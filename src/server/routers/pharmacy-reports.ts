@@ -14,7 +14,7 @@ import {
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
 import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
-import { capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
 const widget = z
@@ -57,6 +57,23 @@ const digestSetting = z
     time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   })
   .strict();
+const pvKind = z.enum(['ADVERSE_DRUG_REACTION', 'MEDICATION_ERROR', 'PRODUCT_QUALITY_COMPLAINT']);
+const pvState = z.enum(['DRAFT', 'UNDER_REVIEW', 'READY', 'SUBMITTED', 'CLOSED']);
+const externalState = z.enum(['NOT_SUBMITTED', 'PENDING', 'SUBMITTED', 'FAILED']);
+const transitions: Record<z.infer<typeof pvState>, readonly z.infer<typeof pvState>[]> = {
+  DRAFT: ['UNDER_REVIEW'],
+  UNDER_REVIEW: ['DRAFT', 'READY'],
+  READY: ['UNDER_REVIEW', 'SUBMITTED', 'CLOSED'],
+  SUBMITTED: ['CLOSED'],
+  CLOSED: [],
+};
+
+async function requirePvBranch(ctx: TRPCContext, branchId: string) {
+  const organizationId = ctx.entitlements.organizationId;
+  const branch = await ctx.db.pharmacyBranch.findFirst({ where: { id: branchId, organizationId } });
+  if (!branch) throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  return organizationId;
+}
 
 async function scope(ctx: TRPCContext) {
   if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
@@ -84,6 +101,149 @@ async function requireFinancialReports(ctx: TRPCContext) {
 }
 
 export const pharmacyReportsRouter = router({
+  createPharmacovigilanceReport: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId: z.string().min(1),
+          kind: pvKind,
+          occurredAt: z.date(),
+          assertedDescription: z.string().trim().min(1).max(10000),
+          patientId: z.string().min(1).optional(),
+          medicineId: z.string().min(1).optional(),
+          inventoryLotId: z.string().min(1).optional(),
+          prescriberId: z.string().min(1).optional(),
+        })
+        .strict()
+        .refine((value) => !value.inventoryLotId || value.medicineId, {
+          message: 'A lot reference requires its medicine reference.',
+          path: ['medicineId'],
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = await requirePvBranch(ctx, input.branchId);
+      if (input.inventoryLotId) {
+        const lot = await ctx.db.pharmacyInventoryLot.findFirst({
+          where: {
+            id: input.inventoryLotId,
+            branchId: input.branchId,
+            organizationId,
+            batch: { medicineId: input.medicineId },
+          },
+          select: { id: true },
+        });
+        if (!lot)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Inventory lot does not match this branch and medicine.',
+          });
+      }
+      ctx.audit.detail = {
+        category: 'PHARMACY_SAFETY',
+        action: 'human_asserted_report_capture',
+        skipInput: true,
+      };
+      return ctx.db.pharmacyPharmacovigilanceReport.create({
+        data: { ...input, organizationId, createdByUserId: ctx.session.user.id },
+      });
+    }),
+  transitionPharmacovigilanceReport: auditedProtectedProcedure
+    .input(
+      z.object({ id: z.string().min(1), branchId: z.string().min(1), state: pvState }).strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = await requirePvBranch(ctx, input.branchId);
+      const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
+        where: { id: input.id, branchId: input.branchId, organizationId },
+      });
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
+      if (!transitions[report.state].includes(input.state))
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid report lifecycle transition.',
+        });
+      return ctx.db.pharmacyPharmacovigilanceReport.update({
+        where: { id: report.id },
+        data: { state: input.state, reviewedByUserId: ctx.session.user.id },
+      });
+    }),
+  recordPharmacovigilanceSubmission: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          id: z.string().min(1),
+          branchId: z.string().min(1),
+          state: externalState,
+          externalReference: z.string().trim().min(1).optional(),
+          failureReason: z.string().trim().min(1).optional(),
+        })
+        .strict()
+        .superRefine((value, issue) => {
+          if (value.state === 'SUBMITTED' && !value.externalReference)
+            issue.addIssue({
+              code: 'custom',
+              path: ['externalReference'],
+              message: 'External reference is required.',
+            });
+          if (value.state === 'FAILED' && !value.failureReason)
+            issue.addIssue({
+              code: 'custom',
+              path: ['failureReason'],
+              message: 'Failure reason is required.',
+            });
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = await requirePvBranch(ctx, input.branchId);
+      const report = await ctx.db.pharmacyPharmacovigilanceReport.findFirst({
+        where: { id: input.id, branchId: input.branchId, organizationId },
+        select: { id: true },
+      });
+      if (!report) throw new TRPCError({ code: 'NOT_FOUND', message: 'Report not found.' });
+      return ctx.db.pharmacyPharmacovigilanceReport.update({
+        where: { id: report.id },
+        data: {
+          externalSubmissionState: input.state,
+          externalReference: input.state === 'SUBMITTED' ? input.externalReference : null,
+          externalFailureReason: input.state === 'FAILED' ? input.failureReason : null,
+        },
+      });
+    }),
+  exportPharmacovigilanceDrap: auditedProtectedProcedure
+    .input(
+      z
+        .object({ branchId: z.string().min(1), from: z.date(), to: z.date() })
+        .strict()
+        .refine((v) => v.to >= v.from, { message: 'Invalid date range.' })
+    )
+    .query(async ({ ctx, input }) => {
+      const organizationId = await requirePvBranch(ctx, input.branchId);
+      ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'drap_export', skipInput: true };
+      const reports = await ctx.db.pharmacyPharmacovigilanceReport.findMany({
+        where: {
+          organizationId,
+          branchId: input.branchId,
+          occurredAt: { gte: input.from, lte: input.to },
+        },
+        orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
+        include: {
+          patient: true,
+          medicine: true,
+          lot: { include: { batch: true } },
+          prescriber: true,
+        },
+      });
+      return {
+        format: 'DRAP_PHARMACOVIGILANCE_V1' as const,
+        from: input.from,
+        to: input.to,
+        reports: reports.map((report) => ({
+          ...report,
+          reportState: report.state,
+          externalSubmissionState: report.externalSubmissionState,
+        })),
+      };
+    }),
   branches: reports.query(({ ctx }) => scope(ctx)),
   catalog: reports.query(async ({ ctx }) => ({
     reports: pharmacyReportCatalog(),
