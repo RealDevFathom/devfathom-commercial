@@ -1,6 +1,6 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-04 10:50 PKT (05:50 UTC) — Claude (Cowork supervisor) handing over to Codex.
+Last reconciled: 2026-09-04 16:26 PKT (11:26 UTC) — Codex supervisor bounded check-in.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
@@ -10,13 +10,20 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   session run by the owner. Role description, rules, the check-in loop with API recipes, native-git
   composition and standard texts: `DevFathom hub/codex-supervisor-handover.md`. This file stays the
   single source of truth for state; the handover doc is the job description.
+- **Supervisor check-in (11:26 UTC 4 Sep):** Paperclip company id was derived from `GET /api/companies` as
+  `439a6e2c-06be-4fe0-bb43-b213140f664a`. The latest 1,000 heartbeat runs contain **zero** `running` or
+  `queued` runs; the four agent badges showing `running` are stale and are not activity evidence. All
+  `claude_local` agents, both Chief of Staff agents, and both Portfolio CTO agents remain paused. WHA-1148
+  was cancelled; deploy-blocked WHA-1236 was parked; WHA-1239 was routed to Fix Engineer 4 against the
+  exact failed cloud artifact; WHA-1306 was reopened only for QA8's GitHub metadata backfill. No duplicate
+  lane was created and no owner-gated staging QA was resumed.
 - **06:50 UTC 4 Sep: Codex usage limit hit at 06:18 and reset by the owner at 06:49.** Errors cleared,
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
 - **Candidate:** the tip of this branch (`3f2e6ae4` + this status commit; clean). Everything composed
   today is in it: WHA-1306 explicit label associations on the platform organization form (10:18; QA8's
-  staging finding — GitHub number pending until the owner's `gh` credential is renewed), WHA-1285 dark-theme contrast (10:00; single squashed commit cd0a2e99 on c223020f, composed as
+  staging finding — GitHub backfill routed to QA8 at 11:26 after `gh` recovered), WHA-1285 dark-theme contrast (10:00; single squashed commit cd0a2e99 on c223020f, composed as
   066a3454 — VERIFIED 10:22 by WHA-1304 on the shipping tip c96a307d: fresh seed, production build,
   38/38 routes dark, axe-core 4.13 color-contrast 0 confirmed nodes, both theme controls pass), WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
   (08:48 — all six restaurant-completion lanes are now in), WHA-1301 administrator guide for recipes/costing/catering/reports (08:25), WHA-1297
@@ -38,26 +45,34 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   INV-05 cold chain, CRM/loyalty P0-lite, FIN-05 fiscal contract with a sandbox integrator, RPT-03
   owner digest, MED-06 reference-data connectors). Owner decisions D02/D04/D10 were defaulted the safe
   way: pluggable interfaces, sandbox/capture modes, no real provider, no fabricated fiscal references.
-- **Staging** runs candidate `6cc482c8` (revision `devfathom-stg--dbrepair0904`, healthy). Known
+- **Staging** still runs the `6cc482c8` deployment. Read-only Azure evidence at 11:23 UTC: revision
+  `devfathom-stg--dbrepair0904` is active, Healthy/Provisioned, 100% traffic, scale-to-zero at the instant
+  of inspection, on image digest `sha256:3a546bd682e04bb5a019b95b59e50c5fdaf9f38c7489c6503a66bc033b218333`.
+  Known
   degradations until the next deploy: platform login limiter 8 attempts / 15 min per IP+e-mail (the
   candidate resets it after a successful login); the platform-admin password hash is stale (the
   first deploy regenerated job secrets while Key Vault kept the Aug 2 values — the live values are
   the migration job's secrets: `az containerapp job secret list … --show-values`); DEDICATED
   provisioning mode fails without Vercel settings — use SHARED mode.
-- **`origin/restaurantv2` = `6cc482c8`.** The owner has a push-only prompt (fast-forward to
-  `8a522bd8`) and a second-deploy prompt (`DevFathom hub/deploy-staging-8a522bd8-prompt.md`, which
-  includes the push, the deploy, and a fallback for `ALTER ROLE` being refused on the hand-created
-  runtime role). The push starts the cloud gate automatically. `main` and production: untouched,
-  not authorized.
+- **Remote and cloud gate (11:26 UTC):** `origin/restaurantv2` =
+  `8a522bd817b3690c4172cec9c0722a7b4e7a4d6b`; `main` =
+  `5c4b48cfc208a7bf321ce9e42de7a2f8f67e1ab6`; `gh auth status` succeeds. QA-gate run
+  `33839934789` failed at job `100919987610`, step `Assert automated gate`; WHA-1132 browser gate was
+  skipped. Artifact `9924966656`: 5,167 tests, 5,105 passed, **35 failed**, **27 pending**, 24 failed
+  suites. None of the eight failed files changed between `8a522bd8` and code tip `3f2e6ae4`; the only
+  `qa.yml` delta adds the catering browser spec, so the candidate has no direct correction for this red
+  result. `main` and production remain untouched and unauthorized.
 - **Open engineering lanes (base = branch tip):** WHA-1270 (guard DEDICATED provisioning mode when
-  Vercel is unconfigured — COMPOSED, not yet on staging), WHA-1239 (feature inventory + any spec fixes the cloud gate asks for), WHA-1281 (cold-load
+  Vercel is unconfigured — COMPOSED, not yet on staging), WHA-1239 (existing lane, now `todo` with Fix
+  Engineer 4 for causal grouping and the smallest proven correction to cloud run `33839934789`), WHA-1281 (cold-load
   investigation covering QA findings 1277–1284: probably scale-to-zero cold start on the 0.5-CPU
   staging plan — if infra, close them and propose minReplicas/CPU to the owner; 1281/1280 are parked
   until QA8 provisions `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1243), a11y fixes
   WHA-1285 COMPOSED, 1288 composed (bbe9d718); WHA-1284's
   perf refactor (2e7de87d stream SOP report cold path, 58aea51b defer deployment forms) is NOT composed —
   accept only with warm-load numbers and test evidence, rebased on the tip.
-  New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
+  WHA-1306 product fix remains composed; its only open work is QA8's GitHub issue-number backfill.
+  New lanes use the branch tip as their base; keep ≤5 heavy and ≤7 total actual runs on the Mac.
 - **Restaurant completion — costing & catering (owner direction 07:10 UTC 4 Sep: "complete restaurants
   first including catering; use the Codex army to the full").** Gap analysis against the client brief:
   built = multi-branch, recipes with units/conversions, stock ledger with RECIPE_CONSUMPTION and
@@ -77,12 +92,11 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   fix. Promote a backlog lane to `todo` only when its
   dependency is composed AND heavy runs ≤ 7. Not in scope yet (owner said restaurants first): hotel
   bookings/guest journey, online payment gateways (providers are MOCK/TERMINAL only).
-- **Compose-procedure lessons (07:40):** after `apply --cached --3way` check
-  `git diff --cached --name-only --diff-filter=U` — any unmerged path means abort (`git reset -q`) and
-  ask the lane to rebase; `git show ":path"` on an unmerged path fails and the redirect leaves an EMPTY
-  file. Never run `git checkout -- .` from the device VM (unlink is refused on the mount) — restore a
-  file with `git show HEAD:path > path` instead. Agents sometimes base on `origin/restaurantv2`
-  (6cc482c8) or on the shared a11y branch: compose single commits and verify the diff is new.
+- **Composition now uses native Git only:** require a clean compose worktree; verify the delivery's sole
+  commit, parent, diff and exact-tree evidence; compose with `git cherry-pick -x <sha>`. Any conflict means
+  `git cherry-pick --abort` and route correction in the lane's own worktree. Never use the obsolete VM
+  lock-moving, index-writing or file-unlink workarounds. Agents can base on stale/shared branches, so
+  compose only a verified new single-commit diff.
 - **Paperclip API note (08:58):** `GET /api/companies/{cid}/issues?limit=1000` is capped at 1000 and ordered
   by priority, so medium/low issues can be cut off — list open work per status
   (`?status=todo|in_progress|blocked|backlog|in_review`) and fetch a specific issue by id.
@@ -106,33 +120,29 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 - Agents NEVER deploy, push, merge, or mutate Azure — cancel any agent-created "Deploy…"/"Push…"
   issue and refuse "deployment authorization" interactions. Staging mutations are the owner's.
 - Codex agents only (all `claude_local` agents are paused — owner rule while Claude limits are tight).
-- Mac load: hard cap ~5 heavy runs (tsc/vitest/PostgreSQL/Next/Playwright); the Mac crashed at 12.
-  QA runs against staging (light); gates run in GitHub Actions, never on the Mac.
+- Mac load: hard cap **5 heavy runs** and **7 total actual runs**; the Mac crashed at 12. QA runs against
+  staging only in isolated SHARED organizations, never Mugd/LakeCity; gates run in GitHub Actions.
 - Paperclip API notes: comments come newest-first; `POST /api/companies/{cid}/issues` dedupes on an
   identical title; `PATCH` cannot change `projectId`; code lanes must use project DevFathom Commercial
   `383ffdb1-6723-44f0-aea3-9eb573b44c49`; re-fire a lane with status `backlog` → `todo`; agent
   interactions: `GET /api/issues/{id}/interactions`, accept with
   `POST /api/issues/{issueId}/interactions/{interactionId}/accept` (body
   `{companyId, resolution:"accepted", status:"accepted", note}`) — accept staging-QA / base-reset /
-  correction-pass requests, refuse deploy/push/merge/grant ones; `ask_user_questions` kinds are
+  correction-pass requests only when current constraints permit; old generic local-QA permissions do not.
+  Refuse deploy/push/merge/grant requests; `ask_user_questions` kinds are
   answered in a comment and the lane re-fired.
-- Composition (the device that composes cannot unlink files): `git diff <tip>^ <tip> | git apply
-  --cached --3way`, write the worktree from the index (`git show :path > path`, `chmod 755` any
-  script), `update-index --really-refresh`, `prisma validate` by exit code when the schema changed,
-  `commit --no-verify` with the trailer `(Composed from WHA-xxxx @ sha by the supervisor.)`; before
-  and after every git write move `*.lock` files under `.git/worktrees/<lane>/` and
-  `.git/refs/heads/` out of the way. Always verify a delivery's parent chain reaches a known base and
-  that the diff is the real change (several "deliveries" were Prettier-only or built on stale bases).
-  Never rename a deployed migration; two NEW migrations must not share a timestamp prefix.
+- Composition: native single-commit `git cherry-pick -x` only after parent/diff/exact-tree verification;
+  conflict means abort and return the lane for correction. No history rewrite or obsolete VM lock/file
+  workaround. Validate Prisma only when schema changed. Never rename a deployed migration; two NEW
+  migrations must not share a timestamp prefix.
 - Evidence and QA artefacts live outside the repo (`/Users/Saad/Developer/paperclip-worktrees/
   _gate-evidence/`, `_qa-evidence/`). Never compose them.
 
 ### Next steps, in order
-1. Owner pushes the branch tip → `restaurantv2` (prompt given; any tip at or after `8a522bd8` is fine) → cloud gate `qa.yml` runs (~45–60 min).
-   A Codex agent reads it read-only (`gh run list --workflow qa.yml`; `gh run view <id>
-   --log-failed`) and every red step becomes a fix lane on the current candidate (workflow fixes to
-   the engineer who wrote it, bf4edfeb).
-2. Owner runs the second staging deploy prompt (it re-seeds from Key Vault, fixing the login drift;
+1. WHA-1239/Fix Engineer 4 classifies and corrects cloud run `33839934789` from the exact artifact; the
+   supervisor composes only verified single commits. Owner alone decides and performs the next
+   `restaurantv2` fast-forward; `qa.yml` must go green before release claims.
+2. Owner runs the second staging deploy prompt against the later accepted candidate (it re-seeds from Key Vault, fixing the login drift;
    if the migration job is refused the `ALTER ROLE`, the prompt's fallback applies the grants).
 3. Post "staging deployed — candidate <sha>" on every QA lane; QA phase B continues; every finding →
    engineer → compose → next candidate.
