@@ -21,6 +21,30 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
     createCaller: () => ({
       branches: async () => ({ branches: [{ id: 'b1', name: 'Main' }] }),
       commandCentre,
+      anomalySignals: async () => [
+        {
+          id: 'anomaly_1',
+          branchId: 'b1',
+          kind: 'CASH_VARIANCE',
+          status: 'OPEN',
+          severity: 'REVIEW',
+          scope: { branchId: 'b1' },
+          exactNumbers: { expectedMinor: 10_000, countedMinor: 8_000, varianceMinor: -2_000 },
+          explanation:
+            'The close count differs from expected cash. Review the close evidence; no posting is created by this signal.',
+          dataWindowStart: new Date('2026-09-01T00:00:00Z'),
+          dataWindowEnd: new Date('2026-09-05T00:00:00Z'),
+          sourceObservedAt: new Date('2026-09-04T10:00:00Z'),
+          policyVersion: 'AI04-2026-09-04',
+          estimateMethod: null,
+          estimateWindow: null,
+          estimateExclusions: null,
+          estimateConfidence: null,
+        },
+      ],
+      refreshAnomalies: async () => ({ evaluated: 1, signals: [] }),
+      acknowledgeAnomaly: async () => ({}),
+      snoozeAnomaly: async () => ({}),
       digestOverview: async () => ({
         branches: [{ id: 'b1', name: 'Main' }],
         settings: [],
@@ -78,6 +102,11 @@ describe('pharmacy report catalog filters', () => {
     );
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
+    expect(screen.getByText(/never rank staff, imply misconduct/)).toBeVisible();
+    expect(screen.getByText(/no posting is created by this signal/)).toBeVisible();
+    expect(screen.getByLabelText('Acknowledgement reason')).toBeRequired();
+    expect(screen.getByLabelText('Snooze reason')).toBeRequired();
     expect(screen.getByRole('heading', { name: 'Digest history' })).toBeVisible();
     expect(
       screen.getByText(
