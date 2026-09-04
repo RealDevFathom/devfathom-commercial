@@ -59,7 +59,7 @@ export function SupportAccessForm({ organizationId }: { organizationId: string }
       />
       <div className="flex items-end gap-3">
         <label className="grid gap-1.5">
-          <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
+          <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-primary-foreground">
             Access duration
           </span>
           <select

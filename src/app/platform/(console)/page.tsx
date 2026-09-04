@@ -216,7 +216,7 @@ export default async function PlatformOverviewPage() {
 
         <div className="space-y-6">
           <section className="rounded-lg border border-primary bg-primary p-5 text-primary-foreground shadow-sm">
-            <div className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.16em] text-accent-brand">
+            <div className="flex items-center gap-2 font-mono text-[9px] uppercase tracking-[0.16em] text-primary-foreground">
               <Clock3 className="size-3.5" aria-hidden="true" />
               Cash collection
             </div>

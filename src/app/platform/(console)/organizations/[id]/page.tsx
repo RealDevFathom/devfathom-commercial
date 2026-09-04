@@ -1883,7 +1883,7 @@ export default async function OrganizationDetailPage({
 
         <aside className="space-y-7">
           <section className="border border-border-default bg-abyss-900 p-5 text-paper-50">
-            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-brass-300">
+            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-primary-foreground">
               Audited support
             </p>
             <h2 className="mt-2 font-display text-xl font-semibold">Enter workspace</h2>
