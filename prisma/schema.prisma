@@ -688,6 +688,96 @@ enum PharmacySaleEventKind {
   EXCHANGED
 }
 
+enum PharmacyFiscalIntegratorMode {
+  OFF
+  SANDBOX
+}
+
+enum PharmacyFiscalDocumentKind {
+  INVOICE
+  CREDIT_NOTE
+  DEBIT_NOTE
+}
+
+enum PharmacyFiscalDocumentStatus {
+  QUEUED
+  SUBMITTING
+  ACCEPTED
+  REJECTED
+  DEAD
+}
+
+/// FIN-05 / D04: tenant selection is deliberately OFF unless explicitly set.
+/// SANDBOX exercises the contract but is never evidence of FBR registration.
+model PharmacyFiscalConfiguration {
+  id               String                       @id @default(cuid())
+  organizationId   String                       @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  integratorMode   PharmacyFiscalIntegratorMode @default(OFF)
+  maxAttempts      Int                          @default(5)
+  baseRetrySeconds Int                          @default(60)
+  updatedByActorId String
+  createdAt        DateTime                     @default(now())
+  updatedAt        DateTime                     @updatedAt
+
+  @@map("pharmacy_fiscal_configurations")
+}
+
+/// FIN-05: an append-preserved fiscal document. `localReference` is DevFathom's
+/// identity; nullable `externalReference` is an integrator response and never a
+/// replacement. Notes must point at an original invoice in the same tenant and
+/// branch. `retentionUntil` is fixed at creation and hard deletion is refused in SQL.
+model PharmacyFiscalDocument {
+  id                   String                       @id @default(cuid())
+  organizationId       String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  saleId               String?
+  kind                 PharmacyFiscalDocumentKind
+  originalDocumentId   String?
+  localReference       String
+  externalReference    String?
+  externalQr           String?
+  integratorMode       PharmacyFiscalIntegratorMode
+  status               PharmacyFiscalDocumentStatus @default(QUEUED)
+  payload              Json
+  payloadHash          String
+  attempts             Int                          @default(0)
+  maxAttempts          Int
+  nextAttemptAt        DateTime?
+  submittedAt          DateTime?
+  acceptedAt           DateTime?
+  rejectedAt           DateTime?
+  lastError            String?
+  retentionUntil       DateTime
+  createdByActorId     String
+  createdAt            DateTime                     @default(now())
+  updatedAt            DateTime                     @updatedAt
+
+  @@unique([organizationId, id], map: "pharmacy_fiscal_documents_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_fiscal_documents_org_branch_id_key")
+  @@unique([organizationId, localReference], map: "pharmacy_fiscal_documents_local_ref_key")
+  @@index([organizationId, branchId, status, nextAttemptAt], map: "pharmacy_fiscal_documents_queue_idx")
+  @@index([organizationId, branchId, createdAt], map: "pharmacy_fiscal_documents_age_idx")
+  @@map("pharmacy_fiscal_documents")
+}
+
+/// Every queue/lifecycle outcome is immutable evidence. Mutable scheduling
+/// fields live on the document; the history of how they changed lives here.
+model PharmacyFiscalDocumentEvent {
+  id             String                        @id @default(cuid())
+  organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  documentId     String
+  fromStatus     PharmacyFiscalDocumentStatus?
+  toStatus       PharmacyFiscalDocumentStatus
+  attempt        Int
+  detail         String?
+  occurredAt     DateTime                      @default(now())
+
+  @@unique([organizationId, id], map: "pharmacy_fiscal_document_events_org_id_key")
+  @@index([organizationId, branchId, documentId, occurredAt], map: "pharmacy_fiscal_document_events_document_idx")
+  @@map("pharmacy_fiscal_document_events")
+}
+
 enum PharmacySaleUnit {
   PACK
   STRIP

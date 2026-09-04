@@ -31,6 +31,8 @@ describe('pharmacy dashboard registry', () => {
         'pharmacistCoverage',
         'openReceivingExceptions',
         'deviceFiscalOfflineExceptions',
+        'agingFiscalDocuments',
+        'rejectedFiscalDocuments',
       ])
     );
     expect(pharmacyDashboardDefault('ADMIN').widgets.every((widget) => widget.visible)).toBe(true);
