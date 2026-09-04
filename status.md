@@ -10,9 +10,10 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`ee2f031b` + this status commit; clean). Everything composed
-  today is in it: WHA-1297 catering console + nav (08:15), WHA-1295 wastage / stock-movement reports
-  (08:15; adds a schema field + migration for movement unit cost), WHA-1296 recipe cost / cost per portion / food-cost % in the catalog console (08:00),
+- **Candidate:** the tip of this branch (`2311714b` + this status commit; clean). Everything composed
+  today is in it: WHA-1301 administrator guide for recipes/costing/catering/reports (08:25), WHA-1297
+  catering console + nav (08:15), WHA-1295 wastage / stock-movement reports (08:15; two indexes via
+  migration `20260904123700_restaurant_stock_report_indexes`), WHA-1296 recipe cost / cost per portion / food-cost % in the catalog console (08:00),
   WHA-1288 labelled platform selects (08:00, rebased), WHA-1294 catering phase 2 (07:50; productionRequirements, costSummary with cost-per-portion
   snapshot on CONFIRMED, RECIPE_CONSUMPTION on IN_PRODUCTION→READY, reversal on cancel), WHA-1293 recipe explosion + costing library (07:50; `src/lib/restaurant/recipe-costing.ts`,
   ledger consumption now routed through it, getRecipeCost/listRecipeCosts), WHA-1294 catering phase 1
