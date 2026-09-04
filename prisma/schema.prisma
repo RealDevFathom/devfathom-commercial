@@ -222,6 +222,43 @@ model PharmacyBranch {
   @@map("pharmacy_branches")
 }
 
+/// INV-10 — the deliberately narrow doorway into the chain purchasing view.
+/// A null branch grants this user the organization view; a non-null branch
+/// grants only that branch. It is not consulted by any other pharmacy screen.
+model PharmacyCentralPurchasingAccess {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  branchId       String?
+  grantedById    String
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, id], map: "pharmacy_central_purchasing_access_org_id_key")
+  @@index([organizationId, userId, branchId], map: "pharmacy_central_purchasing_access_scope_idx")
+  @@map("pharmacy_central_purchasing_access")
+}
+
+/// INV-10 — allocation evidence only. Physical custody remains exclusively in
+/// the INV-07 transfer and stock-movement tables named here.
+model PharmacyCentralPurchaseAllocation {
+  id                  String   @id @default(cuid())
+  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sourceBranchId      String
+  destinationBranchId String
+  goodsReceiptLineId  String
+  transferId          String
+  transferLineId      String
+  quantityUnits       Int
+  allocatedById       String
+  createdAt           DateTime @default(now())
+
+  @@unique([organizationId, id], map: "pharmacy_central_purchase_allocations_org_id_key")
+  @@unique([organizationId, goodsReceiptLineId, destinationBranchId], map: "pharmacy_central_purchase_allocations_once_key")
+  @@index([organizationId, sourceBranchId, createdAt], map: "pharmacy_central_purchase_allocations_source_idx")
+  @@index([organizationId, destinationBranchId, createdAt], map: "pharmacy_central_purchase_allocations_destination_idx")
+  @@map("pharmacy_central_purchase_allocations")
+}
+
 /// PLAT-03 — the twelve onboarding steps of PRD §6.1, in the order the operator
 /// walks them.
 enum PharmacyOnboardingGate {

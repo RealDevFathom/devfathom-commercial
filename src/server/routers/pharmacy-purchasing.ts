@@ -8,6 +8,12 @@ import {
 } from '@/lib/pharmacy/goods-receipt';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
+  allocateCentralReceipt,
+  centralDemand,
+  CentralPurchasingError,
+  createCentralPurchaseOrder,
+} from '@/lib/pharmacy/central-purchasing';
+import {
   listGoodsReceipts,
   listPurchaseOrders,
   listPurchaseReturns,
@@ -68,6 +74,17 @@ const bps = z.number().int().min(0).max(10_000);
 const branchId = z.string().trim().min(1).max(128);
 
 function domainError(error: unknown): never {
+  if (error instanceof CentralPurchasingError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'FORBIDDEN'
+          ? 'FORBIDDEN'
+          : error.reason === 'NOT_FOUND'
+            ? 'NOT_FOUND'
+            : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
   if (error instanceof PharmacyPurchasingError) {
     throw new TRPCError({
       code:
@@ -1272,4 +1289,99 @@ export const pharmacyPurchasingRouter = router({
   supplierCredits: protectedProcedure
     .input(z.object({ branchId }).strict())
     .query(({ ctx, input }) => listSupplierCredits(ctx.db, receivingScope(ctx, input.branchId))),
+
+  /** INV-10 — exact PUR-07 demand. Branch grants see only their own rows. */
+  centralDemand: auditedProtectedProcedure
+    .input(z.object({ branchId: branchId.optional() }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await centralDemand(
+          ctx.db,
+          {
+            organizationId: tenantScope(ctx).organizationId,
+            actorId: ctx.session.user.id,
+          },
+          input.branchId
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** INV-10 — one human-created central draft PO; never auto-orders. */
+  createCentralPurchaseOrder: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          reference: z.string().trim().min(1).max(100),
+          supplierId: z.string().min(1),
+          receivingBranchId: branchId,
+          lines: z
+            .array(
+              z
+                .object({
+                  medicineId: z.string().min(1),
+                  packLevelId: z.string().min(1),
+                  orderedPacks: z.number().int().positive(),
+                  canonicalUnitsPerPack: z.number().int().positive(),
+                  listPricePerPackMinor: z.number().int().nonnegative(),
+                })
+                .strict()
+            )
+            .min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await createCentralPurchaseOrder(
+          ctx.db,
+          {
+            organizationId: tenantScope(ctx).organizationId,
+            actorId: ctx.session.user.id,
+          },
+          input
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  /** INV-10 — records allocation evidence while INV-07 creates the movement. */
+  allocateCentralReceipt: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          goodsReceiptId: z.string().min(1),
+          allocations: z
+            .array(
+              z
+                .object({
+                  goodsReceiptLineId: z.string().min(1),
+                  destinationBranchId: branchId,
+                  destinationStockLocationId: z.string().min(1),
+                  quantityUnits: z.number().int().positive(),
+                })
+                .strict()
+            )
+            .min(1),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          allocateCentralReceipt(
+            txDb(tx),
+            {
+              organizationId: tenantScope(ctx).organizationId,
+              actorId: ctx.session.user.id,
+            },
+            input
+          )
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
 });
