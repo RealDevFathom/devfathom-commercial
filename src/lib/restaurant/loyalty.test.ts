@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  accrueLoyaltyForSettledBill,
   configureLoyaltyProgram,
   earnLoyaltyForClosedOrder,
   enrollLoyaltyAccount,
@@ -196,6 +197,34 @@ describe('append-only ledger', () => {
     });
     await earnLoyaltyForClosedOrder(scoped(), 'order_1', AT);
     expect(db.loyaltyPointsEntry.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('accrues floor(net promotion-adjusted grand total × rate)', async () => {
+    db.restaurantBill.findUnique.mockResolvedValue({
+      order: { customerId: 'customer_1' },
+    });
+    db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
+    db.loyaltyProgramVersion.findFirst.mockResolvedValue({
+      id: 'program_1',
+      earnRate: new Prisma.Decimal('1.2'),
+      expiryDays: null,
+    });
+
+    await accrueLoyaltyForSettledBill(scoped(), {
+      billId: 'bill_promoted',
+      netGrandTotal: new Prisma.Decimal('14.30'),
+      at: AT,
+    });
+
+    expect(db.loyaltyPointsEntry.create).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          billId: 'bill_promoted',
+          points: 17,
+          idempotencyKey: 'loyalty:earn:bill_promoted',
+        }),
+      })
+    );
   });
 
   it('redeems with Decimal math and updates discount/grand total atomically', async () => {
