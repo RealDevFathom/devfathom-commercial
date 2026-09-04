@@ -19,6 +19,7 @@ beforeAll(async () => {
   const owner = new Client({ connectionString: ownerUrl });
   await owner.connect();
   try {
+    await owner.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
     await owner.query(
       `INSERT INTO organizations
         (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
@@ -59,6 +60,7 @@ afterAll(async () => {
   const owner = new Client({ connectionString: ownerUrl });
   await owner.connect();
   try {
+    await owner.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
     await owner.query('BEGIN');
     await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [[orgA, orgB]]);
     await owner.query(
@@ -149,6 +151,7 @@ describeIfDatabase('pharmacy regulatory persistence', () => {
     const client = new Client({ connectionString: ownerUrl });
     await client.connect();
     try {
+      await client.query(`SELECT set_config('app.is_platform_admin', 'true', false)`);
       await client.query(
         `UPDATE pharmacy_branch_regulatory_profiles
             SET "effectiveTo" = '2026-10-01'
