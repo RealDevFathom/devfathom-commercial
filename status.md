@@ -10,8 +10,8 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`d762e270` + this status commit; clean). Everything composed
-  today is in it: WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
+- **Candidate:** the tip of this branch (`c9adf240` + this status commit; clean). Everything composed
+  today is in it: WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
   (08:48 — all six restaurant-completion lanes are now in), WHA-1301 administrator guide for recipes/costing/catering/reports (08:25), WHA-1297
   catering console + nav (08:15), WHA-1295 wastage / stock-movement reports (08:15; two indexes via
   migration `20260904123700_restaurant_stock_report_indexes`), WHA-1296 recipe cost / cost per portion / food-cost % in the catalog console (08:00),
@@ -64,9 +64,10 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   requirements via explodeRecipe, cost summary, RECIPE_CONSUMPTION on IN_PRODUCTION→READY) — phase 1
   COMPOSED 8f079c9b, phase 2 COMPOSED; WHA-1295 C1 wastage + stock-movement reports — COMPOSED ee2f031b; backlog until their dependency is on the tip: WHA-1296 B recipe cost / food-cost %
   in the catalog UI — COMPOSED 4a661588; WHA-1297 E catering console UI — COMPOSED 12e9cf6c; WHA-1298 C2 food-cost, dish-profitability (menu-engineering quadrants) and catering
-  reports — COMPOSED 8ea7ced8. Follow-ups opened 08:15: docs lane for the
-  Documentation Engineer (recipes & costing, catering, wastage/food-cost reports) and a catering
-  end-to-end Playwright spec for QA Engineer 4. Promote a backlog lane to `todo` only when its
+  reports — COMPOSED 8ea7ced8. Follow-ups WHA-1301/1303 (administrator guide) and WHA-1302 (catering end-to-end Playwright spec
+  in the browser gate + qa.yml) are COMPOSED too — the restaurant-completion programme is fully on
+  the tip; what remains is verification on staging (owner deploy) and the WHA-1285 dark-theme contrast
+  fix. Promote a backlog lane to `todo` only when its
   dependency is composed AND heavy runs ≤ 7. Not in scope yet (owner said restaurants first): hotel
   bookings/guest journey, online payment gateways (providers are MOCK/TERMINAL only).
 - **Compose-procedure lessons (07:40):** after `apply --cached --3way` check
@@ -75,6 +76,9 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   file. Never run `git checkout -- .` from the device VM (unlink is refused on the mount) — restore a
   file with `git show HEAD:path > path` instead. Agents sometimes base on `origin/restaurantv2`
   (6cc482c8) or on the shared a11y branch: compose single commits and verify the diff is new.
+- **Paperclip API note (08:58):** `GET /api/companies/{cid}/issues?limit=1000` is capped at 1000 and ordered
+  by priority, so medium/low issues can be cut off — list open work per status
+  (`?status=todo|in_progress|blocked|backlog|in_review`) and fetch a specific issue by id.
 - **Paperclip note:** when a run is killed (usage limit, recovery backstop) Paperclip escalates the
   issue to the agent's manager (Chief of Staff, paused) — reassign it back to the engineer; the
   reassignment also wakes the agent.
