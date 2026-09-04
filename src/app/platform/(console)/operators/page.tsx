@@ -1,11 +1,8 @@
 import { Plus } from 'lucide-react';
-import {
-  PlatformCommandButton,
-  PlatformCommandForm,
-} from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
+import { CreateOperatorForm, OperatorEditor } from './operator-editor';
 
 const roles = ['SUPER_ADMIN', 'OPERATIONS', 'SALES', 'FINANCE', 'SUPPORT', 'AUDITOR'];
 
@@ -40,7 +37,52 @@ export default async function OperatorsPage() {
         <section className="border border-border-default bg-surface-card">
           <div className="divide-y divide-border-subtle">
             {operators.map((operator) => (
-              <details key={operator.id} className="group">
+              <OperatorEditor
+                key={operator.id}
+                fields={[
+                  { name: 'id', label: 'Operator', type: 'hidden', defaultValue: operator.id },
+                  { name: 'name', label: 'Name', required: true, defaultValue: operator.name },
+                  {
+                    name: 'email',
+                    label: 'Email',
+                    type: 'email',
+                    required: true,
+                    defaultValue: operator.email,
+                  },
+                  {
+                    name: 'role',
+                    label: 'Role',
+                    type: 'select',
+                    required: true,
+                    defaultValue: operator.role,
+                    options: roles.map((value) => ({
+                      label: value.replaceAll('_', ' '),
+                      value,
+                    })),
+                  },
+                  {
+                    name: 'password',
+                    label: 'New password',
+                    type: 'password',
+                    help: 'Leave blank to keep the current credential.',
+                  },
+                  {
+                    name: 'active',
+                    label: 'Active',
+                    type: 'checkbox',
+                    defaultValue: operator.active,
+                  },
+                  {
+                    name: 'mfaRequired',
+                    label: 'MFA required',
+                    type: 'checkbox',
+                    defaultValue: operator.mfaRequired,
+                  },
+                ]}
+                mfaReset={
+                  operator.mfaEnabledAt ? { id: operator.id, email: operator.email } : undefined
+                }
+              >
                 <summary className="grid cursor-pointer list-none gap-3 px-5 py-4 sm:grid-cols-[1fr_auto_auto] sm:items-center">
                   <div>
                     <p className="text-sm font-semibold">{operator.name}</p>
@@ -54,68 +96,7 @@ export default async function OperatorsPage() {
                     {operator.role.replaceAll('_', ' ')}
                   </span>
                 </summary>
-                <div className="border-t border-border-subtle bg-surface-sunken/30 px-5">
-                  <PlatformCommandForm
-                    compact
-                    action="operator.upsert"
-                    submitLabel="Update operator"
-                    fields={[
-                      { name: 'id', label: 'Operator', type: 'hidden', defaultValue: operator.id },
-                      { name: 'name', label: 'Name', required: true, defaultValue: operator.name },
-                      {
-                        name: 'email',
-                        label: 'Email',
-                        type: 'email',
-                        required: true,
-                        defaultValue: operator.email,
-                      },
-                      {
-                        name: 'role',
-                        label: 'Role',
-                        type: 'select',
-                        required: true,
-                        defaultValue: operator.role,
-                        options: roles.map((value) => ({
-                          label: value.replaceAll('_', ' '),
-                          value,
-                        })),
-                      },
-                      {
-                        name: 'password',
-                        label: 'New password',
-                        type: 'password',
-                        help: 'Leave blank to keep the current credential.',
-                      },
-                      {
-                        name: 'active',
-                        label: 'Active',
-                        type: 'checkbox',
-                        defaultValue: operator.active,
-                      },
-                      {
-                        name: 'mfaRequired',
-                        label: 'MFA required',
-                        type: 'checkbox',
-                        defaultValue: operator.mfaRequired,
-                      },
-                    ]}
-                  />
-                  {operator.mfaEnabledAt ? (
-                    <div className="border-t border-border-subtle py-4">
-                      <PlatformCommandButton
-                        action="operator.mfa.reset"
-                        label="Reset MFA and revoke sessions"
-                        tone="danger"
-                        confirm={`Reset MFA for ${operator.email}? They will be signed out immediately.`}
-                        payload={{
-                          id: operator.id,
-                          reason: 'Emergency MFA reset by a super administrator',
-                        }}
-                      />
-                    </div>
-                  ) : null}
-                </div>
-              </details>
+              </OperatorEditor>
             ))}
           </div>
         </section>
@@ -127,10 +108,7 @@ export default async function OperatorsPage() {
               <Plus className="h-4 w-4 transition group-open:rotate-45" />
             </summary>
             <div className="border-t border-border-subtle px-5">
-              <PlatformCommandForm
-                compact
-                action="operator.upsert"
-                submitLabel="Create operator"
+              <CreateOperatorForm
                 fields={[
                   { name: 'name', label: 'Name', required: true },
                   { name: 'email', label: 'Email', type: 'email', required: true },
