@@ -1,9 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addRestockInterest,
+  captureSafeRestockArrival,
   PharmacySaleError,
   priceFromLot,
   recoverDemandWithAlternate,
+  recoverRestockInterest,
   returnSaleLine,
   validateDiscount,
 } from './sales';
@@ -31,6 +34,112 @@ describe('POS-03 lot-derived pack/strip/unit pricing', () => {
     });
     expect(price).toEqual({ unitPriceMinor: 330, proRataCeilingMinor: 333 });
     expect(price.unitPriceMinor).toBeLessThanOrEqual(price.proRataCeilingMinor);
+  });
+});
+
+describe('DEM-03 restock interest', () => {
+  it('refuses a contact when current reminders consent is not granted', async () => {
+    const db = {
+      unfulfilledDemandEvent: { findFirst: async () => ({ id: 'demand-a' }) },
+      patientConsent: { findFirst: async () => ({ granted: false, revokedAt: null }) },
+    };
+    await expect(
+      addRestockInterest(db as never, scope, {
+        demandEventId: 'demand-a',
+        patientId: 'patient-a',
+        channel: 'WHATSAPP',
+        quantityUnits: 2,
+      })
+    ).rejects.toThrow('CONSENT_REQUIRED');
+  });
+
+  it.each([
+    {
+      receivedAt: new Date(),
+      state: 'ACTIVE',
+      expiresAt: new Date('2026-01-01'),
+      disposition: 'AVAILABLE',
+    },
+    {
+      receivedAt: new Date(),
+      state: 'ACTIVE',
+      expiresAt: new Date('2027-01-01'),
+      disposition: 'QUARANTINE',
+    },
+  ])(
+    'does not queue for expired or quarantined arrivals',
+    async ({ receivedAt, state, expiresAt, disposition }) => {
+      let notifications = 0;
+      const db = {
+        pharmacyInventoryLot: {
+          findFirst: async () => ({
+            id: 'lot-a',
+            receivedAt,
+            batch: { medicineId: 'med-a', state, expiresAt },
+            balances: disposition === 'AVAILABLE' ? [{ stockLocationId: 'shelf-a' }] : [],
+          }),
+        },
+        pharmacyRestockNotification: {
+          create: async () => {
+            notifications += 1;
+          },
+        },
+      };
+      await expect(
+        captureSafeRestockArrival(db as never, scope, {
+          inventoryLotId: 'lot-a',
+          at: new Date('2026-06-01'),
+        })
+      ).rejects.toThrow('UNSAFE_STOCK');
+      expect(notifications).toBe(0);
+    }
+  );
+
+  it('attributes the completed receipt to the originating event and interest', async () => {
+    const writes: Array<Record<string, unknown>> = [];
+    const db = {
+      pharmacyRestockInterest: {
+        findFirst: async () => ({
+          id: 'interest-a',
+          demandEventId: 'demand-a',
+          demandEvent: { requestedMedicineId: 'med-a' },
+        }),
+        update: async (args: { data: Record<string, unknown> }) => {
+          writes.push(args.data);
+          return { ...args.data, recoveredSale: { receiptNumber: 42 } };
+        },
+      },
+      pharmacySaleLine: {
+        findFirst: async () => ({
+          id: 'line-a',
+          saleId: 'sale-a',
+          medicineId: 'med-a',
+          sale: { status: 'COMPLETED', receiptNumber: 42 },
+        }),
+      },
+      unfulfilledDemandEvent: {
+        update: async (args: { data: Record<string, unknown> }) => {
+          writes.push(args.data);
+          return args;
+        },
+      },
+      pharmacyRestockReservation: { updateMany: async () => ({ count: 1 }) },
+    };
+    const result = await recoverRestockInterest(db as never, scope, {
+      interestId: 'interest-a',
+      saleLineId: 'line-a',
+    });
+    expect(writes).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'RECOVERED', recoveredSaleLineId: 'line-a' }),
+        expect.objectContaining({
+          status: 'RECOVERED',
+          recoveredSaleId: 'sale-a',
+          recoveredSaleLineId: 'line-a',
+        }),
+      ])
+    );
+    expect(result).toMatchObject({ recoveredSale: { receiptNumber: 42 } });
   });
 });
 
