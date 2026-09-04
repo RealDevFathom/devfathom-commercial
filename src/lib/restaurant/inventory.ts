@@ -3,6 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { resolveActiveVersion } from './effective-dating';
+import { explodeRecipe } from './recipe-costing';
 import {
   deriveBalance,
   deriveBalances,
@@ -499,64 +500,6 @@ export async function evaluateLowStockRules(
 
 // ── Recipe consumption at order close ─────────────────────────────────────────
 
-type BomLeaf = { stockItemId: string; quantity: Prisma.Decimal; unitId: string };
-
-/** Recursively flatten a recipe version's BOM into stockable leaf entries.
- *  Sub-recipes expand depth-first; ACTIVE version of each sub-recipe is required. */
-async function flattenBom(
-  tx: ScopedDb,
-  versionId: string,
-  scale: Prisma.Decimal,
-  depth = 0
-): Promise<BomLeaf[]> {
-  if (depth > 10) return []; // cycle guard (assertNoRecipeCycle already enforces, belt+suspenders)
-
-  // A recipe version's BOM lines yield `yieldQuantity` portions; consuming
-  // `scale` portions draws leaf quantities of `line.quantity × scale / yield`
-  // (D07). A null or zero yield means "no batch yield" → do not divide.
-  const version = await tx.restaurantRecipeVersion.findUnique({
-    where: { id: versionId },
-    select: { yieldQuantity: true },
-  });
-  const yieldQuantity = version?.yieldQuantity ?? null;
-  const effectiveScale =
-    yieldQuantity !== null && !yieldQuantity.isZero() ? scale.dividedBy(yieldQuantity) : scale;
-
-  const lines = await tx.restaurantRecipeLine.findMany({
-    where: { recipeVersionId: versionId },
-    select: {
-      quantity: true,
-      unitId: true,
-      ingredientId: true,
-      subRecipeId: true,
-      ingredient: { select: { stockItem: { select: { id: true } } } },
-    },
-  });
-
-  const leaves: BomLeaf[] = [];
-  for (const line of lines) {
-    const qty = dec(line.quantity).times(effectiveScale);
-    if (line.ingredientId) {
-      const stockItemId = line.ingredient?.stockItem?.id;
-      if (stockItemId) {
-        leaves.push({ stockItemId, quantity: qty, unitId: line.unitId });
-      }
-      // Ingredient without a stock item → not tracked; skip silently (D07).
-    } else if (line.subRecipeId) {
-      const versions = await tx.restaurantRecipeVersion.findMany({
-        where: { recipeId: line.subRecipeId },
-        select: { id: true, status: true },
-      });
-      const active = resolveActiveVersion(versions);
-      if (active) {
-        const sub = await flattenBom(tx, active.id, qty, depth + 1);
-        leaves.push(...sub);
-      }
-    }
-  }
-  return leaves;
-}
-
 type OrderItemForConsumption = {
   id: string;
   productId: string;
@@ -608,7 +551,7 @@ export async function postOrderRecipeConsumption(
     // Find the recipe for (product, variant).
     const recipe = await tx.restaurantRecipe.findFirst({
       where: { productId: item.productId, variantId: item.variantId ?? null },
-      select: { id: true },
+      select: { id: true, organizationId: true },
     });
     if (!recipe) continue;
 
@@ -619,8 +562,14 @@ export async function postOrderRecipeConsumption(
     const active = resolveActiveVersion(versions);
     if (!active) continue;
 
-    const scale = dec(item.quantity);
-    const leaves = await flattenBom(tx, active.id, scale);
+    const explosion = await explodeRecipe({
+      organizationId: recipe.organizationId,
+      recipeVersionId: active.id,
+      portions: dec(item.quantity),
+    });
+    const leaves = explosion.ingredients.filter(
+      (leaf): leaf is typeof leaf & { stockItemId: string } => leaf.stockItemId !== null
+    );
     if (leaves.length === 0) continue;
 
     const reason: StockMovementReason = isVoided ? 'WASTAGE' : 'RECIPE_CONSUMPTION';
@@ -633,8 +582,8 @@ export async function postOrderRecipeConsumption(
         stockItemId: leaf.stockItemId,
         locationId: location.id,
         reason,
-        quantity: leaf.quantity.negated(), // consumption = out (negative)
-        unitId: leaf.unitId,
+        quantity: leaf.quantityInBaseUnit.negated(), // consumption = out (negative)
+        unitId: leaf.baseUnitId,
         orderId,
       })),
     });

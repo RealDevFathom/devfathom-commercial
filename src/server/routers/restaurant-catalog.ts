@@ -73,6 +73,11 @@ import {
   VersionImmutabilityError,
   VersionTransitionError,
 } from '@/lib/restaurant/effective-dating';
+import {
+  computeRecipeCost,
+  RecipeCostingError,
+  type RecipeCostResult,
+} from '@/lib/restaurant/recipe-costing';
 
 /**
  * M3-L2 — back-office server surface for canonical catalog + costing substrate.
@@ -113,6 +118,12 @@ function mapCatalogError(err: unknown): never {
   if (err instanceof VersionImmutabilityError || err instanceof VersionTransitionError) {
     throw new TRPCError({ code: 'BAD_REQUEST', message: err.message });
   }
+  if (err instanceof RecipeCostingError) {
+    throw new TRPCError({
+      code: err.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: err.message,
+    });
+  }
   throw err;
 }
 
@@ -126,6 +137,22 @@ function serializeRecipeVersion<T extends { yieldQuantity: { toString(): string 
   version: T
 ): Omit<T, 'yieldQuantity'> & { yieldQuantity: string | null } {
   return { ...version, yieldQuantity: serializeDecimal(version.yieldQuantity) };
+}
+
+function serializeRecipeCost(cost: RecipeCostResult) {
+  return {
+    ...cost,
+    yieldQuantity: serializeDecimal(cost.yieldQuantity),
+    batchCost: cost.batchCost.toString(),
+    costPerPortion: serializeDecimal(cost.costPerPortion),
+    costPerYieldUnit: serializeDecimal(cost.costPerYieldUnit),
+    lines: cost.lines.map((line) => ({
+      ...line,
+      quantityInBaseUnit: line.quantityInBaseUnit.toString(),
+      unitCost: line.unitCost.toString(),
+      lineCost: line.lineCost.toString(),
+    })),
+  };
 }
 
 /** Locale-keyed companion for a customer-facing string (D20), matching the L3 menus surface. */
@@ -940,6 +967,47 @@ export const restaurantCatalogRouter = router({
       try {
         const versions = await listRecipeVersions(ctx.db, input.recipeId);
         return versions.map(serializeRecipeVersion);
+      } catch (err) {
+        mapCatalogError(err);
+      }
+    }),
+
+  getRecipeCost: readProcedure
+    .input(z.object({ recipeId: z.string(), versionId: z.string().optional() }))
+    .query(async ({ ctx, input }) => {
+      try {
+        const selector = input.versionId
+          ? { organizationId: ctx.entitlements.organizationId, recipeVersionId: input.versionId }
+          : { organizationId: ctx.entitlements.organizationId, recipeId: input.recipeId };
+        return serializeRecipeCost(await computeRecipeCost(selector));
+      } catch (err) {
+        mapCatalogError(err);
+      }
+    }),
+
+  listRecipeCosts: readProcedure
+    .input(z.object({ recipeIds: z.array(z.string()).optional() }).optional())
+    .query(async ({ ctx, input }) => {
+      try {
+        const recipeIds =
+          input?.recipeIds ??
+          (
+            await ctx.db.restaurantRecipe.findMany({
+              where: { organizationId: ctx.entitlements.organizationId },
+              select: { id: true },
+              orderBy: { createdAt: 'asc' },
+            })
+          ).map((recipe) => recipe.id);
+        return await Promise.all(
+          recipeIds.map(async (recipeId) =>
+            serializeRecipeCost(
+              await computeRecipeCost({
+                organizationId: ctx.entitlements.organizationId,
+                recipeId,
+              })
+            )
+          )
+        );
       } catch (err) {
         mapCatalogError(err);
       }
