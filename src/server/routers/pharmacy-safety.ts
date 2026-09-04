@@ -8,6 +8,18 @@ import { capabilityProcedure, router } from '../trpc';
 const safety = capabilityProcedure('pharmacy:safety');
 
 export const pharmacySafetyRouter = router({
+  controlledRegister: safety.query(async ({ ctx }) => ({
+    entries: await ctx.db.pharmacyControlledRegisterEntry.findMany({
+      orderBy: [{ branchId: 'asc' }, { serial: 'desc' }],
+      include: {
+        patient: true,
+        prescriber: true,
+        prescription: true,
+        line: { include: { medicine: true } },
+        incidents: { include: { approvals: true } },
+      },
+    }),
+  })),
   createInspectionPack: safety
     .input(z.object({ branchId: z.string().min(1), from: z.date(), to: z.date() }).strict())
     .query(async ({ ctx, input }) => {

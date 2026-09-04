@@ -39,6 +39,10 @@ import {
   Landmark,
   MapPin,
   Bike,
+  FileText,
+  ClipboardCheck,
+  Replace,
+  BookLock,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -253,6 +257,34 @@ export const navigation: NavItem[] = [
   // `pharmacy-counter`, which is what gates it — the item is never
   // vertical-checked here.
   { label: 'Counter', href: '/pharmacy/counter', icon: Monitor, group: 'Pharmacy' },
+  {
+    label: 'Prescriptions',
+    href: '/pharmacy/prescriptions',
+    icon: FileText,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Pharmacist queue',
+    href: '/pharmacy/pharmacist-queue',
+    icon: ClipboardCheck,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Substitution',
+    href: '/pharmacy/substitution',
+    icon: Replace,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Controlled register',
+    href: '/pharmacy/controlled-register',
+    icon: BookLock,
+    group: 'Pharmacy',
+    module: 'pharmacy-safety',
+  },
   {
     label: 'Regulatory profile',
     href: '/pharmacy/regulatory',
