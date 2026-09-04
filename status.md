@@ -1,11 +1,34 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 01:50 PKT (20:50 UTC) — Cowork supervisor check-in #201.
+Last reconciled: 2026-09-05 02:00 PKT (21:00 UTC) — Cowork supervisor check-in #202.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **21:00 — code tip `9e27289d`. Two more wave-4 lanes composed, neither collided.**
+  `54810dec` **ECO-01 + INV-08 DRAP monitoring and recall auto-ingest** (`20260905030000`): one
+  pluggable seam whose only implementation is file/manual ingest — no live feed, no scraping, no
+  credentials, D08 left open. Price notifications become PROPOSED changes a pharmacist confirms against
+  the notification reference. Recall matching is conservative: an ambiguous match is surfaced for
+  confirmation, never quarantined silently; a confirmed match quarantines every matching lot across the
+  organization's branches, **enforced at the dispensing and sales paths rather than in the UI**, produces
+  the per-branch action list including who was already dispensed to, and is reversible with the reversal
+  audited. Ingest is idempotent.
+  `9e27289d` **INV-05 cold-chain reading seam** (`20260905050000`): manual entry and CSV data-logger
+  import behind one interface; readings are append-only, attributed, tenant/branch scoped under forced
+  RLS, and a partly failing import writes nothing. Per-zone expected interval (15 min) and excursion
+  duration (30 min) are configurable, so a single spurious reading never becomes an excursion and a
+  silent zone reads UNMONITORED rather than in range. A sustained excursion feeds the **existing**
+  effective-location fact, so the untouched PUR-07 evaluator emits and reconciles its existing
+  COLD_CHAIN signal — `assertColdChainStorage` and every existing cold-chain rule are unchanged.
+  Both lanes touched `prisma/schema.prisma` and `src/server/routers/pharmacy-inventory.ts` and the
+  three-way apply resolved both cleanly — the report-surface collision is specific to lanes that add a
+  reports tab.
+- **Still running (2):** MKT-03 + MKT-05 customer ordering (`f324ff1e`, b958fd9d) and MED-06 connector
+  automation (`3b419695`, 98700886). Both add a reports/console surface, so expect the two hand-merge
+  points again. After they land, **pharmacy P1 is complete** except RX-06 (D07), SUP-02 (D11) and
+  PUR-08/ECO-03 (D08), which are blocked on owner decisions.
 - **20:50 — code tip `fc456cf4`. Two wave-4 lanes composed.**
   `eadac7b9` **AI-02 expiry/return advisor**: branch sell-through classification with value-at-risk
   ranking, every recommendation explainable (observed rate, projected clear date, expiry, the supplier
