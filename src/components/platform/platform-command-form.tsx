@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, LoaderCircle, Play, Save } from 'lucide-react';
 import { toast } from 'sonner';
@@ -49,12 +49,14 @@ export type CommandField = {
 
 function SearchableSelectField({
   field,
+  id,
   value,
   onChange,
   fieldError,
   errorId,
 }: {
   field: CommandField;
+  id: string;
   value: string;
   onChange: (value: string) => void;
   fieldError?: string;
@@ -71,6 +73,7 @@ function SearchableSelectField({
       <PopoverTrigger
         render={
           <button
+            id={id}
             type="button"
             disabled={field.disabled}
             data-field-name={field.name}
@@ -193,6 +196,7 @@ export function PlatformCommandForm({
   const [error, setError] = useState('');
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState('');
+  const fieldIdPrefix = useId();
   const [selectState, setSelectState] = useState(() => ({
     fields,
     values: initialSelectValues(fields),
@@ -322,13 +326,18 @@ export function PlatformCommandForm({
           const wide = field.type === 'textarea' || field.type === 'json';
           const fieldError = fieldErrors[field.name];
           const errorId = `${field.name}-error`;
+          const fieldId = `${fieldIdPrefix}-${field.name}`;
           return (
-            <label key={field.name} className={cn('block', wide && 'sm:col-span-2')}>
-              <span className="mb-1.5 block text-xs font-semibold text-text-strong">
+            <div key={field.name} className={cn('block', wide && 'sm:col-span-2')}>
+              <label
+                htmlFor={fieldId}
+                className="mb-1.5 block text-xs font-semibold text-text-strong"
+              >
                 {field.label}
-              </span>
+              </label>
               {field.type === 'textarea' || field.type === 'json' ? (
                 <textarea
+                  id={fieldId}
                   name={field.name}
                   required={field.required}
                   disabled={field.disabled}
@@ -346,6 +355,7 @@ export function PlatformCommandForm({
               ) : field.type === 'searchable-select' ? (
                 <SearchableSelectField
                   field={{ ...field, options: optionsFor(field, selectValues) }}
+                  id={fieldId}
                   value={selectValues[field.name] ?? ''}
                   onChange={(value) => updateSelect(field.name, value)}
                   fieldError={fieldError}
@@ -353,6 +363,7 @@ export function PlatformCommandForm({
                 />
               ) : field.type === 'select' ? (
                 <select
+                  id={fieldId}
                   name={field.name}
                   required={field.required}
                   disabled={field.disabled}
@@ -372,6 +383,7 @@ export function PlatformCommandForm({
               ) : field.type === 'checkbox' ? (
                 <span className="flex h-11 items-center gap-2 rounded-lg border border-border-default bg-card px-3 text-xs">
                   <input
+                    id={fieldId}
                     name={field.name}
                     type="checkbox"
                     required={field.required}
@@ -385,6 +397,7 @@ export function PlatformCommandForm({
                 </span>
               ) : (
                 <input
+                  id={fieldId}
                   name={field.name}
                   type={field.type ?? 'text'}
                   required={field.required}
@@ -430,7 +443,7 @@ export function PlatformCommandForm({
                   {fieldError}
                 </span>
               ) : null}
-            </label>
+            </div>
           );
         })}
       </div>

@@ -182,6 +182,15 @@ describe('NewOrganizationPage package step', () => {
     expect(screen.getByRole('button', { name: /Create onboarding record/ })).toBeInTheDocument();
   });
 
+  it('associates timezone and business day cutoff with exactly one control each', async () => {
+    const { container } = render(await renderPage({ vertical: 'RESTAURANT' }));
+
+    expect(screen.getByLabelText(/timezone/i)).toHaveAttribute('data-field-name', 'timezone');
+    expect(screen.getByLabelText(/business day cutoff/i)).toBe(
+      container.querySelector('input[name="businessDayCutoff"]')
+    );
+  });
+
   it('previews the post-submit restaurant state and remaining activation work', async () => {
     render(await renderPage({ vertical: 'RESTAURANT' }));
 
