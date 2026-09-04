@@ -63,6 +63,7 @@ describe('production deployment contract', () => {
     const template = read('infra', 'environment.bicep');
     const production = read('infra', 'production.bicepparam');
     const bootstrap = read('infra', 'production.bootstrap.bicepparam');
+    const extensionPreparation = read('prisma', 'prepare-extensions.sql');
 
     expect(template).toContain('param bootstrapDatabase bool = false');
     expect(template).toContain(
@@ -82,7 +83,9 @@ describe('production deployment contract', () => {
     expect(bootstrap).toContain('param bootstrapDatabase = true');
     // `postgresExtensions` has no default, so a param file that omits it does
     // not compile — the bootstrap file was left behind when it was introduced.
-    expect(bootstrap).toContain("param postgresExtensions = 'btree_gist'");
+    expect(production).toContain("param postgresExtensions = 'btree_gist,pg_trgm'");
+    expect(bootstrap).toContain("param postgresExtensions = 'btree_gist,pg_trgm'");
+    expect(extensionPreparation).toContain("ARRAY['btree_gist', 'pg_trgm']::name[]");
     expect(bootstrap).toContain('DEVFATHOM_PRODUCTION_ADMIN_PASSWORD');
     expect(bootstrap).toContain('DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD');
     expect(bootstrap).not.toContain('DEVFATHOM_PRODUCTION_SEED_PASSWORD');
@@ -97,5 +100,6 @@ describe('production deployment contract', () => {
     expect(staging).toContain('DEVFATHOM_STAGING_SEED_PASSWORD');
     expect(staging).toContain('DEVFATHOM_STAGING_ADMIN_PASSWORD');
     expect(staging).toContain('DEVFATHOM_STAGING_PLATFORM_ADMIN_PASSWORD');
+    expect(staging).toContain("param postgresExtensions = 'btree_gist,pg_trgm'");
   });
 });
