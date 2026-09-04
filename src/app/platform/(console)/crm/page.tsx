@@ -319,7 +319,7 @@ export default async function CrmPage() {
 
         <aside className="space-y-7">
           <section className="border border-border-default bg-abyss-900 p-5 text-paper-50">
-            <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-brass-300">
+            <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-primary-foreground">
               Follow-up queue
             </p>
             <h2 className="mt-1 font-display text-xl font-semibold">Next touches</h2>
@@ -328,7 +328,7 @@ export default async function CrmPage() {
                 <div key={followUp.id} className="py-3">
                   <div className="flex justify-between gap-3">
                     <p className="text-xs font-semibold">{followUp.title}</p>
-                    <span className="font-mono text-[9px] text-brass-300">
+                    <span className="font-mono text-[9px] text-primary-foreground">
                       {followUp.dueAt.toLocaleDateString()}
                     </span>
                   </div>
