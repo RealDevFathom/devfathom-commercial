@@ -48,6 +48,10 @@ import {
   snoozeSignal,
 } from '@/lib/pharmacy/stock-signals-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
+  appendTemperatureLog,
+  ManualTemperatureSensorSource,
+} from '@/lib/pharmacy/temperature-log';
 
 import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
@@ -114,6 +118,23 @@ export const pharmacyInventoryRouter = router({
           name: z.string().trim().min(1).max(200),
           kind: z.enum(['STORE', 'RACK_BIN', 'FRIDGE', 'SAFE', 'QUARANTINE', 'TRANSIT', 'RETURNS']),
           coldChain: z.boolean().default(false),
+          minimumTemperatureC: z.number().finite().min(-100).max(100).nullable().default(null),
+          maximumTemperatureC: z.number().finite().min(-100).max(100).nullable().default(null),
+        })
+        .superRefine((value, ctx) => {
+          if (
+            value.coldChain &&
+            (value.minimumTemperatureC === null ||
+              value.maximumTemperatureC === null ||
+              value.minimumTemperatureC >= value.maximumTemperatureC)
+          ) {
+            ctx.addIssue({
+              code: 'custom',
+              message:
+                'Validated cold-chain zones require a valid minimum and maximum temperature.',
+              path: ['minimumTemperatureC'],
+            });
+          }
         })
         .strict()
     )
@@ -122,6 +143,31 @@ export const pharmacyInventoryRouter = router({
       return ctx.db.pharmacyStockLocation.create({
         data: { ...input, organizationId: scope.organizationId },
       });
+    }),
+
+  recordTemperature: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          stockLocationId: z.string().min(1),
+          temperatureC: z.number().finite().min(-100).max(100),
+          recordedAt: z.date(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        return await appendTemperatureLog(
+          ctx.db,
+          scope,
+          input.stockLocationId,
+          new ManualTemperatureSensorSource(input)
+        );
+      } catch (error) {
+        domainError(error);
+      }
     }),
 
   registerBatch: protectedProcedure

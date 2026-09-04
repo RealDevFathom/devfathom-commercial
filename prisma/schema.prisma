@@ -1075,16 +1075,18 @@ model UnfulfilledDemandEvent {
 /// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
 /// validated cold-chain zones a cold-chain medicine may be put away into.
 model PharmacyStockLocation {
-  id             String                    @id @default(cuid())
-  organizationId String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
-  code           String
-  name           String
-  kind           PharmacyStockLocationKind
-  coldChain      Boolean                   @default(false)
-  active         Boolean                   @default(true)
-  createdAt      DateTime                  @default(now())
-  updatedAt      DateTime                  @updatedAt
+  id                  String                    @id @default(cuid())
+  organizationId      String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  code                String
+  name                String
+  kind                PharmacyStockLocationKind
+  coldChain           Boolean                   @default(false)
+  minimumTemperatureC Float?
+  maximumTemperatureC Float?
+  active              Boolean                   @default(true)
+  createdAt           DateTime                  @default(now())
+  updatedAt           DateTime                  @updatedAt
 
   purchaseReturnLines     PharmacyPurchaseReturnLine[]
   stockSignals            PharmacyStockSignal[]
@@ -1095,12 +1097,34 @@ model PharmacyStockLocation {
   balances                PharmacyStockBalance[]
   discrepancies           PharmacyStockDiscrepancy[]
   deviceQuotas            PharmacyDeviceLotQuota[]
+  temperatureLogs         PharmacyTemperatureLog[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_stock_locations_org_branch_id_key")
   @@unique([organizationId, branchId, code], map: "pharmacy_stock_locations_org_branch_code_key")
   @@index([organizationId, branchId], map: "pharmacy_stock_locations_org_branch_idx")
   @@map("pharmacy_stock_locations")
+}
+
+/// INV-05: immutable storage-zone temperature evidence. Sensor integrations
+/// append through the same source seam as manual readings; P0 ships manual only.
+model PharmacyTemperatureLog {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  stockLocationId String
+  actorId         String
+  temperatureC    Float
+  recordedAt      DateTime
+  outOfRange      Boolean
+  source          String   @default("MANUAL")
+  createdAt       DateTime @default(now())
+
+  location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_temperature_logs_org_id_key")
+  @@index([organizationId, branchId, stockLocationId, recordedAt], map: "pharmacy_temperature_logs_zone_time_idx")
+  @@map("pharmacy_temperature_logs")
 }
 
 /// §8A invariant 18: the manufacturer's batch. Organization-scoped, not

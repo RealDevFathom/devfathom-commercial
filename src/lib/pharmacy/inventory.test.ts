@@ -19,6 +19,7 @@ import { describe, expect, it } from 'vitest';
 import {
   arrangementFor,
   assertArrangementReconciles,
+  assertColdChainStorage,
   blockReasonFor,
   planAllocation,
   planBreakPack,
@@ -29,6 +30,19 @@ import type { AllocationCandidate, BatchState, StockDisposition } from './invent
 
 const AT = new Date('2026-09-02T09:00:00.000Z');
 const SCOPE = { organizationId: 'org_a', branchId: 'branch_a', at: AT };
+
+describe('INV-05 cold-chain put-away', () => {
+  it('rejects cold-chain stock outside validated storage with a typed reason', () => {
+    expect(() => assertColdChainStorage(true, false)).toThrowError(
+      expect.objectContaining({ reason: 'COLD_CHAIN_STORAGE_REQUIRED' })
+    );
+  });
+
+  it('allows cold-chain stock in validated storage and ambient stock anywhere', () => {
+    expect(() => assertColdChainStorage(true, true)).not.toThrow();
+    expect(() => assertColdChainStorage(false, false)).not.toThrow();
+  });
+});
 
 function candidate(overrides: Partial<AllocationCandidate> = {}): AllocationCandidate {
   return {
