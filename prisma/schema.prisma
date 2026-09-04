@@ -213,6 +213,8 @@ model PharmacyBranch {
   purchaseOrders     PharmacyPurchaseOrder[]
   onboardingGates    PharmacyOnboardingGateState[]
   registeredDevices  PharmacyRegisteredDevice[]
+  ownerDigestSettings PharmacyOwnerDigestSetting[]
+  ownerDigestCaptures PharmacyOwnerDigestCapture[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -1979,6 +1981,8 @@ model User {
   writtenNotes                PerformanceNote[]              @relation("NoteAuthor")
   activities                  Activity[]
   notifications               Notification[]
+  pharmacyOwnerDigestSettings PharmacyOwnerDigestSetting[]
+  pharmacyOwnerDigestCaptures PharmacyOwnerDigestCapture[]
   uploadedFiles               ProjectFile[]
   uploadedDocs                Document[]
   timeEntries                 TimeEntry[]
@@ -4039,6 +4043,8 @@ model Organization {
   insightLoyaltyLiabilities            InsightLoyaltyLiability[]
   restaurantNotificationWebhook        RestaurantNotificationWebhook?
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
+  pharmacyOwnerDigestSettings            PharmacyOwnerDigestSetting[]
+  pharmacyOwnerDigestCaptures            PharmacyOwnerDigestCapture[]
 
   @@index([status])
   @@index([deploymentMode])
@@ -12246,4 +12252,48 @@ model PharmacyDeviceLotQuota {
   @@unique([organizationId, id], map: "pharmacy_device_lot_quotas_org_id_key")
   @@index([organizationId, inventoryLotId, stockLocationId], map: "pharmacy_device_lot_quotas_bucket_idx")
   @@map("pharmacy_device_lot_quotas")
+}
+
+/// RPT-03 — one owner's explicit daily digest opt-in for one active branch.
+/// `timeMinutes` is local wall-clock minutes after midnight in the owning
+/// organization's IANA timezone. `nextDueAt` makes cron discovery bounded.
+model PharmacyOwnerDigestSetting {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  branchId       String
+  enabled        Boolean  @default(false)
+  timeMinutes    Int      @default(480)
+  nextDueAt      DateTime?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, userId, branchId], map: "pharmacy_owner_digest_settings_org_user_branch_key")
+  @@index([enabled, nextDueAt], map: "pharmacy_owner_digest_settings_due_idx")
+  @@map("pharmacy_owner_digest_settings")
+}
+
+/// Persistent CaptureChannel delivery. Unique business-date key makes cron
+/// retries idempotent while retaining exact RPT-01 metric keys and contracts.
+model PharmacyOwnerDigestCapture {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId         String
+  branchId       String
+  businessDate   String
+  rendered       String
+  metrics        Json
+  capturedAt     DateTime @default(now())
+
+  organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, userId, branchId, businessDate], map: "pharmacy_owner_digest_captures_daily_key")
+  @@index([organizationId, userId, capturedAt(sort: Desc)], map: "pharmacy_owner_digest_captures_history_idx")
+  @@map("pharmacy_owner_digest_captures")
 }
