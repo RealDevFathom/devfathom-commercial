@@ -1,0 +1,458 @@
+name: QA gate
+
+on:
+  push:
+    branches: [restaurantv2]
+  workflow_dispatch:
+    inputs:
+      sha:
+        description: Commit SHA to verify (defaults to the dispatch commit)
+        required: false
+        type: string
+
+permissions:
+  contents: read
+
+concurrency:
+  group: qa-${{ github.ref }}-${{ inputs.sha || github.sha }}
+  cancel-in-progress: true
+
+jobs:
+  automated-gate:
+    name: WHA-1125 automated gate
+    # For more CPU/RAM, replace ubuntu-latest with a configured larger GitHub-hosted runner label.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: gate-postgres-ci-only
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      RUNTIME_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      SUPERUSER_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
+      DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      SHADOW_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_shadow_test
+      RESTAURANT_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      APP_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      CAMERA_TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      INVENTORY_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      M8_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      MEETING_BACKFILL_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      MENU_IMPORT_TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      PHARMACY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      RESTAURANT_ACTOR_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA288_TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA434_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA910_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA1198_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      DELIVERY_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      EXTENSION_ADMIN_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      M8_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      PHARMACY_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      RESTAURANT_ACTOR_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA1168_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA1198_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA434_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA566_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA874_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA910_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      RESTAURANT_E2E_RESTORATION_DB: '1'
+      RESTAURANT_ACTOR_ADMIN_EMAIL: admin@restaurant-e2e.test
+      RESTAURANT_ACTOR_ADMIN_PASSWORD: gate-admin-ci-only
+      RESTAURANT_ACTOR_OPERATOR_EMAIL: operator@restaurant-e2e.test
+      RESTAURANT_ACTOR_OPERATOR_PASSWORD: gate-operator-ci-only
+      AUTH_SECRET: gate-auth-secret-ci-only-000000000000000000000000
+      AUTH_TRUST_HOST: 'true'
+      AUTH_URL: http://localhost:3000
+      NEXT_PUBLIC_APP_URL: http://localhost:3000
+      PLATFORM_BASE_DOMAIN: localhost
+      PLATFORM_ENCRYPTION_KEY: 0000000000000000000000000000000000000000000000000000000000000000
+      CAMERA_CREDENTIAL_KEY: 1111111111111111111111111111111111111111111111111111111111111111
+      DEFAULT_ORGANIZATION_ID: org_devfathom
+      SEED_PASSWORD: gate-seed-ci-only
+      DEVFATHOM_REGISTRY_NAME: gatecompileonly
+      DEVFATHOM_STAGING_IMAGE: gatecompileonly.azurecr.io/devfathom:gate
+      DEVFATHOM_PRODUCTION_IMAGE: gatecompileonly.azurecr.io/devfathom:gate
+      DEVFATHOM_STAGING_POSTGRES_PASSWORD: gate-compile-only-postgres-password
+      DEVFATHOM_STAGING_APP_DATABASE_PASSWORD: gate-placeholder
+      DEVFATHOM_STAGING_AUTH_SECRET: gate-compile-only-auth-secret-000000
+      DEVFATHOM_STAGING_PLATFORM_ENCRYPTION_KEY: gate-compile-only-platform-key-00000
+      DEVFATHOM_STAGING_CAMERA_CREDENTIAL_KEY: gate-compile-only-camera-key-000000
+      DEVFATHOM_STAGING_CRON_SECRET: gate-compile-only-cron-secret-000000
+      DEVFATHOM_STAGING_SEED_PASSWORD: gate-compile-only-seed-password
+      DEVFATHOM_STAGING_ADMIN_PASSWORD: gate-compile-only-admin-password
+      DEVFATHOM_STAGING_PLATFORM_ADMIN_PASSWORD: gate-compile-only-platform-admin
+      DEVFATHOM_PRODUCTION_POSTGRES_PASSWORD: gate-compile-only-postgres-password
+      DEVFATHOM_PRODUCTION_APP_DATABASE_PASSWORD: gate-placeholder
+      DEVFATHOM_PRODUCTION_AUTH_SECRET: gate-compile-only-auth-secret-000000
+      DEVFATHOM_PRODUCTION_PLATFORM_ENCRYPTION_KEY: gate-compile-only-platform-key-00000
+      DEVFATHOM_PRODUCTION_CAMERA_CREDENTIAL_KEY: gate-compile-only-camera-key-000000
+      DEVFATHOM_PRODUCTION_CRON_SECRET: gate-compile-only-cron-secret-000000
+      DEVFATHOM_PRODUCTION_ADMIN_PASSWORD: gate-compile-only-admin-password
+      DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD: gate-compile-only-platform-admin
+      DEVFATHOM_MEETINGS_SSH_PUBLIC_KEY: ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIGF0ZWNvbXBpbGVvbmx5a2V5MDAwMDAwMDAw gate@ci
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+          fetch-depth: 0
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Run automated gate and retain every exit code
+        shell: bash
+        run: |
+          set +e
+          mkdir -p gate
+          : > gate/exit-codes.txt
+          record() { printf '%s=%s\n' "$1" "$2" >> gate/exit-codes.txt; }
+          run() {
+            local name="$1"
+            shift
+            "$@" >"gate/$name.stdout.log" 2>"gate/$name.stderr.log"
+            local code=$?
+            record "$name" "$code"
+            return 0
+          }
+
+          PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL' >gate/database-bootstrap.stdout.log 2>gate/database-bootstrap.stderr.log
+          CREATE ROLE gate_owner LOGIN PASSWORD 'gate-owner-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE ROLE gate_runtime LOGIN PASSWORD 'gate-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE DATABASE devfathom_gate_test OWNER gate_owner;
+          REVOKE ALL ON DATABASE devfathom_gate_test FROM PUBLIC;
+          GRANT CONNECT, TEMPORARY ON DATABASE devfathom_gate_test TO gate_runtime;
+          CREATE DATABASE devfathom_gate_shadow_test OWNER gate_owner;
+          REVOKE ALL ON DATABASE devfathom_gate_shadow_test FROM PUBLIC;
+          SQL
+          record database-bootstrap "$?"
+
+          DATABASE_URL="$OWNER_URL" EXTENSION_ADMIN_DATABASE_URL="$OWNER_URL" run prepare-extensions bun prisma/prepare-extensions.ts
+          DATABASE_URL="$OWNER_URL" run migrate-deploy bunx prisma migrate deploy
+          run prisma-generate bunx prisma generate
+          run runtime-grants psql "$OWNER_URL" -v ON_ERROR_STOP=1 \
+            -c 'GRANT USAGE ON SCHEMA public TO gate_runtime;' \
+            -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gate_runtime;' \
+            -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gate_runtime;' \
+            -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
+            -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
+          DATABASE_URL="$OWNER_URL" run seed bunx prisma db seed
+          run vitest bunx vitest run --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
+          run lint bun run lint
+
+          git diff --name-only -z b20b577f..HEAD -- '*.ts' '*.tsx' '*.css' '*.md' '*.json' '*.mjs' > gate/prettier-files.zlist
+          record prettier-file-list "$?"
+          if [ -s gate/prettier-files.zlist ]; then
+            xargs -0 bunx prettier --check < gate/prettier-files.zlist >gate/prettier-check.stdout.log 2>gate/prettier-check.stderr.log
+            record prettier-check "$?"
+          else
+            : > gate/prettier-check.stdout.log
+            : > gate/prettier-check.stderr.log
+            record prettier-check 0
+          fi
+
+          NODE_OPTIONS=--max-old-space-size=8192 run typecheck bun run typecheck
+          NODE_OPTIONS=--max-old-space-size=8192 run build bun run build
+          for file in infra/*.bicep; do
+            name="bicep-$(basename "$file" .bicep)"
+            run "$name" az bicep build --file "$file" --outfile "gate/${name}.json"
+          done
+          for file in infra/*.bicepparam; do
+            name="bicep-$(basename "$file" .bicepparam)-params"
+            run "$name" az bicep build-params --file "$file" --outfile "gate/${name}.json"
+          done
+      - name: Upload automated-gate evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: automated-gate
+          path: gate/
+          retention-days: 14
+      - name: Assert automated gate
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const failures = [];
+          const exits = fs.readFileSync('gate/exit-codes.txt', 'utf8').trim().split('\n');
+          for (const line of exits) {
+            const split = line.lastIndexOf('=');
+            if (split < 1 || line.slice(split + 1) !== '0') failures.push(line);
+          }
+          try {
+            const report = JSON.parse(fs.readFileSync('gate/vitest.json', 'utf8'));
+            const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites'];
+            for (const field of requiredZero) {
+              if (typeof report[field] !== 'number' || !Number.isFinite(report[field]) || report[field] !== 0)
+                failures.push(`vitest JSON ${field}=${report[field]}; require numeric zero`);
+            }
+          } catch (error) {
+            failures.push(`vitest JSON unavailable: ${error.message}`);
+          }
+          if (failures.length) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          NODE
+
+  browser-gate:
+    name: WHA-1132 browser gate
+    needs: automated-gate
+    if: always() && needs.automated-gate.result == 'success'
+    # For more CPU/RAM, replace ubuntu-latest with a configured larger GitHub-hosted runner label.
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: gate-postgres-ci-only
+        ports: ['55432:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
+    env:
+      CI: '1'
+      NODE_OPTIONS: --max-old-space-size=8192
+      AUTH_SECRET: gate-browser-auth-secret-ci-only-0000000000000000
+      AUTH_TRUST_HOST: 'true'
+      PLATFORM_BASE_DOMAIN: localhost
+      PLATFORM_ENCRYPTION_KEY: 2222222222222222222222222222222222222222222222222222222222222222
+      CAMERA_CREDENTIAL_KEY: 3333333333333333333333333333333333333333333333333333333333333333
+      SEED_PASSWORD: gate-browser-seed-ci-only
+      PLATFORM_ADMIN_EMAIL: platform-admin@e2e.invalid
+      PLATFORM_ADMIN_PASSWORD: gate-platform-admin-ci-only
+      PLAYWRIGHT_PLATFORM_ADMIN_EMAIL: platform-admin@e2e.invalid
+      PLAYWRIGHT_PLATFORM_ADMIN_PASSWORD: gate-platform-admin-ci-only
+      RESTAURANT_ACTOR_ADMIN_EMAIL: alex@company.com
+      RESTAURANT_ACTOR_ADMIN_PASSWORD: gate-browser-seed-ci-only
+      RESTAURANT_ACTOR_OPERATOR_EMAIL: operator@restaurant-e2e.test
+      RESTAURANT_ACTOR_OPERATOR_PASSWORD: gate-restaurant-operator-ci-only
+      AGENCY_E2E_ADMIN_EMAIL: agency-admin@agency-e2e.test
+      AGENCY_E2E_ADMIN_PASSWORD: gate-agency-admin-ci-only
+      PHARMACY_E2E_ADMIN_EMAIL: pharmacy-admin@pharmacy-e2e.test
+      PHARMACY_E2E_ADMIN_PASSWORD: gate-pharmacy-admin-ci-only
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'workflow_dispatch' && inputs.sha || github.sha }}
+      - uses: oven-sh/setup-bun@v2
+        with:
+          bun-version: 1.3.14
+      - run: bun install --frozen-lockfile
+      - name: Install Chromium
+        run: bunx playwright install --with-deps chromium
+      - name: 00-clean-build
+        id: clean_build
+        continue-on-error: true
+        run: bun run build
+      - name: Record 00-clean-build
+        if: always()
+        run: |
+          mkdir -p gate/browser
+          printf '00-clean-build=%s\n' '${{ steps.clean_build.outcome == 'success' && '0' || '1' }}' > gate/browser/exit-codes.txt
+      - name: 01-provision
+        id: provision
+        continue-on-error: true
+        shell: bash
+        run: |
+          set -euo pipefail
+          owner_base='postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432'
+          PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL'
+          CREATE ROLE gate_owner LOGIN PASSWORD 'gate-owner-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE ROLE gate_runtime LOGIN PASSWORD 'gate-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          SQL
+          for db in restaurant_e2e_gate platform_e2e_gate agency_e2e_gate pharmacy_e2e_gate; do
+            PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 \
+              -c "CREATE DATABASE $db OWNER gate_owner;" \
+              -c "REVOKE ALL ON DATABASE $db FROM PUBLIC;" \
+              -c "GRANT CONNECT, TEMPORARY ON DATABASE $db TO gate_runtime;"
+            EXTENSION_ADMIN_DATABASE_URL="$owner_base/$db" DATABASE_URL="$owner_base/$db" bun prisma/prepare-extensions.ts
+            DATABASE_URL="$owner_base/$db" bunx prisma migrate deploy
+            psql "$owner_base/$db" -v ON_ERROR_STOP=1 \
+              -c 'GRANT USAGE ON SCHEMA public TO gate_runtime;' \
+              -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gate_runtime;' \
+              -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gate_runtime;' \
+              -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
+              -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
+            DATABASE_URL="$owner_base/$db" bunx prisma db seed
+          done
+      - name: Record 01-provision
+        if: always()
+        run: printf '01-provision=%s\n' '${{ steps.provision.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+      - name: 02-run-restaurant
+        id: restaurant
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
+          RESTAURANT_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/restaurant_e2e_gate
+          RESTAURANT_INTEGRATED_E2E: '1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/restaurant-results.json
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/restaurant
+        run: >-
+          bunx tsx scripts/run-restaurant-e2e.ts
+          tests/e2e/restaurant-controls-final.spec.ts
+          tests/e2e/restaurant-integrated.spec.ts
+          tests/e2e/restaurant-lifecycles-final.spec.ts
+          tests/e2e/restaurant-pos-kds.spec.ts
+          tests/e2e/restaurant-pos-kds-resilience.spec.ts
+          tests/e2e/restaurant-delivery.spec.ts
+          --workers=1 --reporter=html,json
+      - name: Record 02-run-restaurant
+        if: always()
+        run: printf '02-run-restaurant=%s\n' '${{ steps.restaurant.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+      - name: 03-run-platform
+        id: platform
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
+          PLAYWRIGHT_DATABASE_ADMIN_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/platform_e2e_gate?options=-c%20app.is_platform_admin%3Dtrue
+          PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/platform-results.json
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/platform
+        run: bunx playwright test --config=tests/e2e/platform-control-plane.config.ts --workers=1 --reporter=html,json
+      - name: Record 03-run-platform
+        if: always()
+        run: printf '03-run-platform=%s\n' '${{ steps.platform.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+      - name: 05-run-agency
+        id: agency
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
+          AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
+          AGENCY_E2E: '1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/agency-results.json
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/agency
+        run: bunx tsx scripts/run-agency-e2e.ts --workers=1 --reporter=html,json
+      - name: Record 05-run-agency
+        if: always()
+        run: printf '05-run-agency=%s\n' '${{ steps.agency.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+      - name: Run pharmacy counter and time-to-first-sale
+        id: pharmacy
+        continue-on-error: true
+        env:
+          DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
+          TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
+          PHARMACY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
+          PHARMACY_E2E: '1'
+          PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/pharmacy-results.json
+          PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/pharmacy
+        run: >-
+          bunx tsx scripts/run-pharmacy-e2e.ts --workers=1 --reporter=html,json
+          tests/e2e/pharmacy-counter.spec.ts tests/e2e/time-to-first-sale.spec.ts
+      - name: Record pharmacy lane
+        if: always()
+        run: printf 'pharmacy-counter-time-to-first-sale=%s\n' '${{ steps.pharmacy.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
+      - name: 21-run-all-lanes summary
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'gate/browser/exit-codes.txt';
+          const expected = [
+            '00-clean-build',
+            '01-provision',
+            '02-run-restaurant',
+            '03-run-platform',
+            '05-run-agency',
+            'pharmacy-counter-time-to-first-sale',
+          ];
+          let aggregate = 0;
+          let lines = [];
+          try {
+            lines = fs.readFileSync(path, 'utf8').trim().split('\n');
+          } catch {
+            aggregate = 1;
+          }
+          const values = new Map();
+          for (const line of lines) {
+            const match = /^([^=]+)=([0-9]+)$/.exec(line);
+            if (!match || values.has(match[1])) {
+              aggregate = 1;
+              continue;
+            }
+            values.set(match[1], Number(match[2]));
+          }
+          for (const name of expected) {
+            if (!values.has(name) || values.get(name) !== 0) aggregate = 1;
+          }
+          if (values.size !== expected.length || [...values.keys()].some((name) => !expected.includes(name))) aggregate = 1;
+          fs.appendFileSync(path, `21-run-all-lanes=${aggregate}\n`);
+          NODE
+          cp gate/browser/exit-codes.txt gate/browser/21-run-all-lanes.txt
+      - name: Upload browser evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-gate
+          path: |
+            gate/browser/
+            playwright-report/
+            playwright-artifacts/
+            test-results/restaurant-integrated/
+          if-no-files-found: warn
+          retention-days: 14
+      - name: Assert browser gate
+        if: always()
+        shell: bash
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const failures = fs.readFileSync('gate/browser/exit-codes.txt', 'utf8')
+            .trim().split('\n').filter((line) => !line.endsWith('=0'));
+          function totals(name) {
+            try {
+              const report = JSON.parse(fs.readFileSync(`gate/browser/${name}-results.json`, 'utf8'));
+              const tests = (report.suites || []).flatMap(function walk(suite) {
+                return [...(suite.specs || []).flatMap((spec) => spec.tests || []),
+                  ...(suite.suites || []).flatMap(walk)];
+              });
+              return {
+                expected: tests.filter((test) => test.status === 'expected').length,
+                unexpected: tests.filter((test) => test.status === 'unexpected').length,
+                skipped: tests.filter((test) => test.status === 'skipped').length,
+                didNotRun: tests.filter((test) => {
+                  const results = test.results || [];
+                  return results.length === 0 ||
+                    (results.at(-1).status === 'skipped' && test.expectedStatus !== 'skipped');
+                }).length,
+              };
+            } catch (error) {
+              failures.push(`${name} JSON unavailable: ${error.message}`);
+              return {};
+            }
+          }
+          const restaurant = totals('restaurant');
+          const platform = totals('platform');
+          const agency = totals('agency');
+          const pharmacy = totals('pharmacy');
+          if (restaurant.expected !== 15 || restaurant.unexpected !== 0 || restaurant.skipped !== 0 || restaurant.didNotRun !== 0)
+            failures.push(`restaurant totals ${JSON.stringify(restaurant)}; require 15/15, unexpected 0, skipped 0, did-not-run 0`);
+          if (platform.unexpected !== 0 || platform.didNotRun !== 0 || platform.skipped !== 0)
+            failures.push(`platform totals ${JSON.stringify(platform)}; require unexpected 0, did-not-run 0, skipped 0`);
+          if (agency.expected !== 8 || agency.unexpected !== 0 || agency.skipped !== 0)
+            failures.push(`agency totals ${JSON.stringify(agency)}; require 8/8, unexpected 0, skipped 0`);
+          if (pharmacy.unexpected !== 0 || pharmacy.skipped !== 0 || pharmacy.didNotRun !== 0)
+            failures.push(`pharmacy totals ${JSON.stringify(pharmacy)}; require unexpected 0, skipped 0, did-not-run 0`);
+          if (failures.length) {
+            console.error(failures.join('\n'));
+            process.exit(1);
+          }
+          NODE
