@@ -59,7 +59,7 @@ function State({ kind }: { kind: 'disabled' | 'permission' | 'error' }) {
         heading="SOP reports"
         description="Outcome and performance reconciliation for completed SOP work."
       />
-      <SectionCard title={copy[0]}>
+      <SectionCard title={copy[0]} titleLevel={2}>
         <p className="text-sm text-text-muted">{copy[1]}</p>
         {kind === 'error' ? (
           <Link className={`${buttonVariants({ variant: 'secondary' })} mt-4`} href={route}>
@@ -96,7 +96,7 @@ export default async function SopReportsContent({ searchParams }: { searchParams
           heading="SOP reports"
           description="Outcome and performance reconciliation for completed SOP work."
         />
-        <SectionCard title="No active branches">
+        <SectionCard title="No active branches" titleLevel={2}>
           <p className="text-sm text-text-muted">
             Create or activate a branch before running an SOP report.
           </p>
@@ -137,7 +137,7 @@ export default async function SopReportsContent({ searchParams }: { searchParams
           </Link>
         }
       />
-      <SectionCard title="Report filters" eyebrow="URL-persisted">
+      <SectionCard title="Report filters" eyebrow="URL-persisted" titleLevel={2}>
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" method="get">
           <label className="text-sm text-text-body">
             Branch

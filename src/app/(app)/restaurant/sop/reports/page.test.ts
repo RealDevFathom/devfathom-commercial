@@ -20,4 +20,14 @@ describe('SOP reports route shell', () => {
     expect(content).toContain("from '@/server/routers/restaurant-sop-execution'");
     expect(content).toContain('const query = await searchParams');
   });
+
+  it('starts every rendered report state with an h2 after the page h1', () => {
+    const content = readFileSync(`${routeDirectory}/report-content.tsx`, 'utf8');
+
+    expect(content).toContain('<SectionCard title={copy[0]} titleLevel={2}>');
+    expect(content).toContain('<SectionCard title="No active branches" titleLevel={2}>');
+    expect(content).toContain(
+      '<SectionCard title="Report filters" eyebrow="URL-persisted" titleLevel={2}>'
+    );
+  });
 });
