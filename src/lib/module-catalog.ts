@@ -226,6 +226,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyDispensing: 'pharmacy-dispensing',
   pharmacySafety: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
+  pharmacyOrdering: 'pharmacy-counter',
 };
 
 export function moduleForProcedure(path: string): string | null {
@@ -302,6 +303,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // separately and a catch-all would gate them all on `pharmacy-core`.
   ['/pharmacy/purchasing', 'pharmacy-procurement'],
   ['/pharmacy/medicines', 'pharmacy-core'],
+  ['/pharmacy/orders', 'pharmacy-counter'],
   ['/restaurant/staff/roster', 'restaurant-core'],
   ['/restaurant/staff', 'restaurant-core'],
   ['/restaurant/devices', 'restaurant-core'],

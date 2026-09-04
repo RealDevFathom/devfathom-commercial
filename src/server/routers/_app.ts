@@ -57,6 +57,7 @@ import { pharmacySalesRouter } from './pharmacy-sales';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 import { pharmacyFinanceRouter } from './pharmacy-finance';
 import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
+import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 export const appRouter = router({
@@ -118,6 +119,7 @@ export const appRouter = router({
   pharmacyReports: pharmacyReportsRouter,
   pharmacyFinance: pharmacyFinanceRouter,
   pharmacyOnboarding: pharmacyOnboardingRouter,
+  pharmacyOrdering: pharmacyOrderingRouter,
   pharmacySupplierLinks: pharmacySupplierLinksRouter,
 });
 

@@ -103,9 +103,10 @@ describe('custom ABAC decisions', () => {
       // so they stay default-deny like the restaurant capabilities above.
       'pharmacy:dispense',
       'pharmacy:safety',
+      'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS).toHaveLength(39);
+    expect(ALL_ACTIONS).toHaveLength(40);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

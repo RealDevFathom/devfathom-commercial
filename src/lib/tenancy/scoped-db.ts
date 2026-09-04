@@ -84,7 +84,7 @@ function exposeNestedTransaction(tx: object): ScopedDb {
 export async function withTenantDb<T>(
   organizationId: string,
   run: (tx: ScopedDb) => Promise<T>,
-  options: { maxWait?: number; timeout?: number } = {}
+  options: { maxWait?: number; timeout?: number; userId?: string } = {}
 ): Promise<T> {
   assertOrganizationId(organizationId);
 
@@ -92,8 +92,10 @@ export async function withTenantDb<T>(
     async (tx) => {
       await tx.$queryRawUnsafe(
         `SELECT set_config('app.current_organization_id', $1, true),
+                set_config('app.current_user_id', $2, true),
                 set_config('app.is_platform_admin', 'false', true)`,
-        organizationId
+        organizationId,
+        options.userId ?? ''
       );
       return run(exposeNestedTransaction(tx));
     },
@@ -129,7 +131,7 @@ export async function withPlatformDb<T>(
  * executed in its own tenant-scoped transaction. Request handlers should prefer
  * one outer `withTenantDb` transaction and pass its `tx` directly.
  */
-export function createTenantDb(organizationId: string): ScopedDb {
+export function createTenantDb(organizationId: string, userId?: string): ScopedDb {
   assertOrganizationId(organizationId);
 
   return new Proxy({} as ScopedDb, {
@@ -140,20 +142,24 @@ export function createTenantDb(organizationId: string): ScopedDb {
         return async (
           run: (tx: ScopedDb) => Promise<unknown>,
           options?: { maxWait?: number; timeout?: number }
-        ) => withTenantDb(organizationId, run, options);
+        ) => withTenantDb(organizationId, run, { ...options, userId });
       }
 
       if (modelKey.startsWith('$')) {
         return (...args: unknown[]) =>
-          withTenantDb(organizationId, (tx) => {
-            const operation = (tx as unknown as Record<string, (...values: unknown[]) => unknown>)[
-              modelKey
-            ];
-            if (typeof operation !== 'function') {
-              throw new Error(`Unsupported Prisma operation: ${modelKey}`);
-            }
-            return Promise.resolve(operation.apply(tx, args));
-          });
+          withTenantDb(
+            organizationId,
+            (tx) => {
+              const operation = (
+                tx as unknown as Record<string, (...values: unknown[]) => unknown>
+              )[modelKey];
+              if (typeof operation !== 'function') {
+                throw new Error(`Unsupported Prisma operation: ${modelKey}`);
+              }
+              return Promise.resolve(operation.apply(tx, args));
+            },
+            { userId }
+          );
       }
 
       return new Proxy(
@@ -162,15 +168,19 @@ export function createTenantDb(organizationId: string): ScopedDb {
           get(_delegate, operationKey) {
             if (typeof operationKey !== 'string') return undefined;
             return (...args: unknown[]) =>
-              withTenantDb(organizationId, (tx) => {
-                const delegate = (tx as unknown as Record<string, unknown>)[modelKey] as
-                  Record<string, (...values: unknown[]) => unknown> | undefined;
-                const operation = delegate?.[operationKey];
-                if (typeof operation !== 'function') {
-                  throw new Error(`Unsupported Prisma operation: ${modelKey}.${operationKey}`);
-                }
-                return Promise.resolve(operation.apply(delegate, args));
-              });
+              withTenantDb(
+                organizationId,
+                (tx) => {
+                  const delegate = (tx as unknown as Record<string, unknown>)[modelKey] as
+                    Record<string, (...values: unknown[]) => unknown> | undefined;
+                  const operation = delegate?.[operationKey];
+                  if (typeof operation !== 'function') {
+                    throw new Error(`Unsupported Prisma operation: ${modelKey}.${operationKey}`);
+                  }
+                  return Promise.resolve(operation.apply(delegate, args));
+                },
+                { userId }
+              );
           },
         }
       );
