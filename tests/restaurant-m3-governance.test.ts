@@ -210,6 +210,14 @@ const DELIVERY_AND_PRINT_TABLES = [
   'restaurant_print_routes',
 ] as const;
 
+const CATERING_TABLES = [
+  'restaurant_catering_orders',
+  'restaurant_catering_order_lines',
+  'restaurant_catering_extra_costs',
+  'restaurant_catering_deliveries',
+  'restaurant_catering_events',
+] as const;
+
 // WHA-288 promotions: the promotion record and its immutable versions, the rule
 // components, the deterministic evaluation/candidate/application snapshots, the
 // per-unit allocations, and the cap counters plus their reservations.
@@ -574,6 +582,7 @@ describe('M3 schema governance (real PostgreSQL)', () => {
         ...CAMERA_TABLES,
         ...TERMINAL_PAYMENT_TABLES,
         ...DELIVERY_AND_PRINT_TABLES,
+        ...CATERING_TABLES,
         ...PROMOTION_TABLES,
         ...COMPLETION_WAVE_TABLES,
         ...FINAL_CORRECTION_TABLES,
