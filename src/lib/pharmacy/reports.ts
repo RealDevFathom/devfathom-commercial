@@ -45,6 +45,15 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
     'reports:financial',
   ],
   [
+    'cashMinor',
+    "Today's cash",
+    'Cash tender amounts less change given.',
+    'pharmacy_tenders',
+    'selected branches and business dates',
+    '/pharmacy/reports?section=finance',
+    'reports:financial',
+  ],
+  [
     'cashVarianceMinor',
     'Cash variance',
     'Counted cash less expected cash on final daily closes.',
@@ -251,6 +260,7 @@ export function validatePharmacyReportFilters(filters: PharmacyReportFilters) {
 type MoneyCounts = {
   salesMinor: number;
   marginMinor: number;
+  cashMinor: number;
   refundsMinor: number;
   cashVarianceMinor: number;
 };
@@ -261,7 +271,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
   const [money, stock, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
     await Promise.all([
       db.$queryRaw<MoneyCounts[]>(
-        Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor" - l."unitCostMinor" * l."canonicalUnits") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "marginMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to}),0)::int AS "cashVarianceMinor"`
+        Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor" - l."unitCostMinor" * l."canonicalUnits") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to}),0)::int AS "cashVarianceMinor"`
       ),
       db.$queryRaw<Array<{ open: number; recommended: number }>>(
         Prisma.sql`SELECT COUNT(*) FILTER (WHERE s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED'))::int AS "open", COUNT(*) FILTER (WHERE a."id" IS NOT NULL)::int AS "recommended" FROM "pharmacy_stock_signals" s LEFT JOIN "pharmacy_stock_signal_actions" a ON a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" WHERE s."branchId" IN (${branches})`
@@ -292,7 +302,13 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
         Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches})`
       ),
     ]);
-  const m = money[0] ?? { salesMinor: 0, marginMinor: 0, refundsMinor: 0, cashVarianceMinor: 0 };
+  const m = money[0] ?? {
+    salesMinor: 0,
+    marginMinor: 0,
+    cashMinor: 0,
+    refundsMinor: 0,
+    cashVarianceMinor: 0,
+  };
   const s = stock[0] ?? { open: 0, recommended: 0 };
   const e = expiry[0] ?? { d30: 0, d60: 0, d90: 0, d180: 0, quarantine: 0 };
   return {
@@ -361,7 +377,7 @@ export function pharmacyReportCatalog() {
     {
       key: 'finance-compliance',
       label: 'Finance and compliance',
-      metrics: ['cashVarianceMinor', 'refundsMinor', 'pharmacistCoverage'],
+      metrics: ['cashMinor', 'cashVarianceMinor', 'refundsMinor', 'pharmacistCoverage'],
       filters: ['branch', 'date', 'supplier'],
     },
   ] as const;
