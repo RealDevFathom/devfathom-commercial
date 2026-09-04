@@ -1,10 +1,19 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 vi.mock('server-only', () => ({}));
+
+const recipeMocks = vi.hoisted(() => ({ computeRecipeCost: vi.fn() }));
+vi.mock('./recipe-costing', async () => ({
+  ...(await vi.importActual<typeof import('./recipe-costing')>('./recipe-costing')),
+  computeRecipeCost: recipeMocks.computeRecipeCost,
+}));
 
 import { Prisma } from '@/generated/prisma/client';
 import {
   csvCell,
   exportRestaurantReportCsv,
+  readCateringReport,
+  readDishProfitabilityReport,
+  readFoodCostReport,
   readInventoryReport,
   readOverviewReport,
   readPaymentsReport,
@@ -17,6 +26,10 @@ import {
   validateRestaurantReportRange,
 } from './reports';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
+beforeEach(() => {
+  recipeMocks.computeRecipeCost.mockReset();
+});
 
 describe('restaurant report range and CSV safety', () => {
   it('accepts 90 days and rejects 91 or reversed dates', () => {
@@ -38,6 +51,250 @@ describe('restaurant report range and CSV safety', () => {
     expect(rowsToCsv([{ label: '=cmd', value: 'a,b' }], ['label', 'value'])).toBe(
       'label,value\n\'=cmd,"a,b"'
     );
+  });
+});
+
+describe('restaurant food-cost and dish-profitability reports', () => {
+  const salesRow = (
+    productId: string,
+    productName: string,
+    quantity: number,
+    netSales: number,
+    variantId: string | null = null
+  ) => ({
+    branchId: 'b1',
+    branchName: 'Main',
+    productId,
+    productName,
+    variantId,
+    categoryId: 'cat-1',
+    categoryName: 'Mains',
+    quantity: BigInt(quantity),
+    netSales: new Prisma.Decimal(netSales),
+  });
+  const recipeCost = (cost: number, missing: string[] = []) => ({
+    costPerPortion: new Prisma.Decimal(cost),
+    missing,
+  });
+
+  it('allocates settled-bill net sales, reports complete costs, and separates every exception', async () => {
+    const db = {
+      $queryRaw: vi.fn(async () => [
+        salesRow('p1', '=Burger', 10, 100),
+        salesRow('p2', 'Soup', 5, 50),
+        salesRow('p3', 'Curry', 3, 30),
+      ]),
+      restaurantRecipe: {
+        findMany: vi.fn(async () => [
+          { id: 'r1', organizationId: 'org1', productId: 'p1', variantId: null },
+          { id: 'r3', organizationId: 'org1', productId: 'p3', variantId: null },
+        ]),
+      },
+    } as unknown as ScopedDb;
+    recipeMocks.computeRecipeCost.mockImplementation(async ({ recipeId }: { recipeId: string }) =>
+      recipeId === 'r1' ? recipeCost(3) : recipeCost(2, ['ingredient-missing'])
+    );
+
+    const report = await readFoodCostReport(db, boundedRange);
+
+    expect(report.totals).toEqual({
+      netSales: '180',
+      costedNetSales: '100',
+      uncostedNetSales: '80',
+      theoreticalCost: '30',
+      foodCostPercent: '30',
+      grossMargin: '70',
+    });
+    expect(report.products).toEqual([
+      expect.objectContaining({
+        productId: 'p1',
+        quantity: '10',
+        theoreticalCost: '30',
+        grossMargin: '70',
+        marginPerItem: '7',
+      }),
+    ]);
+    expect(report.categories).toEqual([
+      expect.objectContaining({ name: 'Mains', netSales: '100', theoreticalCost: '30' }),
+    ]);
+    expect(report.branches).toEqual([
+      expect.objectContaining({ name: 'Main', netSales: '100', grossMargin: '70' }),
+    ]);
+    expect(report.uncostedProducts).toEqual([
+      expect.objectContaining({ productId: 'p3', reason: 'MISSING_INGREDIENT_COST' }),
+      expect.objectContaining({ productId: 'p2', reason: 'NO_RECIPE' }),
+    ]);
+    const sql = queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0]);
+    expect(sql).toContain('bill."status" = \'SETTLED\'');
+    expect(sql).toContain('bill_lines."discountTotal" * bill_lines."eligibleSales"');
+
+    const exported = await exportRestaurantReportCsv(db, 'food-cost', boundedRange, {
+      includeLabourCosts: false,
+    });
+    expect(exported.content).toContain("'=Burger");
+    expect(exported.content).toContain('MISSING_INGREDIENT_COST');
+    expect(exported.content).toContain('NO_RECIPE');
+  });
+
+  it('ranks dishes by volume and contribution margin around deterministic medians', async () => {
+    const db = {
+      $queryRaw: vi.fn(async () => [
+        salesRow('star', 'Star', 10, 100),
+        salesRow('plowhorse', 'Plowhorse', 10, 30),
+        salesRow('puzzle', 'Puzzle', 2, 20),
+        salesRow('dog', 'Dog', 2, 4),
+      ]),
+      restaurantRecipe: {
+        findMany: vi.fn(async () =>
+          ['star', 'plowhorse', 'puzzle', 'dog'].map((productId) => ({
+            id: `r-${productId}`,
+            organizationId: 'org1',
+            productId,
+            variantId: null,
+          }))
+        ),
+      },
+    } as unknown as ScopedDb;
+    recipeMocks.computeRecipeCost.mockImplementation(async ({ recipeId }: { recipeId: string }) =>
+      recipeId === 'r-star' || recipeId === 'r-plowhorse' ? recipeCost(2) : recipeCost(1)
+    );
+
+    const report = await readDishProfitabilityReport(db, boundedRange);
+
+    expect(report.thresholds).toEqual({ medianVolume: '6', medianMargin: '4.5' });
+    expect(
+      Object.fromEntries(report.menuEngineering.map((row) => [row.productId, row.quadrant]))
+    ).toEqual({ star: 'STAR', plowhorse: 'PLOWHORSE', puzzle: 'PUZZLE', dog: 'DOG' });
+    expect(report.byMargin.map((row) => row.productId)).toEqual([
+      'puzzle',
+      'star',
+      'dog',
+      'plowhorse',
+    ]);
+    expect(report.byVolume.slice(0, 2).map((row) => row.productId)).toEqual(['star', 'plowhorse']);
+  });
+});
+
+describe('restaurant catering report', () => {
+  it('combines quoted revenue, recipe snapshots, extras, margins, status and delivery timing', async () => {
+    const order = (
+      id: string,
+      status: string,
+      quotedTotal: Prisma.Decimal | null,
+      lines: Array<{
+        recipeId: string | null;
+        portions: Prisma.Decimal;
+        costPerPortionSnapshot: Prisma.Decimal | null;
+      }>,
+      deliveredAt: string | null
+    ) => ({
+      id,
+      organizationId: 'org1',
+      eventName: id === 'o1' ? '=Launch' : `Event ${id}`,
+      eventDate: new Date('2026-01-10T00:00:00Z'),
+      status,
+      quotedTotal,
+      branch: { id: 'b1', name: 'Main' },
+      lines: lines.map((line) => ({ ...line, description: 'Menu line' })),
+      extraCosts: id === 'o1' ? [{ amount: new Prisma.Decimal(10) }] : [],
+      delivery: deliveredAt
+        ? {
+            scheduledAt: new Date('2026-01-10T12:00:00Z'),
+            deliveredAt: new Date(deliveredAt),
+          }
+        : null,
+    });
+    const db = {
+      restaurantCateringOrder: {
+        findMany: vi.fn(async () => [
+          order(
+            'o1',
+            'DELIVERED',
+            new Prisma.Decimal(100),
+            [
+              {
+                recipeId: 'r1',
+                portions: new Prisma.Decimal(10),
+                costPerPortionSnapshot: new Prisma.Decimal(3),
+              },
+            ],
+            '2026-01-10T11:55:00Z'
+          ),
+          order(
+            'o2',
+            'CLOSED',
+            new Prisma.Decimal(80),
+            [
+              {
+                recipeId: 'r2',
+                portions: new Prisma.Decimal(5),
+                costPerPortionSnapshot: null,
+              },
+            ],
+            '2026-01-10T12:05:00Z'
+          ),
+          order(
+            'o3',
+            'DRAFT',
+            null,
+            [
+              {
+                recipeId: null,
+                portions: new Prisma.Decimal(1),
+                costPerPortionSnapshot: null,
+              },
+            ],
+            null
+          ),
+        ]),
+      },
+    } as unknown as ScopedDb;
+    recipeMocks.computeRecipeCost.mockResolvedValue({
+      costPerPortion: new Prisma.Decimal(2),
+      missing: [],
+    });
+
+    const report = await readCateringReport(db, boundedRange);
+
+    expect(report.totals).toEqual({
+      orderCount: 3,
+      revenue: '180',
+      knownIngredientCost: '40',
+      extras: '10',
+      margin: null,
+      missingCostLineCount: 1,
+      missingRevenueOrderCount: 1,
+      deliveredCount: 2,
+      deliveredOnTimeCount: 1,
+      deliveredOnTimeRate: '50',
+    });
+    expect(report.orders).toEqual([
+      expect.objectContaining({
+        id: 'o1',
+        ingredientCost: '30',
+        margin: '60',
+        deliveredOnTime: true,
+      }),
+      expect.objectContaining({
+        id: 'o2',
+        ingredientCost: '10',
+        margin: '70',
+        deliveredOnTime: false,
+      }),
+      expect.objectContaining({ id: 'o3', ingredientCost: null, margin: null }),
+    ]);
+    expect(report.byStatus).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ status: 'DELIVERED', margin: '60' }),
+        expect.objectContaining({ status: 'DRAFT', margin: null, incompleteMarginCount: 1 }),
+      ])
+    );
+
+    const exported = await exportRestaurantReportCsv(db, 'catering', boundedRange, {
+      includeLabourCosts: false,
+    });
+    expect(exported.content).toContain("'=Launch");
+    expect(exported.content).toContain('Event o3');
   });
 });
 

@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate } from './business-date';
 import { resolveChainTip } from './daily-close';
+import { computeRecipeCost, RecipeCostingError } from './recipe-costing';
 
 export const MAX_REPORT_DAYS = 90;
 export const MAX_REPORT_BRANCHES = 100;
@@ -320,6 +321,562 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
         tipAmount: serializeDecimal(row.tips),
         count: row.count,
       })),
+  };
+}
+
+type ProductSalesRow = {
+  branchId: string;
+  branchName: string;
+  productId: string;
+  productName: string;
+  variantId: string | null;
+  categoryId: string | null;
+  categoryName: string | null;
+  quantity: bigint;
+  netSales: Prisma.Decimal;
+};
+
+type CostedProductRow = {
+  productId: string;
+  productName: string;
+  categoryId: string | null;
+  categoryName: string;
+  quantity: string;
+  netSales: string;
+  theoreticalCost: string;
+  foodCostPercent: string;
+  grossMargin: string;
+  marginPerItem: string;
+};
+
+type CostAggregate = {
+  id: string;
+  name: string;
+  quantity: Prisma.Decimal;
+  netSales: Prisma.Decimal;
+  theoreticalCost: Prisma.Decimal;
+};
+
+export type FoodCostExclusionReason =
+  'NO_RECIPE' | 'RECIPE_UNAVAILABLE' | 'NO_PORTION_COST' | 'MISSING_INGREDIENT_COST';
+
+async function readProductSalesRows(db: ScopedDb, range: RestaurantReportRange, limit: number) {
+  const parsed = validateRestaurantReportRange(range);
+  const rows = await db.$queryRaw<ProductSalesRow[]>(Prisma.sql`
+    WITH bill_lines AS (
+      SELECT
+        bill."id" AS "billId",
+        bill."branchId",
+        bill."discountTotal",
+        line."orderItemId",
+        line."lineSubtotal" - line."compAmount" AS "eligibleSales",
+        SUM(line."lineSubtotal" - line."compAmount") OVER (
+          PARTITION BY bill."id"
+        ) AS "billEligibleSales"
+      FROM "restaurant_bills" bill
+      JOIN "restaurant_bill_lines" line ON line."billId" = bill."id"
+      WHERE bill."status" = 'SETTLED'
+        AND bill."branchId" IN (${Prisma.join(range.branchIds)})
+        AND bill."businessDate" >= ${parsed.from}
+        AND bill."businessDate" <= ${parsed.to}
+    ), allocated_lines AS (
+      SELECT
+        bill_lines.*,
+        CASE
+          WHEN bill_lines."billEligibleSales" = 0 THEN bill_lines."eligibleSales"
+          ELSE bill_lines."eligibleSales" - (
+            bill_lines."discountTotal" * bill_lines."eligibleSales"
+            / bill_lines."billEligibleSales"
+          )
+        END AS "netSales"
+      FROM bill_lines
+    )
+    SELECT
+      allocated."branchId" AS "branchId",
+      branch."name" AS "branchName",
+      item."productId" AS "productId",
+      product."name" AS "productName",
+      item."variantId" AS "variantId",
+      category."id" AS "categoryId",
+      category."name" AS "categoryName",
+      SUM(line."quantity")::bigint AS "quantity",
+      SUM(allocated."netSales") AS "netSales"
+    FROM allocated_lines allocated
+    JOIN "restaurant_bill_lines" line ON line."orderItemId" = allocated."orderItemId"
+      AND line."billId" = allocated."billId"
+    JOIN "restaurant_order_items" item ON item."id" = allocated."orderItemId"
+    JOIN "restaurant_products" product ON product."id" = item."productId"
+    JOIN "restaurant_branches" branch ON branch."id" = allocated."branchId"
+    LEFT JOIN "restaurant_categories" category ON category."id" = product."categoryId"
+    GROUP BY
+      allocated."branchId", branch."name", item."productId", product."name",
+      item."variantId", category."id", category."name"
+    ORDER BY product."name" ASC, item."productId" ASC, allocated."branchId" ASC,
+      item."variantId" ASC NULLS FIRST
+    LIMIT ${limit + 1}
+  `);
+  return { rows: rows.slice(0, limit), truncated: rows.length > limit };
+}
+
+function accumulateCost(
+  map: Map<string, CostAggregate>,
+  key: string,
+  name: string,
+  quantity: Prisma.Decimal,
+  netSales: Prisma.Decimal,
+  theoreticalCost: Prisma.Decimal
+) {
+  const current = map.get(key) ?? {
+    id: key,
+    name,
+    quantity: ZERO,
+    netSales: ZERO,
+    theoreticalCost: ZERO,
+  };
+  current.quantity = current.quantity.plus(quantity);
+  current.netSales = current.netSales.plus(netSales);
+  current.theoreticalCost = current.theoreticalCost.plus(theoreticalCost);
+  map.set(key, current);
+}
+
+function serializeCostAggregate(row: CostAggregate) {
+  const grossMargin = row.netSales.minus(row.theoreticalCost);
+  return {
+    id: row.id,
+    name: row.name,
+    quantity: row.quantity.toString(),
+    netSales: serializeDecimal(row.netSales),
+    theoreticalCost: serializeDecimal(row.theoreticalCost),
+    foodCostPercent: shareOfTotal(row.theoreticalCost, row.netSales),
+    grossMargin: serializeDecimal(grossMargin),
+    marginPerItem: row.quantity.isZero()
+      ? '0'
+      : serializeDecimal(grossMargin.dividedBy(row.quantity)),
+  };
+}
+
+/**
+ * Product profitability is derived from immutable settled bill-line snapshots.
+ * Bill-level discounts are allocated proportionally so product net sales still
+ * reconcile to the bill ledger; current recipe costs remain explicitly
+ * theoretical and never overwrite historical financial facts.
+ */
+export async function readFoodCostReport(
+  db: ScopedDb,
+  range: RestaurantReportRange,
+  limit = MAX_INTERACTIVE_ROWS
+) {
+  const sales = await readProductSalesRows(db, range, limit);
+  const recipes = sales.rows.length
+    ? await db.restaurantRecipe.findMany({
+        where: { productId: { in: [...new Set(sales.rows.map((row) => row.productId))] } },
+        orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        select: { id: true, organizationId: true, productId: true, variantId: true },
+      })
+    : [];
+  const recipesByProduct = new Map<string, typeof recipes>();
+  for (const recipe of recipes) {
+    const current = recipesByProduct.get(recipe.productId) ?? [];
+    current.push(recipe);
+    recipesByProduct.set(recipe.productId, current);
+  }
+  const recipeCosts = new Map<string, Awaited<ReturnType<typeof computeRecipeCost>>>();
+  const recipeFailures = new Set<string>();
+  const products = new Map<
+    string,
+    CostAggregate & { categoryId: string | null; categoryName: string }
+  >();
+  const categories = new Map<string, CostAggregate>();
+  const branches = new Map<string, CostAggregate>();
+  const exclusions = new Map<
+    string,
+    {
+      productId: string;
+      productName: string;
+      categoryName: string;
+      branchNames: Set<string>;
+      quantity: Prisma.Decimal;
+      netSales: Prisma.Decimal;
+      reason: FoodCostExclusionReason;
+      missingIngredientCount: number;
+    }
+  >();
+  let netSales = ZERO;
+  let costedNetSales = ZERO;
+  let theoreticalCost = ZERO;
+
+  for (const row of sales.rows) {
+    const quantity = new Prisma.Decimal(row.quantity.toString());
+    netSales = netSales.plus(row.netSales);
+    const linked = recipesByProduct.get(row.productId) ?? [];
+    const recipe =
+      linked.find((candidate) => candidate.variantId === row.variantId) ??
+      linked.find((candidate) => candidate.variantId === null);
+    let reason: FoodCostExclusionReason | null = recipe ? null : 'NO_RECIPE';
+    let missingIngredientCount = 0;
+    let costPerPortion: Prisma.Decimal | null = null;
+    if (recipe) {
+      let cost = recipeCosts.get(recipe.id);
+      if (!cost && !recipeFailures.has(recipe.id)) {
+        try {
+          cost = await computeRecipeCost({
+            organizationId: recipe.organizationId,
+            recipeId: recipe.id,
+          });
+          recipeCosts.set(recipe.id, cost);
+        } catch (error) {
+          if (!(error instanceof RecipeCostingError)) throw error;
+          recipeFailures.add(recipe.id);
+          reason = 'RECIPE_UNAVAILABLE';
+        }
+      }
+      if (cost) {
+        missingIngredientCount = cost.missing.length;
+        if (cost.missing.length > 0) reason = 'MISSING_INGREDIENT_COST';
+        else if (!cost.costPerPortion) reason = 'NO_PORTION_COST';
+        else costPerPortion = cost.costPerPortion;
+      }
+    }
+    const categoryName = row.categoryName ?? 'Uncategorized';
+    if (reason || !costPerPortion) {
+      const exclusionReason = reason ?? 'NO_PORTION_COST';
+      const key = `${row.productId}:${exclusionReason}`;
+      const current = exclusions.get(key) ?? {
+        productId: row.productId,
+        productName: row.productName,
+        categoryName,
+        branchNames: new Set<string>(),
+        quantity: ZERO,
+        netSales: ZERO,
+        reason: exclusionReason,
+        missingIngredientCount: 0,
+      };
+      current.branchNames.add(row.branchName);
+      current.quantity = current.quantity.plus(quantity);
+      current.netSales = current.netSales.plus(row.netSales);
+      current.missingIngredientCount = Math.max(
+        current.missingIngredientCount,
+        missingIngredientCount
+      );
+      exclusions.set(key, current);
+      continue;
+    }
+    const rowCost = quantity.times(costPerPortion);
+    costedNetSales = costedNetSales.plus(row.netSales);
+    theoreticalCost = theoreticalCost.plus(rowCost);
+    const product = products.get(row.productId) ?? {
+      id: row.productId,
+      name: row.productName,
+      categoryId: row.categoryId,
+      categoryName,
+      quantity: ZERO,
+      netSales: ZERO,
+      theoreticalCost: ZERO,
+    };
+    product.quantity = product.quantity.plus(quantity);
+    product.netSales = product.netSales.plus(row.netSales);
+    product.theoreticalCost = product.theoreticalCost.plus(rowCost);
+    products.set(row.productId, product);
+    accumulateCost(
+      categories,
+      row.categoryId ?? 'uncategorized',
+      categoryName,
+      quantity,
+      row.netSales,
+      rowCost
+    );
+    accumulateCost(branches, row.branchId, row.branchName, quantity, row.netSales, rowCost);
+  }
+
+  const productRows: CostedProductRow[] = [...products.values()]
+    .map((row) => {
+      const serialized = serializeCostAggregate(row);
+      return {
+        productId: row.id,
+        productName: row.name,
+        categoryId: row.categoryId,
+        categoryName: row.categoryName,
+        quantity: serialized.quantity,
+        netSales: serialized.netSales,
+        theoreticalCost: serialized.theoreticalCost,
+        foodCostPercent: serialized.foodCostPercent,
+        grossMargin: serialized.grossMargin,
+        marginPerItem: serialized.marginPerItem,
+      };
+    })
+    .sort(
+      (left, right) =>
+        new Prisma.Decimal(right.netSales).comparedTo(left.netSales) ||
+        left.productName.localeCompare(right.productName)
+    );
+  const grossMargin = costedNetSales.minus(theoreticalCost);
+  return {
+    range,
+    totals: {
+      netSales: serializeDecimal(netSales),
+      costedNetSales: serializeDecimal(costedNetSales),
+      uncostedNetSales: serializeDecimal(netSales.minus(costedNetSales)),
+      theoreticalCost: serializeDecimal(theoreticalCost),
+      foodCostPercent: shareOfTotal(theoreticalCost, costedNetSales),
+      grossMargin: serializeDecimal(grossMargin),
+    },
+    products: productRows.slice(0, limit),
+    categories: [...categories.values()]
+      .map(serializeCostAggregate)
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .slice(0, limit),
+    branches: [...branches.values()]
+      .map(serializeCostAggregate)
+      .sort((left, right) => left.name.localeCompare(right.name))
+      .slice(0, limit),
+    uncostedProducts: [...exclusions.values()]
+      .map((row) => ({
+        productId: row.productId,
+        productName: row.productName,
+        categoryName: row.categoryName,
+        branchNames: [...row.branchNames].sort().join(', '),
+        quantity: row.quantity.toString(),
+        netSales: serializeDecimal(row.netSales),
+        reason: row.reason,
+        missingIngredientCount: row.missingIngredientCount,
+      }))
+      .sort((left, right) => left.productName.localeCompare(right.productName))
+      .slice(0, limit),
+    truncated:
+      sales.truncated ||
+      products.size > limit ||
+      categories.size > limit ||
+      branches.size > limit ||
+      exclusions.size > limit,
+  };
+}
+
+function decimalMedian(values: readonly string[]): Prisma.Decimal {
+  if (!values.length) return ZERO;
+  const ordered = values
+    .map((value) => new Prisma.Decimal(value))
+    .sort((left, right) => left.comparedTo(right));
+  const middle = Math.floor(ordered.length / 2);
+  return ordered.length % 2
+    ? ordered[middle]!
+    : ordered[middle - 1]!.plus(ordered[middle]!).dividedBy(2);
+}
+
+export type MenuEngineeringQuadrant = 'STAR' | 'PLOWHORSE' | 'PUZZLE' | 'DOG';
+
+export async function readDishProfitabilityReport(
+  db: ScopedDb,
+  range: RestaurantReportRange,
+  limit = MAX_INTERACTIVE_ROWS
+) {
+  const foodCost = await readFoodCostReport(db, range, limit);
+  const medianVolume = decimalMedian(foodCost.products.map((row) => row.quantity));
+  const medianMargin = decimalMedian(foodCost.products.map((row) => row.marginPerItem));
+  const menuEngineering = foodCost.products.map((row) => {
+    const highVolume = new Prisma.Decimal(row.quantity).greaterThanOrEqualTo(medianVolume);
+    const highMargin = new Prisma.Decimal(row.marginPerItem).greaterThanOrEqualTo(medianMargin);
+    const quadrant: MenuEngineeringQuadrant = highVolume
+      ? highMargin
+        ? 'STAR'
+        : 'PLOWHORSE'
+      : highMargin
+        ? 'PUZZLE'
+        : 'DOG';
+    return { ...row, quadrant };
+  });
+  return {
+    ...foodCost,
+    thresholds: {
+      medianVolume: medianVolume.toString(),
+      medianMargin: serializeDecimal(medianMargin),
+    },
+    byMargin: [...menuEngineering].sort(
+      (left, right) =>
+        new Prisma.Decimal(right.marginPerItem).comparedTo(left.marginPerItem) ||
+        left.productName.localeCompare(right.productName)
+    ),
+    byVolume: [...menuEngineering].sort(
+      (left, right) =>
+        new Prisma.Decimal(right.quantity).comparedTo(left.quantity) ||
+        new Prisma.Decimal(right.marginPerItem).comparedTo(left.marginPerItem) ||
+        left.productName.localeCompare(right.productName)
+    ),
+    menuEngineering,
+    quadrantCounts: menuEngineering.reduce<Record<MenuEngineeringQuadrant, number>>(
+      (counts, row) => ({ ...counts, [row.quadrant]: counts[row.quadrant] + 1 }),
+      { STAR: 0, PLOWHORSE: 0, PUZZLE: 0, DOG: 0 }
+    ),
+  };
+}
+
+export async function readCateringReport(
+  db: ScopedDb,
+  range: RestaurantReportRange,
+  limit = MAX_INTERACTIVE_ROWS
+) {
+  const parsed = validateRestaurantReportRange(range);
+  const rows = await db.restaurantCateringOrder.findMany({
+    where: {
+      branchId: { in: range.branchIds },
+      eventDate: { gte: parsed.from, lte: parsed.to },
+    },
+    orderBy: [{ eventDate: 'asc' }, { id: 'asc' }],
+    take: limit + 1,
+    select: {
+      id: true,
+      organizationId: true,
+      eventName: true,
+      eventDate: true,
+      status: true,
+      quotedTotal: true,
+      branch: { select: { id: true, name: true } },
+      lines: {
+        orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }],
+        select: {
+          recipeId: true,
+          description: true,
+          portions: true,
+          costPerPortionSnapshot: true,
+        },
+      },
+      extraCosts: { select: { amount: true } },
+      delivery: { select: { scheduledAt: true, deliveredAt: true } },
+    },
+  });
+  const costCache = new Map<
+    string,
+    Awaited<ReturnType<typeof computeRecipeCost>> | RecipeCostingError
+  >();
+  const statusRows = new Map<
+    string,
+    {
+      status: string;
+      orderCount: number;
+      revenue: Prisma.Decimal;
+      knownIngredientCost: Prisma.Decimal;
+      extras: Prisma.Decimal;
+      knownMargin: Prisma.Decimal;
+      incompleteMarginCount: number;
+    }
+  >();
+  let revenue = ZERO;
+  let knownIngredientCost = ZERO;
+  let extras = ZERO;
+  let knownMargin = ZERO;
+  let missingCostLineCount = 0;
+  let missingRevenueOrderCount = 0;
+  let incompleteMarginCount = 0;
+  let deliveredCount = 0;
+  let deliveredOnTimeCount = 0;
+  const orders = [];
+  for (const order of rows.slice(0, limit)) {
+    let orderIngredientCost = ZERO;
+    let orderMissingCostLineCount = 0;
+    for (const line of order.lines) {
+      let costPerPortion = line.costPerPortionSnapshot;
+      if (!costPerPortion && line.recipeId) {
+        let cost = costCache.get(line.recipeId);
+        if (!cost) {
+          try {
+            cost = await computeRecipeCost({
+              organizationId: order.organizationId,
+              recipeId: line.recipeId,
+            });
+          } catch (error) {
+            if (!(error instanceof RecipeCostingError)) throw error;
+            cost = error;
+          }
+          costCache.set(line.recipeId, cost);
+        }
+        if (!(cost instanceof RecipeCostingError) && cost.missing.length === 0)
+          costPerPortion = cost.costPerPortion;
+      }
+      if (!costPerPortion) orderMissingCostLineCount += 1;
+      else orderIngredientCost = orderIngredientCost.plus(line.portions.times(costPerPortion));
+    }
+    const orderExtras = add(order.extraCosts.map((cost) => cost.amount));
+    const orderMargin =
+      order.quotedTotal && orderMissingCostLineCount === 0
+        ? order.quotedTotal.minus(orderIngredientCost).minus(orderExtras)
+        : null;
+    revenue = revenue.plus(order.quotedTotal ?? ZERO);
+    knownIngredientCost = knownIngredientCost.plus(orderIngredientCost);
+    extras = extras.plus(orderExtras);
+    missingCostLineCount += orderMissingCostLineCount;
+    if (!order.quotedTotal) missingRevenueOrderCount += 1;
+    if (orderMargin) knownMargin = knownMargin.plus(orderMargin);
+    else incompleteMarginCount += 1;
+    const deliveredOnTime = order.delivery?.deliveredAt
+      ? order.delivery.deliveredAt <= order.delivery.scheduledAt
+      : null;
+    if (order.delivery?.deliveredAt) {
+      deliveredCount += 1;
+      if (deliveredOnTime) deliveredOnTimeCount += 1;
+    }
+    const status = statusRows.get(order.status) ?? {
+      status: order.status,
+      orderCount: 0,
+      revenue: ZERO,
+      knownIngredientCost: ZERO,
+      extras: ZERO,
+      knownMargin: ZERO,
+      incompleteMarginCount: 0,
+    };
+    status.orderCount += 1;
+    status.revenue = status.revenue.plus(order.quotedTotal ?? ZERO);
+    status.knownIngredientCost = status.knownIngredientCost.plus(orderIngredientCost);
+    status.extras = status.extras.plus(orderExtras);
+    if (orderMargin) status.knownMargin = status.knownMargin.plus(orderMargin);
+    else status.incompleteMarginCount += 1;
+    statusRows.set(order.status, status);
+    orders.push({
+      id: order.id,
+      eventName: order.eventName,
+      eventDate: dateKey(order.eventDate),
+      branchId: order.branch.id,
+      branchName: order.branch.name,
+      status: order.status,
+      quotedTotal: order.quotedTotal ? serializeDecimal(order.quotedTotal) : null,
+      ingredientCost:
+        orderMissingCostLineCount === 0 ? serializeDecimal(orderIngredientCost) : null,
+      extras: serializeDecimal(orderExtras),
+      margin: orderMargin ? serializeDecimal(orderMargin) : null,
+      missingCostLineCount: orderMissingCostLineCount,
+      deliveredOnTime,
+    });
+  }
+  return {
+    range,
+    totals: {
+      orderCount: orders.length,
+      revenue: serializeDecimal(revenue),
+      knownIngredientCost: serializeDecimal(knownIngredientCost),
+      extras: serializeDecimal(extras),
+      margin: incompleteMarginCount === 0 ? serializeDecimal(knownMargin) : null,
+      missingCostLineCount,
+      missingRevenueOrderCount,
+      deliveredCount,
+      deliveredOnTimeCount,
+      deliveredOnTimeRate:
+        deliveredCount > 0
+          ? serializeDecimal(
+              new Prisma.Decimal(deliveredOnTimeCount).dividedBy(deliveredCount).times(100)
+            )
+          : null,
+    },
+    byStatus: [...statusRows.values()]
+      .sort((left, right) => left.status.localeCompare(right.status))
+      .map((row) => ({
+        status: row.status,
+        orderCount: row.orderCount,
+        revenue: serializeDecimal(row.revenue),
+        knownIngredientCost: serializeDecimal(row.knownIngredientCost),
+        extras: serializeDecimal(row.extras),
+        margin: row.incompleteMarginCount === 0 ? serializeDecimal(row.knownMargin) : null,
+        incompleteMarginCount: row.incompleteMarginCount,
+      })),
+    orders,
+    truncated: rows.length > limit,
   };
 }
 
@@ -1356,6 +1913,9 @@ export function rowsToCsv(
 export type RestaurantReportSection =
   | 'overview'
   | 'payments'
+  | 'food-cost'
+  | 'dish-profitability'
+  | 'catering'
   | 'inventory'
   | 'wastage'
   | 'stock-movements'
@@ -1428,6 +1988,114 @@ export async function exportRestaurantReportCsv(
         cashVariance: report.cashVariance,
       },
     ];
+  } else if (section === 'food-cost') {
+    const report = await readFoodCostReport(db, range, MAX_EXPORT_ROWS);
+    truncated = report.truncated;
+    columns = [
+      'productId',
+      'product',
+      'category',
+      'branches',
+      'quantity',
+      'netSales',
+      'theoreticalCost',
+      'foodCostPercent',
+      'grossMargin',
+      'marginPerItem',
+      'costStatus',
+      'missingIngredientCount',
+    ];
+    rows = [
+      ...report.products.map((row) => ({
+        productId: row.productId,
+        product: row.productName,
+        category: row.categoryName,
+        branches: '',
+        quantity: row.quantity,
+        netSales: row.netSales,
+        theoreticalCost: row.theoreticalCost,
+        foodCostPercent: row.foodCostPercent,
+        grossMargin: row.grossMargin,
+        marginPerItem: row.marginPerItem,
+        costStatus: 'COSTED',
+        missingIngredientCount: 0,
+      })),
+      ...report.uncostedProducts.map((row) => ({
+        productId: row.productId,
+        product: row.productName,
+        category: row.categoryName,
+        branches: row.branchNames,
+        quantity: row.quantity,
+        netSales: row.netSales,
+        theoreticalCost: '',
+        foodCostPercent: '',
+        grossMargin: '',
+        marginPerItem: '',
+        costStatus: row.reason,
+        missingIngredientCount: row.missingIngredientCount,
+      })),
+    ].slice(0, MAX_EXPORT_ROWS);
+    truncated ||= report.products.length + report.uncostedProducts.length > MAX_EXPORT_ROWS;
+  } else if (section === 'dish-profitability') {
+    const report = await readDishProfitabilityReport(db, range, MAX_EXPORT_ROWS);
+    truncated = report.truncated;
+    columns = [
+      'marginRank',
+      'productId',
+      'product',
+      'category',
+      'quantity',
+      'netSales',
+      'theoreticalCost',
+      'grossMargin',
+      'marginPerItem',
+      'foodCostPercent',
+      'quadrant',
+      'medianVolume',
+      'medianMargin',
+    ];
+    rows = report.byMargin.slice(0, MAX_EXPORT_ROWS).map((row, index) => ({
+      marginRank: index + 1,
+      productId: row.productId,
+      product: row.productName,
+      category: row.categoryName,
+      quantity: row.quantity,
+      netSales: row.netSales,
+      theoreticalCost: row.theoreticalCost,
+      grossMargin: row.grossMargin,
+      marginPerItem: row.marginPerItem,
+      foodCostPercent: row.foodCostPercent,
+      quadrant: row.quadrant,
+      medianVolume: report.thresholds.medianVolume,
+      medianMargin: report.thresholds.medianMargin,
+    }));
+  } else if (section === 'catering') {
+    const report = await readCateringReport(db, range, MAX_EXPORT_ROWS);
+    truncated = report.truncated;
+    columns = [
+      'eventDate',
+      'branch',
+      'event',
+      'status',
+      'quotedRevenue',
+      'ingredientCost',
+      'extras',
+      'margin',
+      'missingCostLines',
+      'deliveredOnTime',
+    ];
+    rows = report.orders.map((row) => ({
+      eventDate: row.eventDate,
+      branch: row.branchName,
+      event: row.eventName,
+      status: row.status,
+      quotedRevenue: row.quotedTotal ?? '',
+      ingredientCost: row.ingredientCost ?? '',
+      extras: row.extras,
+      margin: row.margin ?? '',
+      missingCostLines: row.missingCostLineCount,
+      deliveredOnTime: row.deliveredOnTime ?? '',
+    }));
   } else if (section === 'inventory') {
     const inventory = await readInventoryExportRows(db, range);
     truncated = inventory.truncated;

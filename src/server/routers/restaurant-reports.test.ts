@@ -6,6 +6,9 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   overview: vi.fn(),
   payments: vi.fn(),
+  foodCost: vi.fn(),
+  dishProfitability: vi.fn(),
+  catering: vi.fn(),
   wastage: vi.fn(),
   stockMovements: vi.fn(),
   workforce: vi.fn(),
@@ -34,6 +37,9 @@ vi.mock('@/lib/restaurant/reports', async () => ({
   ...(await vi.importActual<typeof import('@/lib/restaurant/reports')>('@/lib/restaurant/reports')),
   readOverviewReport: mocks.overview,
   readPaymentsReport: mocks.payments,
+  readFoodCostReport: mocks.foodCost,
+  readDishProfitabilityReport: mocks.dishProfitability,
+  readCateringReport: mocks.catering,
   readWastageReport: mocks.wastage,
   readStockMovementReport: mocks.stockMovements,
   readWorkforceReport: mocks.workforce,
@@ -76,7 +82,9 @@ beforeEach(() => {
   mocks.grants.clear();
   mocks.modules.clear();
   for (const key of [
+    'restaurant-core',
     'restaurant-pos',
+    'restaurant-menu',
     'restaurant-inventory',
     'restaurant-purchasing',
     'restaurant-workforce',
@@ -100,6 +108,9 @@ beforeEach(() => {
   ]);
   mocks.overview.mockResolvedValue({ orderCount: 1 });
   mocks.payments.mockResolvedValue({ netSales: '1.00' });
+  mocks.foodCost.mockResolvedValue({ totals: { theoreticalCost: '2.00' } });
+  mocks.dishProfitability.mockResolvedValue({ menuEngineering: [] });
+  mocks.catering.mockResolvedValue({ totals: { orderCount: 1 } });
   mocks.wastage.mockResolvedValue({ totals: { cost: '2.00' } });
   mocks.stockMovements.mockResolvedValue({ totals: { movementCount: 1 } });
   mocks.workforce.mockResolvedValue({ labourCostsVisible: true, labourCost: '10.00' });
@@ -236,6 +247,54 @@ describe('restaurant report capability and branch matrix', () => {
     await expect(caller().payments(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     mocks.grants.add('reports:financial');
     await expect(caller().payments(input)).resolves.toMatchObject({ netSales: '1.00' });
+  });
+  it('keeps food cost and dish profitability behind financial permission and every source module', async () => {
+    mocks.grants.add('reports:financial');
+
+    await expect(caller().foodCost(input)).resolves.toMatchObject({
+      totals: { theoreticalCost: '2.00' },
+    });
+    await expect(caller().dishProfitability(input)).resolves.toMatchObject({
+      menuEngineering: [],
+    });
+    expect(mocks.foodCost).toHaveBeenCalledWith(db, {
+      branchIds: ['b1'],
+      from: input.from,
+      to: input.to,
+    });
+
+    for (const moduleKey of ['restaurant-pos', 'restaurant-menu', 'restaurant-inventory']) {
+      mocks.modules.delete(moduleKey);
+      await expect(caller().foodCost(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      await expect(caller().dishProfitability(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      mocks.modules.add(moduleKey);
+    }
+  });
+  it('requires reports:financial plus catering:read for catering reads and identical-filter exports', async () => {
+    mocks.grants.add('reports:financial');
+    await expect(caller().catering(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.catering).not.toHaveBeenCalled();
+
+    mocks.grants.add('catering:read');
+    await expect(caller().catering(input)).resolves.toMatchObject({ totals: { orderCount: 1 } });
+    await caller().exportCsv({ ...input, section: 'catering' });
+
+    const resolved = { branchIds: ['b1'], from: input.from, to: input.to };
+    expect(mocks.catering).toHaveBeenCalledWith(db, resolved);
+    expect(mocks.exportCsv).toHaveBeenCalledWith(db, 'catering', resolved, {
+      includeLabourCosts: false,
+    });
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          branchIds: ['b1'],
+          section: 'catering',
+          from: input.from,
+          to: input.to,
+        }),
+      })
+    );
   });
   it('denies POS-derived direct reads and exports when Restaurant POS is disabled', async () => {
     mocks.grants.add('reports:operational');

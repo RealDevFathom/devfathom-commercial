@@ -9,7 +9,17 @@ import { ExportLink } from './export-link';
 
 describe('Restaurant reports CSV downloads', () => {
   it('renders exact native download links without invoking Next Link prefetch navigation', () => {
-    const sections = ['overview', 'payments', 'inventory', 'purchasing', 'workforce', 'sop'] as const;
+    const sections = [
+      'overview',
+      'payments',
+      'food-cost',
+      'dish-profitability',
+      'catering',
+      'inventory',
+      'purchasing',
+      'workforce',
+      'sop',
+    ] as const;
 
     render(
       <>
