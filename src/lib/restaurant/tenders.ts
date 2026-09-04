@@ -799,7 +799,7 @@ async function finalizeTaxSettlement(
     roundingAdjustment: settlement.quote.roundingAdjustment,
     grandTotal: settlement.quote.grandTotal,
     eligibleNetMerchandise: settlement.quote.net,
-    loyaltyNetGrandTotal: settlement.quote.grandTotal,
+    loyaltyNetGrandTotal: settlement.quote.net,
     promotionEvaluationId: settlement.promotionEvaluationId,
     promotionEvaluationHash: settlement.promotionEvaluationHash,
     lines,
