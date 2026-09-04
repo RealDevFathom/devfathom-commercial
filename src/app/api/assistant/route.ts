@@ -3,6 +3,8 @@ import { createAIModel } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
+import { createTenantDb } from '@/lib/tenancy/scoped-db';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 
 // Allow headroom for multi-step tool runs.
 export const maxDuration = 60;
@@ -35,6 +37,10 @@ export async function POST(req: Request) {
 
   const { messages }: { messages: UIMessage[] } = await req.json();
   const organization = actor.organization;
+  const entitlements = await resolveOrganizationEntitlements(
+    organization.id,
+    createTenantDb(organization.id)
+  );
 
   const ctx = {
     organizationId: organization.id,
@@ -44,6 +50,7 @@ export async function POST(req: Request) {
     email: session.user.email,
     department: session.user.department,
     status: session.user.status,
+    enabledModules: entitlements.enabledModules,
   };
 
   const modelMessages = await convertToModelMessages(messages);
@@ -68,7 +75,15 @@ export async function POST(req: Request) {
   );
 
   const hint = recentUserText(messages);
-  const ai = createAIModel();
+  let ai: ReturnType<typeof createAIModel>;
+  try {
+    ai = createAIModel();
+  } catch {
+    return Response.json(
+      { error: 'Ask Fathom is currently unavailable. No cached answer was used.' },
+      { status: 503 }
+    );
+  }
   const result = streamText({
     model: ai.model,
     system: assistantSystemPrompt(ctx),
@@ -83,14 +98,20 @@ export async function POST(req: Request) {
     stopWhen: stepCountIs(6),
     providerOptions: ai.providerOptions,
     onError: ({ error }) => {
-      console.error('[assistant] stream error:', error);
+      console.error(
+        '[assistant] stream unavailable',
+        error instanceof Error ? error.name : 'Error'
+      );
     },
   });
 
   return result.toUIMessageStreamResponse({
     onError: (error) => {
-      console.error('[assistant] surfaced error:', error);
-      return 'Sorry — I hit a snag with that. Please try again or rephrase.';
+      console.error(
+        '[assistant] response unavailable',
+        error instanceof Error ? error.name : 'Error'
+      );
+      return 'Ask Fathom is currently unavailable. No cached answer was used.';
     },
   });
 }
