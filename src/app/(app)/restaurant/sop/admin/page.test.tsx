@@ -169,6 +169,7 @@ describe('SOP admin entitlement states', () => {
       expect(pill(/^Capacity · 1 \/ 3 active$/)).toHaveAttribute('data-tone', 'info');
       expect(pill(/^Available · 1 of 3 allowed$/)).toHaveAttribute('data-tone', 'success');
       expect(limitNote()).toHaveTextContent('2 active template slots remaining.');
+      expect(limitNote()).toHaveClass('text-text-muted');
     });
   });
 

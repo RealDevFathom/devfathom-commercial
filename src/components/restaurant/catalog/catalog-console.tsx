@@ -697,7 +697,7 @@ export function RestaurantCatalogConsole({
                             <span className="block font-medium text-text-strong">
                               {product.name}
                             </span>
-                            <span className="block max-w-72 truncate text-xs text-text-faint">
+                            <span className="block max-w-72 truncate text-xs text-text-muted">
                               {product.description ?? product.id}
                             </span>
                           </TableCell>

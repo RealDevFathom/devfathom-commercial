@@ -161,7 +161,7 @@ export default async function CrmPage() {
                     </article>
                   ))}
                   {!items.length ? (
-                    <p className="px-2 py-8 text-center text-[10px] text-text-faint">No records</p>
+                    <p className="px-2 py-8 text-center text-[10px] text-text-muted">No records</p>
                   ) : null}
                 </div>
               </div>
@@ -341,7 +341,9 @@ export default async function CrmPage() {
               {data.followUps.map((followUp) => (
                 <div key={followUp.id} className="py-3">
                   <div className="flex justify-between gap-3">
-                    <p className="text-xs font-semibold">{followUp.title}</p>
+                    <p className="text-xs font-semibold text-primary-foreground">
+                      {followUp.title}
+                    </p>
                     <span className="font-mono text-[9px] text-primary-foreground">
                       {followUp.dueAt.toLocaleDateString()}
                     </span>

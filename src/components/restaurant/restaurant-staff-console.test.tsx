@@ -407,6 +407,7 @@ describe('Restaurant staff role profiles', () => {
 
   it('pins AA text tokens and an internal mobile scroll region', () => {
     openProfile();
+    expect(screen.getByText('branch_1')).toHaveClass('text-text-muted');
     const dialog = screen.getByRole('dialog', { name: 'Shift Lead — role profile' });
     expect(dialog).toHaveClass(
       'max-h-[calc(100dvh-2rem)]',

@@ -15,6 +15,17 @@ vi.mock('sonner', () => ({
 }));
 
 describe('PlatformCommandForm', () => {
+  it('renders supporting help with the AA text token', () => {
+    render(
+      <PlatformCommandForm
+        action="organization.update"
+        fields={[{ name: 'name', label: 'Name', help: 'At least 12 characters.' }]}
+      />
+    );
+
+    expect(screen.getByText('At least 12 characters.')).toHaveClass('text-text-muted');
+  });
+
   it('renders nullable textareas as empty rather than the string null', () => {
     render(
       <PlatformCommandForm

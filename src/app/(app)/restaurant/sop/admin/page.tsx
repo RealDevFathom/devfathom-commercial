@@ -495,7 +495,7 @@ export function SopAdminView({
                       ? 'text-text-muted'
                       : capacity.kind === 'exhausted'
                         ? 'text-warning'
-                        : 'text-text-faint'
+                        : 'text-text-muted'
                 }`}
               >
                 {capacity.kind === 'unconfigured'

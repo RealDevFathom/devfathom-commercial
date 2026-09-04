@@ -73,6 +73,34 @@ function renderConsole(enabled = true) {
 describe('Restaurant catalog console', () => {
   beforeEach(() => vi.clearAllMocks());
 
+  it('renders product descriptions with the AA supporting-text token', () => {
+    const productSnapshot: CatalogSnapshot = {
+      ...snapshot,
+      products: [
+        {
+          id: 'product_1',
+          categoryId: null,
+          type: 'ITEM',
+          status: 'ACTIVE',
+          name: 'House burger',
+          description: 'Beef and pickles',
+          sortOrder: 0,
+          variants: [],
+          modifierGroups: [],
+          allergens: [],
+        },
+      ],
+    };
+
+    render(
+      <EntitlementsProvider value={entitlements(true)}>
+        <RestaurantCatalogConsole snapshot={productSnapshot} canRead canWrite />
+      </EntitlementsProvider>
+    );
+
+    expect(screen.getByText('Beef and pickles')).toHaveClass('text-text-muted');
+  });
+
   it('gates the console when restaurant-menu is disabled', () => {
     renderConsole(false);
 
