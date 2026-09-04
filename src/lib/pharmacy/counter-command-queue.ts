@@ -93,10 +93,20 @@ export type CounterQueueSnapshot = {
   commands: CounterQueuedCommand[];
   leases: CounterLeaseCursor[];
   quotas: CounterQuota[];
+  /** OFF-04 append-only local audit trail; events are never rewritten. */
+  safetyLeaseEvents: import('./offline-safety-lease').SafetyLeaseEvent[];
 };
 
 export function createCounterQueue(deviceId: string): CounterQueueSnapshot {
-  return { deviceId, nextSequence: 1, replay: 'READY', commands: [], leases: [], quotas: [] };
+  return {
+    deviceId,
+    nextSequence: 1,
+    replay: 'READY',
+    commands: [],
+    leases: [],
+    quotas: [],
+    safetyLeaseEvents: [],
+  };
 }
 
 export function unsettledCommands(snapshot: CounterQueueSnapshot): CounterQueuedCommand[] {
@@ -179,6 +189,8 @@ export type CounterCommandInput = {
   bucket?: QuotaBucketRef | null;
   requestedUnits?: number;
   requestedCreditMinor?: number;
+  /** Defaults true for sale actions, keeping older callers fail closed. */
+  medicineSale?: boolean;
 };
 
 /** What the matrix needs that the queue does not itself hold. */
@@ -189,6 +201,8 @@ export type CounterMatrixInputs = {
   controlledMedicinesPermittedOffline: boolean;
   originalSaleAvailable: boolean;
   deviceUsable: boolean;
+  safetyLeaseOk?: boolean;
+  batchRecalled?: boolean;
 };
 
 export type CounterEnqueueResult =
@@ -259,6 +273,9 @@ export function enqueueCounterCommand(
     controlledMedicinesPermittedOffline: matrix.controlledMedicinesPermittedOffline,
     originalSaleAvailable: matrix.originalSaleAvailable,
     deviceUsable: matrix.deviceUsable,
+    medicineSale: input.medicineSale ?? true,
+    safetyLeaseOk: matrix.safetyLeaseOk,
+    batchRecalled: matrix.batchRecalled,
   });
   if (!decision.allowed) {
     return { ok: false, reason: decision.reason, message: decision.message, decision };

@@ -21,6 +21,8 @@
  * for the seam a browser surface fills.
  */
 import type { PharmacyOfflineSnapshotKind } from './offline-action-matrix';
+import { validSafetyLeaseShape } from './offline-safety-lease';
+import type { OfflineSafetyLease } from './offline-safety-lease';
 
 export type OfflineSnapshotEnvelope = {
   organizationId: string;
@@ -34,6 +36,8 @@ export type OfflineSnapshotEnvelope = {
   /** SERVER instants, ISO-8601 UTC. Client time never widens this window. */
   issuedAt: string;
   expiresAt: string;
+  /** OFF-04: one branch freshness deadline shared by recall, licence and rules. */
+  safetyLease: OfflineSafetyLease;
   signingKeyId: string;
 };
 
@@ -49,6 +53,7 @@ const SIGNED_FIELDS: readonly (keyof OfflineSnapshotEnvelope)[] = [
   'payloadHash',
   'issuedAt',
   'expiresAt',
+  'safetyLease',
   'signingKeyId',
 ];
 
@@ -116,7 +121,8 @@ export function checkEnvelope(input: {
   if (
     !Number.isSafeInteger(envelope.version) ||
     envelope.version < 1 ||
-    !/^[0-9a-f]{64}$/.test(envelope.payloadHash)
+    !/^[0-9a-f]{64}$/.test(envelope.payloadHash) ||
+    !validSafetyLeaseShape(envelope.safetyLease)
   ) {
     return { ok: false, reason: 'MALFORMED', message: 'The snapshot envelope is malformed.' };
   }
@@ -145,6 +151,16 @@ export function checkEnvelope(input: {
   const expiresAtMs = Date.parse(envelope.expiresAt);
   if (!Number.isFinite(issuedAtMs) || !Number.isFinite(expiresAtMs) || expiresAtMs <= issuedAtMs) {
     return { ok: false, reason: 'MALFORMED', message: 'The snapshot validity window is invalid.' };
+  }
+  if (
+    envelope.safetyLease.issuedAt !== envelope.issuedAt ||
+    Date.parse(envelope.safetyLease.expiresAt) > expiresAtMs
+  ) {
+    return {
+      ok: false,
+      reason: 'MALFORMED',
+      message: 'The safety lease is outside the snapshot window.',
+    };
   }
   if (input.nowMs < issuedAtMs) {
     return {

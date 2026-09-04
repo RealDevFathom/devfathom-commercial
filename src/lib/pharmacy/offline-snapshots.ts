@@ -8,6 +8,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { PharmacyOfflineSnapshotKind } from './offline-action-matrix';
 import { canonicalJson, envelopeSigningInput } from './offline-snapshot-envelope';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
+import { validSafetyLeaseShape } from './offline-safety-lease';
+import type { OfflineSafetyLease } from './offline-safety-lease';
 
 /**
  * PH-OFF / OFF-01 — minting the signed snapshots a counter carries offline.
@@ -131,6 +133,7 @@ export type IssueSnapshotInput = {
   /** SERVER instants. The window is signed, so a counter cannot widen it. */
   issuedAt: Date;
   expiresAt: Date;
+  safetyLease?: OfflineSafetyLease;
 };
 
 export type IssuedSnapshot = {
@@ -157,7 +160,19 @@ export async function issueOfflineSnapshot(
   scope: SnapshotScope,
   input: IssueSnapshotInput
 ): Promise<IssuedSnapshot> {
-  if (input.expiresAt.getTime() <= input.issuedAt.getTime()) {
+  const safetyLease = input.safetyLease ?? {
+    issuedAt: input.issuedAt.toISOString(),
+    expiresAt: input.expiresAt.toISOString(),
+    recallVersion: 0,
+    licenceVersion: 0,
+    ruleVersion: 0,
+  };
+  if (
+    input.expiresAt.getTime() <= input.issuedAt.getTime() ||
+    !validSafetyLeaseShape(safetyLease) ||
+    safetyLease.issuedAt !== input.issuedAt.toISOString() ||
+    Date.parse(safetyLease.expiresAt) > input.expiresAt.getTime()
+  ) {
     throw new PharmacySnapshotError('INVALID_WINDOW');
   }
 
@@ -193,6 +208,7 @@ export async function issueOfflineSnapshot(
     payloadHash: snapshotPayloadHash(input.payload),
     issuedAt: input.issuedAt.toISOString(),
     expiresAt: input.expiresAt.toISOString(),
+    safetyLease,
     signingKeyId: SNAPSHOT_SIGNING_KEY_ID,
   };
   const signature = signSnapshotEnvelope(envelope);

@@ -47,6 +47,13 @@ const SCOPE = { organizationId: 'org_a', branchId: 'branch_a', deviceId: 'counte
 const ISSUED_AT = '2026-09-02T09:00:00.000Z';
 const EXPIRES_AT = '2026-09-02T21:00:00.000Z';
 const NOW = Date.parse('2026-09-02T12:00:00.000Z');
+const SAFETY_LEASE = {
+  issuedAt: ISSUED_AT,
+  expiresAt: EXPIRES_AT,
+  recallVersion: 0,
+  licenceVersion: 1,
+  ruleVersion: 1,
+};
 
 const CATALOG_KINDS: PharmacyOfflineSnapshotKind[] = [
   'CATALOG',
@@ -73,6 +80,7 @@ function envelopeFor(
     payloadHash: signing.snapshotPayloadHash(payload),
     issuedAt: ISSUED_AT,
     expiresAt: EXPIRES_AT,
+    safetyLease: SAFETY_LEASE,
     signingKeyId: signing.SNAPSHOT_SIGNING_KEY_ID,
     ...overrides,
   };
@@ -140,7 +148,7 @@ describe('PH-OFF OFF-01 — hydration fails closed', () => {
       [
         'org_a::branch_a::counter_1',
         {
-          schemaVersion: 1,
+          schemaVersion: 2,
           scope: SCOPE,
           catalog: null,
           queue: {
@@ -150,6 +158,7 @@ describe('PH-OFF OFF-01 — hydration fails closed', () => {
             commands: [],
             leases: [],
             quotas: [],
+            safetyLeaseEvents: [],
           },
         },
       ],
@@ -171,7 +180,7 @@ describe('PH-OFF OFF-01 — hydration fails closed', () => {
     const driver = createMemoryDriver([
       [
         'org_a::branch_a::counter_1',
-        { schemaVersion: 1, scope: { ...SCOPE, branchId: 'branch_b' }, catalog: null, queue: null },
+        { schemaVersion: 2, scope: { ...SCOPE, branchId: 'branch_b' }, catalog: null, queue: null },
       ],
     ]);
     expect(await runtime(driver).hydrate()).toBe('unrecoverable');
@@ -300,6 +309,92 @@ describe('PH-OFF OFF-02 — the matrix gates what may be composed', () => {
     const counter = await readyCounter(createMemoryDriver());
     const result = await counter.enqueue(cashSale(1), { ...MATRIX, deviceUsable: false });
     expect(result).toMatchObject({ ok: false, reason: 'DEVICE_REVOKED' });
+  });
+});
+
+describe('PH-OFF OFF-04 — safety lease and recall bulletin', () => {
+  it('issues, renews and reports an expired lease in the append-only event log', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    expect(counter.counterStatus(NOW)).toMatchObject({ safetyLeaseStatus: 'ACTIVE' });
+    expect(counter.snapshot().queue?.safetyLeaseEvents[0]?.type).toBe('ISSUED');
+
+    await install(counter, 'RULES', { kind: 'RULES', renewed: true }, { version: 2 });
+    expect(counter.snapshot().queue?.safetyLeaseEvents.at(-1)?.type).toBe('RENEWED');
+
+    const denied = await counter.enqueue(cashSale(), { ...MATRIX, nowMs: Date.parse(EXPIRES_AT) });
+    expect(denied).toMatchObject({ ok: false, reason: 'SAFETY_LEASE_EXPIRED' });
+    expect(counter.counterStatus(Date.parse(EXPIRES_AT))).toMatchObject({
+      safetyLeaseStatus: 'EXPIRED',
+    });
+    expect(counter.snapshot().queue?.safetyLeaseEvents.at(-1)?.type).toBe('EXPIRED');
+  });
+
+  it('applies a reconnect recall before sale and blocks its batch within the lease SLA', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    const renewedAt = '2026-09-02T11:00:00.000Z';
+    const renewedLease = { ...SAFETY_LEASE, issuedAt: renewedAt, recallVersion: 1 };
+    await install(
+      counter,
+      'RULES',
+      { kind: 'RULES', renewed: true },
+      {
+        version: 2,
+        issuedAt: renewedAt,
+        safetyLease: renewedLease,
+      }
+    );
+
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'SAFETY_LEASE_EXPIRED',
+    });
+    expect(
+      await counter.applyRecallBulletin({
+        issuedAt: '2026-09-02T12:01:00.000Z',
+        recallVersion: 1,
+        recalledBatchIds: ['lot_1'],
+      })
+    ).toBe(true);
+    expect(await counter.enqueue(cashSale(), MATRIX)).toMatchObject({
+      ok: false,
+      reason: 'BATCH_RECALLED',
+    });
+    expect(counter.counterStatus(NOW)).toMatchObject({
+      safetyLeaseStatus: 'ACTIVE',
+      appliedRecallVersion: 1,
+    });
+  });
+
+  it('fails medicine closed after expiry while an allowed non-medicine OTC row continues', async () => {
+    const counter = await readyCounter(createMemoryDriver());
+    const renewedAt = '2026-09-02T11:00:00.000Z';
+    const shortLease = {
+      ...SAFETY_LEASE,
+      issuedAt: renewedAt,
+      expiresAt: '2026-09-02T12:30:00.000Z',
+    };
+    await install(
+      counter,
+      'RULES',
+      { kind: 'RULES', shortLease: true },
+      {
+        version: 2,
+        issuedAt: renewedAt,
+        safetyLease: shortLease,
+      }
+    );
+    const afterLease = { ...MATRIX, nowMs: Date.parse('2026-09-02T12:31:00.000Z') };
+
+    expect(await counter.enqueue(cashSale(), afterLease)).toMatchObject({
+      ok: false,
+      reason: 'SAFETY_LEASE_EXPIRED',
+    });
+    expect(
+      await counter.enqueue(
+        { ...cashSale(), medicineSale: false, payload: { lines: [{ sku: 'soap', units: 1 }] } },
+        afterLease
+      )
+    ).toMatchObject({ ok: true });
   });
 });
 

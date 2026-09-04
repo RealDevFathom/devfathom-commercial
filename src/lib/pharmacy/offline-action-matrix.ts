@@ -193,6 +193,10 @@ export type OfflineActionContext = {
   originalSaleAvailable: boolean;
   /** The enrolled device is still trusted (a revoked device does nothing at all). */
   deviceUsable: boolean;
+  /** OFF-04 applies only to medicine-bearing sale/dispense rows. */
+  medicineSale?: boolean;
+  safetyLeaseOk?: boolean;
+  batchRecalled?: boolean;
 };
 
 export type OfflineDenialReason =
@@ -203,6 +207,8 @@ export type OfflineDenialReason =
   | 'SNAPSHOT_MISSING'
   | 'SNAPSHOT_UNVERIFIED'
   | 'SNAPSHOT_EXPIRED'
+  | 'SAFETY_LEASE_EXPIRED'
+  | 'BATCH_RECALLED'
   | 'NO_RECEIPT_NUMBER'
   | 'QUOTA_EXCEEDED'
   | 'CREDIT_LIMIT_EXCEEDED'
@@ -245,6 +251,25 @@ export function decideOfflineAction(
   }
   if (!context.deviceUsable) {
     return deny(action, 'DEVICE_REVOKED', 'This counter has been revoked and can no longer act.');
+  }
+
+  const saleOrDispense =
+    action === 'CASH_OTC_SALE' ||
+    action === 'KHATA_SALE_WITHIN_CACHED_LIMIT' ||
+    action === 'CONTROLLED_MEDICINE_SALE';
+  if (saleOrDispense && context.medicineSale === true && context.safetyLeaseOk !== true) {
+    return deny(
+      action,
+      'SAFETY_LEASE_EXPIRED',
+      'Medicine sales are paused because this counter’s safety lease expired. Reconnect to refresh recalls, licence and rules.'
+    );
+  }
+  if (saleOrDispense && context.medicineSale === true && context.batchRecalled === true) {
+    return deny(
+      action,
+      'BATCH_RECALLED',
+      'This batch is recalled and cannot be sold or dispensed.'
+    );
   }
 
   if (!rule.allowedOffline) {
