@@ -887,11 +887,112 @@ model PharmacyCustomer {
   patient       PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
   sales         PharmacySale[]
   pointsEntries PharmacyLoyaltyPointsEntry[]
+  paidFamilyAccounts PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
+  familyMemberships  PharmacyFamilyMember[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
   @@index([organizationId, displayName])
   @@map("pharmacy_customers")
+}
+
+enum PharmacyKhataEventKind {
+  CHARGE
+  PAYMENT
+  DISHONOURED_CHEQUE
+}
+
+enum PharmacyKhataLimitDecisionKind {
+  ACCEPTED
+  OVERRIDDEN
+}
+
+/// CRM-L02 retail payer grouping. Clinical records remain attached to each
+/// member's PharmacyPatient and are never copied onto this account.
+model PharmacyFamilyAccount {
+  id               String   @id @default(cuid())
+  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  payerCustomerId  String
+  displayName      String
+  creditLimitMinor Int      @default(0)
+  active           Boolean  @default(true)
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
+
+  payer          PharmacyCustomer             @relation("PharmacyFamilyPayer", fields: [organizationId, payerCustomerId], references: [organizationId, id], onDelete: Restrict)
+  members        PharmacyFamilyMember[]
+  khataEvents    PharmacyKhataEvent[]
+  limitDecisions PharmacyKhataLimitDecision[]
+
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, payerCustomerId])
+  @@map("pharmacy_family_accounts")
+}
+
+model PharmacyFamilyMember {
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  familyAccountId String
+  customerId      String
+  createdAt       DateTime @default(now())
+
+  familyAccount PharmacyFamilyAccount @relation(fields: [organizationId, branchId, familyAccountId], references: [organizationId, branchId, id], onDelete: Restrict)
+  customer      PharmacyCustomer      @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  khataEvents   PharmacyKhataEvent[]
+
+  @@unique([organizationId, branchId, familyAccountId, customerId])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, customerId])
+  @@map("pharmacy_family_members")
+}
+
+/// Append-only history used for both the balance and explainable score.
+model PharmacyKhataEvent {
+  id              String                 @id @default(cuid())
+  organizationId  String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  familyAccountId String
+  memberId        String?
+  kind            PharmacyKhataEventKind
+  amountMinor     Int
+  occurredAt      DateTime               @default(now())
+  dueAt           DateTime?
+  settlesChargeId String?
+  actorId         String
+  note            String?
+
+  familyAccount PharmacyFamilyAccount @relation(fields: [organizationId, branchId, familyAccountId], references: [organizationId, branchId, id], onDelete: Restrict)
+  member        PharmacyFamilyMember? @relation(fields: [organizationId, branchId, memberId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, familyAccountId, occurredAt])
+  @@map("pharmacy_khata_events")
+}
+
+/// Human owner decision. Score calculation never mutates the account limit.
+model PharmacyKhataLimitDecision {
+  id                  String                         @id @default(cuid())
+  organizationId      String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  familyAccountId     String
+  kind                PharmacyKhataLimitDecisionKind
+  score               Int
+  method              String
+  windowStart         DateTime
+  windowEnd           DateTime
+  suggestedLimitMinor Int
+  appliedLimitMinor   Int
+  reasons             Json
+  ownerActorId        String
+  createdAt           DateTime                       @default(now())
+
+  familyAccount PharmacyFamilyAccount @relation(fields: [organizationId, branchId, familyAccountId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, familyAccountId, createdAt])
+  @@map("pharmacy_khata_limit_decisions")
 }
 
 /// Append-only, signed whole-point ledger. Branch is stamped at posting time;
