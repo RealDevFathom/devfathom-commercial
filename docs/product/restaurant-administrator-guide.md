@@ -106,6 +106,45 @@ require a distinct manager credential.
 - **Browser validation:** Price-list values rendering with two decimal places is browser-proven on
   `f2c59457`; the rest of this workflow remains pending.
 
+#### Units, ingredients, and recipe costing
+
+- Create units first, then add directed conversions for every recipe-unit → ingredient-base-unit
+  pair that the BOM needs. A conversion multiplies the recipe-line quantity by its factor; the
+  costing service does not infer a reverse or multi-step conversion. A missing exact conversion
+  stops the calculation.
+- Each ingredient has one base unit and may have a positive reference cost per base unit. When the
+  ingredient is linked to a stock item, recipe costing first derives a weighted-average unit cost
+  from valued stock movements (normally established by receipts): the sum of `quantity × recorded
+unit cost` divided by total valued quantity. It converts that canonical stock-unit cost to the
+  ingredient base unit when necessary. A positive weighted average wins; otherwise a positive
+  ingredient reference cost is used. With neither, the line costs zero and Catalog flags the
+  ingredient under **Missing cost**.
+- A recipe belongs to a product and optional variant. Author ingredients or sub-recipes on a DRAFT
+  version, including each quantity and unit, and record yield quantity/unit and/or a positive
+  portion count. Activating the draft supersedes the previous active version; activated versions
+  are immutable and superseded versions remain readable. Costing the recipe without choosing a
+  historical version uses its active version.
+- A sub-recipe is expanded through its active version. Its line quantity is divided by the
+  sub-recipe yield to determine batches; if that yield is absent or zero, the quantity itself is
+  treated as the batch multiplier. Nested ingredients are combined by ingredient in base units.
+  Cycles are rejected and nesting is limited to eight levels.
+- Approved substitutes can be attached to an ingredient-backed recipe line. They are configuration
+  only in the current tip: costing, catering requirements, stock consumption, and allergen effects
+  continue to use the primary ingredient and do not automatically choose or cost a substitute.
+- Catalog shows **Batch cost** as the sum of `base-unit quantity × selected unit cost` for all
+  exploded ingredients. **Cost per portion** is `batch cost ÷ portion count`, and is unavailable
+  without a positive portion count. **Cost per yield unit** is `batch cost ÷ yield quantity`, and is
+  unavailable without a non-zero yield. For each active branch publication with an effective item
+  price, **Food cost %** is `(cost per portion, or batch cost when portion cost is unavailable) ÷
+branch price × 100`, rounded to two decimal places. A zero or missing effective price produces no
+  comparison.
+
+**Worked example (PKR).** A 10-portion chicken karahi version uses 2 kg chicken and 0.5 kg tomato.
+Chicken's valued movements total 20 kg at PKR 14,000, so its weighted-average cost is PKR 700/kg;
+tomato has no usable valued balance and falls back to its PKR 200/kg reference cost. Batch cost is
+`(2 × 700) + (0.5 × 200) = PKR 1,500`, so cost per portion is PKR 150. At an effective branch price
+of PKR 600, Catalog shows food cost of `150 ÷ 600 × 100 = 25.00%`.
+
 ### 5. Import with OCR, review/correct, then publish manually
 
 - **Navigate:** Menu import (`/restaurant/menu-import`) → upload → wait for extraction → review every
@@ -260,6 +299,52 @@ require a distinct manager credential.
   uncertain response, reload the order before retrying a receipt.
 - **Browser validation:** Validation pending.
 
+### 12A. Plan and fulfil catering orders
+
+- **Navigate:** Restaurant → Catering (`/restaurant/catering`). Filter the order ledger by readable
+  branch, status, or event-date range; select an event to work with its lines, production sheet,
+  delivery, and cost summary.
+- **Required:** `catering:read` to list and inspect; `catering:manage` to create, edit, add/remove
+  lines or extra costs, save delivery details, and change status. Restaurant Core must be enabled.
+- **Order and lifecycle:** Create a DRAFT with branch, event name/date, headcount, and optional
+  customer, service time, venue/delivery address, quote, deposit, and notes. Advance only in order:
+  `DRAFT → QUOTED → CONFIRMED → IN_PRODUCTION → READY → DELIVERED → CLOSED`. Cancellation is allowed
+  from any state except CLOSED or CANCELLED. The status history is appended to the order event
+  ledger.
+- **Lines and cost:** Each line selects either an active product or an active recipe, then records a
+  description, portions, and selling price per portion. Product-only lines contribute zero to the
+  ingredient-cost calculation. For recipe lines, confirmation freezes the then-current recipe cost
+  per portion on the line; before confirmation the summary uses the live active-recipe cost. Add
+  labour, transport, rental, or other extra costs separately. **Ingredient cost** is the sum of
+  `portions × frozen/live recipe cost per portion`; total cost adds extras; margin is `quoted total −
+total cost`; margin % is `margin ÷ quoted total × 100` and is unavailable without a non-zero
+  quote.
+- **Production sheet:** Recipe lines are scaled by their portions, sub-recipes are exploded, and
+  requirements are combined by ingredient and shown in ingredient base units. Product-only lines
+  do not add requirements. Use the console's Print action for the browser print view.
+- **Delivery panel:** Record the scheduled time, named driver, optional dispatch/delivery times,
+  vehicle, and notes. These fields do not move the order lifecycle automatically; use the explicit
+  status action.
+- **Stock at READY and cancellation:** Moving IN_PRODUCTION → READY posts negative
+  `RECIPE_CONSUMPTION` movements for stock-linked requirements to the branch's earliest-created
+  active stock location. If there is no active location, no linked stock item, or no recipe
+  requirement, nothing is posted for that part. The consumption command is idempotent. Cancelling
+  from READY or DELIVERED reverses the posted catering movements once as positive `SALE_REVERSAL`
+  movements. Cancelling before READY has no consumption to reverse; CLOSED orders cannot be
+  cancelled.
+- **Common failure/recovery:** Resolve a missing active recipe version or exact unit conversion in
+  Catalog before preparing or costing the event. Review quote, lines, portions, recipe costs,
+  extras, production quantities, delivery assignment, and status before each transition; a skipped
+  or backward transition is rejected.
+- **Browser validation:** Validation pending.
+
+**Worked example (PKR).** An event has 80 recipe portions sold at PKR 750 each, a frozen recipe cost
+of PKR 260 per portion, PKR 6,000 labour, and PKR 3,200 transport. The quote is PKR 60,000;
+ingredient cost is `80 × 260 = PKR 20,800`, total cost is PKR 30,000, margin is PKR 30,000, and
+margin is 50%. If the active recipe needs 180 g chicken per portion, the production sheet groups it
+as 14,400 g; READY posts −14,400 g to the branch's earliest-created active stock location when
+chicken is stock-linked.
+
 ### 13. Execute SOPs and evidence
 
 - **Navigate:** SOP (`/restaurant/sop`) → assigned occurrence → start → complete steps → attach
@@ -321,6 +406,45 @@ require a distinct manager credential.
   rollups, not current-shift data.
 - **Browser validation:** Dashboard preference persistence is browser-proven on `f2c59457`; the rest
   of this workflow remains pending.
+
+#### Wastage and stock-movement reports
+
+- In Restaurant → Reports, choose a named branch or **All active branches**, inclusive from/to
+  dates, and optionally one authorized stock location. The inventory module and
+  `reports:operational` are required; all-branch reporting additionally requires
+  `restaurant:configure`.
+- **Wastage** includes `WASTAGE`, `SPOILAGE`, and `STAFF_MEAL` movements plus only negative
+  `MANUAL_CORRECTION` movements. Quantities are shown as absolute loss in the stock item's canonical
+  unit. Totals are grouped by reason and day, while ingredient rows show quantity, cost, share of
+  total cost, and whether estimates are included.
+- A wastage row uses its recorded movement unit cost first. If absent, it uses the current
+  stock-item/location weighted-average cost; if that is unavailable, it uses the ingredient
+  reference cost. Either fallback makes the row **Estimated**. With no available cost, the row is
+  unvalued: its effective cost contributes zero and the report counts it separately.
+- **Stock movement** groups every movement in the period by ingredient and canonical unit. Opening
+  quantity includes movements before the from date; inflow and outflow split positive and negative
+  period movements; net is inflow minus outflow, and closing includes all movements before the day
+  after the to date. Costs use recorded unit cost where present and the same current
+  weighted-average/reference fallback for period activity. Rows with a missing recorded movement
+  cost are marked as including estimates; rows with no effective cost are counted as unvalued.
+- **CSV export** applies the same branch, date, location, module, and authorization scope. Wastage
+  CSV contains one movement per row with valuation source and estimated flag. Stock-movement CSV
+  contains the grouped opening/in/out/net/closing quantities and costs plus estimated/unvalued
+  counts. The interactive ingredient table is bounded and can show a truncation notice; CSV has its
+  own larger export bound and reports when truncated.
+
+**Worked example (PKR).** For tomatoes at one location, 3 kg spoilage has a recorded PKR 220/kg
+cost and 2 kg wastage has no recorded cost. The current weighted average is PKR 200/kg, so the
+report values the losses at PKR 660 and an estimated PKR 400: 5 kg and PKR 1,060 total, with one
+estimated movement. If opening stock was 20 kg, a 10 kg receipt and these 5 kg losses produce 10 kg
+inflow, 5 kg outflow, −5 kg net movement, and 25 kg closing quantity.
+
+#### Food-cost, dish-profitability, and catering reports — available after WHA-1298
+
+These three report families are not present on this tip. After WHA-1298 lands, document the
+implemented food-cost report, dish-profitability/menu-engineering quadrants, and catering report
+from their accepted code and console behavior before using them in an administrator procedure or
+sales demo.
 
 ### 16. Drawer and daily close
 
