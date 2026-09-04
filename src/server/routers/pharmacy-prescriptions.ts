@@ -17,6 +17,7 @@ export const pharmacyPrescriptionsRouter = router({
       ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
       ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
       ctx.db.medicine.findMany({
+        where: { saleable: true },
         orderBy: { productName: 'asc' },
         include: { presentations: { orderBy: { presentation: 'asc' } } },
       }),

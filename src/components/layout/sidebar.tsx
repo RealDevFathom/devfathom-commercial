@@ -43,6 +43,7 @@ import {
   ClipboardCheck,
   Replace,
   BookLock,
+  Pill,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -248,6 +249,14 @@ export const navigation: NavItem[] = [
     label: 'Onboarding',
     href: '/pharmacy',
     icon: ListChecks,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  {
+    label: 'Medicine catalog',
+    href: '/pharmacy/medicines',
+    icon: Pill,
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-core',

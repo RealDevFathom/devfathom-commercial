@@ -286,7 +286,9 @@ export const pharmacyPurchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         for (const line of input.lines) {
-          if (!(await ctx.db.medicine.findFirst({ where: { id: line.medicineId } })))
+          if (
+            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
+          )
             throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
           if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
             throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
@@ -503,7 +505,9 @@ export const pharmacyPurchasingRouter = router({
         )
           throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
         for (const line of input.lines) {
-          if (!(await ctx.db.medicine.findFirst({ where: { id: line.medicineId } })))
+          if (
+            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
+          )
             throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
           if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
             throw new PharmacyPurchasingError('CROSS_TENANT_REFERENCE');
@@ -807,7 +811,9 @@ export const pharmacyPurchasingRouter = router({
 
         const lines = [];
         for (const [index, line] of input.lines.entries()) {
-          if (!(await ctx.db.medicine.findFirst({ where: { id: line.medicineId } })))
+          if (
+            !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
+          )
             throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
           if (!(await ctx.db.packLevel.findFirst({ where: { id: line.packLevelId } })))
             throw new PharmacyReceivingError('MISSING_PACK_CONVERSION');
