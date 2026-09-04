@@ -58,8 +58,10 @@ import {
 } from '@/lib/pharmacy/stock-signals-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
-  appendTemperatureLog,
-  ManualTemperatureSensorSource,
+  CsvTemperatureReadingSource,
+  ingestTemperatureReadings,
+  loadTemperatureZoneStatuses,
+  ManualTemperatureReadingSource,
 } from '@/lib/pharmacy/temperature-log';
 
 import {
@@ -195,6 +197,13 @@ export const pharmacyInventoryRouter = router({
           coldChain: z.boolean().default(false),
           minimumTemperatureC: z.number().finite().min(-100).max(100).nullable().default(null),
           maximumTemperatureC: z.number().finite().min(-100).max(100).nullable().default(null),
+          expectedTemperatureReadingIntervalMinutes: z
+            .number()
+            .int()
+            .min(1)
+            .max(10_080)
+            .default(15),
+          temperatureExcursionDurationMinutes: z.number().int().min(1).max(10_080).default(30),
         })
         .superRefine((value, ctx) => {
           if (
@@ -234,15 +243,81 @@ export const pharmacyInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       const scope = scopeFor(ctx, input.branchId);
       try {
-        return await appendTemperatureLog(
+        return await ingestTemperatureReadings(
           ctx.db,
           scope,
           input.stockLocationId,
-          new ManualTemperatureSensorSource(input)
+          new ManualTemperatureReadingSource(input)
         );
       } catch (error) {
         domainError(error);
       }
+    }),
+
+  importTemperatureCsv: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          stockLocationId: z.string().min(1),
+          csv: z.string().min(1).max(5_000_000),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        return await ingestTemperatureReadings(
+          ctx.db,
+          scope,
+          input.stockLocationId,
+          new CsvTemperatureReadingSource(input.csv)
+        );
+      } catch (error) {
+        domainError(error);
+      }
+    }),
+
+  temperatureZoneStatuses: auditedProtectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      return loadTemperatureZoneStatuses(ctx.db, scope, new Date());
+    }),
+
+  configureTemperatureMonitoring: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          stockLocationId: z.string().min(1),
+          expectedTemperatureReadingIntervalMinutes: z.number().int().min(1).max(10_080),
+          temperatureExcursionDurationMinutes: z.number().int().min(1).max(10_080),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      const location = await ctx.db.pharmacyStockLocation.findFirst({
+        where: {
+          id: input.stockLocationId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+        },
+        select: { id: true },
+      });
+      if (!location) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Storage zone is outside this branch.' });
+      }
+      return ctx.db.pharmacyStockLocation.update({
+        where: { id: location.id },
+        data: {
+          expectedTemperatureReadingIntervalMinutes:
+            input.expectedTemperatureReadingIntervalMinutes,
+          temperatureExcursionDurationMinutes: input.temperatureExcursionDurationMinutes,
+        },
+      });
     }),
 
   registerBatch: protectedProcedure

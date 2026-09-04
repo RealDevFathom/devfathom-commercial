@@ -23,6 +23,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import type { LedgerScope } from './stock-ledger';
+import { loadTemperatureZoneStatuses } from './temperature-log';
 import {
   DEFAULT_SIGNAL_POLICY,
   evaluateStockSignals,
@@ -127,6 +128,20 @@ export async function loadSignalFacts(
       AND balance."branchId" = ${scope.branchId}
       AND balance."onHandUnits" > 0
     ORDER BY balance."inventoryLotId" ASC, balance."stockLocationId" ASC, balance."disposition" ASC`);
+
+  // Feed a sustained temperature excursion into the existing location fact.
+  // The PUR-07 evaluator and its COLD_CHAIN rule remain unchanged: the reading
+  // seam only makes a currently breached validated zone fail that existing
+  // effective-location predicate. Pending single readings and monitoring gaps
+  // are surfaced by the temperature status query, not invented as new signals.
+  const temperatureStatuses = await loadTemperatureZoneStatuses(db, scope, at, [
+    ...new Set(lots.filter((lot) => lot.locationColdChain).map((lot) => lot.stockLocationId)),
+  ]);
+  const excursionLocations = new Set(
+    temperatureStatuses
+      .filter((status) => status.status === 'EXCURSION')
+      .map((status) => status.stockLocationId)
+  );
 
   // Approved, not-yet-received quantity. A purchase order counts only once it is
   // approved (§6.3 PUR-07 says "approved inbound"), and only for what has not
@@ -249,6 +264,7 @@ export async function loadSignalFacts(
     sourceObservedAt: observed._max.occurredAt ?? at,
     lots: lots.map((row) => ({
       ...row,
+      locationColdChain: row.locationColdChain && !excursionLocations.has(row.stockLocationId),
       onHandUnits: Number(row.onHandUnits),
       reservedUnits: Number(row.reservedUnits),
     })),
