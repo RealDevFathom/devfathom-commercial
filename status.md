@@ -20,11 +20,18 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   `loyaltyNetGrandTotal: grandTotal -> net` in `src/lib/restaurant/tenders.ts`, reviewed), 17831079
   terminal approver rollback contract (WHA-1309), 0e917d98 pharmacy finance fixture saleable
   (WHA-1310), fbb640a9 cold-chain fixture range (WHA-1311). Sources: Codex lanes @ ca78c75e.
-- **Next, in order:** (1) owner pushes the TIP: `git push origin HEAD:restaurantv2` from this worktree
-  (fast-forward from 8a522bd8; the Cowork VM has no git credentials); (2) the cloud gate re-runs on the
-  real candidate and is the exact-tree validation the five fixes need — do not reproduce it locally;
-  (3) red steps -> fix lanes; green -> owner runs the second staging deploy; (4) QA phase B resumes on
-  WHA-1235/1236/1238/1240/1241/1242/1260/1243.
+- **PUSHED 18:52 UTC: `origin/restaurantv2` = `a1e729ff`** (fast-forward `8a522bd8..a1e729ff`, 43
+  commits). The cloud gate fires on push, so a run on the real candidate now exists; run 33839934789
+  (35 failures, stale tree) is superseded. Reader lane WHA-1313 (405bf857, read-only `gh`) collects the
+  result; WHA-1312 (4c634550) runs a whole-tree static preflight (prisma validate, tsc, Prettier,
+  ESLint across 8a522bd8..a1e729ff) in parallel — the composed tree had never been type-checked end to
+  end.
+- **Next, in order:** (1) gate result -> a fix lane per red root cause on an idle builder (workflow-file
+  fixes to bf4edfeb), compose each delivery, docs commit; (2) green -> owner runs the second staging
+  deploy — **deploy the TIP, not the sha named in `deploy-staging-8a522bd8-prompt.md`**; (3) staging on
+  the new build -> comment "staging deployed — candidate <sha>; logins from Key Vault; phase B resumes;
+  provisioning SHARED; WHA-1264 dependency void" on WHA-1235/1236/1238/1240/1241/1242/1260/1243 and
+  re-fire them; (4) production remains unauthorized.
 - **Supervisor handover (10:50 UTC 4 Sep):** the supervisor role moves from the Cowork session to a Codex
   session run by the owner. Role description, rules, the check-in loop with API recipes, native-git
   composition and standard texts: `DevFathom hub/codex-supervisor-handover.md`. This file stays the
