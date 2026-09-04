@@ -27,6 +27,13 @@ const SCOPE = { organizationId: 'org_a', branchId: 'branch_a', deviceId: 'counte
 const ISSUED_AT = '2026-09-02T09:00:00.000Z';
 const EXPIRES_AT = '2026-09-02T21:00:00.000Z';
 const NOW = Date.parse('2026-09-02T12:00:00.000Z');
+const SAFETY_LEASE = {
+  issuedAt: ISSUED_AT,
+  expiresAt: EXPIRES_AT,
+  recallVersion: 0,
+  licenceVersion: 1,
+  ruleVersion: 1,
+};
 
 const PAYLOAD = { medicines: [{ id: 'med_1', priceMinor: 25_000 }], version: 4 };
 
@@ -38,6 +45,7 @@ function envelope(overrides: Partial<OfflineSnapshotEnvelope> = {}): OfflineSnap
     payloadHash: signing.snapshotPayloadHash(PAYLOAD),
     issuedAt: ISSUED_AT,
     expiresAt: EXPIRES_AT,
+    safetyLease: SAFETY_LEASE,
     signingKeyId: signing.SNAPSHOT_SIGNING_KEY_ID,
     ...overrides,
   };
@@ -83,6 +91,7 @@ describe('PH-OFF OFF-01 — snapshot signatures', () => {
     ['payloadHash', { payloadHash: 'f'.repeat(64) }],
     ['issuedAt', { issuedAt: '2026-09-01T09:00:00.000Z' }],
     ['expiresAt', { expiresAt: '2026-09-09T21:00:00.000Z' }],
+    ['safetyLease', { safetyLease: { ...SAFETY_LEASE, recallVersion: 9 } }],
     ['signingKeyId', { signingKeyId: 'someone-elses-key' }],
   ])('refuses a signature after %s is tampered with', (_field, patch) => {
     const original = envelope();
@@ -204,6 +213,27 @@ describe('PH-OFF OFF-01 — envelope checks a counter can run without the key', 
         payloadHash: hash(),
       })
     ).toMatchObject({ ok: false, reason: 'NOT_YET_VALID' });
+  });
+
+  it('does not let clock skew widen the safety lease at either boundary', () => {
+    expect(
+      checkEnvelope({
+        envelope: envelope(),
+        scope: SCOPE,
+        nowMs: Date.parse(ISSUED_AT) - 1,
+        heldVersion: null,
+        payloadHash: hash(),
+      })
+    ).toMatchObject({ ok: false, reason: 'NOT_YET_VALID' });
+    expect(
+      checkEnvelope({
+        envelope: envelope(),
+        scope: SCOPE,
+        nowMs: Date.parse(SAFETY_LEASE.expiresAt),
+        heldVersion: null,
+        payloadHash: hash(),
+      })
+    ).toMatchObject({ ok: false, reason: 'EXPIRED' });
   });
 
   it('refuses an older version, so a replayed envelope cannot roll prices back', () => {
