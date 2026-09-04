@@ -268,10 +268,10 @@ export default async function NewOrganizationPage({
               {
                 name: 'timezone',
                 label: 'Timezone',
-                type: 'select',
+                type: 'searchable-select',
                 required: true,
                 defaultValue: vertical === 'RESTAURANT' ? 'Asia/Karachi' : 'UTC',
-                help: 'Type while the list is open to search IANA timezones.',
+                help: 'Search by city or IANA name. Timezones are grouped by region.',
                 options: timezoneOptions,
               },
               ...(vertical === 'RESTAURANT'
