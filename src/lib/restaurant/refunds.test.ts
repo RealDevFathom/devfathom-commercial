@@ -112,7 +112,11 @@ async function openBill(count: number): Promise<string> {
   return cut.billIds[0]!;
 }
 
-async function cardTenderAtBranchTwo(): Promise<{ billId: string; tenderId: string }> {
+async function cardTenderAtBranchTwo(): Promise<{
+  billId: string;
+  tenderId: string;
+  paymentId: string;
+}> {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
     organizationId: orgId,
@@ -142,7 +146,7 @@ async function cardTenderAtBranchTwo(): Promise<{ billId: string; tenderId: stri
     actor: actor(branchTwoDeviceId),
     now: AT,
   });
-  return { billId, tenderId: tender.tenderId };
+  return { billId, tenderId: tender.tenderId, paymentId: tender.paymentId! };
 }
 
 /** Settle a single-item (12.50) bill with a card tender and return the tender id. */
@@ -180,6 +184,89 @@ async function openDrawer(device: string): Promise<void> {
     actor: actor(device),
     now: AT,
   });
+}
+
+async function openDrawerAtBranch(device: string, branchId: string): Promise<void> {
+  await deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+    branchId,
+    openingFloat: '100.00',
+    actor: actor(device),
+    now: AT,
+  });
+}
+
+async function splitTaxedTenders(): Promise<{
+  billId: string;
+  tenders: Array<{ id: string; type: 'CASH' | 'CARD' | 'OTHER' }>;
+}> {
+  await openDrawerAtBranch(branchTwoDeviceId, ids.branchTwo);
+  const db = deps.createTenantDb(orgId);
+  const opened = await deps.orders.openOrder(db, {
+    organizationId: orgId,
+    entitlementLimits: { 'pos.orders.monthly': 1000000 },
+    branchId: ids.branchTwo,
+    channel: 'DINE_IN',
+    publicationId: ids.publicationTwo,
+    actor: actor(branchTwoDeviceId),
+    now: AT,
+  });
+  await deps.orders.addItem(db, {
+    orderId: opened.orderId,
+    menuItemId: ids.menuItem,
+    actor: actor(branchTwoDeviceId),
+  });
+  const cut = await deps.bills.cutBills(db, {
+    orderId: opened.orderId,
+    branchId: ids.branchTwo,
+    split: { kind: 'NONE' },
+    actor: actor(branchTwoDeviceId),
+  });
+  const billId = cut.billIds[0]!;
+  const cash = await deps.tenders.applyTender(db, {
+    billId,
+    tender: { type: 'CASH', amount: '5.00', cashReceived: '5.00' },
+    actor: actor(branchTwoDeviceId),
+    now: AT,
+  });
+  const card = await deps.tenders.applyTender(db, {
+    billId,
+    tender: { type: 'CARD', amount: '5.00' },
+    actor: actor(branchTwoDeviceId),
+    now: AT,
+  });
+  const other = await deps.tenders.applyTender(db, {
+    billId,
+    tender: { type: 'OTHER', amount: '5.00' },
+    actor: actor(branchTwoDeviceId),
+    now: AT,
+  });
+  expect(other.settled).toBe(true);
+  return {
+    billId,
+    tenders: [
+      { id: cash.tenderId, type: 'CASH' },
+      { id: card.tenderId, type: 'CARD' },
+      { id: other.tenderId, type: 'OTHER' },
+    ],
+  };
+}
+
+async function sideEffectTotals(organizationId: string) {
+  return deps.withTenantDb(organizationId, async (tx) => ({
+    refunds: await tx.restaurantRefund.count(),
+    coAuthorizations: await tx.restaurantCoAuthorization.count(),
+    paymentEvents: await tx.restaurantPaymentEvent.count(),
+    paymentStatuses: await tx.restaurantPayment.findMany({
+      orderBy: { id: 'asc' },
+      select: { id: true, status: true },
+    }),
+    drawerMovements: await tx.restaurantDrawerMovement.count(),
+    loyaltyReversals: await tx.loyaltyPointsEntry.count({ where: { kind: 'REVERSAL' } }),
+    taxAllocations: await tx.restaurantTaxRefundAllocation.count(),
+    idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+  }));
 }
 
 beforeAll(async () => {
@@ -295,6 +382,7 @@ beforeAll(async () => {
         versionNumber: 1,
         status: 'PUBLISHED',
         effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        effectiveTo: new Date('2026-08-20T00:00:00.000Z'),
         approvalReference: 'SYNTHETIC_TEST_APPROVAL',
         approvedAt: new Date('2026-08-01T00:00:00.000Z'),
         publishedAt: new Date('2026-08-01T00:00:00.000Z'),
@@ -307,6 +395,7 @@ beforeAll(async () => {
             rate: '0.100000',
             status: 'PUBLISHED' as const,
             effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+            effectiveTo: new Date('2026-08-20T00:00:00.000Z'),
             approvalReference: 'SYNTHETIC_TEST_APPROVAL',
             approvedAt: new Date('2026-08-01T00:00:00.000Z'),
             publishedAt: new Date('2026-08-01T00:00:00.000Z'),
@@ -783,5 +872,262 @@ describeIfDatabase('WHA-892 branch and allocation integrity (restricted real DB)
     expect(
       await read((tx) => tx.restaurantRefund.count({ where: { originalTenderId: tenderId } }))
     ).toBe(0);
+  });
+});
+
+describeIfDatabase('WHA-333 per-original-tender refund evidence (restricted real DB)', () => {
+  it('reverses a split-tender bill tender by tender with exact frozen unit-bucket evidence', async () => {
+    const { billId, tenders } = await splitTaxedTenders();
+    const original = await read((tx) =>
+      tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { billId },
+        orderBy: [{ paymentCategory: 'asc' }, { rateBucketSnapshotId: 'asc' }],
+        select: {
+          id: true,
+          originalTenderId: true,
+          paymentCategory: true,
+          cents: true,
+          rateBucket: { select: { billLineId: true, unitOrdinal: true } },
+        },
+      })
+    );
+    expect(new Set(original.map((row) => row.paymentCategory))).toEqual(
+      new Set(['CASH', 'CARD', 'OTHER'])
+    );
+    expect(
+      original.some((row) => row.rateBucket.billLineId && row.rateBucket.unitOrdinal === 0)
+    ).toBe(true);
+
+    for (const tender of tenders) {
+      const result = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tender.id,
+        amount: '5.00',
+        reason: `full ${tender.type} reversal`,
+        branchId: ids.branchTwo,
+        approvingStaffProfileId: ids.manager,
+        actor: actor(branchTwoDeviceId),
+        now: AT,
+      });
+      expect(result.originalTenderId).toBe(tender.id);
+      const expected = original.filter((row) => row.originalTenderId === tender.id);
+      const copied = await read((tx) =>
+        tx.restaurantTaxRefundAllocation.findMany({
+          where: { refundId: result.refundId },
+          orderBy: { originalTenderAllocationId: 'asc' },
+          select: {
+            originalTenderId: true,
+            paymentCategory: true,
+            originalTenderAllocationId: true,
+            cents: true,
+            originalAllocation: {
+              select: { rateBucket: { select: { billLineId: true, unitOrdinal: true } } },
+            },
+          },
+        })
+      );
+      expect(copied.map((row) => row.originalTenderAllocationId).sort()).toEqual(
+        expected.map((row) => row.id).sort()
+      );
+      expect(copied.reduce((total, row) => total + row.cents, BigInt(0))).toBe(
+        expected.reduce((total, row) => total + row.cents, BigInt(0))
+      );
+      expect(copied.every((row) => row.originalTenderId === tender.id)).toBe(true);
+      expect(copied.every((row) => row.paymentCategory === tender.type)).toBe(true);
+      const expectedTuples = expected
+        .map(
+          (row) =>
+            `${row.rateBucket.billLineId ?? 'null'}:${row.rateBucket.unitOrdinal ?? 'null'}:${row.paymentCategory}`
+        )
+        .sort();
+      const copiedTuples = copied
+        .map(
+          (row) =>
+            `${row.originalAllocation.rateBucket.billLineId ?? 'null'}:${row.originalAllocation.rateBucket.unitOrdinal ?? 'null'}:${row.paymentCategory}`
+        )
+        .sort();
+      expect(copiedTuples).toEqual(expectedTuples);
+    }
+
+    const beforeDuplicate = await sideEffectTotals(orgId);
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(orgId), {
+        originalTenderId: tenders[1]!.id,
+        amount: '0.01',
+        reason: 'duplicate reversal',
+        branchId: ids.branchTwo,
+        approvingStaffProfileId: ids.manager,
+        actor: actor(branchTwoDeviceId),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'REFUND_EXCEEDS_TENDER' });
+    expect(await sideEffectTotals(orgId)).toEqual(beforeDuplicate);
+  });
+
+  it('allocates a partial tax refund proportionally, then exhausts exact frozen cents', async () => {
+    const { billId, tenderId } = await cardTenderAtBranchTwo();
+    const original = await read((tx) =>
+      tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { billId, originalTenderId: tenderId },
+        orderBy: { id: 'asc' },
+        select: {
+          id: true,
+          cents: true,
+          paymentCategory: true,
+          rateBucket: { select: { billLineId: true, unitOrdinal: true } },
+        },
+      })
+    );
+    const partial = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '6.00',
+      reason: 'partial taxed return',
+      branchId: ids.branchTwo,
+      approvingStaffProfileId: ids.manager,
+      actor: actor(branchTwoDeviceId),
+      now: AT,
+    });
+    const partialRows = await read((tx) =>
+      tx.restaurantTaxRefundAllocation.findMany({
+        where: { refundId: partial.refundId },
+        select: { originalTenderAllocationId: true, cents: true },
+      })
+    );
+    expect(partial.taxRefundAmount.toString()).toBe('0.5');
+    expect(original).toHaveLength(1);
+    expect(partialRows).toEqual([
+      { originalTenderAllocationId: original[0]!.id, cents: BigInt(50) },
+    ]);
+
+    await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '9.00',
+      reason: 'remaining taxed return',
+      branchId: ids.branchTwo,
+      approvingStaffProfileId: ids.manager,
+      actor: actor(branchTwoDeviceId),
+      now: AT,
+    });
+    const cumulative = await read((tx) =>
+      tx.restaurantTaxRefundAllocation.groupBy({
+        by: ['originalTenderAllocationId'],
+        where: { originalTenderId: tenderId },
+        _sum: { cents: true },
+      })
+    );
+    expect(
+      original
+        .map((row) => ({
+          id: row.id,
+          cents: row.cents,
+          tuple: `${row.rateBucket.billLineId ?? 'null'}:${row.rateBucket.unitOrdinal ?? 'null'}:${row.paymentCategory}`,
+        }))
+        .sort((left, right) => left.id.localeCompare(right.id))
+    ).toEqual(
+      cumulative
+        .map((row) => {
+          const source = original.find(
+            (candidate) => candidate.id === row.originalTenderAllocationId
+          )!;
+          return {
+            id: row.originalTenderAllocationId,
+            cents: row._sum.cents,
+            tuple: `${source.rateBucket.billLineId ?? 'null'}:${source.rateBucket.unitOrdinal ?? 'null'}:${source.paymentCategory}`,
+          };
+        })
+        .sort((left, right) => left.id.localeCompare(right.id))
+    );
+  });
+
+  it('uses frozen tax evidence after live tax configuration is unavailable', async () => {
+    const { tenderId } = await cardTenderAtBranchTwo();
+    expect(
+      await read((tx) =>
+        tx.restaurantTaxProfileVersion.count({
+          where: {
+            branchId: ids.branchTwo,
+            effectiveFrom: { lte: NEXT_DAY },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: NEXT_DAY } }],
+          },
+        })
+      )
+    ).toBe(0);
+    const refund = await deps.refunds.refundTender(deps.createTenantDb(orgId), {
+      originalTenderId: tenderId,
+      amount: '15.00',
+      reason: 'refund after config expiry',
+      branchId: ids.branchTwo,
+      approvingStaffProfileId: ids.manager,
+      actor: actor(branchTwoDeviceId),
+      now: NEXT_DAY,
+    });
+    expect(refund.taxRefundAmount.toString()).toBe('1.25');
+    const evidence = await read((tx) =>
+      tx.restaurantTaxRefundAllocation.findMany({
+        where: { refundId: refund.refundId },
+        include: { originalAllocation: { include: { rateBucket: true } } },
+      })
+    );
+    expect(evidence.length).toBeGreaterThan(0);
+    expect(evidence.some((row) => row.originalAllocation.rateBucket.billLineId !== null)).toBe(
+      true
+    );
+  });
+
+  it('rejects cross-tenant tender access without appending refund evidence', async () => {
+    const { tenderId } = await cardTender();
+    const beforeOwner = await sideEffectTotals(orgId);
+    const beforeOther = await sideEffectTotals(otherOrgId);
+    await expect(
+      deps.refunds.refundTender(deps.createTenantDb(otherOrgId), {
+        originalTenderId: tenderId,
+        amount: '1.00',
+        reason: 'cross tenant',
+        approvingStaffProfileId: ids.manager,
+        actor: actor(),
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'TENDER_NOT_FOUND' });
+    expect(await sideEffectTotals(orgId)).toEqual(beforeOwner);
+    expect(await sideEffectTotals(otherOrgId)).toEqual(beforeOther);
+  });
+
+  it('serializes cumulative refunds so concurrent commands cannot over-refund', async () => {
+    const { tenderId, paymentId } = await cardTenderAtBranchTwo();
+    const attempts = await Promise.allSettled(
+      ['race one', 'race two'].map((reason) =>
+        deps.refunds.refundTender(deps.createTenantDb(orgId), {
+          originalTenderId: tenderId,
+          amount: '9.00',
+          reason,
+          branchId: ids.branchTwo,
+          approvingStaffProfileId: ids.manager,
+          actor: actor(branchTwoDeviceId),
+          now: AT,
+        })
+      )
+    );
+    const fulfilled = attempts.filter((result) => result.status === 'fulfilled');
+    const rejected = attempts.filter((result) => result.status === 'rejected');
+    expect(fulfilled).toHaveLength(1);
+    expect(rejected).toHaveLength(1);
+    expect((rejected[0] as PromiseRejectedResult).reason).toMatchObject({
+      reason: 'REFUND_EXCEEDS_TENDER',
+    });
+    const evidence = await read(async (tx) => ({
+      refunds: await tx.restaurantRefund.findMany({ where: { originalTenderId: tenderId } }),
+      refundEvents: await tx.restaurantPaymentEvent.count({
+        where: { paymentId, capability: 'REFUND' },
+      }),
+      taxAllocations: await tx.restaurantTaxRefundAllocation.findMany({
+        where: { originalTenderId: tenderId },
+      }),
+    }));
+    expect(evidence.refunds).toHaveLength(1);
+    expect(evidence.refunds[0]!.amount.toString()).toBe('9');
+    expect(evidence.refundEvents).toBe(1);
+    expect(evidence.taxAllocations.length).toBeGreaterThan(0);
+    expect(
+      evidence.taxAllocations.reduce((total, row) => total + row.cents, BigInt(0))
+    ).toBeGreaterThan(BigInt(0));
   });
 });
