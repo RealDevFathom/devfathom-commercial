@@ -6,9 +6,11 @@ import {
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
+  parseSimpleMedicineStrength,
   PharmacyMedicineError,
 } from '@/lib/pharmacy/medicine';
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import { MANUAL_FILE_RIGHTS, type ConnectorRights } from '@/lib/pharmacy/reference-connectors';
+import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 
 const family = z.enum(['PHARMACEUTICAL', 'BIOLOGICAL', 'DEVICE', 'ALTERNATIVE', 'FRONT_SHOP']);
 const provenance = z
@@ -23,6 +25,101 @@ const provenance = z
     assertedValue: z.unknown().optional(),
   })
   .strict();
+
+const connectorRights = z
+  .object({
+    acquisition: z.string().min(1).max(500),
+    cache: z.string().min(1).max(500),
+    redistribution: z.string().min(1).max(500),
+    deletion: z.string().min(1).max(500),
+  })
+  .strict();
+
+const referenceField = z.enum([
+  'productName',
+  'brandName',
+  'manufacturer',
+  'drapRegistrationNumber',
+  'strength',
+  'dosageForm',
+  'pack',
+  'barcode',
+  'alias',
+]);
+
+const referenceAssertion = z
+  .object({
+    field: referenceField,
+    value: z.string().trim().min(1).max(1_000),
+    source: z.string().trim().min(1).max(500),
+    sourceType: z.enum(['REGULATOR', 'MANUFACTURER', 'SCRAPED', 'USER', 'IMPORT']),
+    retrievedAt: z.string().datetime(),
+    confidence: z.number().min(0).max(1).optional(),
+    batchId: z.string().trim().min(1).max(200),
+    rowSourceKey: z.string().trim().min(1).max(300),
+    rights: connectorRights,
+  })
+  .strict();
+
+const assertedEnvelope = z
+  .object({
+    value: z.string().trim().min(1).max(1_000),
+    connectorId: z.string().trim().min(1).max(200),
+    sourceLabel: z.string().trim().min(1).max(500),
+    batchId: z.string().trim().min(1).max(200),
+    rowSourceKey: z.string().trim().min(1).max(300),
+    rights: connectorRights,
+    blockingIssues: z.array(z.string().min(1).max(100)).max(4),
+  })
+  .strict();
+
+const assertionIdsPayload = z
+  .object({
+    assertionIds: z.array(z.string().min(1)).min(1).max(20),
+  })
+  .strict();
+
+function jsonConnectorRights(rights: ConnectorRights): Prisma.InputJsonObject {
+  return {
+    acquisition: rights.acquisition,
+    cache: rights.cache,
+    redistribution: rights.redistribution,
+    deletion: rights.deletion,
+  };
+}
+
+const reviewDecisionInput = z.discriminatedUnion('action', [
+  z
+    .object({
+      duplicateKey: z.string().min(1).max(700),
+      action: z.enum(['ACCEPT', 'REJECT', 'DEFER']),
+      medicineIds: z.array(z.string().min(1)).min(1).max(50),
+      payload: assertionIdsPayload,
+    })
+    .strict(),
+  z
+    .object({
+      duplicateKey: z.string().min(1).max(700),
+      action: z.literal('CORRECT'),
+      medicineIds: z.array(z.string().min(1)).min(1).max(50),
+      payload: assertionIdsPayload
+        .extend({
+          corrections: z
+            .array(
+              z
+                .object({
+                  assertionId: z.string().min(1),
+                  value: z.string().trim().min(1).max(1_000),
+                })
+                .strict()
+            )
+            .min(1)
+            .max(20),
+        })
+        .strict(),
+    })
+    .strict(),
+]);
 
 function domainError(error: unknown): never {
   if (error instanceof PharmacyMedicineError) {
@@ -40,6 +137,153 @@ function domainError(error: unknown): never {
 }
 
 export const pharmacyMedicineRouter = router({
+  importReferenceBatch: adminProcedure
+    .input(
+      z
+        .object({
+          connectorId: z.literal('manual-file'),
+          batchId: z.string().trim().min(1).max(200),
+          rows: z
+            .array(
+              z
+                .object({
+                  batchId: z.string().trim().min(1).max(200),
+                  rowSourceKey: z.string().trim().min(1).max(300),
+                  values: z.record(z.string(), z.string().trim().min(1).max(1_000)),
+                  assertions: z.array(referenceAssertion).min(1).max(20),
+                  blockingIssues: z.array(
+                    z.enum([
+                      'MISSING_PRODUCT_NAME',
+                      'MISSING_STRENGTH',
+                      'MISSING_DOSAGE_FORM',
+                      'MISSING_PACK',
+                    ])
+                  ),
+                })
+                .strict()
+            )
+            .min(1)
+            .max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      if (input.rows.some((row) => row.batchId !== input.batchId)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Every row must belong to this batch.',
+        });
+      }
+      if (
+        input.rows.some((row) => {
+          const valueFields = Object.keys(row.values);
+          const assertionFields = row.assertions.map((assertion) => assertion.field);
+          return (
+            valueFields.some(
+              (field) =>
+                !referenceField.options.includes(field as (typeof referenceField.options)[number])
+            ) ||
+            new Set(assertionFields).size !== assertionFields.length ||
+            assertionFields.length !== valueFields.length ||
+            row.assertions.some(
+              (assertion) =>
+                assertion.batchId !== input.batchId ||
+                assertion.rowSourceKey !== row.rowSourceKey ||
+                assertion.sourceType !== 'IMPORT' ||
+                row.values[assertion.field] !== assertion.value
+            )
+          );
+        })
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Manual provenance must match its batch, source row, and mapped value.',
+        });
+      }
+
+      return ctx.db.$transaction(async (tx) => {
+        let imported = 0;
+        let skipped = 0;
+        for (const row of input.rows) {
+          const productName = row.values.productName;
+          if (!productName) {
+            skipped += 1;
+            continue;
+          }
+          const sourceKey = `${input.connectorId}:${input.batchId}:${row.rowSourceKey}`;
+          const existing = await tx.medicineProvenance.findFirst({ where: { source: sourceKey } });
+          if (existing) {
+            skipped += 1;
+            continue;
+          }
+
+          const blockingIssues = [
+            ...(!row.values.strength ? (['MISSING_STRENGTH'] as const) : []),
+            ...(!row.values.dosageForm ? (['MISSING_DOSAGE_FORM'] as const) : []),
+            ...(!row.values.pack ? (['MISSING_PACK'] as const) : []),
+          ];
+          await tx.medicine.create({
+            data: {
+              productName,
+              brandName: row.values.brandName,
+              manufacturer: row.values.manufacturer,
+              drapRegistrationNumber: row.values.drapRegistrationNumber,
+              productFamily: 'PHARMACEUTICAL',
+              saleable: false,
+              provenance: {
+                create: row.assertions.map((assertion) => ({
+                  field: assertion.field,
+                  source: sourceKey,
+                  sourceType: 'IMPORT',
+                  retrievedAt: new Date(assertion.retrievedAt),
+                  confidence: assertion.confidence,
+                  status: 'UNREVIEWED',
+                  assertedValue: {
+                    value: assertion.value,
+                    connectorId: input.connectorId,
+                    sourceLabel: assertion.source,
+                    batchId: assertion.batchId,
+                    rowSourceKey: assertion.rowSourceKey,
+                    rights: jsonConnectorRights(MANUAL_FILE_RIGHTS),
+                    blockingIssues,
+                  },
+                })),
+              },
+            },
+          });
+          imported += 1;
+        }
+        return { batchId: input.batchId, imported, skipped };
+      });
+    }),
+
+  referenceCandidates: adminProcedure.query(({ ctx }) =>
+    ctx.db.medicine.findMany({
+      where: {
+        saleable: false,
+        provenance: {
+          some: {
+            OR: [
+              { status: 'UNREVIEWED' },
+              {
+                status: { in: ['ACCEPTED', 'CORRECTED'] },
+                publicationEntries: { none: { batch: { status: 'PUBLISHED' } } },
+              },
+            ],
+          },
+        },
+      },
+      include: {
+        provenance: { orderBy: { createdAt: 'asc' } },
+        presentations: true,
+        aliases: true,
+        strengths: { include: { ingredient: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+      take: 250,
+    })
+  ),
+
   createIngredient: protectedProcedure
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
     .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
@@ -129,7 +373,7 @@ export const pharmacyMedicineRouter = router({
     .input(z.object({ id: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const medicine = await ctx.db.medicine.findFirst({
-        where: { id: input.id },
+        where: { id: input.id, saleable: true },
         include: {
           strengths: { include: { ingredient: true } },
           presentations: { include: { packLevels: true } },
@@ -278,13 +522,20 @@ export const pharmacyMedicineRouter = router({
     .input(z.object({ code: z.string().trim().min(1).max(200) }).strict())
     .query(async ({ ctx, input }) => {
       const matches = await ctx.db.medicineBarcode.findMany({
-        where: { normalizedCode: normalizeMedicineText(input.code) },
+        where: {
+          normalizedCode: normalizeMedicineText(input.code),
+          presentation: { medicine: { saleable: true } },
+        },
         include: { presentation: true, packLevel: true },
       });
       const targets = matches.map(({ presentation, packLevel }) => ({ presentation, packLevel }));
       if (targets.length === 0) {
         const legacyMatches = await ctx.db.medicineAlias.findMany({
-          where: { type: 'LEGACY_CODE', normalizedValue: normalizeMedicineText(input.code) },
+          where: {
+            type: 'LEGACY_CODE',
+            normalizedValue: normalizeMedicineText(input.code),
+            medicine: { saleable: true },
+          },
           include: { medicine: { include: { presentations: { include: { packLevels: true } } } } },
         });
         for (const alias of legacyMatches) {
@@ -328,19 +579,20 @@ export const pharmacyMedicineRouter = router({
            LEFT JOIN pharmacy_medicine_strength_components strength ON strength."medicineId" = medicine.id
            LEFT JOIN pharmacy_ingredients ingredient ON ingredient.id = strength."ingredientId"
            LEFT JOIN pharmacy_medicine_aliases alias ON alias."medicineId" = medicine.id
-          WHERE pharmacy_normalize_catalog_text(coalesce(medicine."productName",'')) % $1
+          WHERE medicine.saleable = true AND (
+                pharmacy_normalize_catalog_text(coalesce(medicine."productName",'')) % $1
              OR pharmacy_normalize_catalog_text(coalesce(medicine."brandName",'')) % $1
              OR pharmacy_normalize_catalog_text(coalesce(ingredient.name,'')) % $1
              OR pharmacy_normalize_catalog_text(coalesce(strength.value::text,'') || coalesce(strength.unit,'')) % $1
              OR pharmacy_normalize_catalog_text(coalesce(presentation."dosageForm",'')) % $1
              OR coalesce(alias."normalizedValue",'') % $1
-             OR coalesce(alias."normalizedValue",'') = $1
+             OR coalesce(alias."normalizedValue",'') = $1)
           ORDER BY medicine.id LIMIT $2`,
         query,
         input.limit
       );
       return ctx.db.medicine.findMany({
-        where: { id: { in: ids.map(({ id }) => id) } },
+        where: { id: { in: ids.map(({ id }) => id) }, saleable: true },
         include: {
           aliases: true,
           strengths: { include: { ingredient: true } },
@@ -349,7 +601,7 @@ export const pharmacyMedicineRouter = router({
       });
     }),
 
-  duplicateGroups: auditedProtectedProcedure.query(async ({ ctx }) => {
+  duplicateGroups: adminProcedure.query(async ({ ctx }) => {
     const medicines = await ctx.db.medicine.findMany({
       include: { strengths: true, presentations: true, aliases: true, provenance: true },
     });
@@ -370,42 +622,258 @@ export const pharmacyMedicineRouter = router({
       .map(([duplicateKey, candidates]) => ({ duplicateKey, candidates }));
   }),
 
-  recordReviewDecision: protectedProcedure
-    .input(
-      z
-        .object({
-          duplicateKey: z.string().min(1).max(700),
-          action: z.enum(['ACCEPT', 'CORRECT', 'SPLIT', 'MERGE', 'REJECT', 'DEFER']),
-          medicineIds: z.array(z.string().min(1)).min(1),
-          payload: z.json().optional(),
-        })
-        .strict()
-    )
-    .mutation(({ ctx, input }) =>
-      ctx.db.medicineReviewDecision.create({
+  recordReviewDecision: adminProcedure.input(reviewDecisionInput).mutation(({ ctx, input }) =>
+    ctx.db.$transaction(async (tx) => {
+      const medicineIds = [...new Set(input.medicineIds)];
+      const assertionIds = [...new Set(input.payload.assertionIds)];
+      if (
+        medicineIds.length !== input.medicineIds.length ||
+        assertionIds.length !== input.payload.assertionIds.length
+      ) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Review references must be unique.' });
+      }
+      const [medicineCount, assertions] = await Promise.all([
+        tx.medicine.count({ where: { id: { in: medicineIds } } }),
+        tx.medicineProvenance.findMany({ where: { id: { in: assertionIds } } }),
+      ]);
+      if (medicineCount !== medicineIds.length || assertions.length !== assertionIds.length) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Review candidate or assertion not found.',
+        });
+      }
+      if (
+        assertions.some(
+          (assertion) =>
+            !medicineIds.includes(assertion.medicineId) || assertion.status !== 'UNREVIEWED'
+        )
+      ) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Review assertions must be unreviewed and belong to the referenced candidates.',
+        });
+      }
+
+      let reviewedAssertionIds = assertionIds;
+      if (input.action === 'ACCEPT' || input.action === 'REJECT') {
+        const transitioned = await tx.medicineProvenance.updateMany({
+          where: { id: { in: assertionIds }, status: 'UNREVIEWED' },
+          data: {
+            status: input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
+            reviewer: ctx.session.user.id,
+          },
+        });
+        if (transitioned.count !== assertionIds.length) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+        }
+      } else if (input.action === 'CORRECT') {
+        const corrections = new Map(
+          input.payload.corrections.map((item) => [item.assertionId, item.value])
+        );
+        if (
+          corrections.size !== input.payload.corrections.length ||
+          [...corrections.keys()].some((id) => !assertionIds.includes(id))
+        ) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Corrections must reference selected assertions once.',
+          });
+        }
+        const created = [];
+        for (const assertion of assertions) {
+          const value = corrections.get(assertion.id);
+          if (!value) continue;
+          const envelope = assertedEnvelope.parse(assertion.assertedValue);
+          created.push(
+            await tx.medicineProvenance.create({
+              data: {
+                medicineId: assertion.medicineId,
+                field: assertion.field,
+                source: assertion.source,
+                sourceType: assertion.sourceType,
+                retrievedAt: new Date(),
+                confidence: assertion.confidence,
+                reviewer: ctx.session.user.id,
+                status: 'CORRECTED',
+                supersedesId: assertion.id,
+                assertedValue: { ...envelope, value },
+              },
+            })
+          );
+        }
+        const corrected = await tx.medicineProvenance.updateMany({
+          where: { id: { in: [...corrections.keys()] }, status: 'UNREVIEWED' },
+          data: { status: 'SUPERSEDED', reviewer: ctx.session.user.id },
+        });
+        if (corrected.count !== corrections.size) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+        }
+        reviewedAssertionIds = [
+          ...assertionIds.filter((id) => !corrections.has(id)),
+          ...created.map((assertion) => assertion.id),
+        ];
+        const accepted = await tx.medicineProvenance.updateMany({
+          where: {
+            id: { in: assertionIds.filter((id) => !corrections.has(id)) },
+            status: 'UNREVIEWED',
+          },
+          data: { status: 'ACCEPTED', reviewer: ctx.session.user.id },
+        });
+        if (accepted.count !== assertionIds.length - corrections.size) {
+          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+        }
+      }
+
+      return tx.medicineReviewDecision.create({
         data: {
-          ...input,
-          payload:
-            input.payload === null
-              ? Prisma.JsonNull
-              : (input.payload as Prisma.InputJsonValue | undefined),
+          duplicateKey: input.duplicateKey,
+          action: input.action,
+          medicineIds,
+          payload: { assertionIds: reviewedAssertionIds } as Prisma.InputJsonValue,
           reviewerId: ctx.session.user.id,
         },
-      })
-    ),
+      });
+    })
+  ),
 
-  publishAssertions: protectedProcedure
+  publishAssertions: adminProcedure
     .input(z.object({ assertionIds: z.array(z.string().min(1)).min(1) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {
+        const assertionIds = [...new Set(input.assertionIds)];
         const assertions = await tx.medicineProvenance.findMany({
-          where: { id: { in: input.assertionIds } },
+          where: { id: { in: assertionIds } },
         });
-        if (assertions.length !== new Set(input.assertionIds).size)
+        if (assertions.length !== assertionIds.length)
           throw new TRPCError({ code: 'NOT_FOUND', message: 'Assertion not found.' });
-        const batch = await tx.medicinePublicationBatch.create({
-          data: { status: 'PUBLISHED', publishedBy: ctx.session.user.id, publishedAt: new Date() },
+        if (
+          assertions.some(
+            (assertion) =>
+              !['ACCEPTED', 'CORRECTED'].includes(assertion.status) || !assertion.reviewer
+          )
+        ) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Only reviewed, accepted assertions can be published.',
+          });
+        }
+        const existingEntry = await tx.medicinePublicationEntry.findFirst({
+          where: { assertionId: { in: assertionIds }, batch: { status: 'PUBLISHED' } },
         });
+        if (existingEntry)
+          throw new TRPCError({ code: 'CONFLICT', message: 'Assertion was already published.' });
+
+        const decisions = await tx.medicineReviewDecision.findMany({
+          where: {
+            action: { in: ['ACCEPT', 'CORRECT'] },
+            medicineIds: { hasSome: [...new Set(assertions.map((item) => item.medicineId))] },
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        const evidenced = new Set(
+          decisions.flatMap((decision) => {
+            const parsed = assertionIdsPayload.safeParse(decision.payload);
+            return parsed.success ? parsed.data.assertionIds : [];
+          })
+        );
+        if (assertions.some((assertion) => !evidenced.has(assertion.id))) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Accepted assertion lacks matching review evidence.',
+          });
+        }
+
+        const batch = await tx.medicinePublicationBatch.create({
+          data: { status: 'DRAFT' },
+        });
+        const byMedicine = new Map<string, typeof assertions>();
+        for (const assertion of assertions)
+          byMedicine.set(assertion.medicineId, [
+            ...(byMedicine.get(assertion.medicineId) ?? []),
+            assertion,
+          ]);
+        for (const [medicineId, selected] of byMedicine) {
+          const values = new Map(
+            selected.map((assertion) => [
+              assertion.field,
+              assertedEnvelope.parse(assertion.assertedValue).value,
+            ])
+          );
+          for (const field of ['productName', 'strength', 'dosageForm', 'pack'] as const) {
+            if (!values.get(field))
+              throw new TRPCError({
+                code: 'BAD_REQUEST',
+                message: `Publication requires ${field}.`,
+              });
+          }
+          const parsedStrength = parseSimpleMedicineStrength(values.get('strength')!);
+          if (!parsedStrength)
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Strength cannot be safely structured; correct it before publication.',
+            });
+          const medicine = await tx.medicine.findUniqueOrThrow({ where: { id: medicineId } });
+          const ingredientName = values.get('alias') ?? values.get('productName')!;
+          const ingredient = await tx.ingredient.upsert({
+            where: {
+              organizationId_name: {
+                organizationId: medicine.organizationId,
+                name: ingredientName,
+              },
+            },
+            create: { organizationId: medicine.organizationId, name: ingredientName },
+            update: {},
+          });
+          const presentation = await tx.presentation.create({
+            data: {
+              medicineId,
+              dosageForm: values.get('dosageForm')!,
+              presentation: values.get('pack')!,
+            },
+          });
+          await tx.medicineStrengthComponent.create({
+            data: { medicineId, ingredientId: ingredient.id, ...parsedStrength },
+          });
+          const barcode = values.get('barcode');
+          if (barcode)
+            await tx.medicineBarcode.create({
+              data: {
+                presentationId: presentation.id,
+                type: 'GTIN',
+                code: barcode,
+                normalizedCode: normalizeMedicineText(barcode),
+              },
+            });
+          const alias = values.get('alias');
+          if (alias)
+            await tx.medicineAlias.create({
+              data: {
+                medicineId,
+                type: 'GENERIC',
+                value: alias,
+                normalizedValue: normalizeMedicineText(alias),
+              },
+            });
+          assertSaleable({
+            productFamily: medicine.productFamily,
+            hasPresentation: true,
+            hasStrength: true,
+            hasRegistration: Boolean(
+              values.get('drapRegistrationNumber') ?? medicine.drapRegistrationNumber
+            ),
+            provenanceFields: new Set(selected.map((assertion) => assertion.field)),
+          });
+          await tx.medicine.update({
+            where: { id: medicineId },
+            data: {
+              productName: values.get('productName')!,
+              brandName: values.get('brandName'),
+              manufacturer: values.get('manufacturer'),
+              drapRegistrationNumber: values.get('drapRegistrationNumber'),
+              saleable: true,
+            },
+          });
+        }
         await tx.medicinePublicationEntry.createMany({
           data: assertions.map((assertion) => ({
             batchId: batch.id,
@@ -413,11 +881,14 @@ export const pharmacyMedicineRouter = router({
             priorAssertionId: assertion.supersedesId,
           })),
         });
-        return batch;
+        return tx.medicinePublicationBatch.update({
+          where: { id: batch.id },
+          data: { status: 'PUBLISHED', publishedBy: ctx.session.user.id, publishedAt: new Date() },
+        });
       })
     ),
 
-  supersedePublication: protectedProcedure
+  supersedePublication: adminProcedure
     .input(z.object({ batchId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) =>
       ctx.db.$transaction(async (tx) => {

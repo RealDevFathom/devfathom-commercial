@@ -43,6 +43,7 @@ import {
   ClipboardCheck,
   Replace,
   BookLock,
+  Pill,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -251,6 +252,14 @@ export const navigation: NavItem[] = [
     icon: ListChecks,
     adminOnly: true,
     group: 'Pharmacy',
+  },
+  {
+    label: 'Medicine catalog',
+    href: '/pharmacy/medicines',
+    icon: Pill,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
   },
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
   // it is a first-class rail entry. `moduleForPath` resolves it to

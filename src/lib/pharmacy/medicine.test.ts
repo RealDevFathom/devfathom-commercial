@@ -5,9 +5,17 @@ import {
   deriveLooseUnitPrice,
   medicineDuplicateKey,
   normalizeMedicineText,
+  parseSimpleMedicineStrength,
 } from './medicine';
 
 describe('pharmacy medicine invariants', () => {
+  it('structures only lossless scalar strengths', () => {
+    expect(parseSimpleMedicineStrength('500 mg')).toEqual({ value: 500, unit: 'mg' });
+    expect(parseSimpleMedicineStrength('2.5%')).toEqual({ value: 2.5, unit: '%' });
+    expect(parseSimpleMedicineStrength('500 mg / 5 mL')).toBeNull();
+    expect(parseSimpleMedicineStrength('500 mg + 125 mg')).toBeNull();
+  });
+
   it('converts two cartons of 20 x 5 x 10 into 2,000 canonical units', () => {
     expect(canonicalUnits(2, [20, 5, 10])).toBe(2_000);
   });

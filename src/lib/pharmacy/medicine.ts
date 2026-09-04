@@ -19,6 +19,16 @@ export function normalizeMedicineText(value: string): string {
     .replace(/[^\p{L}\p{N}]+/gu, '');
 }
 
+/** MED-03: only losslessly parse one scalar strength. Ratios and compounds need human structure. */
+export function parseSimpleMedicineStrength(input: string): { value: number; unit: string } | null {
+  const match = input.trim().match(/^(\d+(?:\.\d+)?)\s*([\p{L}%µμ]+)$/u);
+  if (!match) return null;
+  const value = Number(match[1]);
+  const unit = match[2]!.trim();
+  if (!Number.isFinite(value) || value <= 0 || value > 1_000_000 || unit.length > 50) return null;
+  return { value, unit };
+}
+
 export function medicineDuplicateKey(input: {
   productName: string;
   strengths: readonly { value: number | string; unit: string }[];

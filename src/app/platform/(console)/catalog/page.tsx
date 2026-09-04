@@ -8,6 +8,7 @@ import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platf
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { VERTICALS } from '@/lib/vertical-catalog';
+import { medicineConnectorHealth } from '@/lib/pharmacy/licensed-reference-connectors';
 
 const BAND_LABELS = {
   BASELINE: 'Baseline',
@@ -45,6 +46,7 @@ export default async function CatalogPage() {
     ]);
     return { modules, packages, cameraPresets };
   });
+  const connectorHealth = medicineConnectorHealth();
 
   return (
     <div className="mx-auto max-w-[1480px]">
@@ -56,6 +58,30 @@ export default async function CatalogPage() {
 
       <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1fr)_400px]">
         <div className="min-w-0 space-y-7">
+          <section className="border border-border-default bg-surface-card">
+            <div className="border-b border-border-subtle px-5 py-4">
+              <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent-brand">
+                Pharmacy vertical / MED-06
+              </p>
+              <h2 className="mt-1 font-display text-xl font-semibold">
+                Reference connector health
+              </h2>
+              <p className="mt-1 text-xs text-text-muted">
+                Configuration presence only. Credentials and feed payloads are never exposed here.
+              </p>
+            </div>
+            <div className="grid gap-px bg-border-subtle sm:grid-cols-3">
+              {connectorHealth.map((connector) => (
+                <div key={connector.id} className="bg-surface-card p-4">
+                  <div className="flex items-start justify-between gap-3">
+                    <p className="text-xs font-semibold">{connector.label}</p>
+                    <PlatformStatus value={connector.status} />
+                  </div>
+                  <p className="mt-3 text-xs leading-5 text-text-muted">{connector.detail}</p>
+                </div>
+              ))}
+            </div>
+          </section>
           <section className="border border-border-default bg-surface-card p-5">
             <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent-brand">
               Camera catalog

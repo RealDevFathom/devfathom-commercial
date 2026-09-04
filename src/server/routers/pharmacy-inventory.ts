@@ -183,7 +183,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { organizationId } = actorFor(ctx);
-      if (!(await ctx.db.medicine.findFirst({ where: { id: input.medicineId } }))) {
+      if (!(await ctx.db.medicine.findFirst({ where: { id: input.medicineId, saleable: true } }))) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Medicine is outside this workspace.' });
       }
       return ctx.db.pharmacyManufacturingBatch.create({
@@ -687,7 +687,7 @@ export const pharmacyInventoryRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const scope = scopeFor(ctx, input.branchId);
-      if (!(await ctx.db.medicine.findFirst({ where: { id: input.medicineId } }))) {
+      if (!(await ctx.db.medicine.findFirst({ where: { id: input.medicineId, saleable: true } }))) {
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Medicine is outside this workspace.' });
       }
       const data = {

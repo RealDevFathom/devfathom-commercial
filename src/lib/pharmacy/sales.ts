@@ -122,7 +122,7 @@ export async function addSaleLine(
   if (!Number.isSafeInteger(canonicalUnits)) throw new PharmacySaleError('INVALID_QUANTITY');
 
   const medicine = await db.medicine.findFirst({
-    where: { id: input.medicineId, organizationId: scope.organizationId },
+    where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
   const allocation = await allocateForSale(db, scope, {

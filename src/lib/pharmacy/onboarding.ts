@@ -279,7 +279,15 @@ export async function evaluatePharmacyReadiness(
     // MED-05 publishes a medicine through a PUBLISHED publication batch; a
     // catalog row that has never been published is not catalog readiness.
     db.medicinePublicationEntry.count({
-      where: { organizationId, batch: { status: 'PUBLISHED' } },
+      where: {
+        organizationId,
+        batch: { status: 'PUBLISHED' },
+        assertion: {
+          status: { in: ['ACCEPTED', 'CORRECTED'] },
+          reviewer: { not: null },
+          medicine: { saleable: true },
+        },
+      },
     }),
     // INV-01 receipt: a lot exists but is only opening stock once received.
     db.pharmacyInventoryLot.count({ where: { organizationId, receivedAt: { not: null } } }),
