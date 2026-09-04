@@ -145,6 +145,8 @@ async function scenario(
           name: 'Validated fridge',
           kind: 'FRIDGE',
           coldChain: true,
+          minimumTemperatureC: 2,
+          maximumTemperatureC: 8,
         },
       }),
       // PUR-01 puts a trigger behind purchase-order creation: an authorized
