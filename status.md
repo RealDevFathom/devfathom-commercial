@@ -6,15 +6,10 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
-- **STOP-PRESS 06:18 UTC 4 Sep: the Codex account hit its usage limit** ("try again at Sep 7th, 2026
-  9:31 AM"). Every Codex run since then fails ("Internal error" / usage limit); the Chief of Staff was
-  paused to stop its retry loop; the three agents showing `error` (Release QA Engineer, QA Engineer 8,
-  Restaurant Fix Engineer 6) are just the runs that died. Nothing was lost: the candidate is at the
-  tip of this branch and clean. In flight when it stopped: WHA-1286 19th route (`titleLevel={2}` on
-  `/restaurant/sop/reports`, on the tip), WHA-1292 axe verification of WHA-1285's f553515b, WHA-1243
-  provisioning `QA PERF 2026-09-04` on staging (SHARED), WHA-1288 select names. To resume: buy Codex
-  credits or wait for the reset, then `clear-error` + re-fire those four lanes (todo); or the owner can
-  un-pause the claude_local agents (his call — Claude limits were also nearly exhausted).
+- **06:50 UTC 4 Sep: Codex usage limit hit at 06:18 and reset by the owner at 06:49.** Errors cleared,
+  the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
+  WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
+  Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
 - **Candidate:** the tip of this branch (`180c935a` + this status commit; clean). Everything composed
   today is in it: WHA-1286 heading hierarchy on 18 routes (06:08; the 19th, `/restaurant/sop/reports`,
   still needs `titleLevel={2}` on the `Report filters` card — the agents' commit 48ac381e sits on
