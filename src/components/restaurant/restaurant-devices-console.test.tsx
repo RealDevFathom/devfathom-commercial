@@ -251,8 +251,8 @@ describe('Restaurant device security UI', () => {
 
     renderConsole(true);
 
-    expect(screen.getByRole('heading', { level: 3, name: 'Loading devices…' })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { level: 3, name: '0 devices' })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Loading devices…' })).toBeInTheDocument();
+    expect(screen.queryByRole('heading', { level: 2, name: '0 devices' })).not.toBeInTheDocument();
   });
 
   it('confirms a friendly device and exposes the rotated secret in an accessible one-time state', async () => {
