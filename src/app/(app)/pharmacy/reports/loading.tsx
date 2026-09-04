@@ -16,6 +16,9 @@ export default function PharmacyReportsLoading() {
       <SectionCard title="Loading command centre">
         <Skeleton className="h-32 w-full" />
       </SectionCard>
+      <SectionCard title="Loading daily owner digest">
+        <Skeleton className="h-40 w-full" />
+      </SectionCard>
     </main>
   );
 }
