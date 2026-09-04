@@ -47,6 +47,7 @@ export class PharmacyReceivingError extends Error {
       | 'BYPASS_EVIDENCE_MISSING'
       | 'SELF_APPROVAL'
       | 'BATCH_EXPIRY_CONFLICT'
+      | 'OCR_CONFIRMATION_REQUIRED'
       | 'NOT_FOUND'
       | 'CROSS_TENANT_REFERENCE'
       | 'CROSS_BRANCH_REFERENCE'

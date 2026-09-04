@@ -134,7 +134,15 @@ export type MenuExtractionRequest = {
   signal?: AbortSignal;
 };
 
-export interface MenuExtractionAdapter {
+/** Neutral extraction contract reused by document-specific OCR pipelines. */
+export interface DocumentExtractionAdapter<Request, Result> {
+  extract(request: Request): Promise<Result>;
+}
+
+export interface MenuExtractionAdapter extends DocumentExtractionAdapter<
+  MenuExtractionRequest,
+  MenuExtractionResult
+> {
   readonly name: MenuExtractionAdapterName;
   readonly version: string;
   extract(request: MenuExtractionRequest): Promise<MenuExtractionResult>;
