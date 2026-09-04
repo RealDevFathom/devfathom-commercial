@@ -21,4 +21,4 @@ param cameraCredentialKey = readEnvironmentVariable('DEVFATHOM_PRODUCTION_CAMERA
 param cronSecret = readEnvironmentVariable('DEVFATHOM_PRODUCTION_CRON_SECRET')
 param adminPassword = readEnvironmentVariable('DEVFATHOM_PRODUCTION_ADMIN_PASSWORD')
 param platformAdminPassword = readEnvironmentVariable('DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD')
-param postgresExtensions = 'btree_gist'
+param postgresExtensions = 'btree_gist,pg_trgm'

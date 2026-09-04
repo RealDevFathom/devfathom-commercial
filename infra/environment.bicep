@@ -50,7 +50,7 @@ param customDomains customDomainBinding[] = []
 Comma-separated allow-list for the azure.extensions server parameter. Azure Database for PostgreSQL
 refuses CREATE EXTENSION for anything absent from it, so this must cover every extension the
 migrations and prisma/prepare-extensions.ts create, or the migration job fails before applying any
-migration.
+migration. The current required set is btree_gist,pg_trgm.
 ''')
 param postgresExtensions string
 

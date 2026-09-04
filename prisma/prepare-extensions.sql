@@ -35,6 +35,7 @@ $hardening_table$;
 
 DO $preflight$
 DECLARE
+  target_extension name;
   extension_oid oid;
   configured_role name := current_user;
   configured_role_oid oid;
@@ -49,87 +50,138 @@ BEGIN
     FROM pg_catalog.pg_roles AS role
    WHERE role.rolname = configured_role;
 
-  IF NOT EXISTS (
-    SELECT 1
-      FROM pg_catalog.pg_extension
-     WHERE extname = 'btree_gist'
-  ) THEN
-    IF NOT configured_role_is_superuser
-       AND NOT pg_catalog.has_database_privilege(
-         configured_role,
-         current_database(),
-         'CREATE'
-       ) THEN
-      RAISE EXCEPTION
-        'extension preparation role % cannot bootstrap btree_gist in database % (CREATE privilege required)',
-        configured_role, current_database();
+  FOREACH target_extension IN ARRAY ARRAY['btree_gist', 'pg_trgm']::name[]
+  LOOP
+    IF NOT EXISTS (
+      SELECT 1
+        FROM pg_catalog.pg_extension
+       WHERE extname = target_extension
+    ) THEN
+      IF NOT configured_role_is_superuser
+         AND NOT pg_catalog.has_database_privilege(
+           configured_role,
+           current_database(),
+           'CREATE'
+         ) THEN
+        RAISE EXCEPTION
+          'extension preparation role % cannot bootstrap % in database % (CREATE privilege required)',
+          configured_role, target_extension, current_database();
+      END IF;
+
+      EXECUTE format('CREATE EXTENSION %I', target_extension);
     END IF;
 
-    EXECUTE 'CREATE EXTENSION btree_gist';
-  END IF;
+    SELECT oid
+      INTO extension_oid
+      FROM pg_catalog.pg_extension
+     WHERE extname = target_extension;
 
-  SELECT oid
-    INTO extension_oid
-    FROM pg_catalog.pg_extension
-   WHERE extname = 'btree_gist';
+    IF extension_oid IS NULL THEN
+      RAISE EXCEPTION '% extension attribution is unavailable', target_extension;
+    END IF;
 
-  IF extension_oid IS NULL THEN
-    RAISE EXCEPTION 'btree_gist extension attribution is unavailable';
-  END IF;
-
-  SELECT count(*)
-    INTO member_count
-    FROM pg_catalog.pg_proc AS procedure
-    JOIN pg_catalog.pg_depend AS dependency
-      ON dependency.classid = 'pg_catalog.pg_proc'::regclass
-     AND dependency.objid = procedure.oid
-     AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
-     AND dependency.refobjid = extension_oid
-     AND dependency.deptype = 'e';
-
-  IF member_count = 0 THEN
-    RAISE EXCEPTION 'btree_gist has no attributed pg_proc members; refusing incomplete ACL preparation';
-  END IF;
-
-  -- Classify every function owner before changing any ACL. PostgreSQL reports an
-  -- ineffective non-owner REVOKE as a warning, so attempting first is unsafe.
-  -- An owner this role cannot assume is a managed-service owner: record the skip
-  -- rather than failing the deployment, and leave its ACLs untouched.
-  FOR owner IN
-    SELECT procedure.proowner AS owner_oid,
-           pg_catalog.pg_get_userbyid(procedure.proowner) AS owner_name,
-           count(*) AS function_count
+    SELECT count(*)
+      INTO member_count
       FROM pg_catalog.pg_proc AS procedure
       JOIN pg_catalog.pg_depend AS dependency
         ON dependency.classid = 'pg_catalog.pg_proc'::regclass
        AND dependency.objid = procedure.oid
        AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
        AND dependency.refobjid = extension_oid
-       AND dependency.deptype = 'e'
-     GROUP BY procedure.proowner
-     ORDER BY procedure.proowner
-  LOOP
-    IF NOT configured_role_is_superuser
-       AND configured_role_oid <> owner.owner_oid
-       AND NOT pg_catalog.pg_has_role(configured_role_oid, owner.owner_oid, 'SET') THEN
-      INSERT INTO platform_ops.platform_db_hardening (
-        extension_name, owner_role, reason, function_count
-      )
-      VALUES ('btree_gist', owner.owner_name, 'managed-owner', owner.function_count)
-      ON CONFLICT ON CONSTRAINT platform_db_hardening_pkey DO UPDATE
-        SET reason = excluded.reason,
-            function_count = excluded.function_count,
-            recorded_at = now();
+       AND dependency.deptype = 'e';
 
-      RAISE NOTICE
-        'skipping btree_gist PUBLIC EXECUTE revoke for % functions owned by %: preparation role % cannot SET ROLE to it (managed-owner)',
-        owner.function_count, owner.owner_name, configured_role;
+    IF member_count = 0 THEN
+      RAISE EXCEPTION '% has no attributed pg_proc members; refusing incomplete ACL preparation',
+        target_extension;
     END IF;
-  END LOOP;
 
-  FOR owner IN
-    SELECT procedure.proowner AS owner_oid,
-           pg_catalog.pg_get_userbyid(procedure.proowner) AS owner_name
+    -- Classify every function owner before changing any ACL. PostgreSQL reports an
+    -- ineffective non-owner REVOKE as a warning, so attempting first is unsafe.
+    -- An owner this role cannot assume is a managed-service owner: record the skip
+    -- rather than failing the deployment, and leave its ACLs untouched.
+    FOR owner IN
+      SELECT procedure.proowner AS owner_oid,
+             pg_catalog.pg_get_userbyid(procedure.proowner) AS owner_name,
+             count(*) AS function_count
+        FROM pg_catalog.pg_proc AS procedure
+        JOIN pg_catalog.pg_depend AS dependency
+          ON dependency.classid = 'pg_catalog.pg_proc'::regclass
+         AND dependency.objid = procedure.oid
+         AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+         AND dependency.refobjid = extension_oid
+         AND dependency.deptype = 'e'
+       GROUP BY procedure.proowner
+       ORDER BY procedure.proowner
+    LOOP
+      IF NOT configured_role_is_superuser
+         AND configured_role_oid <> owner.owner_oid
+         AND NOT pg_catalog.pg_has_role(configured_role_oid, owner.owner_oid, 'SET') THEN
+        INSERT INTO platform_ops.platform_db_hardening (
+          extension_name, owner_role, reason, function_count
+        )
+        VALUES (target_extension, owner.owner_name, 'managed-owner', owner.function_count)
+        ON CONFLICT ON CONSTRAINT platform_db_hardening_pkey DO UPDATE
+          SET reason = excluded.reason,
+              function_count = excluded.function_count,
+              recorded_at = now();
+
+        RAISE NOTICE
+          'skipping % PUBLIC EXECUTE revoke for % functions owned by %: preparation role % cannot SET ROLE to it (managed-owner)',
+          target_extension, owner.function_count, owner.owner_name, configured_role;
+      END IF;
+    END LOOP;
+
+    FOR owner IN
+      SELECT procedure.proowner AS owner_oid,
+             pg_catalog.pg_get_userbyid(procedure.proowner) AS owner_name
+        FROM pg_catalog.pg_proc AS procedure
+        JOIN pg_catalog.pg_depend AS dependency
+          ON dependency.classid = 'pg_catalog.pg_proc'::regclass
+         AND dependency.objid = procedure.oid
+         AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+         AND dependency.refobjid = extension_oid
+         AND dependency.deptype = 'e'
+       WHERE configured_role_is_superuser
+          OR procedure.proowner = configured_role_oid
+          OR pg_catalog.pg_has_role(configured_role_oid, procedure.proowner, 'SET')
+       GROUP BY procedure.proowner
+       ORDER BY procedure.proowner
+    LOOP
+      EXECUTE format('SET LOCAL ROLE %I', owner.owner_name);
+
+      FOR member IN
+        SELECT procedure.oid::regprocedure AS identity
+          FROM pg_catalog.pg_proc AS procedure
+          JOIN pg_catalog.pg_depend AS dependency
+            ON dependency.classid = 'pg_catalog.pg_proc'::regclass
+           AND dependency.objid = procedure.oid
+           AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
+           AND dependency.refobjid = extension_oid
+           AND dependency.deptype = 'e'
+         WHERE procedure.proowner = owner.owner_oid
+         ORDER BY procedure.oid
+      LOOP
+        EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', member.identity);
+      END LOOP;
+
+      EXECUTE format('SET LOCAL ROLE %I', configured_role);
+    END LOOP;
+
+    -- Only functions this role could have corrected are allowed to fail the check.
+    SELECT count(*) FILTER (
+             WHERE EXISTS (
+               SELECT 1
+                 FROM pg_catalog.aclexplode(
+                   coalesce(
+                     procedure.proacl,
+                     pg_catalog.acldefault('f', procedure.proowner)
+                   )
+                 ) AS acl
+                WHERE acl.grantee = 0
+                  AND acl.privilege_type = 'EXECUTE'
+             )
+           )
+      INTO public_execute_count
       FROM pg_catalog.pg_proc AS procedure
       JOIN pg_catalog.pg_depend AS dependency
         ON dependency.classid = 'pg_catalog.pg_proc'::regclass
@@ -139,59 +191,12 @@ BEGIN
        AND dependency.deptype = 'e'
      WHERE configured_role_is_superuser
         OR procedure.proowner = configured_role_oid
-        OR pg_catalog.pg_has_role(configured_role_oid, procedure.proowner, 'SET')
-     GROUP BY procedure.proowner
-     ORDER BY procedure.proowner
-  LOOP
-    EXECUTE format('SET LOCAL ROLE %I', owner.owner_name);
+        OR pg_catalog.pg_has_role(configured_role_oid, procedure.proowner, 'SET');
 
-    FOR member IN
-      SELECT procedure.oid::regprocedure AS identity
-        FROM pg_catalog.pg_proc AS procedure
-        JOIN pg_catalog.pg_depend AS dependency
-          ON dependency.classid = 'pg_catalog.pg_proc'::regclass
-         AND dependency.objid = procedure.oid
-         AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
-         AND dependency.refobjid = extension_oid
-         AND dependency.deptype = 'e'
-       WHERE procedure.proowner = owner.owner_oid
-       ORDER BY procedure.oid
-    LOOP
-      EXECUTE format('REVOKE EXECUTE ON FUNCTION %s FROM PUBLIC', member.identity);
-    END LOOP;
-
-    EXECUTE format('SET LOCAL ROLE %I', configured_role);
+    IF public_execute_count <> 0 THEN
+      RAISE EXCEPTION '% % functions retain PUBLIC EXECUTE after ACL preparation',
+        public_execute_count, target_extension;
+    END IF;
   END LOOP;
-
-  -- Only functions this role could have corrected are allowed to fail the check.
-  SELECT count(*) FILTER (
-           WHERE EXISTS (
-             SELECT 1
-               FROM pg_catalog.aclexplode(
-                 coalesce(
-                   procedure.proacl,
-                   pg_catalog.acldefault('f', procedure.proowner)
-                 )
-               ) AS acl
-              WHERE acl.grantee = 0
-                AND acl.privilege_type = 'EXECUTE'
-           )
-         )
-    INTO public_execute_count
-    FROM pg_catalog.pg_proc AS procedure
-    JOIN pg_catalog.pg_depend AS dependency
-      ON dependency.classid = 'pg_catalog.pg_proc'::regclass
-     AND dependency.objid = procedure.oid
-     AND dependency.refclassid = 'pg_catalog.pg_extension'::regclass
-     AND dependency.refobjid = extension_oid
-     AND dependency.deptype = 'e'
-   WHERE configured_role_is_superuser
-      OR procedure.proowner = configured_role_oid
-      OR pg_catalog.pg_has_role(configured_role_oid, procedure.proowner, 'SET');
-
-  IF public_execute_count <> 0 THEN
-    RAISE EXCEPTION '% btree_gist functions retain PUBLIC EXECUTE after ACL preparation',
-      public_execute_count;
-  END IF;
 END
 $preflight$;
