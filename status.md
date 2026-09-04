@@ -6,6 +6,25 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **19:00 UTC — the Cowork supervisor took the seat back (owner: "Take the supervisor seat back, and
+  complete it"). Codex's supervisor loop must be stopped by the owner so there is only one supervisor.**
+- **THE PUSH WENT TO A STALE SHA.** `origin/restaurantv2` = `8a522bd8`, which is 43 commits behind the
+  candidate and does NOT contain the restaurant-completion programme (catering both phases + console,
+  recipe costing, catalog cost UI, wastage / food-cost / dish-profitability / catering reports,
+  administrator guide, catering e2e spec, the a11y programme, the DEDICATED guard). Verified:
+  `git merge-base --is-ancestor 8f079c9b 8a522bd8` -> false. Cloud gate run 33839934789 (35 failures,
+  27 pending) therefore graded a pre-catering tree. Cause: the 05:00 push prompt hard-coded
+  `8a522bd8:restaurantv2` and was run hours later. **Never pin a sha for a push — always push the tip.**
+- **The five CI repairs are composed** (19:00): 80251087 disposable-cloud RLS probes (WHA-1307),
+  af032e9c loyalty earn/refund on the tax-exclusive basis (WHA-1308; the only product-code change,
+  `loyaltyNetGrandTotal: grandTotal -> net` in `src/lib/restaurant/tenders.ts`, reviewed), 17831079
+  terminal approver rollback contract (WHA-1309), 0e917d98 pharmacy finance fixture saleable
+  (WHA-1310), fbb640a9 cold-chain fixture range (WHA-1311). Sources: Codex lanes @ ca78c75e.
+- **Next, in order:** (1) owner pushes the TIP: `git push origin HEAD:restaurantv2` from this worktree
+  (fast-forward from 8a522bd8; the Cowork VM has no git credentials); (2) the cloud gate re-runs on the
+  real candidate and is the exact-tree validation the five fixes need — do not reproduce it locally;
+  (3) red steps -> fix lanes; green -> owner runs the second staging deploy; (4) QA phase B resumes on
+  WHA-1235/1236/1238/1240/1241/1242/1260/1243.
 - **Supervisor handover (10:50 UTC 4 Sep):** the supervisor role moves from the Cowork session to a Codex
   session run by the owner. Role description, rules, the check-in loop with API recipes, native-git
   composition and standard texts: `DevFathom hub/codex-supervisor-handover.md`. This file stays the
