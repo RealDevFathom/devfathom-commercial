@@ -11457,6 +11457,9 @@ model PharmacySupplierRelationship {
   active         Boolean   @default(true)
   createdAt      DateTime  @default(now())
   revokedAt      DateTime?
+  /// AI-02: number of days before printed expiry when this supplier accepts an
+  /// expiry claim. Null means the relationship has no recorded return window.
+  expiryReturnWindowDays Int?
 
   supplier PharmacySupplier             @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
   links    PharmacySupplierActionLink[]

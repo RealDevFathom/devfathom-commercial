@@ -20,6 +20,7 @@ import {
   refreshPharmacyAnomalySignals,
   snoozePharmacyAnomalySignal,
 } from '@/lib/pharmacy/anomaly-signals-operations';
+import { proposeExpiryReturn, readExpiryAdvice } from '@/lib/pharmacy/expiry-advisor-operations';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
@@ -344,6 +345,32 @@ export const pharmacyReportsRouter = router({
     const bounded = await ownerFilters(ctx, input);
     return readPharmacyAnomalySignals(ctx.db, bounded);
   }),
+  expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
+    const bounded = await ownerFilters(ctx, input);
+    return readExpiryAdvice(ctx.db, bounded.branchIds);
+  }),
+  proposeExpiryReturn: reports
+    .input(
+      z
+        .object({
+          branchId: z.string().trim().min(1).max(128),
+          lotId: z.string().trim().min(1).max(128),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      await requireOwnerBranch(ctx, input.branchId);
+      return proposeExpiryReturn(
+        ctx.db,
+        {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: input.branchId,
+          actorId: ctx.session!.user.id,
+        },
+        input.lotId
+      );
+    }),
   refreshAnomalies: reports.input(filters).mutation(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
     return refreshPharmacyAnomalySignals(ctx.db, bounded, ctx.session!.user.id);

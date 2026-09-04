@@ -109,6 +109,20 @@ describe('pharmacy owner digest capability boundary', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.branchFindMany).not.toHaveBeenCalled();
   });
+
+  it('denies expiry advice and proposal without reports:financial before tenant data access', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(
+      caller().expiryAdvice({ from: '2026-09-01', to: '2026-09-04' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(
+      caller().proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
 });
 
 describe('RX-08 pharmacovigilance state boundaries', () => {

@@ -16,7 +16,15 @@ export const metadata: Metadata = { title: 'Pharmacy reports' };
 type SearchParams = Promise<
   Partial<
     Record<
-      'branch' | 'from' | 'to' | 'supplier' | 'ingredient' | 'batch' | 'digest' | 'anomaly',
+      | 'branch'
+      | 'from'
+      | 'to'
+      | 'supplier'
+      | 'ingredient'
+      | 'batch'
+      | 'digest'
+      | 'anomaly'
+      | 'advisor',
       string | string[] | undefined
     >
   >
@@ -77,6 +85,7 @@ export default async function PharmacyReportsPage({
   let result: Awaited<ReturnType<typeof caller.commandCentre>> | null = null;
   let digest: Awaited<ReturnType<typeof caller.digestOverview>> | null = null;
   let anomalies: Awaited<ReturnType<typeof caller.anomalySignals>> | null = null;
+  let expiryAdvice: Awaited<ReturnType<typeof caller.expiryAdvice>> | null = null;
   let reportError = false;
   const reportFilters = {
     ...(branch ? { branchId: branch } : {}),
@@ -86,17 +95,20 @@ export default async function PharmacyReportsPage({
     from,
     to,
   };
-  const [reportResult, digestResult, anomalyResult] = await Promise.allSettled([
+  const [reportResult, digestResult, anomalyResult, expiryResult] = await Promise.allSettled([
     caller.commandCentre(reportFilters),
     caller.digestOverview(),
     caller.anomalySignals(reportFilters),
+    caller.expiryAdvice(reportFilters),
   ]);
   if (reportResult.status === 'fulfilled') result = reportResult.value;
   else reportError = true;
   if (digestResult.status === 'fulfilled') digest = digestResult.value;
   if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
+  if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
   const digestMessage = value(query.digest);
   const anomalyMessage = value(query.anomaly);
+  const advisorMessage = value(query.advisor);
   const returnQuery = new URLSearchParams(
     Object.entries({ branch, supplier, ingredient, batch, from, to }).filter(
       (entry): entry is [string, string] => typeof entry[1] === 'string'
@@ -105,6 +117,11 @@ export default async function PharmacyReportsPage({
   const anomalyRedirect = (state: 'saved' | 'error') => {
     const copy = new URLSearchParams(returnQuery);
     copy.set('anomaly', state);
+    return `/pharmacy/reports?${copy.toString()}`;
+  };
+  const advisorRedirect = (state: 'saved' | 'error') => {
+    const copy = new URLSearchParams(returnQuery);
+    copy.set('advisor', state);
     return `/pharmacy/reports?${copy.toString()}`;
   };
 
@@ -133,6 +150,20 @@ export default async function PharmacyReportsPage({
       failed = true;
     }
     redirect(anomalyRedirect(failed ? 'error' : 'saved'));
+  }
+  async function proposeReturn(data: FormData) {
+    'use server';
+    let failed = false;
+    try {
+      const actionCtx = await createTRPCContext();
+      await pharmacyReportsRouter.createCaller(actionCtx).proposeExpiryReturn({
+        branchId: String(data.get('branchId') ?? ''),
+        lotId: String(data.get('lotId') ?? ''),
+      });
+    } catch {
+      failed = true;
+    }
+    redirect(advisorRedirect(failed ? 'error' : 'saved'));
   }
   async function acknowledgeAnomaly(data: FormData) {
     'use server';
@@ -255,6 +286,102 @@ export default async function PharmacyReportsPage({
               ))}
             </div>
           </SectionCard>
+          {expiryAdvice ? (
+            <SectionCard
+              eyebrow="AI-02 · Advisory only"
+              title="Expiry and supplier-return advisor"
+              titleLevel={2}
+            >
+              <p className="max-w-3xl text-sm leading-6 text-text-muted">
+                Ranked by projected stock value left at expiry, using only each branch&apos;s recent
+                completed dispensing and sales. Draft proposals do not reserve, move, quarantine,
+                write off, or return stock; a human must review and submit them.
+              </p>
+              {advisorMessage === 'saved' ? (
+                <p className="mt-3 text-sm text-success" role="status">
+                  Draft expiry claim created for human review.
+                </p>
+              ) : advisorMessage === 'error' ? (
+                <p className="mt-3 text-sm text-destructive" role="alert">
+                  The draft could not be created. Eligibility or access may have changed.
+                </p>
+              ) : null}
+              {expiryAdvice.length ? (
+                <ol className="mt-5 divide-y divide-border-subtle border-y border-border-subtle">
+                  {expiryAdvice.map((item) => (
+                    <li className="py-5" key={`${item.lotId}:${item.stockLocationId}`}>
+                      <article className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_auto] lg:items-start">
+                        <div>
+                          <div className="flex flex-wrap items-center gap-2">
+                            <h3 className="font-semibold text-text-strong">{item.medicineName}</h3>
+                            <StatusPill
+                              status={item.classification.replaceAll('_', ' ')}
+                              tone={
+                                item.classification === 'SELLABLE'
+                                  ? 'success'
+                                  : item.classification === 'RETURNABLE'
+                                    ? 'warning'
+                                    : 'neutral'
+                              }
+                            />
+                            {item.coldChain ? (
+                              <StatusPill status="Cold chain" tone="warning" />
+                            ) : null}
+                          </div>
+                          <p className="mt-2 text-sm leading-6 text-text-body">
+                            {item.explanation}
+                          </p>
+                          <dl className="mt-3 flex flex-wrap gap-x-5 gap-y-2 font-mono text-[11px] text-text-muted tabular-nums">
+                            <div>
+                              <dt className="inline font-semibold text-text-body">Batch: </dt>
+                              <dd className="inline">{item.batchNumber}</dd>
+                            </div>
+                            <div>
+                              <dt className="inline font-semibold text-text-body">On hand: </dt>
+                              <dd className="inline">{item.onHandUnits} units</dd>
+                            </div>
+                            <div>
+                              <dt className="inline font-semibold text-text-body">
+                                Value at risk:{' '}
+                              </dt>
+                              <dd className="inline">{money(item.valueAtRiskMinor)}</dd>
+                            </div>
+                            <div>
+                              <dt className="inline font-semibold text-text-body">Supplier: </dt>
+                              <dd className="inline">{item.supplierName}</dd>
+                            </div>
+                          </dl>
+                        </div>
+                        {item.proposalAllowed ? (
+                          <form action={proposeReturn}>
+                            <input name="branchId" type="hidden" value={item.branchId} />
+                            <input name="lotId" type="hidden" value={item.lotId} />
+                            <Button className="min-h-11" type="submit" variant="outline">
+                              Create draft proposal
+                            </Button>
+                          </form>
+                        ) : null}
+                      </article>
+                    </li>
+                  ))}
+                </ol>
+              ) : (
+                <p className="mt-5 text-sm text-text-muted">
+                  No future-expiry lots with available stock match this scope.
+                </p>
+              )}
+            </SectionCard>
+          ) : (
+            <SectionCard
+              eyebrow="AI-02 · Owner only"
+              title="Expiry and supplier-return advisor"
+              titleLevel={2}
+            >
+              <p className="text-sm text-text-muted">
+                Financial report and owner permissions are required to view value-at-risk advice.
+              </p>
+            </SectionCard>
+          )}
           {anomalies ? (
             <SectionCard
               eyebrow="AI-04 / RPT-03 · Review only"
