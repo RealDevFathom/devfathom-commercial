@@ -25,7 +25,7 @@ const viewports = [
 ] as const;
 const themes = ['light', 'dark'] as const;
 const tenantAdminSurfaces = [
-  { path: '/dashboard', heading: /^Service dashboard$/, screenshot: 'dashboard' },
+  { path: '/dashboard', heading: /^Restaurant dashboard$/, screenshot: 'dashboard' },
   { path: '/restaurant/orders', heading: /^Orders$/, screenshot: 'orders' },
   {
     path: '/restaurant/money?tab=daily-close',
@@ -168,7 +168,7 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
       await page.setViewportSize(viewport);
       const actorOrigin = await signInAs(page, 'restaurantAdmin');
 
-      const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+      const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
       await expect(navigation.getByRole('link', { name: 'Point of sale' })).toBeVisible();
       await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toBeVisible();
       await expect(navigation.getByRole('link', { name: 'Onboarding' })).toHaveCount(0);
@@ -238,7 +238,7 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
           await useTheme(page, theme);
           const actorOrigin = await signInAs(page, actor);
           await page.goto(`${actorOrigin}/dashboard`);
-          await accessiblePage(page, /^Service dashboard$/);
+          await accessiblePage(page, /^Restaurant dashboard$/);
           await expect(page.getByText(/restaurant/i).first()).toBeVisible();
           await page.screenshot({
             path: path.join(OUTPUT, `${label}-${viewport.name}-${theme}.png`),

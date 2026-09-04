@@ -55,15 +55,18 @@ test.describe('restaurant POS and KDS core flow', () => {
     const actorOrigin = await signInAs(page, 'restaurantAdmin');
     await page.goto(new URL('/dashboard', actorOrigin).href);
     await expect(page).toHaveURL(new URL('/dashboard', actorOrigin).href);
-    const checklist = page.getByTestId('first-run-checklist');
-    await expect(checklist).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Restaurant dashboard' })).toBeVisible();
+    await expect(page.getByTestId('first-run-checklist')).toHaveCount(0);
     await installSeededTerminalCookie(page.context(), fixture.pos, actorOrigin);
     const establishedResponse = page.waitForResponse(
       (response) =>
         response.url().endsWith('/api/restaurant/terminal/establish') &&
         response.request().method() === 'POST'
     );
-    await checklist.getByRole('link', { name: /Make a test sale/ }).click();
+    await page
+      .locator('[data-slot="app-canvas"]')
+      .getByRole('link', { name: 'Point of sale' })
+      .click();
     expect((await establishedResponse).status()).toBe(201);
 
     const pos = await establishPosFixture(request);

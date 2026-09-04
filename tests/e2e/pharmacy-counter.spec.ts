@@ -70,7 +70,7 @@ test('pharmacy-only navigation exposes pharmacy destinations and excludes Restau
   page,
 }) => {
   await signIn(page);
-  const navigation = page.getByRole('navigation', { name: 'Main navigation' });
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
   await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible();
   await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeVisible();
