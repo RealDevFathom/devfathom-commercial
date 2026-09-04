@@ -243,17 +243,35 @@ export async function refundTender(
       : roundMoney(tenderDeliveryTotal.mul(cumulativePrincipal).div(tender.amount));
     const deliveryFeeRefundAmount = sub(cumulativeDelivery, priorDeliveryRefund);
 
-    const frozenTaxAllocations = await tx.restaurantTaxTenderAllocationSnapshot.findMany({
-      where: { originalTenderId: tender.id },
-      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
-      select: {
-        id: true,
-        cents: true,
-        snapshotId: true,
-        rateBucketSnapshotId: true,
-        paymentCategory: true,
-        refundAllocations: { select: { cents: true } },
-      },
+    const frozenTaxAllocations = (
+      await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        // Refund authority is the exact immutable allocation made for this tender at
+        // settlement. Do not discover evidence through any live tax configuration.
+        where: {
+          billId: tender.billId,
+          originalTenderId: tender.id,
+          paymentCategory: tender.type as 'CASH' | 'CARD' | 'OTHER',
+        },
+        select: {
+          id: true,
+          cents: true,
+          snapshotId: true,
+          rateBucketSnapshotId: true,
+          paymentCategory: true,
+          rateBucket: { select: { billLineId: true, unitOrdinal: true } },
+          refundAllocations: { select: { cents: true } },
+        },
+      })
+    ).sort((left, right) => {
+      const leftLine = left.rateBucket.billLineId ?? '';
+      const rightLine = right.rateBucket.billLineId ?? '';
+      if (leftLine !== rightLine) return leftLine < rightLine ? -1 : 1;
+      const ordinal = (left.rateBucket.unitOrdinal ?? -1) - (right.rateBucket.unitOrdinal ?? -1);
+      if (ordinal !== 0) return ordinal;
+      if (left.paymentCategory !== right.paymentCategory) {
+        return left.paymentCategory < right.paymentCategory ? -1 : 1;
+      }
+      return left.id < right.id ? -1 : left.id === right.id ? 0 : 1;
     });
     const originalTaxCents = frozenTaxAllocations.map((allocation) => Number(allocation.cents));
     const tenderTaxTotal = originalTaxCents.reduce((total, cents) => total + cents, 0);
