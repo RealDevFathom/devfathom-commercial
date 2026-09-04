@@ -85,6 +85,13 @@ const CANDIDATE_COLUMNS = Prisma.sql`
       AND claim."branchId" = balance."branchId"
       AND claim."inventoryLotId" = balance."inventoryLotId"
       AND claim."status" = 'RESERVED'
+  ), 0) - COALESCE((
+    SELECT SUM(reservation."reservedUnits") FROM "pharmacy_restock_reservations" reservation
+    WHERE reservation."organizationId" = balance."organizationId"
+      AND reservation."branchId" = balance."branchId"
+      AND reservation."inventoryLotId" = balance."inventoryLotId"
+      AND reservation."stockLocationId" = balance."stockLocationId"
+      AND reservation."status" = 'RESERVED'
   ), 0))                         AS "availableUnits",
   lot."unitsPerPack"          AS "unitsPerPack",
   balance."sealedPacks"       AS "sealedPacks",
@@ -127,6 +134,13 @@ async function loadCandidates(
           AND claim."branchId" = balance."branchId"
           AND claim."inventoryLotId" = balance."inventoryLotId"
           AND claim."status" = 'RESERVED'
+      ), 0) - COALESCE((
+        SELECT SUM(reservation."reservedUnits") FROM "pharmacy_restock_reservations" reservation
+        WHERE reservation."organizationId" = balance."organizationId"
+          AND reservation."branchId" = balance."branchId"
+          AND reservation."inventoryLotId" = balance."inventoryLotId"
+          AND reservation."stockLocationId" = balance."stockLocationId"
+          AND reservation."status" = 'RESERVED'
       ), 0)) > 0
     ORDER BY batch."expiresAt" ASC, lot."receivedAt" ASC NULLS FIRST,
              balance."inventoryLotId" ASC, balance."stockLocationId" ASC`;

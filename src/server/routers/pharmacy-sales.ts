@@ -20,12 +20,17 @@ import {
 } from '@/lib/pharmacy/customer-loyalty';
 import {
   addSaleLine,
+  addRestockInterest,
+  captureSafeRestockArrival,
   captureDemand,
   changeSaleStatus,
   createSale,
   demandAggregate,
+  optOutRestockInterest,
   PharmacySaleError,
   recoverDemandWithAlternate,
+  recoverRestockInterest,
+  restockRecoveryReport,
   returnSaleLine,
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
@@ -420,6 +425,71 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
     .query(({ ctx, input }) =>
       demandAggregate(ctx.db, scopeFor(ctx, input.branchId), input.from, input.to)
+    ),
+  addRestockInterest: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          demandEventId: z.string().min(1),
+          patientId: z.string().min(1).optional(),
+          channel: z.enum(['SMS', 'WHATSAPP']).optional(),
+          reserveOnArrival: z.boolean().optional(),
+          quantityUnits: z.number().int().positive(),
+          campaignKey: z.string().trim().min(1).max(160).optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          addRestockInterest(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  captureSafeRestockArrival: protectedProcedure
+    .input(z.object({ branchId, inventoryLotId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          captureSafeRestockArrival(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  optOutRestockInterest: protectedProcedure
+    .input(z.object({ branchId, interestId: z.string().min(1) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          optOutRestockInterest(txDb(tx), scopeFor(ctx, input.branchId), input.interestId)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  recoverRestockInterest: protectedProcedure
+    .input(
+      z.object({ branchId, interestId: z.string().min(1), saleLineId: z.string().min(1) }).strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          recoverRestockInterest(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  restockRecoveryReport: protectedProcedure
+    .input(
+      z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
+    )
+    .query(({ ctx, input }) =>
+      restockRecoveryReport(ctx.db, scopeFor(ctx, input.branchId), input.campaignKey)
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────

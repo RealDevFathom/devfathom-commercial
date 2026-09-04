@@ -24,6 +24,7 @@ export class PharmacySaleError extends Error {
       | 'REGULATED_DISCOUNT_REFUSED'
       | 'RETURN_EXCEEDS_SOLD'
       | 'CONSENT_REQUIRED'
+      | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
   ) {
     super(reason);
@@ -378,4 +379,260 @@ export async function demandAggregate(
     confidence: 'observed-events-only',
     rows,
   };
+}
+
+export async function addRestockInterest(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    demandEventId: string;
+    patientId?: string;
+    channel?: 'SMS' | 'WHATSAPP';
+    reserveOnArrival?: boolean;
+    quantityUnits: number;
+    campaignKey?: string;
+  }
+) {
+  if (!Number.isSafeInteger(input.quantityUnits) || input.quantityUnits <= 0)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  const demand = await db.unfulfilledDemandEvent.findFirst({
+    where: {
+      id: input.demandEventId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'OPEN',
+    },
+  });
+  if (!demand) throw new PharmacySaleError('NOT_FOUND');
+  if ((input.patientId === undefined) !== (input.channel === undefined))
+    throw new PharmacySaleError('CONSENT_REQUIRED');
+
+  if (input.patientId && input.channel) {
+    const consent = await db.patientConsent.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        patientId: input.patientId,
+        purpose: 'REMINDERS',
+        channel: input.channel,
+      },
+      orderBy: { version: 'desc' },
+    });
+    if (!consent?.granted || consent.revokedAt) throw new PharmacySaleError('CONSENT_REQUIRED');
+  }
+
+  return db.pharmacyRestockInterest.create({
+    data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      demandEventId: demand.id,
+      patientId: input.patientId,
+      channel: input.channel,
+      reserveOnArrival: input.reserveOnArrival ?? false,
+      quantityUnits: input.quantityUnits,
+      campaignKey: input.campaignKey,
+      createdByUserId: scope.actorId,
+    },
+  });
+}
+
+export async function captureSafeRestockArrival(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { inventoryLotId: string; at?: Date }
+) {
+  const at = input.at ?? new Date();
+  const lot = await db.pharmacyInventoryLot.findFirst({
+    where: {
+      id: input.inventoryLotId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+    },
+    include: {
+      batch: { select: { medicineId: true, state: true, expiresAt: true } },
+      balances: {
+        where: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } },
+        orderBy: { stockLocationId: 'asc' },
+      },
+    },
+  });
+  if (
+    !lot?.receivedAt ||
+    lot.batch.state !== 'ACTIVE' ||
+    lot.batch.expiresAt.getTime() <= at.getTime() ||
+    lot.balances.length === 0
+  )
+    throw new PharmacySaleError('UNSAFE_STOCK');
+
+  const interests = await db.pharmacyRestockInterest.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'OPEN',
+      demandEvent: { requestedMedicineId: lot.batch.medicineId, status: 'OPEN' },
+    },
+    include: { patient: { select: { phone: true } } },
+    orderBy: { createdAt: 'asc' },
+  });
+  const captured = [];
+  for (const interest of interests) {
+    let reservation = null;
+    if (interest.reserveOnArrival) {
+      reservation = await db.pharmacyRestockReservation.create({
+        data: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          interestId: interest.id,
+          inventoryLotId: lot.id,
+          stockLocationId: lot.balances[0]!.stockLocationId,
+          reservedUnits: interest.quantityUnits,
+        },
+      });
+    }
+    if (!interest.patientId || !interest.channel) {
+      captured.push({ interestId: interest.id, reservation, notification: null });
+      continue;
+    }
+    const consent = await db.patientConsent.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        patientId: interest.patientId,
+        purpose: 'REMINDERS',
+        channel: interest.channel,
+      },
+      orderBy: { version: 'desc' },
+    });
+    if (!consent?.granted || consent.revokedAt || !interest.patient?.phone)
+      throw new PharmacySaleError('CONSENT_REQUIRED');
+    const notification = await db.pharmacyRestockNotification.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        interestId: interest.id,
+        channel: interest.channel,
+        destination: interest.patient.phone,
+        consentId: consent.id,
+        inventoryLotId: lot.id,
+        idempotencyKey: `restock:${interest.id}:${lot.id}`,
+      },
+    });
+    await db.pharmacyRestockInterest.update({
+      where: { organizationId_id: { organizationId: scope.organizationId, id: interest.id } },
+      data: { status: 'NOTIFIED' },
+    });
+    captured.push({ interestId: interest.id, reservation, notification });
+  }
+  return captured;
+}
+
+export async function optOutRestockInterest(db: ScopedDb, scope: LedgerScope, interestId: string) {
+  const interest = await db.pharmacyRestockInterest.findFirst({
+    where: { id: interestId, organizationId: scope.organizationId, branchId: scope.branchId },
+  });
+  if (!interest || interest.status === 'RECOVERED') throw new PharmacySaleError('NOT_FOUND');
+  const at = new Date();
+  await db.pharmacyRestockNotification.updateMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      interestId,
+      status: 'CAPTURED',
+    },
+    data: { status: 'CANCELLED', cancelledAt: at },
+  });
+  await db.pharmacyRestockReservation.updateMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      interestId,
+      status: 'RESERVED',
+    },
+    data: { status: 'RELEASED', settledAt: at },
+  });
+  return db.pharmacyRestockInterest.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: interestId } },
+    data: { status: 'OPTED_OUT' },
+  });
+}
+
+export async function recoverRestockInterest(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: { interestId: string; saleLineId: string }
+) {
+  const interest = await db.pharmacyRestockInterest.findFirst({
+    where: {
+      id: input.interestId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: { in: ['OPEN', 'NOTIFIED'] },
+    },
+    include: { demandEvent: true },
+  });
+  const line = await db.pharmacySaleLine.findFirst({
+    where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: { sale: true },
+  });
+  if (
+    !interest ||
+    !line ||
+    line.medicineId !== interest.demandEvent.requestedMedicineId ||
+    line.sale.status !== 'COMPLETED' ||
+    line.sale.receiptNumber === null
+  )
+    throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  const recoveredAt = new Date();
+  await db.unfulfilledDemandEvent.update({
+    where: {
+      organizationId_id: { organizationId: scope.organizationId, id: interest.demandEventId },
+    },
+    data: { status: 'RECOVERED', recoveredSaleLineId: line.id, recoveredAt },
+  });
+  await db.pharmacyRestockReservation.updateMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      interestId: interest.id,
+      status: 'RESERVED',
+    },
+    data: { status: 'CONSUMED', settledAt: recoveredAt },
+  });
+  return db.pharmacyRestockInterest.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: interest.id } },
+    data: {
+      status: 'RECOVERED',
+      recoveredSaleId: line.saleId,
+      recoveredSaleLineId: line.id,
+      recoveredAt,
+    },
+    include: {
+      recoveredSale: { select: { receiptNumber: true, receiptDeviceId: true, businessDate: true } },
+    },
+  });
+}
+
+export async function restockRecoveryReport(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  campaignKey?: string
+) {
+  return db.pharmacyRestockInterest.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      ...(campaignKey ? { campaignKey } : {}),
+    },
+    select: {
+      id: true,
+      demandEventId: true,
+      campaignKey: true,
+      status: true,
+      recoveredSaleLineId: true,
+      recoveredAt: true,
+      demandEvent: { select: { requestedMedicineId: true, requestedText: true, quantity: true } },
+      recoveredSale: {
+        select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
+      },
+    },
+    orderBy: { createdAt: 'desc' },
+  });
 }
