@@ -3,6 +3,7 @@ import { PlatformCommandForm } from '@/components/platform/platform-command-form
 import { PlatformPageHeading } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
+import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import {
@@ -38,6 +39,7 @@ export default async function NewOrganizationPage({
 }) {
   await requirePlatformRead('/platform/organizations');
   const query = await searchParams;
+  const dedicatedProvisioningConfigured = isDedicatedProvisioningConfigured();
   const vertical = chosenVertical(query.vertical);
   const timezoneOptions = ianaTimezoneOptions();
 
@@ -239,9 +241,14 @@ export default async function NewOrganizationPage({
                 type: 'select',
                 required: true,
                 defaultValue: 'SHARED',
+                help: dedicatedProvisioningConfigured
+                  ? 'Dedicated enterprise creates an isolated Vercel deployment.'
+                  : 'Dedicated enterprise is unavailable until Vercel provisioning is configured for this environment.',
                 options: [
                   { label: 'Shared platform', value: 'SHARED' },
-                  { label: 'Dedicated enterprise', value: 'DEDICATED' },
+                  ...(dedicatedProvisioningConfigured
+                    ? [{ label: 'Dedicated enterprise', value: 'DEDICATED' }]
+                    : []),
                 ],
               },
               {

@@ -35,6 +35,7 @@ import {
   BranchOperationDeniedError,
 } from '@/lib/pharmacy/regulatory';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
+import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import {
   ensureAdministratorStaffProfile,
@@ -652,6 +653,12 @@ async function bootstrapOrganization(
   actor: PlatformIdentity,
   input: z.infer<typeof organizationInput>
 ) {
+  if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
+    throw new PlatformSecurityError(
+      'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+      400
+    );
+  }
   const packageRecord = await db.platformPackage.findUnique({
     where: { id: input.packageId },
     include: { moduleLinks: { where: { enabled: true } } },

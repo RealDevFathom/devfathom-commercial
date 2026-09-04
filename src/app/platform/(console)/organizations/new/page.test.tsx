@@ -1,5 +1,5 @@
 import { render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewOrganizationPage from './page';
 
@@ -36,6 +36,10 @@ beforeEach(() => {
       run: (db: { platformPackage: { findMany: typeof mocks.packageFindMany } }) => Promise<unknown>
     ) => run({ platformPackage: { findMany: mocks.packageFindMany } })
   );
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
 });
 
 describe('NewOrganizationPage type-first choice', () => {
@@ -82,6 +86,35 @@ describe('NewOrganizationPage type-first choice', () => {
 });
 
 describe('NewOrganizationPage package step', () => {
+  it('offers only shared deployment when Vercel provisioning is not configured', async () => {
+    vi.stubEnv('VERCEL_ACCESS_TOKEN', undefined);
+    vi.stubEnv('VERCEL_TEAM_ID', undefined);
+    vi.stubEnv('VERCEL_ORG_ID', undefined);
+
+    const { container } = render(await renderPage({ vertical: 'RESTAURANT' }));
+
+    const deploymentOptions = [
+      ...container.querySelectorAll('select[name="deploymentMode"] option'),
+    ];
+    expect(deploymentOptions.map((option) => option.textContent)).toEqual(['Shared platform']);
+    expect(screen.getByText(/Dedicated enterprise is unavailable/)).toBeInTheDocument();
+  });
+
+  it('offers dedicated deployment when the required Vercel settings are configured', async () => {
+    vi.stubEnv('VERCEL_ACCESS_TOKEN', 'test-token');
+    vi.stubEnv('VERCEL_TEAM_ID', 'test-team');
+
+    const { container } = render(await renderPage({ vertical: 'RESTAURANT' }));
+
+    const deploymentOptions = [
+      ...container.querySelectorAll('select[name="deploymentMode"] option'),
+    ];
+    expect(deploymentOptions.map((option) => option.textContent)).toEqual([
+      'Shared platform',
+      'Dedicated enterprise',
+    ]);
+  });
+
   it('offers only pharmacy packages for a PHARMACY organization', async () => {
     mocks.packageFindMany.mockResolvedValue([
       { id: 'pkg_p1', name: 'Pharmacy Essentials', defaultSeats: 10 },
