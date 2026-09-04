@@ -1,7 +1,11 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import superjson from 'superjson';
 
-import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import {
+  INVITATION_GENERIC_MESSAGE,
+  RESET_GENERIC_MESSAGE,
+  SUPPLIER_LINK_GENERIC_MESSAGE,
+} from '@/lib/auth/anonymous-access';
 import { formatValidationError } from '@/lib/validation-error';
 
 /**
@@ -61,6 +65,9 @@ const unroutableInvitation = () => {
 const unroutableReset = () => {
   throw new TRPCError({ code: 'BAD_REQUEST', message: RESET_GENERIC_MESSAGE });
 };
+const unroutableSupplierLink = () => {
+  throw new TRPCError({ code: 'NOT_FOUND', message: SUPPLIER_LINK_GENERIC_MESSAGE });
+};
 
 export const anonymousFallbackRouter = t.router({
   invitations: t.router({
@@ -73,5 +80,10 @@ export const anonymousFallbackRouter = t.router({
     request: t.procedure.mutation(() => ({ success: true as const })),
     validate: t.procedure.query(() => ({ valid: false as const })),
     reset: t.procedure.mutation(unroutableReset),
+  }),
+  pharmacySupplierLinks: t.router({
+    get: t.procedure.query(unroutableSupplierLink),
+    submit: t.procedure.mutation(unroutableSupplierLink),
+    uploadDocument: t.procedure.mutation(unroutableSupplierLink),
   }),
 });

@@ -2,6 +2,7 @@ import 'server-only';
 
 import { hashInviteToken } from '@/lib/invite-token';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { supplierLinkId } from '@/lib/pharmacy/supplier-action-links';
 
 /**
  * Resolve the tenant for an anonymous, token-bearing request.
@@ -40,7 +41,14 @@ export async function organizationForAnonymousToken(
       where: { tokenHash },
       select: { organizationId: true },
     });
-    return reset?.organizationId ?? null;
+    if (reset) return reset.organizationId;
+    const linkId = supplierLinkId(token);
+    if (!linkId) return null;
+    const link = await db.pharmacySupplierActionLink.findUnique({
+      where: { id: linkId },
+      select: { organizationId: true },
+    });
+    return link?.organizationId ?? null;
   });
 }
 
