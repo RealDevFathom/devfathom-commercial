@@ -6,6 +6,10 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **Supervisor handover (10:50 UTC 4 Sep):** the supervisor role moves from the Cowork session to a Codex
+  session run by the owner. Role description, rules, the check-in loop with API recipes, native-git
+  composition and standard texts: `DevFathom hub/codex-supervisor-handover.md`. This file stays the
+  single source of truth for state; the handover doc is the job description.
 - **06:50 UTC 4 Sep: Codex usage limit hit at 06:18 and reset by the owner at 06:49.** Errors cleared,
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
