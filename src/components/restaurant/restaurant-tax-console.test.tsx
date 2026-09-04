@@ -108,15 +108,20 @@ describe('restaurant tax configuration UI', () => {
     render(<RestaurantTaxConsole />);
     expect(screen.getByText('Custom tax profile')).toBeInTheDocument();
     expect(screen.getByText(/customer supplied · not verified by devfathom/i)).toBeInTheDocument();
-    const jurisdiction = screen.getByLabelText('Pakistan jurisdiction');
-    for (const name of [
+    const jurisdiction = screen.getByLabelText<HTMLSelectElement>('Pakistan jurisdiction');
+    const jurisdictionNames = [
       'Punjab',
       'Sindh',
       'Khyber Pakhtunkhwa',
       'Islamabad Capital Territory',
       'Balochistan',
-    ])
-      expect(jurisdiction).toHaveTextContent(name);
+    ];
+    for (const name of jurisdictionNames) expect(jurisdiction).toHaveTextContent(name);
+    expect(
+      Array.from(jurisdiction.options, (option) => option.text).filter(
+        (name) => name !== 'Select jurisdiction'
+      )
+    ).toEqual(jurisdictionNames);
     expect(screen.getByText(/live calculation preview/i)).toBeInTheDocument();
   });
 
