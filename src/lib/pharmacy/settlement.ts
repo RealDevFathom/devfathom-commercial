@@ -5,6 +5,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
 import { firstCloseIsFinal } from './migration/first-close';
 import type { LedgerScope } from './stock-ledger';
 
@@ -208,6 +209,7 @@ export async function applyPharmacyTender(
         businessDate: input.businessDate,
       },
     });
+    if (sale.customerId) await accrueSalePoints(db, scope, sale.id);
   }
   const result = {
     tenderId: tender.id,
@@ -265,7 +267,7 @@ export async function refundPharmacyTender(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
     },
-    include: { refunds: true },
+    include: { refunds: true, sale: { select: { customerId: true } } },
   });
   if (!tender) throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   assertRefundWithinTender(
@@ -313,6 +315,14 @@ export async function refundPharmacyTender(
       actorId: scope.actorId,
     },
   });
+  if (tender.type === 'LOYALTY' && tender.sale.customerId) {
+    await restoreRefundedLoyaltyPoints(db, scope, {
+      refundId: refund.id,
+      tenderId: tender.id,
+      saleId: tender.saleId,
+      customerId: tender.sale.customerId,
+    });
+  }
   if (drawerSessionId)
     await db.pharmacyDrawerMovement.create({
       data: {
