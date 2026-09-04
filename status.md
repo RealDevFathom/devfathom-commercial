@@ -10,8 +10,9 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`db4bddcb` + this status commit; clean). Everything composed
-  today is in it: WHA-1286 heading hierarchy on all 19 routes (07:25), WHA-1239 Playwright regression specs
+- **Candidate:** the tip of this branch (`0e1d4e9f` + this status commit; clean). Everything composed
+  today is in it: WHA-1270 DEDICATED-provisioning guard (07:40; Fixes #61 — the staging provisioning
+  failure QA hit), WHA-1286 heading hierarchy on all 19 routes (07:25), WHA-1239 Playwright regression specs
   (06:08; first run in the cloud gate), a11y fixes WHA-1287/1289/1290/1291 (05:56), WHA-1271 (server-side platform-session
   validation on /platform/login), WHA-1273 (idempotent `prepare-runtime-role`), the two infra fixes from the first staging deploy (pg_trgm allow-list, Azure-safe
   `prepare-runtime-role`), Key Vault as the single source of truth for seed/admin/platform-admin
@@ -34,11 +35,13 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   runtime role). The push starts the cloud gate automatically. `main` and production: untouched,
   not authorized.
 - **Open engineering lanes (base = branch tip):** WHA-1270 (guard DEDICATED provisioning mode when
-  Vercel is unconfigured), WHA-1239 (feature inventory + any spec fixes the cloud gate asks for), WHA-1281 (cold-load
+  Vercel is unconfigured — COMPOSED, not yet on staging), WHA-1239 (feature inventory + any spec fixes the cloud gate asks for), WHA-1281 (cold-load
   investigation covering QA findings 1277–1284: probably scale-to-zero cold start on the 0.5-CPU
   staging plan — if infra, close them and propose minReplicas/CPU to the owner; 1281/1280 are parked
   until QA8 provisions `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1243), a11y fixes
-  WHA-1285 (dark-theme contrast, commit f553515b under verification in WHA-1292), 1288 (select names); WHA-1284's
+  WHA-1285 (dark-theme contrast, commit f553515b under verification in WHA-1292 — f553515b FAILED 4 platform nodes, fix in progress), 1288 (select
+  names: delivered as bdb765bc on the shared a11y branch, conflicts with the candidate's WHA-1287/1290/1291
+  versions of the same files — re-opened to rebase on the tip); WHA-1284's
   perf refactor (2e7de87d stream SOP report cold path, 58aea51b defer deployment forms) is NOT composed —
   accept only with warm-load numbers and test evidence, rebased on the tip.
   New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
@@ -60,6 +63,12 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   reports (after A + D1 + C1) — Reports Engineer. Promote a backlog lane to `todo` only when its
   dependency is composed AND heavy runs ≤ 7. Not in scope yet (owner said restaurants first): hotel
   bookings/guest journey, online payment gateways (providers are MOCK/TERMINAL only).
+- **Compose-procedure lessons (07:40):** after `apply --cached --3way` check
+  `git diff --cached --name-only --diff-filter=U` — any unmerged path means abort (`git reset -q`) and
+  ask the lane to rebase; `git show ":path"` on an unmerged path fails and the redirect leaves an EMPTY
+  file. Never run `git checkout -- .` from the device VM (unlink is refused on the mount) — restore a
+  file with `git show HEAD:path > path` instead. Agents sometimes base on `origin/restaurantv2`
+  (6cc482c8) or on the shared a11y branch: compose single commits and verify the diff is new.
 - **Paperclip note:** when a run is killed (usage limit, recovery backstop) Paperclip escalates the
   issue to the agent's manager (Chief of Staff, paused) — reassign it back to the engineer; the
   reassignment also wakes the agent.
