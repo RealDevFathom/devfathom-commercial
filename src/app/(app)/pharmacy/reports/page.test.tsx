@@ -6,6 +6,7 @@ const commandCentre = vi.fn(async () => ({
   metrics: {
     salesMinor: 10000,
     marginMinor: 2500,
+    cashMinor: 6000,
     cashVarianceMinor: 0,
     refundsMinor: 0,
     openStockSignals: 1,
@@ -20,6 +21,13 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
     createCaller: () => ({
       branches: async () => ({ branches: [{ id: 'b1', name: 'Main' }] }),
       commandCentre,
+      digestOverview: async () => ({
+        branches: [{ id: 'b1', name: 'Main' }],
+        settings: [],
+        history: [],
+        channels: { capture: { enabled: true }, whatsapp: { enabled: false, configured: false } },
+      }),
+      updateDigestSetting: async () => ({}),
       catalog: async () => ({
         permissions: { operational: true, financial: true },
         reports: [
@@ -69,6 +77,12 @@ describe('pharmacy report catalog filters', () => {
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
     );
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
-    expect(screen.getByRole('heading', { name: 'Coming soon' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Digest history' })).toBeVisible();
+    expect(
+      screen.getByText(
+        'No digests captured yet. Turn on a branch digest; history appears after its scheduled time.'
+      )
+    ).toBeVisible();
   });
 });

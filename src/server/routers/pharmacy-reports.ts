@@ -13,6 +13,7 @@ import {
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
+import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
@@ -47,6 +48,13 @@ const filters = z
     supplierId: z.string().trim().min(1).max(128).optional(),
     ingredientId: z.string().trim().min(1).max(128).optional(),
     batchId: z.string().trim().min(1).max(128).optional(),
+  })
+  .strict();
+const digestSetting = z
+  .object({
+    branchId: z.string().trim().min(1).max(128),
+    enabled: z.boolean(),
+    time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   })
   .strict();
 
@@ -104,6 +112,7 @@ export const pharmacyReportsRouter = router({
               ...result.metrics,
               salesMinor: null,
               marginMinor: null,
+              cashMinor: null,
               cashVarianceMinor: null,
               refundsMinor: null,
               accountsPayableMinor: null,
@@ -117,6 +126,87 @@ export const pharmacyReportsRouter = router({
         message: error instanceof Error ? error.message : 'Invalid report filters.',
       });
     }
+  }),
+  digestOverview: reports.query(async ({ ctx }) => {
+    const available = await scope(ctx);
+    if (ctx.session!.user.role !== 'ADMIN')
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+    const [settings, history] = await Promise.all([
+      ctx.db.pharmacyOwnerDigestSetting.findMany({
+        where: { userId: ctx.session!.user.id },
+        orderBy: { branch: { name: 'asc' } },
+        select: {
+          branchId: true,
+          enabled: true,
+          timeMinutes: true,
+          nextDueAt: true,
+          branch: { select: { name: true } },
+        },
+      }),
+      ctx.db.pharmacyOwnerDigestCapture.findMany({
+        where: { userId: ctx.session!.user.id },
+        orderBy: { capturedAt: 'desc' },
+        take: 30,
+        select: {
+          id: true,
+          branchId: true,
+          businessDate: true,
+          rendered: true,
+          capturedAt: true,
+          branch: { select: { name: true } },
+        },
+      }),
+    ]);
+    return {
+      branches: available.branches,
+      settings,
+      history,
+      channels: {
+        capture: { enabled: true },
+        whatsapp: { enabled: false, configured: new WhatsAppChannel().configured },
+      },
+    };
+  }),
+  updateDigestSetting: reports.input(digestSetting).mutation(async ({ ctx, input }) => {
+    const available = await scope(ctx);
+    if (ctx.session!.user.role !== 'ADMIN')
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+    if (!available.branches.some((branch) => branch.id === input.branchId))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+    const [hours, minutes] = input.time.split(':').map(Number);
+    const timeMinutes = hours * 60 + minutes;
+    const organization = await ctx.db.organization.findUnique({
+      where: { id: available.organizationId },
+      select: { timezone: true },
+    });
+    if (!organization) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    return ctx.db.pharmacyOwnerDigestSetting.upsert({
+      where: {
+        organizationId_userId_branchId: {
+          organizationId: available.organizationId,
+          userId: ctx.session!.user.id,
+          branchId: input.branchId,
+        },
+      },
+      update: {
+        enabled: input.enabled,
+        timeMinutes,
+        nextDueAt: input.enabled
+          ? nextDigestDueAt(new Date(), organization.timezone, timeMinutes)
+          : null,
+      },
+      create: {
+        organizationId: available.organizationId,
+        userId: ctx.session!.user.id,
+        branchId: input.branchId,
+        enabled: input.enabled,
+        timeMinutes,
+        nextDueAt: input.enabled
+          ? nextDigestDueAt(new Date(), organization.timezone, timeMinutes)
+          : null,
+      },
+      select: { branchId: true, enabled: true, timeMinutes: true, nextDueAt: true },
+    });
   }),
   getPreferences: reports.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
