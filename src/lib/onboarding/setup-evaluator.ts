@@ -1,6 +1,6 @@
 import type { PrismaClient } from '@/generated/prisma/client';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
-import { FIRST_RUN_VERTICALS, roleTemplatesForVertical, VERTICALS } from '@/lib/vertical-catalog';
+import { roleTemplatesForVertical, VERTICALS } from '@/lib/vertical-catalog';
 
 export type SetupChecklistStatus = 'Done' | 'Needs you' | 'Optional';
 export type SetupChecklistItemKey =
@@ -17,7 +17,7 @@ export type SetupChecklistItem = {
 };
 
 export type SetupChecklist = {
-  vertical: (typeof FIRST_RUN_VERTICALS)[number];
+  vertical: keyof typeof VERTICALS;
   items: readonly SetupChecklistItem[];
   complete: boolean;
 };

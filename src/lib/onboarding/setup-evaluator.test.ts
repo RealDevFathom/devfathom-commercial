@@ -8,6 +8,7 @@ const verticalFixtures = Object.values(VERTICALS).filter(
 );
 const restaurant = verticalFixtures.find((definition) => definition.label === 'Restaurant')!;
 const pharmacy = verticalFixtures.find((definition) => definition.label === 'Pharmacy')!;
+const agency = VERTICALS.AGENCY;
 
 const incomplete: SetupEvidence = {
   hasBranch: false,
@@ -20,6 +21,14 @@ const incomplete: SetupEvidence = {
 };
 
 describe('first-run setup evaluator', () => {
+  it('returns the catalog-defined empty checklist for agency organizations', () => {
+    expect(evaluateSetupChecklist(agency.vertical, incomplete)).toEqual({
+      vertical: 'AGENCY',
+      items: [],
+      complete: true,
+    });
+  });
+
   it('keeps restaurant setup open until every required fact exists', () => {
     const checklist = evaluateSetupChecklist(restaurant.vertical, incomplete);
     expect(checklist.complete).toBe(false);
