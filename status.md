@@ -1,11 +1,28 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 01:30 PKT (20:30 UTC) — Cowork supervisor check-in #199.
+Last reconciled: 2026-09-05 01:40 PKT (20:40 UTC) — Cowork supervisor check-in #200.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **20:40 — THE LAST KNOWN GATE BLOCKER IS COMPOSED. Candidate code tip `3337b141`. PUSH IS DUE.**
+  WHA-1333 (`d308800d`) re-pins `src/lib/auth/anonymous-access.test.ts` to eight/seven procedures, but
+  only after a real security review of the three `pharmacySupplierLinks.*` routes, which is why this is
+  a correct re-pin and not a widened test: each procedure resolves its tenant from the **signed token
+  alone** (`organizationForAnonymousToken` -> the embedded link id; host, headers and body tenant fields
+  are ignored); links carry a random secret plus HMAC, store only the secret hash, and require
+  `revokedAt = null`, `expiresAt > now` and an active relationship; tampered / expired / revoked /
+  supplier-mismatched / wrong-PO links all fail closed with `SUPPLIER_LINK_GENERIC_MESSAGE`; `get`
+  returns only the one bound PO projection and `submit`/`uploadDocument` write proposal evidence only,
+  under that link's own scope and storage prefix. **The assertion is still an exact list — no wildcard,
+  no prefix match.** Evidence: anonymous-access suite 29/29; combined anonymous+supplier suites 79 passed
+  (the 3 skips are the DB-gated file the cloud gate supplies); tsc, Prettier, ESLint all clean.
+  **Push the TIP:** `cd "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1116-compose-the-final-accepted-restaurant-artifacts-into-one-clean-private-candidate" && git push origin HEAD:restaurantv2`
+  Then re-fire WHA-1313 (issue `5b1ace41-c8da-4f94-9486-a316e8c0501b`, agent `405bf857`) to read the run.
+  All five root causes of gate run 33907329688 are now fixed in the tree: M3 allowlist (`787708f4`),
+  vertical-literal + ABAC pin (`4224dbec`), cold-chain fixture (`10587bbb`), CI gate owner CREATEROLE
+  (`2632ff3d`), anonymous allowlist (`3337b141`).
 - **20:28 — candidate tip is `be0cd363`. Two more pharmacy P1 lanes composed:**
   `8738f7a8` WHA-1332 AI-05 gated substitute finder (exact generic + strength, saleable/unexpired/
   in-branch-stock predicates, Rx acceptance FORBIDDEN without `pharmacy:dispense` and creating no RX-04
