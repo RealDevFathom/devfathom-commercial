@@ -3,7 +3,7 @@
  * differently-cased admin email would have surfaced a raw Prisma unique-index
  * error in the control plane instead of a stated conflict.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
 
@@ -111,6 +111,35 @@ describe('organization.create admin email', () => {
         data: expect.objectContaining({ email: 'admin@acme.com' }),
       })
     );
+  });
+});
+
+afterEach(() => {
+  vi.unstubAllEnvs();
+});
+
+describe('organization.create dedicated provisioning preflight', () => {
+  it('rejects unavailable dedicated provisioning before writing an organization', async () => {
+    vi.clearAllMocks();
+    vi.stubEnv('VERCEL_ACCESS_TOKEN', undefined);
+    vi.stubEnv('VERCEL_TEAM_ID', undefined);
+    vi.stubEnv('VERCEL_ORG_ID', undefined);
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      { ...payload('admin@acme.com'), deploymentMode: 'DEDICATED' },
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 400,
+      message:
+        'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+    });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+    expect(platformDb.platformPackage.findUnique).not.toHaveBeenCalled();
   });
 });
 

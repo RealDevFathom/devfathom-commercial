@@ -9,6 +9,7 @@ import {
   type PrismaClient,
 } from '@/generated/prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -145,14 +146,13 @@ async function sharedProvision(
 }
 
 function vercelConfiguration() {
-  const bearerToken = process.env.VERCEL_ACCESS_TOKEN;
-  const teamId = process.env.VERCEL_TEAM_ID ?? process.env.VERCEL_ORG_ID;
-  if (!bearerToken || !teamId) {
+  const configuration = vercelProvisioningConfiguration();
+  if (!configuration) {
     throw new Error(
-      'Dedicated provisioning requires VERCEL_ACCESS_TOKEN and VERCEL_TEAM_ID (or VERCEL_ORG_ID).'
+      'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose shared provisioning or ask a platform administrator to configure Vercel.'
     );
   }
-  return { bearerToken, teamId };
+  return configuration;
 }
 
 async function dedicatedProvision(
