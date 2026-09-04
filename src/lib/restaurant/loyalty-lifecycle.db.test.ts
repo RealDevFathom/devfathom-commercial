@@ -649,6 +649,17 @@ describeIfDatabase('M8/M2 — refunds around the order close', () => {
     });
     expect(tender.settled).toBe(true);
 
+    const settlement = await deps.withTenantDb(ctx.orgId, (tx) =>
+      tx.restaurantTaxTransactionSnapshot.findFirstOrThrow({
+        where: { billId },
+        select: { evidencePayload: true },
+      })
+    );
+    expect(settlement.evidencePayload).toMatchObject({
+      eligibleNetMerchandise: '8.70',
+      loyaltyNetGrandTotal: '8.70',
+    });
+
     // Settlement earns on the tax-exclusive merchandise value; a pre-close refund
     // reverses only the points attributable to the refunded inclusive amount.
     await deps.refunds.refundTender(db, {
