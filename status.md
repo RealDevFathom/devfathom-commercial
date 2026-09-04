@@ -10,8 +10,9 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`066a3454` + this status commit; clean). Everything composed
-  today is in it: WHA-1285 dark-theme contrast (10:00; single squashed commit cd0a2e99 on c223020f, composed as
+- **Candidate:** the tip of this branch (`3f2e6ae4` + this status commit; clean). Everything composed
+  today is in it: WHA-1306 explicit label associations on the platform organization form (10:18; QA8's
+  staging finding — GitHub number pending until the owner's `gh` credential is renewed), WHA-1285 dark-theme contrast (10:00; single squashed commit cd0a2e99 on c223020f, composed as
   066a3454 — **UNVERIFIED on this tree**: WHA-1304's 0-contrast-node pass was against 93b1ba9c, and
   cd0a2e99 differs from it in globals.css, crm/page.tsx and theme-provider; a WHA-1304 rerun on the
   candidate tip was requested — if it fails, revert 066a3454 with `git diff 066a3454 066a3454^ | git apply --cached --3way`), WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
