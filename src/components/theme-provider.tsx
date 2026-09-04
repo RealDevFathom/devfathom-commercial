@@ -26,8 +26,19 @@ function readStoredTheme(): Theme {
 }
 
 function applyTheme(theme: Theme) {
-  document.documentElement.setAttribute('data-theme', theme);
-  document.documentElement.style.colorScheme = theme;
+  const transitionGuard = document.createElement('style');
+  transitionGuard.dataset.themeTransitionGuard = '';
+  transitionGuard.textContent = '*,*::before,*::after{transition:none!important}';
+  document.head.appendChild(transitionGuard);
+
+  const root = document.documentElement;
+  root.setAttribute('data-theme', theme);
+  root.style.colorScheme = theme;
+
+  // Commit the new token values while transitions are disabled so foregrounds
+  // and surfaces cannot expose cross-theme intermediate colors.
+  window.getComputedStyle(root).getPropertyValue('--surface-page');
+  transitionGuard.remove();
 }
 
 export function ThemeProvider({ children }: { children: React.ReactNode }) {
