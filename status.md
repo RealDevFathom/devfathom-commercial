@@ -6,6 +6,16 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **19:02 — preflight regressions fixed and composed.** WHA-1312's whole-tree preflight on `a1e729ff`
+  found three faults invisible to the individual lanes (no product defect: tsc, prisma validate, eslint
+  and `git diff --check` all passed): a bare `vertical: 'RESTAURANT'` literal in the catering console
+  fixture tripping the Phase-1 scattered-conditional audit; the ABAC action pin still at 37 after
+  catering added `catering:read`/`catering:manage` (now 39); and Prettier on `kds-board.tsx`. WHA-1321
+  fixed all three in one commit, composed here. The 13 `TEST_DATABASE_URL is required` suites are
+  environmental — the cloud gate supplies them; never add fallbacks or skips for those.
+  **Never let an agent Prettier-format `status.md` — it is the supervisor's file.**
+- **Push again after this commit** so the gate re-runs on the fixed tree:
+  `git push origin HEAD:restaurantv2` from this worktree (owner-run; the Cowork VM has no credentials).
 - **19:00 UTC — the Cowork supervisor took the seat back (owner: "Take the supervisor seat back, and
   complete it"). Codex's supervisor loop must be stopped by the owner so there is only one supervisor.**
 - **THE PUSH WENT TO A STALE SHA.** `origin/restaurantv2` = `8a522bd8`, which is 43 commits behind the
