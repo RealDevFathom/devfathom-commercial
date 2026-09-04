@@ -28,6 +28,17 @@ CREATE TABLE IF NOT EXISTS platform_ops.platform_db_hardening (
 
 \if :preinstall_vulnerable
   CREATE EXTENSION IF NOT EXISTS btree_gist;
+  CREATE EXTENSION IF NOT EXISTS pg_trgm;
+
+  SELECT count(*) = 2 AS preinstalled_required_extensions
+    FROM pg_catalog.pg_extension
+   WHERE extname IN ('btree_gist', 'pg_trgm')
+  \gset
+  \if :preinstalled_required_extensions
+  \else
+    \echo 'preinstalled scenario lacks a required extension'
+    \quit 1
+  \endif
 \endif
 
 CREATE FUNCTION public.wha766_unrelated_fixture(integer)
@@ -212,11 +223,11 @@ DROP ROLE wha911_nonowner;
   \ir ../../prisma/prepare-extensions.sql
   RESET SESSION AUTHORIZATION;
 
-  SELECT EXISTS (
-           SELECT 1
+  SELECT (
+           SELECT count(*) = 2
              FROM pg_catalog.pg_extension
-            WHERE extname = 'btree_gist'
-         ) AS creator_only_installed_extension,
+            WHERE extname IN ('btree_gist', 'pg_trgm')
+         ) AS creator_only_installed_extensions,
          EXISTS (
            SELECT 1
              FROM platform_ops.platform_db_hardening
@@ -239,9 +250,9 @@ DROP ROLE wha911_nonowner;
               AND acl.privilege_type = 'EXECUTE'
          ) AS creator_only_preserved_unrelated_acl
   \gset
-  \if :creator_only_installed_extension
+  \if :creator_only_installed_extensions
   \else
-    \echo 'CREATE-only preparation did not install btree_gist'
+    \echo 'CREATE-only preparation did not install all required extensions'
     \quit 1
   \endif
   \if :creator_only_recorded_skip

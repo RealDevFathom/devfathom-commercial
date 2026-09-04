@@ -78,6 +78,8 @@ Staging and production set `EMAIL_DELIVERY_MODE=capture`, have no `BREVO_API_KEY
 ## Database migration, RLS, seed, and restore
 
 The manual Container Apps job runs `prisma migrate deploy`; staging then runs the idempotent demo seed. The explicit one-time production initialization path instead follows migrations with a create-only bootstrap for the platform catalog, default organization, system roles and permission, brand, deployment, tenant administrator, and platform administrator. It creates no demo users, projects, invoices, or meetings. Regular production configuration and every promotion run migrations only. PostgreSQL is reachable only through the VNet-integrated Container Apps environment. RLS remains migration-owned; never use `prisma db push`.
+Azure PostgreSQL's `azure.extensions` allow-list must cover every extension created by migrations and `prisma/prepare-extensions.sql`.
+Both staging and production currently require `btree_gist` and `pg_trgm`; update the IaC and preparation step together when that set changes.
 
 Verification commands:
 
