@@ -19,6 +19,11 @@ import {
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
 import {
+  declineSubstitute,
+  findSubstituteProposals,
+  PharmacySubstituteError,
+} from '@/lib/pharmacy/substitute-finder';
+import {
   addSaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
@@ -403,6 +408,62 @@ export const pharmacySalesRouter = router({
         return await captureDemand(ctx.db, scopeFor(ctx, input.branchId), input);
       } catch (error) {
         fail(error);
+      }
+    }),
+  substituteProposals: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          quantityCanonicalUnits: z.number().int().positive(),
+          referencePriceMinor: z.number().int().positive().optional(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        return await findSubstituteProposals(ctx.db, scopeFor(ctx, input.branchId), input);
+      } catch (error) {
+        if (error instanceof PharmacySubstituteError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
+      }
+    }),
+  declineSubstitute: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1).optional(),
+          requestedMedicineId: z.string().min(1),
+          requestedText: z.string().trim().min(1),
+          strength: z.string().optional(),
+          form: z.string().optional(),
+          presentation: z.string().optional(),
+          saleUnit,
+          quantity: z.number().int().positive(),
+          inventoryRuleSnapshot: z.record(z.string(), z.unknown()),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const scope = scopeFor(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const event = await captureDemand(txDb(tx), scope, {
+            ...input,
+            reason: 'SUBSTITUTE_DECLINED',
+          });
+          return declineSubstitute(txDb(tx), scope, event.id);
+        });
+      } catch (error) {
+        if (error instanceof PharmacySubstituteError) {
+          throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
+        }
+        throw error;
       }
     }),
   recoverDemand: protectedProcedure
