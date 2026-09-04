@@ -53,4 +53,34 @@ describe('medicine reference normalization and provenance', () => {
     );
     expect(formulaSafeCell('Panadol')).toBe('Panadol');
   });
+
+  it('carries an optional tenant medicine target and rejects invalid schedule flags', async () => {
+    const result = await new ManualFileConnector().fetch({
+      batchId: 'batch-03',
+      fileName: 'updates.csv',
+      rows: [
+        {
+          MedicineId: 'medicine-1',
+          Product: 'Paracetamol',
+          Strength: '500 mg',
+          Form: 'Tablet',
+          Pack: '10 tablets',
+          Controlled: 'sometimes',
+        },
+      ],
+      mapping: {
+        targetMedicineId: 'MedicineId',
+        productName: 'Product',
+        strength: 'Strength',
+        dosageForm: 'Form',
+        pack: 'Pack',
+        controlled: 'Controlled',
+      },
+    });
+
+    expect(result.rows[0]).toMatchObject({
+      targetMedicineId: 'medicine-1',
+      blockingIssues: ['INVALID_SCHEDULE_CLASSIFICATION'],
+    });
+  });
 });

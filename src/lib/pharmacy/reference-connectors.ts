@@ -8,6 +8,9 @@ export const MEDICINE_REFERENCE_FIELDS = [
   'pack',
   'barcode',
   'alias',
+  'rx',
+  'restricted',
+  'controlled',
 ] as const;
 
 export type MedicineReferenceField = (typeof MEDICINE_REFERENCE_FIELDS)[number];
@@ -43,11 +46,26 @@ export interface MedicineReferenceAssertion {
 export interface NormalizedMedicineReferenceRow {
   batchId: string;
   rowSourceKey: string;
+  targetMedicineId?: string;
   values: Partial<Record<MedicineReferenceField, string>>;
   assertions: MedicineReferenceAssertion[];
   blockingIssues: Array<
-    'MISSING_PRODUCT_NAME' | 'MISSING_STRENGTH' | 'MISSING_DOSAGE_FORM' | 'MISSING_PACK'
+    | 'MISSING_PRODUCT_NAME'
+    | 'MISSING_STRENGTH'
+    | 'MISSING_DOSAGE_FORM'
+    | 'MISSING_PACK'
+    | 'INVALID_SCHEDULE_CLASSIFICATION'
   >;
+}
+
+export type ConnectorSchedule =
+  { kind: 'MANUAL' } | { kind: 'EXPLICIT_CALL'; expression: string; timezone: string };
+
+export interface MedicineReferenceConnectorState {
+  identity: { id: string; label: string };
+  schedule: ConnectorSchedule;
+  lastRunState: 'NEVER' | 'RUNNING' | 'COMPLETED' | 'FAILED';
+  cursor: { inputDigest: string; offset: number } | null;
 }
 
 export interface MedicineReferenceFetchResult {
@@ -63,11 +81,11 @@ export interface MedicineReferenceConnector<TInput = unknown> {
   readonly sourceType: MedicineReferenceSourceType;
   readonly rights: ConnectorRights;
   readonly enabled: boolean;
-  fetch(input: TInput): Promise<MedicineReferenceFetchResult>;
+  fetch(input: TInput, cursor?: number): Promise<MedicineReferenceFetchResult>;
 }
 
 export type ManualMappingTemplate = Partial<
-  Record<MedicineReferenceField | 'rowSourceKey', string>
+  Record<MedicineReferenceField | 'rowSourceKey' | 'targetMedicineId', string>
 >;
 
 export interface ManualFileInput {
@@ -98,6 +116,7 @@ export class ManualFileConnector implements MedicineReferenceConnector<ManualFil
     const rows = input.rows.map((sourceRow, index) => {
       const fallbackKey = `row-${index + 2}`;
       const rowSourceKey = cell(sourceRow, input.mapping.rowSourceKey) ?? fallbackKey;
+      const targetMedicineId = cell(sourceRow, input.mapping.targetMedicineId);
       const values: Partial<Record<MedicineReferenceField, string>> = {};
       const assertions: MedicineReferenceAssertion[] = [];
 
@@ -122,8 +141,22 @@ export class ManualFileConnector implements MedicineReferenceConnector<ManualFil
       if (!values.strength) blockingIssues.push('MISSING_STRENGTH');
       if (!values.dosageForm) blockingIssues.push('MISSING_DOSAGE_FORM');
       if (!values.pack) blockingIssues.push('MISSING_PACK');
+      for (const field of ['rx', 'restricted', 'controlled'] as const) {
+        const value = values[field]?.toLowerCase();
+        if (value && !['true', 'false'].includes(value)) {
+          blockingIssues.push('INVALID_SCHEDULE_CLASSIFICATION');
+          break;
+        }
+      }
 
-      return { batchId: input.batchId, rowSourceKey, values, assertions, blockingIssues };
+      return {
+        batchId: input.batchId,
+        rowSourceKey,
+        ...(targetMedicineId ? { targetMedicineId } : {}),
+        values,
+        assertions,
+        blockingIssues,
+      };
     });
 
     return { connectorId: this.id, batchId: input.batchId, fetchedAt, rows };

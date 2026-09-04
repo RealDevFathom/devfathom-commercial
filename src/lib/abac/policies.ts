@@ -71,6 +71,7 @@ export const ALL_ACTIONS = [
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
+  'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -205,4 +206,5 @@ export const POLICIES: Record<Action, Policy[]> = {
   'menu:import': [],
   'pharmacy:dispense': [],
   'pharmacy:safety': [],
+  'pharmacy:catalogue-review': [],
 };
