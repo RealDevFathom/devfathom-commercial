@@ -798,6 +798,20 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
             finishedAt: new Date(),
           },
     });
+    if (
+      !retry &&
+      job.organizationId &&
+      (job.type === 'PROVISION_SHARED' || job.type === 'PROVISION_DEDICATED')
+    ) {
+      await db.organizationDeployment.updateMany({
+        where: {
+          organizationId: job.organizationId,
+          environment: 'production',
+          status: { not: 'DECOMMISSIONED' },
+        },
+        data: { status: 'FAILED' },
+      });
+    }
   });
   return retry ? 'retried' : 'failed';
 }
