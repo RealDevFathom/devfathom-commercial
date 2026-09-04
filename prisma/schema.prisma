@@ -1469,18 +1469,20 @@ model PharmacyRestockNotification {
 /// INV-05 seam / INV-01: a branch-owned storage place. `coldChain` marks the
 /// validated cold-chain zones a cold-chain medicine may be put away into.
 model PharmacyStockLocation {
-  id                  String                    @id @default(cuid())
-  organizationId      String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId            String
-  code                String
-  name                String
-  kind                PharmacyStockLocationKind
-  coldChain           Boolean                   @default(false)
-  minimumTemperatureC Float?
-  maximumTemperatureC Float?
-  active              Boolean                   @default(true)
-  createdAt           DateTime                  @default(now())
-  updatedAt           DateTime                  @updatedAt
+  id                                        String                    @id @default(cuid())
+  organizationId                            String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                                  String
+  code                                      String
+  name                                      String
+  kind                                      PharmacyStockLocationKind
+  coldChain                                 Boolean                   @default(false)
+  minimumTemperatureC                       Float?
+  maximumTemperatureC                       Float?
+  expectedTemperatureReadingIntervalMinutes Int                       @default(15)
+  temperatureExcursionDurationMinutes       Int                       @default(30)
+  active                                    Boolean                   @default(true)
+  createdAt                                 DateTime                  @default(now())
+  updatedAt                                 DateTime                  @updatedAt
 
   purchaseReturnLines     PharmacyPurchaseReturnLine[]
   stockSignals            PharmacyStockSignal[]
@@ -1500,19 +1502,26 @@ model PharmacyStockLocation {
   @@map("pharmacy_stock_locations")
 }
 
-/// INV-05: immutable storage-zone temperature evidence. Sensor integrations
-/// append through the same source seam as manual readings; P0 ships manual only.
+enum PharmacyTemperatureReadingSource {
+  MANUAL
+  IMPORT
+}
+
+/// INV-05: immutable storage-zone temperature evidence. Staff entry and
+/// data-logger files append through the same source seam; live devices remain
+/// outside this boundary.
 model PharmacyTemperatureLog {
-  id              String   @id @default(cuid())
-  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId        String
-  stockLocationId String
-  actorId         String
-  temperatureC    Float
-  recordedAt      DateTime
-  outOfRange      Boolean
-  source          String   @default("MANUAL")
-  createdAt       DateTime @default(now())
+  id               String                           @id @default(cuid())
+  organizationId   String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  stockLocationId  String
+  actorId          String
+  temperatureC     Float
+  recordedAt       DateTime
+  outOfRange       Boolean
+  source           PharmacyTemperatureReadingSource @default(MANUAL)
+  deviceIdentifier String?
+  createdAt        DateTime                         @default(now())
 
   location PharmacyStockLocation @relation(fields: [organizationId, branchId, stockLocationId], references: [organizationId, branchId, id], onDelete: Restrict)
 
