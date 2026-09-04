@@ -15,6 +15,7 @@ import { restaurantReportsRouter } from '@/server/routers/restaurant-reports';
 import { createTRPCContext } from '@/server/trpc';
 
 import { ExportLink } from './export-link';
+import { ProfitabilityReportTabs } from './profitability-report-tabs';
 import { StockReportTabs } from './stock-report-tabs';
 
 export const metadata: Metadata = { title: 'Restaurant reports' };
@@ -58,6 +59,17 @@ function freshnessCopy(status: 'CURRENT' | 'STALE' | 'PARTIAL' | 'NO_CLOSED_DAYS
     PARTIAL: { label: 'Partial', tone: 'warning' as const },
     NO_CLOSED_DAYS: { label: 'No closed days', tone: 'neutral' as const },
   }[status];
+}
+
+function costExclusionCopy(reason: string): string {
+  return (
+    {
+      NO_RECIPE: 'No linked recipe',
+      RECIPE_UNAVAILABLE: 'Recipe has no usable active version',
+      NO_PORTION_COST: 'Recipe has no portion yield',
+      MISSING_INGREDIENT_COST: 'Ingredient costs are incomplete',
+    }[reason] ?? reason.replaceAll('_', ' ')
+  );
 }
 
 function SectionNotice({
@@ -131,10 +143,11 @@ export default async function RestaurantReportsPage({
   const subject = subjectFromSession(user);
   const canCheck = (action: Action) =>
     can(subject, action, undefined, { db: ctx.db, source: 'TRPC', ip: ctx.requestMeta.ip });
-  const [canOperational, canFinancial, canWorkforceRates] = await Promise.all([
+  const [canOperational, canFinancial, canWorkforceRates, canCateringRead] = await Promise.all([
     canCheck('reports:operational'),
     canCheck('reports:financial'),
     canCheck('workforce:rates'),
+    canCheck('catering:read'),
   ]);
   if (!canOperational && !canFinancial) {
     return (
@@ -189,6 +202,8 @@ export default async function RestaurantReportsPage({
   const rangeInput = { ...(branch === 'all' ? {} : { branchId: branch }), from, to };
   const posEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
   const inventoryEnabled = hasModule(ctx.entitlements, 'restaurant-inventory');
+  const menuEnabled = hasModule(ctx.entitlements, 'restaurant-menu');
+  const profitabilityEnabled = posEnabled && inventoryEnabled && menuEnabled;
   const stockLocationsResult =
     canOperational && inventoryEnabled
       ? await settled(() => caller.stockLocations(branch === 'all' ? {} : { branchId: branch }))
@@ -203,37 +218,57 @@ export default async function RestaurantReportsPage({
     ...(stockLocationId ? { stockLocationId } : {}),
   };
 
-  const [overview, payments, inventory, wastage, stockMovements, purchasing, workforce, sop] =
-    await Promise.all([
-      canOperational && posEnabled
-        ? settled(() => caller.overview(rangeInput))
-        : Promise.resolve({ data: null, failed: false }),
-      canFinancial && posEnabled
-        ? settled(() => caller.payments(rangeInput))
-        : Promise.resolve({ data: null, failed: false }),
-      canOperational && inventoryEnabled
-        ? settled(() => caller.inventory(rangeInput))
-        : Promise.resolve({ data: null, failed: false }),
-      canOperational && inventoryEnabled
-        ? settled(() => caller.wastage(stockRangeInput))
-        : Promise.resolve({ data: null, failed: false }),
-      canOperational && inventoryEnabled
-        ? settled(() => caller.stockMovements(stockRangeInput))
-        : Promise.resolve({ data: null, failed: false }),
-      canOperational && hasModule(ctx.entitlements, 'restaurant-purchasing')
-        ? settled(() => caller.purchasing(rangeInput))
-        : Promise.resolve({ data: null, failed: false }),
-      canOperational && hasModule(ctx.entitlements, 'restaurant-workforce')
-        ? settled(() =>
-            canFinancial && canWorkforceRates
-              ? caller.workforceFinancial(rangeInput)
-              : caller.workforce(rangeInput)
-          )
-        : Promise.resolve({ data: null, failed: false }),
-      canOperational && hasModule(ctx.entitlements, 'restaurant-sop')
-        ? settled(() => caller.sop(rangeInput))
-        : Promise.resolve({ data: null, failed: false }),
-    ]);
+  const [
+    overview,
+    payments,
+    foodCost,
+    dishProfitability,
+    catering,
+    inventory,
+    wastage,
+    stockMovements,
+    purchasing,
+    workforce,
+    sop,
+  ] = await Promise.all([
+    canOperational && posEnabled
+      ? settled(() => caller.overview(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canFinancial && posEnabled
+      ? settled(() => caller.payments(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canFinancial && profitabilityEnabled
+      ? settled(() => caller.foodCost(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canFinancial && profitabilityEnabled
+      ? settled(() => caller.dishProfitability(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canFinancial && canCateringRead
+      ? settled(() => caller.catering(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canOperational && inventoryEnabled
+      ? settled(() => caller.inventory(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canOperational && inventoryEnabled
+      ? settled(() => caller.wastage(stockRangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canOperational && inventoryEnabled
+      ? settled(() => caller.stockMovements(stockRangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canOperational && hasModule(ctx.entitlements, 'restaurant-purchasing')
+      ? settled(() => caller.purchasing(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    canOperational && hasModule(ctx.entitlements, 'restaurant-workforce')
+      ? settled(() =>
+          canFinancial && canWorkforceRates
+            ? caller.workforceFinancial(rangeInput)
+            : caller.workforce(rangeInput)
+        )
+      : Promise.resolve({ data: null, failed: false }),
+    canOperational && hasModule(ctx.entitlements, 'restaurant-sop')
+      ? settled(() => caller.sop(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+  ]);
   const exportBranch = branch;
   const freshness = overview.data?.freshness ?? payments.data?.freshness;
   const freshnessDisplay = freshness ? freshnessCopy(freshness.status) : null;
@@ -243,7 +278,7 @@ export default async function RestaurantReportsPage({
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Reports"
-        description="Closed-day operational ledgers for Essentials. Advanced Insights remains a separately licensed workspace."
+        description="Bounded Restaurant operational and financial ledgers. Advanced Insights remains a separately licensed workspace."
         actions={
           hasModule(ctx.entitlements, 'restaurant-insights') ? (
             <Link className={buttonVariants({ variant: 'secondary' })} href="/restaurant/insights">
@@ -286,11 +321,11 @@ export default async function RestaurantReportsPage({
             </label>
           ) : null}
           <label className="text-sm text-text-body">
-            From closed day
+            From date
             <Input className="mt-1 min-h-11" defaultValue={from} name="from" type="date" />
           </label>
           <label className="text-sm text-text-body">
-            To closed day
+            To date
             <Input className="mt-1 min-h-11" defaultValue={to} name="to" type="date" />
           </label>
           <Button className="min-h-11 self-end" type="submit">
@@ -311,6 +346,388 @@ export default async function RestaurantReportsPage({
             ) : null}
           </div>
         ) : null}
+      </SectionCard>
+
+      <SectionCard eyebrow="Theoretical recipe costing" title="Profitability" titleLevel={2}>
+        <ProfitabilityReportTabs
+          foodCost={
+            !profitabilityEnabled ? (
+              <SectionNotice
+                kind="module"
+                detail="Restaurant POS, Menu and Inventory are required for theoretical food costing."
+              />
+            ) : !canFinancial ? (
+              <SectionNotice kind="permission" detail="reports:financial is required." />
+            ) : foodCost.failed ? (
+              <SectionNotice kind="error" detail="Food-cost data could not be loaded." />
+            ) : foodCost.data ? (
+              <div className="space-y-6">
+                <div className="flex justify-end">
+                  <ExportLink section="food-cost" branch={exportBranch} from={from} to={to} />
+                </div>
+                <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+                  <Stat
+                    label="Costed net sales"
+                    value={displayNumber(foodCost.data.totals.costedNetSales)}
+                  />
+                  <Stat
+                    label="Theoretical food cost"
+                    value={displayNumber(foodCost.data.totals.theoreticalCost)}
+                  />
+                  <Stat label="Food cost" value={`${foodCost.data.totals.foodCostPercent}%`} />
+                  <Stat
+                    label="Gross margin"
+                    value={displayNumber(foodCost.data.totals.grossMargin)}
+                  />
+                </div>
+                {foodCost.data.truncated ? (
+                  <DetailLimitNotice
+                    detail={`Showing the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} sales groups. Export is limited to ${MAX_EXPORT_ROWS.toLocaleString()} rows.`}
+                  />
+                ) : null}
+                {foodCost.data.uncostedProducts.length ? (
+                  <div>
+                    <h3 className="mb-3 font-semibold text-text-strong">Costing exceptions</h3>
+                    <p className="mb-3 text-sm text-text-muted">
+                      {displayNumber(foodCost.data.totals.uncostedNetSales)} in net sales is
+                      excluded from margin totals until these recipes are complete.
+                    </p>
+                    <TableFrame label="Products excluded from food-cost totals">
+                      <table className="w-full min-w-[48rem] text-left text-sm">
+                        <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                          <tr>
+                            <th className="p-3">Product</th>
+                            <th className="p-3">Category</th>
+                            <th className="p-3">Reason</th>
+                            <th className="p-3 text-right">Quantity</th>
+                            <th className="p-3 text-right">Net sales</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {foodCost.data.uncostedProducts.map((row) => (
+                            <tr
+                              className="border-t border-border-subtle"
+                              key={`${row.productId}:${row.reason}`}
+                            >
+                              <td className="p-3 text-text-strong">{row.productName}</td>
+                              <td className="p-3 text-text-muted">{row.categoryName}</td>
+                              <td className="p-3 text-text-muted">
+                                {costExclusionCopy(row.reason)}
+                                {row.missingIngredientCount
+                                  ? ` (${row.missingIngredientCount} missing)`
+                                  : ''}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">{row.quantity}</td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.netSales)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableFrame>
+                  </div>
+                ) : null}
+                {foodCost.data.products.length ? (
+                  <div>
+                    <h3 className="mb-3 font-semibold text-text-strong">Product food cost</h3>
+                    <TableFrame label="Food cost by product">
+                      <table className="w-full min-w-[64rem] text-left text-sm">
+                        <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                          <tr>
+                            <th className="p-3">Product</th>
+                            <th className="p-3">Category</th>
+                            <th className="p-3 text-right">Quantity</th>
+                            <th className="p-3 text-right">Net sales</th>
+                            <th className="p-3 text-right">Food cost</th>
+                            <th className="p-3 text-right">Food cost %</th>
+                            <th className="p-3 text-right">Gross margin</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {foodCost.data.products.map((row) => (
+                            <tr className="border-t border-border-subtle" key={row.productId}>
+                              <td className="p-3 text-text-strong">{row.productName}</td>
+                              <td className="p-3 text-text-muted">{row.categoryName}</td>
+                              <td className="p-3 text-right tabular-nums">{row.quantity}</td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.netSales)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.theoreticalCost)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {row.foodCostPercent}%
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.grossMargin)}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableFrame>
+                  </div>
+                ) : foodCost.data.uncostedProducts.length === 0 ? (
+                  <SectionNotice kind="empty" detail="No settled bill lines match this period." />
+                ) : null}
+                <div className="grid gap-6 xl:grid-cols-2">
+                  {[
+                    { label: 'Food cost by category', rows: foodCost.data.categories },
+                    { label: 'Food cost by branch', rows: foodCost.data.branches },
+                  ].map((group) => (
+                    <div key={group.label}>
+                      <h3 className="mb-3 font-semibold text-text-strong">{group.label}</h3>
+                      {group.rows.length ? (
+                        <TableFrame label={group.label}>
+                          <table className="w-full min-w-[30rem] text-left text-sm">
+                            <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                              <tr>
+                                <th className="p-3">Group</th>
+                                <th className="p-3 text-right">Net sales</th>
+                                <th className="p-3 text-right">Food cost</th>
+                                <th className="p-3 text-right">Margin</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {group.rows.map((row) => (
+                                <tr className="border-t border-border-subtle" key={row.id}>
+                                  <td className="p-3 text-text-strong">{row.name}</td>
+                                  <td className="p-3 text-right tabular-nums">
+                                    {displayNumber(row.netSales)}
+                                  </td>
+                                  <td className="p-3 text-right tabular-nums">
+                                    {displayNumber(row.theoreticalCost)}
+                                  </td>
+                                  <td className="p-3 text-right tabular-nums">
+                                    {displayNumber(row.grossMargin)}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </TableFrame>
+                      ) : (
+                        <p className="text-sm text-text-muted">No fully costed products.</p>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null
+          }
+          dishProfitability={
+            !profitabilityEnabled ? (
+              <SectionNotice
+                kind="module"
+                detail="Restaurant POS, Menu and Inventory are required for dish profitability."
+              />
+            ) : !canFinancial ? (
+              <SectionNotice kind="permission" detail="reports:financial is required." />
+            ) : dishProfitability.failed ? (
+              <SectionNotice kind="error" detail="Dish-profitability data could not be loaded." />
+            ) : dishProfitability.data && dishProfitability.data.menuEngineering.length ? (
+              <div className="space-y-6">
+                <div className="flex justify-end">
+                  <ExportLink
+                    section="dish-profitability"
+                    branch={exportBranch}
+                    from={from}
+                    to={to}
+                  />
+                </div>
+                <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-6">
+                  <Stat
+                    label="Median volume"
+                    value={dishProfitability.data.thresholds.medianVolume}
+                  />
+                  <Stat
+                    label="Median margin / item"
+                    value={displayNumber(dishProfitability.data.thresholds.medianMargin)}
+                  />
+                  <Stat label="Stars" value={dishProfitability.data.quadrantCounts.STAR} />
+                  <Stat
+                    label="Plowhorses"
+                    value={dishProfitability.data.quadrantCounts.PLOWHORSE}
+                  />
+                  <Stat label="Puzzles" value={dishProfitability.data.quadrantCounts.PUZZLE} />
+                  <Stat label="Dogs" value={dishProfitability.data.quadrantCounts.DOG} />
+                </div>
+                <div className="grid gap-6 xl:grid-cols-2">
+                  {[
+                    { label: 'Ranked by margin per item', rows: dishProfitability.data.byMargin },
+                    { label: 'Ranked by volume', rows: dishProfitability.data.byVolume },
+                  ].map((ranking) => (
+                    <div key={ranking.label}>
+                      <h3 className="mb-3 font-semibold text-text-strong">{ranking.label}</h3>
+                      <TableFrame label={ranking.label}>
+                        <table className="w-full min-w-[38rem] text-left text-sm">
+                          <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                            <tr>
+                              <th className="p-3">Rank</th>
+                              <th className="p-3">Product</th>
+                              <th className="p-3">Quadrant</th>
+                              <th className="p-3 text-right">Volume</th>
+                              <th className="p-3 text-right">Margin / item</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {ranking.rows.map((row, index) => (
+                              <tr className="border-t border-border-subtle" key={row.productId}>
+                                <td className="p-3 font-mono text-xs text-text-muted">
+                                  {index + 1}
+                                </td>
+                                <td className="p-3 text-text-strong">{row.productName}</td>
+                                <td className="p-3 text-text-muted">{row.quadrant}</td>
+                                <td className="p-3 text-right tabular-nums">{row.quantity}</td>
+                                <td className="p-3 text-right tabular-nums">
+                                  {displayNumber(row.marginPerItem)}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </TableFrame>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : (
+              <SectionNotice
+                kind="empty"
+                detail="No fully costed dishes match this period. Resolve food-cost exceptions first."
+              />
+            )
+          }
+          catering={
+            !canFinancial ? (
+              <SectionNotice kind="permission" detail="reports:financial is required." />
+            ) : !canCateringRead ? (
+              <SectionNotice kind="permission" detail="catering:read is required." />
+            ) : catering.failed ? (
+              <SectionNotice kind="error" detail="Catering report data could not be loaded." />
+            ) : catering.data && catering.data.totals.orderCount > 0 ? (
+              <div className="space-y-6">
+                <div className="flex justify-end">
+                  <ExportLink section="catering" branch={exportBranch} from={from} to={to} />
+                </div>
+                <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-5">
+                  <Stat
+                    label="Quoted revenue"
+                    value={displayNumber(catering.data.totals.revenue)}
+                  />
+                  <Stat
+                    label="Known ingredient cost"
+                    value={displayNumber(catering.data.totals.knownIngredientCost)}
+                  />
+                  <Stat label="Extras" value={displayNumber(catering.data.totals.extras)} />
+                  <Stat
+                    label="Margin"
+                    value={
+                      catering.data.totals.margin
+                        ? displayNumber(catering.data.totals.margin)
+                        : 'Incomplete'
+                    }
+                    sub={
+                      catering.data.totals.margin
+                        ? undefined
+                        : 'Missing revenue or ingredient costs'
+                    }
+                  />
+                  <Stat
+                    label="Delivered on time"
+                    value={
+                      catering.data.totals.deliveredOnTimeRate
+                        ? `${catering.data.totals.deliveredOnTimeRate}%`
+                        : 'Not available'
+                    }
+                    sub={`${catering.data.totals.deliveredCount} completed deliveries`}
+                  />
+                </div>
+                {catering.data.totals.missingCostLineCount ? (
+                  <DetailLimitNotice
+                    detail={`${catering.data.totals.missingCostLineCount} catering line(s) have no usable recipe cost; affected margins remain incomplete.`}
+                  />
+                ) : null}
+                {catering.data.truncated ? (
+                  <DetailLimitNotice
+                    detail={`Showing the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} catering orders. Export is limited to ${MAX_EXPORT_ROWS.toLocaleString()} rows.`}
+                  />
+                ) : null}
+                <div className="grid gap-6 xl:grid-cols-2">
+                  <div>
+                    <h3 className="mb-3 font-semibold text-text-strong">Orders by status</h3>
+                    <TableFrame label="Catering orders by status">
+                      <table className="w-full min-w-[32rem] text-left text-sm">
+                        <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                          <tr>
+                            <th className="p-3">Status</th>
+                            <th className="p-3 text-right">Orders</th>
+                            <th className="p-3 text-right">Revenue</th>
+                            <th className="p-3 text-right">Margin</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {catering.data.byStatus.map((row) => (
+                            <tr className="border-t border-border-subtle" key={row.status}>
+                              <td className="p-3 text-text-strong">
+                                {row.status.replaceAll('_', ' ')}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">{row.orderCount}</td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.revenue)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {row.margin ? displayNumber(row.margin) : 'Incomplete'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableFrame>
+                  </div>
+                  <div>
+                    <h3 className="mb-3 font-semibold text-text-strong">Catering orders</h3>
+                    <TableFrame label="Catering order profitability">
+                      <table className="w-full min-w-[44rem] text-left text-sm">
+                        <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                          <tr>
+                            <th className="p-3">Event</th>
+                            <th className="p-3">Date</th>
+                            <th className="p-3">Status</th>
+                            <th className="p-3 text-right">Revenue</th>
+                            <th className="p-3 text-right">Margin</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {catering.data.orders.map((row) => (
+                            <tr className="border-t border-border-subtle" key={row.id}>
+                              <td className="p-3 text-text-strong">{row.eventName}</td>
+                              <td className="p-3 font-mono text-xs text-text-muted">
+                                {row.eventDate}
+                              </td>
+                              <td className="p-3 text-text-muted">
+                                {row.status.replaceAll('_', ' ')}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {row.quotedTotal ? displayNumber(row.quotedTotal) : 'Not quoted'}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {row.margin ? displayNumber(row.margin) : 'Incomplete'}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableFrame>
+                  </div>
+                </div>
+              </div>
+            ) : (
+              <SectionNotice kind="empty" detail="No catering orders match this period." />
+            )
+          }
+        />
       </SectionCard>
 
       <SectionCard

@@ -53,4 +53,20 @@ describe('GET Restaurant report export', () => {
       to: '2026-01-31',
     });
   });
+
+  it('accepts a profitability export with the same branch and period filters', async () => {
+    const response = await GET(
+      new Request(
+        'https://devfathom.test/api/restaurant/reports/export?section=dish-profitability&branch=b1&from=2026-01-01&to=2026-01-31'
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.exportCsv).toHaveBeenCalledWith({
+      section: 'dish-profitability',
+      branchId: 'b1',
+      from: '2026-01-01',
+      to: '2026-01-31',
+    });
+  });
 });

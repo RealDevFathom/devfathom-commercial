@@ -9,6 +9,9 @@ const query = z
     section: z.enum([
       'overview',
       'payments',
+      'food-cost',
+      'dish-profitability',
+      'catering',
       'inventory',
       'wastage',
       'stock-movements',

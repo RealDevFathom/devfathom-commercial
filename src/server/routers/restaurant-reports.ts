@@ -5,6 +5,9 @@ import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import {
   exportRestaurantReportCsv,
+  readCateringReport,
+  readDishProfitabilityReport,
+  readFoodCostReport,
   readInventoryReport,
   readOverviewReport,
   readPaymentsReport,
@@ -35,6 +38,9 @@ const stockRange = range.extend({ stockLocationId: z.string().min(1).max(200).op
 const section = z.enum([
   'overview',
   'payments',
+  'food-cost',
+  'dish-profitability',
+  'catering',
   'inventory',
   'wastage',
   'stock-movements',
@@ -162,6 +168,24 @@ export const restaurantReportsRouter = router({
     requireModule(ctx, 'restaurant-pos');
     return guarded(ctx, input, (resolved) => readPaymentsReport(ctx.db, resolved));
   }),
+  foodCost: financial.input(range).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-pos');
+    requireModule(ctx, 'restaurant-menu');
+    requireModule(ctx, 'restaurant-inventory');
+    return guarded(ctx, input, (resolved) => readFoodCostReport(ctx.db, resolved));
+  }),
+  dishProfitability: financial.input(range).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-pos');
+    requireModule(ctx, 'restaurant-menu');
+    requireModule(ctx, 'restaurant-inventory');
+    return guarded(ctx, input, (resolved) => readDishProfitabilityReport(ctx.db, resolved));
+  }),
+  catering: financial.input(range).query(async ({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-core');
+    if (!(await allowed(ctx, 'catering:read')))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'catering:read permission is required.' });
+    return guarded(ctx, input, (resolved) => readCateringReport(ctx.db, resolved));
+  }),
   inventory: operational.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-inventory');
     return guarded(ctx, input, (resolved) => readInventoryReport(ctx.db, resolved));
@@ -223,13 +247,28 @@ export const restaurantReportsRouter = router({
   exportCsv: auditedProtectedProcedure
     .input(stockRange.extend({ section }))
     .query(async ({ ctx, input }) => {
-      const needsFinancial = input.section === 'payments';
+      const needsFinancial = ['payments', 'food-cost', 'dish-profitability', 'catering'].includes(
+        input.section
+      );
       if (needsFinancial && !(await allowed(ctx, 'reports:financial')))
         throw new TRPCError({ code: 'FORBIDDEN' });
       if (!needsFinancial && !(await allowed(ctx, 'reports:operational')))
         throw new TRPCError({ code: 'FORBIDDEN' });
       if (input.section === 'overview' || input.section === 'payments')
         requireModule(ctx, 'restaurant-pos');
+      if (input.section === 'food-cost' || input.section === 'dish-profitability') {
+        requireModule(ctx, 'restaurant-pos');
+        requireModule(ctx, 'restaurant-menu');
+        requireModule(ctx, 'restaurant-inventory');
+      }
+      if (input.section === 'catering') {
+        requireModule(ctx, 'restaurant-core');
+        if (!(await allowed(ctx, 'catering:read')))
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'catering:read permission is required.',
+          });
+      }
       if (
         input.section === 'inventory' ||
         input.section === 'wastage' ||
