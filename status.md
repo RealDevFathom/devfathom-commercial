@@ -6,6 +6,24 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **CLOUD GATE on `a1e729ff` FAILED (run 33907329688, 24m04s) — five root causes, three still open.**
+  The aggregate assertion is `vitest=1, prettier-check=123, numFailedTests=4, numFailedTestSuites=14,
+  numPendingTests=27; require numeric zero` — note **pending counts as failure**, so a skipped
+  acceptance assertion fails the gate exactly like a failing one. Causes: (1) `tests/restaurant-m3-governance.test.ts:561`
+  the M3 table allowlist pins 159 tables but the schema now has 164 — the five catering tables
+  (`20260904133000`) were never added to it → **WHA-1327** (6df3ac4a); (2) vertical scattered-conditional
+  audit — FIXED in 4224dbec; (3) ABAC pin 37→39 — FIXED in 4224dbec; (4)
+  `src/lib/pharmacy/stock-signals.db.test.ts:394` the cold-chain fixture cannot even receive its lot
+  because INV-05 requires a validated zone (`COLD_CHAIN_STORAGE_REQUIRED` from
+  `assertColdChainStorage`) — the earlier WHA-1311 repair added a valid range but no zone → **WHA-1328**
+  (b958fd9d, fix the fixture, never the rule); (5) 27 RLS/database acceptance assertions SKIP in CI
+  because `.github/workflows/qa.yml` sets only a subset of the per-suite env vars they require
+  (`WHA910_TEST_RUNTIME/OWNER_DATABASE_URL`, `M8_TEST_OWNER_DATABASE_URL`,
+  `DELIVERY_TEST_OWNER_DATABASE_URL`, `PHARMACY_TEST_OWNER_DATABASE_URL`,
+  `WHA1198_TEST_RUNTIME_DATABASE_URL`, …) → **WHA-1329** (bf4edfeb, workflow fix; never relax the
+  zero-pending assertion or add skips).
+  **Lesson: a new table needs its governance-allowlist entry in the same lane, and a new migration's
+  fixtures need the storage/zone preconditions its own rules enforce.**
 - **PHARMACY P1 STARTED (owner 18:45: "once you complete restaurant + Catering, move to pharmacy, and
   complete it"). Wave 1 composed 19:10:** WHA-1315 explainable forecasting / replenishment drafts,
   default-off behind a per-org setting with a deterministic-baseline comparison harness (PUR-09, DEM-02
@@ -16,7 +34,12 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   receipt with per-field confidence and mandatory confirmation of every regulated field (AI-03)
   `f03252ab`; WHA-1326 Ask Fathom for pharmacy — answers only from the metric contract, branch/entitlement
   scoped, every figure cited, explicit refusal when no authorized metric supports the question (AI-01)
-  `48843f14`. WHA-1314 anomaly signals (AI-04/RPT-03) still running.
+  `48843f14`. WHA-1314 anomaly signals (AI-04/RPT-03) and WHA-1325
+  RX-07 refills still running. Also composed 19:28: WHA-1323 permissioned segments + campaign builder in
+  capture mode with clinical fields excluded and regulated outreach fail-closed (MKT-01/02) `d524d189`;
+  WHA-1322 central purchasing and branch replenishment, custody delegated to INV-07 transfers (INV-10)
+  `c2472553`; WHA-1324 restock-interest list, reservation and consented recovery attribution (DEM-03)
+  `db306ef1`. Migration prefixes now used: … 195000, 196000, 197000.
   Migration prefixes in use today: 100000, 110000, 110500, 120000, 123700, 133000, 192000, 193000,
   194000 — a new lane must be given its own and told which.
 - **Pharmacy P1 still to do (wave 2+):** INV-10 central purchasing, MKT-01/02 segments + campaign
