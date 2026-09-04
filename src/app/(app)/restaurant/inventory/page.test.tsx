@@ -142,9 +142,8 @@ beforeEach(() => {
   mocks.resolveTenantActor.mockResolvedValue(actor);
   mocks.createTRPCContext.mockResolvedValue(contextStub());
   mocks.can.mockResolvedValue(true);
-  mocks.hasModule.mockImplementation(
-    (entitlements: { enabledModules: string[] }, module: string) =>
-      entitlements.enabledModules.includes(module)
+  mocks.hasModule.mockImplementation((entitlements: { enabledModules: string[] }, module: string) =>
+    entitlements.enabledModules.includes(module)
   );
   mocks.createCaller.mockReturnValue(callerStub());
 });
