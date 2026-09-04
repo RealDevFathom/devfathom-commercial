@@ -10,8 +10,9 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`ef6d6cd7` + this status commit; clean). Everything composed
-  today is in it: WHA-1294 catering phase 2 (07:50; productionRequirements, costSummary with cost-per-portion
+- **Candidate:** the tip of this branch (`a09fe081` + this status commit; clean). Everything composed
+  today is in it: WHA-1296 recipe cost / cost per portion / food-cost % in the catalog console (08:00),
+  WHA-1288 labelled platform selects (08:00, rebased), WHA-1294 catering phase 2 (07:50; productionRequirements, costSummary with cost-per-portion
   snapshot on CONFIRMED, RECIPE_CONSUMPTION on IN_PRODUCTION→READY, reversal on cancel), WHA-1293 recipe explosion + costing library (07:50; `src/lib/restaurant/recipe-costing.ts`,
   ledger consumption now routed through it, getRecipeCost/listRecipeCosts), WHA-1294 catering phase 1
   (07:50; models + migration `20260904133000_restaurant_catering_orders`, `restaurant-catering` router,
@@ -43,9 +44,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   investigation covering QA findings 1277–1284: probably scale-to-zero cold start on the 0.5-CPU
   staging plan — if infra, close them and propose minReplicas/CPU to the owner; 1281/1280 are parked
   until QA8 provisions `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1243), a11y fixes
-  WHA-1285 (dark-theme contrast, commit f553515b under verification in WHA-1292 — f553515b FAILED 4 platform nodes, fix in progress), 1288 (select
-  names: delivered as bdb765bc on the shared a11y branch, conflicts with the candidate's WHA-1287/1290/1291
-  versions of the same files — re-opened to rebase on the tip); WHA-1284's
+  WHA-1285 (dark-theme contrast, commit f553515b under verification in WHA-1292 — f553515b FAILED 4 platform nodes, fix in progress), 1288 composed (bbe9d718); WHA-1284's
   perf refactor (2e7de87d stream SOP report cold path, 58aea51b defer deployment forms) is NOT composed —
   accept only with warm-load numbers and test evidence, rebased on the tip.
   New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
@@ -62,7 +61,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   requirements via explodeRecipe, cost summary, RECIPE_CONSUMPTION on IN_PRODUCTION→READY) — phase 1
   COMPOSED 8f079c9b, phase 2 COMPOSED; WHA-1295 C1 wastage + stock-movement reports — Codex Restaurant Reports
   Engineer, running; backlog until their dependency is on the tip: WHA-1296 B recipe cost / food-cost %
-  in the catalog UI (after A) — Product Engineer 2, PROMOTED 07:50; WHA-1297 E catering console UI (after D1) — Product
+  in the catalog UI — COMPOSED 4a661588; WHA-1297 E catering console UI (after D1) — Product
   Engineer 3; WHA-1298 C2 food-cost, dish-profitability (menu-engineering quadrants) and catering
   reports (after A + D1 + C1) — Reports Engineer. Promote a backlog lane to `todo` only when its
   dependency is composed AND heavy runs ≤ 7. Not in scope yet (owner said restaurants first): hotel
