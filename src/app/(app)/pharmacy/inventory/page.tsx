@@ -141,61 +141,84 @@ export default async function PharmacyInventoryPage({
   }
 
   const caller = pharmacyInventoryRouter.createCaller(ctx);
-  const [organizationLocations, lots, counts, transfers, recalls, signals, users, nearExpiry] =
-    await Promise.all([
-      ctx.db.pharmacyStockLocation.findMany({
-        where: { organizationId, active: true },
-        orderBy: { name: 'asc' },
-      }),
-      ctx.db.pharmacyInventoryLot.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
-        include: {
-          batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
-          balances: { include: { location: true } },
-        },
-      }),
-      ctx.db.pharmacyInventoryCount.findMany({
-        where: { organizationId, branchId: branch.id },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { lines: true },
-      }),
-      ctx.db.pharmacyInterbranchTransfer.findMany({
-        where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { lines: true },
-      }),
-      ctx.db.pharmacyRecallNotice.findMany({
-        where: { organizationId },
-        orderBy: { createdAt: 'desc' },
-        take: 20,
-        include: { acknowledgements: true },
-      }),
-      ctx.db.pharmacyStockSignal.findMany({
-        where: {
-          organizationId,
-          branchId: branch.id,
-          status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
-        },
-        orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
-        take: 50,
-        include: {
-          medicine: { select: { productName: true } },
-          location: { select: { name: true } },
-        },
-      }),
-      ctx.db.user.findMany({
-        where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
-        orderBy: { name: 'asc' },
-        select: { id: true, name: true, title: true },
-      }),
-      caller.nearExpiryBoard({ branchId: branch.id }),
-    ]);
+  const [
+    organizationLocations,
+    lots,
+    counts,
+    transfers,
+    recalls,
+    signals,
+    users,
+    nearExpiry,
+    temperatureLogs,
+  ] = await Promise.all([
+    ctx.db.pharmacyStockLocation.findMany({
+      where: { organizationId, active: true },
+      orderBy: { name: 'asc' },
+    }),
+    ctx.db.pharmacyInventoryLot.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: [{ batch: { expiresAt: 'asc' } }, { createdAt: 'asc' }],
+      include: {
+        batch: { include: { medicine: { select: { productName: true, brandName: true } } } },
+        balances: { include: { location: true } },
+      },
+    }),
+    ctx.db.pharmacyInventoryCount.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { lines: true },
+    }),
+    ctx.db.pharmacyInterbranchTransfer.findMany({
+      where: { organizationId, OR: [{ fromBranchId: branch.id }, { toBranchId: branch.id }] },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { lines: true },
+    }),
+    ctx.db.pharmacyRecallNotice.findMany({
+      where: { organizationId },
+      orderBy: { createdAt: 'desc' },
+      take: 20,
+      include: { acknowledgements: true },
+    }),
+    ctx.db.pharmacyStockSignal.findMany({
+      where: {
+        organizationId,
+        branchId: branch.id,
+        status: { in: ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] },
+      },
+      orderBy: [{ dueAt: 'asc' }, { createdAt: 'asc' }],
+      take: 50,
+      include: {
+        medicine: { select: { productName: true } },
+        location: { select: { name: true } },
+      },
+    }),
+    ctx.db.user.findMany({
+      where: { organizationId, status: 'ACTIVE', id: { not: ctx.session.user.id } },
+      orderBy: { name: 'asc' },
+      select: { id: true, name: true, title: true },
+    }),
+    caller.nearExpiryBoard({ branchId: branch.id }),
+    ctx.db.pharmacyTemperatureLog.findMany({
+      where: { organizationId, branchId: branch.id },
+      orderBy: { recordedAt: 'desc' },
+      take: 20,
+      include: { location: { select: { name: true } } },
+    }),
+  ]);
   const branchNames = new Map(branches.map((item) => [item.id, item.name]));
   const locations = organizationLocations.filter((item) => item.branchId === branch.id);
   const destinationLocations = organizationLocations.filter((item) => item.branchId !== branch.id);
+  const coldChainLocations = locations.filter((item) => item.coldChain);
+  const latestTemperatureByZone = new Map<string, (typeof temperatureLogs)[number]>();
+  for (const log of temperatureLogs) {
+    if (!latestTemperatureByZone.has(log.stockLocationId)) {
+      latestTemperatureByZone.set(log.stockLocationId, log);
+    }
+  }
+  const outOfRangeLogs = [...latestTemperatureByZone.values()].filter((log) => log.outOfRange);
   const available = lots.flatMap((lot) =>
     lot.balances
       .filter((balance) => balance.disposition === 'AVAILABLE' && balance.onHandUnits > 0)
@@ -228,6 +251,17 @@ export default async function PharmacyInventoryPage({
           kind: field(data, 'kind') as
             'STORE' | 'RACK_BIN' | 'FRIDGE' | 'SAFE' | 'QUARANTINE' | 'TRANSIT' | 'RETURNS',
           coldChain: data.get('coldChain') === 'on',
+          minimumTemperatureC:
+            data.get('coldChain') === 'on' ? Number(field(data, 'minimumTemperatureC')) : null,
+          maximumTemperatureC:
+            data.get('coldChain') === 'on' ? Number(field(data, 'maximumTemperatureC')) : null,
+        });
+      else if (action === 'record-temperature')
+        await actionCaller.recordTemperature({
+          branchId,
+          stockLocationId: field(data, 'stockLocationId'),
+          temperatureC: Number(field(data, 'temperatureC')),
+          recordedAt: new Date(),
         });
       else if (action === 'create-count')
         await actionCaller.createCount({
@@ -442,6 +476,16 @@ export default async function PharmacyInventoryPage({
 
       <div className="grid gap-6 xl:grid-cols-2">
         <SectionCard title="Locations" eyebrow="INV-05">
+          {outOfRangeLogs.length > 0 ? (
+            <div
+              className="mb-4 rounded-[var(--radius-sm)] border border-destructive bg-destructive-background p-3 text-sm text-destructive-foreground"
+              role="alert"
+            >
+              {outOfRangeLogs.length} recent temperature reading
+              {outOfRangeLogs.length === 1 ? ' is' : 's are'} outside the validated range. Review
+              the affected stock before use.
+            </div>
+          ) : null}
           <div className="space-y-2">
             {locations.map((location) => (
               <div
@@ -452,6 +496,9 @@ export default async function PharmacyInventoryPage({
                   <p className="font-medium text-text-strong">{location.name}</p>
                   <p className="text-xs text-text-muted">
                     {label(location.kind)} · code {location.code}
+                    {location.coldChain
+                      ? ` · ${location.minimumTemperatureC}–${location.maximumTemperatureC} °C`
+                      : ''}
                   </p>
                 </div>
                 <StatusPill
@@ -487,10 +534,70 @@ export default async function PharmacyInventoryPage({
             <label className="flex min-h-11 items-center gap-2 self-end text-sm">
               <input name="coldChain" type="checkbox" /> Validated cold-chain zone
             </label>
+            <label className="text-sm">
+              Minimum °C
+              <Input className="mt-1" name="minimumTemperatureC" step="0.1" type="number" />
+            </label>
+            <label className="text-sm">
+              Maximum °C
+              <Input className="mt-1" name="maximumTemperatureC" step="0.1" type="number" />
+            </label>
             <Button className="sm:col-span-2" type="submit">
               Create location
             </Button>
           </form>
+          <div className="mt-6 border-t border-border-subtle pt-5">
+            <h3 className="font-medium text-text-strong">Manual temperature log</h3>
+            {coldChainLocations.length > 0 ? (
+              <form action={perform} className="mt-3 grid gap-3 sm:grid-cols-2">
+                <input name="action" type="hidden" value="record-temperature" />
+                <input name="branchId" type="hidden" value={branch.id} />
+                <label className="text-sm">
+                  Validated zone
+                  <select className={inputClass} name="stockLocationId">
+                    {coldChainLocations.map((location) => (
+                      <option key={location.id} value={location.id}>
+                        {location.name} · {location.minimumTemperatureC}–
+                        {location.maximumTemperatureC} °C
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <label className="text-sm">
+                  Reading °C
+                  <Input
+                    className="mt-1"
+                    inputMode="decimal"
+                    name="temperatureC"
+                    required
+                    step="0.1"
+                    type="number"
+                  />
+                </label>
+                <Button className="sm:col-span-2" type="submit">
+                  Record manual reading
+                </Button>
+              </form>
+            ) : (
+              <Empty>Create a validated cold-chain zone before recording temperatures.</Empty>
+            )}
+            <div className="mt-4 space-y-2">
+              {temperatureLogs.map((log) => (
+                <div
+                  className="flex flex-wrap items-center justify-between gap-2 rounded-[var(--radius-sm)] bg-surface-sunken p-3 text-sm"
+                  key={log.id}
+                >
+                  <span>
+                    {log.location.name} · {log.temperatureC} °C · {when(log.recordedAt)}
+                  </span>
+                  <StatusPill
+                    status={log.outOfRange ? 'Out of range' : 'In range'}
+                    tone={log.outOfRange ? 'danger' : 'success'}
+                  />
+                </div>
+              ))}
+            </div>
+          </div>
         </SectionCard>
         <SectionCard title="Physical count" eyebrow="INV-06 · frozen snapshot">
           {available.length && locations.length ? (

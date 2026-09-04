@@ -578,7 +578,13 @@ export async function postTenderEntry(
   if (!tender) throw new PharmacyFinanceError('NOT_FOUND');
   if (tender.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   const settlementAccount =
-    tender.type === 'CASH' ? 'CASH' : tender.type === 'CREDIT' ? 'ACCOUNTS_RECEIVABLE' : 'BANK';
+    tender.type === 'CASH'
+      ? 'CASH'
+      : tender.type === 'CREDIT'
+        ? 'ACCOUNTS_RECEIVABLE'
+        : tender.type === 'LOYALTY'
+          ? 'LOYALTY_REDEMPTION'
+          : 'BANK';
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_TENDER',
     sourceId: tender.id,
@@ -620,7 +626,9 @@ export async function postTenderRefundEntry(
       ? 'CASH'
       : refund.originalTender.type === 'CREDIT'
         ? 'ACCOUNTS_RECEIVABLE'
-        : 'BANK';
+        : refund.originalTender.type === 'LOYALTY'
+          ? 'LOYALTY_REDEMPTION'
+          : 'BANK';
   return postJournalEntry(db, scope, {
     sourceKind: 'PHARMACY_REFUND',
     sourceId: refund.id,

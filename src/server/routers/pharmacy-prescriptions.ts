@@ -12,6 +12,45 @@ const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
 
 export const pharmacyPrescriptionsRouter = router({
+  workspace: protectedProcedure.query(async ({ ctx }) => {
+    const [patients, prescribers, medicines, prescriptions] = await Promise.all([
+      ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
+      ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
+      ctx.db.medicine.findMany({
+        where: { saleable: true },
+        orderBy: { productName: 'asc' },
+        include: { presentations: { orderBy: { presentation: 'asc' } } },
+      }),
+      ctx.db.prescription.findMany({
+        orderBy: { capturedAt: 'desc' },
+        include: {
+          patient: true,
+          prescriber: true,
+          lines: {
+            orderBy: { lineNumber: 'asc' },
+            include: { medicine: true, presentation: true, fills: true },
+          },
+        },
+      }),
+    ]);
+    return {
+      patients: patients.map(maskedPatient),
+      prescribers,
+      medicines,
+      prescriptions: prescriptions.map((prescription) => ({
+        ...prescription,
+        patient: maskedPatient(prescription.patient),
+        lines: prescription.lines.map((line) => ({
+          ...line,
+          remainingAuthorizedUnits: Math.max(
+            0,
+            line.authorizedCanonicalUnits * (prescription.authorizedRepeats + 1) -
+              line.fills.reduce((total, fill) => total + fill.quantityCanonicalUnits, 0)
+          ),
+        })),
+      })),
+    };
+  }),
   createPatient: protectedProcedure
     .input(
       z

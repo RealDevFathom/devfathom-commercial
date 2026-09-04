@@ -4,7 +4,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 
 export default function RestaurantSopAdminLoading() {
   return (
-    <main
+    <div
       className="min-w-0 space-y-6"
       role="status"
       aria-busy="true"
@@ -62,6 +62,6 @@ export default function RestaurantSopAdminLoading() {
       <SectionCard eyebrow="Contract boundary" title="Escalation policies">
         <Skeleton className="h-16 w-full max-w-3xl motion-reduce:animate-none" />
       </SectionCard>
-    </main>
+    </div>
   );
 }

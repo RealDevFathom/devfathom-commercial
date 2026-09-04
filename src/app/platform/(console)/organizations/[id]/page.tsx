@@ -41,102 +41,132 @@ export default async function OrganizationDetailPage({
   const { id } = await params;
   const now = new Date();
   const data = await withPlatformDb(async (db) => {
-    const [organization, modules, packages, liveContracts, branchCount, restaurantBranches] =
-      await Promise.all([
-        db.organization.findUnique({
-          where: { id },
-          include: {
-            package: {
-              select: {
-                id: true,
-                name: true,
-                key: true,
-                vertical: true,
-                // Package defaults are the entitlement baseline; only enabled links
-                // to still-active catalog modules count.
-                moduleLinks: {
-                  where: { enabled: true },
-                  select: {
-                    moduleId: true,
-                    limits: true,
-                    module: { select: { active: true, key: true } },
-                  },
+    const [
+      organization,
+      modules,
+      packages,
+      liveContracts,
+      branchCount,
+      restaurantBranches,
+      failedProvisioningJob,
+    ] = await Promise.all([
+      db.organization.findUnique({
+        where: { id },
+        include: {
+          package: {
+            select: {
+              id: true,
+              name: true,
+              key: true,
+              vertical: true,
+              // Package defaults are the entitlement baseline; only enabled links
+              // to still-active catalog modules count.
+              moduleLinks: {
+                where: { enabled: true },
+                select: {
+                  moduleId: true,
+                  limits: true,
+                  module: { select: { active: true, key: true } },
                 },
               },
             },
-            modules: {
-              include: { module: true },
-              orderBy: { module: { sortOrder: 'asc' } },
-            },
-            limits: { orderBy: { key: 'asc' } },
-            usageCounters: { orderBy: { updatedAt: 'desc' }, take: 12 },
-            brand: true,
-            emailSettings: true,
-            domains: { orderBy: [{ isPrimary: 'desc' }, { host: 'asc' }] },
-            identityConnections: { orderBy: { createdAt: 'desc' } },
-            scimTokens: { orderBy: { createdAt: 'desc' } },
-            scimEvents: { orderBy: { createdAt: 'desc' }, take: 20 },
-            roles: {
-              orderBy: { name: 'asc' },
-              include: {
-                permissions: { orderBy: { capability: 'asc' } },
-                _count: { select: { users: true } },
-              },
-            },
-            permissionOverrides: {
-              orderBy: { updatedAt: 'desc' },
-              include: { user: { select: { name: true, email: true } } },
-            },
-            deployments: { orderBy: { environment: 'asc' } },
-            contracts: { orderBy: { endDate: 'desc' }, take: 5 },
-            invoices: { orderBy: { dueAt: 'desc' }, take: 5 },
-            lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 12 },
-            restaurantActivationAcknowledgements: {
-              orderBy: { kind: 'asc' },
-            },
-            users: {
-              orderBy: [{ role: 'asc' }, { name: 'asc' }],
-              select: {
-                id: true,
-                name: true,
-                email: true,
-                role: true,
-                status: true,
-                title: true,
-                department: true,
-                organizationRoleId: true,
-              },
-            },
-            _count: { select: { users: true, supportSessions: true } },
           },
-        }),
-        db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
-        // Every active package is loaded once and partitioned by vertical below:
-        // the profile form may offer only same-vertical packages (§2.3), while a
-        // pre-activation correction may offer only the target vertical's packages.
-        db.platformPackage.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
-        // Mirrors the live-contract predicate in `resolveOrganizationEntitlements`
-        // so the console reports the same effective source the runtime resolves.
-        db.platformContract.findMany({
-          where: {
-            organizationId: id,
-            status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
-            startDate: { lte: now },
-            OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
+          modules: {
+            include: { module: true },
+            orderBy: { module: { sortOrder: 'asc' } },
           },
-          select: {
-            modules: { select: { moduleId: true, module: { select: { active: true } } } },
+          limits: { orderBy: { key: 'asc' } },
+          usageCounters: { orderBy: { updatedAt: 'desc' }, take: 12 },
+          brand: true,
+          emailSettings: true,
+          domains: { orderBy: [{ isPrimary: 'desc' }, { host: 'asc' }] },
+          identityConnections: { orderBy: { createdAt: 'desc' } },
+          scimTokens: { orderBy: { createdAt: 'desc' } },
+          scimEvents: { orderBy: { createdAt: 'desc' }, take: 20 },
+          roles: {
+            orderBy: { name: 'asc' },
+            include: {
+              permissions: { orderBy: { capability: 'asc' } },
+              _count: { select: { users: true } },
+            },
           },
-        }),
-        // §2.2 — the command refuses a vertical correction once vertical-owned rows
-        // exist, so the affordance must not be offered once they do.
-        db.restaurantBranch.count({ where: { organizationId: id } }),
-        db.restaurantBranch.findMany({
-          where: { organizationId: id, isDefault: true, active: true },
-          select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
-        }),
-      ]);
-    return { organization, modules, packages, liveContracts, branchCount, restaurantBranches };
+          permissionOverrides: {
+            orderBy: { updatedAt: 'desc' },
+            include: { user: { select: { name: true, email: true } } },
+          },
+          deployments: { orderBy: { environment: 'asc' } },
+          contracts: { orderBy: { endDate: 'desc' }, take: 5 },
+          invoices: { orderBy: { dueAt: 'desc' }, take: 5 },
+          lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 12 },
+          restaurantActivationAcknowledgements: {
+            orderBy: { kind: 'asc' },
+          },
+          users: {
+            orderBy: [{ role: 'asc' }, { name: 'asc' }],
+            select: {
+              id: true,
+              name: true,
+              email: true,
+              role: true,
+              status: true,
+              title: true,
+              department: true,
+              organizationRoleId: true,
+            },
+          },
+          _count: { select: { users: true, supportSessions: true } },
+        },
+      }),
+      db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
+      // Every active package is loaded once and partitioned by vertical below:
+      // the profile form may offer only same-vertical packages (§2.3), while a
+      // pre-activation correction may offer only the target vertical's packages.
+      db.platformPackage.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+      // Mirrors the live-contract predicate in `resolveOrganizationEntitlements`
+      // so the console reports the same effective source the runtime resolves.
+      db.platformContract.findMany({
+        where: {
+          organizationId: id,
+          status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
+          startDate: { lte: now },
+          OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
+        },
+        select: {
+          modules: { select: { moduleId: true, module: { select: { active: true } } } },
+        },
+      }),
+      // §2.2 — the command refuses a vertical correction once vertical-owned rows
+      // exist, so the affordance must not be offered once they do.
+      db.restaurantBranch.count({ where: { organizationId: id } }),
+      db.restaurantBranch.findMany({
+        where: { organizationId: id, isDefault: true, active: true },
+        select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
+      }),
+      db.platformJob.findFirst({
+        where: {
+          organizationId: id,
+          type: { in: ['PROVISION_SHARED', 'PROVISION_DEDICATED'] },
+          status: 'FAILED',
+        },
+        orderBy: { finishedAt: 'desc' },
+        select: {
+          id: true,
+          type: true,
+          attempts: true,
+          maxAttempts: true,
+          finishedAt: true,
+        },
+      }),
+    ]);
+    return {
+      organization,
+      modules,
+      packages,
+      liveContracts,
+      branchCount,
+      restaurantBranches,
+      failedProvisioningJob,
+    };
   });
   if (!data.organization) notFound();
   const organization = data.organization;
@@ -247,6 +277,60 @@ export default async function OrganizationDetailPage({
         description={`${organization.legalName} · ${verticalDefinition.label} · ${organization.deploymentMode.toLowerCase()} deployment · ${organization._count.users}/${organization.seatLimit} seats`}
         action={<PlatformStatus value={organization.status} />}
       />
+
+      {data.failedProvisioningJob ? (
+        <section
+          aria-labelledby="provisioning-recovery-title"
+          className="mt-5 border border-destructive/30 bg-destructive/10 px-5 py-4"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <div className="flex flex-wrap items-center gap-2">
+                <PlatformStatus value="FAILED" />
+                <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-text-muted">
+                  Failed step ·{' '}
+                  {data.failedProvisioningJob.type === 'PROVISION_DEDICATED'
+                    ? 'Dedicated environment provisioning'
+                    : 'Shared environment provisioning'}
+                </p>
+              </div>
+              <h2
+                id="provisioning-recovery-title"
+                className="mt-3 font-display text-lg font-semibold text-text-strong"
+              >
+                Provisioning needs operator recovery
+              </h2>
+              <p className="mt-1 text-sm text-text-body">
+                The provisioning worker exhausted {data.failedProvisioningJob.attempts} of{' '}
+                {data.failedProvisioningJob.maxAttempts} attempts. Review the deployment inputs and
+                provider configuration, then retry the same job. Retrying resets this job safely; it
+                does not create a second deployment.
+              </p>
+              <p className="mt-2 text-xs text-text-muted">
+                Owner: Platform Operations
+                {data.failedProvisioningJob.finishedAt
+                  ? ` · Failed ${data.failedProvisioningJob.finishedAt.toLocaleString()}`
+                  : ''}
+                . If the retry fails, escalate with the job ID from Job control; do not paste
+                credentials or provider secrets into notes.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <PlatformCommandButton
+                action="job.retry"
+                label="Retry provisioning"
+                payload={{ id: data.failedProvisioningJob.id }}
+              />
+              <Link
+                href="/platform/jobs"
+                className="inline-flex min-h-9 items-center border border-border-default bg-surface-card px-3 text-xs font-semibold text-text-body transition-colors hover:bg-surface-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Open Job control
+              </Link>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <nav
         aria-label="Organization sections"

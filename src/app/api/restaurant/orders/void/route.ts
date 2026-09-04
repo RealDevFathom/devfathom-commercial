@@ -41,6 +41,14 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   const parsed = voidBody.safeParse(parsedJson.data);
   if (!parsed.success) return invalidBody(parsed.error.issues);
 
+  try {
+    await requireOrderInDeviceBranch(ctx.db, parsed.data.orderId, ctx.device.branchId);
+  } catch (err) {
+    const response = orderErrorResponse(err);
+    if (response) return response;
+    throw err;
+  }
+
   let approvingStaffProfileId: string | null = null;
   if (parsed.data.approving) {
     const now = new Date();

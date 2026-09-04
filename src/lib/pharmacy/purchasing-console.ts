@@ -287,7 +287,7 @@ export async function purchasingWorkspace(
       },
     }),
     db.medicine.findMany({
-      where: { organizationId: scope.organizationId },
+      where: { organizationId: scope.organizationId, saleable: true },
       orderBy: [{ productName: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
@@ -693,7 +693,11 @@ export async function resolveScan(
   if (!term) return { kind: 'unresolved', label: '' };
 
   const barcode = await db.medicineBarcode.findFirst({
-    where: { organizationId: scope.organizationId, normalizedCode: normalizeMedicineText(term) },
+    where: {
+      organizationId: scope.organizationId,
+      normalizedCode: normalizeMedicineText(term),
+      presentation: { medicine: { saleable: true } },
+    },
     select: {
       packLevelId: true,
       presentation: { select: { medicineId: true, medicine: { select: { productName: true } } } },
@@ -711,6 +715,7 @@ export async function resolveScan(
   const medicine = await db.medicine.findFirst({
     where: {
       organizationId: scope.organizationId,
+      saleable: true,
       productName: { contains: term, mode: 'insensitive' },
     },
     orderBy: [{ productName: 'asc' }, { id: 'asc' }],

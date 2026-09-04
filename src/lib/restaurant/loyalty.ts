@@ -331,8 +331,8 @@ export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, a
 }
 
 /**
- * Append the loyalty earn for one successfully settled bill using the eligible
- * merchandise basis frozen by settlement. The caller owns the transaction: this
+ * Append loyalty earn for one successfully settled bill using its net grand total.
+ * The caller owns the transaction: this
  * function deliberately does not open one, so the earn cannot survive a rollback
  * of the tax snapshot, bill totals, promotion consumption, tender, or receipt.
  *
@@ -342,7 +342,7 @@ export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, a
  */
 export async function accrueLoyaltyForSettledBill(
   tx: ScopedDb,
-  input: { billId: string; eligibleNetMerchandise: Prisma.Decimal; at: Date }
+  input: { billId: string; netGrandTotal: Prisma.Decimal; at: Date }
 ) {
   const bill = await tx.restaurantBill.findUnique({
     where: { id: input.billId },
@@ -364,7 +364,7 @@ export async function accrueLoyaltyForSettledBill(
   });
   if (prior) return prior;
 
-  const eligible = money(input.eligibleNetMerchandise);
+  const eligible = money(input.netGrandTotal);
   if (eligible.isNegative()) {
     throw new LoyaltyError('Settlement loyalty basis cannot be negative.', 'INVALID');
   }

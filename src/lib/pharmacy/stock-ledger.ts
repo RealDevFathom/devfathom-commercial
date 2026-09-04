@@ -22,6 +22,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   arrangementFor,
   assertArrangementReconciles,
+  assertColdChainStorage,
   blockReasonFor,
   planAllocation,
   planBreakPack,
@@ -199,10 +200,12 @@ export type ReceiveLotInput = {
 export async function receiveLot(db: ScopedDb, scope: LedgerScope, input: ReceiveLotInput) {
   const batch = await db.pharmacyManufacturingBatch.findFirst({
     where: { id: input.manufacturingBatchId, organizationId: scope.organizationId },
+    include: { medicine: { select: { coldChain: true } } },
   });
   if (!batch) throw new PharmacyInventoryError('CROSS_TENANT_REFERENCE');
 
-  await assertLocationInBranch(db, scope, input.stockLocationId);
+  const receivingLocation = await assertLocationInBranch(db, scope, input.stockLocationId);
+  assertColdChainStorage(batch.medicine.coldChain, receivingLocation.coldChain);
   if (input.quarantine) {
     if (!Number.isSafeInteger(input.quarantine.units) || input.quarantine.units <= 0) {
       throw new PharmacyInventoryError('INVALID_QUANTITY');
@@ -274,6 +277,7 @@ async function assertLocationInBranch(db: ScopedDb, scope: LedgerScope, stockLoc
   if (location.branchId !== scope.branchId) {
     throw new PharmacyInventoryError('CROSS_BRANCH_REFERENCE');
   }
+  return location;
 }
 
 async function postReceipt(

@@ -66,6 +66,19 @@ async function openCounter(page: Page) {
   await expect(page.getByLabel('Scan or search')).toBeFocused();
 }
 
+test('pharmacy-only navigation exposes pharmacy destinations and excludes Restaurant routes', async ({
+  page,
+}) => {
+  await signIn(page);
+  const navigation = page.getByRole('navigation', { name: 'Primary navigation' });
+  await expect(navigation.getByRole('link', { name: 'Onboarding' })).toBeVisible();
+  await expect(navigation.getByRole('link', { name: 'Counter' })).toBeVisible();
+  await expect(navigation.getByRole('link', { name: 'Regulatory profile' })).toBeVisible();
+  await expect(navigation.getByRole('link', { name: 'Point of sale' })).toHaveCount(0);
+  await expect(navigation.getByRole('link', { name: 'Kitchen display' })).toHaveCount(0);
+  await expect(navigation.getByRole('link', { name: 'Restaurant staff' })).toHaveCount(0);
+});
+
 /**
  * Cash tenders need an open drawer (POS-07), and every test that takes one must
  * open its own.

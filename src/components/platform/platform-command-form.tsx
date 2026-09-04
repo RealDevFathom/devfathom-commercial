@@ -2,8 +2,17 @@
 
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LoaderCircle, Play, Save } from 'lucide-react';
+import { ChevronDown, LoaderCircle, Play, Save } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
 export type CommandField = {
@@ -20,6 +29,7 @@ export type CommandField = {
     | 'color'
     | 'textarea'
     | 'select'
+    | 'searchable-select'
     | 'checkbox'
     | 'json'
     | 'hidden';
@@ -37,6 +47,74 @@ export type CommandField = {
   options?: Array<{ label: string; value: string; filterValue?: string }>;
 };
 
+function SearchableSelectField({
+  field,
+  value,
+  onChange,
+  fieldError,
+  errorId,
+}: {
+  field: CommandField;
+  value: string;
+  onChange: (value: string) => void;
+  fieldError?: string;
+  errorId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const options = field.options ?? [];
+  const groups = Map.groupBy(options, (option) => option.value.split('/')[0] ?? 'Other');
+  const selected = options.find((option) => option.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <input type="hidden" name={field.name} value={value} />
+      <PopoverTrigger
+        render={
+          <button
+            type="button"
+            disabled={field.disabled}
+            data-field-name={field.name}
+            aria-label={field.label}
+            aria-invalid={Boolean(fieldError)}
+            aria-describedby={fieldError ? errorId : undefined}
+            className="flex h-11 w-full items-center justify-between gap-2 rounded-lg border border-border-default bg-card px-3 text-left text-sm outline-none transition hover:bg-surface-sunken focus-visible:border-accent-brand focus-visible:ring-2 focus-visible:ring-accent-brand/15 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        }
+      >
+        <span className={cn('truncate', !selected && 'text-text-muted')}>
+          {selected?.label ?? 'Choose a timezone'}
+        </span>
+        <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-text-muted" />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-(--anchor-width) min-w-72 p-0">
+        <Command value={value}>
+          <CommandInput placeholder="Search city or IANA timezone…" autoFocus />
+          <CommandList>
+            <CommandEmpty>No matching timezone.</CommandEmpty>
+            {[...groups.entries()].map(([region, regionOptions]) => (
+              <CommandGroup key={region} heading={region === 'UTC' ? 'Universal' : region}>
+                {regionOptions.map((option) => (
+                  <CommandItem
+                    key={option.value}
+                    value={`${option.label} ${option.value.replaceAll('_', ' ')}`}
+                    data-checked={option.value === value}
+                    onSelect={() => {
+                      onChange(option.value);
+                      setOpen(false);
+                    }}
+                  >
+                    {option.label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
 function optionsFor(field: CommandField, values: Record<string, string>) {
   return field.filterBy
     ? field.options?.filter((option) => option.filterValue === values[field.filterBy!])
@@ -46,7 +124,7 @@ function optionsFor(field: CommandField, values: Record<string, string>) {
 function initialSelectValues(fields: CommandField[]) {
   const values: Record<string, string> = {};
   for (const field of fields) {
-    if (field.type !== 'select') continue;
+    if (field.type !== 'select' && field.type !== 'searchable-select') continue;
     const options = optionsFor(field, values);
     const fallback = field.required ? (options?.[0]?.value ?? '') : '';
     const preferred = String(field.defaultValue ?? fallback);
@@ -155,7 +233,9 @@ export function PlatformCommandForm({
     if (Object.keys(clientFieldErrors).length) {
       setFieldErrors(clientFieldErrors);
       setError(`${Object.keys(clientFieldErrors).length} field needs attention`);
-      (form.elements.namedItem(Object.keys(clientFieldErrors)[0]!) as HTMLElement)?.focus();
+      const firstInvalid = Object.keys(clientFieldErrors)[0]!;
+      (form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null)?.focus() ??
+        (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
       return;
     }
     setPending(true);
@@ -187,7 +267,10 @@ export function PlatformCommandForm({
           setFieldErrors(visibleErrors);
           const count = Object.keys(visibleErrors).length;
           setError(`${count} ${count === 1 ? 'field needs' : 'fields need'} attention`);
-          (form.elements.namedItem(Object.keys(visibleErrors)[0]!) as HTMLElement)?.focus();
+          const firstInvalid = Object.keys(visibleErrors)[0]!;
+          (
+            form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null
+          )?.focus() ?? (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
         } else {
           setError(body.error ?? body.details?.[0]?.message ?? 'The command failed.');
         }
@@ -259,6 +342,14 @@ export function PlatformCommandForm({
                   aria-invalid={Boolean(fieldError)}
                   aria-describedby={fieldError ? errorId : undefined}
                   className="w-full rounded-lg border border-border-default bg-card px-3 py-2.5 font-sans text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
+                />
+              ) : field.type === 'searchable-select' ? (
+                <SearchableSelectField
+                  field={{ ...field, options: optionsFor(field, selectValues) }}
+                  value={selectValues[field.name] ?? ''}
+                  onChange={(value) => updateSelect(field.name, value)}
+                  fieldError={fieldError}
+                  errorId={errorId}
                 />
               ) : field.type === 'select' ? (
                 <select

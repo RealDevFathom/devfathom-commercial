@@ -323,7 +323,7 @@ export default function RestaurantSopOversightPage() {
   const auditTrail: AuditEntry[] = auditQuery.data ?? [];
 
   return (
-    <main className="min-w-0 space-y-6" aria-busy={state === 'loading'}>
+    <div className="min-w-0 space-y-6" aria-busy={state === 'loading'}>
       <PageHeader
         eyebrow="Restaurant operations"
         heading="SOP oversight"
@@ -1012,6 +1012,6 @@ export default function RestaurantSopOversightPage() {
           </SectionCard>
         </>
       )}
-    </main>
+    </div>
   );
 }

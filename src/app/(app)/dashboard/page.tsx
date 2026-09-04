@@ -3,6 +3,7 @@ import { HydrationBoundary } from '@tanstack/react-query';
 import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
 import { RestaurantDashboardContent } from './restaurant-dashboard-content';
+import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { FirstRunChecklist } from '@/components/onboarding/first-run-checklist';
 import { loadSetupChecklist } from '@/lib/onboarding/setup-evaluator';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -15,6 +16,7 @@ export default async function DashboardPage() {
   const ssr = await createSSRHelpers();
   const helpers = ssr?.helpers;
   const restaurant = ssr?.entitlements.vertical === 'RESTAURANT';
+  const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const firstRunVertical =
     ssr?.entitlements.vertical === 'RESTAURANT' || ssr?.entitlements.vertical === 'PHARMACY'
       ? ssr.entitlements.vertical
@@ -38,7 +40,7 @@ export default async function DashboardPage() {
   //
   // `.prefetch()` never throws — react-query captures errors into the cache, so
   // an UNAUTHORIZED/FORBIDDEN result degrades gracefully to the client fetch.
-  if (helpers && !restaurant) {
+  if (helpers && !restaurant && !pharmacy) {
     await Promise.all([
       helpers.dashboard.getStats.prefetch(),
       helpers.dashboard.getRecentActivity.prefetch(),
@@ -52,7 +54,9 @@ export default async function DashboardPage() {
 
   return (
     <HydrationBoundary state={helpers?.dehydrate()}>
-      {restaurant ? (
+      {pharmacy ? (
+        <PharmacyDashboardContent role={ssr.session?.user?.role} />
+      ) : restaurant ? (
         <RestaurantDashboardContent
           enabledModules={ssr.entitlements.enabledModules}
           checklist={checklist ?? undefined}

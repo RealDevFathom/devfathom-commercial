@@ -155,7 +155,11 @@ async function matchMedicineIds(
 
   const barcode = normalized
     ? await db.medicineBarcode.findFirst({
-        where: { organizationId: scope.organizationId, normalizedCode: normalized },
+        where: {
+          organizationId: scope.organizationId,
+          normalizedCode: normalized,
+          presentation: { medicine: { saleable: true } },
+        },
         select: { presentation: { select: { medicineId: true } } },
       })
     : null;
@@ -166,6 +170,7 @@ async function matchMedicineIds(
       where: {
         organizationId: scope.organizationId,
         normalizedValue: { startsWith: normalized },
+        medicine: { saleable: true },
       },
       select: { medicineId: true },
       orderBy: { normalizedValue: 'asc' },
@@ -177,6 +182,7 @@ async function matchMedicineIds(
   const byName = await db.medicine.findMany({
     where: {
       organizationId: scope.organizationId,
+      saleable: true,
       OR: [
         { productName: { contains: trimmed, mode: 'insensitive' } },
         { brandName: { contains: trimmed, mode: 'insensitive' } },
@@ -193,6 +199,7 @@ async function matchMedicineIds(
   const byIngredient = await db.medicineStrengthComponent.findMany({
     where: {
       organizationId: scope.organizationId,
+      medicine: { saleable: true },
       OR: [
         { ingredient: { name: { contains: trimmed, mode: 'insensitive' } } },
         { unit: { contains: trimmed, mode: 'insensitive' } },
@@ -206,6 +213,7 @@ async function matchMedicineIds(
   const byPresentation = await db.presentation.findMany({
     where: {
       organizationId: scope.organizationId,
+      medicine: { saleable: true },
       OR: [
         { presentation: { contains: trimmed, mode: 'insensitive' } },
         { dosageForm: { contains: trimmed, mode: 'insensitive' } },
@@ -255,7 +263,7 @@ export async function searchCounterCatalog(
 
   const [medicines, lots, packLevels, mrps] = await Promise.all([
     db.medicine.findMany({
-      where: { organizationId: scope.organizationId, id: { in: medicineIds } },
+      where: { organizationId: scope.organizationId, id: { in: medicineIds }, saleable: true },
       include: {
         strengths: { include: { ingredient: { select: { name: true } } } },
         presentations: { orderBy: { createdAt: 'asc' } },

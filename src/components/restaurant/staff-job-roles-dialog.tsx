@@ -160,175 +160,175 @@ export function StaffJobRolesDialog({
             <p className="rounded-md border border-dashed border-border-subtle px-3 py-6 text-center text-sm text-text-muted">
               Select a branch to view and edit roles.
             </p>
-        ) : loading ? (
-          <div role="status" aria-label="Loading role profile" className="space-y-3">
-            <Skeleton className="h-16 w-full" />
-            <Skeleton className="h-40 w-full" />
-            <span className="sr-only">Loading roles and capabilities…</span>
-          </div>
-        ) : loadError ? (
-          <div role="alert" className="rounded-md bg-destructive/10 p-4 text-sm text-destructive">
-            Access details could not be loaded. Close this panel and try again; no changes were
-            made.
-          </div>
-        ) : (
-          <div className="space-y-6">
-            <section aria-labelledby="profile-roles" className="space-y-3">
-              <div>
-                <h3 id="profile-roles" className="font-semibold text-text-strong">
-                  Role profiles
-                </h3>
-                <p className="text-sm text-text-muted">
-                  Select any number. Capability previews update before you save.
-                </p>
-              </div>
-              {(rolesQuery.data ?? []).length === 0 ? (
-                <p className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">
-                  No active role profiles exist. Create or activate a role, then return here.
-                </p>
-              ) : (
-                <div className="grid gap-2 sm:grid-cols-2">
-                  {(rolesQuery.data ?? []).map((role) => {
-                    const active = selected.has(role.id);
-                    return (
-                      <Button
-                        key={role.id}
-                        type="button"
-                        variant={active ? 'secondary' : 'outline'}
-                        aria-pressed={active}
-                        disabled={pending}
-                        onClick={() => toggleRole(role.id)}
-                        className="h-auto min-h-14 justify-start whitespace-normal px-3 py-2 text-left"
-                      >
-                        <span>
-                          <span className="block font-medium">{role.name}</span>
-                          <span className="block text-xs font-normal text-text-strong">
-                            {role.capabilities.length} inherited capabilities
-                          </span>
-                        </span>
-                      </Button>
-                    );
-                  })}
-                </div>
-              )}
-              {saveError ? (
-                <p
-                  role="alert"
-                  className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
-                >
-                  {saveError}
-                </p>
-              ) : null}
-            </section>
-            <section aria-labelledby="profile-capabilities" className="space-y-3">
-              <div className="flex flex-wrap items-end justify-between gap-3">
+          ) : loading ? (
+            <div role="status" aria-label="Loading role profile" className="space-y-3">
+              <Skeleton className="h-16 w-full" />
+              <Skeleton className="h-40 w-full" />
+              <span className="sr-only">Loading roles and capabilities…</span>
+            </div>
+          ) : loadError ? (
+            <div role="alert" className="rounded-md bg-destructive/10 p-4 text-sm text-destructive">
+              Access details could not be loaded. Close this panel and try again; no changes were
+              made.
+            </div>
+          ) : (
+            <div className="space-y-6">
+              <section aria-labelledby="profile-roles" className="space-y-3">
                 <div>
-                  <h3 id="profile-capabilities" className="font-semibold text-text-strong">
-                    Capabilities
+                  <h3 id="profile-roles" className="font-semibold text-text-strong">
+                    Role profiles
                   </h3>
                   <p className="text-sm text-text-muted">
-                    Each row shows why access is available or withheld.
+                    Select any number. Capability previews update before you save.
                   </p>
                 </div>
-                <label className="w-full sm:w-64">
-                  <span className="sr-only">Search capabilities</span>
-                  <Input
-                    type="search"
-                    value={search}
-                    onChange={(event) => setSearch(event.target.value)}
-                    placeholder="Search capabilities"
-                    className="h-11"
-                  />
-                </label>
-              </div>
-              <div className="flex flex-wrap gap-2" aria-label="Capability provenance legend">
-                <StatusPill
-                  status="Inherited from role"
-                  tone="neutral"
-                  className="!text-text-strong"
-                />
-                <StatusPill status="Direct exception" tone="success" />
-                <StatusPill
-                  status="Denied for person"
-                  tone="warning"
-                  className="!text-text-strong"
-                />
-              </div>
-              {visible.length === 0 ? (
-                <p className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">
-                  No capabilities match. Clear the search to see the full list; your selections are
-                  preserved.
-                </p>
-              ) : (
-                <div className="divide-y divide-border-subtle rounded-md border border-border-default">
-                  {visible.map((capability) => {
-                    const isDenied = denied.has(capability),
-                      isDirect = direct.has(capability),
-                      isInherited = inherited.has(capability);
-                    const state = isDenied
-                      ? 'denied'
-                      : isDirect
-                        ? 'direct'
-                        : isInherited
-                          ? 'inherited'
-                          : null;
-                    return (
-                      <div
-                        key={capability}
-                        className="flex min-h-14 flex-wrap items-center gap-3 px-3 py-2 hover:bg-surface-muted"
-                      >
-                        <span className="min-w-0 flex-1 font-mono text-xs text-text-strong">
-                          {capability}
-                        </span>
-                        {state ? (
-                          <StatusPill
-                            status={
-                              state === 'inherited'
-                                ? 'Inherited'
-                                : state === 'direct'
-                                  ? 'Direct'
-                                  : 'Denied'
-                            }
-                            tone={tones[state]}
-                            className={state === 'direct' ? undefined : '!text-text-strong'}
-                          />
-                        ) : (
-                          <span className="text-xs text-text-strong">Not granted</span>
-                        )}
-                        <div
-                          className="flex gap-1"
-                          role="group"
-                          aria-label={`Access for ${capability}`}
+                {(rolesQuery.data ?? []).length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">
+                    No active role profiles exist. Create or activate a role, then return here.
+                  </p>
+                ) : (
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    {(rolesQuery.data ?? []).map((role) => {
+                      const active = selected.has(role.id);
+                      return (
+                        <Button
+                          key={role.id}
+                          type="button"
+                          variant={active ? 'secondary' : 'outline'}
+                          aria-pressed={active}
+                          disabled={pending}
+                          onClick={() => toggleRole(role.id)}
+                          className="h-auto min-h-14 justify-start whitespace-normal px-3 py-2 text-left"
                         >
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={isDirect ? 'secondary' : 'ghost'}
-                            aria-pressed={isDirect}
-                            disabled={pending}
-                            onClick={() => choose(capability, isDirect ? null : 'ALLOW')}
-                          >
-                            Direct
-                          </Button>
-                          <Button
-                            type="button"
-                            size="sm"
-                            variant={isDenied ? 'secondary' : 'ghost'}
-                            aria-pressed={isDenied}
-                            disabled={pending}
-                            onClick={() => choose(capability, isDenied ? null : 'DENY')}
-                          >
-                            Deny
-                          </Button>
-                        </div>
-                      </div>
-                    );
-                  })}
+                          <span>
+                            <span className="block font-medium">{role.name}</span>
+                            <span className="block text-xs font-normal text-text-strong">
+                              {role.capabilities.length} inherited capabilities
+                            </span>
+                          </span>
+                        </Button>
+                      );
+                    })}
+                  </div>
+                )}
+                {saveError ? (
+                  <p
+                    role="alert"
+                    className="rounded-md bg-destructive/10 p-3 text-sm text-destructive"
+                  >
+                    {saveError}
+                  </p>
+                ) : null}
+              </section>
+              <section aria-labelledby="profile-capabilities" className="space-y-3">
+                <div className="flex flex-wrap items-end justify-between gap-3">
+                  <div>
+                    <h3 id="profile-capabilities" className="font-semibold text-text-strong">
+                      Capabilities
+                    </h3>
+                    <p className="text-sm text-text-muted">
+                      Each row shows why access is available or withheld.
+                    </p>
+                  </div>
+                  <label className="w-full sm:w-64">
+                    <span className="sr-only">Search capabilities</span>
+                    <Input
+                      type="search"
+                      value={search}
+                      onChange={(event) => setSearch(event.target.value)}
+                      placeholder="Search capabilities"
+                      className="h-11"
+                    />
+                  </label>
                 </div>
-              )}
-            </section>
-          </div>
-        )}
+                <div className="flex flex-wrap gap-2" aria-label="Capability provenance legend">
+                  <StatusPill
+                    status="Inherited from role"
+                    tone="neutral"
+                    className="!text-text-strong"
+                  />
+                  <StatusPill status="Direct exception" tone="success" />
+                  <StatusPill
+                    status="Denied for person"
+                    tone="warning"
+                    className="!text-text-strong"
+                  />
+                </div>
+                {visible.length === 0 ? (
+                  <p className="rounded-md border border-dashed border-border-default p-4 text-sm text-text-muted">
+                    No capabilities match. Clear the search to see the full list; your selections
+                    are preserved.
+                  </p>
+                ) : (
+                  <div className="divide-y divide-border-subtle rounded-md border border-border-default">
+                    {visible.map((capability) => {
+                      const isDenied = denied.has(capability),
+                        isDirect = direct.has(capability),
+                        isInherited = inherited.has(capability);
+                      const state = isDenied
+                        ? 'denied'
+                        : isDirect
+                          ? 'direct'
+                          : isInherited
+                            ? 'inherited'
+                            : null;
+                      return (
+                        <div
+                          key={capability}
+                          className="flex min-h-14 flex-wrap items-center gap-3 px-3 py-2 hover:bg-surface-muted"
+                        >
+                          <span className="min-w-0 flex-1 font-mono text-xs text-text-strong">
+                            {capability}
+                          </span>
+                          {state ? (
+                            <StatusPill
+                              status={
+                                state === 'inherited'
+                                  ? 'Inherited'
+                                  : state === 'direct'
+                                    ? 'Direct'
+                                    : 'Denied'
+                              }
+                              tone={tones[state]}
+                              className={state === 'direct' ? undefined : '!text-text-strong'}
+                            />
+                          ) : (
+                            <span className="text-xs text-text-strong">Not granted</span>
+                          )}
+                          <div
+                            className="flex gap-1"
+                            role="group"
+                            aria-label={`Access for ${capability}`}
+                          >
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={isDirect ? 'secondary' : 'ghost'}
+                              aria-pressed={isDirect}
+                              disabled={pending}
+                              onClick={() => choose(capability, isDirect ? null : 'ALLOW')}
+                            >
+                              Direct
+                            </Button>
+                            <Button
+                              type="button"
+                              size="sm"
+                              variant={isDenied ? 'secondary' : 'ghost'}
+                              aria-pressed={isDenied}
+                              disabled={pending}
+                              onClick={() => choose(capability, isDenied ? null : 'DENY')}
+                            >
+                              Deny
+                            </Button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                )}
+              </section>
+            </div>
+          )}
         </div>
         <DialogFooter>
           <Button variant="outline" onClick={() => onOpenChange(false)} disabled={pending}>

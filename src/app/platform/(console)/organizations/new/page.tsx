@@ -3,6 +3,7 @@ import { PlatformCommandForm } from '@/components/platform/platform-command-form
 import { PlatformPageHeading } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
+import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { ianaTimezoneOptions } from '@/lib/platform/timezones';
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import {
@@ -38,6 +39,7 @@ export default async function NewOrganizationPage({
 }) {
   await requirePlatformRead('/platform/organizations');
   const query = await searchParams;
+  const dedicatedProvisioningConfigured = isDedicatedProvisioningConfigured();
   const vertical = chosenVertical(query.vertical);
   const timezoneOptions = ianaTimezoneOptions();
 
@@ -165,7 +167,43 @@ export default async function NewOrganizationPage({
           </div>
         </section>
       ) : (
-        <div className="mt-7">
+        <div className="mt-7 space-y-5">
+          {vertical === 'RESTAURANT' ? (
+            <section
+              aria-labelledby="restaurant-activation-preview"
+              className="border border-border-default bg-surface-sunken p-4"
+            >
+              <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent-brand">
+                After this form
+              </p>
+              <h2
+                id="restaurant-activation-preview"
+                className="mt-1 font-display text-base font-semibold text-text-strong"
+              >
+                This creates an onboarding record, not an active restaurant
+              </h2>
+              <p className="mt-2 text-xs leading-5 text-text-body">
+                The organization will open in <strong>ONBOARDING</strong> with its first branch,
+                administrator, package entitlements, and a pending production deployment.
+              </p>
+              <ol className="mt-3 grid gap-2 text-xs leading-5 text-text-body sm:grid-cols-2">
+                <li className="border-l-2 border-border-strong pl-3">
+                  <strong className="block text-text-strong">1. Confirm readiness</strong>
+                  Review branch details and acknowledge the tax, payment, device, and operator
+                  policies.
+                </li>
+                <li className="border-l-2 border-border-strong pl-3">
+                  <strong className="block text-text-strong">2. Finish deployment</strong>
+                  Wait for or complete the production deployment until it is ready.
+                </li>
+                <li className="border-l-2 border-border-strong pl-3 sm:col-span-2">
+                  <strong className="block text-text-strong">3. Activate manually</strong>
+                  Verify the lifecycle gate, then apply the change to ACTIVE from the organization
+                  detail page.
+                </li>
+              </ol>
+            </section>
+          ) : null}
           <PlatformCommandForm
             action="organization.create"
             submitLabel="Create onboarding record"
@@ -203,9 +241,14 @@ export default async function NewOrganizationPage({
                 type: 'select',
                 required: true,
                 defaultValue: 'SHARED',
+                help: dedicatedProvisioningConfigured
+                  ? 'Dedicated enterprise creates an isolated Vercel deployment.'
+                  : 'Dedicated enterprise is unavailable until Vercel provisioning is configured for this environment.',
                 options: [
                   { label: 'Shared platform', value: 'SHARED' },
-                  { label: 'Dedicated enterprise', value: 'DEDICATED' },
+                  ...(dedicatedProvisioningConfigured
+                    ? [{ label: 'Dedicated enterprise', value: 'DEDICATED' }]
+                    : []),
                 ],
               },
               {
@@ -232,10 +275,10 @@ export default async function NewOrganizationPage({
               {
                 name: 'timezone',
                 label: 'Timezone',
-                type: 'select',
+                type: 'searchable-select',
                 required: true,
                 defaultValue: vertical === 'RESTAURANT' ? 'Asia/Karachi' : 'UTC',
-                help: 'Type while the list is open to search IANA timezones.',
+                help: 'Search by city or IANA name. Timezones are grouped by region.',
                 options: timezoneOptions,
               },
               ...(vertical === 'RESTAURANT'

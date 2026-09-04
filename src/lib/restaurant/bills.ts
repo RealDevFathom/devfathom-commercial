@@ -1127,6 +1127,7 @@ export type FinalizeBillSettlementInput = SettleBillInput & {
   roundingAdjustment: Prisma.Decimal;
   grandTotal: Prisma.Decimal;
   eligibleNetMerchandise: Prisma.Decimal;
+  loyaltyNetGrandTotal: Prisma.Decimal;
   promotionEvaluationId?: string | null;
   promotionEvaluationHash?: string | null;
   lines: readonly SettlementLineEvidence[];
@@ -1454,6 +1455,7 @@ export async function finalizeBillSettlement(
       : {}),
     roundingAdjustment: input.roundingAdjustment.toFixed(2),
     eligibleNetMerchandise: input.eligibleNetMerchandise.toFixed(2),
+    loyaltyNetGrandTotal: input.loyaltyNetGrandTotal.toFixed(2),
     promotionEvaluationId: input.promotionEvaluationId ?? null,
     promotionEvaluationHash: input.promotionEvaluationHash ?? null,
   };
@@ -1568,7 +1570,7 @@ export async function finalizeBillSettlement(
   const settled = await settleBill(tx, input);
   const loyalty = await accrueLoyaltyForSettledBill(tx, {
     billId: bill.id,
-    eligibleNetMerchandise: input.eligibleNetMerchandise,
+    netGrandTotal: input.loyaltyNetGrandTotal,
     at: input.at,
   });
   return {

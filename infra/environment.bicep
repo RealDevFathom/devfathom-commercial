@@ -50,7 +50,7 @@ param customDomains customDomainBinding[] = []
 Comma-separated allow-list for the azure.extensions server parameter. Azure Database for PostgreSQL
 refuses CREATE EXTENSION for anything absent from it, so this must cover every extension the
 migrations and prisma/prepare-extensions.ts create, or the migration job fails before applying any
-migration.
+migration. The current required set is btree_gist,pg_trgm.
 ''')
 param postgresExtensions string
 
@@ -73,6 +73,8 @@ param seedPassword string = ''
 param adminPassword string = ''
 @secure()
 param platformAdminPassword string = ''
+@description('Allow guarded bootstrap scripts to create missing initialization secrets. Keep false for direct deployments.')
+param createInitializationSecrets bool = false
 
 param adminEmail string = 'admin@staging.devfathom.com'
 param platformAdminEmail string = 'platform-admin@staging.devfathom.com'
@@ -99,14 +101,12 @@ var migrationCommand = seedDatabase && bootstrapDatabase
   : seedDatabase
     ? environmentName != 'staging'
       ? fail('Database seeding is only supported in staging.')
-      : empty(seedPassword) || empty(adminPassword) || empty(platformAdminPassword)
-        ? fail('Staging database seeding requires seed, administrator, and platform administrator passwords.')
-        : '${migrateDatabaseCommand} && bun prisma/seed.ts'
+      : '${migrateDatabaseCommand} && bun prisma/seed.ts'
     : bootstrapDatabase
       ? environmentName != 'production'
         ? fail('Production bootstrap is only supported in production.')
-        : length(trim(adminPassword)) < 12 || length(trim(platformAdminPassword)) < 12
-          ? fail('Production bootstrap requires administrator passwords of at least 12 characters.')
+        : (!empty(adminPassword) && length(trim(adminPassword)) < 12) || (!empty(platformAdminPassword) && length(trim(platformAdminPassword)) < 12)
+          ? fail('Explicitly supplied production administrator passwords must be at least 12 characters.')
           : '${migrateDatabaseCommand} && bun prisma/bootstrap.ts'
       : migrateDatabaseCommand
 
@@ -274,6 +274,21 @@ resource cronSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: 'cron-secret'
   properties: { value: cronSecret }
 }
+resource seedPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createInitializationSecrets && !empty(seedPassword)) {
+  parent: vault
+  name: 'seed-password'
+  properties: { value: seedPassword }
+}
+resource adminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createInitializationSecrets && !empty(adminPassword)) {
+  parent: vault
+  name: 'admin-password'
+  properties: { value: adminPassword }
+}
+resource platformAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createInitializationSecrets && !empty(platformAdminPassword)) {
+  parent: vault
+  name: 'platform-admin-password'
+  properties: { value: platformAdminPassword }
+}
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
   location: location
@@ -430,11 +445,13 @@ var migrationSecrets = concat(
     { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
     { name: 'app-database-url', keyVaultUrl: '${vaultBaseUrl}/app-database-url', identity: identity.id }
   ],
-  seedDatabase ? [{ name: 'seed-password', value: seedPassword }] : [],
+  seedDatabase
+    ? [{ name: 'seed-password', keyVaultUrl: '${vaultBaseUrl}/seed-password', identity: identity.id }]
+    : [],
   seedDatabase || bootstrapDatabase
     ? [
-        { name: 'admin-password', value: adminPassword }
-        { name: 'platform-admin-password', value: platformAdminPassword }
+        { name: 'admin-password', keyVaultUrl: '${vaultBaseUrl}/admin-password', identity: identity.id }
+        { name: 'platform-admin-password', keyVaultUrl: '${vaultBaseUrl}/platform-admin-password', identity: identity.id }
       ]
     : []
 )
@@ -595,7 +612,7 @@ resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
       ]
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, database, databaseUrlSecret, appDatabaseUrlSecret]
+  dependsOn: [acrPull, vaultSecretsUser, database, databaseUrlSecret, appDatabaseUrlSecret, seedPasswordSecret, adminPasswordSecret, platformAdminPasswordSecret]
 }
 
 output appName string = app.name

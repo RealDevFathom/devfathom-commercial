@@ -39,6 +39,11 @@ import {
   Landmark,
   MapPin,
   Bike,
+  FileText,
+  ClipboardCheck,
+  Replace,
+  BookLock,
+  Pill,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -238,27 +243,68 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   // PLAT-02/03 — the pharmacy workspace's front door. Both gate on mandatory
-  // Pharmacy Core through `moduleForPath`, never on the organization's vertical
-  // directly, so a workspace granted the module sees them and one that is not
-  // never does.
+  // Pharmacy Core through explicit module ownership, so vertical and entitlement
+  // checks remain fail-closed without a broad `/pharmacy` route mapping.
   {
     label: 'Onboarding',
     href: '/pharmacy',
     icon: ListChecks,
     adminOnly: true,
     group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  {
+    label: 'Medicine catalog',
+    href: '/pharmacy/medicines',
+    icon: Pill,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
   },
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
-  // it is a first-class rail entry. `moduleForPath` resolves it to
-  // `pharmacy-counter`, which is what gates it — the item is never
-  // vertical-checked here.
-  { label: 'Counter', href: '/pharmacy/counter', icon: Monitor, group: 'Pharmacy' },
+  // it is a first-class rail entry gated by its explicit module ownership.
+  {
+    label: 'Counter',
+    href: '/pharmacy/counter',
+    icon: Monitor,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
+  },
+  {
+    label: 'Prescriptions',
+    href: '/pharmacy/prescriptions',
+    icon: FileText,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Pharmacist queue',
+    href: '/pharmacy/pharmacist-queue',
+    icon: ClipboardCheck,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Substitution',
+    href: '/pharmacy/substitution',
+    icon: Replace,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Controlled register',
+    href: '/pharmacy/controlled-register',
+    icon: BookLock,
+    group: 'Pharmacy',
+    module: 'pharmacy-safety',
+  },
   {
     label: 'Regulatory profile',
     href: '/pharmacy/regulatory',
     icon: ShieldCheck,
     adminOnly: true,
     group: 'Pharmacy',
+    module: 'pharmacy-core',
   },
   {
     label: 'Reviews',

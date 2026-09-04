@@ -181,6 +181,47 @@ type SettlementContext = {
   promotionEvaluationHash: string | null;
 };
 
+export function splitCheckoutDiscountAccounting(
+  billDiscountTotal: Prisma.Decimal,
+  applications: readonly {
+    taxTreatment: string | null;
+    computedAmount: Prisma.Decimal;
+  }[]
+): {
+  nonPromotionDiscount: Prisma.Decimal;
+  beforeTaxPromotion: Prisma.Decimal;
+  afterTaxDiscount: Prisma.Decimal;
+} {
+  if (
+    applications.some(
+      (row) => row.taxTreatment !== 'BEFORE_TAX' && row.taxTreatment !== 'AFTER_TAX'
+    )
+  ) {
+    throw new TenderError('Applied promotion is missing its tax treatment.', 'INVALID');
+  }
+  const appliedPromotionTotal = sum(applications.map((row) => row.computedAmount));
+  const nonPromotionDiscount = sub(billDiscountTotal, appliedPromotionTotal);
+  if (nonPromotionDiscount.isNegative()) {
+    throw new TenderError('Promotion accounting exceeds the bill discount total.', 'INVALID');
+  }
+  return {
+    nonPromotionDiscount,
+    beforeTaxPromotion: sum(
+      applications
+        .filter((row) => row.taxTreatment === 'BEFORE_TAX')
+        .map((row) => row.computedAmount)
+    ),
+    afterTaxDiscount: add(
+      nonPromotionDiscount,
+      sum(
+        applications
+          .filter((row) => row.taxTreatment === 'AFTER_TAX')
+          .map((row) => row.computedAmount)
+      )
+    ),
+  };
+}
+
 /** The persisted shape of one applied tender, before coverage/settlement. */
 type PersistedTender = {
   tenderId: string;
@@ -490,12 +531,13 @@ async function loadSettlementContext(
     throw new TenderError('Conflicting promotion evidence cannot be settled.', 'INVALID');
   }
   const discounts = new Map<string, Prisma.Decimal>();
-  let afterTaxDiscount = ZERO;
+  // Accepted promotions are already reflected in the open bill's discountTotal.
+  // Preserve only its non-promotion remainder here, then rebuild promotion
+  // accounting from immutable application snapshots without double counting.
+  const discountAccounting = splitCheckoutDiscountAccounting(bill.discountTotal, applications);
+  const afterTaxDiscount = discountAccounting.afterTaxDiscount;
   for (const row of applications) {
-    if (row.taxTreatment === 'AFTER_TAX') {
-      afterTaxDiscount = add(afterTaxDiscount, row.computedAmount);
-      continue;
-    }
+    if (row.taxTreatment === 'AFTER_TAX') continue;
     for (const allocation of row.application.allocations) {
       const key = `${allocation.orderItemId}:${allocation.unitOrdinal}`;
       discounts.set(key, add(discounts.get(key) ?? ZERO, allocation.allocatedAmount));
@@ -757,6 +799,7 @@ async function finalizeTaxSettlement(
     roundingAdjustment: settlement.quote.roundingAdjustment,
     grandTotal: settlement.quote.grandTotal,
     eligibleNetMerchandise: settlement.quote.net,
+    loyaltyNetGrandTotal: settlement.quote.grandTotal,
     promotionEvaluationId: settlement.promotionEvaluationId,
     promotionEvaluationHash: settlement.promotionEvaluationHash,
     lines,

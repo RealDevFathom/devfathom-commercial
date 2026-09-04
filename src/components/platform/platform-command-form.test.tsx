@@ -77,7 +77,49 @@ describe('PlatformCommandForm', () => {
     expect(input).toHaveAttribute('placeholder', 'HH:MM');
   });
 
-  it('renders a custom timezone issue inline and focuses the timezone select', async () => {
+  it('searches grouped timezones and preserves the selected IANA value', async () => {
+    vi.stubGlobal(
+      'ResizeObserver',
+      class ResizeObserver {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
+    render(
+      <PlatformCommandForm
+        action="organization.restaurant.setup"
+        fields={[
+          {
+            name: 'timezone',
+            label: 'Timezone',
+            type: 'searchable-select',
+            required: true,
+            defaultValue: 'Asia/Karachi',
+            options: [
+              { label: 'UTC', value: 'UTC' },
+              { label: 'Asia/Karachi', value: 'Asia/Karachi' },
+              { label: 'Europe/London', value: 'Europe/London' },
+            ],
+          },
+        ]}
+      />
+    );
+
+    fireEvent.click(screen.getByRole('button', { name: 'Timezone' }));
+    expect(screen.getByRole('group', { name: 'Asia' })).toBeInTheDocument();
+    expect(screen.getByRole('group', { name: 'Europe' })).toBeInTheDocument();
+
+    fireEvent.change(screen.getByPlaceholderText('Search city or IANA timezone…'), {
+      target: { value: 'London' },
+    });
+    fireEvent.click(screen.getByText('Europe/London'));
+
+    expect(screen.getByRole('button', { name: 'Timezone' })).toHaveTextContent('Europe/London');
+    expect(document.querySelector('input[name="timezone"]')).toHaveValue('Europe/London');
+  });
+
+  it('renders a custom timezone issue inline and focuses the timezone combobox', async () => {
     vi.stubGlobal(
       'fetch',
       vi.fn().mockResolvedValue({
@@ -102,7 +144,7 @@ describe('PlatformCommandForm', () => {
           {
             name: 'timezone',
             label: 'IANA timezone',
-            type: 'select',
+            type: 'searchable-select',
             required: true,
             defaultValue: 'Asia/Karachi',
             options: [{ label: 'Asia/Karachi', value: 'Asia/Karachi' }],
@@ -111,7 +153,7 @@ describe('PlatformCommandForm', () => {
       />
     );
 
-    const select = screen.getByLabelText('IANA timezone');
+    const select = screen.getByRole('button', { name: 'IANA timezone' });
     fireEvent.submit(select.closest('form')!);
 
     await waitFor(() => expect(select).toHaveFocus());
