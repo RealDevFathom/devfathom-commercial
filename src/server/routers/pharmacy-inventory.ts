@@ -12,6 +12,15 @@ import { z } from 'zod';
 
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
+  confirmPriceChange,
+  FileDrapNoticeSource,
+  ingestDrapSource,
+  ManualDrapNoticeSource,
+  recallActionList,
+  reverseRecallQuarantine,
+  type DrapNotice,
+} from '@/lib/pharmacy/drap-monitoring';
+import {
   acknowledgeRecall,
   allocateTransfer,
   approveCount,
@@ -53,11 +62,37 @@ import {
   ManualTemperatureSensorSource,
 } from '@/lib/pharmacy/temperature-log';
 
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
 const expiryPrecision = z.enum(['DAY', 'MONTH']);
+const regulatory = capabilityProcedure('pharmacy:safety');
+const drapNotice = z.discriminatedUnion('kind', [
+  z
+    .object({
+      kind: z.literal('PRICE'),
+      sourceReference: z.string().trim().min(1),
+      drapRegistrationNumber: z.string().trim().min(1),
+      notifiedPriceMinor: z.number().int().nonnegative(),
+      effectiveDate: z.date(),
+    })
+    .strict(),
+  z
+    .object({
+      kind: z.literal('RECALL'),
+      sourceReference: z.string().trim().min(1),
+      drapRegistrationNumber: z.string().trim().min(1),
+      batchNumbers: z.array(z.string().trim().min(1)).optional(),
+      reason: z.string().trim().min(1),
+    })
+    .strict(),
+]);
 
 /**
  * Prisma's interactive-transaction client omits lifecycle methods from its
@@ -109,6 +144,46 @@ function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
 }
 
 export const pharmacyInventoryRouter = router({
+  ingestDrapManual: regulatory
+    .input(z.object({ notices: z.array(drapNotice).min(1).max(100) }).strict())
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        ingestDrapSource(
+          txDb(tx),
+          actorFor(ctx),
+          new ManualDrapNoticeSource(input.notices as DrapNotice[])
+        )
+      )
+    ),
+
+  ingestDrapFile: regulatory
+    .input(z.object({ contents: z.string().min(2).max(1_000_000) }).strict())
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        ingestDrapSource(txDb(tx), actorFor(ctx), new FileDrapNoticeSource(input.contents))
+      )
+    ),
+
+  confirmDrapPrice: regulatory
+    .input(z.object({ proposalId: z.string().min(1) }).strict())
+    .mutation(({ ctx, input }) => confirmPriceChange(ctx.db, actorFor(ctx), input.proposalId)),
+
+  drapRecallActions: auditedProtectedProcedure
+    .input(z.object({ recallNoticeId: z.string().min(1) }).strict())
+    .query(({ ctx, input }) => recallActionList(ctx.db, actorFor(ctx), input.recallNoticeId)),
+
+  reverseDrapRecall: regulatory
+    .input(
+      z
+        .object({ recallNoticeId: z.string().min(1), reason: z.string().trim().min(1).max(500) })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      ctx.db.$transaction((tx) =>
+        reverseRecallQuarantine(txDb(tx), actorFor(ctx), input.recallNoticeId, input.reason)
+      )
+    ),
+
   createLocation: protectedProcedure
     .input(
       z

@@ -18,6 +18,7 @@ import {
   readCustomerSnapshot,
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
+import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   declineSubstitute,
   findSubstituteProposals,
@@ -78,6 +79,12 @@ function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacyInventoryError && error.reason === 'BLOCKED_STOCK') {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'This lot is quarantined or recalled and cannot be dispensed or sold.',
+    });
+  }
   if (error instanceof PharmacyLoyaltyError) {
     throw new TRPCError({
       code:

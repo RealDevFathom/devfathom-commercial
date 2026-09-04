@@ -447,6 +447,14 @@ export async function allocateForSale(
   } catch (error) {
     const shortOfStock =
       error instanceof PharmacyInventoryError && error.reason === 'INSUFFICIENT_STOCK';
+    const blockReasons = candidates.map((candidate) => blockReasonFor(candidate, allocationScope));
+    if (
+      shortOfStock &&
+      blockReasons.every((reason) => reason !== null) &&
+      blockReasons.some((reason) => reason === 'RECALLED' || reason === 'QUARANTINED')
+    ) {
+      throw new PharmacyInventoryError('BLOCKED_STOCK');
+    }
     if (!shortOfStock || !input.emergency) throw error;
     return emergencyShortfall(db, scope, input, candidates, byBucket, input.emergency.reason);
   }
