@@ -51,7 +51,7 @@ describe('production deployment contract', () => {
     expect(workflow).toContain('--retry-max-time 150');
   });
 
-  it('keeps initialization credentials out of the always-on app', () => {
+  it('keeps initialization credentials in Key Vault and out of the always-on app', () => {
     const template = read('infra', 'environment.bicep');
     const webEnvironment = template
       .split('var webEnvironment = [', 2)[1]
@@ -70,11 +70,24 @@ describe('production deployment contract', () => {
     }
     expect(template).toContain('env: webEnvironment');
     expect(template).toContain('secrets: runtimeKeyVaultSecrets');
-    expect(template).not.toContain('resource seedPasswordSecret');
-    expect(template).not.toContain('resource adminPasswordSecret');
-    expect(template).not.toContain('resource platformAdminPasswordSecret');
-    expect(template).toContain("{ name: 'admin-password', value: adminPassword }");
+    for (const [resource, secret, parameter] of [
+      ['seedPasswordSecret', 'seed-password', 'seedPassword'],
+      ['adminPasswordSecret', 'admin-password', 'adminPassword'],
+      ['platformAdminPasswordSecret', 'platform-admin-password', 'platformAdminPassword'],
+    ]) {
+      expect(template).toContain(
+        `resource ${resource} 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createInitializationSecrets && !empty(${parameter}))`
+      );
+      expect(template).toContain(
+        `{ name: '${secret}', keyVaultUrl: '\${vaultBaseUrl}/${secret}', identity: identity.id }`
+      );
+      expect(template).not.toContain(`{ name: '${secret}', value: ${parameter} }`);
+    }
+    expect(template).toContain(
+      'seedPasswordSecret, adminPasswordSecret, platformAdminPasswordSecret'
+    );
     expect(template).toContain('secrets: migrationSecrets');
+    expect(template).toContain('param createInitializationSecrets bool = false');
   });
 
   it('defaults production to migrations only and provides an explicit bootstrap parameter file', () => {
@@ -98,9 +111,16 @@ describe('production deployment contract', () => {
     expect(production).toContain('param minReplicas = 1');
     expect(production).not.toMatch(/DEVFATHOM_PRODUCTION_(?:SEED|ADMIN|PLATFORM_ADMIN)_PASSWORD/);
     expect(bootstrap).toContain('param bootstrapDatabase = true');
-    expect(bootstrap).toContain('DEVFATHOM_PRODUCTION_ADMIN_PASSWORD');
-    expect(bootstrap).toContain('DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD');
+    expect(bootstrap).toContain(
+      "readEnvironmentVariable('DEVFATHOM_PRODUCTION_ADMIN_PASSWORD', '')"
+    );
+    expect(bootstrap).toContain(
+      "readEnvironmentVariable('DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD', '')"
+    );
     expect(bootstrap).not.toContain('DEVFATHOM_PRODUCTION_SEED_PASSWORD');
+    expect(bootstrap).toContain(
+      "readEnvironmentVariable('DEVFATHOM_PRODUCTION_CREATE_INITIALIZATION_SECRETS', 'false') == 'true'"
+    );
   });
 
   it('retains the existing staging seed inputs', () => {
@@ -109,9 +129,52 @@ describe('production deployment contract', () => {
     expect(staging).toContain('param seedDatabase = true');
     expect(staging).toContain('param bootstrapDatabase = false');
     expect(staging).toContain("param emailDeliveryMode = 'capture'");
-    expect(staging).toContain('DEVFATHOM_STAGING_SEED_PASSWORD');
-    expect(staging).toContain('DEVFATHOM_STAGING_ADMIN_PASSWORD');
-    expect(staging).toContain('DEVFATHOM_STAGING_PLATFORM_ADMIN_PASSWORD');
+    expect(staging).toContain("readEnvironmentVariable('DEVFATHOM_STAGING_SEED_PASSWORD', '')");
+    expect(staging).toContain("readEnvironmentVariable('DEVFATHOM_STAGING_ADMIN_PASSWORD', '')");
+    expect(staging).toContain(
+      "readEnvironmentVariable('DEVFATHOM_STAGING_PLATFORM_ADMIN_PASSWORD', '')"
+    );
+    expect(staging).toContain(
+      "readEnvironmentVariable('DEVFATHOM_STAGING_CREATE_INITIALIZATION_SECRETS', 'false') == 'true'"
+    );
+  });
+
+  it('generates only missing staging initialization credentials', () => {
+    const deployment = read('infra', 'deploy-staging.sh');
+
+    expect(deployment).toContain('az keyvault list');
+    expect(deployment).toContain("starts_with(name, 'df-stg-')");
+    expect(deployment).not.toContain('--query properties.outputs.keyVaultName.value');
+    expect(deployment).toContain('if ! vault_lookup=$(az keyvault list');
+    expect(deployment).toContain('if (( ${#key_vault_ids[@]} == 0 ))');
+    expect(deployment).toContain('az resource show');
+    expect(deployment).toContain('--ids "$key_vault_id/secrets/$secret_name"');
+    expect(deployment).toContain('elif [[ $secret_lookup == *ResourceNotFound* ]]');
+    expect(deployment).toContain('unset DEVFATHOM_STAGING_SEED_PASSWORD');
+    expect(deployment).toContain('unset DEVFATHOM_STAGING_CREATE_INITIALIZATION_SECRETS');
+    expect(deployment).toContain('generate_initialization_credential "$environment_variable"');
+    expect(deployment).toContain('if (( ${#key_vault_ids[@]} > 1 ))');
+    expect(deployment).toContain('export DEVFATHOM_STAGING_CREATE_INITIALIZATION_SECRETS=true');
+    expect(deployment).toContain('Aborting without changing initialization credentials.');
+  });
+
+  it('guards production bootstrap through independent vault and secret discovery', () => {
+    const deployment = read('infra', 'deploy-production-bootstrap.sh');
+
+    expect(deployment).toContain('az keyvault list');
+    expect(deployment).toContain("starts_with(name, 'df-prd-')");
+    expect(deployment).not.toContain('az deployment group show');
+    expect(deployment).toContain('if ! vault_lookup=$(az keyvault list');
+    expect(deployment).toContain('if (( ${#key_vault_ids[@]} == 0 ))');
+    expect(deployment).toContain('unset DEVFATHOM_PRODUCTION_ADMIN_PASSWORD');
+    expect(deployment).toContain('unset DEVFATHOM_PRODUCTION_PLATFORM_ADMIN_PASSWORD');
+    expect(deployment).toContain('unset DEVFATHOM_PRODUCTION_CREATE_INITIALIZATION_SECRETS');
+    expect(deployment).toContain('--ids "$key_vault_id/secrets/$secret_name"');
+    expect(deployment).toContain('elif [[ $secret_lookup == *ResourceNotFound* ]]');
+    expect(deployment).toContain('if (( ${#key_vault_ids[@]} > 1 ))');
+    expect(deployment).toContain('export DEVFATHOM_PRODUCTION_CREATE_INITIALIZATION_SECRETS=true');
+    expect(deployment).toContain('--parameters infra/production.bootstrap.bicepparam');
+    expect(deployment).toContain('Aborting without changing initialization credentials.');
   });
 
   it('allow-lists every extension created by deployment code', () => {
