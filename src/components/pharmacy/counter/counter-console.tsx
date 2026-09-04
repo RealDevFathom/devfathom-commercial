@@ -8,6 +8,7 @@ import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterReceiptView } from './counter-receipt-view';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
+import { CounterSubstituteProposals } from './counter-substitute-proposals';
 import { CounterTenderPanel, type CounterTenderType } from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { Button } from '@/components/ui/button';
@@ -165,6 +166,7 @@ export function PharmacyCounterConsole() {
   const tender = trpc.pharmacySales.tender.useMutation();
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
+  const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
 
@@ -211,6 +213,32 @@ export function PharmacyCounterConsole() {
       return null;
     }
   }, [activeRow, quantity, selectedOption]);
+
+  const requestedCanonicalUnits = selectedOption
+    ? selectedOption.canonicalUnitsPerSaleUnit * quantity
+    : null;
+  const substituteInput =
+    activeRow &&
+    selectedOption &&
+    requestedCanonicalUnits !== null &&
+    activeRow.onHandUnits < requestedCanonicalUnits
+      ? {
+          branchId,
+          medicineId: activeRow.medicineId,
+          presentationId: activeRow.presentationId,
+          quantityCanonicalUnits: requestedCanonicalUnits,
+          ...(preview ? { referencePriceMinor: preview.unitPriceMinor } : {}),
+        }
+      : null;
+  const substitutesQuery = trpc.pharmacySales.substituteProposals.useQuery(
+    substituteInput ?? {
+      branchId,
+      medicineId: '',
+      presentationId: '',
+      quantityCanonicalUnits: 1,
+    },
+    { enabled: substituteInput !== null }
+  );
 
   /**
    * POS-09 alerts for the composed bill.
@@ -500,6 +528,42 @@ export function PharmacyCounterConsole() {
     saleId,
     saleUnit,
     submittedQuery,
+  ]);
+
+  const declineVisibleSubstitutes = useCallback(async () => {
+    if (!activeRow || busy) return;
+    setPending('declineSubstitute');
+    try {
+      await declineSubstitute.mutateAsync({
+        branchId,
+        ...(saleId ? { saleId } : {}),
+        requestedMedicineId: activeRow.medicineId,
+        requestedText: activeRow.displayName,
+        strength: activeRow.strength ?? undefined,
+        form: activeRow.dosageForm ?? undefined,
+        presentation: activeRow.presentation,
+        saleUnit: saleUnit ?? 'UNIT',
+        quantity,
+        inventoryRuleSnapshot: {
+          proposalCount: substitutesQuery.data?.length ?? 0,
+          capturedAt: new Date().toISOString(),
+        },
+      });
+      setNotice({ tone: 'success', message: 'Demand closed: substitute declined.' });
+    } catch (error) {
+      setNotice({ tone: 'danger', message: messageFrom(error) });
+    } finally {
+      setPending(null);
+    }
+  }, [
+    activeRow,
+    branchId,
+    busy,
+    declineSubstitute,
+    quantity,
+    saleId,
+    saleUnit,
+    substitutesQuery.data,
   ]);
 
   const printReceipt = useCallback(() => {
@@ -836,6 +900,31 @@ export function PharmacyCounterConsole() {
               />
             </div>
           </SectionCard>
+
+          {substituteInput ? (
+            <SectionCard eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+              <CounterSubstituteProposals
+                proposals={substitutesQuery.data ?? []}
+                state={
+                  substitutesQuery.isLoading
+                    ? 'loading'
+                    : substitutesQuery.isError
+                      ? 'error'
+                      : 'ready'
+                }
+                prescriptionOnly={activeRow?.restriction.rx ?? false}
+                error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
+                disabled={busy}
+                onChoose={(proposal) => {
+                  setQuery(proposal.displayName);
+                  setSubmittedQuery(proposal.displayName);
+                  setActiveRow(null);
+                }}
+                onDecline={() => void declineVisibleSubstitutes()}
+                onRetry={() => void substitutesQuery.refetch()}
+              />
+            </SectionCard>
+          ) : null}
 
           <SectionCard
             eyebrow="POS-03"

@@ -878,6 +878,7 @@ enum PharmacyDemandReason {
 enum PharmacyDemandStatus {
   OPEN
   RECOVERED
+  CLOSED
 }
 
 enum PharmacyRestockInterestStatus {
@@ -1379,6 +1380,7 @@ model UnfulfilledDemandEvent {
   status                PharmacyDemandStatus      @default(OPEN)
   recoveredSaleLineId   String?
   recoveredAt           DateTime?
+  closedAt              DateTime?
   capturedByUserId      String
   createdAt             DateTime                  @default(now())
   sale                  PharmacySale?             @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)
