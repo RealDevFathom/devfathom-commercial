@@ -47,6 +47,11 @@ export function rateLimit(key: string, limit: number, windowMs: number): RateLim
   return { ok: true, retryAfter: 0, remaining: limit - b.count };
 }
 
+/** Clear a limiter bucket after the protected operation succeeds. */
+export function clearRateLimit(key: string): void {
+  buckets.delete(key);
+}
+
 /** Best-effort client IP from standard proxy headers. */
 export function clientIp(request: Request): string {
   const xff = request.headers.get('x-forwarded-for');
