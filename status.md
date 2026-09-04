@@ -75,16 +75,28 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 
   WHA-1239 remains unassigned `in_review`, coordination only. QA8's failed reporting path remains
   parked. WHA-1306 GitHub metadata is complete as #78.
-- **Actual run snapshot at `2026-09-04T17:49:46.735Z`:** all five records were `running`; assignment and wake state do
-  not prove useful work or completion.
+- **Superseded 17:49 dispatch snapshot:** all five initial runs inherited parent WHA-1239 workspace
+  `e2805e6f-eaaf-473f-8aae-89094188d23b` through `reuse_existing`; their `running` state did not prove
+  isolated execution. The supervisor paused exactly those five builders and actual runs returned to zero.
+  A/B delivered no edits; D/E stopped. C's test-only commit
+  `79ff2c89dba3ae155503bddeccb9e59683b8f9ee` on wrong parent
+  `87dac6a78fdd8f5e10083aaa8673cc261f7572f3` remains preserved in the now-clean old checkout, but is not
+  accepted or composed. C must carry only its owned diff into the corrected workspace and create a new
+  ordinary commit there; never alter the original commit or ref.
+- **Corrected isolated workspace/run snapshot (`2026-09-04T18:02:53.039Z`):** the native provisioner
+  created five distinct child-sourced workspaces. Every checkout read exact HEAD `ca78c75e` on its
+  literal branch; no active run payload referenced old workspace `e2805e6f-eaaf-473f-8aae-89094188d23b`.
+  Post-provision `reuse_existing` now attaches each issue only to its own new workspace. Common cwd
+  prefix: `/Users/Saad/Developer/paperclip-worktrees/devfathom/`. These `running` records prove routing,
+  not productive execution.
 
-  | Group / issue | Run id | State | Started UTC |
+  | Group / issue | Workspace id | Branch / cwd suffix | Run id / state |
   |---|---|---|---|
-  | A / WHA-1307 | `9c70671b-bd27-47c5-9086-6dca75f39d3b` | `running` | 17:49:44.231 |
-  | B / WHA-1308 | `7636b79c-6692-4206-8e20-1b49604d4968` | `running` | 17:49:44.324 |
-  | C / WHA-1309 | `c25632cb-937b-4737-96d4-34feeb33c948` | `running` | 17:49:44.425 |
-  | D / WHA-1310 | `dfe16e5f-2f7f-4969-b78e-9d941ea2f842` | `running` | 17:49:44.516 |
-  | E / WHA-1311 | `3e73122d-b6b3-40c7-9085-0ae60a7bcf79` | `running` | 17:49:44.767 |
+  | A / WHA-1307 | `ad761c77-821d-4426-89f6-2e64f0e03d44` | `codex/WHA-1307-ci-A` | `8775bd91-6416-413f-9882-e470c0b897d4` / `running` |
+  | B / WHA-1308 | `96886047-ab1c-428d-9a68-f6713c0ad9e2` | `codex/WHA-1308-ci-B` | `de2fe3eb-5244-4b57-9c9f-bc7e1db4e593` / `running` |
+  | C / WHA-1309 | `549805f1-95b9-4c15-8610-1a7d8e2ae46a` | `codex/WHA-1309-ci-C` | `6cd90477-9717-4571-a116-302cb75e05a8` / `running` |
+  | D / WHA-1310 | `517f75e8-ec9a-4b15-94a2-1d2f3279d194` | `codex/WHA-1310-ci-D` | `37474b76-9ca7-455d-8844-600b1223843e` / `running` |
+  | E / WHA-1311 | `302f594c-4972-405f-86ee-50664e38e8bb` | `codex/WHA-1311-ci-E` | `013e4432-9519-4e8c-9def-0930a9646cf6` / `running` |
 
 - **Other open engineering lanes:** WHA-1270 (guard DEDICATED provisioning mode when
   Vercel is unconfigured — COMPOSED, not yet on staging), WHA-1281 (cold-load
