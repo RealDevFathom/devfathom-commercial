@@ -81,6 +81,9 @@ The manual Container Apps job runs `prisma migrate deploy`; staging then runs th
 Azure PostgreSQL's `azure.extensions` allow-list must cover every extension created by migrations and `prisma/prepare-extensions.sql`.
 Both staging and production currently require `btree_gist` and `pg_trgm`; update the IaC and preparation step together when that set changes.
 
+Runtime-role preparation omits `SUPERUSER` and `BYPASSRLS` attributes because PostgreSQL 16/Azure Flexible Server non-superuser admins cannot alter them.
+Any pre-existing privileged runtime role fails the post-condition assertion and must not be repaired automatically.
+
 Verification commands:
 
 ```bash

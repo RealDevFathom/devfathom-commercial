@@ -30,6 +30,8 @@ async function main() {
   try {
     await client.connect();
     await client.query('BEGIN');
+    // PostgreSQL 16/Azure Flexible Server non-superuser admins cannot alter SUPERUSER or BYPASSRLS;
+    // pre-existing privileged roles must fail the post-condition below instead of being repaired.
     await client.query(`
       DO $role$
       BEGIN
@@ -38,7 +40,7 @@ async function main() {
         END IF;
       END
       $role$;
-      ALTER ROLE ${ROLE_NAME} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+      ALTER ROLE ${ROLE_NAME} LOGIN NOCREATEDB NOCREATEROLE NOINHERIT;
     `);
 
     const passwordSql = await client.query<{ sql: string }>(
