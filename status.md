@@ -10,8 +10,11 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** the tip of this branch (`c9adf240` + this status commit; clean). Everything composed
-  today is in it: WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
+- **Candidate:** the tip of this branch (`066a3454` + this status commit; clean). Everything composed
+  today is in it: WHA-1285 dark-theme contrast (10:00; single squashed commit cd0a2e99 on c223020f, composed as
+  066a3454 — **UNVERIFIED on this tree**: WHA-1304's 0-contrast-node pass was against 93b1ba9c, and
+  cd0a2e99 differs from it in globals.css, crm/page.tsx and theme-provider; a WHA-1304 rerun on the
+  candidate tip was requested — if it fails, revert 066a3454 with `git diff 066a3454 066a3454^ | git apply --cached --3way`), WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
   (08:48 — all six restaurant-completion lanes are now in), WHA-1301 administrator guide for recipes/costing/catering/reports (08:25), WHA-1297
   catering console + nav (08:15), WHA-1295 wastage / stock-movement reports (08:15; two indexes via
   migration `20260904123700_restaurant_stock_report_indexes`), WHA-1296 recipe cost / cost per portion / food-cost % in the catalog console (08:00),
@@ -47,7 +50,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   investigation covering QA findings 1277–1284: probably scale-to-zero cold start on the 0.5-CPU
   staging plan — if infra, close them and propose minReplicas/CPU to the owner; 1281/1280 are parked
   until QA8 provisions `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1243), a11y fixes
-  WHA-1285 (dark-theme contrast, commit f553515b — WHA-1299 full dark-theme axe scan on 64251eb8 still finds 23 contrast nodes on 6 routes, e.g. `text-text-faint` on /restaurant/catalog; Fix Engineer 8 iterating; NOT composed), 1288 composed (bbe9d718); WHA-1284's
+  WHA-1285 COMPOSED, 1288 composed (bbe9d718); WHA-1284's
   perf refactor (2e7de87d stream SOP report cold path, 58aea51b defer deployment forms) is NOT composed —
   accept only with warm-load numbers and test evidence, rebased on the tip.
   New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
