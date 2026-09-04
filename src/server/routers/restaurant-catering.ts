@@ -2,6 +2,8 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
+import { postStockMovements } from '@/lib/restaurant/inventory-ledger';
+import { computeRecipeCost, explodeRecipe } from '@/lib/restaurant/recipe-costing';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '../audit';
 import { capabilityProcedure, router } from '../trpc';
@@ -44,6 +46,139 @@ function serializeOrder<T extends Record<string, unknown>>(order: T) {
       Prisma.Decimal.isDecimal(value) ? value.toString() : value
     )
   ) as T;
+}
+
+type Requirement = {
+  ingredientId: string;
+  ingredientName: string;
+  baseUnitId: string;
+  stockItemId: string | null;
+  quantityInBaseUnit: Prisma.Decimal;
+};
+
+async function calculateRequirements(
+  db: Pick<ScopedDb, 'restaurantCateringOrderLine'>,
+  organizationId: string,
+  orderId: string
+): Promise<Requirement[]> {
+  const lines = await db.restaurantCateringOrderLine.findMany({
+    where: { organizationId, orderId, recipeId: { not: null } },
+    select: { recipeId: true, portions: true },
+  });
+  const grouped = new Map<string, Requirement>();
+  for (const line of lines) {
+    if (!line.recipeId) continue;
+    const explosion = await explodeRecipe({
+      organizationId,
+      recipeId: line.recipeId,
+      portions: line.portions,
+    });
+    for (const ingredient of explosion.ingredients) {
+      const current = grouped.get(ingredient.ingredientId);
+      if (current) {
+        current.quantityInBaseUnit = current.quantityInBaseUnit.plus(ingredient.quantityInBaseUnit);
+      } else {
+        grouped.set(ingredient.ingredientId, { ...ingredient });
+      }
+    }
+  }
+  return [...grouped.values()].sort((a, b) => a.ingredientName.localeCompare(b.ingredientName));
+}
+
+async function calculateLineCosts(
+  db: Pick<ScopedDb, 'restaurantCateringOrderLine'>,
+  organizationId: string,
+  orderId: string
+) {
+  const lines = await db.restaurantCateringOrderLine.findMany({
+    where: { organizationId, orderId },
+    select: { id: true, recipeId: true, portions: true, costPerPortionSnapshot: true },
+  });
+  const results: Array<{ id: string; costPerPortion: Prisma.Decimal; totalCost: Prisma.Decimal }> =
+    [];
+  for (const line of lines) {
+    let costPerPortion = line.costPerPortionSnapshot;
+    if (!costPerPortion && line.recipeId) {
+      costPerPortion = (await computeRecipeCost({ organizationId, recipeId: line.recipeId }))
+        .costPerPortion;
+    }
+    const resolved = costPerPortion ?? new Prisma.Decimal(0);
+    results.push({
+      id: line.id,
+      costPerPortion: resolved,
+      totalCost: line.portions.times(resolved),
+    });
+  }
+  return results;
+}
+
+async function postCateringConsumption(
+  tx: ScopedDb,
+  organizationId: string,
+  orderId: string,
+  branchId: string,
+  actorStaffProfileId?: string | null
+) {
+  const location = await tx.restaurantStockLocation.findFirst({
+    where: { organizationId, branchId, isActive: true },
+    select: { id: true },
+    orderBy: { createdAt: 'asc' },
+  });
+  if (!location) return;
+  const requirements = await calculateRequirements(tx, organizationId, orderId);
+  const movements = requirements.flatMap((requirement) =>
+    requirement.stockItemId
+      ? [
+          {
+            stockItemId: requirement.stockItemId,
+            locationId: location.id,
+            reason: 'RECIPE_CONSUMPTION' as const,
+            quantity: requirement.quantityInBaseUnit.negated(),
+          },
+        ]
+      : []
+  );
+  if (!movements.length) return;
+  await postStockMovements(tx, {
+    commandType: 'catering.ready',
+    actor: {
+      staffProfileId: actorStaffProfileId,
+      idempotencyKey: `catering:${orderId}:consumption`,
+    },
+    movements,
+  });
+}
+
+async function reverseCateringConsumption(
+  tx: ScopedDb,
+  organizationId: string,
+  orderId: string,
+  actorStaffProfileId?: string | null
+) {
+  const key = await tx.restaurantInventoryIdempotencyKey.findFirst({
+    where: { organizationId, key: `catering:${orderId}:consumption` },
+    select: { resultRef: true },
+  });
+  const ids = key?.resultRef?.split(',').filter(Boolean) ?? [];
+  if (!ids.length) return;
+  const originals = await tx.restaurantStockMovement.findMany({
+    where: { organizationId, id: { in: ids }, reason: 'RECIPE_CONSUMPTION' },
+    select: { stockItemId: true, locationId: true, quantity: true },
+  });
+  if (!originals.length) return;
+  await postStockMovements(tx, {
+    commandType: 'catering.cancel.reversal',
+    actor: {
+      staffProfileId: actorStaffProfileId,
+      idempotencyKey: `catering:${orderId}:reversal`,
+    },
+    movements: originals.map((movement) => ({
+      stockItemId: movement.stockItemId,
+      locationId: movement.locationId,
+      reason: 'SALE_REVERSAL' as const,
+      quantity: movement.quantity.negated(),
+    })),
+  });
 }
 
 async function requireOrder(
@@ -398,11 +533,60 @@ export const restaurantCateringRouter = router({
       });
     }),
 
+  productionRequirements: readProcedure
+    .input(z.object({ orderId: id }).strict())
+    .query(async ({ ctx, input }) => {
+      const orgId = organizationId(ctx);
+      await requireOrder(ctx.db, orgId, input.orderId);
+      const requirements = await calculateRequirements(ctx.db, orgId, input.orderId);
+      return requirements.map((requirement) => ({
+        ...requirement,
+        quantityInBaseUnit: requirement.quantityInBaseUnit.toString(),
+      }));
+    }),
+
+  costSummary: readProcedure
+    .input(z.object({ orderId: id }).strict())
+    .query(async ({ ctx, input }) => {
+      const orgId = organizationId(ctx);
+      const order = await ctx.db.restaurantCateringOrder.findFirst({
+        where: { organizationId: orgId, id: input.orderId },
+        select: { quotedTotal: true, extraCosts: { select: { amount: true } } },
+      });
+      if (!order) throw new TRPCError({ code: 'NOT_FOUND', message: 'Catering order not found.' });
+      const lineCosts = await calculateLineCosts(ctx.db, orgId, input.orderId);
+      const recipeCost = lineCosts.reduce(
+        (total, line) => total.plus(line.totalCost),
+        new Prisma.Decimal(0)
+      );
+      const extraCost = order.extraCosts.reduce(
+        (total, cost) => total.plus(cost.amount),
+        new Prisma.Decimal(0)
+      );
+      const totalCost = recipeCost.plus(extraCost);
+      const margin = order.quotedTotal?.minus(totalCost) ?? null;
+      const marginPercent =
+        margin && order.quotedTotal && !order.quotedTotal.isZero()
+          ? margin.dividedBy(order.quotedTotal).times(100)
+          : null;
+      return {
+        recipeCost: recipeCost.toString(),
+        extraCost: extraCost.toString(),
+        totalCost: totalCost.toString(),
+        quotedTotal: order.quotedTotal?.toString() ?? null,
+        margin: margin?.toString() ?? null,
+        marginPercent: marginPercent?.toString() ?? null,
+      };
+    }),
+
   transition: manageProcedure
     .input(z.object({ orderId: id, to: status, ...actor }).strict())
     .mutation(async ({ ctx, input }) => {
       const orgId = organizationId(ctx);
+      const confirmationCosts =
+        input.to === 'CONFIRMED' ? await calculateLineCosts(ctx.db, orgId, input.orderId) : [];
       const order = await ctx.db.$transaction(async (tx) => {
+        const scopedTx = tx as unknown as ScopedDb;
         await tx.$queryRaw(
           Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(${input.orderId}, 0))`
         );
@@ -416,6 +600,34 @@ export const restaurantCateringRouter = router({
             code: 'CONFLICT',
             message: `Cannot transition catering order from ${current.status} to ${input.to}.`,
           });
+        if (input.to === 'CONFIRMED') {
+          for (const line of confirmationCosts) {
+            await tx.restaurantCateringOrderLine.updateMany({
+              where: { organizationId: orgId, orderId: input.orderId, id: line.id },
+              data: { costPerPortionSnapshot: line.costPerPortion },
+            });
+          }
+        }
+        if (currentStatus === 'IN_PRODUCTION' && input.to === 'READY') {
+          await postCateringConsumption(
+            scopedTx,
+            orgId,
+            input.orderId,
+            current.branchId,
+            input.actorStaffProfileId
+          );
+        }
+        if (
+          input.to === 'CANCELLED' &&
+          (currentStatus === 'READY' || currentStatus === 'DELIVERED')
+        ) {
+          await reverseCateringConsumption(
+            scopedTx,
+            orgId,
+            input.orderId,
+            input.actorStaffProfileId
+          );
+        }
         const updated = await tx.restaurantCateringOrder.update({
           where: { organizationId_id: { organizationId: orgId, id: input.orderId } },
           data: { status: input.to },
