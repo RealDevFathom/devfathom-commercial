@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   contractFindMany: vi.fn(),
   branchCount: vi.fn(),
   branchFindMany: vi.fn(),
+  jobFindFirst: vi.fn(),
 }));
 
 vi.mock('@/lib/platform/page-access', () => ({
@@ -142,8 +143,47 @@ beforeEach(() => {
       platformPackage: { findMany: mocks.packageFindMany },
       platformContract: { findMany: mocks.contractFindMany },
       restaurantBranch: { count: mocks.branchCount, findMany: mocks.branchFindMany },
+      platformJob: { findFirst: mocks.jobFindFirst },
     })
   );
+  mocks.jobFindFirst.mockResolvedValue(null);
+});
+
+describe('OrganizationDetailPage provisioning recovery', () => {
+  it('names the failed step, owner, and safe retry without exposing the worker error', async () => {
+    mocks.jobFindFirst.mockResolvedValue({
+      id: 'job_provision_1',
+      type: 'PROVISION_DEDICATED',
+      status: 'FAILED',
+      attempts: 3,
+      maxAttempts: 3,
+      error: 'VERCEL_ACCESS_TOKEN=secret-value',
+      finishedAt: new Date('2026-09-04T10:30:00Z'),
+    });
+
+    await renderDetail();
+
+    const recovery = screen.getByRole('region', { name: 'Provisioning needs operator recovery' });
+    expect(recovery).toHaveTextContent('Failed step · Dedicated environment provisioning');
+    expect(recovery).toHaveTextContent('Owner: Platform Operations');
+    expect(recovery).toHaveTextContent('does not create a second deployment');
+    expect(
+      within(recovery).getByRole('button', { name: 'Retry provisioning' })
+    ).toBeInTheDocument();
+    expect(within(recovery).getByRole('link', { name: 'Open Job control' })).toHaveAttribute(
+      'href',
+      '/platform/jobs'
+    );
+    expect(recovery).not.toHaveTextContent('secret-value');
+  });
+
+  it('does not show recovery guidance when no provisioning job has failed', async () => {
+    await renderDetail();
+
+    expect(
+      screen.queryByRole('region', { name: 'Provisioning needs operator recovery' })
+    ).toBeNull();
+  });
 });
 
 describe('OrganizationDetailPage vertical presentation', () => {
