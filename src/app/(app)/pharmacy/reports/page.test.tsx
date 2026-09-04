@@ -42,6 +42,33 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
           estimateConfidence: null,
         },
       ],
+      expiryAdvice: async () => [
+        {
+          lotId: 'lot-1',
+          branchId: 'b1',
+          medicineName: 'High-value medicine',
+          batchNumber: 'B-1',
+          supplierId: 'supplier-1',
+          supplierName: 'Supplier',
+          stockLocationId: 'location-1',
+          onHandUnits: 90,
+          unitCostMinor: 500,
+          expiresAt: new Date('2026-10-05T00:00:00Z'),
+          soldUnits: 10,
+          historyDays: 30,
+          returnWindowDays: 45,
+          coldChain: false,
+          classification: 'RETURNABLE',
+          observedUnitsPerDay: 0.33,
+          projectedClearAt: new Date('2027-06-01T00:00:00Z'),
+          returnWindowStartsAt: new Date('2026-08-21T00:00:00Z'),
+          valueAtRiskMinor: 40_000,
+          projectedUnsoldUnits: 80,
+          proposalAllowed: true,
+          explanation: 'Observed 10 units over 30 days; projected clear after expiry.',
+        },
+      ],
+      proposeExpiryReturn: async () => ({}),
       refreshAnomalies: async () => ({ evaluated: 1, signals: [] }),
       acknowledgeAnomaly: async () => ({}),
       snoozeAnomaly: async () => ({}),
@@ -103,6 +130,11 @@ describe('pharmacy report catalog filters', () => {
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();
     expect(screen.getByRole('heading', { name: 'Anomaly review signals' })).toBeVisible();
+    expect(
+      screen.getByRole('heading', { name: 'Expiry and supplier-return advisor' })
+    ).toBeVisible();
+    expect(screen.getByText('High-value medicine')).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Create draft proposal' })).toBeVisible();
     expect(screen.getByText(/never rank staff, imply misconduct/)).toBeVisible();
     expect(screen.getByText(/no posting is created by this signal/)).toBeVisible();
     expect(screen.getByLabelText('Acknowledgement reason')).toBeRequired();
