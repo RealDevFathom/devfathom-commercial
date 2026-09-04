@@ -77,7 +77,12 @@ export const PHARMACY_WIDGET_REGISTRY: readonly PharmacyWidgetDefinition[] = [
     key: 'exceptions',
     label: 'Operational exceptions',
     description: 'Receiving, device, fiscal and offline exceptions',
-    metrics: ['openReceivingExceptions', 'deviceFiscalOfflineExceptions'],
+    metrics: [
+      'openReceivingExceptions',
+      'agingFiscalDocuments',
+      'rejectedFiscalDocuments',
+      'deviceFiscalOfflineExceptions',
+    ],
     permission: 'reports:operational',
     defaultSpan: 'compact',
   },

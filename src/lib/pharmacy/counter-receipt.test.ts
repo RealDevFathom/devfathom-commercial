@@ -127,6 +127,21 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     expect(document.footer).toContain('Tendered 50.00');
   });
 
+  it('omits fiscal fields when integration is off', () => {
+    const source = { ...receipt(), fiscal: undefined } as CounterReceipt & { fiscal?: unknown };
+    expect(JSON.stringify(buildCounterReceiptDocument(source, 'en'))).not.toContain('fiscal');
+  });
+
+  it('never prints a sandbox identifier or presents it as an FBR reference', () => {
+    const source = {
+      ...receipt(),
+      fiscal: { mode: 'SANDBOX', externalReference: 'SANDBOX-LOCAL-42', externalQr: null },
+    } as CounterReceipt & { fiscal: unknown };
+    const printed = JSON.stringify(buildCounterReceiptDocument(source, 'en'));
+    expect(printed).not.toContain('SANDBOX-LOCAL-42');
+    expect(printed).not.toContain('FBR');
+  });
+
   it('marks a reprint without touching the receipt number', () => {
     const source = receipt();
     const first = buildCounterReceiptDocument(source, 'en');
