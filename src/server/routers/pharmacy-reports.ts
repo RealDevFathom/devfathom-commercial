@@ -7,9 +7,31 @@ import {
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
-import { capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
+const digestSetting = z
+  .object({
+    enabled: z.boolean(),
+    localTime: z.string().regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/),
+    channel: z.literal('CAPTURE'),
+  })
+  .strict();
+
+async function assertOwner(ctx: TRPCContext) {
+  const userId = ctx.session?.user?.id;
+  if (!userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const owner = await ctx.db.user.findFirst({
+    where: {
+      id: userId,
+      organizationId: ctx.entitlements.organizationId,
+      organizationRole: { key: 'owner', organizationId: ctx.entitlements.organizationId },
+    },
+    select: { id: true },
+  });
+  if (!owner) throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+  return owner.id;
+}
 const filters = z
   .object({
     branchId: z.string().trim().min(1).max(128).optional(),
@@ -34,6 +56,29 @@ async function scope(ctx: TRPCContext) {
 }
 
 export const pharmacyReportsRouter = router({
+  digest: auditedProtectedProcedure.query(async ({ ctx }) => {
+    await assertOwner(ctx);
+    const [setting, history] = await Promise.all([
+      ctx.db.pharmacyOwnerDigestSetting.findUnique({
+        where: { organizationId: ctx.entitlements.organizationId },
+      }),
+      ctx.db.pharmacyOwnerDigest.findMany({
+        where: { organizationId: ctx.entitlements.organizationId },
+        orderBy: { createdAt: 'desc' },
+        take: 31,
+        include: { branch: { select: { name: true } } },
+      }),
+    ]);
+    return { setting, history };
+  }),
+  updateDigest: auditedProtectedProcedure.input(digestSetting).mutation(async ({ ctx, input }) => {
+    const configuredByUserId = await assertOwner(ctx);
+    return ctx.db.pharmacyOwnerDigestSetting.upsert({
+      where: { organizationId: ctx.entitlements.organizationId },
+      create: { organizationId: ctx.entitlements.organizationId, configuredByUserId, ...input },
+      update: { configuredByUserId, ...input },
+    });
+  }),
   branches: reports.query(({ ctx }) => scope(ctx)),
   catalog: reports.query(() => ({
     reports: pharmacyReportCatalog(),

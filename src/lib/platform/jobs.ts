@@ -8,6 +8,7 @@ import {
   type PlatformJobType,
   type PrismaClient,
 } from '@/generated/prisma/client';
+import { captureDailyOwnerDigests } from '@/lib/pharmacy/owner-digest';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
 type JobPayload = Record<string, unknown>;
@@ -51,6 +52,69 @@ function requiredString(payload: JobPayload, key: string): string {
     throw new Error(`Job payload requires "${key}".`);
   }
   return value.trim();
+}
+
+function localScheduleParts(at: Date, timeZone: string) {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hourCycle: 'h23',
+  }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((item) => item.type === type)?.value ?? '';
+  return {
+    date: `${part('year')}-${part('month')}-${part('day')}`,
+    time: `${part('hour')}:${part('minute')}`,
+  };
+}
+
+async function enqueueDueOwnerDigests(at = new Date()): Promise<number> {
+  return withPlatformDb(async (db) => {
+    const settings = await db.pharmacyOwnerDigestSetting.findMany({
+      where: { enabled: true, channel: 'CAPTURE' },
+      select: {
+        organizationId: true,
+        localTime: true,
+        lastEnqueuedDate: true,
+        organization: { select: { timezone: true } },
+      },
+    });
+    let enqueued = 0;
+    for (const setting of settings) {
+      const local = localScheduleParts(at, setting.organization.timezone);
+      if (local.time < setting.localTime || setting.lastEnqueuedDate === local.date) continue;
+      const claimed = await db.pharmacyOwnerDigestSetting.updateMany({
+        where: {
+          organizationId: setting.organizationId,
+          enabled: true,
+          lastEnqueuedDate: setting.lastEnqueuedDate,
+        },
+        data: { lastEnqueuedDate: local.date },
+      });
+      if (!claimed.count) continue;
+      await db.platformJob.create({
+        data: {
+          organizationId: setting.organizationId,
+          type: 'DAILY_OWNER_DIGEST',
+          payload: { businessDate: local.date },
+          idempotencyKey: `owner-digest:${setting.organizationId}:${local.date}`,
+        },
+      });
+      enqueued += 1;
+    }
+    return enqueued;
+  });
+}
+
+async function dailyOwnerDigest(_db: PrismaClient, job: PlatformJob, payload: JobPayload) {
+  const organizationId = requiredOrganization(job);
+  const businessDate = requiredString(payload, 'businessDate');
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(businessDate)) throw new Error('Invalid digest business date.');
+  return captureDailyOwnerDigests(organizationId, businessDate);
 }
 
 async function claimJob(): Promise<PlatformJob | null> {
@@ -746,6 +810,7 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PURGE_DATA: (database, item) => purgeData(database, item),
         SUSPEND: (database, item) => setDeploymentAvailability(database, item, true),
         RESUME: (database, item) => setDeploymentAvailability(database, item, false),
+        DAILY_OWNER_DIGEST: dailyOwnerDigest,
       };
       return handlers[job.type](db, job, payload);
     },
@@ -803,6 +868,7 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
 }
 
 export type ProcessJobsResult = {
+  enqueued: number;
   recovered: number;
   claimed: number;
   succeeded: number;
@@ -813,6 +879,7 @@ export type ProcessJobsResult = {
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   const result: ProcessJobsResult = {
+    enqueued: await enqueueDueOwnerDigests(),
     recovered: await recoverStaleJobs(),
     claimed: 0,
     succeeded: 0,

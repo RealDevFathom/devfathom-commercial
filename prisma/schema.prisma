@@ -213,11 +213,49 @@ model PharmacyBranch {
   purchaseOrders     PharmacyPurchaseOrder[]
   onboardingGates    PharmacyOnboardingGateState[]
   registeredDevices  PharmacyRegisteredDevice[]
+  ownerDigests       PharmacyOwnerDigest[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
   @@map("pharmacy_branches")
+}
+
+model PharmacyOwnerDigestSetting {
+  id                 String   @id @default(cuid())
+  organizationId     String   @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  enabled            Boolean  @default(false)
+  localTime          String   @default("08:00")
+  channel            String   @default("CAPTURE")
+  configuredByUserId String
+  lastEnqueuedDate   String?
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  organization Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  configuredBy User @relation(fields: [configuredByUserId], references: [id], onDelete: Restrict)
+
+  @@map("pharmacy_owner_digest_settings")
+}
+
+model PharmacyOwnerDigest {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  businessDate   String
+  channel        String
+  deliveryStatus String
+  rendered       String   @db.Text
+  metrics        Json
+  createdAt      DateTime @default(now())
+
+  organization Organization  @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, branchId, businessDate, channel])
+  @@index([organizationId, createdAt])
+  @@index([organizationId, branchId, createdAt])
+  @@map("pharmacy_owner_digests")
 }
 
 /// PLAT-03 — the twelve onboarding steps of PRD §6.1, in the order the operator
@@ -1847,6 +1885,7 @@ enum PlatformJobType {
   PURGE_DATA
   SUSPEND
   RESUME
+  DAILY_OWNER_DIGEST
 }
 
 enum PlatformJobStatus {
@@ -2017,6 +2056,8 @@ model User {
   // web-login User. A User may back zero or many staff profiles; a staff
   // profile need not have one at all.
   restaurantStaffProfiles     RestaurantStaffProfile[]       @relation("RestaurantStaffUser")
+
+  pharmacyOwnerDigestSettings PharmacyOwnerDigestSetting[]
 
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -4013,6 +4054,8 @@ model Organization {
   roles                                OrganizationRole[]
   departments                          OrganizationDepartment[]
   pharmacyOnboarding                   PharmacyOnboardingState?
+  pharmacyOwnerDigestSetting           PharmacyOwnerDigestSetting?
+  pharmacyOwnerDigests                 PharmacyOwnerDigest[]
   permissionOverrides                  UserPermissionOverride[]
   modules                              OrganizationModule[]
   limits                               OrganizationLimit[]

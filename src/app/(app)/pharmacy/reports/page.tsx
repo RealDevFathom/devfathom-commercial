@@ -1,12 +1,14 @@
 import type { Metadata } from 'next';
 
 import { Input } from '@/components/ui/input';
+import { Button } from '@/components/ui/button';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
+import { updateOwnerDigest } from './actions';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -68,6 +70,13 @@ export default async function PharmacyReportsPage({
     reportError = true;
   }
   const metrics = result?.metrics;
+  let digest: Awaited<ReturnType<typeof caller.digest>> | null = null;
+  let digestUnavailable = false;
+  try {
+    digest = await caller.digest();
+  } catch {
+    digestUnavailable = true;
+  }
   const cards = metrics
     ? [
         ['Sales', money(metrics.salesMinor)],
@@ -120,6 +129,72 @@ export default async function PharmacyReportsPage({
           </button>
         </form>
       </SectionCard>
+      {digest ? (
+        <>
+          <SectionCard eyebrow="RPT-03" title="Daily owner digest" titleLevel={2}>
+            <form
+              action={updateOwnerDigest}
+              className="grid gap-4 sm:grid-cols-[1fr_10rem_auto] sm:items-end"
+            >
+              <label className="flex min-h-11 items-center gap-3 text-sm text-text-body">
+                <input
+                  defaultChecked={digest.setting?.enabled ?? false}
+                  name="enabled"
+                  type="checkbox"
+                />
+                Opt in to daily capture
+              </label>
+              <label className="text-sm text-text-body">
+                Local delivery time
+                <Input
+                  className="mt-1 min-h-11"
+                  defaultValue={digest.setting?.localTime ?? '08:00'}
+                  name="localTime"
+                  required
+                  type="time"
+                />
+              </label>
+              <Button type="submit">Save digest settings</Button>
+            </form>
+            <p className="mt-3 text-sm text-text-muted">
+              Capture is the only enabled P0 channel. WhatsApp remains disabled until a real
+              provider integration is implemented.
+            </p>
+          </SectionCard>
+          <SectionCard eyebrow="Owner only" title="Digest history" titleLevel={2}>
+            {digest.history.length ? (
+              <div className="space-y-3">
+                {digest.history.map((item) => (
+                  <article
+                    className="rounded-md border border-border-subtle bg-surface-raised p-4"
+                    key={item.id}
+                  >
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <h3 className="font-medium text-text-strong">
+                        {item.branch.name} · {item.businessDate}
+                      </h3>
+                      <StatusPill status={item.deliveryStatus} tone="success" />
+                    </div>
+                    <pre className="mt-3 whitespace-pre-wrap font-sans text-sm text-text-body">
+                      {item.rendered}
+                    </pre>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p className="text-sm text-text-muted">
+                No digests captured yet. Enable daily capture; the next due cron run will compose
+                one per active branch.
+              </p>
+            )}
+          </SectionCard>
+        </>
+      ) : digestUnavailable ? (
+        <ReportNotice
+          title="Owner digest unavailable"
+          detail="Digest settings and retained history require the pharmacy Owner role. No digest data was exposed."
+        />
+      ) : null}
       {reportError ? (
         <ReportNotice
           title="Report could not load"
