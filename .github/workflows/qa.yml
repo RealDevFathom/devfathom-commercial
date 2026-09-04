@@ -307,6 +307,7 @@ jobs:
         run: >-
           bunx tsx scripts/run-restaurant-e2e.ts
           tests/e2e/restaurant-controls-final.spec.ts
+          tests/e2e/restaurant-catering.spec.ts
           tests/e2e/restaurant-integrated.spec.ts
           tests/e2e/restaurant-lifecycles-final.spec.ts
           tests/e2e/restaurant-pos-kds.spec.ts

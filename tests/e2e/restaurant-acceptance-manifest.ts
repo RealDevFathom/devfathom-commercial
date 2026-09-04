@@ -180,6 +180,17 @@ export const coverageMatrix = [
       'Clock in/out, breaks, swap request/review, late attendance, append-only corrections, and CSV export are implemented; browser/release acceptance remains, while payroll and tip payout are deferred.',
   },
   {
+    id: 'catering',
+    requirement: 'Catering quotes, production requirements, delivery, and inventory lifecycle',
+    status: 'Delivered',
+    evidence: [
+      source('catering-router', 'src/server/routers/restaurant-catering.ts'),
+      route('catering-route', 'src/app/(app)/restaurant/catering/page.tsx'),
+      test('catering-browser', 'tests/e2e/restaurant-catering.spec.ts'),
+    ],
+    boundary: 'Fleet routing and physical delivery remain external operations.',
+  },
+  {
     id: 'sop-jobs-notifications',
     requirement: 'SOP, recurrence, evidence, verification, escalation, notifications',
     status: 'Partial',
@@ -376,8 +387,8 @@ export function validateRestaurantAcceptanceManifest(root = repositoryRoot): rea
     ...finalActorMatrix,
   ];
 
-  if (coverageMatrix.length !== 17) {
-    errors.push(`Expected 17 code-grounded coverage rows, found ${coverageMatrix.length}.`);
+  if (coverageMatrix.length !== 18) {
+    errors.push(`Expected 18 code-grounded coverage rows, found ${coverageMatrix.length}.`);
   }
   if (finalActorMatrix.length !== 4) {
     errors.push(`Expected 4 final actor rows, found ${finalActorMatrix.length}.`);

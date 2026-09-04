@@ -31,6 +31,7 @@ export default defineConfig({
   },
   testMatch: [
     'restaurant-controls-final.spec.ts',
+    'restaurant-catering.spec.ts',
     'restaurant-integrated.spec.ts',
     'restaurant-lifecycles-final.spec.ts',
     'restaurant-pos-kds.spec.ts',
