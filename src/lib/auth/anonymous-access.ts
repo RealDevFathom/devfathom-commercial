@@ -29,7 +29,12 @@ export const ANONYMOUS_TOKEN_PROCEDURES = new Set([
   'invitations.accept',
   'passwordReset.validate',
   'passwordReset.reset',
+  'pharmacySupplierLinks.get',
+  'pharmacySupplierLinks.submit',
+  'pharmacySupplierLinks.uploadDocument',
 ]);
+
+export const SUPPLIER_LINK_GENERIC_MESSAGE = 'This supplier link is invalid, expired, or revoked.';
 
 /**
  * Procedures that carry no token and must be routed by host instead. Only

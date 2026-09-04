@@ -206,13 +206,13 @@ model PharmacyBranch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  regulatoryProfiles BranchRegulatoryProfile[]
-  stockLocations     PharmacyStockLocation[]       @relation("PharmacyBranchStockLocations")
-  inventoryLots      PharmacyInventoryLot[]
-  requisitions       PharmacyRequisition[]
-  purchaseOrders     PharmacyPurchaseOrder[]
-  onboardingGates    PharmacyOnboardingGateState[]
-  registeredDevices  PharmacyRegisteredDevice[]
+  regulatoryProfiles  BranchRegulatoryProfile[]
+  stockLocations      PharmacyStockLocation[]       @relation("PharmacyBranchStockLocations")
+  inventoryLots       PharmacyInventoryLot[]
+  requisitions        PharmacyRequisition[]
+  purchaseOrders      PharmacyPurchaseOrder[]
+  onboardingGates     PharmacyOnboardingGateState[]
+  registeredDevices   PharmacyRegisteredDevice[]
   ownerDigestSettings PharmacyOwnerDigestSetting[]
   ownerDigestCaptures PharmacyOwnerDigestCapture[]
 
@@ -729,30 +729,30 @@ model PharmacyFiscalConfiguration {
 /// replacement. Notes must point at an original invoice in the same tenant and
 /// branch. `retentionUntil` is fixed at creation and hard deletion is refused in SQL.
 model PharmacyFiscalDocument {
-  id                   String                       @id @default(cuid())
-  organizationId       String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId             String
-  saleId               String?
-  kind                 PharmacyFiscalDocumentKind
-  originalDocumentId   String?
-  localReference       String
-  externalReference    String?
-  externalQr           String?
-  integratorMode       PharmacyFiscalIntegratorMode
-  status               PharmacyFiscalDocumentStatus @default(QUEUED)
-  payload              Json
-  payloadHash          String
-  attempts             Int                          @default(0)
-  maxAttempts          Int
-  nextAttemptAt        DateTime?
-  submittedAt          DateTime?
-  acceptedAt           DateTime?
-  rejectedAt           DateTime?
-  lastError            String?
-  retentionUntil       DateTime
-  createdByActorId     String
-  createdAt            DateTime                     @default(now())
-  updatedAt            DateTime                     @updatedAt
+  id                 String                       @id @default(cuid())
+  organizationId     String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  saleId             String?
+  kind               PharmacyFiscalDocumentKind
+  originalDocumentId String?
+  localReference     String
+  externalReference  String?
+  externalQr         String?
+  integratorMode     PharmacyFiscalIntegratorMode
+  status             PharmacyFiscalDocumentStatus @default(QUEUED)
+  payload            Json
+  payloadHash        String
+  attempts           Int                          @default(0)
+  maxAttempts        Int
+  nextAttemptAt      DateTime?
+  submittedAt        DateTime?
+  acceptedAt         DateTime?
+  rejectedAt         DateTime?
+  lastError          String?
+  retentionUntil     DateTime
+  createdByActorId   String
+  createdAt          DateTime                     @default(now())
+  updatedAt          DateTime                     @updatedAt
 
   @@unique([organizationId, id], map: "pharmacy_fiscal_documents_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_fiscal_documents_org_branch_id_key")
@@ -4224,8 +4224,8 @@ model Organization {
   insightLoyaltyLiabilities            InsightLoyaltyLiability[]
   restaurantNotificationWebhook        RestaurantNotificationWebhook?
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
-  pharmacyOwnerDigestSettings            PharmacyOwnerDigestSetting[]
-  pharmacyOwnerDigestCaptures            PharmacyOwnerDigestCapture[]
+  pharmacyOwnerDigestSettings          PharmacyOwnerDigestSetting[]
+  pharmacyOwnerDigestCaptures          PharmacyOwnerDigestCapture[]
 
   @@index([status])
   @@index([deploymentMode])
@@ -5355,10 +5355,10 @@ model RestaurantRecipe {
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
-  product        RestaurantProduct         @relation(fields: [productId], references: [id], onDelete: Cascade)
-  variant        RestaurantProductVariant? @relation(fields: [variantId], references: [id], onDelete: SetNull)
+  product        RestaurantProduct             @relation(fields: [productId], references: [id], onDelete: Cascade)
+  variant        RestaurantProductVariant?     @relation(fields: [variantId], references: [id], onDelete: SetNull)
   versions       RestaurantRecipeVersion[]
-  subRecipeLines RestaurantRecipeLine[]    @relation("RecipeLineSubRecipe")
+  subRecipeLines RestaurantRecipeLine[]        @relation("RecipeLineSubRecipe")
   cateringLines  RestaurantCateringOrderLine[]
 
   @@index([organizationId])
@@ -8476,7 +8476,7 @@ model RestaurantCustomerAddress {
   createdAt          DateTime  @default(now())
   updatedAt          DateTime  @updatedAt
 
-  customer RestaurantCustomer @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Cascade)
+  customer       RestaurantCustomer        @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Cascade)
   cateringOrders RestaurantCateringOrder[]
 
   @@unique([organizationId, customerId, id])
@@ -10956,6 +10956,7 @@ model PharmacySupplier {
   purchaseReturns PharmacyPurchaseReturn[]
   debitNotes      PharmacyDebitNote[]
   credits         PharmacySupplierCredit[]
+  relationships   PharmacySupplierRelationship[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, name])
@@ -11120,13 +11121,14 @@ model PharmacyPurchaseOrder {
   createdAt          DateTime                    @default(now())
   updatedAt          DateTime                    @updatedAt
 
-  goodsReceipts PharmacyGoodsReceipt[]
-  supplier      PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
-  requisition   PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
-  quote         PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
-  branch        PharmacyBranch?                 @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  lines         PharmacyPurchaseOrderLine[]
-  approvals     PharmacyPurchaseOrderApproval[]
+  goodsReceipts       PharmacyGoodsReceipt[]
+  supplier            PharmacySupplier                @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  requisition         PharmacyRequisition?            @relation(fields: [organizationId, requisitionId], references: [organizationId, id], onDelete: Restrict)
+  quote               PharmacyQuote?                  @relation(fields: [organizationId, quoteId], references: [organizationId, id], onDelete: Restrict)
+  branch              PharmacyBranch?                 @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  lines               PharmacyPurchaseOrderLine[]
+  approvals           PharmacyPurchaseOrderApproval[]
+  supplierActionLinks PharmacySupplierActionLink[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
@@ -11191,6 +11193,133 @@ model PharmacyPurchaseOrderApproval {
   @@unique([organizationId, id])
   @@index([organizationId, purchaseOrderId, createdAt])
   @@map("pharmacy_purchase_order_approvals")
+}
+
+enum PharmacySupplierSubmissionKind {
+  ACKNOWLEDGEMENT
+  REJECTION
+  PARTIAL_ACCEPTANCE
+  ETA
+  SUBSTITUTION_PROPOSAL
+  DOCUMENT
+}
+
+enum PharmacySupplierSubmissionSource {
+  SIGNED_LINK
+  PHONE
+  WHATSAPP
+}
+
+/// SUP-01/SUP-03 — the active commercial relationship is the supplier's entire
+/// external authorization boundary. It is deliberately narrower than Supplier.
+model PharmacySupplierRelationship {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  supplierId     String
+  active         Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  revokedAt      DateTime?
+
+  supplier PharmacySupplier             @relation(fields: [organizationId, supplierId], references: [organizationId, id], onDelete: Restrict)
+  links    PharmacySupplierActionLink[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, supplierId])
+  @@index([organizationId, branchId, active])
+  @@map("pharmacy_supplier_relationships")
+}
+
+/// Raw link secrets are never stored. A link grants access to exactly one
+/// relationship/PO pair and remains independently expirable and revocable.
+model PharmacySupplierActionLink {
+  id                     String    @id @default(cuid())
+  organizationId         String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId               String
+  supplierRelationshipId String
+  purchaseOrderId        String
+  tokenHash              String    @unique
+  expiresAt              DateTime
+  revokedAt              DateTime?
+  createdByUserId        String
+  createdAt              DateTime  @default(now())
+
+  relationship  PharmacySupplierRelationship @relation(fields: [organizationId, supplierRelationshipId], references: [organizationId, id], onDelete: Restrict)
+  purchaseOrder PharmacyPurchaseOrder        @relation(fields: [organizationId, purchaseOrderId], references: [organizationId, id], onDelete: Restrict)
+  submissions   PharmacySupplierSubmission[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, supplierRelationshipId, purchaseOrderId])
+  @@index([organizationId, branchId, expiresAt])
+  @@map("pharmacy_supplier_action_links")
+}
+
+/// Every inbound answer is append-only evidence/a proposal. Corrections link
+/// to the prior version; pharmacy approval is a separate event below.
+model PharmacySupplierSubmission {
+  id             String                           @id @default(cuid())
+  organizationId String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  actionLinkId   String
+  versionGroupId String
+  version        Int
+  supersedesId   String?
+  kind           PharmacySupplierSubmissionKind
+  source         PharmacySupplierSubmissionSource
+  idempotencyKey String
+  payload        Json
+  sourceEvidence String?
+  submittedAt    DateTime                         @default(now())
+
+  actionLink   PharmacySupplierActionLink           @relation(fields: [organizationId, actionLinkId], references: [organizationId, id], onDelete: Restrict)
+  supersedes   PharmacySupplierSubmission?          @relation("PharmacySupplierSubmissionVersions", fields: [organizationId, supersedesId], references: [organizationId, id], onDelete: Restrict)
+  supersededBy PharmacySupplierSubmission[]         @relation("PharmacySupplierSubmissionVersions")
+  documents    PharmacySupplierDocument[]
+  approvals    PharmacySupplierSubmissionApproval[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, actionLinkId, idempotencyKey])
+  @@unique([organizationId, versionGroupId, version])
+  @@index([organizationId, branchId, submittedAt])
+  @@map("pharmacy_supplier_submissions")
+}
+
+model PharmacySupplierDocument {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  submissionId   String
+  fileName       String
+  mimeType       String
+  byteSize       Int
+  sha256         String
+  storageUri     String
+  malwareChecked Boolean  @default(false)
+  createdAt      DateTime @default(now())
+
+  submission PharmacySupplierSubmission @relation(fields: [organizationId, submissionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, submissionId, sha256])
+  @@index([organizationId, branchId, createdAt])
+  @@map("pharmacy_supplier_documents")
+}
+
+model PharmacySupplierSubmissionApproval {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  submissionId   String
+  actorUserId    String
+  approved       Boolean
+  reason         String?
+  createdAt      DateTime @default(now())
+
+  submission PharmacySupplierSubmission @relation(fields: [organizationId, submissionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, submissionId, createdAt])
+  @@map("pharmacy_supplier_submission_approvals")
 }
 
 enum PatientConsentPurpose {
@@ -12584,15 +12713,15 @@ model PharmacyDeviceLotQuota {
 /// `timeMinutes` is local wall-clock minutes after midnight in the owning
 /// organization's IANA timezone. `nextDueAt` makes cron discovery bounded.
 model PharmacyOwnerDigestSetting {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   userId         String
   branchId       String
-  enabled        Boolean  @default(false)
-  timeMinutes    Int      @default(480)
+  enabled        Boolean   @default(false)
+  timeMinutes    Int       @default(480)
   nextDueAt      DateTime?
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
 
   organization Organization   @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   user         User           @relation(fields: [userId], references: [id], onDelete: Cascade)
