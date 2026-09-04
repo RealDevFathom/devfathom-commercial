@@ -142,6 +142,41 @@ function caller(limits: Record<string, number> = { 'restaurant.brands.max': 5 })
   } as unknown as TRPCContext);
 }
 
+describe('recipe picker reads', () => {
+  it('lists organization recipes with only their active version summary', async () => {
+    const recipes = db.restaurantRecipe as Delegate;
+    recipes.findMany.mockResolvedValue([
+      {
+        id: 'recipe_1',
+        name: 'Harvest lunch',
+        versions: [{ id: 'version_2', portionCount: 24 }],
+      },
+    ]);
+
+    await expect(caller().listRecipes()).resolves.toEqual([
+      {
+        id: 'recipe_1',
+        name: 'Harvest lunch',
+        activeVersionId: 'version_2',
+        portionCount: 24,
+      },
+    ]);
+    expect(recipes.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1' },
+      select: {
+        id: true,
+        name: true,
+        versions: {
+          where: { status: 'ACTIVE' },
+          select: { id: true, portionCount: true },
+          take: 1,
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+  });
+});
+
 // ── C2 shadow-copy guard — STRICT rejection of branch-scoped/shadow fields ─────
 // The canonical creation schemas are `.strict()`: a branch-scoped or shadow-copy
 // field is REJECTED (BAD_REQUEST at the schema edge), not silently stripped, and

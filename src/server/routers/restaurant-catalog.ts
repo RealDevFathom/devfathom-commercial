@@ -1070,6 +1070,28 @@ export const restaurantCatalogRouter = router({
       }
     }),
 
+  listRecipes: readProcedure.query(async ({ ctx }) => {
+    const recipes = await ctx.db.restaurantRecipe.findMany({
+      where: { organizationId: ctx.entitlements.organizationId },
+      select: {
+        id: true,
+        name: true,
+        versions: {
+          where: { status: 'ACTIVE' },
+          select: { id: true, portionCount: true },
+          take: 1,
+        },
+      },
+      orderBy: { name: 'asc' },
+    });
+    return recipes.map((recipe) => ({
+      id: recipe.id,
+      name: recipe.name,
+      activeVersionId: recipe.versions[0]?.id ?? null,
+      portionCount: recipe.versions[0]?.portionCount ?? null,
+    }));
+  }),
+
   // ── Recipe lines ─────────────────────────────────────────────────────────────
 
   createRecipeLine: writeProcedure

@@ -6,6 +6,7 @@ const restaurantRoutes = [
   '/kds',
   '/restaurant/floor',
   '/restaurant/orders',
+  '/restaurant/catering',
   '/restaurant/money',
   '/restaurant/inventory',
   '/restaurant/purchasing',
