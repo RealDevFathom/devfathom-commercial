@@ -39,6 +39,8 @@ export const ALL_ACTIONS = [
   // second-merged lane realigns — same adjacency rule as the other coordinated files).
   'orders:read', // restaurant M4-L2: order-read gate (org-role driven)
   'orders:manage', // restaurant M4-L2: order back-office mutation gate (org-role driven)
+  'catering:read',
+  'catering:manage',
   'money:read', // restaurant M5-L1: back-office money reads (bills/tenders/refunds/drawers/close) — org-role driven
   // restaurant M6-L2 inventory domain capabilities (org-role driven via customDecision path):
   'inventory:read', // console reads: stock on hand, ledger, counts, transfers, batches, low-stock rules
@@ -138,6 +140,8 @@ export const POLICIES: Record<Action, Policy[]> = {
   'floor:manage': [],
   'orders:read': [],
   'orders:manage': [],
+  'catering:read': [],
+  'catering:manage': [],
 
   // Restaurant M5-L1: back-office money reads (bills/splits/comps, tenders +
   // refunds with payment event trails, drawer-session review, daily-close

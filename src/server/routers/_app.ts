@@ -46,6 +46,7 @@ import { restaurantDashboardRouter } from './restaurant-dashboard';
 import { restaurantReportsRouter } from './restaurant-reports';
 import { restaurantBranchesRouter } from './restaurant-branches';
 import { restaurantDeliveryRouter } from './restaurant-delivery';
+import { restaurantCateringRouter } from './restaurant-catering';
 import { pharmacyMedicineRouter } from './pharmacy-medicine';
 import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import { pharmacyInventoryRouter } from './pharmacy-inventory';
@@ -105,6 +106,7 @@ export const appRouter = router({
   restaurantReports: restaurantReportsRouter,
   restaurantBranches: restaurantBranchesRouter,
   restaurantDelivery: restaurantDeliveryRouter,
+  restaurantCatering: restaurantCateringRouter,
   pharmacyMedicine: pharmacyMedicineRouter,
   pharmacyPurchasing: pharmacyPurchasingRouter,
   pharmacyInventory: pharmacyInventoryRouter,
