@@ -13,7 +13,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   disposable CI gate owner was NOCREATEROLE, so those tenant-isolation assertions had never once run in
   the cloud gate. The fix grants CREATEROLE to the **ephemeral CI gate owner only**; the deployed runtime
   role `devfathom_app` stays LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE and the suites still
-  connect as it. Remaining blocker: **WHA-1328** cold-chain fixture (373dd4ae, in progress).
+  connect as it. **All three gate blockers are now composed** — WHA-1328 landed as `10587bbb`: the breach fixture receives 20 cold-chain units into the validated 2–8°C fridge and then transfers them to non-cold MAIN, so PUR-07 observes a real breach; `assertColdChainStorage` and every product rule are untouched. **The candidate is ready for a clean gate run — the owner must push.**
   Also composed: `7968f6c3` RX-07 refill schedules + bilingual medication cards (30 tablets once daily →
   reminder day 27; partial fills shorten it).
 - **Compose rule proven twice today:** a lane's commit does not need to sit on the tip — `git diff sha^ sha
