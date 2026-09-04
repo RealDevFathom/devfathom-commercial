@@ -86,7 +86,10 @@ function makeDb() {
     restaurantComboComponentOption: model(),
     restaurantProductAllergen: model(),
     restaurantAllergen: model(),
+    restaurantPriceList: model(),
+    restaurantPriceListVersion: model(),
     restaurantPriceListEntry: model(),
+    restaurantBranchMenuPublication: model(),
     restaurantMenuItem: model(),
     restaurantUnit: model(),
     restaurantUnitConversion: model(),
@@ -330,6 +333,40 @@ describe('recipe costing reads', () => {
       yieldQuantity: '2',
       lines: [{ quantityInBaseUnit: '500', unitCost: '0.01', lineCost: '5' }],
     });
+  });
+
+  it('computes food-cost percentages with Decimal math for each branch price', async () => {
+    mocks.computeRecipeCost.mockResolvedValue(cost('r1'));
+    (db.restaurantRecipe as Delegate).findUnique.mockResolvedValue({
+      productId: 'product_1',
+      variantId: null,
+    });
+    (db.restaurantPriceList as Delegate).findFirst.mockResolvedValue({ id: 'prices_1' });
+    (db.restaurantBranchMenuPublication as Delegate).findMany.mockResolvedValue([
+      { branchId: 'branch_1', priceListId: 'prices_1', branch: { name: 'Downtown' } },
+    ]);
+    (db.restaurantPriceListVersion as Delegate).findMany.mockResolvedValue([
+      {
+        id: 'prices_v1',
+        versionNumber: 1,
+        effectiveFrom: new Date('2026-01-01'),
+        status: 'ACTIVE',
+      },
+    ]);
+    (db.restaurantPriceListEntry as Delegate).findMany.mockResolvedValue([
+      { id: 'entry_1', productId: 'product_1', variantId: null, price: new Prisma.Decimal('10') },
+    ]);
+
+    const result = await caller().getRecipeCost({ recipeId: 'r1' });
+
+    expect(result?.priceComparisons).toEqual([
+      {
+        branchId: 'branch_1',
+        branchName: 'Downtown',
+        price: '10',
+        foodCostPercent: '12.5',
+      },
+    ]);
   });
 
   it('listRecipeCosts limits computation to requested recipe ids', async () => {

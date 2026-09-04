@@ -8,12 +8,16 @@ const mocks = vi.hoisted(() => ({
   createProduct: vi.fn(),
   mutate: vi.fn(),
   refresh: vi.fn(),
+  invalidateCost: vi.fn(),
 }));
 
 vi.mock('next/navigation', () => ({ useRouter: () => ({ refresh: mocks.refresh }) }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
+    useUtils: () => ({
+      restaurantCatalog: { getRecipeCost: { invalidate: mocks.invalidateCost } },
+    }),
     restaurantCatalog: new Proxy(
       {},
       {
@@ -21,6 +25,28 @@ vi.mock('@/lib/trpc', () => ({
           useMutation: () => ({
             mutate: procedure === 'createProduct' ? mocks.createProduct : mocks.mutate,
             isPending: false,
+          }),
+          useQuery: () => ({
+            data:
+              procedure === 'getRecipeCost'
+                ? {
+                    batchCost: '12',
+                    costPerPortion: '3',
+                    costPerYieldUnit: '6',
+                    missing: ['Truffle'],
+                    priceComparisons: [
+                      {
+                        branchId: 'branch_1',
+                        branchName: 'Downtown',
+                        price: '10',
+                        foodCostPercent: '30',
+                      },
+                    ],
+                  }
+                : undefined,
+            isLoading: false,
+            isError: false,
+            refetch: vi.fn(),
           }),
         }),
       }
@@ -99,5 +125,63 @@ describe('Restaurant catalog console', () => {
       categoryId: null,
       sortOrder: 0,
     });
+  });
+
+  it('shows recipe costs, branch food-cost percentage, and missing ingredients', () => {
+    const recipeSnapshot: CatalogSnapshot = {
+      ...snapshot,
+      products: [
+        {
+          id: 'product_1',
+          categoryId: null,
+          type: 'ITEM',
+          status: 'ACTIVE',
+          name: 'Pasta',
+          description: null,
+          sortOrder: 0,
+          variants: [],
+          modifierGroups: [],
+          allergens: [],
+        },
+      ],
+      recipes: [
+        {
+          id: 'recipe_1',
+          productId: 'product_1',
+          variantId: null,
+          name: 'Pasta batch',
+          versions: [
+            {
+              id: 'version_1',
+              recipeId: 'recipe_1',
+              versionNumber: 1,
+              status: 'ACTIVE',
+              yieldQuantity: '2',
+              yieldUnitId: null,
+              portionCount: 4,
+              notes: null,
+              activatedAt: null,
+              supersededAt: null,
+              lines: [],
+            },
+          ],
+        },
+      ],
+    };
+    render(
+      <EntitlementsProvider value={entitlements(true)}>
+        <RestaurantCatalogConsole snapshot={recipeSnapshot} canRead canWrite />
+      </EntitlementsProvider>
+    );
+
+    fireEvent.click(screen.getByRole('tab', { name: 'Recipes (1)' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Manage versions' }));
+
+    expect(screen.getByText('12')).toBeInTheDocument();
+    expect(screen.getByText('3')).toBeInTheDocument();
+    expect(screen.getByText('6')).toBeInTheDocument();
+    expect(screen.getByText('Missing cost')).toBeInTheDocument();
+    expect(screen.getByText('Truffle')).toBeInTheDocument();
+    expect(screen.getByText('30% at 10')).toBeInTheDocument();
   });
 });

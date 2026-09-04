@@ -78,6 +78,8 @@ import {
   RecipeCostingError,
   type RecipeCostResult,
 } from '@/lib/restaurant/recipe-costing';
+import { pickEntry, resolveEffectiveEntries } from '@/lib/restaurant/price-lists';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * M3-L2 — back-office server surface for canonical catalog + costing substrate.
@@ -153,6 +155,57 @@ function serializeRecipeCost(cost: RecipeCostResult) {
       lineCost: line.lineCost.toString(),
     })),
   };
+}
+
+async function recipePriceComparisons(db: ScopedDb, cost: RecipeCostResult) {
+  const recipe = await db.restaurantRecipe.findUnique({
+    where: { id: cost.recipeId },
+    select: { productId: true, variantId: true },
+  });
+  if (!recipe) return [];
+
+  const [defaultList, publications] = await Promise.all([
+    db.restaurantPriceList.findFirst({ where: { isDefault: true }, select: { id: true } }),
+    db.restaurantBranchMenuPublication.findMany({
+      where: {
+        status: 'PUBLISHED',
+        menu: {
+          sections: {
+            some: { items: { some: { productId: recipe.productId, variantId: recipe.variantId } } },
+          },
+        },
+      },
+      orderBy: [{ branch: { name: 'asc' } }, { createdAt: 'desc' }],
+      distinct: ['branchId'],
+      select: { branchId: true, priceListId: true, branch: { select: { name: true } } },
+    }),
+  ]);
+  const listIds = new Set(
+    publications.map((publication) => publication.priceListId ?? defaultList?.id).filter(Boolean)
+  );
+  const lists = new Map(
+    await Promise.all(
+      [...listIds].map(
+        async (id) => [id, await resolveEffectiveEntries(db, id!, new Date())] as const
+      )
+    )
+  );
+  const unitCost = cost.costPerPortion ?? cost.batchCost;
+
+  return publications.flatMap((publication) => {
+    const listId = publication.priceListId ?? defaultList?.id;
+    const list = listId ? lists.get(listId) : null;
+    const entry = list ? pickEntry(list.entries, recipe.productId, recipe.variantId) : null;
+    if (!entry || entry.price.isZero()) return [];
+    return [
+      {
+        branchId: publication.branchId,
+        branchName: publication.branch.name,
+        price: entry.price.toString(),
+        foodCostPercent: unitCost.dividedBy(entry.price).times(100).toDecimalPlaces(2).toString(),
+      },
+    ];
+  });
 }
 
 /** Locale-keyed companion for a customer-facing string (D20), matching the L3 menus surface. */
@@ -979,7 +1032,11 @@ export const restaurantCatalogRouter = router({
         const selector = input.versionId
           ? { organizationId: ctx.entitlements.organizationId, recipeVersionId: input.versionId }
           : { organizationId: ctx.entitlements.organizationId, recipeId: input.recipeId };
-        return serializeRecipeCost(await computeRecipeCost(selector));
+        const cost = await computeRecipeCost(selector);
+        return {
+          ...serializeRecipeCost(cost),
+          priceComparisons: await recipePriceComparisons(ctx.db, cost),
+        };
       } catch (err) {
         mapCatalogError(err);
       }

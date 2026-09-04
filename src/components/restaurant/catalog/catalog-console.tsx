@@ -227,6 +227,7 @@ export function RestaurantCatalogConsole({
   loadError = false,
 }: CatalogConsoleProps) {
   const router = useRouter();
+  const utils = trpc.useUtils();
   const entitlements = useEntitlements();
   const menuModule = entitlements.modules.find((module) => module.key === 'restaurant-menu');
   const moduleEnabled =
@@ -245,6 +246,7 @@ export function RestaurantCatalogConsole({
     setConfirmation(null);
     setMutationError('');
     toast.success(message);
+    void utils.restaurantCatalog.getRecipeCost.invalidate();
     startRefresh(() => router.refresh());
   };
   const fail = (error: { message: string }) => {
@@ -442,6 +444,11 @@ export function RestaurantCatalogConsole({
     ? ingredientsById.get(selectedIngredientId)
     : undefined;
   const selectedRecipe = selectedRecipeId ? recipesById.get(selectedRecipeId) : undefined;
+  const costVersion = selectedRecipe?.versions[0];
+  const recipeCost = trpc.restaurantCatalog.getRecipeCost.useQuery(
+    { recipeId: selectedRecipe?.id ?? '', versionId: costVersion?.id },
+    { enabled: Boolean(selectedRecipe && costVersion && canRead) }
+  );
 
   const openEditor = (value: Editor) => {
     setMutationError('');
@@ -599,7 +606,7 @@ export function RestaurantCatalogConsole({
       />
 
       {!moduleEnabled ? (
-        <SectionCard title="Menu and Costing module disabled">
+        <SectionCard title="Menu and Costing module disabled" titleLevel={2}>
           <div className="space-y-3" role="status">
             <StatusPill status="Disabled" tone="warning" />
             <p className="max-w-2xl text-sm leading-relaxed text-text-muted">
@@ -609,7 +616,7 @@ export function RestaurantCatalogConsole({
           </div>
         </SectionCard>
       ) : loadError ? (
-        <SectionCard title="Catalog could not be loaded">
+        <SectionCard title="Catalog could not be loaded" titleLevel={2}>
           <div role="alert" className="flex flex-wrap items-center justify-between gap-3">
             <p className="text-sm text-destructive">
               Catalog data is safe, but the current snapshot is unavailable.
@@ -620,7 +627,7 @@ export function RestaurantCatalogConsole({
           </div>
         </SectionCard>
       ) : !canRead ? (
-        <SectionCard title="Catalog access unavailable">
+        <SectionCard title="Catalog access unavailable" titleLevel={2}>
           <p role="alert" className="text-sm text-destructive">
             You do not have permission to view the restaurant catalog.
           </p>
@@ -777,6 +784,7 @@ export function RestaurantCatalogConsole({
                 <SectionCard
                   eyebrow="Product detail"
                   title={selectedProduct.name}
+                  titleLevel={2}
                   actions={
                     <Button variant="ghost" onClick={() => setSelectedProductId(null)}>
                       Close
@@ -1028,6 +1036,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Hierarchy"
                 title={`${snapshot.categories.length} categor${snapshot.categories.length === 1 ? 'y' : 'ies'}`}
+                titleLevel={2}
                 actions={
                   canWrite ? (
                     <Button className="min-h-11" onClick={() => openEditor({ kind: 'category' })}>
@@ -1113,6 +1122,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Reusable choices"
                 title={`${snapshot.modifierGroups.length} modifier group${snapshot.modifierGroups.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   canWrite ? (
                     <Button
@@ -1212,6 +1222,7 @@ export function RestaurantCatalogConsole({
                 <SectionCard
                   eyebrow="Group options"
                   title={selectedModifierGroup.name}
+                  titleLevel={2}
                   actions={
                     <div className="flex gap-2">
                       {canWrite ? (
@@ -1306,6 +1317,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Safety registry"
                 title={`${snapshot.allergens.length} allergen${snapshot.allergens.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   canWrite ? (
                     <Button className="min-h-11" onClick={() => openEditor({ kind: 'allergen' })}>
@@ -1381,6 +1393,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Measures"
                 title={`${snapshot.units.length} unit${snapshot.units.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   canWrite ? (
                     <Button className="min-h-11" onClick={() => openEditor({ kind: 'unit' })}>
@@ -1453,6 +1466,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Directed conversions"
                 title={`${snapshot.conversions.length} conversion${snapshot.conversions.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   canWrite && snapshot.units.length > 1 ? (
                     <Button
@@ -1538,6 +1552,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Recipe inputs"
                 title={`${snapshot.ingredients.length} ingredient${snapshot.ingredients.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   canWrite ? (
                     <Button
@@ -1618,6 +1633,7 @@ export function RestaurantCatalogConsole({
                 <SectionCard
                   eyebrow="Ingredient allergens"
                   title={selectedIngredient.name}
+                  titleLevel={2}
                   actions={
                     <Button variant="ghost" onClick={() => setSelectedIngredientId(null)}>
                       Close
@@ -1708,6 +1724,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Versioned preparation"
                 title={`${snapshot.recipes.length} recipe${snapshot.recipes.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   canWrite ? (
                     <Button
@@ -1799,6 +1816,7 @@ export function RestaurantCatalogConsole({
                 <SectionCard
                   eyebrow="Recipe lifecycle"
                   title={selectedRecipe.name}
+                  titleLevel={2}
                   actions={
                     <div className="flex gap-2">
                       {canWrite ? (
@@ -1818,6 +1836,85 @@ export function RestaurantCatalogConsole({
                     </div>
                   }
                 >
+                  {costVersion ? (
+                    <div className="mb-5 rounded-md border border-border-subtle bg-surface-sunken p-4">
+                      <p className={labelClass}>Version {costVersion.versionNumber} cost</p>
+                      {recipeCost.isLoading ? (
+                        <p role="status" className="mt-2 text-sm text-text-muted">
+                          Calculating recipe cost…
+                        </p>
+                      ) : recipeCost.isError ? (
+                        <div
+                          className="mt-2 flex flex-wrap items-center justify-between gap-3"
+                          role="alert"
+                        >
+                          <p className="text-sm text-destructive">
+                            Recipe cost could not be calculated.
+                          </p>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => void recipeCost.refetch()}
+                          >
+                            Try again
+                          </Button>
+                        </div>
+                      ) : recipeCost.data ? (
+                        <div className="mt-3 space-y-3">
+                          <dl className="grid gap-3 sm:grid-cols-3">
+                            <div>
+                              <dt className={labelClass}>Batch cost</dt>
+                              <dd className="mt-1 font-mono tabular-nums text-text-strong">
+                                {recipeCost.data.batchCost}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className={labelClass}>Cost per portion</dt>
+                              <dd className="mt-1 font-mono tabular-nums text-text-strong">
+                                {recipeCost.data.costPerPortion ?? 'Not available'}
+                              </dd>
+                            </div>
+                            <div>
+                              <dt className={labelClass}>Cost per yield unit</dt>
+                              <dd className="mt-1 font-mono tabular-nums text-text-strong">
+                                {recipeCost.data.costPerYieldUnit ?? 'Not available'}
+                              </dd>
+                            </div>
+                          </dl>
+                          {recipeCost.data.missing.length ? (
+                            <div className="flex flex-wrap items-center gap-2">
+                              <StatusPill status="Missing cost" tone="warning" />
+                              <p className="text-sm text-text-muted">
+                                {recipeCost.data.missing.join(', ')}
+                              </p>
+                            </div>
+                          ) : null}
+                          {recipeCost.data.priceComparisons.length ? (
+                            <div className="border-t border-border-subtle pt-3">
+                              <p className={labelClass}>Food cost by active branch price</p>
+                              <ul className="mt-2 grid gap-2 sm:grid-cols-2">
+                                {recipeCost.data.priceComparisons.map((comparison) => (
+                                  <li
+                                    key={comparison.branchId}
+                                    className="flex justify-between gap-3 text-sm"
+                                  >
+                                    <span className="text-text-muted">{comparison.branchName}</span>
+                                    <span className="font-mono tabular-nums text-text-strong">
+                                      {comparison.foodCostPercent}% at {comparison.price}
+                                    </span>
+                                  </li>
+                                ))}
+                              </ul>
+                            </div>
+                          ) : (
+                            <p className="text-sm text-text-muted">
+                              No active branch price is available for this product.
+                            </p>
+                          )}
+                        </div>
+                      ) : null}
+                    </div>
+                  ) : null}
                   {selectedRecipe.versions.length ? (
                     <div className="space-y-4">
                       {selectedRecipe.versions.map((version) => (
