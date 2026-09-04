@@ -6,51 +6,90 @@ import {
   searchCounterPatients,
 } from '@/lib/pharmacy/counter-prescriptions';
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
+import {
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
 
 export const pharmacyPrescriptionsRouter = router({
-  workspace: protectedProcedure.query(async ({ ctx }) => {
-    const [patients, prescribers, medicines, prescriptions] = await Promise.all([
-      ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
-      ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
-      ctx.db.medicine.findMany({
-        where: { saleable: true },
-        orderBy: { productName: 'asc' },
-        include: { presentations: { orderBy: { presentation: 'asc' } } },
-      }),
-      ctx.db.prescription.findMany({
-        orderBy: { capturedAt: 'desc' },
-        include: {
-          patient: true,
-          prescriber: true,
-          lines: {
-            orderBy: { lineNumber: 'asc' },
-            include: { medicine: true, presentation: true, fills: true },
-          },
-        },
-      }),
-    ]);
-    return {
-      patients: patients.map(maskedPatient),
-      prescribers,
-      medicines,
-      prescriptions: prescriptions.map((prescription) => ({
-        ...prescription,
-        patient: maskedPatient(prescription.patient),
-        lines: prescription.lines.map((line) => ({
-          ...line,
-          remainingAuthorizedUnits: Math.max(
-            0,
-            line.authorizedCanonicalUnits * (prescription.authorizedRepeats + 1) -
-              line.fills.reduce((total, fill) => total + fill.quantityCanonicalUnits, 0)
-          ),
+  workspace: protectedProcedure
+    .input(
+      z
+        .object({ branchId: z.string().trim().min(1).optional() })
+        .strict()
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      const branches = await ctx.db.pharmacyBranch.findMany({
+        where: { active: true },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      });
+      const selectedBranch = input?.branchId
+        ? branches.find((branch) => branch.id === input.branchId)
+        : branches[0];
+      if (input?.branchId && !selectedBranch)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+
+      const [patients, prescribers, medicines, prescriptions, reminderCaptures] = await Promise.all(
+        [
+          ctx.db.pharmacyPatient.findMany({ orderBy: { displayName: 'asc' } }),
+          ctx.db.pharmacyPrescriber.findMany({ orderBy: { name: 'asc' } }),
+          ctx.db.medicine.findMany({
+            where: { saleable: true },
+            orderBy: { productName: 'asc' },
+            include: { presentations: { orderBy: { presentation: 'asc' } } },
+          }),
+          ctx.db.prescription.findMany({
+            orderBy: { capturedAt: 'desc' },
+            include: {
+              patient: true,
+              prescriber: true,
+              lines: {
+                orderBy: { lineNumber: 'asc' },
+                include: {
+                  medicine: true,
+                  presentation: true,
+                  fills: { include: { reminderCapture: true }, orderBy: { dispensedAt: 'desc' } },
+                },
+              },
+            },
+          }),
+          selectedBranch
+            ? ctx.db.pharmacyRefillReminderCapture.findMany({
+                where: { branchId: selectedBranch.id },
+                orderBy: { capturedAt: 'desc' },
+              })
+            : Promise.resolve([]),
+        ]
+      );
+      return {
+        branches,
+        selectedBranchId: selectedBranch?.id ?? null,
+        patients: patients.map(maskedPatient),
+        prescribers,
+        medicines,
+        reminderCaptures,
+        prescriptions: prescriptions.map((prescription) => ({
+          ...prescription,
+          patient: maskedPatient(prescription.patient),
+          lines: prescription.lines.map((line) => ({
+            ...line,
+            remainingAuthorizedUnits: Math.max(
+              0,
+              line.authorizedCanonicalUnits * (prescription.authorizedRepeats + 1) -
+                line.fills.reduce((total, fill) => total + fill.quantityCanonicalUnits, 0)
+            ),
+          })),
         })),
-      })),
-    };
-  }),
+      };
+    }),
   createPatient: protectedProcedure
     .input(
       z
@@ -172,6 +211,46 @@ export const pharmacyPrescriptionsRouter = router({
     .mutation(({ ctx, input }) =>
       ctx.db.prescriptionFill.create({ data: { ...input, dispensedByUserId: ctx.session.user.id } })
     ),
+
+  captureRefillReminder: capabilityProcedure('pharmacy:dispense')
+    .input(
+      z
+        .object({
+          branchId: z.string().trim().min(1).max(128),
+          fillId: z.string().trim().min(1).max(128),
+          channel: z.enum(['PHONE', 'SMS', 'WHATSAPP', 'EMAIL']),
+          directionsUrdu: z.string().trim().min(1).max(500),
+          idempotencyKey: z.string().trim().min(1).max(200),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await captureRefillReminder(
+          ctx.db,
+          {
+            organizationId: ctx.entitlements.organizationId,
+            branchId: input.branchId,
+            actorId: ctx.session!.user.id,
+          },
+          input
+        );
+      } catch (error) {
+        if (error instanceof RefillSupportError) {
+          throw new TRPCError({
+            code:
+              error.reason === 'FILL_NOT_FOUND' || error.reason === 'BRANCH_NOT_FOUND'
+                ? 'NOT_FOUND'
+                : error.reason === 'REMINDER_CONSENT_REQUIRED' ||
+                    error.reason === 'PHARMACIST_APPROVAL_REQUIRED'
+                  ? 'FORBIDDEN'
+                  : 'BAD_REQUEST',
+            message: error.reason,
+          });
+        }
+        throw error;
+      }
+    }),
 
   // ── POS-09: the prescription panel beside the cart ────────────────────────
 

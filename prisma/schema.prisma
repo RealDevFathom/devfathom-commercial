@@ -206,15 +206,16 @@ model PharmacyBranch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  regulatoryProfiles  BranchRegulatoryProfile[]
-  stockLocations      PharmacyStockLocation[]       @relation("PharmacyBranchStockLocations")
-  inventoryLots       PharmacyInventoryLot[]
-  requisitions        PharmacyRequisition[]
-  purchaseOrders      PharmacyPurchaseOrder[]
-  onboardingGates     PharmacyOnboardingGateState[]
-  registeredDevices   PharmacyRegisteredDevice[]
-  ownerDigestSettings PharmacyOwnerDigestSetting[]
-  ownerDigestCaptures PharmacyOwnerDigestCapture[]
+  regulatoryProfiles     BranchRegulatoryProfile[]
+  stockLocations         PharmacyStockLocation[]         @relation("PharmacyBranchStockLocations")
+  inventoryLots          PharmacyInventoryLot[]
+  requisitions           PharmacyRequisition[]
+  purchaseOrders         PharmacyPurchaseOrder[]
+  onboardingGates        PharmacyOnboardingGateState[]
+  registeredDevices      PharmacyRegisteredDevice[]
+  ownerDigestSettings    PharmacyOwnerDigestSetting[]
+  ownerDigestCaptures    PharmacyOwnerDigestCapture[]
+  refillReminderCaptures PharmacyRefillReminderCapture[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -884,9 +885,9 @@ model PharmacyCustomer {
   createdAt        DateTime @default(now())
   updatedAt        DateTime @updatedAt
 
-  patient       PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
-  sales         PharmacySale[]
-  pointsEntries PharmacyLoyaltyPointsEntry[]
+  patient            PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  sales              PharmacySale[]
+  pointsEntries      PharmacyLoyaltyPointsEntry[]
   paidFamilyAccounts PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
   familyMemberships  PharmacyFamilyMember[]
 
@@ -11465,26 +11466,28 @@ model PharmacyPatient {
   prescriptions             Prescription[]
   unfulfilledDemandEvents   UnfulfilledDemandEvent[]
   retailCustomers           PharmacyCustomer[]
+  refillReminderCaptures    PharmacyRefillReminderCapture[]
 
   @@unique([organizationId, id])
   @@map("pharmacy_patients")
 }
 
 model PatientConsent {
-  id               String                @id @default(cuid())
-  organizationId   String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id               String                          @id @default(cuid())
+  organizationId   String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   patientId        String
   purpose          PatientConsentPurpose
   channel          PatientConsentChannel
   version          Int
   granted          Boolean
   recordedByUserId String
-  recordedAt       DateTime              @default(now())
+  recordedAt       DateTime                        @default(now())
   revokedAt        DateTime?
   supersedesId     String?
-  patient          PharmacyPatient       @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
-  supersedes       PatientConsent?       @relation("ConsentVersions", fields: [organizationId, supersedesId], references: [organizationId, id], onDelete: Restrict)
-  supersededBy     PatientConsent[]      @relation("ConsentVersions")
+  patient          PharmacyPatient                 @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  supersedes       PatientConsent?                 @relation("ConsentVersions", fields: [organizationId, supersedesId], references: [organizationId, id], onDelete: Restrict)
+  supersededBy     PatientConsent[]                @relation("ConsentVersions")
+  reminderCaptures PharmacyRefillReminderCapture[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId, purpose, channel, version])
@@ -11553,20 +11556,62 @@ model PrescriptionLine {
 }
 
 model PrescriptionFill {
-  id                     String           @id @default(cuid())
-  organizationId         String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                     String                         @id @default(cuid())
+  organizationId         String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   prescriptionLineId     String
   fillSequence           Int
   quantityCanonicalUnits Int
   dispensedByUserId      String
-  dispensedAt            DateTime         @default(now())
+  dispensedAt            DateTime                       @default(now())
   idempotencyKey         String
-  line                   PrescriptionLine @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  line                   PrescriptionLine               @relation(fields: [organizationId, prescriptionLineId], references: [organizationId, id], onDelete: Restrict)
+  reminderCapture        PharmacyRefillReminderCapture?
 
   @@unique([organizationId, id])
   @@unique([organizationId, prescriptionLineId, fillSequence])
   @@unique([organizationId, idempotencyKey])
   @@map("pharmacy_prescription_fills")
+}
+
+/// RX-07: a patient-context, capture-only refill reminder draft. The immutable
+/// row snapshots the dispensed quantity and reviewed bilingual directions so a
+/// later card never drifts from what the pharmacist approved. No delivery state
+/// exists here; CRM-W03 owns delivery in a separate purpose boundary.
+model PharmacyRefillReminderCapture {
+  id                   String                            @id @default(cuid())
+  organizationId       String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  prescriptionFillId   String
+  patientId            String
+  channel              PatientConsentChannel
+  consentEventId       String
+  pharmacistDecisionId String?
+  medicineName         String
+  strength             String
+  dosageForm           String
+  directionsEnglish    String
+  directionsUrdu       String
+  quantityDispensed    Int
+  dosesPerDay          Decimal                           @db.Decimal(10, 4)
+  expectedExhaustionAt DateTime
+  reminderAt           DateTime
+  status               String                            @default("CAPTURED")
+  captureMode          Boolean                           @default(true)
+  capturedByUserId     String
+  capturedAt           DateTime                          @default(now())
+  idempotencyKey       String
+  branch               PharmacyBranch                    @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  fill                 PrescriptionFill                  @relation(fields: [organizationId, prescriptionFillId], references: [organizationId, id], onDelete: Restrict)
+  patient              PharmacyPatient                   @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  consentEvent         PatientConsent                    @relation(fields: [organizationId, consentEventId], references: [organizationId, id], onDelete: Restrict)
+  pharmacistDecision   PharmacyPharmacistReviewDecision? @relation(fields: [organizationId, pharmacistDecisionId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, prescriptionFillId])
+  @@unique([organizationId, idempotencyKey])
+  @@index([organizationId, branchId, reminderAt])
+  @@index([organizationId, patientId, capturedAt])
+  @@map("pharmacy_refill_reminder_captures")
 }
 
 enum PharmacyReviewDecisionKind {
@@ -11601,15 +11646,16 @@ model PharmacyPharmacistReviewItem {
 
 /// RX-03: append-only clinical decisions. SIGN is the sole sale-release event.
 model PharmacyPharmacistReviewDecision {
-  id             String                       @id @default(cuid())
-  organizationId String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  reviewItemId   String
-  kind           PharmacyReviewDecisionKind
-  actorUserId    String
-  reason         String?
-  signedAt       DateTime?
-  createdAt      DateTime                     @default(now())
-  reviewItem     PharmacyPharmacistReviewItem @relation(fields: [organizationId, reviewItemId], references: [organizationId, id], onDelete: Restrict)
+  id               String                          @id @default(cuid())
+  organizationId   String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  reviewItemId     String
+  kind             PharmacyReviewDecisionKind
+  actorUserId      String
+  reason           String?
+  signedAt         DateTime?
+  createdAt        DateTime                        @default(now())
+  reviewItem       PharmacyPharmacistReviewItem    @relation(fields: [organizationId, reviewItemId], references: [organizationId, id], onDelete: Restrict)
+  reminderCaptures PharmacyRefillReminderCapture[]
 
   @@unique([organizationId, id])
   @@index([organizationId, reviewItemId, createdAt])
