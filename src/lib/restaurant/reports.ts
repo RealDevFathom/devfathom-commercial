@@ -17,6 +17,10 @@ export type RestaurantReportRange = {
   to: string;
 };
 
+export type RestaurantStockReportRange = RestaurantReportRange & {
+  stockLocationId?: string;
+};
+
 export type ReportFreshnessStatus = 'CURRENT' | 'STALE' | 'PARTIAL' | 'NO_CLOSED_DAYS';
 
 export class RestaurantReportError extends Error {
@@ -44,6 +48,10 @@ function add(values: readonly Prisma.Decimal[]): Prisma.Decimal {
 
 function serializeDecimal(value: Prisma.Decimal): string {
   return value.toDecimalPlaces(2).toString();
+}
+
+function shareOfTotal(value: Prisma.Decimal, total: Prisma.Decimal): string {
+  return total.isZero() ? '0' : serializeDecimal(value.dividedBy(total).times(100));
 }
 
 function boundedRows<T>(rows: readonly T[], limit = MAX_INTERACTIVE_ROWS) {
@@ -598,6 +606,412 @@ async function readInventoryExportRows(db: ScopedDb, range: RestaurantReportRang
   return boundedRows(rows, MAX_EXPORT_ROWS);
 }
 
+type WastageAggregateRow = {
+  movementCount: number;
+  quantity: Prisma.Decimal;
+  cost: Prisma.Decimal;
+  estimatedCost: Prisma.Decimal;
+  estimatedMovementCount: number;
+  unvaluedMovementCount: number;
+};
+
+type WastageReasonRow = WastageAggregateRow & { reason: string };
+type WastageDayRow = WastageAggregateRow & { day: string };
+type WastageIngredientRow = WastageAggregateRow & {
+  stockItemId: string;
+  ingredientName: string;
+  canonicalUnit: string;
+};
+
+function stockLocationClause(range: RestaurantStockReportRange) {
+  return range.stockLocationId
+    ? Prisma.sql`AND movement."locationId" = ${range.stockLocationId}`
+    : Prisma.empty;
+}
+
+function valuedWastageCte(
+  range: RestaurantStockReportRange,
+  parsed: ReturnType<typeof validateRestaurantReportRange>
+) {
+  return Prisma.sql`
+    WITH current_costs AS (
+      SELECT
+        movement."stockItemId",
+        movement."locationId",
+        SUM(movement."quantity" * movement."unitCost")
+          / NULLIF(SUM(movement."quantity"), 0) AS "weightedAverageCost"
+      FROM "restaurant_stock_movements" movement
+      WHERE movement."unitCost" IS NOT NULL
+      GROUP BY movement."stockItemId", movement."locationId"
+    ), valued_wastage AS (
+      SELECT
+        movement."id",
+        movement."stockItemId",
+        movement."locationId",
+        location."branchId",
+        branch."name" AS "branchName",
+        location."name" AS "locationName",
+        ingredient."name" AS "ingredientName",
+        COALESCE(unit."abbreviation", unit."name") AS "canonicalUnit",
+        movement."reason"::text AS "reason",
+        movement."occurredAt",
+        ABS(movement."quantity") AS "quantity",
+        COALESCE(
+          movement."unitCost",
+          current_costs."weightedAverageCost",
+          ingredient."referenceCost"
+        ) AS "effectiveUnitCost",
+        CASE
+          WHEN movement."unitCost" IS NOT NULL THEN 'RECORDED'
+          WHEN current_costs."weightedAverageCost" IS NOT NULL THEN 'WEIGHTED_AVERAGE'
+          WHEN ingredient."referenceCost" IS NOT NULL THEN 'REFERENCE'
+          ELSE 'UNAVAILABLE'
+        END AS "valuationSource"
+      FROM "restaurant_stock_movements" movement
+      JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+      JOIN "restaurant_branches" branch ON branch."id" = location."branchId"
+      JOIN "restaurant_stock_items" item ON item."id" = movement."stockItemId"
+      JOIN "restaurant_ingredients" ingredient ON ingredient."id" = item."ingredientId"
+      JOIN "restaurant_units" unit ON unit."id" = item."canonicalUnitId"
+      LEFT JOIN current_costs
+        ON current_costs."stockItemId" = movement."stockItemId"
+       AND current_costs."locationId" = movement."locationId"
+      WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+        ${stockLocationClause(range)}
+        AND movement."occurredAt" >= ${parsed.from}
+        AND movement."occurredAt" < ${parsed.toExclusive}
+        AND (
+          movement."reason" IN ('WASTAGE', 'SPOILAGE', 'STAFF_MEAL')
+          OR (movement."reason" = 'MANUAL_CORRECTION' AND movement."quantity" < 0)
+        )
+    )
+  `;
+}
+
+function wastageAggregateSelect() {
+  return Prisma.sql`
+    COUNT(*)::int AS "movementCount",
+    COALESCE(SUM("quantity"), 0) AS "quantity",
+    COALESCE(SUM("quantity" * COALESCE("effectiveUnitCost", 0)), 0) AS "cost",
+    COALESCE(SUM("quantity" * COALESCE("effectiveUnitCost", 0))
+      FILTER (WHERE "valuationSource" <> 'RECORDED'), 0) AS "estimatedCost",
+    COUNT(*) FILTER (WHERE "valuationSource" <> 'RECORDED')::int
+      AS "estimatedMovementCount",
+    COUNT(*) FILTER (WHERE "valuationSource" = 'UNAVAILABLE')::int
+      AS "unvaluedMovementCount"
+  `;
+}
+
+function serializeWastageGroup<T extends WastageAggregateRow>(row: T, totalCost: Prisma.Decimal) {
+  return {
+    ...row,
+    quantity: row.quantity.toString(),
+    cost: serializeDecimal(row.cost),
+    estimatedCost: serializeDecimal(row.estimatedCost),
+    estimated: row.estimatedMovementCount > 0,
+    shareOfTotal: shareOfTotal(row.cost, totalCost),
+  };
+}
+
+async function readWastageIngredientRows(
+  db: ScopedDb,
+  range: RestaurantStockReportRange,
+  limit: number
+) {
+  const parsed = validateRestaurantReportRange(range);
+  const rows = await db.$queryRaw<WastageIngredientRow[]>(Prisma.sql`
+    ${valuedWastageCte(range, parsed)}
+    SELECT
+      "stockItemId",
+      "ingredientName",
+      "canonicalUnit",
+      ${wastageAggregateSelect()}
+    FROM valued_wastage
+    GROUP BY "stockItemId", "ingredientName", "canonicalUnit"
+    ORDER BY SUM("quantity" * COALESCE("effectiveUnitCost", 0)) DESC,
+      "ingredientName" ASC, "stockItemId" ASC
+    LIMIT ${limit + 1}
+  `);
+  return boundedRows(rows, limit);
+}
+
+export async function readWastageReport(db: ScopedDb, range: RestaurantStockReportRange) {
+  const parsed = validateRestaurantReportRange(range);
+  const [reasonRows, dayRows, ingredients] = await Promise.all([
+    db.$queryRaw<WastageReasonRow[]>(Prisma.sql`
+      ${valuedWastageCte(range, parsed)}
+      SELECT "reason", ${wastageAggregateSelect()}
+      FROM valued_wastage
+      GROUP BY "reason"
+      ORDER BY "reason" ASC
+    `),
+    db.$queryRaw<WastageDayRow[]>(Prisma.sql`
+      ${valuedWastageCte(range, parsed)}
+      SELECT TO_CHAR("occurredAt", 'YYYY-MM-DD') AS "day", ${wastageAggregateSelect()}
+      FROM valued_wastage
+      GROUP BY TO_CHAR("occurredAt", 'YYYY-MM-DD')
+      ORDER BY "day" ASC
+    `),
+    readWastageIngredientRows(db, range, MAX_INTERACTIVE_ROWS),
+  ]);
+  const totals = reasonRows.reduce<WastageAggregateRow>(
+    (total, row) => ({
+      movementCount: total.movementCount + row.movementCount,
+      quantity: total.quantity.plus(row.quantity),
+      cost: total.cost.plus(row.cost),
+      estimatedCost: total.estimatedCost.plus(row.estimatedCost),
+      estimatedMovementCount: total.estimatedMovementCount + row.estimatedMovementCount,
+      unvaluedMovementCount: total.unvaluedMovementCount + row.unvaluedMovementCount,
+    }),
+    {
+      movementCount: 0,
+      quantity: ZERO,
+      cost: ZERO,
+      estimatedCost: ZERO,
+      estimatedMovementCount: 0,
+      unvaluedMovementCount: 0,
+    }
+  );
+  return {
+    range,
+    totals: {
+      movementCount: totals.movementCount,
+      quantity: totals.quantity.toString(),
+      cost: serializeDecimal(totals.cost),
+      estimatedCost: serializeDecimal(totals.estimatedCost),
+      estimatedMovementCount: totals.estimatedMovementCount,
+      unvaluedMovementCount: totals.unvaluedMovementCount,
+    },
+    byReason: reasonRows.map((row) => serializeWastageGroup(row, totals.cost)),
+    byIngredient: ingredients.rows.map((row) => serializeWastageGroup(row, totals.cost)),
+    byDay: dayRows.map((row) => serializeWastageGroup(row, totals.cost)),
+    truncated: ingredients.truncated,
+  };
+}
+
+type StockMovementGroupRow = {
+  stockItemId: string;
+  ingredientName: string;
+  canonicalUnit: string;
+  movementCount: number;
+  openingQuantity: Prisma.Decimal;
+  inQuantity: Prisma.Decimal;
+  outQuantity: Prisma.Decimal;
+  netQuantity: Prisma.Decimal;
+  closingQuantity: Prisma.Decimal;
+  openingCost: Prisma.Decimal;
+  inCost: Prisma.Decimal;
+  outCost: Prisma.Decimal;
+  netCost: Prisma.Decimal;
+  closingCost: Prisma.Decimal;
+  estimatedMovementCount: number;
+  unvaluedMovementCount: number;
+  totalOpeningQuantity: Prisma.Decimal;
+  totalInQuantity: Prisma.Decimal;
+  totalOutQuantity: Prisma.Decimal;
+  totalNetQuantity: Prisma.Decimal;
+  totalClosingQuantity: Prisma.Decimal;
+  totalOpeningCost: Prisma.Decimal;
+  totalInCost: Prisma.Decimal;
+  totalOutCost: Prisma.Decimal;
+  totalNetCost: Prisma.Decimal;
+  totalClosingCost: Prisma.Decimal;
+  totalMovementCount: number;
+  totalEstimatedMovementCount: number;
+  totalUnvaluedMovementCount: number;
+  totalActivityCost: Prisma.Decimal;
+};
+
+async function readStockMovementRows(
+  db: ScopedDb,
+  range: RestaurantStockReportRange,
+  limit: number
+) {
+  const parsed = validateRestaurantReportRange(range);
+  const rows = await db.$queryRaw<StockMovementGroupRow[]>(Prisma.sql`
+    WITH current_costs AS (
+      SELECT
+        movement."stockItemId",
+        movement."locationId",
+        SUM(movement."quantity" * movement."unitCost")
+          / NULLIF(SUM(movement."quantity"), 0) AS "weightedAverageCost"
+      FROM "restaurant_stock_movements" movement
+      WHERE movement."unitCost" IS NOT NULL
+      GROUP BY movement."stockItemId", movement."locationId"
+    ), scoped_movements AS (
+      SELECT
+        movement."stockItemId",
+        ingredient."name" AS "ingredientName",
+        COALESCE(unit."abbreviation", unit."name") AS "canonicalUnit",
+        movement."quantity",
+        movement."unitCost",
+        movement."occurredAt",
+        COALESCE(
+          movement."unitCost",
+          current_costs."weightedAverageCost",
+          ingredient."referenceCost"
+        ) AS "effectiveUnitCost",
+        COALESCE(current_costs."weightedAverageCost", ingredient."referenceCost")
+          AS "balanceUnitCost"
+      FROM "restaurant_stock_movements" movement
+      JOIN "restaurant_stock_locations" location ON location."id" = movement."locationId"
+      JOIN "restaurant_stock_items" item ON item."id" = movement."stockItemId"
+      JOIN "restaurant_ingredients" ingredient ON ingredient."id" = item."ingredientId"
+      JOIN "restaurant_units" unit ON unit."id" = item."canonicalUnitId"
+      LEFT JOIN current_costs
+        ON current_costs."stockItemId" = movement."stockItemId"
+       AND current_costs."locationId" = movement."locationId"
+      WHERE location."branchId" IN (${Prisma.join(range.branchIds)})
+        ${stockLocationClause(range)}
+        AND movement."occurredAt" < ${parsed.toExclusive}
+    ), grouped AS (
+      SELECT
+        "stockItemId",
+        "ingredientName",
+        "canonicalUnit",
+        COUNT(*) FILTER (WHERE "occurredAt" >= ${parsed.from})::int AS "movementCount",
+        COALESCE(SUM("quantity") FILTER (WHERE "occurredAt" < ${parsed.from}), 0)
+          AS "openingQuantity",
+        COALESCE(SUM("quantity") FILTER (
+          WHERE "occurredAt" >= ${parsed.from} AND "quantity" > 0
+        ), 0) AS "inQuantity",
+        COALESCE(SUM(ABS("quantity")) FILTER (
+          WHERE "occurredAt" >= ${parsed.from} AND "quantity" < 0
+        ), 0) AS "outQuantity",
+        COALESCE(SUM("quantity") FILTER (WHERE "occurredAt" >= ${parsed.from}), 0)
+          AS "netQuantity",
+        COALESCE(SUM("quantity"), 0) AS "closingQuantity",
+        COALESCE(SUM("quantity" * COALESCE("balanceUnitCost", 0)) FILTER (
+          WHERE "occurredAt" < ${parsed.from}
+        ), 0) AS "openingCost",
+        COALESCE(SUM("quantity" * COALESCE("effectiveUnitCost", 0)) FILTER (
+          WHERE "occurredAt" >= ${parsed.from} AND "quantity" > 0
+        ), 0) AS "inCost",
+        COALESCE(SUM(ABS("quantity") * COALESCE("effectiveUnitCost", 0)) FILTER (
+          WHERE "occurredAt" >= ${parsed.from} AND "quantity" < 0
+        ), 0) AS "outCost",
+        COALESCE(SUM("quantity" * COALESCE("effectiveUnitCost", 0)) FILTER (
+          WHERE "occurredAt" >= ${parsed.from}
+        ), 0) AS "netCost",
+        COALESCE(SUM("quantity" * COALESCE("balanceUnitCost", 0)), 0) AS "closingCost",
+        COUNT(*) FILTER (
+          WHERE "occurredAt" >= ${parsed.from} AND "unitCost" IS NULL
+        )::int AS "estimatedMovementCount",
+        COUNT(*) FILTER (
+          WHERE "occurredAt" >= ${parsed.from} AND "effectiveUnitCost" IS NULL
+        )::int AS "unvaluedMovementCount"
+      FROM scoped_movements
+      GROUP BY "stockItemId", "ingredientName", "canonicalUnit"
+      HAVING COUNT(*) FILTER (WHERE "occurredAt" >= ${parsed.from}) > 0
+    )
+    SELECT
+      grouped.*,
+      SUM("openingQuantity") OVER () AS "totalOpeningQuantity",
+      SUM("inQuantity") OVER () AS "totalInQuantity",
+      SUM("outQuantity") OVER () AS "totalOutQuantity",
+      SUM("netQuantity") OVER () AS "totalNetQuantity",
+      SUM("closingQuantity") OVER () AS "totalClosingQuantity",
+      SUM("openingCost") OVER () AS "totalOpeningCost",
+      SUM("inCost") OVER () AS "totalInCost",
+      SUM("outCost") OVER () AS "totalOutCost",
+      SUM("netCost") OVER () AS "totalNetCost",
+      SUM("closingCost") OVER () AS "totalClosingCost",
+      SUM("movementCount") OVER ()::int AS "totalMovementCount",
+      SUM("estimatedMovementCount") OVER ()::int AS "totalEstimatedMovementCount",
+      SUM("unvaluedMovementCount") OVER ()::int AS "totalUnvaluedMovementCount",
+      SUM("inCost" + "outCost") OVER () AS "totalActivityCost"
+    FROM grouped
+    ORDER BY ("inCost" + "outCost") DESC, "ingredientName" ASC, "stockItemId" ASC
+    LIMIT ${limit + 1}
+  `);
+  return boundedRows(rows, limit);
+}
+
+function serializeStockMovementRow(row: StockMovementGroupRow) {
+  return {
+    stockItemId: row.stockItemId,
+    ingredientName: row.ingredientName,
+    canonicalUnit: row.canonicalUnit,
+    movementCount: row.movementCount,
+    openingQuantity: row.openingQuantity.toString(),
+    inQuantity: row.inQuantity.toString(),
+    outQuantity: row.outQuantity.toString(),
+    netQuantity: row.netQuantity.toString(),
+    closingQuantity: row.closingQuantity.toString(),
+    openingCost: serializeDecimal(row.openingCost),
+    inCost: serializeDecimal(row.inCost),
+    outCost: serializeDecimal(row.outCost),
+    netCost: serializeDecimal(row.netCost),
+    closingCost: serializeDecimal(row.closingCost),
+    estimatedMovementCount: row.estimatedMovementCount,
+    unvaluedMovementCount: row.unvaluedMovementCount,
+    estimated: row.estimatedMovementCount > 0,
+    shareOfTotal: shareOfTotal(row.inCost.plus(row.outCost), row.totalActivityCost),
+  };
+}
+
+export async function readStockMovementReport(db: ScopedDb, range: RestaurantStockReportRange) {
+  const result = await readStockMovementRows(db, range, MAX_INTERACTIVE_ROWS);
+  const first = result.rows[0];
+  return {
+    range,
+    totals: {
+      movementCount: first?.totalMovementCount ?? 0,
+      openingQuantity: first?.totalOpeningQuantity.toString() ?? '0',
+      inQuantity: first?.totalInQuantity.toString() ?? '0',
+      outQuantity: first?.totalOutQuantity.toString() ?? '0',
+      netQuantity: first?.totalNetQuantity.toString() ?? '0',
+      closingQuantity: first?.totalClosingQuantity.toString() ?? '0',
+      openingCost: serializeDecimal(first?.totalOpeningCost ?? ZERO),
+      inCost: serializeDecimal(first?.totalInCost ?? ZERO),
+      outCost: serializeDecimal(first?.totalOutCost ?? ZERO),
+      netCost: serializeDecimal(first?.totalNetCost ?? ZERO),
+      closingCost: serializeDecimal(first?.totalClosingCost ?? ZERO),
+      estimatedMovementCount: first?.totalEstimatedMovementCount ?? 0,
+      unvaluedMovementCount: first?.totalUnvaluedMovementCount ?? 0,
+    },
+    ingredients: result.rows.map(serializeStockMovementRow),
+    truncated: result.truncated,
+  };
+}
+
+async function readWastageExportRows(db: ScopedDb, range: RestaurantStockReportRange) {
+  const parsed = validateRestaurantReportRange(range);
+  const rows = await db.$queryRaw<
+    Array<{
+      id: string;
+      day: string;
+      branchName: string;
+      locationName: string;
+      ingredientName: string;
+      canonicalUnit: string;
+      reason: string;
+      quantity: Prisma.Decimal;
+      effectiveUnitCost: Prisma.Decimal | null;
+      cost: Prisma.Decimal;
+      valuationSource: string;
+    }>
+  >(Prisma.sql`
+    ${valuedWastageCte(range, parsed)}
+    SELECT
+      "id",
+      TO_CHAR("occurredAt", 'YYYY-MM-DD') AS "day",
+      "branchName",
+      "locationName",
+      "ingredientName",
+      "canonicalUnit",
+      "reason",
+      "quantity",
+      "effectiveUnitCost",
+      "quantity" * COALESCE("effectiveUnitCost", 0) AS "cost",
+      "valuationSource"
+    FROM valued_wastage
+    ORDER BY "occurredAt" ASC, "id" ASC
+    LIMIT ${MAX_EXPORT_ROWS + 1}
+  `);
+  return boundedRows(rows, MAX_EXPORT_ROWS);
+}
+
 export async function readPurchasingReport(db: ScopedDb, range: RestaurantReportRange) {
   const parsed = validateRestaurantReportRange(range);
   const [summaryRows, statusRows, supplierRows, discrepancyRows] = await Promise.all([
@@ -940,12 +1354,19 @@ export function rowsToCsv(
 }
 
 export type RestaurantReportSection =
-  'overview' | 'payments' | 'inventory' | 'purchasing' | 'workforce' | 'sop';
+  | 'overview'
+  | 'payments'
+  | 'inventory'
+  | 'wastage'
+  | 'stock-movements'
+  | 'purchasing'
+  | 'workforce'
+  | 'sop';
 
 export async function exportRestaurantReportCsv(
   db: ScopedDb,
   section: RestaurantReportSection,
-  range: RestaurantReportRange,
+  range: RestaurantStockReportRange,
   options: { includeLabourCosts: boolean }
 ) {
   let rows: Record<string, unknown>[];
@@ -1019,6 +1440,77 @@ export async function exportRestaurantReportCsv(
       weightedAverageCost: row.weightedAverageCost.toString(),
       negative: row.onHand.lessThan(ZERO),
     }));
+  } else if (section === 'wastage') {
+    const wastage = await readWastageExportRows(db, range);
+    truncated = wastage.truncated;
+    columns = [
+      'day',
+      'branch',
+      'location',
+      'ingredient',
+      'canonicalUnit',
+      'reason',
+      'quantity',
+      'unitCost',
+      'cost',
+      'valuationSource',
+      'estimated',
+    ];
+    rows = wastage.rows.map((row) => ({
+      day: row.day,
+      branch: row.branchName,
+      location: row.locationName,
+      ingredient: row.ingredientName,
+      canonicalUnit: row.canonicalUnit,
+      reason: row.reason,
+      quantity: row.quantity.toString(),
+      unitCost: row.effectiveUnitCost?.toString() ?? '',
+      cost: serializeDecimal(row.cost),
+      valuationSource: row.valuationSource,
+      estimated: row.valuationSource !== 'RECORDED',
+    }));
+  } else if (section === 'stock-movements') {
+    const movements = await readStockMovementRows(db, range, MAX_EXPORT_ROWS);
+    truncated = movements.truncated;
+    columns = [
+      'ingredient',
+      'canonicalUnit',
+      'movements',
+      'openingQuantity',
+      'inQuantity',
+      'outQuantity',
+      'netQuantity',
+      'closingQuantity',
+      'openingCost',
+      'inCost',
+      'outCost',
+      'netCost',
+      'closingCost',
+      'estimatedMovements',
+      'unvaluedMovements',
+      'shareOfTotal',
+    ];
+    rows = movements.rows.map((row) => {
+      const serialized = serializeStockMovementRow(row);
+      return {
+        ingredient: serialized.ingredientName,
+        canonicalUnit: serialized.canonicalUnit,
+        movements: serialized.movementCount,
+        openingQuantity: serialized.openingQuantity,
+        inQuantity: serialized.inQuantity,
+        outQuantity: serialized.outQuantity,
+        netQuantity: serialized.netQuantity,
+        closingQuantity: serialized.closingQuantity,
+        openingCost: serialized.openingCost,
+        inCost: serialized.inCost,
+        outCost: serialized.outCost,
+        netCost: serialized.netCost,
+        closingCost: serialized.closingCost,
+        estimatedMovements: serialized.estimatedMovementCount,
+        unvaluedMovements: serialized.unvaluedMovementCount,
+        shareOfTotal: serialized.shareOfTotal,
+      };
+    });
   } else if (section === 'purchasing') {
     const report = await readPurchasingReport(db, range);
     columns = [

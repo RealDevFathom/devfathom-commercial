@@ -7118,6 +7118,8 @@ model RestaurantStockMovement {
   @@index([locationId])
   @@index([reason])
   @@index([occurredAt])
+  @@index([locationId, occurredAt, stockItemId], map: "restaurant_stock_movements_location_occurred_item_idx")
+  @@index([reason, occurredAt, locationId], map: "restaurant_stock_movements_reason_occurred_location_idx")
   @@index([orderId])
   @@index([receiptId])
   @@index([transferId])
