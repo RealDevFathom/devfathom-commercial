@@ -355,14 +355,14 @@ export function SopBoardView(props: SopBoardViewProps) {
     }[props.state];
 
     return (
-      <main className="min-w-0 space-y-6">
+      <div className="min-w-0 space-y-6">
         {header}
         <SectionCard>
           <h2 className="text-lg font-semibold text-text-strong">{copy.title}</h2>
           <p className="mt-2 text-sm text-text-muted">{copy.body}</p>
           {props.state === 'error' ? <SopLoadRecovery /> : null}
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -394,7 +394,7 @@ export function SopBoardView(props: SopBoardViewProps) {
   );
 
   return (
-    <main className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6">
       {header}
 
       {notice ? (
@@ -989,7 +989,7 @@ export function SopBoardView(props: SopBoardViewProps) {
           )}
         </SectionCard>
       </div>
-    </main>
+    </div>
   );
 }
 

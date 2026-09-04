@@ -6,7 +6,12 @@ const skeletonClass = 'motion-reduce:animate-none';
 
 export default function Loading() {
   return (
-    <main aria-busy="true" aria-label="Loading branch SOP board" className="min-w-0 space-y-6">
+    <div
+      role="status"
+      aria-busy="true"
+      aria-label="Loading branch SOP board"
+      className="min-w-0 space-y-6"
+    >
       <PageHeader
         eyebrow={<Skeleton className={`${skeletonClass} h-3 w-36`} />}
         heading={<Skeleton className={`${skeletonClass} h-11 w-72 max-w-full`} />}
@@ -73,6 +78,6 @@ export default function Loading() {
           </div>
         </SectionCard>
       </div>
-    </main>
+    </div>
   );
 }

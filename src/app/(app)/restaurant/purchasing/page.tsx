@@ -73,7 +73,7 @@ const NO_ACTOR = 'Your session is no longer active. Sign in again and retry.';
 
 function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Purchasing"
@@ -89,7 +89,7 @@ function AccessState({ moduleEnabled }: { moduleEnabled: boolean }) {
             : 'Enable the Restaurant Purchasing module to use purchasing.'}
         </p>
       </SectionCard>
-    </main>
+    </div>
   );
 }
 
@@ -174,7 +174,7 @@ export default async function PurchasingPage({
     };
   } catch {
     return (
-      <main className="space-y-6">
+      <div className="space-y-6">
         <PageHeader
           eyebrow="Restaurant operations"
           heading="Purchasing"
@@ -189,7 +189,7 @@ export default async function PurchasingPage({
             Retry
           </Link>
         </SectionCard>
-      </main>
+      </div>
     );
   }
 
@@ -397,7 +397,7 @@ export default async function PurchasingPage({
   );
 
   return (
-    <main className="space-y-6">
+    <div className="space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Purchasing"
@@ -862,6 +862,6 @@ export default async function PurchasingPage({
           )}
         </SectionCard>
       </div>
-    </main>
+    </div>
   );
 }
