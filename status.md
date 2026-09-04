@@ -1,11 +1,33 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 02:00 PKT (21:00 UTC) — Cowork supervisor check-in #202.
+Last reconciled: 2026-09-05 02:15 PKT (21:15 UTC) — Cowork supervisor check-in #204.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **21:15 — code tip `f143fee6`. MED-06 composed; ONE wave-4 lane left.**
+  `f143fee6` **MED-06 governed reference-data connectors** (`20260905070000`): one connector interface
+  whose only implementation is manual/file ingest — no live feed, no credentials, no network in tests,
+  D08 left open. A run keeps a cursor and an immutable per-run summary so a failure resumes rather than
+  restarts and a second identical run is a no-op. **Regulated reference data — medicine identity,
+  schedule classification, controlled status — only changes through a proposal confirmed under the new
+  `pharmacy:catalogue-review` capability**; descriptive fields may apply directly and the summary says
+  which is which. A bad row is rejected with a reason without aborting the run; a structurally invalid
+  file writes nothing. No daemon, cron or timer — a run is an explicit call.
+  **ABAC pin is now 40** (`src/lib/abac/index.test.ts:109`), moved by this lane for its new capability.
+  Two pure-addition collisions merged so both sides survive: a Prisma back-relation beside the DRAP
+  price-proposal relation, and its RLS assertion beside the SAFE-05 one.
+- **Recovering a silent run — this worked and is worth repeating.** MED-06's agent closed its issue with
+  "Run completed. Agent did not post a summary comment this run (transcript withheld — see run log)" and
+  no sha. The work was NOT lost: `git branch --list 'WHA-ph1-*' -v` on the hub showed the lane branch at
+  `bff7dd1e`, and `git log --all --oneline --since='45 minutes ago' --not $(git rev-parse HEAD)` lists
+  every un-composed lane commit. **Check the lane branch before re-firing anything.** The recovery and
+  its verification were recorded in a comment on the issue.
+- **Still running (1):** MKT-03 + MKT-05 customer ordering (`f324ff1e`, b958fd9d) — its branch is still
+  at `be0cd363`, so no commit yet. It is the largest brief of the wave. **When it composes, pharmacy P1
+  is COMPLETE** except RX-06 (D07), SUP-02 (D11) and PUR-08/ECO-03 (D08), which are blocked on owner
+  decisions. Do not start those, and do not invent new work.
 - **21:00 — code tip `9e27289d`. Two more wave-4 lanes composed, neither collided.**
   `54810dec` **ECO-01 + INV-08 DRAP monitoring and recall auto-ingest** (`20260905030000`): one
   pluggable seam whose only implementation is file/manual ingest — no live feed, no scraping, no
