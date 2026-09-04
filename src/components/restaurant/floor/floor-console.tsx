@@ -409,7 +409,7 @@ export function FloorConsole() {
         </SectionCard>
       ) : (
         <>
-          <SectionCard eyebrow="Scope" title="Branch and service date">
+          <SectionCard eyebrow="Scope" title="Branch and service date" titleLevel={2}>
             <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_13rem_auto] md:items-end">
               <Field label="Branch">
                 <RestaurantBranchSelect

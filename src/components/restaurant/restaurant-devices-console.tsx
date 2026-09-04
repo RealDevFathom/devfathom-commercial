@@ -214,6 +214,7 @@ export function RestaurantDevicesConsole() {
               ? 'Loading devices…'
               : `${devicesQuery.data?.length ?? 0} device${devicesQuery.data?.length === 1 ? '' : 's'}`
           }
+          titleLevel={2}
         >
           {devicesQuery.isLoading ? (
             <div role="status" aria-label="Loading restaurant devices" className="space-y-3 py-2">

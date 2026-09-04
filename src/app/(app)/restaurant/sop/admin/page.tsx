@@ -433,6 +433,7 @@ export function SopAdminView({
           <SectionCard
             eyebrow="sop.templates.max"
             title="Template library"
+            titleLevel={2}
             actions={
               capacity.kind === 'unconfigured' ? (
                 <StatusPill

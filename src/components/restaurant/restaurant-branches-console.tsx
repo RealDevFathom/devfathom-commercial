@@ -98,6 +98,7 @@ export function RestaurantBranchesConsole() {
           <SectionCard
             title="Locations"
             eyebrow={`${activeCount} of ${query.data?.limit ?? '—'} active`}
+            titleLevel={2}
           >
             {query.isLoading ? (
               <p aria-live="polite" className="text-sm text-text-muted">

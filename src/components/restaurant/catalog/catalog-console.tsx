@@ -660,6 +660,7 @@ export function RestaurantCatalogConsole({
               <SectionCard
                 eyebrow="Sellable registry"
                 title={`${snapshot.products.length} product${snapshot.products.length === 1 ? '' : 's'}`}
+                titleLevel={2}
                 actions={
                   canWrite ? (
                     <Button className="min-h-11" onClick={() => openEditor({ kind: 'product' })}>
