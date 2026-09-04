@@ -14,7 +14,9 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   mode (SUP-01/SUP-03) `4e599d9f`; WHA-1317 family accounts on one khata + explainable khata health
   score with cross-member privacy tests (CRM-L02/L04) `69152887`; WHA-1318 invoice OCR to a DRAFT goods
   receipt with per-field confidence and mandatory confirmation of every regulated field (AI-03)
-  `f03252ab`. WHA-1314 anomaly signals (AI-04/RPT-03) still running.
+  `f03252ab`; WHA-1326 Ask Fathom for pharmacy — answers only from the metric contract, branch/entitlement
+  scoped, every figure cited, explicit refusal when no authorized metric supports the question (AI-01)
+  `48843f14`. WHA-1314 anomaly signals (AI-04/RPT-03) still running.
   Migration prefixes in use today: 100000, 110000, 110500, 120000, 123700, 133000, 192000, 193000,
   194000 — a new lane must be given its own and told which.
 - **Pharmacy P1 still to do (wave 2+):** INV-10 central purchasing, MKT-01/02 segments + campaign
