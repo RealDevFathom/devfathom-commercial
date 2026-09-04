@@ -36,4 +36,21 @@ describe('GET Restaurant report export', () => {
     expect(response.status).toBe(200);
     expect(response.headers.get('X-Report-Truncated')).toBe('true');
   });
+
+  it('passes the stock-location filter unchanged for wastage exports', async () => {
+    const response = await GET(
+      new Request(
+        'https://devfathom.test/api/restaurant/reports/export?section=wastage&branch=branch-1&stockLocation=location-1&from=2026-01-01&to=2026-01-31'
+      )
+    );
+
+    expect(response.status).toBe(200);
+    expect(mocks.exportCsv).toHaveBeenCalledWith({
+      section: 'wastage',
+      branchId: 'branch-1',
+      stockLocationId: 'location-1',
+      from: '2026-01-01',
+      to: '2026-01-31',
+    });
+  });
 });

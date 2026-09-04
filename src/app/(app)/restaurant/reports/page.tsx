@@ -15,10 +15,13 @@ import { restaurantReportsRouter } from '@/server/routers/restaurant-reports';
 import { createTRPCContext } from '@/server/trpc';
 
 import { ExportLink } from './export-link';
+import { InventoryReportTabs } from './inventory-report-tabs';
 
 export const metadata: Metadata = { title: 'Restaurant reports' };
 
-type SearchParams = Promise<Record<'branch' | 'from' | 'to', string | string[] | undefined>>;
+type SearchParams = Promise<
+  Record<'branch' | 'stockLocation' | 'from' | 'to', string | string[] | undefined>
+>;
 
 const selectClass =
   'mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50';
@@ -184,32 +187,56 @@ export default async function RestaurantReportsPage({
       ? 'all'
       : (branches.find((item) => item.id === requestedBranch)?.id ?? branches[0]!.id);
   const rangeInput = { ...(branch === 'all' ? {} : { branchId: branch }), from, to };
+  const reportBranchIds = branch === 'all' ? branches.map((item) => item.id) : [branch];
+  const locationResult = await settled(() =>
+    ctx.db.restaurantStockLocation.findMany({
+      where: { branchId: { in: reportBranchIds } },
+      orderBy: [{ branch: { name: 'asc' } }, { name: 'asc' }, { id: 'asc' }],
+      select: { id: true, name: true, isActive: true, branch: { select: { name: true } } },
+    })
+  );
+  const stockLocations = locationResult.data ?? [];
+  const requestedStockLocation = queryValue(query.stockLocation);
+  const stockLocation = stockLocations.some((item) => item.id === requestedStockLocation)
+    ? requestedStockLocation!
+    : 'all';
+  const stockRangeInput = {
+    ...rangeInput,
+    ...(stockLocation === 'all' ? {} : { stockLocationId: stockLocation }),
+  };
   const posEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
 
-  const [overview, payments, inventory, purchasing, workforce, sop] = await Promise.all([
-    canOperational && posEnabled
-      ? settled(() => caller.overview(rangeInput))
-      : Promise.resolve({ data: null, failed: false }),
-    canFinancial && posEnabled
-      ? settled(() => caller.payments(rangeInput))
-      : Promise.resolve({ data: null, failed: false }),
-    canOperational && hasModule(ctx.entitlements, 'restaurant-inventory')
-      ? settled(() => caller.inventory(rangeInput))
-      : Promise.resolve({ data: null, failed: false }),
-    canOperational && hasModule(ctx.entitlements, 'restaurant-purchasing')
-      ? settled(() => caller.purchasing(rangeInput))
-      : Promise.resolve({ data: null, failed: false }),
-    canOperational && hasModule(ctx.entitlements, 'restaurant-workforce')
-      ? settled(() =>
-          canFinancial && canWorkforceRates
-            ? caller.workforceFinancial(rangeInput)
-            : caller.workforce(rangeInput)
-        )
-      : Promise.resolve({ data: null, failed: false }),
-    canOperational && hasModule(ctx.entitlements, 'restaurant-sop')
-      ? settled(() => caller.sop(rangeInput))
-      : Promise.resolve({ data: null, failed: false }),
-  ]);
+  const [overview, payments, inventory, wastage, stockMovements, purchasing, workforce, sop] =
+    await Promise.all([
+      canOperational && posEnabled
+        ? settled(() => caller.overview(rangeInput))
+        : Promise.resolve({ data: null, failed: false }),
+      canFinancial && posEnabled
+        ? settled(() => caller.payments(rangeInput))
+        : Promise.resolve({ data: null, failed: false }),
+      canOperational && hasModule(ctx.entitlements, 'restaurant-inventory')
+        ? settled(() => caller.inventory(rangeInput))
+        : Promise.resolve({ data: null, failed: false }),
+      canOperational && hasModule(ctx.entitlements, 'restaurant-inventory')
+        ? settled(() => caller.wastage(stockRangeInput))
+        : Promise.resolve({ data: null, failed: false }),
+      canOperational && hasModule(ctx.entitlements, 'restaurant-inventory')
+        ? settled(() => caller.stockMovements(stockRangeInput))
+        : Promise.resolve({ data: null, failed: false }),
+      canOperational && hasModule(ctx.entitlements, 'restaurant-purchasing')
+        ? settled(() => caller.purchasing(rangeInput))
+        : Promise.resolve({ data: null, failed: false }),
+      canOperational && hasModule(ctx.entitlements, 'restaurant-workforce')
+        ? settled(() =>
+            canFinancial && canWorkforceRates
+              ? caller.workforceFinancial(rangeInput)
+              : caller.workforce(rangeInput)
+          )
+        : Promise.resolve({ data: null, failed: false }),
+      canOperational && hasModule(ctx.entitlements, 'restaurant-sop')
+        ? settled(() => caller.sop(rangeInput))
+        : Promise.resolve({ data: null, failed: false }),
+    ]);
   const exportBranch = branch;
   const freshness = overview.data?.freshness ?? payments.data?.freshness;
   const freshnessDisplay = freshness ? freshnessCopy(freshness.status) : null;
@@ -230,7 +257,7 @@ export default async function RestaurantReportsPage({
       />
 
       <SectionCard eyebrow="Maximum 90 days" title="Report filters" titleLevel={2}>
-        <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
+        <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-5" method="get">
           <label className="text-sm text-text-body">
             Branch
             <select className={selectClass} defaultValue={branch} name="branch">
@@ -238,6 +265,19 @@ export default async function RestaurantReportsPage({
               {branches.map((item) => (
                 <option key={item.id} value={item.id}>
                   {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="text-sm text-text-body">
+            Stock location
+            <select className={selectClass} defaultValue={stockLocation} name="stockLocation">
+              <option value="all">All stock locations</option>
+              {stockLocations.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {branch === 'all' ? `${item.branch.name} — ` : ''}
+                  {item.name}
+                  {item.isActive ? '' : ' (inactive)'}
                 </option>
               ))}
             </select>
@@ -269,6 +309,255 @@ export default async function RestaurantReportsPage({
           </div>
         ) : null}
       </SectionCard>
+
+      <InventoryReportTabs
+        wastage={
+          <SectionCard
+            actions={
+              wastage.data ? (
+                <ExportLink
+                  section="wastage"
+                  branch={exportBranch}
+                  stockLocation={stockLocation === 'all' ? undefined : stockLocation}
+                  from={from}
+                  to={to}
+                />
+              ) : undefined
+            }
+            eyebrow="Recorded cost, then estimated fallback"
+            title="Wastage report"
+            titleLevel={2}
+          >
+            {!hasModule(ctx.entitlements, 'restaurant-inventory') ? (
+              <SectionNotice
+                kind="module"
+                detail="Enable Restaurant Inventory to expose wastage valuation."
+              />
+            ) : !canOperational ? (
+              <SectionNotice kind="permission" detail="reports:operational is required." />
+            ) : wastage.failed ? (
+              <SectionNotice kind="error" detail="Wastage movements could not be loaded." />
+            ) : wastage.data && wastage.data.totals.movementCount > 0 ? (
+              <>
+                <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
+                  <Stat label="Wastage cost" value={displayNumber(wastage.data.totals.cost)} />
+                  <Stat label="Quantity" value={displayNumber(wastage.data.totals.quantity)} />
+                  <Stat label="Movements" value={wastage.data.totals.movementCount} />
+                  <Stat
+                    label="Estimated"
+                    value={wastage.data.totals.estimatedMovementCount}
+                    sub={`${wastage.data.totals.unvaluedMovementCount} unvalued`}
+                  />
+                </div>
+                {wastage.data.truncated ? (
+                  <div className="mt-5">
+                    <DetailLimitNotice
+                      detail={`Showing the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} ingredients; totals and reason/day groups use the complete filtered ledger.`}
+                    />
+                  </div>
+                ) : null}
+                <div className="mt-6 grid gap-6 xl:grid-cols-2">
+                  <div>
+                    <h3 className="mb-3 font-semibold text-text-strong">By reason</h3>
+                    <TableFrame label="Wastage grouped by reason">
+                      <table className="w-full min-w-[34rem] text-left text-sm">
+                        <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                          <tr>
+                            <th className="p-3">Reason</th>
+                            <th className="p-3 text-right">Quantity</th>
+                            <th className="p-3 text-right">Cost</th>
+                            <th className="p-3 text-right">Share</th>
+                            <th className="p-3">Valuation</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wastage.data.byReason.map((row) => (
+                            <tr className="border-t border-border-subtle" key={row.reason}>
+                              <td className="p-3 text-text-strong">
+                                {row.reason.replaceAll('_', ' ')}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.quantity)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.cost)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">{row.shareOfTotal}%</td>
+                              <td className="p-3">
+                                <StatusPill
+                                  status={row.valuationStatus.replaceAll('_', ' ')}
+                                  tone={row.valuationStatus === 'RECORDED' ? 'neutral' : 'warning'}
+                                />
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableFrame>
+                  </div>
+                  <div>
+                    <h3 className="mb-3 font-semibold text-text-strong">By day</h3>
+                    <TableFrame label="Wastage grouped by day">
+                      <table className="w-full min-w-[30rem] text-left text-sm">
+                        <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                          <tr>
+                            <th className="p-3">Day</th>
+                            <th className="p-3 text-right">Movements</th>
+                            <th className="p-3 text-right">Quantity</th>
+                            <th className="p-3 text-right">Cost</th>
+                            <th className="p-3 text-right">Share</th>
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {wastage.data.byDay.map((row) => (
+                            <tr className="border-t border-border-subtle" key={row.day}>
+                              <td className="p-3 font-mono text-xs text-text-muted">{row.day}</td>
+                              <td className="p-3 text-right tabular-nums">{row.movementCount}</td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.quantity)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">
+                                {displayNumber(row.cost)}
+                              </td>
+                              <td className="p-3 text-right tabular-nums">{row.shareOfTotal}%</td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </TableFrame>
+                  </div>
+                </div>
+                <div className="mt-6 border-t border-border-subtle pt-5">
+                  <h3 className="mb-3 font-semibold text-text-strong">By ingredient</h3>
+                  <TableFrame label="Wastage grouped by ingredient">
+                    <table className="w-full min-w-[46rem] text-left text-sm">
+                      <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                        <tr>
+                          <th className="p-3">Ingredient</th>
+                          <th className="p-3">Unit</th>
+                          <th className="p-3 text-right">Quantity</th>
+                          <th className="p-3 text-right">Cost</th>
+                          <th className="p-3 text-right">Share</th>
+                          <th className="p-3">Valuation</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {wastage.data.byIngredient.map((row) => (
+                          <tr className="border-t border-border-subtle" key={row.stockItemId}>
+                            <td className="p-3 text-text-strong">{row.ingredientName}</td>
+                            <td className="p-3 text-text-muted">{row.canonicalUnit}</td>
+                            <td className="p-3 text-right tabular-nums">
+                              {displayNumber(row.quantity)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums">
+                              {displayNumber(row.cost)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums">{row.shareOfTotal}%</td>
+                            <td className="p-3">
+                              <StatusPill
+                                status={row.valuationStatus.replaceAll('_', ' ')}
+                                tone={row.valuationStatus === 'RECORDED' ? 'neutral' : 'warning'}
+                              />
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                </div>
+              </>
+            ) : (
+              <SectionNotice
+                kind="empty"
+                detail="No wastage, spoilage, staff-meal or negative manual-correction movements match these filters."
+              />
+            )}
+          </SectionCard>
+        }
+        stockMovements={
+          <SectionCard
+            actions={
+              stockMovements.data ? (
+                <ExportLink
+                  section="stock-movements"
+                  branch={exportBranch}
+                  stockLocation={stockLocation === 'all' ? undefined : stockLocation}
+                  from={from}
+                  to={to}
+                />
+              ) : undefined
+            }
+            eyebrow="Immutable movement ledger"
+            title="Stock-movement report"
+            titleLevel={2}
+          >
+            {!hasModule(ctx.entitlements, 'restaurant-inventory') ? (
+              <SectionNotice
+                kind="module"
+                detail="Enable Restaurant Inventory to expose stock movement reporting."
+              />
+            ) : !canOperational ? (
+              <SectionNotice kind="permission" detail="reports:operational is required." />
+            ) : stockMovements.failed ? (
+              <SectionNotice kind="error" detail="Stock movements could not be loaded." />
+            ) : stockMovements.data && stockMovements.data.movementCount > 0 ? (
+              <>
+                <div className="grid gap-5 sm:grid-cols-2">
+                  <Stat label="Movements" value={stockMovements.data.movementCount} />
+                  <Stat label="Ingredients moved" value={stockMovements.data.ingredientCount} />
+                </div>
+                {stockMovements.data.truncated ? (
+                  <div className="mt-5">
+                    <DetailLimitNotice
+                      detail={`Showing the first ${MAX_INTERACTIVE_ROWS.toLocaleString()} ingredients; movement and ingredient counts use the complete filtered ledger.`}
+                    />
+                  </div>
+                ) : null}
+                <div className="mt-6">
+                  <TableFrame label="Stock movement by ingredient">
+                    <table className="w-full min-w-[52rem] text-left text-sm">
+                      <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
+                        <tr>
+                          <th className="p-3">Ingredient</th>
+                          <th className="p-3">Unit</th>
+                          <th className="p-3 text-right">Opening</th>
+                          <th className="p-3 text-right">In</th>
+                          <th className="p-3 text-right">Out</th>
+                          <th className="p-3 text-right">Net</th>
+                          <th className="p-3 text-right">Closing</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {stockMovements.data.ingredients.map((row) => (
+                          <tr className="border-t border-border-subtle" key={row.stockItemId}>
+                            <td className="p-3 text-text-strong">{row.ingredientName}</td>
+                            <td className="p-3 text-text-muted">{row.canonicalUnit}</td>
+                            <td className="p-3 text-right tabular-nums">
+                              {displayNumber(row.opening)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums">{displayNumber(row.in)}</td>
+                            <td className="p-3 text-right tabular-nums">
+                              {displayNumber(row.out)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums">
+                              {displayNumber(row.net)}
+                            </td>
+                            <td className="p-3 text-right tabular-nums">
+                              {displayNumber(row.closing)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </TableFrame>
+                </div>
+              </>
+            ) : (
+              <SectionNotice kind="empty" detail="No stock movements match these filters." />
+            )}
+          </SectionCard>
+        }
+      />
 
       <SectionCard
         actions={

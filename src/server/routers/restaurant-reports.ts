@@ -10,6 +10,8 @@ import {
   readPaymentsReport,
   readPurchasingReport,
   readSopReport,
+  readStockMovementReport,
+  readWastageReport,
   readWorkforceReport,
   RestaurantReportError,
 } from '@/lib/restaurant/reports';
@@ -29,7 +31,17 @@ const range = z
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   })
   .strict();
-const section = z.enum(['overview', 'payments', 'inventory', 'purchasing', 'workforce', 'sop']);
+const stockRange = range.extend({ stockLocationId: z.string().min(1).max(200).optional() });
+const section = z.enum([
+  'overview',
+  'payments',
+  'inventory',
+  'wastage',
+  'stock-movements',
+  'purchasing',
+  'workforce',
+  'sop',
+]);
 async function allowed(ctx: TRPCContext, action: Action) {
   const user = ctx.session?.user;
   return Boolean(
@@ -98,6 +110,20 @@ async function resolvedRange(ctx: TRPCContext, input: z.infer<typeof range>) {
     });
   return { branchIds, from: input.from, to: input.to };
 }
+async function resolvedStockRange(ctx: TRPCContext, input: z.infer<typeof stockRange>) {
+  const resolved = await resolvedRange(ctx, input);
+  if (!input.stockLocationId) return resolved;
+  const location = await ctx.db.restaurantStockLocation.findFirst({
+    where: { id: input.stockLocationId, branchId: { in: resolved.branchIds } },
+    select: { id: true },
+  });
+  if (!location)
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'The stock location is outside your report scope.',
+    });
+  return { ...resolved, stockLocationId: location.id };
+}
 function requireModule(ctx: TRPCContext, key: string) {
   if (!hasModule(ctx.entitlements, key))
     throw new TRPCError({ code: 'FORBIDDEN', message: 'This report source is not licensed.' });
@@ -108,6 +134,20 @@ async function guarded<T>(
   read: (resolved: Awaited<ReturnType<typeof resolvedRange>>) => Promise<T>
 ) {
   const resolved = await resolvedRange(ctx, input);
+  try {
+    return await read(resolved);
+  } catch (error) {
+    if (error instanceof RestaurantReportError)
+      throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+    throw error;
+  }
+}
+async function guardedStock<T>(
+  ctx: TRPCContext,
+  input: z.infer<typeof stockRange>,
+  read: (resolved: Awaited<ReturnType<typeof resolvedStockRange>>) => Promise<T>
+) {
+  const resolved = await resolvedStockRange(ctx, input);
   try {
     return await read(resolved);
   } catch (error) {
@@ -135,6 +175,14 @@ export const restaurantReportsRouter = router({
   inventory: operational.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-inventory');
     return guarded(ctx, input, (resolved) => readInventoryReport(ctx.db, resolved));
+  }),
+  wastage: operational.input(stockRange).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-inventory');
+    return guardedStock(ctx, input, (resolved) => readWastageReport(ctx.db, resolved));
+  }),
+  stockMovements: operational.input(stockRange).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-inventory');
+    return guardedStock(ctx, input, (resolved) => readStockMovementReport(ctx.db, resolved));
   }),
   purchasing: operational.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-purchasing');
@@ -167,7 +215,7 @@ export const restaurantReportsRouter = router({
     return guarded(ctx, input, (resolved) => readSopReport(ctx.db, resolved));
   }),
   exportCsv: auditedProtectedProcedure
-    .input(range.extend({ section }))
+    .input(stockRange.extend({ section }))
     .query(async ({ ctx, input }) => {
       const needsFinancial = input.section === 'payments';
       if (needsFinancial && !(await allowed(ctx, 'reports:financial')))
@@ -176,7 +224,8 @@ export const restaurantReportsRouter = router({
         throw new TRPCError({ code: 'FORBIDDEN' });
       if (input.section === 'overview' || input.section === 'payments')
         requireModule(ctx, 'restaurant-pos');
-      if (input.section === 'inventory') requireModule(ctx, 'restaurant-inventory');
+      if (['inventory', 'wastage', 'stock-movements'].includes(input.section))
+        requireModule(ctx, 'restaurant-inventory');
       if (input.section === 'purchasing') requireModule(ctx, 'restaurant-purchasing');
       if (input.section === 'workforce') requireModule(ctx, 'restaurant-workforce');
       if (input.section === 'sop') requireModule(ctx, 'restaurant-sop');
@@ -184,7 +233,7 @@ export const restaurantReportsRouter = router({
         input.section === 'workforce' &&
         (await allowed(ctx, 'reports:financial')) &&
         (await allowed(ctx, 'workforce:rates'));
-      return guarded(ctx, input, async (resolved) => {
+      const exportReport = async (resolved: Awaited<ReturnType<typeof resolvedStockRange>>) => {
         const result = await exportRestaurantReportCsv(ctx.db, input.section, resolved, {
           includeLabourCosts,
         });
@@ -194,9 +243,15 @@ export const restaurantReportsRouter = router({
             section: input.section,
             from: resolved.from,
             to: resolved.to,
+            ...('stockLocationId' in resolved && resolved.stockLocationId
+              ? { stockLocationId: resolved.stockLocationId }
+              : {}),
           },
         });
         return result;
-      });
+      };
+      return input.section === 'wastage' || input.section === 'stock-movements'
+        ? guardedStock(ctx, input, exportReport)
+        : guarded(ctx, input, exportReport);
     }),
 });

@@ -6,8 +6,18 @@ import { createTRPCContext } from '@/server/trpc';
 
 const query = z
   .object({
-    section: z.enum(['overview', 'payments', 'inventory', 'purchasing', 'workforce', 'sop']),
+    section: z.enum([
+      'overview',
+      'payments',
+      'inventory',
+      'wastage',
+      'stock-movements',
+      'purchasing',
+      'workforce',
+      'sop',
+    ]),
     branch: z.string().min(1).max(200),
+    stockLocation: z.string().min(1).max(200).optional(),
     from: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
     to: z.string().regex(/^\d{4}-\d{2}-\d{2}$/),
   })
@@ -23,6 +33,7 @@ export async function GET(request: Request) {
     const file = await restaurantReportsRouter.createCaller(ctx).exportCsv({
       section: parsed.data.section,
       ...(parsed.data.branch === 'all' ? {} : { branchId: parsed.data.branch }),
+      ...(parsed.data.stockLocation ? { stockLocationId: parsed.data.stockLocation } : {}),
       from: parsed.data.from,
       to: parsed.data.to,
     });

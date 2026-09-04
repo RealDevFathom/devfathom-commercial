@@ -6,6 +6,8 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   overview: vi.fn(),
   payments: vi.fn(),
+  wastage: vi.fn(),
+  stockMovements: vi.fn(),
   workforce: vi.fn(),
   exportCsv: vi.fn(),
   annotateAudit: vi.fn(),
@@ -32,6 +34,8 @@ vi.mock('@/lib/restaurant/reports', async () => ({
   ...(await vi.importActual<typeof import('@/lib/restaurant/reports')>('@/lib/restaurant/reports')),
   readOverviewReport: mocks.overview,
   readPaymentsReport: mocks.payments,
+  readWastageReport: mocks.wastage,
+  readStockMovementReport: mocks.stockMovements,
   readWorkforceReport: mocks.workforce,
   exportRestaurantReportCsv: mocks.exportCsv,
 }));
@@ -44,6 +48,7 @@ const db = {
   restaurantBranch: { findMany: vi.fn() },
   restaurantStaffProfile: { findFirst: vi.fn() },
   restaurantBranchAssignment: { findMany: vi.fn() },
+  restaurantStockLocation: { findFirst: vi.fn() },
 };
 const input = { branchId: 'b1', from: '2026-01-01', to: '2026-01-02' };
 function caller() {
@@ -84,8 +89,11 @@ beforeEach(() => {
   db.restaurantStaffProfile.findFirst.mockResolvedValue({ primaryBranchId: 'b1' });
   db.restaurantBranchAssignment.findMany.mockResolvedValue([]);
   db.restaurantBranch.findMany.mockResolvedValue([{ id: 'b1', name: 'One' }]);
+  db.restaurantStockLocation.findFirst.mockResolvedValue({ id: 'location-1' });
   mocks.overview.mockResolvedValue({ orderCount: 1 });
   mocks.payments.mockResolvedValue({ netSales: '1.00' });
+  mocks.wastage.mockResolvedValue({ totals: { movementCount: 1 } });
+  mocks.stockMovements.mockResolvedValue({ movementCount: 1 });
   mocks.workforce.mockResolvedValue({ labourCostsVisible: true, labourCost: '10.00' });
   mocks.exportCsv.mockResolvedValue({
     filename: 'restaurant-workforce.csv',
@@ -220,6 +228,85 @@ describe('restaurant report capability and branch matrix', () => {
     await expect(caller().payments(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     mocks.grants.add('reports:financial');
     await expect(caller().payments(input)).resolves.toMatchObject({ netSales: '1.00' });
+  });
+  it('passes an authorized stock location to both inventory-ledger reports', async () => {
+    mocks.grants.add('reports:operational');
+    const stockInput = { ...input, stockLocationId: 'location-1' };
+
+    await expect(caller().wastage(stockInput)).resolves.toMatchObject({
+      totals: { movementCount: 1 },
+    });
+    await expect(caller().stockMovements(stockInput)).resolves.toMatchObject({ movementCount: 1 });
+
+    expect(db.restaurantStockLocation.findFirst).toHaveBeenCalledWith({
+      where: { id: 'location-1', branchId: { in: ['b1'] } },
+      select: { id: true },
+    });
+    expect(mocks.wastage).toHaveBeenCalledWith(db, {
+      branchIds: ['b1'],
+      stockLocationId: 'location-1',
+      from: input.from,
+      to: input.to,
+    });
+    expect(mocks.stockMovements).toHaveBeenCalledWith(db, {
+      branchIds: ['b1'],
+      stockLocationId: 'location-1',
+      from: input.from,
+      to: input.to,
+    });
+  });
+  it('rejects a stock location outside the authorized branches without reading the ledger', async () => {
+    mocks.grants.add('reports:operational');
+    db.restaurantStockLocation.findFirst.mockResolvedValue(null);
+
+    await expect(
+      caller().wastage({ ...input, stockLocationId: 'other-location' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.wastage).not.toHaveBeenCalled();
+  });
+  it('keeps new report reads and exports behind Inventory plus operational capability', async () => {
+    mocks.grants.add('reports:operational');
+    mocks.modules.delete('restaurant-inventory');
+
+    await expect(caller().wastage(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().stockMovements(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().exportCsv({ ...input, section: 'wastage' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.wastage).not.toHaveBeenCalled();
+    expect(mocks.stockMovements).not.toHaveBeenCalled();
+    expect(mocks.exportCsv).not.toHaveBeenCalled();
+  });
+  it('audits wastage CSV with the same authorized location filter', async () => {
+    mocks.grants.add('reports:operational');
+
+    await caller().exportCsv({
+      ...input,
+      section: 'wastage',
+      stockLocationId: 'location-1',
+    });
+
+    expect(mocks.exportCsv).toHaveBeenCalledWith(
+      db,
+      'wastage',
+      {
+        branchIds: ['b1'],
+        stockLocationId: 'location-1',
+        from: input.from,
+        to: input.to,
+      },
+      { includeLabourCosts: false }
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        metadata: expect.objectContaining({
+          branchIds: ['b1'],
+          section: 'wastage',
+          stockLocationId: 'location-1',
+        }),
+      })
+    );
   });
   it('denies POS-derived direct reads and exports when Restaurant POS is disabled', async () => {
     mocks.grants.add('reports:operational');

@@ -10,6 +10,8 @@ import {
   readPaymentsReport,
   readPurchasingReport,
   readSopReport,
+  readStockMovementReport,
+  readWastageReport,
   readWorkforceReport,
   rowsToCsv,
   validateRestaurantReportRange,
@@ -219,6 +221,154 @@ function queryText(query: unknown): string {
 }
 
 const boundedRange = { branchIds: ['b1'], from: '2026-01-01', to: '2026-01-31' };
+
+describe('restaurant wastage and stock movement reports', () => {
+  it('values bounded wastage groups with recorded-cost precedence and explicit estimates', async () => {
+    const aggregate = {
+      movementCount: 4,
+      quantity: new Prisma.Decimal(10),
+      cost: new Prisma.Decimal(25),
+      estimatedMovementCount: 2,
+      unvaluedMovementCount: 1,
+    };
+    const ingredients = Array.from({ length: 201 }, (_, index) => ({
+      stockItemId: `stock-${index}`,
+      ingredientName: index === 0 ? '=Formula flour' : `Ingredient ${index}`,
+      canonicalUnit: 'kg',
+      movementCount: 2,
+      quantity: new Prisma.Decimal(4),
+      cost: new Prisma.Decimal(10),
+      estimatedMovementCount: 1,
+      unvaluedMovementCount: 0,
+    }));
+    const responses = [
+      [aggregate],
+      [{ ...aggregate, reason: 'WASTAGE', movementCount: 2, cost: new Prisma.Decimal(10) }],
+      ingredients,
+      [{ ...aggregate, day: '2026-01-02' }],
+    ];
+    const db = {
+      $queryRaw: vi.fn(async () => responses.shift() ?? []),
+    } as unknown as ScopedDb;
+    const report = await readWastageReport(db, {
+      ...boundedRange,
+      stockLocationId: 'location-1',
+    });
+
+    expect(report).toMatchObject({
+      totals: {
+        movementCount: 4,
+        quantity: '10',
+        cost: '25',
+        estimatedMovementCount: 2,
+        unvaluedMovementCount: 1,
+      },
+      byReason: [
+        {
+          reason: 'WASTAGE',
+          cost: '10',
+          shareOfTotal: '40',
+          estimated: true,
+          valuationStatus: 'MIXED',
+        },
+      ],
+      byDay: [{ day: '2026-01-02' }],
+      truncated: true,
+    });
+    expect(report.byIngredient).toHaveLength(200);
+    const sql = (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls
+      .map(([query]) => queryText(query))
+      .join(' ');
+    expect(sql).toContain('MANUAL_CORRECTION');
+    expect(sql).toContain('movement."unitCost"');
+    expect(sql).toContain('current_cost."weightedAverageCost"');
+    expect(sql).toContain('ingredient."referenceCost"');
+    expect(
+      (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls.every(([query]) =>
+        (query as { values?: unknown[] }).values?.includes('location-1')
+      )
+    ).toBe(true);
+  });
+
+  it('derives opening, in, out, net and closing per canonical ingredient unit', async () => {
+    const db = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([{ movementCount: 3, ingredientCount: 1 }])
+        .mockResolvedValueOnce([
+          {
+            stockItemId: 'stock-1',
+            ingredientName: 'Flour',
+            canonicalUnit: 'kg',
+            movementCount: 3,
+            opening: new Prisma.Decimal(5),
+            incoming: new Prisma.Decimal(8),
+            outgoing: new Prisma.Decimal(3),
+            net: new Prisma.Decimal(5),
+            closing: new Prisma.Decimal(10),
+          },
+        ]),
+    } as unknown as ScopedDb;
+
+    await expect(readStockMovementReport(db, boundedRange)).resolves.toMatchObject({
+      movementCount: 3,
+      ingredientCount: 1,
+      ingredients: [
+        {
+          stockItemId: 'stock-1',
+          canonicalUnit: 'kg',
+          opening: '5',
+          in: '8',
+          out: '3',
+          net: '5',
+          closing: '10',
+        },
+      ],
+      truncated: false,
+    });
+    expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[1]?.[0])).toContain(
+      'HAVING COUNT(*) FILTER'
+    );
+  });
+
+  it('uses the same stock-location filter and formula-safe ingredient rows for CSV', async () => {
+    const aggregate = {
+      movementCount: 1,
+      quantity: new Prisma.Decimal(2),
+      cost: new Prisma.Decimal(6),
+      estimatedMovementCount: 1,
+      unvaluedMovementCount: 0,
+    };
+    const db = {
+      $queryRaw: vi
+        .fn()
+        .mockResolvedValueOnce([aggregate])
+        .mockResolvedValueOnce([{ ...aggregate, reason: 'SPOILAGE' }])
+        .mockResolvedValueOnce([
+          {
+            ...aggregate,
+            stockItemId: 'stock-1',
+            ingredientName: '=Formula flour',
+            canonicalUnit: 'kg',
+          },
+        ])
+        .mockResolvedValueOnce([{ ...aggregate, day: '2026-01-02' }]),
+    } as unknown as ScopedDb;
+    const exported = await exportRestaurantReportCsv(
+      db,
+      'wastage',
+      { ...boundedRange, stockLocationId: 'location-1' },
+      { includeLabourCosts: false }
+    );
+
+    expect(exported.content).toContain("\n'=Formula flour,kg,1,2,6,100,ESTIMATED,1,0");
+    expect(
+      (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls.every(([query]) =>
+        (query as { values?: unknown[] }).values?.includes('location-1')
+      )
+    ).toBe(true);
+  });
+});
 
 describe('restaurant complete summaries with bounded details', () => {
   it.each([
