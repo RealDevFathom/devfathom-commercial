@@ -21,6 +21,10 @@ import {
   snoozePharmacyAnomalySignal,
 } from '@/lib/pharmacy/anomaly-signals-operations';
 import { proposeExpiryReturn, readExpiryAdvice } from '@/lib/pharmacy/expiry-advisor-operations';
+import {
+  acknowledgePackAuthenticationFlag,
+  readPackAuthenticationFlags,
+} from '@/lib/pharmacy/pack-authentication-operations';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
@@ -370,6 +374,24 @@ export const pharmacyReportsRouter = router({
         },
         input.lotId
       );
+    }),
+  packAuthenticationFlags: reports.input(filters).query(async ({ ctx, input }) => {
+    const resolved = await ownerFilters(ctx, input);
+    return readPackAuthenticationFlags(ctx.db, resolved.branchIds);
+  }),
+  acknowledgePackAuthenticationFlag: reports
+    .input(anomalyDecision)
+    .mutation(async ({ ctx, input }) => {
+      await requireFinancialReports(ctx);
+      await requireOwnerBranch(ctx, input.branchId);
+      await acknowledgePackAuthenticationFlag(ctx.db, {
+        organizationId: ctx.entitlements.organizationId,
+        branchId: input.branchId,
+        scanId: input.signalId,
+        actorId: ctx.session!.user.id,
+        reason: input.reason,
+      });
+      return { acknowledged: true };
     }),
   refreshAnomalies: reports.input(filters).mutation(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);

@@ -55,6 +55,7 @@ import {
   submitPurchaseReturn,
 } from '@/lib/pharmacy/supplier-returns-operations';
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
+import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
@@ -1284,6 +1285,20 @@ export const pharmacyPurchasingRouter = router({
   resolveScan: protectedProcedure
     .input(z.object({ term: z.string().trim().min(1).max(200) }).strict())
     .query(({ ctx, input }) => resolveScan(ctx.db, tenantScope(ctx), input.term)),
+
+  /** SAFE-05: audited, advisory pack authentication at the goods-in bench. */
+  authenticatePack: auditedProtectedProcedure
+    .input(z.object({ branchId, payload: z.string().max(512) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = receivingScope(ctx, input.branchId);
+      ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'receiving_pack_scan' };
+      return authenticatePharmacyPack(ctx.db, {
+        ...scope,
+        actorId: ctx.session.user.id,
+        source: 'RECEIVING',
+        payload: input.payload,
+      });
+    }),
 
   /** PUR-06 — supplier credits recorded at this branch and what they cover. */
   supplierCredits: protectedProcedure

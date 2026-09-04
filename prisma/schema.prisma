@@ -13313,3 +13313,67 @@ model PharmacyAnomalySignalEvent {
   @@index([organizationId, branchId, signalId, createdAt], map: "pharmacy_anomaly_signal_events_org_signal_idx")
   @@map("pharmacy_anomaly_signal_events")
 }
+
+enum PharmacyPackAuthenticationSource {
+  RECEIVING
+  DISPENSING
+}
+
+enum PharmacyPackAuthenticationStatus {
+  VERIFIED
+  FLAGGED
+  NOT_VERIFIABLE
+  BLOCKED_RECALL
+}
+
+/// SAFE-05 — one branch-scoped scan verdict. Non-recall failures are advisory;
+/// reasoned acknowledgement is retained on the immutable scan evidence.
+model PharmacyPackAuthenticationScan {
+  id                   String                            @id @default(cuid())
+  organizationId       String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  source               PharmacyPackAuthenticationSource
+  status               PharmacyPackAuthenticationStatus
+  gtin                 String?
+  batchNumber          String?
+  expiresOn            String?
+  serial               String?
+  medicineId           String?
+  manufacturingBatchId String?
+  issues               String[]
+  explanation          String
+  advisory             Boolean
+  scannedByUserId      String
+  acknowledgedAt       DateTime?
+  acknowledgedByUserId String?
+  acknowledgementReason String?
+  createdAt            DateTime                          @default(now())
+  events               PharmacyPackAuthenticationEvent[]
+
+  @@unique([organizationId, id], map: "pharmacy_pack_authentication_scans_org_id_key")
+  @@unique([organizationId, branchId, id], map: "pharmacy_pack_authentication_scans_org_branch_id_key")
+  @@index([organizationId, branchId, status, createdAt(sort: Desc)], map: "pharmacy_pack_auth_scans_org_branch_status_idx")
+  @@index([organizationId, serial], map: "pharmacy_pack_auth_scans_org_serial_idx")
+  @@map("pharmacy_pack_authentication_scans")
+}
+
+enum PharmacyPackAuthenticationEventKind {
+  SCANNED
+  ACKNOWLEDGED
+}
+
+model PharmacyPackAuthenticationEvent {
+  id             String                                @id @default(cuid())
+  organizationId String                                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  scanId         String
+  kind           PharmacyPackAuthenticationEventKind
+  actorId        String
+  reason         String?
+  createdAt      DateTime                              @default(now())
+  scan           PharmacyPackAuthenticationScan        @relation(fields: [organizationId, branchId, scanId], references: [organizationId, branchId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id], map: "pharmacy_pack_authentication_events_org_id_key")
+  @@index([organizationId, branchId, scanId, createdAt], map: "pharmacy_pack_authentication_events_org_scan_idx")
+  @@map("pharmacy_pack_authentication_events")
+}

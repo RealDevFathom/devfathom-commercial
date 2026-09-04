@@ -40,6 +40,7 @@ import {
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import {
   applyPharmacyTender,
   closePharmacyDrawer,
@@ -50,7 +51,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 
-import { protectedProcedure, router } from '../trpc';
+import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -593,6 +594,19 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+
+  /** SAFE-05: advisory pack authentication; only the existing recall path blocks. */
+  authenticatePack: auditedProtectedProcedure
+    .input(z.object({ branchId, payload: z.string().max(512) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
+      return authenticatePharmacyPack(ctx.db, {
+        ...scope,
+        source: 'DISPENSING',
+        payload: input.payload,
+      });
     }),
 
   /** The open bill with the FEFO allocation each line actually drew (POS-03). */
