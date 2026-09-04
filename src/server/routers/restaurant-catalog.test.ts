@@ -9,7 +9,15 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   annotateAudit: vi.fn(),
+  computeRecipeCost: vi.fn(),
 }));
+
+vi.mock('@/lib/restaurant/recipe-costing', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/restaurant/recipe-costing')>(
+    '@/lib/restaurant/recipe-costing'
+  );
+  return { ...actual, computeRecipeCost: mocks.computeRecipeCost };
+});
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -100,12 +108,14 @@ beforeEach(() => {
   db = makeDb();
   mocks.can.mockResolvedValue(true);
   mocks.annotateAudit.mockReset();
+  mocks.computeRecipeCost.mockReset();
 });
 
 function caller(limits: Record<string, number> = { 'restaurant.brands.max': 5 }) {
   return restaurantCatalogRouter.createCaller({
     db,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-menu'],
       activeSeats: 1,
       seatLimit: 50,
@@ -114,7 +124,13 @@ function caller(limits: Record<string, number> = { 'restaurant.brands.max': 5 })
     },
     session: {
       expires: 'later',
-      user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+      user: {
+        id: 'user_1',
+        organizationId: 'org_1',
+        role: 'EMPLOYEE',
+        department: 'OPERATIONS',
+        status: 'ACTIVE',
+      },
     },
     organization: null,
     support: null,
@@ -272,6 +288,66 @@ describe('read models', () => {
     (db.restaurantBrand as Delegate).findMany.mockResolvedValue([{ id: 'b1', name: 'A' }]);
     const result = await caller().listBrands();
     expect(result).toHaveLength(1);
+  });
+});
+
+describe('recipe costing reads', () => {
+  const cost = (recipeId: string) => ({
+    recipeId,
+    recipeVersionId: `${recipeId}_v1`,
+    portionCount: 4,
+    yieldQuantity: new Prisma.Decimal('2'),
+    yieldUnitId: 'unit_kg',
+    lines: [
+      {
+        ingredientId: 'ingredient_1',
+        ingredientName: 'Flour',
+        baseUnitId: 'unit_g',
+        stockItemId: 'stock_1',
+        quantityInBaseUnit: new Prisma.Decimal('500'),
+        unitCost: new Prisma.Decimal('0.01'),
+        source: 'WEIGHTED_AVERAGE' as const,
+        lineCost: new Prisma.Decimal('5'),
+      },
+    ],
+    batchCost: new Prisma.Decimal('5'),
+    costPerPortion: new Prisma.Decimal('1.25'),
+    costPerYieldUnit: new Prisma.Decimal('2.5'),
+    missing: [],
+  });
+
+  it('getRecipeCost is organization-scoped and serializes all Decimals', async () => {
+    mocks.computeRecipeCost.mockResolvedValue(cost('r1'));
+    const result = await caller().getRecipeCost({ recipeId: 'r1', versionId: 'v3' });
+    expect(mocks.computeRecipeCost).toHaveBeenCalledWith({
+      organizationId: 'org_1',
+      recipeVersionId: 'v3',
+    });
+    expect(result).toMatchObject({
+      batchCost: '5',
+      costPerPortion: '1.25',
+      costPerYieldUnit: '2.5',
+      yieldQuantity: '2',
+      lines: [{ quantityInBaseUnit: '500', unitCost: '0.01', lineCost: '5' }],
+    });
+  });
+
+  it('listRecipeCosts limits computation to requested recipe ids', async () => {
+    mocks.computeRecipeCost.mockImplementation(async ({ recipeId }: { recipeId: string }) =>
+      cost(recipeId)
+    );
+    const result = await caller().listRecipeCosts({ recipeIds: ['r1', 'r2'] });
+    expect(result?.map((item) => item.recipeId)).toEqual(['r1', 'r2']);
+    expect(mocks.computeRecipeCost).toHaveBeenCalledTimes(2);
+    expect((db.restaurantRecipe as Delegate).findMany).not.toHaveBeenCalled();
+  });
+
+  it('uses the same menu:read capability guard as recipe reads', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().getRecipeCost({ recipeId: 'r1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.computeRecipeCost).not.toHaveBeenCalled();
   });
 });
 
