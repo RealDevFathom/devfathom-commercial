@@ -206,16 +206,17 @@ model PharmacyBranch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  regulatoryProfiles     BranchRegulatoryProfile[]
-  stockLocations         PharmacyStockLocation[]         @relation("PharmacyBranchStockLocations")
-  inventoryLots          PharmacyInventoryLot[]
-  requisitions           PharmacyRequisition[]
-  purchaseOrders         PharmacyPurchaseOrder[]
-  onboardingGates        PharmacyOnboardingGateState[]
-  registeredDevices      PharmacyRegisteredDevice[]
-  ownerDigestSettings    PharmacyOwnerDigestSetting[]
-  ownerDigestCaptures    PharmacyOwnerDigestCapture[]
-  refillReminderCaptures PharmacyRefillReminderCapture[]
+  regulatoryProfiles       BranchRegulatoryProfile[]
+  stockLocations           PharmacyStockLocation[]           @relation("PharmacyBranchStockLocations")
+  inventoryLots            PharmacyInventoryLot[]
+  requisitions             PharmacyRequisition[]
+  purchaseOrders           PharmacyPurchaseOrder[]
+  onboardingGates          PharmacyOnboardingGateState[]
+  registeredDevices        PharmacyRegisteredDevice[]
+  ownerDigestSettings      PharmacyOwnerDigestSetting[]
+  ownerDigestCaptures      PharmacyOwnerDigestCapture[]
+  refillReminderCaptures   PharmacyRefillReminderCapture[]
+  pharmacovigilanceReports PharmacyPharmacovigilanceReport[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -397,8 +398,8 @@ model Ingredient {
 }
 
 model Medicine {
-  id                           String                       @id @default(cuid())
-  organizationId               String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                           String                            @id @default(cuid())
+  organizationId               String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   productName                  String
   brandName                    String?
   manufacturer                 String?
@@ -407,16 +408,16 @@ model Medicine {
   drapRegistrationStatus       String?
   drapRegisteredAt             DateTime?
   productFamily                PharmacyProductFamily
-  rx                           Boolean                      @default(false)
-  otc                          Boolean                      @default(false)
-  restricted                   Boolean                      @default(false)
-  controlled                   Boolean                      @default(false)
-  highAlert                    Boolean                      @default(false)
-  lasa                         Boolean                      @default(false)
-  coldChain                    Boolean                      @default(false)
-  saleable                     Boolean                      @default(false)
-  createdAt                    DateTime                     @default(now())
-  updatedAt                    DateTime                     @updatedAt
+  rx                           Boolean                           @default(false)
+  otc                          Boolean                           @default(false)
+  restricted                   Boolean                           @default(false)
+  controlled                   Boolean                           @default(false)
+  highAlert                    Boolean                           @default(false)
+  lasa                         Boolean                           @default(false)
+  coldChain                    Boolean                           @default(false)
+  saleable                     Boolean                           @default(false)
+  createdAt                    DateTime                          @default(now())
+  updatedAt                    DateTime                          @updatedAt
   strengths                    MedicineStrengthComponent[]
   presentations                Presentation[]
   provenance                   MedicineProvenance[]
@@ -433,6 +434,7 @@ model Medicine {
   // PUR-07: the approved replenishment policy and the signals it produces.
   safetyStocks                 PharmacySafetyStock[]
   stockSignals                 PharmacyStockSignal[]
+  pharmacovigilanceReports     PharmacyPharmacovigilanceReport[]
 
   @@unique([organizationId, id], map: "pharmacy_medicines_org_id_key")
   @@index([organizationId, productName])
@@ -1571,17 +1573,18 @@ model PharmacyInventoryLot {
   saleAllocations PharmacySaleLineAllocation[]
   returnLines     PharmacySaleReturnLine[]
 
-  movements           PharmacyStockMovement[]
-  balances            PharmacyStockBalance[]
-  discrepancies       PharmacyStockDiscrepancy[]
-  recommendedBy       PharmacyAllocationOverride[]      @relation("PharmacyAllocationRecommended")
-  selectedBy          PharmacyAllocationOverride[]      @relation("PharmacyAllocationSelected")
-  receiptLines        PharmacyGoodsReceiptLine[]
-  countLines          PharmacyInventoryCountLine[]
-  transferLines       PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
-  supplierClaims      PharmacySupplierClaim[]
-  purchaseReturnLines PharmacyPurchaseReturnLine[]
-  deviceQuotas        PharmacyDeviceLotQuota[]
+  movements                PharmacyStockMovement[]
+  balances                 PharmacyStockBalance[]
+  discrepancies            PharmacyStockDiscrepancy[]
+  recommendedBy            PharmacyAllocationOverride[]      @relation("PharmacyAllocationRecommended")
+  selectedBy               PharmacyAllocationOverride[]      @relation("PharmacyAllocationSelected")
+  receiptLines             PharmacyGoodsReceiptLine[]
+  countLines               PharmacyInventoryCountLine[]
+  transferLines            PharmacyInterbranchTransferLine[] @relation("PharmacyTransferSourceLot")
+  supplierClaims           PharmacySupplierClaim[]
+  purchaseReturnLines      PharmacyPurchaseReturnLine[]
+  deviceQuotas             PharmacyDeviceLotQuota[]
+  pharmacovigilanceReports PharmacyPharmacovigilanceReport[]
 
   @@unique([organizationId, id], map: "pharmacy_inventory_lots_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_inventory_lots_org_branch_id_key")
@@ -11582,6 +11585,27 @@ enum PrescriptionCustodyState {
   TRANSFERRED
 }
 
+enum PharmacyPharmacovigilanceKind {
+  ADVERSE_DRUG_REACTION
+  MEDICATION_ERROR
+  PRODUCT_QUALITY_COMPLAINT
+}
+
+enum PharmacyPharmacovigilanceState {
+  DRAFT
+  UNDER_REVIEW
+  READY
+  SUBMITTED
+  CLOSED
+}
+
+enum PharmacyExternalSubmissionState {
+  NOT_SUBMITTED
+  PENDING
+  SUBMITTED
+  FAILED
+}
+
 model PharmacyPatient {
   controlledRegisterEntries PharmacyControlledRegisterEntry[]
   id                        String                            @id @default(cuid())
@@ -11598,6 +11622,7 @@ model PharmacyPatient {
   restockInterests          PharmacyRestockInterest[]
   retailCustomers           PharmacyCustomer[]
   refillReminderCaptures    PharmacyRefillReminderCapture[]
+  pharmacovigilanceReports  PharmacyPharmacovigilanceReport[]
 
   @@unique([organizationId, id])
   @@map("pharmacy_patients")
@@ -11635,10 +11660,44 @@ model PharmacyPrescriber {
   facility                  String?
   createdAt                 DateTime                          @default(now())
   prescriptions             Prescription[]
+  pharmacovigilanceReports  PharmacyPharmacovigilanceReport[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, registrationNumber])
   @@map("pharmacy_prescribers")
+}
+
+/// RX-08: human-asserted safety report. Internal lifecycle and external
+/// submission state are intentionally independent.
+model PharmacyPharmacovigilanceReport {
+  id                      String                          @id @default(cuid())
+  organizationId          String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                String
+  kind                    PharmacyPharmacovigilanceKind
+  state                   PharmacyPharmacovigilanceState  @default(DRAFT)
+  externalSubmissionState PharmacyExternalSubmissionState @default(NOT_SUBMITTED)
+  patientId               String?
+  medicineId              String?
+  inventoryLotId          String?
+  prescriberId            String?
+  occurredAt              DateTime
+  assertedDescription     String
+  externalReference       String?
+  externalFailureReason   String?
+  createdByUserId         String
+  reviewedByUserId        String?
+  createdAt               DateTime                        @default(now())
+  updatedAt               DateTime                        @updatedAt
+
+  branch     PharmacyBranch        @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_pv_branch_fkey")
+  patient    PharmacyPatient?      @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  medicine   Medicine?             @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  lot        PharmacyInventoryLot? @relation(fields: [organizationId, branchId, inventoryLotId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_pv_lot_fkey")
+  prescriber PharmacyPrescriber?   @relation(fields: [organizationId, prescriberId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, occurredAt])
+  @@map("pharmacy_pharmacovigilance_reports")
 }
 
 model Prescription {
@@ -13055,14 +13114,14 @@ enum PharmacyCampaignStatus {
 /// MKT-01 — operator-visible, versioned rule data. Application validation uses
 /// a retail-only allowlist and rejects every clinical/medicine key before write.
 model PharmacyMarketingSegment {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
-  name           String
-  definition     Json
-  version        Int      @default(1)
+  id              String   @id @default(cuid())
+  organizationId  String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  name            String
+  definition      Json
+  version         Int      @default(1)
   createdByUserId String
-  createdAt      DateTime @default(now())
+  createdAt       DateTime @default(now())
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, name, version])
@@ -13070,15 +13129,15 @@ model PharmacyMarketingSegment {
 }
 
 model PharmacyMarketingTemplate {
-  id               String                    @id @default(cuid())
-  organizationId   String                    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id               String                   @id @default(cuid())
+  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId         String
   name             String
   channel          PharmacyMarketingChannel
   body             String
   approvedByUserId String
   approvedAt       DateTime
-  createdAt        DateTime                  @default(now())
+  createdAt        DateTime                 @default(now())
 
   @@unique([organizationId, id])
   @@map("pharmacy_marketing_templates")
@@ -13108,14 +13167,14 @@ model PharmacyCampaign {
 
 /// Capture mode only: records intended delivery; no provider delivery state exists.
 model PharmacyCampaignCapture {
-  id               String                   @id @default(cuid())
-  organizationId   String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId         String
-  campaignId       String
-  customerId       String
-  channel          PharmacyMarketingChannel
-  idempotencyKey   String
-  capturedAt       DateTime                 @default(now())
+  id             String                   @id @default(cuid())
+  organizationId String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  campaignId     String
+  customerId     String
+  channel        PharmacyMarketingChannel
+  idempotencyKey String
+  capturedAt     DateTime                 @default(now())
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
@@ -13140,20 +13199,20 @@ model PharmacyCampaignExclusion {
 
 /// MKT-02 / invariant 22 — an explicitly estimated campaign→visit→receipt link.
 model PharmacyCampaignAttribution {
-  id                    String   @id @default(cuid())
-  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId              String
-  campaignId            String
-  visitId               String
-  receiptId             String
-  method                 String
-  windowDays             Int
-  exclusions             Json
-  confidence             String
-  recoveredSalesMinor    Int
-  recoveredMarginMinor   Int
-  messageCostMinor       Int
-  attributedAt           DateTime @default(now())
+  id                   String   @id @default(cuid())
+  organizationId       String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  campaignId           String
+  visitId              String
+  receiptId            String
+  method               String
+  windowDays           Int
+  exclusions           Json
+  confidence           String
+  recoveredSalesMinor  Int
+  recoveredMarginMinor Int
+  messageCostMinor     Int
+  attributedAt         DateTime @default(now())
 
   @@unique([organizationId, id])
   @@unique([organizationId, campaignId, visitId, receiptId])
