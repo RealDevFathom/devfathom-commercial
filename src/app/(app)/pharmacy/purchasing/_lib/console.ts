@@ -109,6 +109,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'amountMinor',
   },
   BLOCKED_STOCK: { message: 'That stock is quarantined or recalled and cannot be moved.' },
+  COLD_CHAIN_STORAGE_REQUIRED: {
+    message:
+      'This medicine requires cold-chain storage. Choose a validated cold-chain zone before posting the receipt.',
+    field: 'stockLocationId',
+  },
   NOT_FOUND: { message: 'That record no longer exists. Reload the page.' },
 };
 

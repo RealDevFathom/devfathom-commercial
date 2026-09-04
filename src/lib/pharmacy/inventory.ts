@@ -31,8 +31,19 @@ export class PharmacyInventoryError extends Error {
       | 'INVALID_UNITS'
       | 'INVALID_STATE'
       | 'COAUTH_REQUIRED'
+      | 'COLD_CHAIN_STORAGE_REQUIRED'
   ) {
     super(reason);
+  }
+}
+
+/** INV-05 put-away gate: cold-chain stock needs positively validated storage. */
+export function assertColdChainStorage(
+  medicineRequiresColdChain: boolean,
+  locationIsValidated: boolean
+): void {
+  if (medicineRequiresColdChain && !locationIsValidated) {
+    throw new PharmacyInventoryError('COLD_CHAIN_STORAGE_REQUIRED');
   }
 }
 
