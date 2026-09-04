@@ -14,6 +14,12 @@ import {
   readPharmacyOwnerCommandCentre,
 } from '@/lib/pharmacy/reports';
 import { nextDigestDueAt, WhatsAppChannel } from '@/lib/pharmacy/owner-digest';
+import {
+  acknowledgePharmacyAnomalySignal,
+  readPharmacyAnomalySignals,
+  refreshPharmacyAnomalySignals,
+  snoozePharmacyAnomalySignal,
+} from '@/lib/pharmacy/anomaly-signals-operations';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
@@ -57,6 +63,16 @@ const digestSetting = z
     time: z.string().regex(/^([01]\d|2[0-3]):[0-5]\d$/),
   })
   .strict();
+const anomalyDecision = z
+  .object({
+    branchId: z.string().trim().min(1).max(128),
+    signalId: z.string().trim().min(1).max(128),
+    reason: z.string().trim().min(3).max(500),
+  })
+  .strict();
+const anomalySnooze = anomalyDecision
+  .extend({ snoozedUntil: z.iso.datetime({ offset: true }) })
+  .strict();
 
 async function scope(ctx: TRPCContext) {
   if (!hasModule(ctx.entitlements, 'pharmacy-reports'))
@@ -81,6 +97,30 @@ async function requireFinancialReports(ctx: TRPCContext) {
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
     });
+}
+
+async function ownerFilters(ctx: TRPCContext, input: z.infer<typeof filters>) {
+  await requireFinancialReports(ctx);
+  const available = await scope(ctx);
+  if (ctx.session!.user.role !== 'ADMIN')
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+  const branchIds = input.branchId
+    ? [input.branchId]
+    : available.branches.map((branch) => branch.id);
+  if (
+    !branchIds.length ||
+    branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+  return { ...input, branchIds };
+}
+
+async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
+  const available = await scope(ctx);
+  if (ctx.session!.user.role !== 'ADMIN')
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Owner access is required.' });
+  if (!available.branches.some((branch) => branch.id === branchId))
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
 }
 
 export const pharmacyReportsRouter = router({
@@ -139,6 +179,31 @@ export const pharmacyReportsRouter = router({
         message: error instanceof Error ? error.message : 'Invalid report filters.',
       });
     }
+  }),
+  anomalySignals: reports.input(filters).query(async ({ ctx, input }) => {
+    const bounded = await ownerFilters(ctx, input);
+    return readPharmacyAnomalySignals(ctx.db, bounded);
+  }),
+  refreshAnomalies: reports.input(filters).mutation(async ({ ctx, input }) => {
+    const bounded = await ownerFilters(ctx, input);
+    return refreshPharmacyAnomalySignals(ctx.db, bounded, ctx.session!.user.id);
+  }),
+  acknowledgeAnomaly: reports.input(anomalyDecision).mutation(async ({ ctx, input }) => {
+    await requireFinancialReports(ctx);
+    await requireOwnerBranch(ctx, input.branchId);
+    return acknowledgePharmacyAnomalySignal(ctx.db, {
+      ...input,
+      actorId: ctx.session!.user.id,
+    });
+  }),
+  snoozeAnomaly: reports.input(anomalySnooze).mutation(async ({ ctx, input }) => {
+    await requireFinancialReports(ctx);
+    await requireOwnerBranch(ctx, input.branchId);
+    return snoozePharmacyAnomalySignal(ctx.db, {
+      ...input,
+      actorId: ctx.session!.user.id,
+      snoozedUntil: new Date(input.snoozedUntil),
+    });
   }),
   digestOverview: reports.query(async ({ ctx }) => {
     await requireFinancialReports(ctx);

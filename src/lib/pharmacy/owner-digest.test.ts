@@ -2,6 +2,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   readPharmacyOwnerCommandCentre: vi.fn(),
+  readPharmacyAnomalySignals: vi.fn(),
+  refreshPharmacyAnomalySignals: vi.fn(),
   can: vi.fn(),
   platformDb: { pharmacyOwnerDigestSetting: { findMany: vi.fn() } },
   tenantDb: {
@@ -34,6 +36,14 @@ vi.mock('./reports', () => ({
     'deviceFiscalOfflineExceptions',
   ].map((key) => ({ key, label: key, definition: `${key} definition`, source: `${key} source` })),
 }));
+vi.mock('./anomaly-signals-operations', () => ({
+  readPharmacyAnomalySignals: mocks.readPharmacyAnomalySignals,
+  refreshPharmacyAnomalySignals: mocks.refreshPharmacyAnomalySignals,
+  renderAnomalyDigest: (signals: Array<{ explanation: string }>) => [
+    `Anomaly review signals: ${signals.length}`,
+    ...signals.map((signal) => `- ${signal.explanation}`),
+  ],
+}));
 
 import {
   CaptureChannel,
@@ -47,6 +57,8 @@ describe('RPT-03 owner digest', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.platformDb.pharmacyOwnerDigestSetting.findMany.mockResolvedValue([]);
+    mocks.readPharmacyAnomalySignals.mockResolvedValue([]);
+    mocks.refreshPharmacyAnomalySignals.mockResolvedValue({ evaluated: 0, signals: [] });
     mocks.readPharmacyOwnerCommandCentre.mockResolvedValue({
       freshness: { status: 'CURRENT', asOf: '2026-09-04T08:00:00.000Z', source: 'ledgers' },
       metrics: {
@@ -99,6 +111,27 @@ describe('RPT-03 owner digest', () => {
     expect(digest.rendered).toContain('cashMinor: PKR 60.00');
     expect(digest.rendered).not.toContain('cashVarianceMinor');
     expect(digest.rendered).toContain('deviceFiscalOfflineExceptions: Not available');
+    expect(digest.rendered).toContain('Anomaly review signals: 0');
+  });
+
+  it('includes explainable anomaly events in the existing owner digest', async () => {
+    mocks.readPharmacyAnomalySignals.mockResolvedValue([
+      {
+        kind: 'CASH_VARIANCE',
+        status: 'OPEN',
+        severity: 'REVIEW',
+        explanation: 'Counted PKR 1,000 below the expected cash; review the close evidence.',
+      },
+    ]);
+    const digest = await composeOwnerDigest({} as never, {
+      organizationId: 'org_1',
+      userId: 'user_1',
+      branchId: 'branch_1',
+      branchName: 'Main',
+      businessDate: '2026-09-04',
+    });
+    expect(digest.rendered).toContain('Anomaly review signals: 1');
+    expect(digest.rendered).toContain('review the close evidence');
   });
 
   it('persists capture delivery with the daily idempotency key', async () => {
