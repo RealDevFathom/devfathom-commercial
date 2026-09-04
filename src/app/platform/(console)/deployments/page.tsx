@@ -1,7 +1,7 @@
-import { PlatformCommandForm } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
+import { DeploymentCommandDisclosure } from './deployment-command-disclosure';
 
 export default async function DeploymentsPage({
   searchParams,
@@ -48,9 +48,49 @@ export default async function DeploymentsPage({
         title="Deployments"
         description="Shared and dedicated production positions, provider references, health, versions, and activation readiness."
       />
-      <details
-        open={Boolean(preselectedOrganizationId)}
+      <DeploymentCommandDisclosure
+        defaultOpen={Boolean(preselectedOrganizationId)}
         className="group mt-7 border border-border-default bg-surface-card"
+        panelClassName="border-t border-border-subtle px-5"
+        action="deployment.create"
+        submitLabel="Create deployment"
+        fields={[
+          {
+            name: 'organizationId',
+            label: 'Organization',
+            type: 'select',
+            required: true,
+            defaultValue: preselectedOrganizationId,
+            options: data.organizations.map((organization) => ({
+              label: `${organization.displayName} · ${organization.slug}`,
+              value: organization.id,
+            })),
+          },
+          {
+            name: 'environment',
+            label: 'Environment',
+            required: true,
+            defaultValue: 'production',
+            help: 'Automatic provisioning is available for production only.',
+          },
+          {
+            name: 'mode',
+            label: 'Isolation mode',
+            type: 'select',
+            required: true,
+            defaultValue: 'SHARED',
+            options: ['SHARED', 'DEDICATED'].map((value) => ({ label: value, value })),
+          },
+          { name: 'provider', label: 'Provider', required: true, defaultValue: 'VERCEL' },
+          { name: 'region', label: 'Region' },
+          { name: 'databaseRef', label: 'Database reference' },
+          {
+            name: 'queueProvision',
+            label: 'Queue provisioning',
+            type: 'checkbox',
+            defaultValue: true,
+          },
+        ]}
       >
         <summary className="cursor-pointer list-none px-5 py-4">
           <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent-brand">
@@ -61,51 +101,7 @@ export default async function DeploymentsPage({
             Register any environment, or queue automatic production provisioning.
           </p>
         </summary>
-        <div className="border-t border-border-subtle px-5">
-          <PlatformCommandForm
-            compact
-            action="deployment.create"
-            submitLabel="Create deployment"
-            fields={[
-              {
-                name: 'organizationId',
-                label: 'Organization',
-                type: 'select',
-                required: true,
-                defaultValue: preselectedOrganizationId,
-                options: data.organizations.map((organization) => ({
-                  label: `${organization.displayName} · ${organization.slug}`,
-                  value: organization.id,
-                })),
-              },
-              {
-                name: 'environment',
-                label: 'Environment',
-                required: true,
-                defaultValue: 'production',
-                help: 'Automatic provisioning is available for production only.',
-              },
-              {
-                name: 'mode',
-                label: 'Isolation mode',
-                type: 'select',
-                required: true,
-                defaultValue: 'SHARED',
-                options: ['SHARED', 'DEDICATED'].map((value) => ({ label: value, value })),
-              },
-              { name: 'provider', label: 'Provider', required: true, defaultValue: 'VERCEL' },
-              { name: 'region', label: 'Region' },
-              { name: 'databaseRef', label: 'Database reference' },
-              {
-                name: 'queueProvision',
-                label: 'Queue provisioning',
-                type: 'checkbox',
-                defaultValue: true,
-              },
-            ]}
-          />
-        </div>
-      </details>
+      </DeploymentCommandDisclosure>
       <div className="mt-7 grid gap-5 xl:grid-cols-2">
         {data.deployments.map((deployment) => (
           <article key={deployment.id} className="border border-border-default bg-surface-card">
@@ -133,46 +129,49 @@ export default async function DeploymentsPage({
                 </div>
               ))}
             </div>
-            <div className="p-5">
-              <PlatformCommandForm
-                compact
-                action="deployment.update"
-                submitLabel="Save deployment"
-                fields={[
-                  { name: 'id', label: 'Deployment', type: 'hidden', defaultValue: deployment.id },
-                  {
-                    name: 'status',
-                    label: 'Status',
-                    type: 'select',
-                    required: true,
-                    defaultValue: deployment.status,
-                    options: [
-                      'PENDING',
-                      'PROVISIONING',
-                      'READY',
-                      'DEGRADED',
-                      'FAILED',
-                      'DECOMMISSIONED',
-                    ].map((value) => ({ label: value, value })),
-                  },
-                  { name: 'provider', label: 'Provider', defaultValue: deployment.provider },
-                  { name: 'projectId', label: 'Project ID', defaultValue: deployment.projectId },
-                  { name: 'region', label: 'Region', defaultValue: deployment.region },
-                  { name: 'url', label: 'URL', type: 'url', defaultValue: deployment.url },
-                  {
-                    name: 'databaseRef',
-                    label: 'Database reference',
-                    defaultValue: deployment.databaseRef,
-                  },
-                  {
-                    name: 'edgeConfigRef',
-                    label: 'Edge config reference',
-                    defaultValue: deployment.edgeConfigRef,
-                  },
-                  { name: 'version', label: 'Version', defaultValue: deployment.version },
-                ]}
-              />
-            </div>
+            <DeploymentCommandDisclosure
+              className="group"
+              panelClassName="border-t border-border-subtle px-5"
+              action="deployment.update"
+              submitLabel="Save deployment"
+              fields={[
+                { name: 'id', label: 'Deployment', type: 'hidden', defaultValue: deployment.id },
+                {
+                  name: 'status',
+                  label: 'Status',
+                  type: 'select',
+                  required: true,
+                  defaultValue: deployment.status,
+                  options: [
+                    'PENDING',
+                    'PROVISIONING',
+                    'READY',
+                    'DEGRADED',
+                    'FAILED',
+                    'DECOMMISSIONED',
+                  ].map((value) => ({ label: value, value })),
+                },
+                { name: 'provider', label: 'Provider', defaultValue: deployment.provider },
+                { name: 'projectId', label: 'Project ID', defaultValue: deployment.projectId },
+                { name: 'region', label: 'Region', defaultValue: deployment.region },
+                { name: 'url', label: 'URL', type: 'url', defaultValue: deployment.url },
+                {
+                  name: 'databaseRef',
+                  label: 'Database reference',
+                  defaultValue: deployment.databaseRef,
+                },
+                {
+                  name: 'edgeConfigRef',
+                  label: 'Edge config reference',
+                  defaultValue: deployment.edgeConfigRef,
+                },
+                { name: 'version', label: 'Version', defaultValue: deployment.version },
+              ]}
+            >
+              <summary className="cursor-pointer list-none px-5 py-4 text-xs font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring">
+                Edit deployment
+              </summary>
+            </DeploymentCommandDisclosure>
           </article>
         ))}
       </div>
