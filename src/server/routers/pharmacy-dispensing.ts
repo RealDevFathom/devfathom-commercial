@@ -4,6 +4,36 @@ import { capabilityProcedure, router } from '../trpc';
 const dispense = capabilityProcedure('pharmacy:dispense');
 
 export const pharmacyDispensingRouter = router({
+  reviewQueue: dispense.query(async ({ ctx }) => ({
+    currentUserId: ctx.session!.user.id,
+    items: await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      orderBy: { requestedAt: 'asc' },
+      include: {
+        line: {
+          include: {
+            medicine: true,
+            presentation: true,
+            prescription: { include: { patient: true, prescriber: true } },
+          },
+        },
+        decisions: { orderBy: { createdAt: 'asc' } },
+      },
+    }),
+  })),
+  substitutionWorkspace: dispense.query(async ({ ctx }) => ({
+    lines: await ctx.db.pharmacyPharmacistReviewItem.findMany({
+      orderBy: { requestedAt: 'desc' },
+      include: {
+        line: {
+          include: {
+            medicine: { include: { presentations: { orderBy: { presentation: 'asc' } } } },
+            presentation: true,
+            prescription: { include: { patient: true } },
+          },
+        },
+      },
+    }),
+  })),
   enqueueReview: dispense
     .input(
       z.object({ prescriptionLineId: z.string().min(1), saleLineId: z.string().min(1) }).strict()
