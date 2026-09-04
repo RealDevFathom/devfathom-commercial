@@ -16,9 +16,10 @@ param authSecret = readEnvironmentVariable('DEVFATHOM_STAGING_AUTH_SECRET')
 param platformEncryptionKey = readEnvironmentVariable('DEVFATHOM_STAGING_PLATFORM_ENCRYPTION_KEY')
 param cameraCredentialKey = readEnvironmentVariable('DEVFATHOM_STAGING_CAMERA_CREDENTIAL_KEY')
 param cronSecret = readEnvironmentVariable('DEVFATHOM_STAGING_CRON_SECRET')
-param seedPassword = readEnvironmentVariable('DEVFATHOM_STAGING_SEED_PASSWORD')
-param adminPassword = readEnvironmentVariable('DEVFATHOM_STAGING_ADMIN_PASSWORD')
-param platformAdminPassword = readEnvironmentVariable('DEVFATHOM_STAGING_PLATFORM_ADMIN_PASSWORD')
+param seedPassword = readEnvironmentVariable('DEVFATHOM_STAGING_SEED_PASSWORD', '')
+param adminPassword = readEnvironmentVariable('DEVFATHOM_STAGING_ADMIN_PASSWORD', '')
+param platformAdminPassword = readEnvironmentVariable('DEVFATHOM_STAGING_PLATFORM_ADMIN_PASSWORD', '')
+param createInitializationSecrets = readEnvironmentVariable('DEVFATHOM_STAGING_CREATE_INITIALIZATION_SECRETS', 'false') == 'true'
 param customDomains = [
   {
     name: 'staging.devfathom.com'

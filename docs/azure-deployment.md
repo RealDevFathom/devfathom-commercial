@@ -20,24 +20,23 @@ Live resource inventory (names intentionally omitted from this documentation):
 
 ## IaC and first deployment
 
-`shared.bicep` creates the registry. `environment.bicep` creates one isolated environment. Operational secure parameters enter only through process environment variables and become Key Vault secrets; values are never committed. Initialization passwords are temporary Container Apps job secrets and are never available to the web app.
+`shared.bicep` creates the registry. `environment.bicep` creates one isolated environment. Operational secure parameters enter only through process environment variables and become Key Vault secrets; values are never committed. Key Vault is also the canonical source for the seed, tenant administrator, and platform administrator passwords. Only the migration job receives versionless Key Vault references for those initialization credentials; the web app never receives them.
 
 ```bash
 ./infra/deploy-staging.sh
 ./infra/configure-github-oidc.sh
 ```
 
-The staging script creates only the two `rg-devfathom-*` groups above, builds one `linux/amd64` image, pushes it to ACR, provisions staging, sets the generated Container Apps hostname as a recognized default tenant host, and starts the migration/seed job. Re-running the full script generates new bootstrap credentials; use the GitHub workflow for normal releases.
+The staging script creates only the two `rg-devfathom-*` groups above, builds one `linux/amd64` image, pushes it to ACR, provisions staging, sets the generated Container Apps hostname as a recognized default tenant host, and starts the migration/seed job. It discovers the environment Key Vault independently of deployment history, generates only confirmed-missing initialization credentials, and explicitly authorizes those writes. Existing Key Vault values always win. A lookup error or ambiguous vault match aborts without deployment. Use this guarded script for bootstrap; use the GitHub workflow for normal releases.
 
 ## Production deployment status — DARK / NOT PUBLICLY CUT OVER
 
 Production-readiness PR #33 is merged to `main` at `ffec57b4`. The merged hardening includes safe create-only bootstrap, capture-mode email, production minimum replicas/probes, and promotion concurrency/health safeguards. The latest staging run passed build, migration/seed, deploy, and smoke in 7m40s; opaque run and image values are intentionally omitted.
 
-The approved `ffec57b4` build is provisioned in isolated production. The one-time bootstrap succeeded, regular production parameters were redeployed, and a second credential-free migration succeeded. The migration job is now migration-only, retains only the operational `database-url` secret, and has no admin/seed initialization environment or secret. Initial credentials remain only in the local macOS Keychain and are not documented.
+The approved `ffec57b4` build is provisioned in isolated production. The one-time bootstrap succeeded, regular production parameters were redeployed, and a second credential-free migration succeeded. Production bootstrap must run through `./infra/deploy-production-bootstrap.sh`. The wrapper independently discovers the production Key Vault, generates only confirmed-missing administrator credentials, and explicitly authorizes only those writes. Existing Key Vault values always win; inherited initialization variables are ignored. A lookup error or ambiguous vault match aborts without deployment. Routine production deployments remain credential-free and configure the job for migrations only. Initial credential values are not documented.
 
 ```bash
-az deployment group create -g rg-devfathom-production-uaenorth \
-  --parameters infra/production.bootstrap.bicepparam --name production-bootstrap
+./infra/deploy-production-bootstrap.sh
 az containerapp job start -g rg-devfathom-production-uaenorth -n devfathom-prd-migrate
 # Wait for a Succeeded execution before continuing.
 az containerapp job execution list -g rg-devfathom-production-uaenorth \
@@ -46,15 +45,7 @@ az deployment group create -g rg-devfathom-production-uaenorth \
   --parameters infra/production.bicepparam --name production
 ```
 
-After that regular redeployment, verify that the job retains only its operational `database-url` secret. If the Container Apps resource provider still reports any initialization secret, remove it explicitly after confirming no job environment variable references it:
-
-```bash
-az containerapp job secret list -g rg-devfathom-production-uaenorth -n devfathom-prd-migrate -o table
-az containerapp job secret remove -g rg-devfathom-production-uaenorth -n devfathom-prd-migrate \
-  --secret-names admin-password platform-admin-password --yes
-```
-
-Unset the initialization password environment variables after verification. Routine production deployments and promotions do not read or require them.
+Direct use of bootstrap parameter files is unsupported: their write gate defaults false, so stale credential environment variables cannot overwrite Key Vault. Guarded scripts enable the gate only after proving a vault or individual secret is missing. Later bootstrap runs resolve existing versionless Key Vault references; routine production deployments and promotions do not read or require initialization credentials.
 
 ## CI/CD and OIDC
 
@@ -71,7 +62,7 @@ Repository mismatch: `infra/configure-github-oidc.sh` still models staging and p
 
 ## Secrets and email
 
-The staging Key Vault contains the database URL, Auth.js secret, platform encryption key, cron bearer, seed password, tenant administrator password, and platform administrator password. The staging Container App reads versionless Key Vault references with its managed identity. That identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope. Production secrets are not copied into documentation; the migration job retains only its operational database URL, and initial credentials remain in the local macOS Keychain.
+The staging Key Vault contains the database URL, Auth.js secret, platform encryption key, cron bearer, seed password, tenant administrator password, and platform administrator password. Key Vault remains the single source of truth for initialization credentials. The migration job reads them through versionless Key Vault references with its managed identity; the Container App does not receive them. That identity has `AcrPull`, `Storage Blob Data Contributor`, `Key Vault Secrets User`, and `Cognitive Services OpenAI User` at resource scope. Production secret values are not copied into documentation; routine migration-only job configuration omits initialization secret references.
 
 Staging and production set `EMAIL_DELIVERY_MODE=capture`, have no `BREVO_API_KEY`, and do not require a configured sender. Captures log only the recipient count; recipient addresses, subject, and body are excluded. No message leaves either environment. Production must remain in capture mode until Brevo Key Vault wiring, DNS, and sender verification are complete.
 
@@ -203,5 +194,5 @@ Database migrations are forward-only; restore to a new server for a data/schema 
 - DNS/TLS: GoDaddy records are live. `staging.devfathom.com` and `admin.staging.devfathom.com` are bound to the staging Container App with Azure-managed DigiCert certificates and both HTTPS routes return HTTP 200.
 - Source baseline: current `main` is `ffec57b4` after production-readiness PR #33 merged. Meetings PR #23 is merged and its schema/reconciliation work is staging-verified.
 - Production resources: isolated production resources are provisioned in the tagged resource group; the approved `ffec57b4` build is deployed with minimum one replica, one-time bootstrap and two migrations succeeded, and the dark Azure FQDN `/api/health` check is OK.
-- Production configuration: the regular migration job is migration-only with only the operational database URL secret; initialization environment and secrets are absent. Initial admin credentials remain only in the local macOS Keychain.
+- Production configuration: the regular migration job is migration-only with only operational database references; initialization environment and secret references are absent. Canonical administrator credentials remain in Key Vault for explicit bootstrap reuse.
 - Production public access: `admin.devfathom.com` remains DNS-unconfigured, `www.devfathom.com` still serves or redirects to the existing GoDaddy marketing site, and no public custom domain is attached. Production is **DARK / NOT PUBLICLY CUT OVER**.
