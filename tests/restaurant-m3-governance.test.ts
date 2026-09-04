@@ -218,6 +218,13 @@ const CATERING_TABLES = [
   'restaurant_catering_events',
 ] as const;
 
+// SAFE-05 adds pharmacy tables outside the restaurant closed-world prefix, but
+// pins them here as required by the shared schema-governance gate.
+const SAFE05_PHARMACY_TABLES = [
+  'pharmacy_pack_authentication_events',
+  'pharmacy_pack_authentication_scans',
+] as const;
+
 // WHA-288 promotions: the promotion record and its immutable versions, the rule
 // components, the deterministic evaluation/candidate/application snapshots, the
 // per-unit allocations, and the cap counters plus their reservations.
@@ -590,6 +597,28 @@ describe('M3 schema governance (real PostgreSQL)', () => {
     );
 
     expect(await readM3Columns()).toEqual(M3_COLUMNS);
+  });
+
+  it('pins SAFE-05 tables and requires forced RLS', async () => {
+    const rows = await client!.query<{
+      table_name: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT c.relname AS table_name, c.relrowsecurity, c.relforcerowsecurity
+         FROM pg_catalog.pg_class c
+         JOIN pg_catalog.pg_namespace n ON n.oid=c.relnamespace
+        WHERE n.nspname='public' AND c.relname=ANY($1::text[])
+        ORDER BY c.relname`,
+      [[...SAFE05_PHARMACY_TABLES]]
+    );
+    expect(rows.rows).toEqual(
+      SAFE05_PHARMACY_TABLES.map((table_name) => ({
+        table_name,
+        relrowsecurity: true,
+        relforcerowsecurity: true,
+      }))
+    );
   });
 
   it('keeps canonical tables branch-free and publication children publication-owned', async () => {

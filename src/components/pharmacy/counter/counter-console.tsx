@@ -169,6 +169,7 @@ export function PharmacyCounterConsole() {
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
   const linkCustomer = trpc.pharmacySales.linkCustomer.useMutation();
   const redeemLoyalty = trpc.pharmacySales.redeemPoints.useMutation();
+  const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
   const refreshCart = useCallback(async () => {
     await utils.pharmacySales.counterCart.invalidate();
@@ -293,14 +294,36 @@ export function PharmacyCounterConsole() {
     searchRef.current?.select();
   }, []);
 
-  const runSearch = useCallback(() => {
+  const runSearch = useCallback(async () => {
     const trimmed = query.trim();
     if (trimmed.length < 2) {
       setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
       return;
     }
-    setSubmittedQuery(trimmed);
-  }, [query]);
+    const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
+    if (!looksLikeGs1) {
+      setSubmittedQuery(trimmed);
+      return;
+    }
+    setPending('authenticatePack');
+    try {
+      const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
+      setSubmittedQuery(verdict.parsed?.gtin ?? trimmed);
+      setNotice({
+        tone:
+          verdict.status === 'VERIFIED'
+            ? 'success'
+            : verdict.status === 'BLOCKED_RECALL'
+              ? 'danger'
+              : 'warning',
+        message: verdict.explanation,
+      });
+    } catch (error) {
+      setNotice({ tone: 'danger', message: messageFrom(error) });
+    } finally {
+      setPending(null);
+    }
+  }, [authenticatePack, branchId, query]);
 
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
@@ -852,7 +875,7 @@ export function PharmacyCounterConsole() {
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter') return;
                       event.preventDefault();
-                      runSearch();
+                      void runSearch();
                     }}
                     className="h-11"
                   />
