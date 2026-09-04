@@ -3,6 +3,8 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
+import { assertDisposableRlsDatabase } from './disposable-rls-database';
+
 const url = process.env.M8_TEST_OWNER_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 if (!url) {
   throw new Error('M8_TEST_OWNER_DATABASE_URL or TEST_DATABASE_URL is required');
@@ -34,10 +36,7 @@ async function expectPgCode(code: string, operation: () => Promise<unknown>) {
 
 describe('tax core real-PostgreSQL RLS and immutability', () => {
   beforeAll(async () => {
-    const hostname = new URL(url).hostname;
-    if (!['localhost', '127.0.0.1', '::1', '[::1]'].includes(hostname)) {
-      throw new Error('Refusing to run tax RLS probes against a non-local database');
-    }
+    assertDisposableRlsDatabase(url);
     await client.connect();
     await client.query('BEGIN');
     await client.query(`CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS`);
