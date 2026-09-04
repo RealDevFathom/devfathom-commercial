@@ -6,6 +6,24 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **PHARMACY P1 STARTED (owner 18:45: "once you complete restaurant + Catering, move to pharmacy, and
+  complete it"). Wave 1 composed 19:10:** WHA-1315 explainable forecasting / replenishment drafts,
+  default-off behind a per-org setting with a deterministic-baseline comparison harness (PUR-09, DEM-02
+  as a named input) `529ec4e9`; WHA-1316 expiring signed supplier PO action links, submissions are
+  proposals only, invariants 24–28 with negative tests, uploads fail closed in structural-checks-only
+  mode (SUP-01/SUP-03) `4e599d9f`; WHA-1317 family accounts on one khata + explainable khata health
+  score with cross-member privacy tests (CRM-L02/L04) `69152887`; WHA-1318 invoice OCR to a DRAFT goods
+  receipt with per-field confidence and mandatory confirmation of every regulated field (AI-03)
+  `f03252ab`. WHA-1314 anomaly signals (AI-04/RPT-03) still running.
+  Migration prefixes in use today: 100000, 110000, 110500, 120000, 123700, 133000, 192000, 193000,
+  194000 — a new lane must be given its own and told which.
+- **Pharmacy P1 still to do (wave 2+):** INV-10 central purchasing, MKT-01/02 segments + campaign
+  builder (capture mode, regulated-item outreach fail-closed until D10), DEM-03 restock notifications,
+  RX-07 refill schedules, RX-08 pharmacovigilance, AI-01 Ask Fathom pharmacy, AI-05 substitute finder,
+  ECO-01 DRAP monitoring, SAFE-05 GS1 flag, MED-06 connector automation, INV-08 recall auto-ingest,
+  INV-05 sensor seam, MKT-03 storefront, MKT-05 delivery. **Blocked on owner decisions, do not start:**
+  RX-06 clinical decision support (licensed data + D07), SUP-02 supplier accounts (D11), PUR-08/ECO-03
+  distributor feeds (D08).
 - **19:02 — preflight regressions fixed and composed.** WHA-1312's whole-tree preflight on `a1e729ff`
   found three faults invisible to the individual lanes (no product defect: tsc, prisma validate, eslint
   and `git diff --check` all passed): a bare `vertical: 'RESTAURANT'` literal in the catering console
