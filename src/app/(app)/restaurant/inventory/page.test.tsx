@@ -218,6 +218,7 @@ describe('physical count workflow', () => {
       stockItemId: 'item-1',
       countedQuantity: '12.5',
     });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
   it('redirects a created count without invalidating the redirecting route', async () => {
     const { page } = await pageWithCount('DRAFT');
@@ -347,6 +348,7 @@ describe('physical count workflow', () => {
     post.set('stockCountId', 'count-1');
     await formAction(submitted.page, 'Post reconciliation')(post);
     expect(submitted.caller.postStockCount).toHaveBeenCalledWith({ stockCountId: 'count-1' });
+    expect(mocks.revalidatePath).not.toHaveBeenCalled();
   });
   it('renders expected, counted, and signed variance after freeze', async () => {
     const { page } = await pageWithCount('SUBMITTED');
