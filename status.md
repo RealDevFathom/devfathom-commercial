@@ -44,6 +44,27 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   perf refactor (2e7de87d stream SOP report cold path, 58aea51b defer deployment forms) is NOT composed —
   accept only with warm-load numbers and test evidence, rebased on the tip.
   New lanes use the branch tip as their base; keep ≤5 heavy runs on the Mac.
+- **Restaurant completion — costing & catering (owner direction 07:10 UTC 4 Sep: "complete restaurants
+  first including catering; use the Codex army to the full").** Gap analysis against the client brief:
+  built = multi-branch, recipes with units/conversions, stock ledger with RECIPE_CONSUMPTION and
+  WASTAGE/SPOILAGE/STAFF_MEAL, purchasing, overview/payments/inventory/purchasing/workforce/SOP reports;
+  missing = recipe-cost rollup, food-cost/profitability/wastage reports, catering. Lanes (all `high`,
+  base = branch tip, one commit each, supervisor composes):
+  WHA-1293 A recipe costing + explosion library (`src/lib/restaurant/recipe-costing.ts`:
+  `explodeRecipe`, `computeRecipeCost`; extracts the ledger's explosion; tRPC getRecipeCost/listRecipeCosts)
+  — Codex Product Engineer, running; WHA-1294 D1 catering server (models RestaurantCateringOrder/Line/
+  ExtraCost/Delivery/Event + one migration, `restaurant-catering` router, state machine, production
+  requirements via explodeRecipe, cost summary, RECIPE_CONSUMPTION on IN_PRODUCTION→READY) — Codex
+  Platform Engineer 2, running; WHA-1295 C1 wastage + stock-movement reports — Codex Restaurant Reports
+  Engineer, running; backlog until their dependency is on the tip: WHA-1296 B recipe cost / food-cost %
+  in the catalog UI (after A) — Product Engineer 2; WHA-1297 E catering console UI (after D1) — Product
+  Engineer 3; WHA-1298 C2 food-cost, dish-profitability (menu-engineering quadrants) and catering
+  reports (after A + D1 + C1) — Reports Engineer. Promote a backlog lane to `todo` only when its
+  dependency is composed AND heavy runs ≤ 7. Not in scope yet (owner said restaurants first): hotel
+  bookings/guest journey, online payment gateways (providers are MOCK/TERMINAL only).
+- **Paperclip note:** when a run is killed (usage limit, recovery backstop) Paperclip escalates the
+  issue to the agent's manager (Chief of Staff, paused) — reassign it back to the engineer; the
+  reassignment also wakes the agent.
 - **QA team** (Codex QA Engineers 1–9, lanes WHA-1235/1236/1238/1240/1241/1242/1243/1260/1239) tests
   STAGING ONLY in their own `QA <AREA> 2026-09-04` organizations; never the owner's org "Mugd" /
   LakeCity; GitHub issue first (`WhatTheStack1/devfathom-commercial`, labels qa, restaurant|pharmacy,
