@@ -278,6 +278,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // can never disagree.
   ['/restaurant/floor', 'restaurant-pos'],
   ['/restaurant/delivery', 'restaurant-core'],
+  ['/restaurant/catering', 'restaurant-core'],
   ['/restaurant/orders', 'restaurant-pos'],
   ['/restaurant/money', 'restaurant-pos'],
   ['/restaurant/tax', 'restaurant-pos'],

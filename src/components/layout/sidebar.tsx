@@ -41,6 +41,7 @@ import {
   Bike,
   FileText,
   ClipboardCheck,
+  ConciergeBell,
   Replace,
   BookLock,
   Pill,
@@ -121,6 +122,13 @@ export const navigation: NavItem[] = [
   { label: 'Kitchen display', href: '/kds', icon: CookingPot, group: 'Restaurant' },
   { label: 'Floor', href: '/restaurant/floor', icon: LayoutGrid, group: 'Restaurant' },
   { label: 'Orders', href: '/restaurant/orders', icon: ReceiptText, group: 'Restaurant' },
+  {
+    label: 'Catering',
+    href: '/restaurant/catering',
+    icon: ConciergeBell,
+    group: 'Restaurant',
+    module: 'restaurant-core',
+  },
   {
     label: 'Finance & reconciliation',
     href: '/restaurant/money',
