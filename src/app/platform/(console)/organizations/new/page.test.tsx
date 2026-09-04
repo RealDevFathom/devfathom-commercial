@@ -149,6 +149,31 @@ describe('NewOrganizationPage package step', () => {
     expect(screen.getByRole('button', { name: /Create onboarding record/ })).toBeInTheDocument();
   });
 
+  it('previews the post-submit restaurant state and remaining activation work', async () => {
+    render(await renderPage({ vertical: 'RESTAURANT' }));
+
+    const preview = screen.getByRole('region', {
+      name: 'This creates an onboarding record, not an active restaurant',
+    });
+    const submit = screen.getByRole('button', { name: 'Create onboarding record' });
+
+    expect(preview).toHaveTextContent('ONBOARDING');
+    expect(preview).toHaveTextContent('Confirm readiness');
+    expect(preview).toHaveTextContent('Finish deployment');
+    expect(preview).toHaveTextContent('Activate manually');
+    expect(preview.compareDocumentPosition(submit) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
+  it('keeps the restaurant activation preview out of other verticals', async () => {
+    render(await renderPage({ vertical: 'AGENCY' }));
+
+    expect(
+      screen.queryByRole('region', {
+        name: 'This creates an onboarding record, not an active restaurant',
+      })
+    ).toBeNull();
+  });
+
   it('keeps the opportunity on the submitted payload after the type is chosen', async () => {
     const { container } = render(await renderPage({ vertical: 'AGENCY', opportunityId: 'opp_9' }));
 
