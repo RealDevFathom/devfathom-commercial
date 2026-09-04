@@ -57,4 +57,22 @@ describe('platform proxy authorization', () => {
     expect(response.headers.get('x-middleware-next')).toBe('1');
     expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
   });
+
+  it('redirects an authenticated operator away from the platform login page', async () => {
+    const request = platformRequest('/platform/login');
+    const response = await proxy(request);
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('http://admin.localhost:4319/platform');
+    expect(mocks.getPlatformSession).toHaveBeenCalledWith(request);
+  });
+
+  it('renders the platform login page when its session cookie is invalid', async () => {
+    mocks.getPlatformSession.mockResolvedValueOnce(null);
+    const response = await proxy(platformRequest('/platform/login'));
+
+    expect(response.status).toBe(200);
+    expect(response.headers.get('x-middleware-next')).toBe('1');
+    expect(response.headers.get('location')).toBeNull();
+  });
 });
