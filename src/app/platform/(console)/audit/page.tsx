@@ -71,8 +71,10 @@ export default async function PlatformAuditPage({
           placeholder="Search action, target, or reason"
           className="h-10 border border-border-default bg-surface-card px-3 text-sm outline-none focus:border-accent-brand"
         />
-        <label className="grid gap-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
-          Outcome
+        <label className="grid gap-1.5">
+          <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
+            Outcome
+          </span>
           <select
             name="outcome"
             defaultValue={query.outcome ?? ''}

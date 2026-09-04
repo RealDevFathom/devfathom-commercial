@@ -79,8 +79,10 @@ export default async function OrganizationsPage({
             className="h-10 w-full border border-border-default bg-surface-card pl-9 pr-3 text-sm outline-none focus:border-accent-brand"
           />
         </label>
-        <label className="grid gap-1.5 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
-          Lifecycle status
+        <label className="grid gap-1.5">
+          <span className="font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
+            Lifecycle status
+          </span>
           <select
             name="status"
             defaultValue={status ?? ''}
