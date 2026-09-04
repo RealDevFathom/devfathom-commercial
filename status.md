@@ -1,6 +1,6 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-04 16:33 PKT (11:33 UTC) — Codex supervisor bounded check-in.
+Last reconciled: 2026-09-04 23:15 PKT (18:15 UTC) — Codex supervisor bounded check-in.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
@@ -21,8 +21,8 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   the four in-flight lanes re-fired (WHA-1286 19th heading route on the tip, WHA-1292 axe check of
   WHA-1285's f553515b, WHA-1243 `QA PERF 2026-09-04` on staging in SHARED mode, WHA-1288 select names).
   Chief of Staff stays paused (it only creates "Review productivity" issues and burns Codex tokens).
-- **Candidate:** product code remains `3f2e6ae4`; this docs-only dispatch starts from status tip
-  `ca78c75e`. Everything composed today is in it: WHA-1306 explicit label associations on the platform
+- **Candidate:** product code remains `3f2e6ae4`; none of the five QA-CI private deliveries below is
+  composed, CI-accepted or release-changing. Everything previously composed today remains in it: WHA-1306 explicit label associations on the platform
   organization form (10:18; QA8's staging finding; GitHub metadata completed as #78), WHA-1285 dark-theme contrast (10:00; single squashed commit cd0a2e99 on c223020f, composed as
   066a3454 — VERIFIED 10:22 by WHA-1304 on the shipping tip c96a307d: fresh seed, production build,
   38/38 routes dark, axe-core 4.13 color-contrast 0 confirmed nodes, both theme controls pass), WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
@@ -63,40 +63,31 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   suites. None of the eight failed files changed between `8a522bd8` and code tip `3f2e6ae4`; the only
   `qa.yml` delta adds the catering browser spec, so the candidate has no direct correction for this red
   result. `main` and production remain untouched and unauthorized.
-- **QA-CI repair dispatch (base = exact private candidate `ca78c75e`, product code `3f2e6ae4`):**
+- **QA-CI private delivery hold (live supervisor check 18:14–18:15 UTC):** zero actual Paperclip runs;
+  all five issues are unassigned `in_review` with explicit delivery holds, and all five child-sourced
+  workspaces remain distinct. Every private commit has exact parent
+  `ca78c75e201bb096323c89a0cc8847ada18eaed8` and passed
+  `git diff --check`. None is composed or CI-accepted. Exact-tree cloud/runtime validation remains the
+  blocker. The only pending interaction, WHA-1311 `request_confirmation`
+  `3dbafb91-2cea-40b2-8be2-aa8421b38186`, is **not** approval to compose. WHA-1239 remains unassigned
+  `in_review`, coordination only; QA8's failed reporting path stays parked. No push, merge, deploy or
+  cloud change occurred; product and release state did not change.
 
-  | Group | Paperclip | GitHub | Owner |
-  |---|---|---|---|
-  | A | WHA-1307 | [#79](https://github.com/WhatTheStack1/devfathom-commercial/issues/79) | Codex Restaurant Fix Engineer 4 |
-  | B | WHA-1308 | [#80](https://github.com/WhatTheStack1/devfathom-commercial/issues/80) | Codex Restaurant Finance Engineer |
-  | C | WHA-1309 | [#81](https://github.com/WhatTheStack1/devfathom-commercial/issues/81) | Codex Product Engineer |
-  | D | WHA-1310 | [#82](https://github.com/WhatTheStack1/devfathom-commercial/issues/82) | Codex Product Engineer 2 |
-  | E | WHA-1311 | [#83](https://github.com/WhatTheStack1/devfathom-commercial/issues/83) | Codex Product Engineer 3 |
+  | Group / issue | Owner | Workspace id / branch | Private commit | Delivery evidence and gap |
+  |---|---|---|---|---|
+  | A / WHA-1307 / [#79](https://github.com/WhatTheStack1/devfathom-commercial/issues/79) | Codex Restaurant Fix Engineer 4 | `ad761c77-821d-4426-89f6-2e64f0e03d44` / `codex/WHA-1307-ci-A` | `02a9f92ef61150bf9b70111478d94aa519f7a213` | Five owned RLS test/helper files; positive opt-in disposable-DB guard; 27 assertions unexecuted; Prettier/ESLint/typecheck unavailable. |
+  | B / WHA-1308 / [#80](https://github.com/WhatTheStack1/devfathom-commercial/issues/80) | Codex Restaurant Finance Engineer | `96886047-ab1c-428d-9a68-f6713c0ad9e2` / `codex/WHA-1308-ci-B` | `dc71f71a49949aa1ad4f9fac00187435c92e277a` | `tenders.ts` plus loyalty-lifecycle test; frozen tax-exclusive `quote.net` earn basis; tests/statics unexecuted. |
+  | C / WHA-1309 / [#81](https://github.com/WhatTheStack1/devfathom-commercial/issues/81) | Codex Product Engineer | `549805f1-95b9-4c15-8610-1a7d8e2ae46a` / `codex/WHA-1309-ci-C` | `15c1a6f27d0161efb0eb877b591c4579df178219` | Terminal rollback DB test only; runtime test unexecuted. |
+  | D / WHA-1310 / [#82](https://github.com/WhatTheStack1/devfathom-commercial/issues/82) | Codex Product Engineer 2 | `517f75e8-ec9a-4b15-94a2-1d2f3279d194` / `codex/WHA-1310-ci-D` | `94b86dd87324d767953f0c3b171ec64b7d5f6da6` | Pharmacy-finance fixture `saleable: true`; touched Prettier/ESLint pass; typecheck exit 2 from missing generated Prisma artifacts; DB/CI unexecuted. |
+  | E / WHA-1311 / [#83](https://github.com/WhatTheStack1/devfathom-commercial/issues/83) | Codex Product Engineer 3 | `302f594c-4972-405f-86ee-50664e38e8bb` / `codex/WHA-1311-ci-E` | `f646d296d0051b7429ce4e591206d61137543a00` | Stock-signals fixture adds ordered 2–8 C range; touched Prettier/ESLint pass; same typecheck environment blocker; DB/CI unexecuted. |
 
-  WHA-1239 remains unassigned `in_review`, coordination only. QA8's failed reporting path remains
-  parked. WHA-1306 GitHub metadata is complete as #78.
-- **Superseded 17:49 dispatch snapshot:** all five initial runs inherited parent WHA-1239 workspace
-  `e2805e6f-eaaf-473f-8aae-89094188d23b` through `reuse_existing`; their `running` state did not prove
-  isolated execution. The supervisor paused exactly those five builders and actual runs returned to zero.
-  A/B delivered no edits; D/E stopped. C's test-only commit
-  `79ff2c89dba3ae155503bddeccb9e59683b8f9ee` on wrong parent
-  `87dac6a78fdd8f5e10083aaa8673cc261f7572f3` remains preserved in the now-clean old checkout, but is not
-  accepted or composed. C must carry only its owned diff into the corrected workspace and create a new
-  ordinary commit there; never alter the original commit or ref.
-- **Corrected isolated workspace/run snapshot (`2026-09-04T18:02:53.039Z`):** the native provisioner
-  created five distinct child-sourced workspaces. Every checkout read exact HEAD `ca78c75e` on its
-  literal branch; no active run payload referenced old workspace `e2805e6f-eaaf-473f-8aae-89094188d23b`.
-  Post-provision `reuse_existing` now attaches each issue only to its own new workspace. Common cwd
-  prefix: `/Users/Saad/Developer/paperclip-worktrees/devfathom/`. These `running` records prove routing,
-  not productive execution.
-
-  | Group / issue | Workspace id | Branch / cwd suffix | Run id / state |
-  |---|---|---|---|
-  | A / WHA-1307 | `ad761c77-821d-4426-89f6-2e64f0e03d44` | `codex/WHA-1307-ci-A` | `8775bd91-6416-413f-9882-e470c0b897d4` / `running` |
-  | B / WHA-1308 | `96886047-ab1c-428d-9a68-f6713c0ad9e2` | `codex/WHA-1308-ci-B` | `de2fe3eb-5244-4b57-9c9f-bc7e1db4e593` / `running` |
-  | C / WHA-1309 | `549805f1-95b9-4c15-8610-1a7d8e2ae46a` | `codex/WHA-1309-ci-C` | `6cd90477-9717-4571-a116-302cb75e05a8` / `running` |
-  | D / WHA-1310 | `517f75e8-ec9a-4b15-94a2-1d2f3279d194` | `codex/WHA-1310-ci-D` | `37474b76-9ca7-455d-8844-600b1223843e` / `running` |
-  | E / WHA-1311 | `302f594c-4972-405f-86ee-50664e38e8bb` | `codex/WHA-1311-ci-E` | `013e4432-9519-4e8c-9def-0930a9646cf6` / `running` |
+- **Shared-workspace incident history (17:49–18:02 UTC):** all five initial runs inherited parent
+  WHA-1239 workspace `e2805e6f-eaaf-473f-8aae-89094188d23b` through `reuse_existing`; their `running`
+  state did not prove isolated execution. The supervisor paused those builders, then the native provisioner
+  created the five distinct child workspaces retained above. A/B had no delivered edits in the old
+  checkout; D/E stopped. C's old test-only commit `79ff2c89dba3ae155503bddeccb9e59683b8f9ee`
+  on wrong parent `87dac6a78fdd8f5e10083aaa8673cc261f7572f3` remains preserved but is not a delivery,
+  accepted or composed; C's correct-parent private delivery is `15c1a6f2` above.
 
 - **Other open engineering lanes:** WHA-1270 (guard DEDICATED provisioning mode when
   Vercel is unconfigured — COMPOSED, not yet on staging), WHA-1281 (cold-load
@@ -174,9 +165,10 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   _gate-evidence/`, `_qa-evidence/`). Never compose them.
 
 ### Next steps, in order
-1. WHA-1307 through WHA-1311 independently confirm the five supplied QA4 findings against exact
-   candidate `ca78c75e`; the supervisor composes only verified single commits. WHA-1239 stays unassigned
-   `in_review`, coordination only. Owner alone decides and performs the next
+1. Keep WHA-1307 through WHA-1311 unassigned `in_review` until exact-tree cloud/runtime validation
+   resolves each private delivery hold; `git diff --check` alone is insufficient. WHA-1311's pending
+   confirmation is not composition approval. The supervisor composes only accepted, verified single
+   commits. Owner alone decides and performs the next
    `restaurantv2` fast-forward; `qa.yml` must go green before release claims.
 2. Owner runs the second staging deploy prompt against the later accepted candidate (it re-seeds from Key Vault, fixing the login drift;
    if the migration job is refused the `ALTER ROLE`, the prompt's fallback applies the grants).
