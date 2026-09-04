@@ -13,9 +13,8 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 - **Candidate:** the tip of this branch (`3f2e6ae4` + this status commit; clean). Everything composed
   today is in it: WHA-1306 explicit label associations on the platform organization form (10:18; QA8's
   staging finding — GitHub number pending until the owner's `gh` credential is renewed), WHA-1285 dark-theme contrast (10:00; single squashed commit cd0a2e99 on c223020f, composed as
-  066a3454 — **UNVERIFIED on this tree**: WHA-1304's 0-contrast-node pass was against 93b1ba9c, and
-  cd0a2e99 differs from it in globals.css, crm/page.tsx and theme-provider; a WHA-1304 rerun on the
-  candidate tip was requested — if it fails, revert 066a3454 with `git diff 066a3454 066a3454^ | git apply --cached --3way`), WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
+  066a3454 — VERIFIED 10:22 by WHA-1304 on the shipping tip c96a307d: fresh seed, production build,
+  38/38 routes dark, axe-core 4.13 color-contrast 0 confirmed nodes, both theme controls pass), WHA-1303 administrator guide for the profitability reports (08:58), WHA-1302 catering end-to-end Playwright spec in the browser gate + qa.yml (08:55), WHA-1298 food-cost / dish-profitability (menu-engineering quadrants) / catering reports
   (08:48 — all six restaurant-completion lanes are now in), WHA-1301 administrator guide for recipes/costing/catering/reports (08:25), WHA-1297
   catering console + nav (08:15), WHA-1295 wastage / stock-movement reports (08:15; two indexes via
   migration `20260904123700_restaurant_stock_report_indexes`), WHA-1296 recipe cost / cost per portion / food-cost % in the catalog console (08:00),
