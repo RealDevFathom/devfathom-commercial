@@ -32,6 +32,7 @@ import { buildChatTools } from '@/lib/ai/tools/chat';
 import { buildNotesTools } from '@/lib/ai/tools/notes';
 import { buildMeetingsTools } from '@/lib/ai/tools/meetings';
 import { buildInsightsTools } from '@/lib/ai/tools/insights';
+import { buildPharmacyReportTools } from '@/lib/ai/tools/pharmacy-reports';
 
 export type { AssistantContext } from '@/lib/ai/context';
 
@@ -45,7 +46,8 @@ type Domain =
   | 'finance'
   | 'chat'
   | 'notes'
-  | 'meetings';
+  | 'meetings'
+  | 'pharmacyReports';
 
 // High-frequency READ tools that answer most questions — always offered, so a
 // plain question rarely needs a domain bundle loaded at all.
@@ -74,6 +76,8 @@ const SELF_LEAVE_REQUEST =
   /\b(?:i (?:want|need|would like|plan) to )?(?:take|book|request|submit|put in for)\b.{0,40}\b(?:leave|time off|vacation|pto)\b/i;
 const FINANCE_INTENT =
   /invoic|revenue|profit|expense|transaction|p&l|pnl|budget|\bpaid\b|owe|financ|money|billing|\bbill\b|payment|cash|margin/i;
+const PHARMACY_REPORT_INTENT =
+  /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim/i;
 
 export function assistantToolChoice(hint: string) {
   return SELF_LEAVE_REQUEST.test(hint)
@@ -85,6 +89,7 @@ export function assistantToolChoice(hint: string) {
 // purpose: a missed keyword just means a write tool isn't offered for that turn,
 // and CORE still answers reads. Matched against the recent user message(s).
 const ROUTES: Array<[RegExp, Domain[]]> = [
+  [PHARMACY_REPORT_INTENT, ['pharmacyReports']],
   [FINANCE_INTENT, ['finance']],
   [
     /\btask|to-?do|kanban|checklist|\blabel|assign|comment|ticket|backlog|sprint|\bcard\b|due date|priorit|move .*to|mark .*done/i,
@@ -135,7 +140,13 @@ function selectDomains(hint: string): Set<Domain> {
 export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string } = {}): ToolSet {
   const hint = (opts.hint ?? '').trim();
   if (hint && UNSUPPORTED_TOOL_INTENT.test(hint)) return {};
-  if (hint && ctx.role !== 'ADMIN' && FINANCE_INTENT.test(hint)) return {};
+  if (
+    hint &&
+    ctx.role !== 'ADMIN' &&
+    FINANCE_INTENT.test(hint) &&
+    !PHARMACY_REPORT_INTENT.test(hint)
+  )
+    return {};
 
   const h = createAssistantHelpers(ctx);
   const perDomain: Record<Domain, ToolSet> = {
@@ -149,6 +160,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     chat: buildChatTools(h),
     notes: buildNotesTools(h),
     meetings: buildMeetingsTools(h),
+    pharmacyReports: buildPharmacyReportTools(h),
   };
 
   const selectAll = hint.length === 0;

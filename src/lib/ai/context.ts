@@ -37,6 +37,7 @@ export type AssistantContext = {
   organizationId: string;
   userId: string;
   role: string;
+  enabledModules?: string[];
   name?: string | null;
   email?: string | null;
   department?: string | null;

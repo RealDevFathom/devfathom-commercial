@@ -7,6 +7,7 @@ const ctx = {
   role: 'EMPLOYEE',
 } as AssistantContext;
 const adminCtx = { ...ctx, role: 'ADMIN' } as AssistantContext;
+const pharmacyCtx = { ...ctx, enabledModules: ['pharmacy-reports'] } as AssistantContext;
 
 describe('assistant tool routing', () => {
   it('suppresses unsupported tools and forces clear self-leave requests', () => {
@@ -23,5 +24,8 @@ describe('assistant tool routing', () => {
     expect(buildAssistantTools(adminCtx, { hint: 'show revenue and profit' })).toHaveProperty(
       'getFinanceSummary'
     );
+    expect(
+      buildAssistantTools(pharmacyCtx, { hint: 'show pharmacy sales and margin' })
+    ).toHaveProperty('askPharmacyReports');
   });
 });
