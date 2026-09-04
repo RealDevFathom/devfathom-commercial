@@ -55,6 +55,7 @@ jobs:
       WHA434_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA910_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA1198_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA1316_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       DELIVERY_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       EXTENSION_ADMIN_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       M8_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
@@ -63,6 +64,7 @@ jobs:
       RESTAURANT_ACTOR_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA1168_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA1198_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WHA1316_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA434_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA566_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA874_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
@@ -128,7 +130,7 @@ jobs:
           }
 
           PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL' >gate/database-bootstrap.stdout.log 2>gate/database-bootstrap.stderr.log
-          CREATE ROLE gate_owner LOGIN PASSWORD 'gate-owner-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE ROLE gate_owner LOGIN PASSWORD 'gate-owner-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB CREATEROLE NOINHERIT;
           CREATE ROLE gate_runtime LOGIN PASSWORD 'gate-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
           CREATE DATABASE devfathom_gate_test OWNER gate_owner;
           REVOKE ALL ON DATABASE devfathom_gate_test FROM PUBLIC;
