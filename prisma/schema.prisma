@@ -11727,6 +11727,8 @@ model PharmacyGoodsReceipt {
   reversedByUserId       String?
   reversalReason         String?
   note                   String?
+  /// AI-03: document-level OCR proposals and their source boxes.
+  ocrDraftEvidence       Json?
   createdAt              DateTime                   @default(now())
   updatedAt              DateTime                   @updatedAt
 
@@ -11783,6 +11785,11 @@ model PharmacyGoodsReceiptLine {
   quarantineLocationId      String?
   /// Stamped when the receipt posts; the join from this document to the ledger.
   inventoryLotId            String?
+  /// AI-03 / MED-04: confidence and source box for every extracted field.
+  ocrFieldEvidence          Json?
+  /// A human, never OCR confidence, confirms the regulated facts before posting.
+  ocrRegulatedConfirmedAt   DateTime?
+  ocrRegulatedConfirmedById String?
   createdAt                 DateTime                @default(now())
 
   goodsReceipt       PharmacyGoodsReceipt         @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_receipt_fkey")

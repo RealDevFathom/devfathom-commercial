@@ -89,6 +89,12 @@ export async function postGoodsReceipt(
   // posted three good lines and then refused the fourth would leave stock on
   // the shelf for a delivery the operator never finished accepting.
   for (const line of receipt.lines) {
+    if (
+      line.ocrFieldEvidence &&
+      (!line.ocrRegulatedConfirmedAt || !line.ocrRegulatedConfirmedById)
+    ) {
+      throw new PharmacyReceivingError('OCR_CONFIRMATION_REQUIRED');
+    }
     assertSaleableOnReceipt({
       batchNumber: line.batchNumber,
       printedExpiry: line.printedExpiry,
