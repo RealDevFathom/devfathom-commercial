@@ -4838,6 +4838,9 @@ model RestaurantBranch {
   // conservative `false` default so a branch that does not roster keeps its
   // existing M2 sign-in behaviour untouched.
   shiftSignInEnforced Boolean  @default(false)
+  /// Shared receipt designer v1; null uses domain defaults. Existing branch RLS applies.
+  receiptLayout       Json?
+  receiptLayoutRevision Int   @default(0)
   address             String?
   active              Boolean  @default(true)
   isDefault           Boolean  @default(false)
