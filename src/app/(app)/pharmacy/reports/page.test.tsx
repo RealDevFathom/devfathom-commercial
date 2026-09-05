@@ -79,6 +79,8 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
         channels: { capture: { enabled: true }, whatsapp: { enabled: false, configured: false } },
       }),
       updateDigestSetting: async () => ({}),
+      packAuthenticationFlags: async () => [],
+      acknowledgePackAuthenticationFlag: async () => ({}),
       catalog: async () => ({
         permissions: { operational: true, financial: true },
         reports: [

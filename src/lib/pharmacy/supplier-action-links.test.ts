@@ -8,6 +8,9 @@ import {
 import { structuralSupplierFileScanner } from './supplier-file-scanner';
 
 const NOW = new Date('2026-09-04T12:00:00Z');
+// Link expiry is anchored to the run clock so the fixture can never expire mid-gate.
+const LINK_TTL_MS = 60 * 60 * 1000;
+const linkExpiry = () => new Date(Date.now() + LINK_TTL_MS);
 
 function fakeDb() {
   const stored: Record<string, unknown>[] = [];
@@ -63,7 +66,7 @@ async function issued() {
     relationshipId: 'rel_a',
     purchaseOrderId: 'po_a',
     actorUserId: 'user_a',
-    expiresAt: new Date('2026-09-05T00:00:00Z'),
+    expiresAt: linkExpiry(),
   });
   return { ...state, token: result.token };
 }
@@ -83,7 +86,7 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
         relationshipId: 'rel_a',
         purchaseOrderId: 'po_a',
         actorUserId: 'user_a',
-        expiresAt: new Date('2026-09-05'),
+        expiresAt: linkExpiry(),
       })
     ).rejects.toMatchObject({ reason: 'MISMATCH' });
     state.purchaseOrder.supplierId = 'supplier_a';
@@ -184,7 +187,7 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
         kind: 'ACKNOWLEDGEMENT',
         idempotencyKey: 'late',
         payload: {},
-        now: new Date('2026-09-06'),
+        now: new Date(Date.now() + 2 * LINK_TTL_MS),
       })
     ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
     (state.stored[0] as { revokedAt: Date | null }).revokedAt = NOW;
