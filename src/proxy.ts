@@ -37,7 +37,13 @@ export async function proxy(request: Request) {
     REQUEST_ID_HEADER,
     request.headers.get(REQUEST_ID_HEADER) ?? crypto.randomUUID()
   );
-  const next = () => NextResponse.next({ request: { headers: requestHeaders } });
+  const next = () => {
+    const response = NextResponse.next({ request: { headers: requestHeaders } });
+    if (pathname === '/demo' || pathname.startsWith('/demo/')) {
+      response.headers.set('X-Robots-Tag', 'noindex, nofollow');
+    }
+    return response;
+  };
   const baseDomain = (process.env.PLATFORM_BASE_DOMAIN ?? '')
     .trim()
     .toLowerCase()
@@ -116,7 +122,11 @@ export async function proxy(request: Request) {
   }
 
   // Allow public paths
-  if (publicPaths.some((path) => pathname.startsWith(path))) {
+  if (
+    pathname === '/demo' ||
+    pathname.startsWith('/demo/') ||
+    publicPaths.some((path) => pathname.startsWith(path))
+  ) {
     return next();
   }
 

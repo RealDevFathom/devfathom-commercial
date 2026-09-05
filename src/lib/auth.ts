@@ -14,12 +14,13 @@ import {
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
 import { SSO_TICKET_COOKIE } from '@/lib/sso';
-import type { SessionInvalidReason } from '@/lib/auth/session-state';
+import { liveDemoAccessExpiry, type SessionInvalidReason } from '@/lib/auth/session-state';
 import { DUMMY_PASSWORD_HASH, SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { consumeLoginIntent, LOGIN_INTENT_COOKIE, peekLoginIntent } from '@/lib/auth/login-intent';
 import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
+import { demoManagerEmail, demoManagerId, demoSeatFromOrganizationId } from '@/lib/demo/config';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -196,6 +197,18 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             ip,
             userAgent,
             reason: 'Unknown workspace host',
+          });
+          return null;
+        }
+        if (organization.isDemo) {
+          await compare(password, DUMMY_PASSWORD_HASH);
+          recordAuthAudit({
+            type: 'LOGIN_FAILED',
+            organizationId: organization.id,
+            email,
+            ip,
+            userAgent,
+            reason: 'Demo workspace requires demo access',
           });
           return null;
         }
@@ -396,6 +409,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const organization = await resolveOrganizationById(organizationId);
         if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
+        const demoSeat = organization.isDemo ? demoSeatFromOrganizationId(organization.id) : null;
+        if (
+          organization.isDemo &&
+          (!demoSeat ||
+            candidate.userId !== demoManagerId(demoSeat) ||
+            intent.email !== demoManagerEmail(demoSeat) ||
+            !liveDemoAccessExpiry(candidate.demoAccessExpiresAt))
+        ) {
+          return null;
+        }
 
         return withTenantDb(organization.id, async (tenantDb) => {
           const user = await tenantDb.user.findUnique({
@@ -473,6 +496,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            demoAccessExpiresAt: organization.isDemo ? candidate.demoAccessExpiresAt : undefined,
           };
         });
       },
@@ -485,7 +509,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const rawTicket = parseCookie(request.headers.get('cookie'), SSO_TICKET_COOKIE);
         if (!rawTicket || rawTicket.length < 32 || rawTicket.length > 128) return null;
         const organization = await resolveOrganizationForRequest(request);
-        if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
+        if (
+          !organization ||
+          organization.isDemo ||
+          !isTenantLifecycleAccessible(organization.status)
+        ) {
+          return null;
+        }
         return withTenantDb(organization.id, async (tenantDb) => {
           const ticket = await tenantDb.tenantSsoTicket.findFirst({
             where: {
@@ -550,6 +580,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.status = ((user as Record<string, unknown>).status as string) ?? 'ACTIVE';
         // AUTH-01: snapshot the session-revocation counter at sign-in.
         token.tokenVersion = ((user as Record<string, unknown>).tokenVersion as number) ?? 0;
+        token.demoAccessExpiresAt =
+          liveDemoAccessExpiry((user as Record<string, unknown>).demoAccessExpiresAt) ?? undefined;
         // #16: session validity is its own claim. `status` now only ever holds a
         // real UserStatus, so a revoked session can never be misreported as a
         // deactivated account (and vice versa).
@@ -572,6 +604,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // so failing open buys no availability — only an unrevocable window.
       // Recovery is a fresh sign-in, or the next successful revalidation once
       // REVALIDATE_AFTER_MS has elapsed.
+      if (
+        token.demoAccessExpiresAt !== undefined &&
+        !liveDemoAccessExpiry(token.demoAccessExpiresAt)
+      ) {
+        token.sessionRevoked = true;
+        token.sessionInvalidReason = 'DEMO_ACCESS_EXPIRED';
+        return token;
+      }
+
       const lastValidated = typeof token.lastValidatedAt === 'number' ? token.lastValidatedAt : 0;
       const stale = Date.now() - lastValidated > REVALIDATE_AFTER_MS;
       if (token.id && token.organizationId && stale) {
@@ -585,13 +626,19 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 department: true,
                 title: true,
                 tokenVersion: true,
-                organization: { select: { slug: true, status: true } },
+                organization: { select: { slug: true, status: true, isDemo: true } },
               },
             })
           );
           if (!fresh) {
             token.sessionRevoked = true;
             token.sessionInvalidReason = 'DELETED';
+          } else if (
+            fresh.organization.isDemo &&
+            !liveDemoAccessExpiry(token.demoAccessExpiresAt)
+          ) {
+            token.sessionRevoked = true;
+            token.sessionInvalidReason = 'DEMO_ACCESS_EXPIRED';
           } else if (fresh.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
             // AUTH-01 / IMP-AUTH-03: the counter was bumped (password change,
             // admin reset, lay-off, or "sign out everywhere"), so every token
@@ -640,6 +687,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.sessionRevoked = Boolean(token.sessionRevoked);
         session.user.sessionInvalidReason =
           (token.sessionInvalidReason as SessionInvalidReason | null) ?? null;
+        session.user.demoAccessExpiresAt =
+          liveDemoAccessExpiry(token.demoAccessExpiresAt) ?? undefined;
       }
       return session;
     },

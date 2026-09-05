@@ -51,6 +51,9 @@ export async function POST(request: Request) {
   if (actor.support) {
     return reject('Support sessions cannot enroll restaurant terminals.', 403);
   }
+  if (actor.organization.isDemo) {
+    return reject('Not available in demo.', 403);
+  }
   const parsed = inputSchema.safeParse(Object.fromEntries(await request.formData()));
   if (!parsed.success) return reject('Review the terminal enrollment fields.', 400);
   const input = parsed.data;

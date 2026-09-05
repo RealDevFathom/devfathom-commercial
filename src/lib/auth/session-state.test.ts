@@ -6,9 +6,21 @@ import {
   WORKSPACE_UNAVAILABLE_MESSAGE,
   evaluateSessionUser,
   isSessionUsable,
+  liveDemoAccessExpiry,
   signInRedirectPath,
   type SessionUserState,
 } from './session-state';
+
+describe('liveDemoAccessExpiry', () => {
+  it('accepts only a finite future numeric claim', () => {
+    const now = Date.parse('2026-09-04T12:00:00.000Z');
+    expect(liveDemoAccessExpiry(now + 1, now)).toBe(now + 1);
+    expect(liveDemoAccessExpiry(now, now)).toBeNull();
+    expect(liveDemoAccessExpiry(Number.NaN, now)).toBeNull();
+    expect(liveDemoAccessExpiry(Number.POSITIVE_INFINITY, now)).toBeNull();
+    expect(liveDemoAccessExpiry(String(now + 1), now)).toBeNull();
+  });
+});
 
 describe('evaluateSessionUser', () => {
   it.each([

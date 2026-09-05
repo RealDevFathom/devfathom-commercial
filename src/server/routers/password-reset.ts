@@ -34,10 +34,20 @@ function invalidResetLink() {
 async function loadUsableToken(db: PrismaClient, token: string) {
   const record = await db.passwordResetToken.findUnique({
     where: { tokenHash: hashInviteToken(token) },
-    include: { user: { select: { id: true, name: true, email: true, status: true } } },
+    include: {
+      user: {
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          status: true,
+          organization: { select: { isDemo: true } },
+        },
+      },
+    },
   });
 
-  if (!record || record.usedAt) return null;
+  if (!record || record.usedAt || record.user.organization.isDemo) return null;
   if (record.expiresAt.getTime() < Date.now()) return null;
   return record;
 }
@@ -51,6 +61,7 @@ export const passwordResetRouter = router({
     // format — it would turn the endpoint into an enumeration oracle.
     .input(z.object({ email: emailLookupSchema }))
     .mutation(async ({ ctx, input }) => {
+      if (ctx.organization?.isDemo) return { success: true };
       const email = input.email;
       const ip = ctx.requestMeta.ip ?? 'unknown';
 

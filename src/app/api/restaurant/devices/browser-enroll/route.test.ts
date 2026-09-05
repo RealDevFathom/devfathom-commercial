@@ -9,6 +9,7 @@ const mocks = vi.hoisted(() => ({
   stationFindFirst: vi.fn(),
   resolveCapabilityBranchAuthorization: vi.fn(),
   support: null as null | { platformUserId: string },
+  isDemo: false,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -50,7 +51,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
   resolveTenantActor: async () => ({
-    organization: { id: 'org_1' },
+    organization: { id: 'org_1', isDemo: mocks.isDemo },
     support: mocks.support,
     session: {
       expires: 'later',
@@ -98,6 +99,7 @@ beforeEach(() => {
   });
   mocks.recordAudit.mockClear();
   mocks.support = null;
+  mocks.isDemo = false;
   mocks.branchFindUnique.mockClear();
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1', name: 'Downtown' });
   mocks.stationFindFirst.mockResolvedValue({ id: 'station_1', name: 'Expo' });
@@ -176,6 +178,17 @@ describe('POST browser enrollment', () => {
     expect(mocks.enrollDevice).not.toHaveBeenCalled();
     expect(mocks.recordAudit).not.toHaveBeenCalled();
     expect(response.headers.getSetCookie()).toEqual([]);
+  });
+
+  it('rejects manual device enrollment for a demo organization', async () => {
+    mocks.isDemo = true;
+
+    const response = await POST(request());
+
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({ error: 'Not available in demo.' });
+    expect(mocks.can).not.toHaveBeenCalled();
+    expect(mocks.enrollDevice).not.toHaveBeenCalled();
   });
 
   it('denies a Branch A manager attempting to enroll a device at Branch B', async () => {

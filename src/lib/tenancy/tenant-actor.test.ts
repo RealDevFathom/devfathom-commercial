@@ -105,6 +105,29 @@ describe('resolveTenantActor', () => {
     expect(actor?.organization).toEqual({ id: 'org_other' });
   });
 
+  it('requires a live absolute grant expiry for a demo organization', async () => {
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other', isDemo: true });
+
+    await expect(
+      resolveTenantActor({
+        request: request(),
+        session: sessionFor({ status: 'ACTIVE' }),
+      })
+    ).resolves.toBeNull();
+    await expect(
+      resolveTenantActor({
+        request: request(),
+        session: sessionFor({ status: 'ACTIVE', demoAccessExpiresAt: Date.now() - 1 }),
+      })
+    ).resolves.toBeNull();
+    await expect(
+      resolveTenantActor({
+        request: request(),
+        session: sessionFor({ status: 'ACTIVE', demoAccessExpiresAt: Date.now() + 60_000 }),
+      })
+    ).resolves.toMatchObject({ organization: { id: 'org_other', isDemo: true } });
+  });
+
   // D14: `df_support_session` is domain-wide and outranks the tenant JWT, so an
   // operator with a live support session who opened the shared host would have
   // been handed an impersonated actor for a workspace they never opened.

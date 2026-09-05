@@ -27,6 +27,7 @@ declare module 'next-auth' {
       // unverifiable). See src/lib/auth/session-state.ts.
       sessionRevoked?: boolean;
       sessionInvalidReason?: SessionInvalidReason | null;
+      demoAccessExpiresAt?: number;
     };
   }
 
@@ -42,6 +43,7 @@ declare module 'next-auth' {
     supportSessionId?: string;
     platformUserId?: string;
     supportReason?: string;
+    demoAccessExpiresAt?: number;
   }
 }
 
@@ -61,5 +63,6 @@ declare module 'next-auth/jwt' {
     // #16: session revocation as its own claim, never folded into `status`.
     sessionRevoked?: boolean;
     sessionInvalidReason?: SessionInvalidReason | null;
+    demoAccessExpiresAt?: number;
   }
 }

@@ -26,20 +26,21 @@ export async function resolveOrganizationEntitlements(
   db: ScopedDb,
   now = new Date()
 ): Promise<EntitlementView> {
+  const organizationPromise = db.organization.findUnique({
+    where: { id: organizationId },
+    select: {
+      id: true,
+      seatLimit: true,
+      packageId: true,
+      // §2.3 — additive: surfaced on the view below. Selecting one more
+      // scalar does not affect the package → contract → override resolution
+      // order applied further down.
+      vertical: true,
+    },
+  });
   const [tenantState, controlState] = await Promise.all([
     Promise.all([
-      db.organization.findUnique({
-        where: { id: organizationId },
-        select: {
-          id: true,
-          seatLimit: true,
-          packageId: true,
-          // §2.3 — additive: surfaced on the view below. Selecting one more
-          // scalar does not affect the package → contract → override resolution
-          // order applied further down.
-          vertical: true,
-        },
-      }),
+      organizationPromise,
       db.organizationModule.findMany({
         where: { organizationId },
         select: {
@@ -69,10 +70,7 @@ export async function resolveOrganizationEntitlements(
     // control-plane-only RLS policy. Resolve that half of the entitlement
     // snapshot in a separate privileged transaction, never by weakening RLS.
     withPlatformDb(async (platformDb) => {
-      const organization = await platformDb.organization.findUnique({
-        where: { id: organizationId },
-        select: { packageId: true },
-      });
+      const organization = await organizationPromise;
       const [catalog, packageRecord, contracts] = await Promise.all([
         platformDb.platformModule.findMany({
           where: { active: true },

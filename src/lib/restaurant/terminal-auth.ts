@@ -8,6 +8,8 @@ import type {
   RestaurantTerminalSession,
 } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { liveDemoAccessExpiry } from '@/lib/auth/session-state';
+import { demoManagerEmail, demoManagerId, demoSeatFromOrganizationId } from '@/lib/demo/config';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
@@ -35,6 +37,7 @@ import {
   type TerminalSessionState,
 } from '@/lib/restaurant/terminal-session';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { resolveTenantActor, type TenantActor } from '@/lib/tenancy/tenant-actor';
 
 /**
  * M2-L3 / §5 / C2 & C5 — device-authenticated terminal transport.
@@ -67,6 +70,8 @@ const DEVICE_LIMIT = 240;
 export type TerminalDeviceContext = {
   organizationId: string;
   device: RestaurantRegisteredDevice;
+  /** Present only for demo devices after the live Auth.js actor is bound. */
+  demoActor: TenantActor | null;
   /** Tenant-scoped transaction for the device's organization. */
   db: ScopedDb;
 };
@@ -218,7 +223,12 @@ async function rejectDisabledTerminalModule(
   return null;
 }
 
-type DeviceDiscovery = { deviceId: string; organizationId: string };
+type DeviceDiscovery = {
+  deviceId: string;
+  organizationId: string;
+  isDemo: boolean;
+  demoActor: TenantActor | null;
+};
 
 /**
  * Resolve a device secret to its organization in the explicit platform scope
@@ -233,13 +243,41 @@ async function discoverDevice(secret: string): Promise<DeviceDiscovery | null> {
     if (!device) return null;
     const organization = await platformDb.organization.findUnique({
       where: { id: device.organizationId },
-      select: { status: true },
+      select: { status: true, isDemo: true },
     });
     if (!organization || !['ONBOARDING', 'ACTIVE', 'GRACE'].includes(organization.status)) {
       return null;
     }
-    return { deviceId: device.id, organizationId: device.organizationId };
+    return {
+      deviceId: device.id,
+      organizationId: device.organizationId,
+      isDemo: organization.isDemo,
+      demoActor: null,
+    };
   });
+}
+
+async function bindDemoActor(
+  request: Request,
+  discovery: DeviceDiscovery
+): Promise<DeviceDiscovery | NextResponse> {
+  if (!discovery.isDemo) return discovery;
+  const actor = await resolveTenantActor({ request });
+  const seat = demoSeatFromOrganizationId(discovery.organizationId);
+  if (
+    !actor ||
+    actor.support ||
+    !seat ||
+    !actor.organization.isDemo ||
+    actor.organization.id !== discovery.organizationId ||
+    actor.session.user.organizationId !== discovery.organizationId ||
+    actor.session.user.id !== demoManagerId(seat) ||
+    actor.session.user.email !== demoManagerEmail(seat) ||
+    !liveDemoAccessExpiry(actor.session.user.demoAccessExpiresAt)
+  ) {
+    return unauthorized('Demo access has expired; reopen the restaurant demo.');
+  }
+  return { ...discovery, demoActor: actor };
 }
 
 /** Run flood controls and resolve the device; returns the discovery or an error response. */
@@ -256,8 +294,11 @@ async function authenticateDevice(request: Request): Promise<DeviceDiscovery | N
     return forbidden('Terminal request origin was not accepted.');
   }
 
-  const discovery = await discoverDevice(credential.secret);
-  if (!discovery) return unauthorized('Unknown or unauthorized device.');
+  const discovered = await discoverDevice(credential.secret);
+  if (!discovered) return unauthorized('Unknown or unauthorized device.');
+
+  const discovery = await bindDemoActor(request, discovered);
+  if (discovery instanceof NextResponse) return discovery;
 
   const deviceGate = rateLimit(
     `terminal:device:${discovery.deviceId}`,
@@ -307,7 +348,11 @@ export function withDeviceAuth<T extends unknown[]>(
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
         if (entitlementRejection) return entitlementRejection;
         await touchDeviceLastSeen(db, device.id, now);
-        return handler({ organizationId: auth.organizationId, device, db }, request, ...args);
+        return handler(
+          { organizationId: auth.organizationId, device, demoActor: auth.demoActor, db },
+          request,
+          ...args
+        );
       });
     } catch (err) {
       return respondToEscapedError('Terminal device-auth error:', err, options.mapError);
@@ -376,7 +421,14 @@ export function withTerminalAuth<T extends unknown[]>(
         ]);
 
         return handler(
-          { organizationId: auth.organizationId, device, db, session, state: verdict.state },
+          {
+            organizationId: auth.organizationId,
+            device,
+            demoActor: auth.demoActor,
+            db,
+            session,
+            state: verdict.state,
+          },
           request,
           ...args
         );

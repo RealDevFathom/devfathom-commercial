@@ -17,6 +17,7 @@ import {
   isAuditExcludedPath,
   recordTrpcAudit,
 } from '@/server/audit';
+import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls
@@ -172,7 +173,17 @@ const auditMutations = auditMiddleware({ auditReads: false });
 const auditAll = auditMiddleware({ auditReads: true });
 
 // Auth guard for any logged-in, active account.
-const requireActiveUser = t.middleware(async ({ ctx, next }) => {
+function assertDemoProcedureAllowed(
+  ctx: TRPCContext,
+  path: string,
+  type: 'query' | 'mutation' | 'subscription'
+) {
+  if (ctx.organization?.isDemo && type !== 'subscription' && isDemoProcedureBlocked(path, type)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: DEMO_UNAVAILABLE_MESSAGE });
+  }
+}
+
+const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
   if (!ctx.session?.user) {
     throw new TRPCError({
       code: 'UNAUTHORIZED',
@@ -180,6 +191,7 @@ const requireActiveUser = t.middleware(async ({ ctx, next }) => {
     });
   }
   assertSessionUsable(ctx.session.user);
+  assertDemoProcedureAllowed(ctx, path, type);
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
 
@@ -201,7 +213,7 @@ const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
 // resignation is PENDING and not your own") are checked INSIDE the resolver via
 // a second `can(...)` call with the loaded resource's attributes.
 function requireCapability(action: Action) {
-  return t.middleware(async ({ ctx, next }) => {
+  return t.middleware(async ({ ctx, next, path, type }) => {
     if (!ctx.session?.user) {
       throw new TRPCError({
         code: 'UNAUTHORIZED',
@@ -209,6 +221,7 @@ function requireCapability(action: Action) {
       });
     }
     assertSessionUsable(ctx.session.user);
+    assertDemoProcedureAllowed(ctx, path, type);
     const subject = subjectFromSession(ctx.session.user);
     const allowed = await can(subject, action, undefined, {
       db: ctx.db as Prisma.TransactionClient,

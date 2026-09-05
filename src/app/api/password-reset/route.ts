@@ -80,7 +80,7 @@ export async function POST(request: Request) {
 
 async function hostTarget(host: string): Promise<ResetTarget[]> {
   const organization = await resolveOrganizationByHost(host);
-  if (!organization) return [];
+  if (!organization || organization.isDemo) return [];
   return [{ organizationId: organization.id, organizationStatus: organization.status }];
 }
 

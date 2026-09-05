@@ -54,7 +54,7 @@ export async function findLoginCandidates(normalizedEmail: string): Promise<Logi
 
   const rows = await withPlatformDb((platformDb) =>
     platformDb.user.findMany({
-      where: { email: normalizedEmail },
+      where: { email: normalizedEmail, organization: { isDemo: false } },
       // Fetch one past the cap so "too many" is distinguishable from "exactly
       // the cap" without a second query.
       take: LOGIN_CANDIDATE_CAP + 1,

@@ -79,4 +79,52 @@ describe('baseline entitlement resolution', () => {
       },
     ]);
   });
+
+  it('uses the package from an organization visible only inside the supplied transaction', async () => {
+    const now = new Date('2026-09-04T00:00:00.000Z');
+    const db = {
+      organization: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'org_uncommitted',
+          seatLimit: 5,
+          packageId: 'pkg_restaurant',
+          vertical: 'RESTAURANT',
+        }),
+      },
+      organizationModule: { findMany: vi.fn().mockResolvedValue([]) },
+      organizationLimit: { findMany: vi.fn().mockResolvedValue([]) },
+      user: { count: vi.fn().mockResolvedValue(1) },
+    };
+    const platformDb = {
+      organization: { findUnique: vi.fn().mockResolvedValue(null) },
+      platformModule: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'mod_restaurant_menu',
+            key: 'restaurant-menu',
+            name: 'Restaurant Menu',
+            band: 'VERTICAL_OPTIONAL',
+          },
+        ]),
+      },
+      platformPackage: {
+        findUnique: vi.fn().mockResolvedValue({
+          moduleLinks: [{ limits: null, module: { id: 'mod_restaurant_menu', active: true } }],
+        }),
+      },
+      platformContract: { findMany: vi.fn().mockResolvedValue([]) },
+    };
+    mocks.withPlatformDb.mockImplementation((run: (client: typeof platformDb) => unknown) =>
+      run(platformDb)
+    );
+
+    const result = await resolveOrganizationEntitlements('org_uncommitted', db as never, now);
+
+    expect(platformDb.organization.findUnique).not.toHaveBeenCalled();
+    expect(platformDb.platformPackage.findUnique).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'pkg_restaurant' } })
+    );
+    expect(result.enabledModules).toContain('restaurant-menu');
+    expect(result.modules[0]?.source).toBe('PACKAGE');
+  });
 });

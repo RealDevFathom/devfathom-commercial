@@ -22,6 +22,7 @@ const h = vi.hoisted(() => ({
   // request. Enabled by default so the pre-existing transport cases stay valid;
   // the entitlement cases below flip it off.
   entitlements: { enabled: ['restaurant-pos'] as string[] },
+  resolveTenantActor: vi.fn(),
 }));
 
 function findBy(rows: Row[], where: Record<string, unknown>): Row | null {
@@ -44,6 +45,10 @@ vi.mock('@/lib/rate-limit', () => ({
     h.rate.ok
       ? { ok: true, retryAfter: 0, remaining: 1 }
       : { ok: false, retryAfter: 30, remaining: 0 },
+}));
+
+vi.mock('@/lib/tenancy/tenant-actor', () => ({
+  resolveTenantActor: h.resolveTenantActor,
 }));
 
 vi.mock('@/lib/tenancy/scoped-db', () => {
@@ -86,13 +91,13 @@ import { hashTerminalSessionToken } from './terminal-session';
 import { TERMINAL_DEVICE_COOKIE, withDeviceAuth, withTerminalAuth } from './terminal-auth';
 import { openOrderBody, terminalCommandRoute } from './terminal-orders';
 
-const ORG = 'org_rest';
+const ORG = 'org_demo_restaurant_seat_1';
 
 let deviceSecret: string;
 let sessionToken: string;
 
 function seedDevice(overrides: Row = {}): void {
-  h.store.orgs.push({ id: ORG, status: 'ACTIVE' });
+  h.store.orgs.push({ id: ORG, status: 'ACTIVE', isDemo: false });
   const gen = generateDeviceSecret();
   deviceSecret = gen.secret;
   h.store.devices.push({
@@ -134,6 +139,8 @@ beforeEach(() => {
   h.store.branches = [];
   h.rate.ok = true;
   h.entitlements.enabled = ['restaurant-pos'];
+  h.resolveTenantActor.mockReset();
+  h.resolveTenantActor.mockResolvedValue(null);
 });
 
 describe('withDeviceAuth', () => {
@@ -367,6 +374,106 @@ describe('withTerminalAuth', () => {
     expect(res.status).toBe(403);
     expect(inner).not.toHaveBeenCalled();
     expect(h.store.devices[0].lastSeenAt).toBeNull();
+  });
+});
+
+describe('demo terminal actor binding', () => {
+  function markDemo() {
+    h.store.orgs[0].isDemo = true;
+  }
+
+  function validActor(overrides: Record<string, unknown> = {}) {
+    return {
+      organization: { id: ORG, isDemo: true },
+      support: null,
+      session: {
+        user: {
+          id: 'user_demo_restaurant_seat_1_manager',
+          email: 'manager.seat1@demo.devfathom.invalid',
+          organizationId: ORG,
+          demoAccessExpiresAt: Date.now() + 60_000,
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  function deviceHeaders() {
+    return { authorization: `Bearer ${deviceSecret}` };
+  }
+
+  function sessionHeaders() {
+    return {
+      ...deviceHeaders(),
+      'x-terminal-session': sessionToken,
+    };
+  }
+
+  it('admits both device-only and operator-session routes for a matching live demo actor', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    markDemo();
+    h.resolveTenantActor.mockResolvedValue(validActor());
+
+    expect((await withDeviceAuth(() => new Response('ok'))(req(deviceHeaders()))).status).toBe(200);
+    expect((await withTerminalAuth(() => new Response('ok'))(req(sessionHeaders()))).status).toBe(
+      200
+    );
+  });
+
+  it.each([
+    ['missing actor', null],
+    [
+      'missing grant claim',
+      validActor({
+        session: {
+          user: {
+            id: 'user_demo_restaurant_seat_1_manager',
+            email: 'manager.seat1@demo.devfathom.invalid',
+            organizationId: ORG,
+          },
+        },
+      }),
+    ],
+    [
+      'expired grant claim',
+      validActor({
+        session: {
+          user: {
+            id: 'user_demo_restaurant_seat_1_manager',
+            email: 'manager.seat1@demo.devfathom.invalid',
+            organizationId: ORG,
+            demoAccessExpiresAt: Date.now() - 1,
+          },
+        },
+      }),
+    ],
+    [
+      'wrong organization',
+      validActor({ organization: { id: 'org_demo_restaurant_seat_2', isDemo: true } }),
+    ],
+  ])('rejects copied demo credentials for a %s', async (_label, actor) => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    markDemo();
+    h.resolveTenantActor.mockResolvedValue(actor);
+
+    const device = await withDeviceAuth(() => new Response('ok'))(req(deviceHeaders()));
+    const terminal = await withTerminalAuth(() => new Response('ok'))(req(sessionHeaders()));
+
+    expect(device.status).toBe(401);
+    expect(terminal.status).toBe(401);
+  });
+
+  it('does not require a tenant actor for ordinary device flows', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+
+    expect((await withDeviceAuth(() => new Response('ok'))(req(deviceHeaders()))).status).toBe(200);
+    expect((await withTerminalAuth(() => new Response('ok'))(req(sessionHeaders()))).status).toBe(
+      200
+    );
+    expect(h.resolveTenantActor).not.toHaveBeenCalled();
   });
 });
 

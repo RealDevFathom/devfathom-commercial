@@ -2,8 +2,9 @@
  * D6 — the one new cross-tenant read surface in this change.
  *
  * `withPlatformDb` bypasses the users RLS policy, so these tests pin the two
- * properties that make the helper safe to review: the only predicate is the
- * normalized email, and nothing outside the whitelist ever leaves the query.
+ * properties that make the helper safe to review: the predicates are the
+ * normalized email plus the non-demo boundary, and nothing outside the
+ * whitelist ever leaves the query.
  */
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -52,12 +53,15 @@ describe('findLoginCandidates', () => {
     expect(mocks.findMany).toHaveBeenCalledTimes(1);
   });
 
-  it('filters on the normalized email and nothing else', async () => {
+  it('filters on the normalized email and excludes demo principals', async () => {
     await findLoginCandidates('alex@company.com');
 
     const [args] = mocks.findMany.mock.calls[0] as [{ where: Record<string, unknown> }];
-    expect(args.where).toEqual({ email: 'alex@company.com' });
-    expect(Object.keys(args.where)).toHaveLength(1);
+    expect(args.where).toEqual({
+      email: 'alex@company.com',
+      organization: { isDemo: false },
+    });
+    expect(Object.keys(args.where)).toHaveLength(2);
   });
 
   it('selects only whitelisted fields, never a full user row', async () => {
