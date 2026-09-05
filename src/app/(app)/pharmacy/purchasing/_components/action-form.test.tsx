@@ -22,7 +22,7 @@ function setup(action: (form: FormData) => Promise<string>) {
 describe('purchasing outcome delivery', () => {
   it('navigates explicitly with success notice and selection intact', async () => {
     const destination =
-      '/pharmacy/purchasing/orders?kind=success&notice=Outcome&branch=b1&order=o1';
+      '/pharmacy/purchasing/orders?kind=success&outcome=committed&notice=Outcome&branch=b1&order=o1';
     const action = vi.fn().mockResolvedValue(destination);
     const { replace } = setup(action);
     await act(async () => {
@@ -37,7 +37,7 @@ describe('purchasing outcome delivery', () => {
     const action = vi
       .fn()
       .mockResolvedValue(
-        '/pharmacy/purchasing/orders?kind=error&notice=Reference+already+used&field=reference&order=o1'
+        '/pharmacy/purchasing/orders?kind=error&outcome=rejected&notice=Reference+already+used&field=reference&order=o1'
       );
     const { replace } = setup(action);
     const input = screen.getByLabelText('Reference');
@@ -52,7 +52,7 @@ describe('purchasing outcome delivery', () => {
     expect(input).toHaveAccessibleDescription('Reference already used');
     expect(screen.getByRole('button')).not.toBeDisabled();
     fireEvent.change(input, { target: { value: 'CORRECTED-PO' } });
-    action.mockResolvedValue('/pharmacy/purchasing/orders?kind=success');
+    action.mockResolvedValue('/pharmacy/purchasing/orders?kind=success&outcome=committed');
     await act(async () => {
       fireEvent.click(screen.getByRole('button'));
     });
@@ -64,7 +64,11 @@ describe('purchasing outcome delivery', () => {
 
   it('focuses the error message when the server supplies no visible field', async () => {
     const { replace } = setup(
-      vi.fn().mockResolvedValue('/pharmacy/purchasing/orders?kind=error&notice=Permission+denied')
+      vi
+        .fn()
+        .mockResolvedValue(
+          '/pharmacy/purchasing/orders?kind=error&outcome=rejected&notice=Permission+denied'
+        )
     );
     await act(async () => {
       fireEvent.click(screen.getByRole('button'));
@@ -118,7 +122,7 @@ describe('purchasing outcome delivery', () => {
     expect(action).toHaveBeenCalledTimes(1);
     expect(screen.getByRole('button')).toBeDisabled();
     expect(screen.getByRole('status')).toHaveTextContent('Saving');
-    await act(async () => resolve('/pharmacy/purchasing/orders?kind=success'));
+    await act(async () => resolve('/pharmacy/purchasing/orders?kind=success&outcome=committed'));
     expect(replace).toHaveBeenCalledTimes(1);
     fireEvent.submit(form);
     expect(action).toHaveBeenCalledTimes(1);
@@ -144,4 +148,24 @@ describe('purchasing outcome delivery', () => {
       expect(replace).not.toHaveBeenCalled();
     }
   );
+});
+
+it.each([
+  'kind=error',
+  'kind=error&outcome=unknown',
+  'kind=success',
+  'kind=error&outcome=committed',
+])('unclassified or contradictory outcome stays locked: %s', async (query) => {
+  const action = vi.fn().mockResolvedValue(`/pharmacy/purchasing/orders?${query}`);
+  const { form, replace } = setup(action);
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button'));
+  });
+  expect(screen.getByRole('alert')).toHaveTextContent('check the record before retrying');
+  expect(screen.getByRole('button')).toBeDisabled();
+  await act(async () => {
+    fireEvent.submit(form);
+  });
+  expect(action).toHaveBeenCalledTimes(1);
+  expect(replace).not.toHaveBeenCalled();
 });

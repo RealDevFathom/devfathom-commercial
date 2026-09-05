@@ -23,7 +23,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   dateField,
   dateInputValue,
   destination,
@@ -97,11 +98,12 @@ export default async function PharmacySuppliersPage({
 
   async function createSupplier(form: FormData) {
     'use server';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      const supplier = await actionCaller.createSupplier({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      const supplier = await outcome.write(actionCaller.createSupplier)({
         name: field(form, 'name'),
         legalName: optionalField(form, 'legalName'),
         serviceArea: optionalField(form, 'serviceArea'),
@@ -123,7 +125,7 @@ export default async function PharmacySuppliersPage({
       );
     } catch (error) {
       next = destination(ROUTE, {
-        ...actionFailure(error, 'Could not add the supplier.'),
+        ...outcome.failure(error, 'Could not add the supplier.'),
         kind: 'error',
       });
     }
@@ -133,11 +135,12 @@ export default async function PharmacySuppliersPage({
   async function recordLicence(form: FormData) {
     'use server';
     const supplierId = field(form, 'supplierId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.recordSupplierLicence({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.recordSupplierLicence)({
         supplierId,
         licenceType: field(form, 'licenceType'),
         licenceNumber: field(form, 'licenceNumber'),
@@ -157,7 +160,7 @@ export default async function PharmacySuppliersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not file the licence.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not file the licence.'), kind: 'error' },
         { supplier: supplierId }
       );
     }
@@ -168,11 +171,12 @@ export default async function PharmacySuppliersPage({
     'use server';
     const supplierId = field(form, 'supplierId');
     const authorized = field(form, 'authorized') === 'true';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.setSupplierAuthorization({ supplierId, authorized });
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.setSupplierAuthorization)({ supplierId, authorized });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -187,7 +191,7 @@ export default async function PharmacySuppliersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not change authorization.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not change authorization.'), kind: 'error' },
         { supplier: supplierId }
       );
     }

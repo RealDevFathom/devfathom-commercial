@@ -119,6 +119,32 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
 
 export type ActionFailure = { message: string; field?: string };
 
+/** Explicit local validation, never inferred from a generic Error message. */
+export class PurchasingValidationError extends Error {}
+
+/** One guard per action invocation. Argument parsing finishes before write starts.
+ * Once a router mutation is invoked, even a typed rejection is conservative:
+ * this layer cannot prove whether an unknown server error followed a commit.
+ */
+export function purchasingOutcome() {
+  let writeStarted = false;
+  return {
+    write<Args extends unknown[], Result>(mutation: (...args: Args) => Promise<Result>) {
+      return (...args: Args): Promise<Result> => {
+        writeStarted = true;
+        return mutation(...args);
+      };
+    },
+    failure(error: unknown, fallback: string): ActionFailure & { outcome: 'rejected' | 'unknown' } {
+      return {
+        ...actionFailure(error, fallback),
+        outcome:
+          !writeStarted && error instanceof PurchasingValidationError ? 'rejected' : 'unknown',
+      };
+    },
+  };
+}
+
 function zodFailure(error: unknown): ActionFailure | null {
   const cause = error instanceof Error ? (error.cause ?? error) : error;
   if (!(cause instanceof ZodError)) return null;
@@ -152,6 +178,10 @@ function zodFailure(error: unknown): ActionFailure | null {
  * its own message rather than being flattened to "something went wrong".
  */
 export function actionFailure(error: unknown, fallback: string): ActionFailure {
+  if (error instanceof PurchasingValidationError) {
+    const field = (error as PurchasingValidationError & { field?: string }).field;
+    return { message: error.message, ...(field ? { field } : {}) };
+  }
   const zod = zodFailure(error);
   if (zod) return zod;
   const raw = error instanceof Error ? error.message : '';
@@ -187,6 +217,7 @@ function constraintFailure(error: unknown, raw: string): ActionFailure | null {
 export type Notice = {
   message: string;
   kind: 'success' | 'error';
+  outcome?: 'rejected' | 'unknown';
   field?: string;
 };
 
@@ -199,7 +230,11 @@ export function destination(
   notice: Notice,
   keep: Record<string, string | undefined> = {}
 ): string {
-  const params = new URLSearchParams({ notice: notice.message, kind: notice.kind });
+  const params = new URLSearchParams({
+    notice: notice.message,
+    kind: notice.kind,
+    outcome: notice.kind === 'success' ? 'committed' : (notice.outcome ?? 'unknown'),
+  });
   if (notice.field) params.set('field', notice.field);
   for (const [key, value] of Object.entries(keep)) if (value) params.set(key, value);
   return `${route}?${params}`;
@@ -243,7 +278,9 @@ export function optionalField(form: FormData, name: string): string | undefined 
 export function integerField(form: FormData, name: string, label: string): number {
   const raw = field(form, name);
   if (!/^-?\d+$/.test(raw)) {
-    throw Object.assign(new Error(`${label}: enter a whole number.`), { field: name });
+    throw Object.assign(new PurchasingValidationError(`${label}: enter a whole number.`), {
+      field: name,
+    });
   }
   return Number(raw);
 }
@@ -265,9 +302,12 @@ export function optionalIntegerField(
 export function moneyFieldMinor(form: FormData, name: string, label: string): number {
   const raw = field(form, name);
   if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
-    throw Object.assign(new Error(`${label}: enter an amount like 1250 or 1250.75.`), {
-      field: name,
-    });
+    throw Object.assign(
+      new PurchasingValidationError(`${label}: enter an amount like 1250 or 1250.75.`),
+      {
+        field: name,
+      }
+    );
   }
   const [rupees, paisa = ''] = raw.split('.');
   return Number(rupees) * 100 + Number(paisa.padEnd(2, '0'));
@@ -291,7 +331,7 @@ export function optionalMoneyFieldMinor(
 export function dateField(form: FormData, name: string, label: string): Date {
   const raw = field(form, name);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(raw)) {
-    throw Object.assign(new Error(`${label}: choose a date.`), { field: name });
+    throw Object.assign(new PurchasingValidationError(`${label}: choose a date.`), { field: name });
   }
   return new Date(`${raw}T00:00:00.000Z`);
 }
