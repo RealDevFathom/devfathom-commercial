@@ -28,11 +28,11 @@ export const GET = moneyReadRoute({
       return NextResponse.json({ error: 'A non-empty billId query is required.' }, { status: 400 });
     }
     const receipt = await buildReceiptForBranch(ctx.db, parsed.data.billId, ctx.device.branchId);
-    if (!receipt) {
+    if (!receipt || receipt.receiptNumber === null || !receipt.settledAt) {
       return NextResponse.json({ error: 'No settled bill with that id.' }, { status: 404 });
     }
     return NextResponse.json(
-      { ...receipt, printing: await receiptPrintState(ctx, receipt.billId) },
+      { ...receipt, printing: await receiptPrintState(ctx, receipt) },
       { headers: { 'Cache-Control': 'no-store' } }
     );
   },

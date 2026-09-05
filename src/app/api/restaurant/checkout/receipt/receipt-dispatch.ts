@@ -1,9 +1,14 @@
 import { createHash } from 'node:crypto';
+import { buildReceiptPreview, type ReceiptPreviewFacts } from '@/lib/receipts/preview';
+import { getRestaurantReceiptLayout } from '@/lib/receipts/restaurant-settings';
 
 import type { MoneyCommandArgs } from '@/lib/restaurant/checkout-routes';
 import { buildReceiptForBranch } from '@/lib/restaurant/checkout-routes';
 import { appendOrderEvent } from '@/lib/restaurant/outbox';
-import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
+import {
+  PrintDocumentSchema,
+  ReceiptPrintSnapshotSchema,
+} from '@/lib/restaurant/printing/contract';
 import { PrintBridgeService } from '@/lib/restaurant/printing/service';
 import type { TerminalContext } from '@/lib/restaurant/terminal-auth';
 import { z } from 'zod';
@@ -33,7 +38,131 @@ const jobSelect = {
   createdAt: true,
 } as const;
 
-export async function receiptPrintState(ctx: TerminalContext, billId: string) {
+type SettledReceipt = NonNullable<Awaited<ReturnType<typeof buildReceiptForBranch>>>;
+
+/** Format saved amounts without recomputing, abbreviating, or dropping split/tender facts. */
+async function receiptFacts(
+  ctx: TerminalContext,
+  receipt: SettledReceipt,
+  reason?: string
+): Promise<ReceiptPreviewFacts> {
+  const saved = await ctx.db.restaurantBill.findFirstOrThrow({
+    where: { id: receipt.billId, branchId: ctx.device.branchId, status: 'SETTLED' },
+    select: {
+      discountTotal: true,
+      serviceChargeBasis: true,
+      serviceChargeRate: true,
+      serviceChargeTaxTreatment: true,
+      lines: {
+        orderBy: { createdAt: 'asc' },
+        select: { id: true, taxAmount: true, serviceChargeAmount: true },
+      },
+      tenders: { orderBy: { createdAt: 'asc' }, select: { id: true, cashReceived: true } },
+      taxTransactionSnapshots: {
+        where: { branchId: ctx.device.branchId, reversesSnapshotId: null },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          transactionReference: true,
+          currency: true,
+          buckets: {
+            orderBy: { id: 'asc' },
+            select: {
+              paymentCategory: true,
+              priceMode: true,
+              rate: true,
+              taxableAmount: true,
+              taxAmount: true,
+              grossAmount: true,
+              preDiscountGrossAmount: true,
+              beforeTaxDiscountAmount: true,
+              afterTaxDiscountAmount: true,
+            },
+          },
+        },
+      },
+    },
+  });
+  return {
+    businessName: receipt.branchName,
+    invoiceNumber: `${receipt.receiptNumber}${reason ? ' - COPY' : ''}`,
+    issuedAt: `${receipt.settledAt!.toISOString()} / Business date ${receipt.businessDate}`,
+    orderNumber: String(receipt.orderNumber),
+    channel: receipt.channel,
+    lines: receipt.lines.map((line) => {
+      const amounts = saved.lines.find((row) => row.id === line.id)!;
+      return `${line.quantity} x ${line.name} @ ${line.unitPrice}\nLine subtotal ${line.lineSubtotal} / Comp ${line.compAmount} / Line total ${line.lineTotal}\nLine tax ${amounts.taxAmount.toFixed(2)} / Line service ${amounts.serviceChargeAmount.toFixed(2)}`;
+    }),
+    taxLines: [
+      `Tax ${receipt.totals.taxTotal}`,
+      ...saved.taxTransactionSnapshots.flatMap((tax) => [
+        `Tax reference ${tax.transactionReference} / Currency ${tax.currency}`,
+        ...tax.buckets.map(
+          (bucket) =>
+            `${bucket.paymentCategory} / ${bucket.priceMode} / Rate ${bucket.rate.toString()}\nTaxable ${bucket.taxableAmount.toFixed(2)} / Tax ${bucket.taxAmount.toFixed(2)} / Gross ${bucket.grossAmount.toFixed(2)}\nPre-discount gross ${bucket.preDiscountGrossAmount.toFixed(2)} / Before-tax discount ${bucket.beforeTaxDiscountAmount.toFixed(2)} / After-tax discount ${bucket.afterTaxDiscountAmount.toFixed(2)}`
+        ),
+      ]),
+    ],
+    totals: [
+      `Subtotal ${receipt.totals.subtotal}`,
+      `Delivery ${receipt.totals.deliveryFeeTotal}`,
+      `Service ${receipt.totals.serviceChargeTotal}`,
+      `Comp ${receipt.totals.compTotal}`,
+      `Discount ${saved.discountTotal.toFixed(2)}`,
+      ...(saved.serviceChargeRate === null
+        ? []
+        : [
+            `Service basis ${saved.serviceChargeBasis.toFixed(2)} / Rate ${saved.serviceChargeRate.toString()} / Tax treatment ${saved.serviceChargeTaxTreatment ?? 'Unspecified'}`,
+          ]),
+      `Rounding ${receipt.totals.roundingAdjustment}`,
+      `TOTAL ${receipt.totals.grandTotal}`,
+      `Split ${receipt.splitKind}${receipt.fractionNumerator !== null && receipt.fractionDenominator !== null ? ` ${receipt.fractionNumerator}/${receipt.fractionDenominator}` : ''}`,
+      ...(reason ? [`Reprint: ${reason}`] : []),
+    ],
+    payments: receipt.tenders.length
+      ? receipt.tenders.map((t) => {
+          const received = saved.tenders.find((row) => row.id === t.id)!.cashReceived;
+          return `${t.type} ${t.amount} / Tip ${t.tipAmount}${t.changeGiven === null ? '' : ` / Change ${t.changeGiven}`}${received === null ? '' : ` / Cash received ${received.toFixed(2)}`}`;
+        })
+      : ['No tenders recorded.'],
+  };
+}
+
+async function browserPreview(ctx: TerminalContext, receipt: SettledReceipt, document?: unknown) {
+  const stored = document ? PrintDocumentSchema.parse(document).receiptSnapshot : undefined;
+  if (stored)
+    return {
+      text: buildReceiptPreview(stored.layout, stored.facts),
+      paperWidth: stored.layout.paperWidth,
+      source: 'queued' as const,
+    };
+  const { layout } = await getRestaurantReceiptLayout(
+    ctx.db,
+    ctx.organizationId,
+    ctx.device.branchId
+  );
+  const facts = await receiptFacts(ctx, receipt);
+  const snapshot = ReceiptPrintSnapshotSchema.safeParse({ layout, facts });
+  return {
+    text: snapshot.success ? buildReceiptPreview(snapshot.data.layout, snapshot.data.facts) : null,
+    paperWidth: layout.paperWidth,
+    source: 'saved' as const,
+    // Lossless inert text fallback only. Shared Unicode layout parity belongs to WHA-1354.
+    plainText: snapshot.success
+      ? undefined
+      : [
+          facts.businessName,
+          `Invoice: ${facts.invoiceNumber}`,
+          facts.issuedAt,
+          `Order: ${facts.orderNumber} / Channel: ${facts.channel}`,
+          ...facts.lines,
+          ...facts.taxLines,
+          ...facts.totals,
+          ...facts.payments,
+        ].join('\n'),
+  };
+}
+
+export async function receiptPrintState(ctx: TerminalContext, receipt: SettledReceipt) {
   const [route, latestJob] = await Promise.all([
     ctx.db.restaurantPrintRoute.findFirst({
       where: {
@@ -49,10 +178,10 @@ export async function receiptPrintState(ctx: TerminalContext, billId: string) {
       where: {
         branchId: ctx.device.branchId,
         documentType: 'RECEIPT',
-        document: { path: ['reference'], equals: reference(billId) },
+        document: { path: ['reference'], equals: reference(receipt.billId) },
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
-      select: jobSelect,
+      select: { ...jobSelect, document: true },
     }),
   ]);
   return {
@@ -60,7 +189,8 @@ export async function receiptPrintState(ctx: TerminalContext, billId: string) {
     registerId: ctx.device.id,
     registerName: ctx.device.name,
     printerId: route?.printerId ?? null,
-    latestJob,
+    latestJob: latestJob ? { ...latestJob, document: undefined } : null,
+    preview: await browserPreview(ctx, receipt, latestJob?.document),
   };
 }
 
@@ -81,7 +211,7 @@ export async function dispatchReceipt({
     'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
     `${ctx.organizationId}:${ctx.device.branchId}:${documentReference}`
   );
-  const state = await receiptPrintState(ctx, data.billId);
+  const state = await receiptPrintState(ctx, receipt);
   const idempotencyKey =
     data.action === 'print'
       ? `${documentReference}:original`
@@ -102,7 +232,9 @@ export async function dispatchReceipt({
       const priorDocument = PrintDocumentSchema.safeParse(prior.document);
       if (
         !priorDocument.success ||
-        !priorDocument.data.footer?.endsWith(`\nReprint: ${data.reason}`)
+        (priorDocument.data.receiptSnapshot
+          ? priorDocument.data.footer !== `Receipt copy\nReprint: ${data.reason}`
+          : !priorDocument.data.footer?.endsWith(`\nReprint: ${data.reason}`))
       ) {
         return Response.json(
           { error: 'This reprint request was already used with a different reason.' },
@@ -119,7 +251,12 @@ export async function dispatchReceipt({
       printedAt: prior.printedAt,
       createdAt: prior.createdAt,
     };
-    return { ...state, latestJob: job, replayed: true };
+    return {
+      ...state,
+      latestJob: job,
+      preview: await browserPreview(ctx, receipt, prior.document),
+      replayed: true,
+    };
   }
   if (data.action === 'reprint' && (!state.latestJob || state.latestJob.status !== 'PRINTED')) {
     return Response.json(
@@ -132,29 +269,23 @@ export async function dispatchReceipt({
   }
   if (!state.printerId) return { ...state, outcome: 'NO_PRINTER' as const, replayed: false };
 
-  // Baseline shared RECEIPT contract. Layout settings belong to the designer lane.
-  // Never recalculate, truncate, or accept client totals; reject unrepresentable receipts.
+  const { layout } = await getRestaurantReceiptLayout(
+    ctx.db,
+    ctx.organizationId,
+    ctx.device.branchId
+  );
+  // Shared snapshot is authoritative; legacy envelope fields are compatibility metadata only.
   const document = PrintDocumentSchema.safeParse({
     type: 'RECEIPT',
     reference: documentReference,
     title: `Receipt ${receipt.receiptNumber}${data.action === 'reprint' ? ' - COPY' : ''}`,
     createdAt: receipt.settledAt.toISOString(),
-    lines: receipt.lines.map((line) => ({
-      quantity: line.quantity,
-      label: `${line.name} @ ${line.unitPrice} = ${line.lineTotal} (comp ${line.compAmount})`,
-    })),
-    footer: [
-      `${receipt.branchName} / Order ${receipt.orderNumber} / ${receipt.businessDate}`,
-      `Subtotal ${receipt.totals.subtotal}`,
-      `Delivery ${receipt.totals.deliveryFeeTotal} / Service ${receipt.totals.serviceChargeTotal}`,
-      `Tax ${receipt.totals.taxTotal} / Comp ${receipt.totals.compTotal}`,
-      `Rounding ${receipt.totals.roundingAdjustment} / TOTAL ${receipt.totals.grandTotal}`,
-      ...receipt.tenders.map(
-        (t) =>
-          `${t.type} ${t.amount} / Tip ${t.tipAmount}${t.changeGiven === null ? '' : ` / Change ${t.changeGiven}`}`
-      ),
-      ...(data.action === 'reprint' ? [`Reprint: ${data.reason}`] : []),
-    ].join('\n'),
+    lines: [{ quantity: 1, label: 'Settled receipt; see captured receipt snapshot.' }],
+    footer: data.action === 'reprint' ? `Receipt copy\nReprint: ${data.reason}` : undefined,
+    receiptSnapshot: {
+      layout,
+      facts: await receiptFacts(ctx, receipt, data.action === 'reprint' ? data.reason : undefined),
+    },
   });
   if (
     !document.success ||
@@ -198,7 +329,7 @@ export async function dispatchReceipt({
     });
   }
   return {
-    ...(await receiptPrintState(ctx, data.billId)),
+    ...(await receiptPrintState(ctx, receipt)),
     outcome: result.status,
     replayed: result.replayed,
   };

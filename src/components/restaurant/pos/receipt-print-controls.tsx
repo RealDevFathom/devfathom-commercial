@@ -14,6 +14,12 @@ export type ReceiptPrinting = {
   registerId: string;
   registerName: string;
   printerId: string | null;
+  preview?: {
+    text: string | null;
+    plainText?: string;
+    paperWidth: 58 | 80;
+    source: 'queued' | 'saved';
+  };
   latestJob: {
     id: string;
     status: string;
@@ -54,7 +60,7 @@ export function ReceiptPrintControls({
   const busy = useRef(false);
   const [error, setError] = useState('');
   const [reason, setReason] = useState('');
-  const [width, setWidth] = useState<58 | 80>(80);
+  const width = state.preview?.paperWidth ?? 80;
   const [dialogStatus, setDialogStatus] = useState('');
   const [duplicateAccepted, setDuplicateAccepted] = useState(false);
   const [retry, setRetry] = useState<{ requestId: string; reason: string } | null>(null);
@@ -180,21 +186,19 @@ export function ReceiptPrintControls({
         Printer settings require an administrator session. Routing applies to this branch; the
         bridge uses its configured destination allowlist.
       </p>
-      <label className="block space-y-1 text-sm text-text-body">
-        Browser receipt paper
-        <select
-          value={width}
-          onChange={(event) => setWidth(Number(event.target.value) as 58 | 80)}
-          className="ml-2 min-h-11 rounded-md border border-input bg-surface-raised px-3 focus-visible:ring-2 focus-visible:ring-ring"
-        >
-          <option value={58}>58 mm</option>
-          <option value={80}>80 mm</option>
-        </select>
-      </label>
       <p className="text-xs text-text-muted">
+        {state.preview?.source === 'queued'
+          ? 'Using the queued receipt layout.'
+          : 'Using the saved branch receipt width.'}{' '}
         Choose matching {width} mm paper in the OS print dialog. The receipt content uses this width
         with 2 mm margins.
       </p>
+      {state.preview?.text === null ? (
+        <p className="text-xs text-text-muted">
+          Shared printer layout cannot represent this receipt. Browser fallback preserves the
+          original text and amounts in a plain receipt; OS font support must be checked.
+        </p>
+      ) : null}
       {state.latestJob || error ? (
         <label className="flex items-start gap-2 text-sm text-text-body">
           <input
@@ -213,7 +217,7 @@ export function ReceiptPrintControls({
         disabled={pending || (Boolean(state.latestJob || error) && !duplicateAccepted)}
         onClick={() => {
           try {
-            requestReceiptDialog(receipt, width);
+            requestReceiptDialog(receipt, width, state.preview?.text ?? state.preview?.plainText);
             setDialogStatus(
               'Print dialog requested. Closing the dialog does not confirm printing.'
             );

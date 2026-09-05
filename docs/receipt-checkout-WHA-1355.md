@@ -1,5 +1,179 @@
 # WHA-1355 Restaurant receipt checkout dispatch
 
+## Authorized private development integration — September 5
+
+This section supersedes the initial-pass snapshot/DB limitations below. It is **private
+development only**, not authoritative WHA-1116 composition, producer independent review,
+staging approval, or physical printer acceptance. Final disposition remains **blocked**.
+Supervisor authorization: comment `84ef8978-798f-4444-b8c3-5a6a122d1fe3`.
+
+Clean assigned branch and HEAD `74bb5b3c4e5e520845304d9200c6a37fe6d556e0` verified before
+mutation. Producer parent/scope inspection completed before cherry-picking. None was an exact
+ancestor, so all four were applied in the authorized order. No conflicts; Git automatically
+preserved the designer navigation alongside the existing routing changes. The existing settings
+regression passed after composition. No other candidate commits were added.
+
+| Original producer                          | Private cherry-pick                        | Private parent                             |
+| ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
+| `806f1138395c595ca27e3eb086581b9961fb441e` | `4cb05b80a8bbc69efca2aa0abaefa2fc046433de` | `74bb5b3c4e5e520845304d9200c6a37fe6d556e0` |
+| `411306de8d88b8eea574caa93750a972afa028d7` | `43b7b8d48a9720c23c3a1b2d26489115e1cdfd05` | `4cb05b80a8bbc69efca2aa0abaefa2fc046433de` |
+| `bc0693705163c618c3445ffcc7c8b89f13ac8024` | `f0685b7dcae1dd022dc62657e0c1079c53c35169` | `43b7b8d48a9720c23c3a1b2d26489115e1cdfd05` |
+| `655c7f9a1668c122b6319a5fea33910564b9cfa7` | `7562dde3057554278d73b35fc66c6e91a80ed68a` | `f0685b7dcae1dd022dc62657e0c1079c53c35169` |
+
+The integration-only commit has parent `7562dde3057554278d73b35fc66c6e91a80ed68a`;
+its exact SHA is in the issue completion comment. The original caller commit's parent remains
+`fe1e3e383c8b966cdb68669ba5366db00fe2320a`. An authoritative composer that already applied
+the producers should take only the new integration commit after the original caller patch;
+do not repeat the producer cherry-picks.
+
+### Integration-only paths and behavior
+
+- `src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts`
+- `src/app/api/restaurant/checkout/receipt/route.ts`
+- `src/app/api/restaurant/checkout/receipt/route.test.ts`
+- `src/app/api/restaurant/checkout/receipt/receipt-dispatch.db.test.ts`
+- `src/components/restaurant/pos/receipt-browser-print.ts`
+- `src/components/restaurant/pos/receipt-print-controls.tsx`
+- `src/components/restaurant/pos/receipt-print-controls.test.tsx`
+- `docs/receipt-checkout-WHA-1355.md`
+
+New receipt jobs now consume `getRestaurantReceiptLayout` with the authorized organization and
+device branch and persist `PrintDocument.receiptSnapshot = { layout, facts }`. Shared
+`ReceiptPreviewFacts` carries saved identity, dates, quantities, unit prices, line subtotal/comp/
+tax/service/total, bill discount/fees/tax/rounding/total, fractional splits, every tender/tip/change/
+cash-received value, service rate/basis/tax treatment, and any original saved tax snapshot currency,
+rate buckets and discount allocations. No totals are recalculated, truncated, or accepted from
+the client. No card credentials or arbitrary fiscal evidence JSON is exposed.
+
+Settings changes affect subsequent jobs, including explicit new reprints. Existing jobs and
+idempotent retries retain captured layout/facts; browser copies of snapshot jobs use exactly
+`buildReceiptPreview` text and captured paper width. The UI no longer overrides that width with
+an independent selector. Reprint identity and the reason are included in the rendered facts;
+new snapshot retries compare the entire original reason, including multiline input.
+
+The shared schema cannot represent Unicode or oversized receipts. Enqueue returns 422, never
+question marks. GET preserves complete original facts in inert plain browser text and labels the
+layout limitation. **Unicode fallback is deliberately plain, not identical shared layout**:
+`ReceiptPreviewFactsSchema` rejects Unicode before shared browser rendering. WHA-1354 owns
+the required schema/preview distinction; no shared validation bypass or renderer edit was made.
+Corrupt persisted layouts fail closed. Browser output still says “Print dialog requested,” uses
+`textContent`, preserves CSP nonce handling, and makes no physical-success inference.
+
+Existing POS/unlocked-operator/`payments:collect` gates, strict input, exact branch restriction,
+bill-level lock, idempotency, queue/event/outbox transaction, duplicate-copy acknowledgement,
+Studio components/tokens and KOT behavior remain. No shared service, renderer, runtime, schema,
+designer, or producer test was edited by the integration-only patch.
+
+### Verification and failures
+
+New isolated database `wha1355_disposable_104c8930dc` was created on the verified disposable
+PG16.15 cluster at `127.0.0.1:52027`, using WHA-1354's provisioning pattern and WHA-1350's
+private admin configuration. Admin connected only to maintenance `postgres` for identity and
+bootstrap. `data_directory` matched the known disposable cluster. No existing test database was
+connected to or migrated. Owner/runtime were dedicated NOSUPERUSER, NOBYPASSRLS,
+NOCREATEDB, NOCREATEROLE, NOINHERIT roles; runtime owned **0 tables**. Branch, print job,
+and bill tables all had ENABLE/FORCE RLS. **105 migrations, 0 unsuccessful, 0 checksum
+mismatches**. Extension preparation, migration deploy, local Prisma generation, grants and
+evidence checks exited 0. Dependencies/generated client were local directories, not shared links.
+
+Database command below produced **19 passed, 1 failed, 0 skipped**: caller **4/4**, designer
+**4/4**, current-claim **8/8**, existing printing **3/4**. Caller tests prove persisted settings,
+captured preview/ESC-POS parity, unchanged queued snapshots, new-job settings, tenant/branch
+denial, concurrent deduplication, and queue/event/outbox rollback. These exercise the real
+database/service with a constructed terminal context; route permissions are tested separately.
+The later reason-comparison correction is covered by the unit run, not a repeated DB run.
+
+The existing synthetic TCP case fails at `printing.db.test.ts:158` because it supplies only two
+arguments to WHA-1356's now-three-argument `writeToPrinter`; `scripts/print-bridge.ts:198`
+throws `TypeError: Cannot read properties of undefined (reading 'includes')` while reading the
+required allowlist. No physical device test occurred. Failure reported directly to WHA-1356
+and WHA-1360, whose runtime/test lanes were left unchanged. The failing case was not repeated.
+
+Unit command below: **83 passed, 0 failed, 0 skipped**, ten files. After adding the explicit
+saved-tax-allocation regression, the receipt route file alone passed **20/20**; other nine files'
+unchanged evidence reused, giving **84 unique unit cases**. Initial two-file run had **26 pass,
+1 fail** because an assertion ignored 32-column wrapping; assertion corrected to compare
+whitespace-normalized preview. No product fact was removed to satisfy that assertion.
+
+Integrated scoped TypeScript (15 source/test roots plus ambient declarations, real transitive
+imports): **2 errors**, both producer-owned `scripts/print-bridge.ts:128,144` TS2352 environment
+casts missing Next's required `ProcessEnv.NODE_ENV`. Reported directly to WHA-1356. No
+`as unknown`, stub, ambient weakening or runtime edit was introduced. The same scoped command
+without the runtime root, covering caller plus shared layout/contract/renderer/service and generic
+bridge API, exited **0 with no diagnostics**. This narrower pass does not clear the integrated
+runtime failure. No full workspace typecheck/build or repeated failing integrated command.
+
+Scoped ESLint: exit 0, no warnings/errors. Source formatting and integration diff-check: exit 0.
+The earlier documentation EOF blank line is removed in this documentation update.
+
+Exact verification commands (URLs supplied privately, never printed):
+
+```sh
+node "$PAPERCLIP_RUN_SCRATCH_DIR/provision.cjs"
+EXTENSION_ADMIN_DATABASE_URL="$OWNER_DATABASE_URL" node --import tsx prisma/prepare-extensions.ts
+node node_modules/prisma/build/index.js migrate deploy --config "$WHA1355_ENV_DIR/migration.config.mjs"
+node node_modules/prisma/build/index.js generate
+node "$PAPERCLIP_RUN_SCRATCH_DIR/grant.cjs"
+node node_modules/vitest/vitest.mjs run src/app/api/restaurant/checkout/receipt/receipt-dispatch.db.test.ts src/lib/restaurant/printing/printing.db.test.ts src/lib/restaurant/printing/claim.db.test.ts src/lib/receipts/restaurant-settings.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile="$WHA1355_ENV_DIR/db-tests.json"
+node node_modules/vitest/vitest.mjs run src/app/api/restaurant/checkout/receipt/route.test.ts src/components/restaurant/pos/receipt-view.test.tsx src/components/restaurant/pos/receipt-print-controls.test.tsx src/components/restaurant/restaurant-devices-console.test.tsx 'src/app/(app)/settings/settings-entitlements.test.tsx' src/lib/restaurant/checkout-routes.test.ts src/lib/restaurant/printing/printing.test.ts src/lib/restaurant/printing/receipt-snapshot.test.ts src/lib/receipts/configuration.test.ts src/app/api/restaurant/print-bridge/route.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile="$PAPERCLIP_RUN_SCRATCH_DIR/integration-unit-tests.json"
+node node_modules/vitest/vitest.mjs run src/app/api/restaurant/checkout/receipt/route.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile="$PAPERCLIP_RUN_SCRATCH_DIR/final-route-tests.json"
+node node_modules/typescript/bin/tsc --noEmit -p "$PAPERCLIP_RUN_SCRATCH_DIR/integration-tsconfig.json"
+node node_modules/typescript/bin/tsc --noEmit -p "$PAPERCLIP_RUN_SCRATCH_DIR/caller-tsconfig.json"
+node node_modules/eslint/bin/eslint.js src/app/api/restaurant/checkout/receipt/{receipt-dispatch.ts,route.ts,route.test.ts,receipt-dispatch.db.test.ts} src/components/restaurant/pos/{receipt-browser-print.ts,receipt-print-controls.tsx,receipt-print-controls.test.tsx}
+node node_modules/prettier/bin/prettier.cjs --check src/app/api/restaurant/checkout/receipt/{receipt-dispatch.ts,route.ts,route.test.ts,receipt-dispatch.db.test.ts} src/components/restaurant/pos/{receipt-browser-print.ts,receipt-print-controls.tsx,receipt-print-controls.test.tsx}
+node "$PAPERCLIP_RUN_SCRATCH_DIR/db-evidence.cjs"
+node "$PAPERCLIP_RUN_SCRATCH_DIR/cleanup.cjs"
+git diff --check
+```
+
+Recreate the scoped typecheck configurations without stubs:
+
+```python
+import json, os
+from pathlib import Path
+root = Path.cwd()
+scratch = Path(os.environ['PAPERCLIP_RUN_SCRATCH_DIR'])
+files = [
+    *['src/app/api/restaurant/checkout/receipt/' + f for f in
+      ['receipt-dispatch.ts', 'route.ts', 'route.test.ts', 'receipt-dispatch.db.test.ts']],
+    *['src/components/restaurant/pos/' + f for f in
+      ['receipt-browser-print.ts', 'receipt-print-controls.tsx', 'receipt-print-controls.test.tsx']],
+    *['src/lib/receipts/' + f for f in ['configuration.ts', 'preview.ts', 'restaurant-settings.ts']],
+    *['src/lib/restaurant/printing/' + f for f in ['contract.ts', 'service.ts', 'esc-pos.ts']],
+    'src/app/api/restaurant/print-bridge/route.ts', 'scripts/print-bridge.ts',
+]
+config = {'extends': str(root / 'tsconfig.json'),
+          'compilerOptions': {'incremental': False, 'noEmit': True},
+          'include': [str(root / f) for f in files] + [str(root / f) for f in
+                      ['next-env.d.ts', 'src/types/**/*.d.ts', 'vitest.setup.ts']],
+          'exclude': ['node_modules']}
+(scratch / 'integration-tsconfig.json').write_text(json.dumps(config))
+config['include'] = [f for f in config['include'] if not f.endswith('/scripts/print-bridge.ts')]
+(scratch / 'caller-tsconfig.json').write_text(json.dumps(config))
+```
+
+After evidence capture, cleanup reverified cluster identity and removed **only** this new
+database and its two dedicated roles, without FORCE or terminating sessions. Shared cluster,
+WHA-1350/WHA-1354 databases and other workers' environments remain. Credentials and temporary
+scripts were held only in run-owned scratch, not committed. Reproduction needs another new
+disposable database provisioned using the same documented restricted owner/runtime pattern.
+
+### Remaining named gates
+
+WHA-1354 owns shared Unicode browser-preview parity. WHA-1356 owns its two integrated runtime
+type errors; WHA-1360 and WHA-1356 coordinate the explicit allowlist fixture mismatch. WHA-1362
+and producer reviewers own independent review. Board/authoritative composer owns the accepted
+WHA-1116 composition. Verification Engineer owns approved staging build and the full Studio
+visual/accessibility matrix; Saad/hardware owner supplies configured targets and physical checks.
+No local app/browser/hardware service, extra agent, nested Codex, push, merge, stage deployment,
+or release-completion claim. No universal printer/OS compatibility claim.
+
+Recovery: omit the integration-only commit from the authoritative composition, or revert it there
+under its owner's change process. Never remove additive schema/data to undo this caller change;
+captured or attempted jobs require inspection before any manual copy.
+
+## Initial private caller pass (historical evidence)
+
 Bounded implementation artifact; acceptance **blocked** pending composition and staging.
 
 Base/parent: `fe1e3e383c8b966cdb68669ba5366db00fe2320a`.
@@ -154,4 +328,3 @@ with a validated driver/transport. No universal printer/OS compatibility or phys
 Recovery: this is a private patch only. Before rollout, the composition owner can omit/revert this
 commit. If ever deployed, disable the receipt route on the approved host and inspect existing
 queued/attempted jobs before any manual copy; removing UI never cancels already queued jobs.
-

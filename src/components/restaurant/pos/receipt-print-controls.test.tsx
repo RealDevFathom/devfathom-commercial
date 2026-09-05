@@ -160,6 +160,39 @@ describe('Receipt print controls', () => {
 });
 
 describe('Browser receipt fallback', () => {
+  it('prints the identical captured shared preview at its captured width after settings change', () => {
+    const popup = {
+      document: document.implementation.createHTMLDocument(),
+      focus: vi.fn(),
+      print: vi.fn(),
+      opener: window,
+    };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const text = 'Saved header\nInvoice: 7\nTOTAL 26.05\nSaved footer';
+    render(
+      <ReceiptPrintControls
+        receipt={receipt}
+        initial={{ ...queued, preview: { text, paperWidth: 58, source: 'queued' } }}
+        request={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/Using the queued receipt layout/)).toHaveTextContent('58 mm');
+    fireEvent.click(screen.getByRole('checkbox'));
+    fireEvent.click(screen.getByRole('button', { name: 'Open browser print dialog' }));
+    expect(popup.document.querySelector('pre')?.textContent).toBe(text);
+    expect(popup.document.querySelector('style')?.textContent).toContain('width: 54mm');
+  });
+  it('labels unsupported shared previews honestly while preserving plain Unicode fallback', () => {
+    render(
+      <ReceiptPrintControls
+        receipt={receipt}
+        initial={{ ...initial, preview: { text: null, paperWidth: 58, source: 'saved' } }}
+        request={vi.fn()}
+      />
+    );
+    expect(screen.getByText(/Shared printer layout cannot represent/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Open browser print dialog' })).toBeEnabled();
+  });
   it.each([58, 80] as const)(
     'requests %s mm paper with canonical facts and inert Unicode text',
     (width) => {

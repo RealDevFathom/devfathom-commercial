@@ -13,6 +13,9 @@ vi.mock('@/lib/restaurant/terminal-auth', () => ({
 vi.mock('@/lib/restaurant/outbox', () => ({ appendOrderEvent: mocks.event }));
 
 import { GET, POST } from './route';
+import { DEFAULT_RECEIPT_LAYOUT, type ReceiptLayout } from '@/lib/receipts/configuration';
+import { buildReceiptPreview } from '@/lib/receipts/preview';
+import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
 
 const decimal = (value: string) => new Prisma.Decimal(value);
 function bill() {
@@ -33,6 +36,11 @@ function bill() {
     serviceChargeTotal: decimal('1'),
     deliveryFeeTotal: decimal('3'),
     compTotal: decimal('4'),
+    discountTotal: decimal('0.50'),
+    serviceChargeBasis: decimal('20'),
+    serviceChargeRate: decimal('0.05'),
+    serviceChargeTaxTreatment: 'EXCLUSIVE',
+    taxTransactionSnapshots: [],
     roundingAdjustment: decimal('0.05'),
     grandTotal: decimal('26.05'),
     lines: [
@@ -44,6 +52,8 @@ function bill() {
         lineSubtotal: decimal('24'),
         compAmount: decimal('4'),
         lineTotal: decimal('20'),
+        taxAmount: decimal('2'),
+        serviceChargeAmount: decimal('1'),
       },
     ],
     tenders: [
@@ -53,6 +63,7 @@ function bill() {
         amount: decimal('26.05'),
         tipAmount: decimal('1.50'),
         changeGiven: decimal('3.95'),
+        cashReceived: decimal('30'),
       },
     ],
   };
@@ -70,6 +81,8 @@ let jobs: Job[];
 let receipt: ReturnType<typeof bill> | null;
 let configured: boolean;
 let allowed: boolean;
+let layout: ReceiptLayout;
+const findLayout = vi.fn();
 const findBill = vi.fn();
 const createJob = vi.fn();
 const lock = vi.fn();
@@ -79,7 +92,13 @@ beforeEach(() => {
   receipt = bill();
   configured = true;
   allowed = true;
+  layout = { ...DEFAULT_RECEIPT_LAYOUT, paperWidth: 58, footerText: 'Saved footer' };
   vi.clearAllMocks();
+  findLayout.mockImplementation(async ({ where }) =>
+    where.organizationId === 'org-1' && where.id === 'branch-1' && where.active
+      ? { receiptLayout: layout, receiptLayoutRevision: 1 }
+      : null
+  );
   findBill.mockImplementation(async ({ where }) =>
     where.id === receipt?.id && where.branchId === receipt?.branchId && where.status === 'SETTLED'
       ? receipt
@@ -97,7 +116,8 @@ beforeEach(() => {
     session: { activeStaffProfileId: 'staff-1' },
     db: {
       $executeRawUnsafe: lock,
-      restaurantBill: { findFirst: findBill },
+      restaurantBill: { findFirst: findBill, findFirstOrThrow: findBill },
+      restaurantBranch: { findFirst: findLayout },
       restaurantStaffProfile: {
         findUnique: async () => ({
           user: {
@@ -154,9 +174,19 @@ describe('Restaurant receipt dispatch', () => {
     expect(jobs).toHaveLength(1);
     expect(jobs[0].document).toMatchObject({
       type: 'RECEIPT',
-      lines: [{ quantity: 2, label: 'Meal @ 12.00 = 20.00 (comp 4.00)' }],
+      receiptSnapshot: {
+        layout,
+        facts: {
+          lines: [
+            expect.stringContaining(
+              '2 x Meal @ 12.00\nLine subtotal 24.00 / Comp 4.00 / Line total 20.00'
+            ),
+          ],
+        },
+      },
     });
-    const footer = (jobs[0].document as { footer: string }).footer;
+    const snapshot = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!;
+    const footer = buildReceiptPreview(snapshot.layout, snapshot.facts);
     for (const fact of [
       'Subtotal 24.00',
       'Delivery 3.00',
@@ -168,13 +198,20 @@ describe('Restaurant receipt dispatch', () => {
       'CASH 26.05',
       'Tip 1.50',
       'Change 3.95',
+      'Discount 0.50',
+      'Line tax 2.00',
+      'Cash received 30.00',
     ])
-      expect(footer).toContain(fact);
+      expect(footer.replaceAll('\n', ' ')).toContain(fact);
     expect(createJob.mock.calls[0][0].data).toMatchObject({
       organizationId: 'org-1',
       branchId: 'branch-1',
       stationId: null,
       printerId: 'queue:///Receipt',
+    });
+    expect(findLayout).toHaveBeenCalledWith({
+      where: { id: 'branch-1', organizationId: 'org-1', active: true },
+      select: { receiptLayout: true, receiptLayoutRevision: true },
     });
     expect(mocks.event).toHaveBeenCalledWith(
       mocks.ctx.db,
@@ -184,6 +221,88 @@ describe('Restaurant receipt dispatch', () => {
         eventType: 'receipt.print_requested',
       })
     );
+  });
+  it('captures new saved settings but preserves prior queued layout and exact browser preview', async () => {
+    await post();
+    const captured = structuredClone(jobs[0].document);
+    layout = { ...layout, paperWidth: 80, footerText: 'Changed after enqueue' };
+    const replay = await (await post()).json();
+    expect(jobs[0].document).toEqual(captured);
+    const snapshot = PrintDocumentSchema.parse(captured).receiptSnapshot!;
+    expect(replay.preview).toEqual({
+      text: buildReceiptPreview(snapshot.layout, snapshot.facts),
+      paperWidth: 58,
+      source: 'queued',
+    });
+    jobs[0].status = 'PRINTED';
+    await post(copy);
+    expect(PrintDocumentSchema.parse(jobs[1].document).receiptSnapshot).toMatchObject({
+      layout,
+      facts: {
+        invoiceNumber: '7 - COPY',
+        totals: expect.arrayContaining([`Reprint: ${copy.reason}`]),
+      },
+    });
+  });
+  it('carries fractional split and every saved line/tender amount without recalculation', async () => {
+    Object.assign(receipt!, {
+      splitKind: 'FRACTION',
+      fractionNumerator: 1,
+      fractionDenominator: 3,
+    });
+    await post();
+    const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
+    expect(facts.totals).toContain('Split FRACTION 1/3');
+    expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
+  });
+  it('preserves saved tax currency, rate buckets and discount allocations', async () => {
+    findBill.mockResolvedValue({
+      ...receipt,
+      taxTransactionSnapshots: [
+        {
+          transactionReference: 'tax-original',
+          currency: 'PKR',
+          buckets: [
+            {
+              paymentCategory: 'CASH',
+              priceMode: 'EXCLUSIVE',
+              rate: decimal('0.1'),
+              taxableAmount: decimal('20'),
+              taxAmount: decimal('2'),
+              grossAmount: decimal('22'),
+              preDiscountGrossAmount: decimal('24'),
+              beforeTaxDiscountAmount: decimal('1'),
+              afterTaxDiscountAmount: decimal('0.50'),
+            },
+          ],
+        },
+      ],
+    });
+    await post();
+    const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
+    expect(facts.taxLines).toEqual([
+      'Tax 2.00',
+      'Tax reference tax-original / Currency PKR',
+      'CASH / EXCLUSIVE / Rate 0.1\nTaxable 20.00 / Tax 2.00 / Gross 22.00\nPre-discount gross 24.00 / Before-tax discount 1.00 / After-tax discount 0.50',
+    ]);
+  });
+  it('returns saved-layout preview before dispatch and keeps Unicode intact for plain browser fallback', async () => {
+    const get = () =>
+      GET(new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1'));
+    const ascii = await (await get()).json();
+    expect(ascii.printing.preview).toMatchObject({
+      paperWidth: 58,
+      source: 'saved',
+      text: expect.stringContaining('Saved footer'),
+    });
+    receipt!.lines[0].name = 'اردو';
+    const unicode = await (await get()).json();
+    expect(unicode.lines[0].name).toBe('اردو');
+    expect(unicode.printing.preview).toMatchObject({ paperWidth: 58, text: null });
+    expect(unicode.printing.preview.plainText).toContain('اردو');
+    expect(unicode.printing.preview.plainText).toContain('Discount 0.50');
+    expect((await post()).status).toBe(422);
+    expect(jobs).toHaveLength(0);
   });
   it('deduplicates first prints across transport keys and preserves offline status after routing removal', async () => {
     await post();
@@ -214,6 +333,22 @@ describe('Restaurant receipt dispatch', () => {
         payload: expect.objectContaining({ reason: copy.reason }),
       })
     );
+  });
+  it('compares the entire captured reprint reason even when it contains a second reason label', async () => {
+    await post();
+    jobs[0].status = 'PRINTED';
+    expect((await post({ ...copy, reason: 'First reason\nReprint: Second reason' })).status).toBe(
+      200
+    );
+    expect((await post({ ...copy, reason: 'Second reason' })).status).toBe(409);
+  });
+  it('fails closed on corrupt saved layouts without creating a job', async () => {
+    findLayout.mockResolvedValue({
+      receiptLayout: { ...layout, paperWidth: 42 },
+      receiptLayoutRevision: 1,
+    });
+    await expect(post()).rejects.toThrow();
+    expect(jobs).toHaveLength(0);
   });
   it.each(['PENDING', 'OFFLINE', 'NO_PRINTER'])(
     'refuses another copy when existing delivery is %s',
@@ -248,17 +383,26 @@ describe('Restaurant receipt dispatch', () => {
     mocks.ctx.device.kind = 'KDS';
     expect((await post()).status).toBe(403);
     expect(findBill).not.toHaveBeenCalled();
+    expect(findLayout).not.toHaveBeenCalled();
     expect(createJob).not.toHaveBeenCalled();
   });
   it('rejects missing idempotency headers and client money/routing fields', async () => {
     expect((await post(undefined, '')).status).toBe(400);
-    for (const field of ['totals', 'branchId', 'printerId', 'document'])
+    for (const field of [
+      'totals',
+      'branchId',
+      'printerId',
+      'document',
+      'receiptSnapshot',
+      'layout',
+      'facts',
+    ])
       expect((await post({ billId: 'bill-1', action: 'print', [field]: 'untrusted' })).status).toBe(
         400
       );
     expect(createJob).not.toHaveBeenCalled();
   });
-  it.each(['اردو', 'x'.repeat(170), 'bad\u001bname'])(
+  it.each(['اردو', 'x'.repeat(2001), 'bad\u001bname'])(
     'rejects an unsupported label instead of corrupting receipt facts',
     async (name) => {
       receipt!.lines[0].name = name;
@@ -266,7 +410,7 @@ describe('Restaurant receipt dispatch', () => {
       expect(createJob).not.toHaveBeenCalled();
     }
   );
-  it('returns scoped receipt status with no-store and no print document exposure', async () => {
+  it('returns scoped receipt preview/status with no-store and no raw job document exposure', async () => {
     await post();
     const response = await GET(
       new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1')
