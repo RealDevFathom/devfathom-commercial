@@ -70,6 +70,9 @@ test('SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical req
   await page.getByLabel('Display name').fill('E2E Pharmacy');
   await page.getByLabel('Legal name').fill('E2E Pharmacy (Private) Limited');
   await page.getByLabel('Workspace slug').fill(pharmacy.slug);
+  await page.getByLabel('First branch name').fill('Clifton Chemist');
+  await page.getByLabel('First branch address').fill('12 Clifton Road, Karachi');
+  await page.getByLabel('First branch city').fill('Karachi');
   await packageSelect.selectOption(pharmacyPackageIds.get('pharmacy-essentials')!);
   await page.getByLabel('Primary contact', { exact: true }).fill('Pharmacy Owner');
   await page.getByLabel('Primary contact email').fill(pharmacy.email);

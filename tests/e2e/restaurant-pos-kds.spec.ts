@@ -312,7 +312,10 @@ test.describe('restaurant POS and KDS core flow', () => {
     await expect(page.getByRole('dialog', { name: 'Refund settled payment' })).toBeVisible();
     await page.getByLabel('Settled receipt').selectOption(refundableTender!.tenderId);
     await page.getByLabel('Refund amount').fill('1.00');
-    await page.getByLabel('Reason').fill('Guest item quality adjustment');
+    await page
+      .getByRole('dialog', { name: 'Refund settled payment' })
+      .getByLabel('Reason', { exact: true })
+      .fill('Guest item quality adjustment');
     await page
       .getByLabel('Approving manager')
       .selectOption({ label: 'Alex Carter — Restaurant E2E Manager' });

@@ -46,8 +46,13 @@ async function pharmacyFirstSale(page: Page, metric: { clicks: number }) {
     .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
   await activate(page.getByRole('button', { name: 'Sign in' }), metric);
   const chooser = page.getByText('Choose a workspace', { exact: true });
-  if (await chooser.isVisible({ timeout: 10_000 }).catch(() => false))
+  // Do not navigate away while the credential request is still in flight.
+  await expect
+    .poll(async () => (await chooser.isVisible()) || new URL(page.url()).pathname !== '/login')
+    .toBe(true);
+  if (await chooser.isVisible())
     await activate(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }), metric);
+  await expect(page).not.toHaveURL(/\/login(?:[/?#]|$)/);
 
   await page.goto('/dashboard');
   const checklist = page.getByTestId('first-run-checklist');
