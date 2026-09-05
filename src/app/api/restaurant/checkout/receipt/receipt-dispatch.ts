@@ -1,0 +1,205 @@
+import { createHash } from 'node:crypto';
+
+import type { MoneyCommandArgs } from '@/lib/restaurant/checkout-routes';
+import { buildReceiptForBranch } from '@/lib/restaurant/checkout-routes';
+import { appendOrderEvent } from '@/lib/restaurant/outbox';
+import { PrintDocumentSchema } from '@/lib/restaurant/printing/contract';
+import { PrintBridgeService } from '@/lib/restaurant/printing/service';
+import type { TerminalContext } from '@/lib/restaurant/terminal-auth';
+import { z } from 'zod';
+
+export const receiptPrintBody = z.discriminatedUnion('action', [
+  z.object({ billId: z.string().min(1).max(128), action: z.literal('print') }).strict(),
+  z
+    .object({
+      billId: z.string().min(1).max(128),
+      action: z.literal('reprint'),
+      reason: z.string().trim().min(3).max(200),
+      requestId: z.string().uuid(),
+    })
+    .strict(),
+]);
+
+const reference = (billId: string) =>
+  `receipt:${createHash('sha256').update(billId).digest('hex')}`;
+
+const jobSelect = {
+  id: true,
+  status: true,
+  printerId: true,
+  attemptCount: true,
+  lastAttemptAt: true,
+  printedAt: true,
+  createdAt: true,
+} as const;
+
+export async function receiptPrintState(ctx: TerminalContext, billId: string) {
+  const [route, latestJob] = await Promise.all([
+    ctx.db.restaurantPrintRoute.findFirst({
+      where: {
+        branchId: ctx.device.branchId,
+        documentType: 'RECEIPT',
+        stationId: null,
+        enabled: true,
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { printerId: true },
+    }),
+    ctx.db.restaurantPrintJob.findFirst({
+      where: {
+        branchId: ctx.device.branchId,
+        documentType: 'RECEIPT',
+        document: { path: ['reference'], equals: reference(billId) },
+      },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: jobSelect,
+    }),
+  ]);
+  return {
+    branchId: ctx.device.branchId,
+    registerId: ctx.device.id,
+    registerName: ctx.device.name,
+    printerId: route?.printerId ?? null,
+    latestJob,
+  };
+}
+
+/** Runs inside moneyMutationRoute's tenant transaction; no caller-supplied money or routing. */
+export async function dispatchReceipt({
+  ctx,
+  data,
+  actor,
+}: MoneyCommandArgs<typeof receiptPrintBody>) {
+  if (ctx.device.kind !== 'POS')
+    return Response.json({ error: 'A POS register is required.' }, { status: 403 });
+  const receipt = await buildReceiptForBranch(ctx.db, data.billId, ctx.device.branchId);
+  if (!receipt || receipt.receiptNumber === null || !receipt.settledAt) {
+    return Response.json({ error: 'No issued settled receipt with that id.' }, { status: 404 });
+  }
+  const documentReference = reference(data.billId);
+  await ctx.db.$executeRawUnsafe(
+    'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+    `${ctx.organizationId}:${ctx.device.branchId}:${documentReference}`
+  );
+  const state = await receiptPrintState(ctx, data.billId);
+  const idempotencyKey =
+    data.action === 'print'
+      ? `${documentReference}:original`
+      : `${documentReference}:reprint:${data.requestId}`;
+  const prior = await ctx.db.restaurantPrintJob.findUnique({
+    where: {
+      organizationId_branchId_idempotencyKey: {
+        organizationId: ctx.organizationId,
+        branchId: ctx.device.branchId,
+        idempotencyKey,
+      },
+    },
+    select: { ...jobSelect, document: true },
+  });
+  // Return the actual persisted state even if routes were removed after submission.
+  if (prior) {
+    if (data.action === 'reprint') {
+      const priorDocument = PrintDocumentSchema.safeParse(prior.document);
+      if (
+        !priorDocument.success ||
+        !priorDocument.data.footer?.endsWith(`\nReprint: ${data.reason}`)
+      ) {
+        return Response.json(
+          { error: 'This reprint request was already used with a different reason.' },
+          { status: 409 }
+        );
+      }
+    }
+    const job = {
+      id: prior.id,
+      status: prior.status,
+      printerId: prior.printerId,
+      attemptCount: prior.attemptCount,
+      lastAttemptAt: prior.lastAttemptAt,
+      printedAt: prior.printedAt,
+      createdAt: prior.createdAt,
+    };
+    return { ...state, latestJob: job, replayed: true };
+  }
+  if (data.action === 'reprint' && (!state.latestJob || state.latestJob.status !== 'PRINTED')) {
+    return Response.json(
+      {
+        error:
+          'Reprint requires a bridge-acknowledged receipt. Check the existing job before requesting another copy.',
+      },
+      { status: 409 }
+    );
+  }
+  if (!state.printerId) return { ...state, outcome: 'NO_PRINTER' as const, replayed: false };
+
+  // Baseline shared RECEIPT contract. Layout settings belong to the designer lane.
+  // Never recalculate, truncate, or accept client totals; reject unrepresentable receipts.
+  const document = PrintDocumentSchema.safeParse({
+    type: 'RECEIPT',
+    reference: documentReference,
+    title: `Receipt ${receipt.receiptNumber}${data.action === 'reprint' ? ' - COPY' : ''}`,
+    createdAt: receipt.settledAt.toISOString(),
+    lines: receipt.lines.map((line) => ({
+      quantity: line.quantity,
+      label: `${line.name} @ ${line.unitPrice} = ${line.lineTotal} (comp ${line.compAmount})`,
+    })),
+    footer: [
+      `${receipt.branchName} / Order ${receipt.orderNumber} / ${receipt.businessDate}`,
+      `Subtotal ${receipt.totals.subtotal}`,
+      `Delivery ${receipt.totals.deliveryFeeTotal} / Service ${receipt.totals.serviceChargeTotal}`,
+      `Tax ${receipt.totals.taxTotal} / Comp ${receipt.totals.compTotal}`,
+      `Rounding ${receipt.totals.roundingAdjustment} / TOTAL ${receipt.totals.grandTotal}`,
+      ...receipt.tenders.map(
+        (t) =>
+          `${t.type} ${t.amount} / Tip ${t.tipAmount}${t.changeGiven === null ? '' : ` / Change ${t.changeGiven}`}`
+      ),
+      ...(data.action === 'reprint' ? [`Reprint: ${data.reason}`] : []),
+    ].join('\n'),
+  });
+  if (
+    !document.success ||
+    [
+      document.data.title,
+      ...document.data.lines.map((line) => line.label),
+      document.data.footer ?? '',
+    ].some((value) => /[^\x20-\x7e\n]/.test(value))
+  ) {
+    return Response.json(
+      {
+        error:
+          'This receipt exceeds the current printer layout limits. Use the browser receipt or ask an administrator to configure a supported layout.',
+      },
+      { status: 422 }
+    );
+  }
+  const result = await new PrintBridgeService(ctx.db).enqueue(
+    ctx.organizationId,
+    {
+      branchId: ctx.device.branchId,
+      routes: [
+        { documentType: 'RECEIPT', stationId: null, printerId: state.printerId, enabled: true },
+      ],
+    },
+    { branchId: ctx.device.branchId, stationId: null, idempotencyKey, document: document.data }
+  );
+  if (result.status !== 'NO_PRINTER' && !result.replayed) {
+    await appendOrderEvent(ctx.db, {
+      orderId: receipt.orderId,
+      eventType:
+        data.action === 'reprint' ? 'receipt.reprint_requested' : 'receipt.print_requested',
+      actorStaffProfileId: actor.staffProfileId,
+      actorDeviceId: ctx.device.id,
+      payload: {
+        billId: data.billId,
+        printerId: state.printerId,
+        idempotencyKey,
+        reason: data.action === 'reprint' ? data.reason : null,
+      },
+    });
+  }
+  return {
+    ...(await receiptPrintState(ctx, data.billId)),
+    outcome: result.status,
+    replayed: result.replayed,
+  };
+}

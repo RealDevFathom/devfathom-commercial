@@ -6,8 +6,9 @@ import { Button } from '@/components/ui/button';
 import { StatusPill } from '@/components/ui/status-pill';
 
 import type { TerminalRequest } from './checkout-panel';
+import { ReceiptPrintControls, type ReceiptPrinting } from './receipt-print-controls';
 
-type Receipt = {
+export type Receipt = {
   billId: string;
   orderNumber: number;
   channel: string;
@@ -16,6 +17,7 @@ type Receipt = {
   receiptNumber: number | null;
   settledAt: string;
   splitKind: string;
+  printing?: ReceiptPrinting;
   lines: {
     id: string;
     name: string;
@@ -96,7 +98,7 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
     };
   }, [fetchReceipt]);
 
-  if (loading) {
+  if (loading || (receipt && receipt.billId !== billId)) {
     return <p className="text-sm text-text-muted">Loading settled receipt…</p>;
   }
 
@@ -188,6 +190,14 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
           </div>
         ))}
       </div>
+      {receipt.printing ? (
+        <ReceiptPrintControls
+          key={receipt.billId}
+          receipt={receipt}
+          request={request}
+          initial={receipt.printing}
+        />
+      ) : null}
     </section>
   );
 }
