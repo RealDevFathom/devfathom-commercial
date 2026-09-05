@@ -1,5 +1,97 @@
 # WHA-1358 Pharmacy browser printing evidence
 
+## Authorized private consumer integration — September 5
+
+Supervisor comment `32c4b49a-3067-462c-83bd-bbb143cd363c` authorized these exact
+dependency copies solely for private development. Original base remains
+`fe1e3e383c8b966cdb68669ba5366db00fe2320a`; clean starting HEAD was
+`2cdef75b9f9bb85f9706ec113a13c3a6267d5183`, preserving its parent
+`8fccc771aeb4fdd07141ada88e8a74e39459a588`.
+
+| Source dependency | Local private copy |
+| --- | --- |
+| `c49b1afa252f20905269a044d09bdb0406eb7b60` | `0b7bca3a662f904ce55e7a70a5229a67bbe37c52` |
+| `806f1138395c595ca27e3eb086581b9961fb441e` | `cab383313b1a661e74a5065bb5f599be2b24de9a` |
+| `411306de8d88b8eea574caa93750a972afa028d7` | `120855488ed740aa448d702b9d0b33f5c188ef52` |
+| `bdea63a2cd3d35eab300dc585e7e1352cf64c4e4` | `1e920422ed17ea8e8d6b422c151b495c50c16bd2` |
+| `513d05ad34f3268c2229c2ea5703786726e7ccde` | `57cb2f0d77b7b4b68214797faf13ee52927599ca` |
+
+All cherry-picks clean; consumer parent is the last local copy above. These are
+not accepted compose/release artifacts. Consumer SHA is recorded in Paperclip.
+
+Owned consumer paths:
+
+- `src/lib/pharmacy/counter-receipt-presentation.ts`
+- `src/lib/pharmacy/counter-browser-print.ts`
+- `src/lib/pharmacy/counter-browser-print.test.ts`
+- `src/components/pharmacy/counter/counter-receipt-view.tsx`
+- `src/components/pharmacy/counter/counter-receipt-view.test.tsx`
+- `src/lib/pharmacy/COUNTER-PRINTING.md`
+
+Before: UI/browser receipt used singular batch/expiry fields and the UI details
+preview used the old raw document envelope. After: issued identity and every
+allocation's own batch, expiry and canonical units appear below ONE financial
+line. Explicit UNAVAILABLE and legacy missing status show localized historical
+identity unavailable; unverified live medicine/presentation/batch labels are not
+used. Null allocation labels remain unavailable. No price/tax/total/refund
+calculation changes. Existing cart refresh code/assertions have zero diff.
+
+The presentation adapter calls shared `buildReceiptPreview`, which validates
+`ReceiptLayoutSchema` and `ReceiptPreviewFactsSchema`. React text and escaped
+browser text remain inert; `pre-wrap` preserves Unicode logical lines. Browser
+58/80 mm and A4 output uses the same preview. The model has no tax breakdown;
+an explicit localized unavailable message replaces any invented zero-tax fact.
+This semantic preview does not assert raw-printer capability and enables no
+queue. Saved layout read/write remains unconnected; only transient width/default
+layout is used. Printing still requests the OS dialog without confirming paper.
+
+Studio contract and bundled Next `use-client.md` read. Existing Button, Label,
+StatusPill and semantic surface/text/border/focus classes reused. Existing
+idle/loading/error/disabled/reprint controls retained; invalid shared semantic
+input disables printing. No app/browser services under the explicit task limit.
+Claude-Mem/Codebase Memory/Ponytail unavailable; narrow local fallback retained.
+
+Exact focused verification (final source, before documentation-only changes):
+
+```sh
+node node_modules/vitest/vitest.mjs run src/lib/pharmacy/counter-browser-print.test.ts src/components/pharmacy/counter/counter-receipt-view.test.tsx src/lib/pharmacy/counter-query-refresh.test.ts src/lib/pharmacy/counter-receipt.test.ts
+# exit 0; 4 files, 47 passed, 0 failed, 0 skipped
+node node_modules/typescript/bin/tsc --noEmit --project "$PAPERCLIP_RUN_SCRATCH_DIR/tsconfig.receipt-consumer.json"
+# exit 0; no diagnostics
+node node_modules/eslint/bin/eslint.js src/lib/pharmacy/counter-receipt-presentation.ts src/lib/pharmacy/counter-browser-print.ts src/lib/pharmacy/counter-browser-print.test.ts src/components/pharmacy/counter/counter-receipt-view.tsx src/components/pharmacy/counter/counter-receipt-view.test.tsx
+# exit 0; no diagnostics
+node node_modules/prettier/bin/prettier.cjs --check src/lib/pharmacy/counter-receipt-presentation.ts src/lib/pharmacy/counter-browser-print.ts src/lib/pharmacy/counter-browser-print.test.ts src/components/pharmacy/counter/counter-receipt-view.tsx src/components/pharmacy/counter/counter-receipt-view.test.tsx
+# exit 0; All matched files use Prettier code style!
+git diff --check
+# exit 0
+```
+
+Scoped config reproduces the earlier Python recipe: use the five consumer TS/TSX
+paths above plus `src/types/next-auth.d.ts` and `vitest.setup.ts`; filename is
+`tsconfig.receipt-consumer.json`, same compiler options. First test pass also had
+47 passing tests; final pass followed centralizing existing amount validation in
+the shared Pharmacy presentation adapter. No test failures. Format write ran on
+the five consumer files. No full build/typecheck, database test/migration, browser
+service, device access or independent reviewer launched. Parent dependency tests
+are owner evidence only, not claimed as rerun here.
+
+Remaining acceptance groups:
+
+1. Board independent combined review and Restaurant-first composition; WHA-1354,
+   WHA-1355, WHA-1356 and WHA-1360 retain their shared/transport responsibilities.
+2. GitHub89 staff-to-branch/capability policy: Board/Saad decision and WHA-1364
+   backend authorization repair. No permission workaround or settings write added.
+3. Saved Pharmacy designer/settings adoption after authorized permission contract;
+   source tax-breakdown contract remains unavailable, without invented money.
+4. Board/Verification owner authorized staging Studio matrix and configured
+   real-printer/OS output, Unicode fonts, 58/80 mm and A4, retry/cancel/margins.
+
+Private consumer work is delivered; overall hardware acceptance stays blocked.
+Rollback consumer application commit only; retain dependency snapshot events and
+additive data. No migrations executed here. Older sections below are historical
+evidence; backend live-label limitations are superseded by the copied #90 model,
+while GitHub89 authorization and release gates remain unresolved.
+
 Base / parent: `fe1e3e383c8b966cdb68669ba5366db00fe2320a`.
 Owned branch: `WHA-1358-hw-p1-pharmacy-receipt-printing-and-shared-designer-settings-adoption-after-restaurant`.
 Initial worktree clean. No remote synchronization, services, migrations, devices or network discovery.

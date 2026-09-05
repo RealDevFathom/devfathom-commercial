@@ -1,0 +1,92 @@
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import { buildReceiptPreview } from '@/lib/receipts/preview';
+
+import {
+  COUNTER_RECEIPT_STRINGS,
+  formatMinor,
+  formatReceiptDate,
+  receiptTitle,
+  type CounterReceipt,
+  type CounterReceiptLine,
+  type CounterReceiptLocale,
+} from './counter-receipt';
+
+const labels = {
+  en: {
+    unavailable: 'Historical identity unavailable',
+    unknown: 'Unavailable',
+    units: 'Canonical units',
+    tax: 'Tax breakdown unavailable in receipt source',
+    payments: 'Payment details unavailable',
+  },
+  ur: {
+    unavailable: 'تاریخی شناخت دستیاب نہیں',
+    unknown: 'دستیاب نہیں',
+    units: 'بنیادی اکائیاں',
+    tax: 'رسید کے ماخذ میں ٹیکس کی تفصیل دستیاب نہیں',
+    payments: 'ادائیگی کی تفصیل دستیاب نہیں',
+  },
+} as const;
+
+/** Missing status on legacy callers is not evidence of issued identity. */
+export function counterLinePresentation(line: CounterReceiptLine, locale: CounterReceiptLocale) {
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  const text = labels[locale];
+  const issued = line.identityStatus === 'ISSUED';
+  return {
+    identity: issued
+      ? [line.medicineName, line.strength, line.presentation].filter(Boolean).join(' · ')
+      : text.unavailable,
+    allocations: (line.allocations ?? []).map((allocation) => {
+      const batch = issued ? allocation.batchNumber : null;
+      const expiry = issued ? allocation.expiresAt : null;
+      return `${strings.batch}: ${batch ?? text.unknown} · ${strings.expiry}: ${expiry ? formatReceiptDate(expiry) : text.unknown} · ${text.units}: ${allocation.canonicalUnits}`;
+    }),
+  };
+}
+
+/** Browser semantics only. No raw queue capability or saved settings authorization. */
+export function buildCounterReceiptPreview(
+  receipt: CounterReceipt,
+  locale: CounterReceiptLocale,
+  paperWidth: 58 | 80,
+  reprint = false
+): string {
+  const amounts = [
+    ...Object.values(receipt.totals),
+    ...receipt.lines.flatMap((line) => [line.unitPriceMinor, line.lineTotalMinor]),
+    ...receipt.tenders.map((tender) => tender.amountMinor),
+  ];
+  if (!amounts.every(Number.isSafeInteger)) throw new Error('Receipt amounts are invalid.');
+  const strings = COUNTER_RECEIPT_STRINGS[locale];
+  return buildReceiptPreview(
+    { ...DEFAULT_RECEIPT_LAYOUT, paperWidth, footerText: reprint ? strings.reprint : '' },
+    {
+      businessName: receipt.branchName,
+      invoiceNumber: receiptTitle(receipt, locale),
+      issuedAt: `${strings.date}: ${receipt.businessDate ?? formatReceiptDate(receipt.completedAt)}`,
+      lines: receipt.lines.map((line) => {
+        const presentation = counterLinePresentation(line, locale);
+        return [
+          presentation.identity,
+          `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor)}`,
+          ...presentation.allocations,
+          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
+        ].join('\n');
+      }),
+      // The Pharmacy model supplies no tax breakdown. Never invent zero tax.
+      taxLines: [labels[locale].tax],
+      totals: [
+        receipt.currency,
+        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,
+        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
+        `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
+        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
+        `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
+      ],
+      payments: receipt.tenders.length
+        ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+        : [labels[locale].payments],
+    }
+  );
+}

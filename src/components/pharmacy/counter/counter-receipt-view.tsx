@@ -5,7 +5,6 @@ import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
 import {
-  buildCounterReceiptDocument,
   COUNTER_RECEIPT_DIRECTION,
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
@@ -14,6 +13,11 @@ import {
   type CounterReceipt,
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
+
+import {
+  buildCounterReceiptPreview,
+  counterLinePresentation,
+} from '@/lib/pharmacy/counter-receipt-presentation';
 
 export type CounterReceiptViewProps = {
   receipt: CounterReceipt | null;
@@ -30,17 +34,7 @@ export type CounterReceiptViewProps = {
   onRetry: () => void;
 };
 
-/**
- * POS-08 — the receipt, in both formats and both languages.
- *
- * The thermal preview is the exact `RECEIPT` document that goes to the printing
- * seam, rendered as text. Showing the real document rather than a lookalike is
- * what makes "what printed" and "what was on screen" the same artifact.
- *
- * Reprinting re-renders; it never re-settles. The receipt number is whatever
- * the settling tender issued, and an unsettled bill says so instead of showing
- * a number it does not have.
- */
+/** Receipt browser preview; requesting a print never confirms paper delivery. */
 export function CounterReceiptView({
   receipt,
   state,
@@ -81,13 +75,18 @@ export function CounterReceiptView({
   const direction = COUNTER_RECEIPT_DIRECTION[locale];
   const language = locale === 'ur' ? 'ur-PK' : 'en';
 
-  let document: ReturnType<typeof buildCounterReceiptDocument> | null = null;
+  let document: string | null = null;
   let documentError: string | null = null;
   try {
-    document = buildCounterReceiptDocument(receipt, locale, { reprint });
+    document = buildCounterReceiptPreview(
+      receipt,
+      locale,
+      format === 'THERMAL_58' ? 58 : 80,
+      reprint
+    );
   } catch {
     documentError =
-      'This bill cannot be rendered as a print document. Check that it has at least one line.';
+      'This receipt cannot be previewed. Reload it or ask support to check its source data.';
   }
 
   return (
@@ -123,7 +122,9 @@ export function CounterReceiptView({
         <Button
           type="button"
           className="h-11"
-          disabled={printing || document === null || receipt.receiptNumber === null}
+          disabled={
+            printing || document === null || receipt.receiptNumber === null || !receipt.completedAt
+          }
           onClick={onPrint}
         >
           {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
@@ -181,22 +182,25 @@ export function CounterReceiptView({
           {receipt.lines.map((line) => (
             <li key={line.saleLineId} className="space-y-0.5 py-2">
               <div className="flex justify-between gap-3">
-                <span className="min-w-0 text-text-strong">
-                  {line.medicineName}
-                  {line.strength ? ` ${line.strength}` : ''}
+                <span className="min-w-0 break-words text-text-strong">
+                  {counterLinePresentation(line, locale).identity}
                 </span>
                 <span className="shrink-0 tabular-nums text-text-strong">
                   {formatMinor(line.lineTotalMinor)}
                 </span>
               </div>
               <p className="text-text-muted">
-                {line.presentation} · {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
+                {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
                 {formatMinor(line.unitPriceMinor)}
               </p>
-              <p className="tabular-nums text-text-muted">
-                {strings.batch}: {line.batchNumber} · {strings.expiry}:{' '}
-                {formatReceiptDate(line.expiresAt)}
-              </p>
+              {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
+                <p
+                  key={line.allocations![index]!.allocationId}
+                  className="whitespace-pre-wrap break-words tabular-nums text-text-muted"
+                >
+                  {allocation}
+                </p>
+              ))}
             </li>
           ))}
         </ul>
@@ -236,17 +240,10 @@ export function CounterReceiptView({
       {document ? (
         <details className="rounded-md border border-border-subtle p-3">
           <summary className="cursor-pointer text-sm font-semibold text-text-strong">
-            Shared protocol document preview (not queued)
+            Shared browser receipt preview (not queued)
           </summary>
-          <pre className="mt-2 overflow-x-auto font-mono text-xs text-text-body">
-            {[
-              `${document.type} ${document.reference}`,
-              document.title,
-              ...document.lines.map((line) => `${line.quantity} × ${line.label}`),
-              document.footer ?? '',
-            ]
-              .filter(Boolean)
-              .join('\n')}
+          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-text-body">
+            {document}
           </pre>
         </details>
       ) : null}

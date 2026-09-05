@@ -51,8 +51,8 @@ describe('isolated Pharmacy browser receipt', () => {
     const before = JSON.stringify(receipt);
     const html = buildCounterBrowserReceipt(receipt, 'en', 'THERMAL', true);
     expect(html).toContain('Amount: 1.79');
-    expect(html).toContain('<dt>Total</dt><dd>1.79</dd>');
-    expect(html).toContain('<dt>Change</dt><dd>0.11</dd>');
+    expect(html).toContain('Total: 1.79');
+    expect(html).toContain('Change: 0.11');
     expect(html).toContain('Receipt 12');
     expect(html).toContain('Reprint — not a new sale');
     expect(JSON.stringify(receipt)).toBe(before);
@@ -78,6 +78,93 @@ describe('isolated Pharmacy browser receipt', () => {
     const html = buildCounterBrowserReceipt(receipt, 'ur', 'THERMAL_58');
     expect(html).toContain('lang="ur" dir="rtl"');
     expect(html).toContain('قابلِ ادائیگی');
+  });
+
+  it.each(['THERMAL_58', 'THERMAL', 'A4'] as const)(
+    'renders every issued allocation with one amount in %s',
+    (format) => {
+      const source: CounterReceipt = {
+        ...receipt,
+        lines: [
+          {
+            ...receipt.lines[0]!,
+            identityStatus: 'ISSUED',
+            medicineName: 'دوا 👩‍⚕️',
+            expiresAt: '',
+            allocations: [
+              {
+                allocationId: 'a',
+                inventoryLotId: 'a',
+                batchNumber: '<img src=x>',
+                expiresAt: '2027-01-01',
+                canonicalUnits: 3,
+              },
+              {
+                allocationId: 'b',
+                inventoryLotId: 'b',
+                batchNumber: 'بیچ ب',
+                expiresAt: '2028-02-02',
+                canonicalUnits: 7,
+              },
+            ],
+          },
+        ],
+      };
+      const before = JSON.stringify(source);
+      const parsed = new DOMParser().parseFromString(
+        buildCounterBrowserReceipt(source, 'en', format),
+        'text/html'
+      );
+      expect(parsed.querySelector('img')).toBeNull();
+      const text = parsed.body.textContent!.replace(/\s+/g, ' ');
+      expect(text).toContain('دوا 👩‍⚕️');
+      expect(text).toContain('Batch: <img src=x> · Expiry: 2027-01-01 · Canonical units: 3');
+      expect(text).toContain('Batch: بیچ ب · Expiry: 2028-02-02 · Canonical units: 7');
+      expect(text.match(/Amount: 1.79/g)).toHaveLength(1);
+      expect(text).toContain('Total: 1.79');
+      expect(JSON.stringify(source)).toBe(before);
+    }
+  );
+
+  it.each(['en', 'ur'] as const)(
+    'localizes unavailable identity without catalog fallback in %s',
+    (locale) => {
+      const source: CounterReceipt = {
+        ...receipt,
+        lines: [
+          {
+            ...receipt.lines[0]!,
+            identityStatus: 'UNAVAILABLE',
+            medicineName: 'LIVE_CATALOG',
+            allocations: [
+              {
+                allocationId: 'a',
+                inventoryLotId: 'a',
+                batchNumber: null,
+                expiresAt: null,
+                canonicalUnits: 3,
+              },
+            ],
+          },
+        ],
+      };
+      const html = buildCounterBrowserReceipt(source, locale, 'A4');
+      expect(html).toContain(
+        locale === 'en' ? 'Historical identity unavailable' : 'تاریخی شناخت دستیاب نہیں'
+      );
+      expect(html).not.toContain('LIVE_CATALOG');
+      expect(html).not.toContain('Batch 1');
+      expect(html).not.toContain('2027-01-01');
+    }
+  );
+
+  it('treats missing legacy identity status honestly and rejects shared-schema control input', () => {
+    expect(buildCounterBrowserReceipt(receipt, 'en', 'A4')).toContain(
+      'Historical identity unavailable'
+    );
+    expect(() =>
+      buildCounterBrowserReceipt({ ...receipt, branchName: 'Bad\u001b' }, 'en', 'A4')
+    ).toThrow();
   });
 
   it('refuses unsettled, empty, invalid amounts and unsupported input before opening a window', () => {
