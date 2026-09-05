@@ -46,7 +46,7 @@ Named unblock owners/actions:
 2. WHA-1355 Restaurant owner: provide verified Restaurant composition revision before Pharmacy
    shared-contract acceptance. WHA-1356 transport / WHA-1360 durable-print owners: provide a
    Pharmacy-safe transport/queue scope if direct printing is enabled.
-3. Chief of Staff: resolve/assign immutable receipt-source and POS access-policy prerequisites;
+3. Current supervisor/board: resolve/assign immutable receipt-source and POS access-policy prerequisites;
    supply an authorized staging revision and browser/hardware acceptance owner.
 
 ## Verification
@@ -124,3 +124,54 @@ network connections are not universally supported by this browser fallback: an O
 and compatible driver are prerequisites. No device compatibility was tested or promised.
 
 Rollback: revert only this private commit after owner review; no data/schema changes to undo.
+
+## POS-09 continuation — pending initial cart read
+
+Continuation parent: `8fccc771aeb4fdd07141ada88e8a74e39459a588` (clean checkout).
+Original assigned base remains `fe1e3e383c8b966cdb68669ba5366db00fe2320a`.
+Board/WHA-1351 assigned synchronization correction to this existing Pharmacy lane.
+The initial cart request starts when ensureSale activates the sale, before addLine commits.
+Invalidation could reuse that pending empty read. The refresh helper now awaits cancellation
+before invalidation, forcing a fresh read and preventing a late old response from replacing it.
+Receipt invalidation follows the cart refresh. Existing mutation, alert and tender rules remain.
+
+Exact continuation paths:
+
+- `src/components/pharmacy/counter/counter-console.tsx`
+- `src/lib/pharmacy/counter-query-refresh.ts`
+- `src/lib/pharmacy/counter-query-refresh.test.ts`
+- `src/lib/pharmacy/COUNTER-PRINTING.md`
+
+Verification commands:
+
+```sh
+bun run test -- src/lib/pharmacy/counter-query-refresh.test.ts
+# exit 0; 1 file, 3 passed, 0 failed, 0 skipped
+bunx eslint src/lib/pharmacy/counter-query-refresh.ts src/lib/pharmacy/counter-query-refresh.test.ts src/components/pharmacy/counter/counter-console.tsx
+# no diagnostics
+bunx prettier --check src/lib/pharmacy/counter-query-refresh.ts src/lib/pharmacy/counter-query-refresh.test.ts src/components/pharmacy/counter/counter-console.tsx
+# All matched files use Prettier code style!
+bunx tsc --noEmit --project "$PAPERCLIP_RUN_SCRATCH_DIR/tsconfig.counter-refresh.json"
+# no diagnostics
+git diff --check
+# exit 0
+```
+
+Recreate the scoped TypeScript config with the earlier Python recipe, replacing `files` with
+the three continuation TS/TSX paths plus `src/types/next-auth.d.ts` and `vitest.setup.ts`, and
+the target filename with `tsconfig.counter-refresh.json`. No compiler options changed.
+Prettier `--write` ran on the same three paths before verification (exit 0).
+
+Tests use installed QueryClient/QueryObserver with controlled promises. Both old-response
+completion orders preserve the persisted line; settled cached carts also refresh. No server,
+browser or physical device was used. Prior 34 receipt tests are unchanged evidence, not rerun.
+Scoped diff inspection found no shared-lane changes. No independent reviewer was launched.
+Claude-Mem/graph/Ponytail tools unavailable; narrow source fallback used without setup repair.
+Bundled Next use-client guide and full Studio contract read; no visual geometry changed.
+
+Remaining: the same four acceptance groups above, plus staging POS-09 cart/alert/refused-tender
+verification by WHA-1351 after board-approved composition/push. Unit tests do not replace it.
+WHA-1354 owns saved-layout/settings contract, WHA-1355 Restaurant composition, WHA-1356/1360
+transport/queue scope; board owns source-policy decisions and staging/hardware authorization.
+Overall issue remains blocked on those owners/actions. Rollback this continuation commit only;
+no database or schema changes. Final private SHA is recorded in the issue comment.
