@@ -169,6 +169,7 @@ describe('explicit transport configuration', () => {
 
 describe('native queue dispatch', () => {
   it('pipes exact bytes to local CUPS with fixed arguments and no inherited secrets', async () => {
+    vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('PRINT_BRIDGE_TOKEN', 'sensitive');
     vi.stubEnv('CUPS_SERVER', 'untrusted.example');
     const { chunks } = fakeChild();
@@ -195,13 +196,16 @@ describe('native queue dispatch', () => {
       {
         shell: false,
         windowsHide: true,
-        env: { PATH: '/usr/bin:/bin', LANG: 'C' },
+        env: { PATH: '/usr/bin:/bin', LANG: 'C', NODE_ENV: 'production' },
         stdio: ['pipe', 'ignore', 'ignore'],
       }
     );
   });
 
   it('Windows command keeps queue data out of PowerShell code/arguments and preserves policy', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('PRINT_BRIDGE_TOKEN', 'sensitive');
+    vi.stubEnv('NODE_OPTIONS', '--inspect');
     const queue = 'Receipt $(whoami); "front"';
     const command = queueCommand({ kind: 'queue', queue, platform: 'win32' });
     expect(command.file).toMatch(/System32\\WindowsPowerShell\\v1.0\\powershell.exe$/);
@@ -210,7 +214,9 @@ describe('native queue dispatch', () => {
     expect(command.args.join(' ')).not.toContain(queue);
     expect(command.args.join(' ')).not.toMatch(/Bypass|ExecutionPolicy|-Command/);
     expect(command.env.DEVFATHOM_PRINT_QUEUE).toBe(queue);
+    expect(command.env.NODE_ENV).toBe('production');
     expect(command.env.PRINT_BRIDGE_TOKEN).toBeUndefined();
+    expect(command.env.NODE_OPTIONS).toBeUndefined();
   });
 
   it('Windows submission pipes binary-safe base64 only to the fixed helper', async () => {
