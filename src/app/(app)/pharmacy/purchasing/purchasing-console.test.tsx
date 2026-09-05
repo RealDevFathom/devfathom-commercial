@@ -1,3 +1,5 @@
+import { Children, isValidElement, type ReactNode } from 'react';
+import { PurchasingActionForm } from './_components/action-form';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, within } from '@testing-library/react';
 
@@ -572,5 +574,74 @@ describe('segregation of duties (PUR-02)', () => {
 
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+});
+
+function findAction(node: ReactNode, name: string): (form: FormData) => Promise<string> {
+  let found: ((form: FormData) => Promise<string>) | undefined;
+  function visit(children: ReactNode) {
+    Children.forEach(children, (child) => {
+      if (
+        !isValidElement<{ action?: (form: FormData) => Promise<string>; children?: ReactNode }>(
+          child
+        )
+      )
+        return;
+      if (child.type === PurchasingActionForm && child.props.action?.name === name)
+        found = child.props.action;
+      visit(child.props.children);
+    });
+  }
+  visit(node);
+  if (!found) throw new Error(`Missing action ${name}`);
+  return found;
+}
+
+describe('explicit purchasing action outcomes', () => {
+  it('returns a success destination after one authenticated supplier write', async () => {
+    const createSupplier = vi.fn().mockResolvedValue({ id: 'new-supplier', name: 'New supplier' });
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    const form = new FormData();
+    form.set('name', 'New supplier');
+    const result = new URL(await action(form), 'https://workspace.test');
+    expect(result.pathname).toBe('/pharmacy/purchasing/suppliers');
+    expect(result.searchParams.get('kind')).toBe('success');
+    expect(result.searchParams.get('supplier')).toBe('new-supplier');
+    expect(result.searchParams.get('notice')).toContain('New supplier added');
+    expect(createSupplier).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns field validation feedback without writing', async () => {
+    const createSupplier = vi.fn();
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    const form = new FormData();
+    form.set('creditLimit', 'invalid');
+    const result = new URL(await action(form), 'https://workspace.test');
+    expect(result.searchParams.get('kind')).toBe('error');
+    expect(result.searchParams.get('notice')).toContain('Credit limit');
+    expect(createSupplier).not.toHaveBeenCalled();
+  });
+
+  it('re-resolves the session at submission and returns session-loss feedback', async () => {
+    const createSupplier = vi.fn();
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    mocks.resolveTenantActor.mockResolvedValue(null);
+    const result = new URL(await action(new FormData()), 'https://workspace.test');
+    expect(result.searchParams.get('kind')).toBe('error');
+    expect(result.searchParams.get('notice')).toContain('session is no longer active');
+    expect(createSupplier).not.toHaveBeenCalled();
+  });
+
+  it('delivers domain rejection feedback without changing its meaning', async () => {
+    const createSupplier = vi.fn().mockRejectedValue(new Error('CROSS_TENANT_REFERENCE'));
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    const result = new URL(await action(new FormData()), 'https://workspace.test');
+    expect(result.searchParams.get('kind')).toBe('error');
+    expect(result.searchParams.get('notice')).toBe('That record is not part of this workspace.');
+    expect(createSupplier).toHaveBeenCalledTimes(1);
   });
 });

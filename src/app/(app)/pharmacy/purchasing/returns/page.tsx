@@ -1,7 +1,7 @@
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
-import { redirect, RedirectType } from 'next/navigation';
+import { PurchasingActionForm } from '../_components/action-form';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -223,7 +223,7 @@ export default async function PharmacyReturnsPage({
         { branch }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function advanceReturn(form: FormData) {
@@ -268,7 +268,7 @@ export default async function PharmacyReturnsPage({
         { branch, return: purchaseReturnId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function recordCredit(form: FormData) {
@@ -301,7 +301,7 @@ export default async function PharmacyReturnsPage({
         { branch }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function allocateCredit(form: FormData) {
@@ -330,7 +330,7 @@ export default async function PharmacyReturnsPage({
         { branch, return: optionalField(form, 'purchaseReturnId') }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   return (
@@ -455,7 +455,7 @@ export default async function PharmacyReturnsPage({
                 ]}
               />
             ) : (
-              <form action={createReturn} className="space-y-4">
+              <PurchasingActionForm action={createReturn} className="space-y-4">
                 <input name="branchId" type="hidden" value={branchId} />
                 <div className="grid gap-4 sm:grid-cols-3">
                   <TextField label="Reference" name="reference" notice={notice} required />
@@ -539,12 +539,15 @@ export default async function PharmacyReturnsPage({
                   label="Hold"
                   value="A draft reserves nothing. The stock stays saleable until the return is submitted."
                 />
-              </form>
+              </PurchasingActionForm>
             )}
           </SectionCard>
 
           <SectionCard eyebrow="PUR-06" title="Supplier credit" titleLevel={2}>
-            <form action={recordCredit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <PurchasingActionForm
+              action={recordCredit}
+              className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+            >
               <input name="branchId" type="hidden" value={branchId} />
               <SelectField
                 emptyHint="No suppliers yet."
@@ -581,7 +584,7 @@ export default async function PharmacyReturnsPage({
               <div className="sm:col-span-2 lg:col-span-4">
                 <SubmitButton>Record credit</SubmitButton>
               </div>
-            </form>
+            </PurchasingActionForm>
 
             {credits.length > 0 ? (
               <ul className="mt-5 space-y-2">
@@ -609,7 +612,7 @@ export default async function PharmacyReturnsPage({
                         {money(unallocated)} unallocated
                       </p>
                       {unallocated > 0 && openDebitNotes.length > 0 ? (
-                        <form
+                        <PurchasingActionForm
                           action={allocateCredit}
                           className="mt-3 flex flex-wrap items-end gap-3"
                         >
@@ -635,7 +638,7 @@ export default async function PharmacyReturnsPage({
                             required
                           />
                           <SubmitButton variant="secondary">Allocate</SubmitButton>
-                        </form>
+                        </PurchasingActionForm>
                       ) : null}
                     </li>
                   );
@@ -704,8 +707,8 @@ function ReturnDetail({
   }[];
   branchId: string;
   notice: Notice | null;
-  onAdvance: (form: FormData) => Promise<void>;
-  onAllocate: (form: FormData) => Promise<void>;
+  onAdvance: (form: FormData) => Promise<string>;
+  onAllocate: (form: FormData) => Promise<string>;
 }) {
   const blockedByWindow = purchaseReturn.lines.some((line) => line.windowState === 'CLOSED');
   const spendable = credits.filter(
@@ -791,7 +794,10 @@ function ReturnDetail({
                     : ''}
                 </p>
                 {note.position.outstandingMinor > 0 && spendable.length > 0 ? (
-                  <form action={onAllocate} className="mt-3 flex flex-wrap items-end gap-3">
+                  <PurchasingActionForm
+                    action={onAllocate}
+                    className="mt-3 flex flex-wrap items-end gap-3"
+                  >
                     <input name="branchId" type="hidden" value={branchId} />
                     <input name="debitNoteId" type="hidden" value={note.id} />
                     <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
@@ -815,7 +821,7 @@ function ReturnDetail({
                       required
                     />
                     <SubmitButton variant="secondary">Allocate</SubmitButton>
-                  </form>
+                  </PurchasingActionForm>
                 ) : null}
               </li>
             ))}
@@ -825,12 +831,12 @@ function ReturnDetail({
 
       <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
         {purchaseReturn.status === 'DRAFT' ? (
-          <form action={onAdvance}>
+          <PurchasingActionForm action={onAdvance}>
             <input name="branchId" type="hidden" value={branchId} />
             <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
             <input name="action" type="hidden" value="submit" />
             <SubmitButton>Submit and reserve the stock</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
 
         {purchaseReturn.status === 'SUBMITTED' ? (
@@ -841,17 +847,17 @@ function ReturnDetail({
               return for the lines whose windows are still open.
             </p>
           ) : (
-            <form action={onAdvance}>
+            <PurchasingActionForm action={onAdvance}>
               <input name="branchId" type="hidden" value={branchId} />
               <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
               <input name="action" type="hidden" value="dispatch" />
               <SubmitButton>Dispatch to supplier</SubmitButton>
-            </form>
+            </PurchasingActionForm>
           )
         ) : null}
 
         {purchaseReturn.status === 'DISPATCHED' && purchaseReturn.debitNotes.length === 0 ? (
-          <form action={onAdvance} className="flex flex-wrap items-end gap-3">
+          <PurchasingActionForm action={onAdvance} className="flex flex-wrap items-end gap-3">
             <input name="branchId" type="hidden" value={branchId} />
             <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
             <input name="action" type="hidden" value="debit" />
@@ -863,7 +869,7 @@ function ReturnDetail({
               required
             />
             <SubmitButton>Issue debit note</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
       </div>
     </SectionCard>
