@@ -35,6 +35,10 @@ import {
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
+import {
+  printCounterBrowserReceipt,
+  type CounterReceiptFormat,
+} from '@/lib/pharmacy/counter-browser-print';
 import { trpc } from '@/lib/trpc';
 
 type Notice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };
@@ -105,7 +109,7 @@ export function PharmacyCounterConsole({
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
-  const [receiptFormat, setReceiptFormat] = useState<'THERMAL' | 'A4'>('THERMAL');
+  const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
   const [receiptRenders, setReceiptRenders] = useState(0);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
@@ -184,6 +188,7 @@ export function PharmacyCounterConsole({
 
   const setActiveSale = useCallback((nextSaleId: string | null) => {
     setSaleId(nextSaleId);
+    setReceiptRenders(0);
     setCustomerId(null);
     setRedeemPoints(0);
   }, []);
@@ -596,9 +601,38 @@ export function PharmacyCounterConsole({
   ]);
 
   const printReceipt = useCallback(() => {
-    setReceiptRenders((count) => count + 1);
-    window.print();
-  }, []);
+    const receipt = receiptQuery.data;
+    if (
+      !receipt ||
+      receipt.saleId !== saleId ||
+      cart?.status !== 'COMPLETED' ||
+      receiptQuery.isFetching ||
+      receiptQuery.isError
+    ) {
+      setNotice({ tone: 'danger', message: 'Load the settled receipt before printing.' });
+      return;
+    }
+    try {
+      printCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, receiptRenders > 0);
+      setReceiptRenders((count) => count + 1);
+      setNotice({
+        tone: 'success',
+        message:
+          'Browser print dialog requested. Select the matching paper size and OS printer. Physical printing is not confirmed.',
+      });
+    } catch (error) {
+      setNotice({ tone: 'danger', message: messageFrom(error) });
+    }
+  }, [
+    cart?.status,
+    receiptFormat,
+    receiptLocale,
+    receiptQuery.data,
+    receiptQuery.isError,
+    receiptQuery.isFetching,
+    receiptRenders,
+    saleId,
+  ]);
 
   // ── POS-01 keyboard map ───────────────────────────────────────────────────
 
@@ -1077,6 +1111,7 @@ export function PharmacyCounterConsole({
               locale={receiptLocale}
               format={receiptFormat}
               reprint={receiptRenders > 0}
+              printing={receiptQuery.isFetching}
               error={receiptQuery.error ? messageFrom(receiptQuery.error) : null}
               onLocaleChange={setReceiptLocale}
               onFormatChange={setReceiptFormat}
