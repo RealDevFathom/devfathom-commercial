@@ -1,15 +1,18 @@
 import { z } from 'zod';
 
-// Printable ASCII matches the existing ESC/POS baseline. Reject commands, markup,
-// bidi controls and unsupported glyphs instead of silently changing printed text.
-const text = (max: number) =>
+// Semantic browser text, not an assertion of printer encoding support. Preserve
+// Unicode/combining/joining characters; reject commands, bidi overrides and broken UTF-16.
+export const receiptTextSchema = (max: number) =>
   z
     .string()
     .max(max)
     .regex(
-      /^[\x20-\x3b\x3d\x3f-\x7e\n]*$/,
-      'Use plain printable text without markup or printer commands.'
+      /^[^\x00-\x09\x0b-\x1f\x7f-\x9f\u202a-\u202e\u2066-\u2069\p{Cs}]*$/u,
+      'Use valid text without control characters or printer commands.'
     );
+
+const text = (max: number) =>
+  receiptTextSchema(max).regex(/^[^<>]*$/, 'Use plain text without markup.');
 
 export const ReceiptLayoutSchema = z
   .object({

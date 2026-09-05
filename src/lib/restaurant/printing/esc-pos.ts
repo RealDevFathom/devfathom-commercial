@@ -1,4 +1,4 @@
-import { PrintDocumentSchema, type PrintDocument } from './contract';
+import { RawPrintValidationError, validateRawPrintDocument, type PrintDocument } from './contract';
 import { buildReceiptPreview } from '@/lib/receipts/preview';
 
 const ESC = 0x1b;
@@ -6,14 +6,13 @@ const GS = 0x1d;
 const encoder = new TextEncoder();
 
 function text(value: string): number[] {
-  if (!/^[\x20-\x7e\n]*$/.test(value))
-    throw new Error('Unsupported printer text. Use a browser/OS-rendered receipt.');
+  if (!/^[\x20-\x7e\n]*$/.test(value)) throw new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT');
   return [...encoder.encode(value)];
 }
 
 /** Vendor-neutral ESC/POS baseline: initialize, centered bold header, left-aligned body, cut. */
 export function renderEscPos(document: PrintDocument): Uint8Array {
-  document = PrintDocumentSchema.parse(document);
+  document = validateRawPrintDocument(document);
   if (document.receiptSnapshot) {
     const { layout, facts } = document.receiptSnapshot;
     const body = buildReceiptPreview(layout, facts);

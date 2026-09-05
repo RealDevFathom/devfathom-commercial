@@ -6,6 +6,16 @@ import { ReceiptDesigner } from './receipt-designer';
 const branch = { id: 'a', name: 'Branch A', revision: 0, layout: DEFAULT_RECEIPT_LAYOUT };
 afterEach(() => vi.unstubAllGlobals());
 describe('receipt designer', () => {
+  it('renders Unicode layout text losslessly in the existing browser preview', async () => {
+    vi.stubGlobal('fetch', vi.fn().mockResolvedValue(Response.json({ branches: [branch] })));
+    render(<ReceiptDesigner />);
+    const footer = await screen.findByLabelText('Footer text (500 characters)');
+    const text = 'شکریہ e\u0301 👩‍👩‍👧‍👦 '.repeat(6);
+    fireEvent.change(footer, { target: { value: text } });
+    expect(footer).not.toHaveAttribute('aria-invalid', 'true');
+    expect(screen.getByLabelText('Sample receipt').textContent).toContain(text);
+    expect(screen.getByRole('button', { name: 'Save layout' })).toBeEnabled();
+  });
   it('preserves draft after failed save and makes reset an explicit save', async () => {
     const fetch = vi
       .fn()
