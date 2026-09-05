@@ -1,5 +1,75 @@
 # WHA-1354 — shared receipt layout handoff
 
+## Board-authorized single correction pass
+
+Base `bdea63a2cd3d35eab300dc585e7e1352cf64c4e4`; tracked tree clean before
+correction, expected private DB review directory retained. Board rejection of
+interaction `6f17eaff-95da-4764-bb0c-50b0c0877a46` explicitly authorized this pass.
+This section supersedes earlier ASCII-only shared-preview descriptions.
+
+`ReceiptLayoutSchema` and `ReceiptPreviewFactsSchema` now accept bounded Unicode
+text, including Urdu, combining marks and joining sequences. `receiptTextSchema`
+rejects C0 controls except LF, C1 controls, bidi overrides/isolates and unpaired
+surrogates, before legacy field trimming. Layout text retains its markup rejection.
+Facts remain inert text; consumers must use React text children/textContent, never
+HTML interpolation. No normalization, substitution or monetary recalculation added.
+
+`buildReceiptPreview(layout, facts)` remains the shared browser interface. ASCII
+32/48-column wrapping is unchanged. Unicode logical lines stay intact for existing
+browser `white-space: pre-wrap` wrapping; they are not measured as printer cells or
+sliced through UTF-16/grapheme sequences. Existing designer already uses React text
+children and pre-wrap. No UI implementation, routes, fonts or tokens changed.
+
+`printing/contract.ts` exports:
+
+- `validateRawPrintDocument(input: unknown): PrintDocument`: validates shape and
+  encoding for both legacy envelope fields and complete snapshot layout/facts.
+  Returns a parsed copy. Semantic `PrintDocumentSchema` alone is **not** raw queue
+  acceptance validation.
+- `RawPrintValidationError`: safe constant message, `code` is
+  `INVALID_PRINT_DOCUMENT` (malformed/control input, `fallback: null`) or
+  `UNSUPPORTED_PRINT_TEXT` (unsupported encoding, `fallback: 'BROWSER_OS'`).
+  No receipt contents or validation payload included in errors.
+- `renderEscPos` calls this same raw validator before emitting bytes, retaining
+  defensive ASCII enforcement. Unicode remains browser-only, never question marks.
+
+WHA-1360 must call raw validation before queue acceptance, including direct typed
+service callers, map errors to actionable enqueue responses, and contain existing
+invalid persisted jobs without starving later valid work or retrying uncertain
+physical writes. This producer correction alone does **not** close GitHub91.
+WHA-1355/1358 should reuse shared Unicode layout/facts/preview and render inert text;
+they must not treat semantic schema success as raw printer capability.
+
+Changed files: configuration.ts, preview.ts, configuration.test.ts under
+`src/lib/receipts`; contract.ts, esc-pos.ts, receipt-snapshot.test.ts under
+`src/lib/restaurant/printing`; `src/components/receipts/receipt-designer.test.tsx`;
+this document. No service/API/runtime, schema/migrations or database environment edits.
+
+Verification:
+
+- Fail-before `node node_modules/vitest/vitest.mjs run src/lib/receipts/configuration.test.ts`:
+  **2 failed / 14 passed**; both new 58/80 mm Unicode parity cases rejected by the
+  original layout schema.
+- Final `node node_modules/vitest/vitest.mjs run src/lib/receipts/configuration.test.ts src/lib/restaurant/printing/receipt-snapshot.test.ts src/lib/restaurant/printing/printing.test.ts src/components/receipts/receipt-designer.test.tsx src/lib/receipts/restaurant-settings.test.ts src/app/api/restaurant/receipt-layout/route.test.ts`:
+  **59 passed, 0 failed, 0 skipped**, 6 files, exit 0. Covers actual designer Unicode
+  textContent, escaped browser facts, combining/emoji integrity, raw legacy and
+  snapshot rejection, safe typed errors, controls before trimming, and existing
+  ASCII golden/width/facts/permission behavior. DOM tests are not visual acceptance.
+- `node node_modules/typescript/bin/tsc --noEmit -p "$PAPERCLIP_RUN_SCRATCH_DIR/correction-tsconfig.json"`:
+  exit 0. Scratch config extends repository config, disables incremental output,
+  includes next-env, src/types, vitest.setup, all receipts TS, changed printing TS
+  and designer test. Service/runtime integration is outside this scoped check.
+- `node node_modules/eslint/bin/eslint.js` on the seven changed TS/TSX paths:
+  exit 0, no diagnostics. Prettier and diff checks recorded in final handoff.
+- Prior four isolated DB tests/105 migration checks remain historical evidence;
+  not rerun for this pure text/encoding correction. Existing DB preserved for review.
+
+Board owns combined recheck after WHA-1360/1356 corrections; three reviewed combined
+TypeScript errors remain their lane. No extra independent agent/review run, build,
+browser service, migration, deployment or physical hardware access. Staging visual,
+consumer integration and real printer gates remain open. Rollback is application
+commit reversion only; no database rollback required.
+
 ## Disposable database verification, September 5
 
 This section supersedes earlier statements that the four Restaurant database tests
