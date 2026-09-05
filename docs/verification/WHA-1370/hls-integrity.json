@@ -1,0 +1,9 @@
+{
+  "attachment": "e455eada-b7d0-4995-89d1-af096a6fa45a",
+  "bytes": 8003699,
+  "sha256": "14311c46a7aea04a7ffc373653b11d019bb41df8a693a2459eb3115a262aef53",
+  "lockIntegrity": "sha512-CW/pPvSOFIRsosbwxrYaE9ERmpTo5fbTqL7wCvuCFlqW1Bmb1K5fXsY7yiH95rmlr4rVuA7UXHbM/cIXQ6AXwg==",
+  "lockIntegrityMatches": true,
+  "safeExtraction": "only package-prefixed regular files/directories, no absolute/traversal/link/special entries",
+  "version": "1.7.2"
+}

@@ -1,0 +1,26 @@
+[
+  {
+    "file": "phase2-build.log",
+    "rawSha256": "f76a505bc3152c359a848d54975eeef8ace7f487cb107a9ac631805579b77179",
+    "storedSha256": "491eaddab21280d3985f021e8ffac998fd65539f1a0d92904a2bd39fe1930016",
+    "normalization": "trim line-end whitespace and excess blank lines at EOF only"
+  },
+  {
+    "file": "phase1-camera-native.log",
+    "rawSha256": "b1be422ad6bb1bef49bf749de6f4381603adc0ba1de717198fa713080906992b",
+    "storedSha256": "b1be422ad6bb1bef49bf749de6f4381603adc0ba1de717198fa713080906992b",
+    "normalization": "trim line-end whitespace and excess blank lines at EOF only"
+  },
+  {
+    "file": "phase1-build.log",
+    "rawSha256": "a14d5e3eb9a78dd582b0a07432bcbcce6ac3c4015d5d36df2b431f094f70dcf4",
+    "storedSha256": "9621117168ce096178e8fe41f79946e2e09ee440d1257fed20d0f6635c531d21",
+    "normalization": "trim line-end whitespace and excess blank lines at EOF only"
+  },
+  {
+    "file": "phase1-sized-build.log",
+    "rawSha256": "b6753c3d3b2c41073aeb5000bee7b4682d032fc7264148cfee06b092c70f566e",
+    "storedSha256": "9766f23d0b39c15006d4ff7562255f9f1fb90187e26ff6f268755ccd21cedeec",
+    "normalization": "trim line-end whitespace and excess blank lines at EOF only"
+  }
+]

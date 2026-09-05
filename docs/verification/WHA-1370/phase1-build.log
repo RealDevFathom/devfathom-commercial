@@ -1,0 +1,146 @@
+$ prisma generate && next build
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma.
+
+✔ Generated Prisma Client (7.9.1) to ./src/generated/prisma in 1.58s
+
+▲ Next.js 16.2.12 (Turbopack)
+- Experiments (use with caution):
+  · cpus: 1
+  · optimizePackageImports
+
+  Creating an optimized production build ...
+✓ Compiled successfully in 15.3s
+  Running TypeScript ...
+
+<--- Last few GCs --->
+
+[13332:0x7a8040c000]    20622 ms: Mark-Compact 4038.1 (4133.4) -> 4023.4 (4134.6) MB, pooled: 0 MB, 418.79 / 0.00 ms  (average mu = 0.083, current mu = 0.052) allocation failure; scavenge might not succeed
+[13332:0x7a8040c000]    21053 ms: Mark-Compact 4043.3 (4138.6) -> 4026.6 (4137.9) MB, pooled: 0 MB, 408.08 / 0.00 ms  (average mu = 0.068, current mu = 0.053) allocation failure; scavenge might not succeed
+
+
+<--- JS stacktrace --->
+
+FATAL ERROR: Ineffective mark-compacts near heap limit Allocation failed - JavaScript heap out of memory
+----- Native stack trace -----
+
+ 1: 0x102c87680 node::OOMErrorHandler(char const*, v8::OOMDetails const&) [/Users/Saad/.hermes/node/bin/node]
+ 2: 0x102e62a94 v8::internal::V8::FatalProcessOutOfMemory(v8::internal::Isolate*, char const*, v8::OOMDetails const&) [/Users/Saad/.hermes/node/bin/node]
+ 3: 0x1030720a8 v8::internal::Heap::stack() [/Users/Saad/.hermes/node/bin/node]
+ 4: 0x1030884c4 v8::internal::Heap::CollectGarbage(v8::internal::AllocationSpace, v8::internal::GarbageCollectionReason, v8::GCCallbackFlags)::$_1::operator()() const [/Users/Saad/.hermes/node/bin/node]
+ 5: 0x103087d58 void heap::base::Stack::SetMarkerAndCallbackImpl<v8::internal::Heap::CollectGarbage(v8::internal::AllocationSpace, v8::internal::GarbageCollectionReason, v8::GCCallbackFlags)::$_1>(heap::base::Stack*, void*, void const*) [/Users/Saad/.hermes/node/bin/node]
+ 6: 0x1038439b4 PushAllRegistersAndIterateStack [/Users/Saad/.hermes/node/bin/node]
+ 7: 0x103070268 v8::internal::Heap::CollectGarbage(v8::internal::AllocationSpace, v8::internal::GarbageCollectionReason, v8::GCCallbackFlags) [/Users/Saad/.hermes/node/bin/node]
+ 8: 0x103064a3c v8::internal::HeapAllocator::AllocateRawWithLightRetrySlowPath(int, v8::internal::AllocationType, v8::internal::AllocationOrigin, v8::internal::AllocationAlignment) [/Users/Saad/.hermes/node/bin/node]
+ 9: 0x103065274 v8::internal::HeapAllocator::AllocateRawWithRetryOrFailSlowPath(int, v8::internal::AllocationType, v8::internal::AllocationOrigin, v8::internal::AllocationAlignment) [/Users/Saad/.hermes/node/bin/node]
+10: 0x103048560 v8::internal::Factory::NewFillerObject(int, v8::internal::AllocationAlignment, v8::internal::AllocationType, v8::internal::AllocationOrigin) [/Users/Saad/.hermes/node/bin/node]
+11: 0x1034649c0 v8::internal::Runtime_AllocateInYoungGeneration(int, unsigned long*, v8::internal::Isolate*) [/Users/Saad/.hermes/node/bin/node]
+12: 0x103925df4 Builtins_CEntry_Return1_ArgvOnStack_NoBuiltinExit [/Users/Saad/.hermes/node/bin/node]
+13: 0x10f01725c
+14: 0x10ef1d12c
+15: 0x10eda8b90
+16: 0x10ee0d480
+17: 0x10eda9274
+18: 0x10eda8800
+19: 0x10e921478
+20: 0x10e9143a4
+21: 0x10e919040
+22: 0x10e6c8718
+23: 0x10e918ecc
+24: 0x10e6c8718
+25: 0x10ef8f650
+26: 0x10e6e0fa8
+27: 0x10e691da8
+28: 0x10e6911ac
+29: 0x10e6911ac
+30: 0x10efdc9e4
+31: 0x10e623ad0
+32: 0x10e9cc9f0
+33: 0x10eedfef0
+34: 0x10e92c2d4
+35: 0x10e6daef0
+36: 0x10e6c8618
+37: 0x10e918ecc
+38: 0x10e6c8718
+39: 0x10e923494
+40: 0x10e6c886c
+41: 0x10ef8f650
+42: 0x10e6e0fa8
+43: 0x10e691da8
+44: 0x10ef0c324
+45: 0x10eea8a7c
+46: 0x10e91d6e0
+47: 0x10e9323a0
+48: 0x10efde5f8
+49: 0x10ee9abac
+50: 0x10e691090
+51: 0x10efdc9e4
+52: 0x10e9ad91c
+53: 0x10e690d6c
+54: 0x10efdc9e4
+55: 0x10ef172ec
+56: 0x10e690f6c
+57: 0x10efdc9e4
+58: 0x10e96f010
+59: 0x10e690d40
+60: 0x10efdc9e4
+61: 0x10e9264c0
+62: 0x10e92c434
+63: 0x10f03792c
+64: 0x10efbbcc0
+65: 0x10e694cd0
+66: 0x10e927978
+67: 0x10f03789c
+68: 0x10efbbcc0
+69: 0x10e92c4ec
+70: 0x10f03792c
+71: 0x10efbbcc0
+72: 0x10e694cd0
+73: 0x10e9278d4
+74: 0x10f03789c
+75: 0x10efbbcc0
+76: 0x10ef3706c
+77: 0x10ef252f8
+78: 0x10390a4c8 Builtins_SetPrototypeForEach [/Users/Saad/.hermes/node/bin/node]
+79: 0x10e9b4530
+80: 0x10e9b5540
+81: 0x10e9b692c
+82: 0x10e9b6bb8
+83: 0x10e9bac58
+84: 0x10e9b6cfc
+85: 0x10e6aa21c
+86: 0x10e6a9ca0
+87: 0x10e6a6e28
+88: 0x10e6a70f4
+89: 0x10e6a7210
+90: 0x10e6a74f0
+91: 0x10e6a6468
+92: 0x10e6a8358
+93: 0x10e6a8f6c
+94: 0x103890ef0 Builtins_InterpreterEntryTrampoline [/Users/Saad/.hermes/node/bin/node]
+95: 0x103890ef0 Builtins_InterpreterEntryTrampoline [/Users/Saad/.hermes/node/bin/node]
+96: 0x1038cd410 Builtins_AsyncFunctionAwaitResolveClosure [/Users/Saad/.hermes/node/bin/node]
+97: 0x103998f78 Builtins_PromiseFulfillReactionJob [/Users/Saad/.hermes/node/bin/node]
+98: 0x1038bd6f4 Builtins_RunMicrotasks [/Users/Saad/.hermes/node/bin/node]
+99: 0x10388eaf4 Builtins_JSRunMicrotasksEntry [/Users/Saad/.hermes/node/bin/node]
+100: 0x102fc9e54 v8::internal::(anonymous namespace)::Invoke(v8::internal::Isolate*, v8::internal::(anonymous namespace)::InvokeParams const&) [/Users/Saad/.hermes/node/bin/node]
+101: 0x102fca6fc v8::internal::(anonymous namespace)::InvokeWithTryCatch(v8::internal::Isolate*, v8::internal::(anonymous namespace)::InvokeParams const&) [/Users/Saad/.hermes/node/bin/node]
+102: 0x102fca834 v8::internal::Execution::TryRunMicrotasks(v8::internal::Isolate*, v8::internal::MicrotaskQueue*) [/Users/Saad/.hermes/node/bin/node]
+103: 0x102ff7ab4 v8::internal::MicrotaskQueue::RunMicrotasks(v8::internal::Isolate*) [/Users/Saad/.hermes/node/bin/node]
+104: 0x102ff8238 v8::internal::MicrotaskQueue::PerformCheckpoint(v8::Isolate*) [/Users/Saad/.hermes/node/bin/node]
+105: 0x102b86878 node::InternalCallbackScope::Close() [/Users/Saad/.hermes/node/bin/node]
+106: 0x102b86338 node::InternalCallbackScope::~InternalCallbackScope() [/Users/Saad/.hermes/node/bin/node]
+107: 0x102c8b774 node::fs::FileHandle::CloseReq::Resolve() [/Users/Saad/.hermes/node/bin/node]
+108: 0x102ca5f60 node::fs::FileHandle::ClosePromise()::$_0::__invoke(uv_fs_s*) [/Users/Saad/.hermes/node/bin/node]
+109: 0x102c7f304 node::MakeLibuvRequestCallback<uv_fs_s, void (*)(uv_fs_s*)>::Wrapper(uv_fs_s*) [/Users/Saad/.hermes/node/bin/node]
+110: 0x10386b698 uv__work_done [/Users/Saad/.hermes/node/bin/node]
+111: 0x10386f3c8 uv__async_io [/Users/Saad/.hermes/node/bin/node]
+112: 0x103883760 uv__io_poll [/Users/Saad/.hermes/node/bin/node]
+113: 0x10386f930 uv_run [/Users/Saad/.hermes/node/bin/node]
+114: 0x102b87394 node::SpinEventLoopInternal(node::Environment*) [/Users/Saad/.hermes/node/bin/node]
+115: 0x102cd18d4 node::NodeMainInstance::Run() [/Users/Saad/.hermes/node/bin/node]
+116: 0x102c427e8 node::Start(int, char**) [/Users/Saad/.hermes/node/bin/node]
+117: 0x19e56fbec start [/usr/lib/dyld]
+Next.js build worker exited with code: null and signal: SIGABRT
+error: script "build" exited with code 1
