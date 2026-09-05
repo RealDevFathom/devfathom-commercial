@@ -33,6 +33,7 @@ import {
   type CounterKeymapPresetKey,
 } from '@/lib/pharmacy/counter-keymap';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
+import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import {
@@ -182,8 +183,7 @@ export function PharmacyCounterConsole({
   const authenticatePack = trpc.pharmacySales.authenticatePack.useMutation();
 
   const refreshCart = useCallback(async () => {
-    await utils.pharmacySales.counterCart.invalidate();
-    await utils.pharmacySales.counterReceipt.invalidate();
+    await refreshCounterQueries(utils.pharmacySales);
   }, [utils]);
 
   const setActiveSale = useCallback((nextSaleId: string | null) => {
