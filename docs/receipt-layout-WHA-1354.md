@@ -1,5 +1,64 @@
 # WHA-1354 — shared receipt layout handoff
 
+## Disposable database verification, September 5
+
+This section supersedes earlier statements that the four Restaurant database tests
+were skipped and that migrations had never been executed in an isolated environment.
+Source tested: `411306de8d88b8eea574caa93750a972afa028d7`, parent
+`806f1138395c595ca27e3eb086581b9961fb441e`, original base
+`fe1e3e383c8b966cdb68669ba5366db00fe2320a`. Clean assigned branch verified before work.
+No application, migration or test source changed in this verification heartbeat.
+
+Supervisor explicitly authorized using the verified disposable PostgreSQL 16.15
+cluster at `127.0.0.1:52027`. Admin connected only to its maintenance database for
+identity/bootstrap; its data_directory matched the supplied WHA-1350 environment.
+Created **new** `wha1354_disposable_b032106891`; no connection to or migration of
+the existing `wha1350_disposable_test` database. First preflight stopped before
+mutation because PostgreSQL rendered its address as `127.0.0.1/32`; corrected that
+exact identity comparison, then bootstrap succeeded.
+
+Dedicated owner `wha1354_owner_b032106891` and runtime
+`wha1354_runtime_b032106891` both use NOSUPERUSER, NOBYPASSRLS, NOCREATEDB,
+NOCREATEROLE, NOINHERIT. Runtime owns **0 application tables**. Restaurant and
+Pharmacy branch tables both have ENABLE/FORCE RLS and the dedicated owner.
+Canonical QA DML/sequence grants applied; no test ran as admin or owner.
+
+Exact commands, run from this checkout with URLs sourced privately:
+
+- `node "$PAPERCLIP_RUN_SCRATCH_DIR/provision.cjs"`: corrected preflight exit 0.
+- `EXTENSION_ADMIN_DATABASE_URL="$OWNER_DATABASE_URL" node --import tsx prisma/prepare-extensions.ts`:
+  exit 0, using the new database's restricted owner.
+- `node node_modules/prisma/build/index.js migrate deploy --config "$WHA1354_ENV_DIR/migration.config.mjs"`:
+  exit 0; **105 current migrations**, **0 unsuccessful**, **0 checksum mismatches**.
+  Includes `20260905180000_receipt_layout` and `20260905190000_pharmacy_receipt_layout`.
+- Owner `pg.Client` applied canonical QA runtime schema, table, sequence and default
+  grants: success. No seed required; tests create their own synthetic fixtures.
+- `node node_modules/vitest/vitest.mjs run src/lib/receipts/restaurant-settings.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile="$WHA1354_ENV_DIR/receipt-db-tests.json"`:
+  exit 0; **4 passed, 0 failed, 0 pending/skipped**. Scope: **2 tenants, 3 Restaurant
+  branches**. Verifies persisted branch isolation, forged tenant read/write denial,
+  exactly one competing revision writer, reset and transaction rollback. Suite
+  asserts runtime has neither SUPERUSER nor BYPASSRLS before fixtures/tests.
+- `node "$PAPERCLIP_RUN_SCRATCH_DIR/evidence.cjs"`: exit 0; asserts runtime flags,
+  zero table ownership, both branch tables' FORCE RLS, every migration checksum and
+  successful finish, and all four test results. Sanitized evidence retained alongside
+  raw JSON test report in the private environment.
+
+Review environment: `.wha1354-verification-NSdov4/README.md` in this checkout.
+Directory 0700, credential file 0600; URLs/passwords never printed or committed.
+Environment and database preserved for independent review. WHA-1354 owns cleanup
+after review: remove only its new database/roles and private directory; never stop
+the shared disposable cluster or remove WHA-1350's data. Expected untracked private
+environment remains; only this documentation is committed by the heartbeat.
+
+WHA-1360 reported producer artifact `bc0693705163c618c3445ffcc7c8b89f13ac8024`
+with 28/28 checks; acknowledged as owner evidence, not locally integrated/verified.
+Existing local typecheck missing-token producer error therefore remains a composition
+gate. Prior 27/27 snapshot/unit checks remain valid for unchanged source. No full
+typecheck/build/lint rerun for this documentation-only update. Independent review,
+Pharmacy adapter authorization/persistence acceptance, composed producer/runtime/POS
+integration, staging visual/build acceptance and actual configured-printer acceptance
+remain separate gates. No app/browser services, deployment or real-device access.
+
 ## Coordination follow-up, September 5
 
 This section supersedes the initial-pass renderer/Pharmacy limitations below.
