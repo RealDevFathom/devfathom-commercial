@@ -334,3 +334,69 @@ pending; this correction does not answer the owner's hardware question. No gatew
 device probe, secrets generation, push or merge. Rollback: unavailable mode remains fail-closed;
 reverting this correction restores the reviewed usability defects, so do not activate real
 transport on that older revision. Current supervisor and WHA-1363 own review re-entry.
+
+## F3-R1 audit-boundary correction — September 5, 2026
+
+Supervisor comment `757186e4-6044-4cfd-9169-39e92fe5af7a` authorizes this narrow additional
+pass, including shared audit serialization and adjacent existing tests. Clean correction
+parent `036debad81072badc79e7331fae20e2a84addf3e`, parent of that commit `977eed1e`;
+assigned branch and original base unchanged. Only this document, `src/server/audit.ts`
+and `src/server/trpc.test.ts` changed.
+
+Caller trace: outer tRPC audit middleware captures raw input before guards and calls
+`recordTrpcAudit` after success or failure. That capture point calls `toAuditJson` before
+`recordAudit` sends a row to the tenant sink; the platform sink also serializes input.
+The existing recursive key redaction now matches exactly `previousGrantId`, case-insensitively.
+This covers early failures without resolver annotation. Denial auditing, ACL, middleware
+order, ordinary grant fields and other metadata remain intact. No cross-user bypass was
+demonstrated by the original finding; the correction prevents retaining this short-lived
+viewer-bound identifier in serialized audit input.
+
+Regression evidence uses the actual admin middleware, camera resolver and audit serializer,
+with mocked authorization decisions and database write sinks. Entitlement, capability,
+license and invalid-input denials all produce a FAILURE row containing `[REDACTED]` instead
+of the synthetic identifier, while retaining actor, action, error code and ordinary metadata.
+The camera prefix currently lacks a catalog license mapping, so the license test mounts
+the same camera procedure under the existing licensed `projects` fixture prefix to exercise
+the real outer license guard. This is explicit fixture coverage, not a changed license policy.
+A fifth regression covers case-insensitive nested keys, retained ordinary grant metadata
+and nonmutation of the caller's input. No audit DB was written and no RLS claim is added.
+
+Checks from this checkout:
+
+```sh
+node node_modules/vitest/vitest.mjs run src/server/trpc.test.ts --maxWorkers=1 --no-file-parallelism
+node --input-type=module -e 'import Hls from "hls.js"; if (Hls.version !== "1.7.2") throw new Error("Unexpected version"); console.log("Real hls.js ESM import:", Hls.version);'
+bun build src/components/restaurant/restaurant-camera-player.tsx --target browser --splitting --outdir "$PAPERCLIP_RUN_SCRATCH_DIR/camera-browser-bundle"
+node node_modules/typescript/bin/tsc --project "$PAPERCLIP_RUN_SCRATCH_DIR/camera-tsconfig.json"
+node node_modules/eslint/bin/eslint.js src/server/audit.ts src/server/trpc.test.ts src/components/restaurant/restaurant-camera-player.tsx src/components/restaurant/restaurant-camera-wizard.tsx src/components/restaurant/restaurant-cameras-console.tsx src/server/routers/restaurant-cameras.ts 'src/app/api/restaurant/cameras/[cameraId]/stream/route.ts'
+```
+
+Adjacent tRPC suite: **119 passed, 0 failed, 0 skipped**, including five new regressions.
+The original eleven-file camera command printed in the preceding section was run unchanged:
+**45 passed, 0 failed, 0 skipped**, with the real pinned hls.js resolvable and no fake alias.
+Existing player tests still mock media behavior; they do not prove decoding. Separate real
+ESM import returned `1.7.2`; browser-target bundle resolved seven modules and produced a
+59.40 KB player entry, 1.54 KB shared chunk and 1.24 MB lazy HLS chunk, exit 0. This proves
+package import and bundling, not browser playback or a full Next candidate build.
+Scoped compiler (audit/test plus existing camera UI/router/route, Next types, auth declaration
+and Vitest setup) exit 0. Initial lint reported one unused test-helper parameter; replaced
+it with a typed mock declaration. Final lint/format/diff results are in the delivery comment.
+
+Real package provenance: downloaded exact official registry `hls.js/1.7.2` tarball, verified
+SHA-512 against `bun.lock`, extracted only into run-owned private dependency storage. No
+install scripts, global/shared writes or manifest changes. Existing dependency packages
+were linked read-only, excluding writable Vite/cache directories. Reproducible private
+reviewer access: attachment `e455eada-b7d0-4995-89d1-af096a6fa45a`, filename `hls.js-1.7.2.tgz`,
+8,003,699 bytes, SHA-256 `14311c46a7aea04a7ffc373653b11d019bb41df8a693a2459eb3115a262aef53`.
+Download `/api/attachments/e455eada-b7d0-4995-89d1-af096a6fa45a/content`, verify its SHA-512
+against the lock entry, extract in the reviewer's private scratch and link `hls.js` to its
+`package` directory. This preserves true dependency access after implementation run cleanup.
+The archive includes the upstream license. No placeholder module or CDN is required.
+
+Unchanged protocol 16/16 and independent camera DB 4/4 plus credential isolation 3/3 evidence
+are reused, not rerun. Three gates remain: original-review F3-R1 recheck, full candidate
+build at composition, and authorized hardware/browser/Studio acceptance. No code here answers
+model/codec/gateway or policy questions; no services, device probes, migration, deployment,
+push or merge. Rollback of this narrow commit reintroduces audit retention of prior grant
+IDs; unavailable gateway mode remains the operational fail-closed setting.
