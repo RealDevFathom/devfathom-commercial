@@ -155,7 +155,9 @@ describeIfDatabase('durable print bridge', () => {
         claimNextPrintJob(db, branchA, 'bridge-a')
       );
       expect(claimed).not.toBeNull();
-      await writeToPrinter(claimed!.printerId, Buffer.from(claimed!.bytes, 'base64'));
+      await writeToPrinter(claimed!.printerId, Buffer.from(claimed!.bytes, 'base64'), [
+        tcpConfig.routes[0].printerId,
+      ]);
       expect((await received).includes(Buffer.from('Soda'))).toBe(true);
       await expect(
         tenancy.withTenantDb(orgA, (db) =>

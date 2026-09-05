@@ -5,6 +5,7 @@ import { z } from 'zod';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
   PrintJobSchema,
+  RawPrintValidationError,
   PrintRoutingConfigSchema,
   type PrintDocumentType,
 } from '@/lib/restaurant/printing/contract';
@@ -221,17 +222,31 @@ export async function POST(request: Request) {
   const branchError = await branchAccessError(ctx, parsed.data.branchId);
   if (branchError) return branchError;
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
-  const result = await ctx.db.$transaction(async (db) => {
-    const routes = await db.restaurantPrintRoute.findMany({
-      where: { branchId: parsed.data.branchId },
-      select: { documentType: true, stationId: true, printerId: true, enabled: true },
+  let result;
+  try {
+    result = await ctx.db.$transaction(async (db) => {
+      const routes = await db.restaurantPrintRoute.findMany({
+        where: { branchId: parsed.data.branchId },
+        select: { documentType: true, stationId: true, printerId: true, enabled: true },
+      });
+      return new PrintBridgeService(db).enqueue(
+        organizationId,
+        { branchId: parsed.data.branchId, routes },
+        parsed.data
+      );
     });
-    return new PrintBridgeService(db).enqueue(
-      organizationId,
-      { branchId: parsed.data.branchId, routes },
-      parsed.data
+  } catch (error) {
+    if (!(error instanceof RawPrintValidationError)) throw error;
+    return NextResponse.json(
+      {
+        error: error.message,
+        code: error.code,
+        fallback: error.fallback,
+        retryable: false,
+      },
+      { status: 422 }
     );
-  });
+  }
   return NextResponse.json(
     { mode: 'DEVICE_BRIDGE', result },
     { status: result.status === 'QUEUED' ? 202 : result.status === 'PRINTED' ? 200 : 409 }
