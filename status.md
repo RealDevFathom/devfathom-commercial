@@ -1,11 +1,31 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 02:25 PKT (21:25 UTC) — Cowork supervisor check-in #205.
+Last reconciled: 2026-09-05 05:40 PKT (00:40 UTC) — Cowork supervisor check-in #214.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **00:40 UTC 2026-09-05 — NEAR MISS: a sha-pinned deploy prompt almost put staging on a 37-commit
+  stale, known-red build. Root cause fixed; read this before writing any operator prompt.**
+  Saad opened `deploy-staging-a1e729ff-prompt.md` and its gate step told Claude Code to wait on run
+  **33907329688 for `a1e729ff`** — the exact tree that had already failed with 35 failures and 27
+  pending. Verified at the time: `a1e729ff` is an ancestor of HEAD, 37 commits behind, and contains
+  **none** of the five gate fixes (`787708f4`, `4224dbec`, `10587bbb`, `2632ff3d`, `3337b141`) and none
+  of pharmacy P1. Caught before anything reached Azure.
+  **This is the same failure as the 05:00 stale push, in a new costume.** A prompt file records a SHA
+  that is right when written and wrong an hour later, and the person running it cannot tell. Naming the
+  run id is the same bug twice over: a run id implies a SHA.
+  **Fix, applied:** `DevFathom hub/deploy-staging.md` is now the only deploy prompt. It names no commit
+  — it derives `SHA=$(git rev-parse HEAD)` from the worktree, pushes the tip, and finds its gate run by
+  **matching `headSha` to that SHA** (`gh run list --json databaseId,headSha,... --jq 'select(.headSha==...)'`),
+  explicitly refusing any run for another commit. It also asks the tree which migrations are new instead
+  of listing them, and checks the pharmacy routes. The four sha-pinned files
+  (`deploy-staging-a1e729ff-prompt.md`, `-6cc482c8-`, `-8a522bd8-`, `deploy-staging-prompt.md`) have been
+  overwritten with a SUPERSEDED notice pointing at it — they could not be deleted from the Cowork VM, and
+  leaving them readable was the whole hazard.
+  **Standing rule: an operator prompt never names a commit, a run id, or a migration list. It derives
+  them at run time.** The same applies to the QA and gate prompts — check them before reuse.
 - **21:25 — PHARMACY P1 IS COMPLETE. Code tip `3239460e`. Nothing is running. The push and the staging
   deploy are all that remain.**
   `3239460e` **MKT-03 + MKT-05 customer ordering** (`20260905060000`): one order model, two fulfilment
