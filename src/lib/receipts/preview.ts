@@ -1,11 +1,7 @@
 import { z } from 'zod';
-import { ReceiptLayoutSchema, type ReceiptLayout } from './configuration';
+import { ReceiptLayoutSchema, receiptTextSchema, type ReceiptLayout } from './configuration';
 
-const fact = z
-  .string()
-  .min(1)
-  .max(2000)
-  .regex(/^[\x20-\x7e\n]+$/);
+const fact = receiptTextSchema(2000).min(1);
 export const ReceiptPreviewFactsSchema = z
   .object({
     businessName: fact,
@@ -30,6 +26,9 @@ export function wrapReceiptText(value: string, columns: number): string[] {
   if (!Number.isInteger(columns) || columns < 1 || columns > 48)
     throw new Error('Invalid receipt columns.');
   return value.split('\n').flatMap((line) => {
+    // ASCII cell wrapping is retained byte-for-byte. Unicode logical lines stay
+    // intact for browser pre-wrap; UTF-16 slicing can split graphemes and Urdu joining.
+    if (/[^\x20-\x7e]/.test(line)) return [line];
     const result: string[] = [];
     while (line.length > columns) {
       const space = line.lastIndexOf(' ', columns);
