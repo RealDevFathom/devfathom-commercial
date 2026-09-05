@@ -134,6 +134,13 @@ export function SettingsContent() {
       {/* Process-local print bridge simulator (WHA-228). */}
       {isAdmin && <PrintRoutingSection />}
 
+      <Link
+        href="/settings/receipts"
+        className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Receipt designer and layout settings
+      </Link>
+
       {/* Account info */}
       <Card className="border-border/60">
         <CardHeader className="pb-3">
