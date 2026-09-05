@@ -1,11 +1,50 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 08:40 PKT (03:40 UTC) — Cowork supervisor check-in #228.
+Last reconciled: 2026-09-05 17:55 PKT (12:55 UTC) — Cowork supervisor check-in #252.
+
+## 12:55 UTC — all four gate causes repaired by hand; candidate ready to push
+
+Candidate code tip **`1d036c63`**. The gate failure on `54fcfb22` (run `33934389162`) had **four**
+causes, not three, and **none was a product defect**. The three repair lanes dispatched at 03:38 turned
+out to be redundant: each woke, found its fix already composed on 09-04 and already inside
+`origin/restaurantv2` (`2632ff3d` qa.yml CREATEROLE, `787708f4` M3 allowlist, `10587bbb` cold-chain
+fixture, `d308800d` anon allowlist), and closed with an acknowledgement. Their branches
+(`WHA-gate-expiring-fixture`, `WHA-gate-reports-mock-drift`, `WHA-gate-ci-db-env-1341-recovery`) all
+still sit at base `25aae5ad` with no commits. The supervisor therefore repaired the four live causes
+directly rather than dispatching a fourth round — cheaper and faster than another lane cycle.
+
+1. **Five pending assertions — CI env wiring.** `customer-ordering.db.test.ts` self-skips unless
+   `PHARMACY_ORDERING_TEST_OWNER_DATABASE_URL` exists (its runtime side already falls back to
+   `TEST_DATABASE_URL`, so it needs only the owner URL); `reference-connector-automation.db.test.ts`
+   self-skips unless `WHA1339_TEST_RUNTIME_DATABASE_URL` exists. Both are now set in `qa.yml` beside the
+   existing owner/runtime URLs. **This was never the CREATEROLE problem** — neither suite reached its
+   runtime-role assertion. Fix the workflow, never the guard.
+2. **`supplier-action-links.test.ts` — a dated fixture that expired mid-run.** The link was issued with
+   `expiresAt: 2026-09-05T00:00:00Z` and the gate ran after 01:00Z. Expiry now derives from the run clock
+   (`LINK_TTL_MS`), and the deliberately-late submission uses `2 × LINK_TTL_MS`, so no date can ever
+   break this suite again. **Standing rule: a test fixture never hard-codes a date it must outlive.**
+3. **`pharmacy/reports/page.test.tsx` — mock drift.** `page.tsx:106` calls `packAuthenticationFlags`;
+   the mocked caller did not provide it. The page renders an empty flag list correctly
+   (`authenticationFlags.length ? … : empty-state`), so the mock returns `[]`.
+   `acknowledgePackAuthenticationFlag` is mocked alongside it to stop the same drift recurring.
+4. **`status.md` failed prettier-check.** Reformatted; re-run Prettier after every status edit.
+
+**Local verification is limited on the Cowork VM by design.** Prettier passes on all four files. `vitest`
+cannot run there at all (`MODULE_NOT_FOUND` on the rolldown native binding — `node_modules` were
+installed on macOS, the mount is a Linux VM), and `tsc --noEmit` is OOM-killed (exit 137). **The cloud
+gate is the authority.** Next step is Saad pushing the tip and a fresh sha-agnostic gate read.
+
+**Push the TIP, never a pinned sha. Use `DevFathom hub/deploy-staging.md` and nothing else.**
+
+---
+
+Prior entry: Cowork supervisor check-in #228.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+
 - **01:16 UTC — CLOUD GATE FAILED on the pushed candidate `54fcfb22` (run `33934389162`, headSha verified).**
   `vitest=1, prettier-check=123, numFailedTests=2, numFailedTestSuites=4, numPendingTests=5`. **Three causes,
   none of them a product defect.** Three repair lanes dispatched 03:38 (the bridge to the Mac was down
@@ -198,7 +237,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   acknowledge/snooze audited and immutable under RLS; migration 20260904190000 applies before the
   195000–198000 set).
   **Composition note — two things learned here.** (1) `git apply --cached --3way` sometimes refuses a
-  lane's *newly added* files with "does not exist in index"; the remedy is to let the modified files
+  lane's _newly added_ files with "does not exist in index"; the remedy is to let the modified files
   apply, then `git checkout <sha> -- <path>` each added path (they cannot collide, they are new). (2)
   WHA-1314 collided with the RX-08 lane on `src/server/routers/pharmacy-reports.ts` at **two purely
   additive points** — the `../trpc` import line and the schema/helper block. Because 1314 had already
@@ -257,14 +296,14 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   Also composed: `7968f6c3` RX-07 refill schedules + bilingual medication cards (30 tablets once daily →
   reminder day 27; partial fills shorten it).
 - **Compose rule proven twice today:** a lane's commit does not need to sit on the tip — `git diff sha^ sha
-  | git apply --3way` composes any parent — but once several schema lanes land, a stale-based schema
+| git apply --3way` composes any parent — but once several schema lanes land, a stale-based schema
   commit WILL conflict on `prisma/schema.prisma`. Then ask the lane for a FRESH commit on the tip in a NEW
   worktree (applying its own diff into it), never a rebase: the lane contract forbids rebase/merge/push and
   an agent correctly refused when I once said otherwise. WHA-1314 (anomaly signals, `4966bf7e`) is
   re-doing exactly that, keeping migration prefix 20260904190000.
 - **CLOUD GATE on `a1e729ff` FAILED (run 33907329688, 24m04s) — five root causes, three still open.**
   The aggregate assertion is `vitest=1, prettier-check=123, numFailedTests=4, numFailedTestSuites=14,
-  numPendingTests=27; require numeric zero` — note **pending counts as failure**, so a skipped
+numPendingTests=27; require numeric zero` — note **pending counts as failure**, so a skipped
   acceptance assertion fails the gate exactly like a failing one. Causes: (1) `tests/restaurant-m3-governance.test.ts:561`
   the M3 table allowlist pins 159 tables but the schema now has 164 — the five catering tables
   (`20260904133000`) were never added to it → **WHA-1327** (6df3ac4a); (2) vertical scattered-conditional
@@ -408,13 +447,13 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   `in_review`, coordination only; QA8's failed reporting path stays parked. No push, merge, deploy or
   cloud change occurred; product and release state did not change.
 
-  | Group / issue | Owner | Workspace id / branch | Private commit | Delivery evidence and gap |
-  |---|---|---|---|---|
-  | A / WHA-1307 / [#79](https://github.com/WhatTheStack1/devfathom-commercial/issues/79) | Codex Restaurant Fix Engineer 4 | `ad761c77-821d-4426-89f6-2e64f0e03d44` / `codex/WHA-1307-ci-A` | `02a9f92ef61150bf9b70111478d94aa519f7a213` | Five owned RLS test/helper files; positive opt-in disposable-DB guard; 27 assertions unexecuted; Prettier/ESLint/typecheck unavailable. |
-  | B / WHA-1308 / [#80](https://github.com/WhatTheStack1/devfathom-commercial/issues/80) | Codex Restaurant Finance Engineer | `96886047-ab1c-428d-9a68-f6713c0ad9e2` / `codex/WHA-1308-ci-B` | `dc71f71a49949aa1ad4f9fac00187435c92e277a` | `tenders.ts` plus loyalty-lifecycle test; frozen tax-exclusive `quote.net` earn basis; tests/statics unexecuted. |
-  | C / WHA-1309 / [#81](https://github.com/WhatTheStack1/devfathom-commercial/issues/81) | Codex Product Engineer | `549805f1-95b9-4c15-8610-1a7d8e2ae46a` / `codex/WHA-1309-ci-C` | `15c1a6f27d0161efb0eb877b591c4579df178219` | Terminal rollback DB test only; runtime test unexecuted. |
-  | D / WHA-1310 / [#82](https://github.com/WhatTheStack1/devfathom-commercial/issues/82) | Codex Product Engineer 2 | `517f75e8-ec9a-4b15-94a2-1d2f3279d194` / `codex/WHA-1310-ci-D` | `94b86dd87324d767953f0c3b171ec64b7d5f6da6` | Pharmacy-finance fixture `saleable: true`; touched Prettier/ESLint pass; typecheck exit 2 from missing generated Prisma artifacts; DB/CI unexecuted. |
-  | E / WHA-1311 / [#83](https://github.com/WhatTheStack1/devfathom-commercial/issues/83) | Codex Product Engineer 3 | `302f594c-4972-405f-86ee-50664e38e8bb` / `codex/WHA-1311-ci-E` | `f646d296d0051b7429ce4e591206d61137543a00` | Stock-signals fixture adds ordered 2–8 C range; touched Prettier/ESLint pass; same typecheck environment blocker; DB/CI unexecuted. |
+  | Group / issue                                                                         | Owner                             | Workspace id / branch                                          | Private commit                             | Delivery evidence and gap                                                                                                                            |
+  | ------------------------------------------------------------------------------------- | --------------------------------- | -------------------------------------------------------------- | ------------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------- |
+  | A / WHA-1307 / [#79](https://github.com/WhatTheStack1/devfathom-commercial/issues/79) | Codex Restaurant Fix Engineer 4   | `ad761c77-821d-4426-89f6-2e64f0e03d44` / `codex/WHA-1307-ci-A` | `02a9f92ef61150bf9b70111478d94aa519f7a213` | Five owned RLS test/helper files; positive opt-in disposable-DB guard; 27 assertions unexecuted; Prettier/ESLint/typecheck unavailable.              |
+  | B / WHA-1308 / [#80](https://github.com/WhatTheStack1/devfathom-commercial/issues/80) | Codex Restaurant Finance Engineer | `96886047-ab1c-428d-9a68-f6713c0ad9e2` / `codex/WHA-1308-ci-B` | `dc71f71a49949aa1ad4f9fac00187435c92e277a` | `tenders.ts` plus loyalty-lifecycle test; frozen tax-exclusive `quote.net` earn basis; tests/statics unexecuted.                                     |
+  | C / WHA-1309 / [#81](https://github.com/WhatTheStack1/devfathom-commercial/issues/81) | Codex Product Engineer            | `549805f1-95b9-4c15-8610-1a7d8e2ae46a` / `codex/WHA-1309-ci-C` | `15c1a6f27d0161efb0eb877b591c4579df178219` | Terminal rollback DB test only; runtime test unexecuted.                                                                                             |
+  | D / WHA-1310 / [#82](https://github.com/WhatTheStack1/devfathom-commercial/issues/82) | Codex Product Engineer 2          | `517f75e8-ec9a-4b15-94a2-1d2f3279d194` / `codex/WHA-1310-ci-D` | `94b86dd87324d767953f0c3b171ec64b7d5f6da6` | Pharmacy-finance fixture `saleable: true`; touched Prettier/ESLint pass; typecheck exit 2 from missing generated Prisma artifacts; DB/CI unexecuted. |
+  | E / WHA-1311 / [#83](https://github.com/WhatTheStack1/devfathom-commercial/issues/83) | Codex Product Engineer 3          | `302f594c-4972-405f-86ee-50664e38e8bb` / `codex/WHA-1311-ci-E` | `f646d296d0051b7429ce4e591206d61137543a00` | Stock-signals fixture adds ordered 2–8 C range; touched Prettier/ESLint pass; same typecheck environment blocker; DB/CI unexecuted.                  |
 
 - **Shared-workspace incident history (17:49–18:02 UTC):** all five initial runs inherited parent
   WHA-1239 workspace `e2805e6f-eaaf-473f-8aae-89094188d23b` through `reuse_existing`; their `running`
@@ -473,6 +512,7 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   test, tsc 8 GiB + touched vitest + Prettier/ESLint + `git diff --check`, `Fixes #<n>`, no push).
 
 ### Rules that must survive the handoff
+
 - Owner constraints: never push/merge/deploy without explicit owner authorization (only
   `restaurantv2` pushes and owner-run staging deploys have been authorized; each staging deploy is
   authorized separately); never touch `main` or production; no over-engineering; never delete or skip
@@ -497,9 +537,10 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
   workaround. Validate Prisma only when schema changed. Never rename a deployed migration; two NEW
   migrations must not share a timestamp prefix.
 - Evidence and QA artefacts live outside the repo (`/Users/Saad/Developer/paperclip-worktrees/
-  _gate-evidence/`, `_qa-evidence/`). Never compose them.
+_gate-evidence/`, `_qa-evidence/`). Never compose them.
 
 ### Next steps, in order
+
 1. Keep WHA-1307 through WHA-1311 unassigned `in_review` until exact-tree cloud/runtime validation
    resolves each private delivery hold; `git diff --check` alone is insufficient. WHA-1311's pending
    confirmation is not composition approval. The supervisor composes only accepted, verified single
@@ -512,10 +553,12 @@ Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for hi
 4. Green cloud gate + no open S1/S2 → owner decides production (needs the production preflight, the
    image gate with Docker up, DNS for production hostnames, and `promote-production.yml` with a
    staging-approved digest).
+
 - Still pending from the owner: confirm the D02/D04/D10 defaults, decide D09/D01 and the two numbers
   (materiality threshold, share-of-PO trigger); SPF record for Brevo; Google Wallet issuer (WHA-268).
 
 ### Companion documents
+
 - Cowork project doc `claude/devfathom-status.md` (same facts, Claude-side pointer) and the
   "DevFathom Delivery Board" artifact; owner prompts in `DevFathom hub/`
   (`deploy-staging-6cc482c8-prompt.md`, `staging-repair-pg_trgm-prompt.md`,
