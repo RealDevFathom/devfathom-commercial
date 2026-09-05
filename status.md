@@ -1,11 +1,38 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 06:10 PKT (01:10 UTC) — Cowork supervisor check-in #216.
+Last reconciled: 2026-09-05 08:40 PKT (03:40 UTC) — Cowork supervisor check-in #228.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **01:16 UTC — CLOUD GATE FAILED on the pushed candidate `54fcfb22` (run `33934389162`, headSha verified).**
+  `vitest=1, prettier-check=123, numFailedTests=2, numFailedTestSuites=4, numPendingTests=5`. **Three causes,
+  none of them a product defect.** Three repair lanes dispatched 03:38 (the bridge to the Mac was down
+  01:06-03:37, so dispatch waited ~2.5h; nothing was lost).
+  1. **`WHA-gate-ci-db-env` (critical, Fix Engineer 1).** Five acceptance assertions SKIPPED, and pending
+     fails this gate exactly like failing. `customer-ordering.db.test.ts:203/232/247` self-skip because
+     **`PHARMACY_ORDERING_TEST_OWNER_DATABASE_URL`** is never set (runtime falls back to
+     `TEST_DATABASE_URL`, the owner URL does not); `reference-connector-automation.db.test.ts:35/83`
+     self-skip because **`WHA1339_TEST_RUNTIME_DATABASE_URL`** is never set. Same class as WHA-1329 —
+     fix `.github/workflows/qa.yml`, never the guard. Neither suite reached its runtime-role assertion,
+     so this is env wiring, not the CREATEROLE problem.
+  2. **`WHA-gate-expiring-fixture` (Fix Engineer 7). A test with an expiry date baked into it.**
+     `supplier-action-links.test.ts:76` (invariant 24) threw `INVALID_LINK` because the fixture issues its
+     link with a **hard-coded absolute `expiresAt: 2026-09-05T00:00:00Z`** (line 66) and the run happened
+     after 01:00Z. The product code is right; the test passed yesterday and fails today. Fix: expiry
+     relative to `Date.now()`, and the negative cases pinned to an explicitly PAST relative time.
+     **This is the same failure as the hard-coded sha, in a different costume** — a value that is true
+     when written and false an hour later, with nothing to warn you.
+  3. **`WHA-gate-reports-mock-drift` (Product Engineer 3). My composition's doing.**
+     `pharmacy/reports/page.test.tsx:111` fails rendering because the page's `Promise.allSettled` tuple
+     now also calls `expiryAdvice` (AI-02) and `packAuthenticationFlags` (SAFE-05) after the union merge,
+     and the caller mock never learned about them. **Fix the test, not the page** — and the assertion
+     should end up stronger, since catching this drift is its whole job.
+- **Bridge outage 01:06-03:37 UTC.** The `mcp__remote-devices__*` tools flapped in and out the whole time
+  while every actual call failed. **Lesson: tool availability is not a connection — only a successful call
+  counts.** The right behaviour was one probe per check-in, a widening interval (10 → 15 → 20 → 25 min),
+  and the dispatch pre-written so it fired in a single call the moment contact returned. Nothing decayed.
 - **01:05 UTC — PUSHED. `origin/restaurantv2` is now `54fcfb22`** (`a1e729ff..54fcfb22`, 467 objects).
   This is the first time the remote has carried the restaurant-completion programme, the a11y
   programme, the five gate repairs and the whole pharmacy P0+P1 programme. The gate fires on push to
