@@ -1,5 +1,65 @@
 # WHA-1354 — shared receipt layout handoff
 
+## Coordination follow-up, September 5
+
+This section supersedes the initial-pass renderer/Pharmacy limitations below.
+Follow-up base: `806f1138395c595ca27e3eb086581b9961fb441e`; original base:
+`fe1e3e383c8b966cdb68669ba5366db00fe2320a`. Assigned branch and clean tree verified.
+
+- `src/lib/restaurant/printing/contract.ts` adds required
+  `ClaimedPrintJob.claimToken: string`. WHA-1360 signs/validates the opaque 64 lowercase
+  hex HMAC; WHA-1356 echoes it. Stable AUTH_SECRET and ACK lease enforcement belong
+  to those owners. This type alone supplies no security enforcement.
+- The same file exports `ReceiptPrintSnapshotSchema` / `ReceiptPrintSnapshot` and
+  optional `PrintDocument.receiptSnapshot: { layout, facts }`, restricted to RECEIPT.
+  Fields use existing `ReceiptLayoutSchema` and `ReceiptPreviewFactsSchema`.
+  Legacy document envelope fields remain required. With a snapshot, its complete
+  settled facts are authoritative; legacy lines/title/footer are not rendered.
+  Callers must construct the snapshot from authorized saved invoice facts and persist
+  it with the job. Parsing copies the input; subsequent preference changes cannot
+  affect the captured snapshot. Consumer integration remains pending.
+- `src/lib/restaurant/printing/esc-pos.ts` validates input and renders snapshot
+  text using `buildReceiptPreview`, at 32/48 columns for 58/80 mm. Legacy ASCII bytes
+  retain the golden fixture. Unsupported glyphs and printer control characters now
+  throw instead of becoming question marks. Owners must surface this failure and
+  offer a browser/OS-rendered path for Urdu; that fallback is not implemented here.
+  Existing initialization/cut behavior remains device-acceptance gated.
+- `prisma/schema.prisma` and
+  `prisma/migrations/20260905190000_pharmacy_receipt_layout/migration.sql` add
+  `PharmacyBranch.receiptLayout Json?` and `receiptLayoutRevision Int @default(0)`
+  on `pharmacy_branches`. No existing settings column was available. Constraints
+  require object-or-SQL-NULL layout and nonnegative revision. Existing RLS policies
+  remain unchanged; migration unexecuted. WHA-1358 owns the adapter: derive tenant
+  and Pharmacy branch from authorization, enforce Pharmacy module/capabilities on
+  read/write, use tenant/branch/active/revision-qualified atomic updates, increment
+  revision, retain errors, and use `readReceiptLayout` (defaults only for SQL NULL).
+- New tests: `src/lib/restaurant/printing/receipt-snapshot.test.ts`.
+
+Follow-up verification (no source edits after these checks, apart from formatting):
+
+- `bunx vitest run src/lib/restaurant/printing/receipt-snapshot.test.ts src/lib/restaurant/printing/printing.test.ts src/lib/receipts/configuration.test.ts`:
+  **27 passed, 0 failed, 0 skipped**, 3 files passed. Covers exact preview bytes,
+  both widths, mandatory facts, copied snapshots, legacy golden bytes, invalid
+  document type, missing facts, commands and unsupported Unicode.
+- `bunx prisma validate` and `bunx prisma generate`: exit 0.
+- `bunx tsc --noEmit -p "$PAPERCLIP_RUN_SCRATCH_DIR/receipt-contract-tsconfig.json"`:
+  exit 2, **1 error**: `service.ts(187,5): error TS2741: Property 'claimToken' is missing`.
+  Scratch config extends repository tsconfig, disables incremental output, includes
+  next-env, src/types, vitest.setup, changed printing TS and service.ts. Producer
+  is exclusively WHA-1360-owned; blocked pending that owner's matching change.
+- `bunx eslint src/lib/restaurant/printing/contract.ts src/lib/restaurant/printing/esc-pos.ts src/lib/restaurant/printing/receipt-snapshot.test.ts`:
+  no diagnostics. `bunx prettier --check` with those same paths: all matched files
+  formatted. `git diff --check`: exit 0. Prior unchanged UI evidence remains applicable;
+  prior **4 skipped database tests** remain pending. No migration/database execution,
+  full build, UI service, browser, real hardware or network discovery performed.
+
+Chief of Staff must integrate WHA-1360's producer and WHA-1356's token echo together,
+coordinate WHA-1355/WHA-1358 snapshot consumers, supply isolated migration/RLS tests
+and assign independent review plus approved staging visual/build acceptance. Keep
+issue blocked until these named owner actions occur. Revert the follow-up application
+commit if needed; retain additive database columns/data. Do not deploy the required
+token contract without its producer/consumer changes.
+
 Implementation prepared on the assigned private branch, based on
 `fe1e3e383c8b966cdb68669ba5366db00fe2320a`. Initial working tree was clean.
 No POS callers, ESC/POS renderer, bridge, transport, camera, or pharmacy sale code changed.
