@@ -2,25 +2,10 @@ import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { cameraGatewayRuntime } from '@/lib/restaurant/camera-gateway-runtime';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
-
-const MAX_MANIFEST_BYTES = 256 * 1024;
-const MAX_SEGMENT_BYTES = 16 * 1024 * 1024;
-const SAFE_SEGMENT = /^[A-Za-z0-9._~!$&'()+,;=@%-]+$/;
+import { CameraTransportError, rewriteCameraManifest } from '@/lib/restaurant/cameras/mediamtx';
 
 function response(message: string, status: number) {
   return new Response(message, { status, headers: { 'Cache-Control': 'no-store' } });
-}
-
-async function boundedFetch(url: URL, maximum: number) {
-  const upstream = await fetch(url, { redirect: 'manual', cache: 'no-store' });
-  if (upstream.status >= 300 && upstream.status < 400)
-    throw new Error('Gateway redirects are refused.');
-  if (!upstream.ok) throw new Error('Gateway request failed.');
-  const declared = Number(upstream.headers.get('content-length') ?? 0);
-  if (declared > maximum) throw new Error('Gateway response is too large.');
-  const bytes = new Uint8Array(await upstream.arrayBuffer());
-  if (bytes.byteLength > maximum) throw new Error('Gateway response is too large.');
-  return bytes;
 }
 
 export async function GET(request: Request, context: { params: Promise<{ cameraId: string }> }) {
@@ -41,6 +26,7 @@ export async function GET(request: Request, context: { params: Promise<{ cameraI
     const grant = await db.restaurantCameraStreamGrant.findUnique({ where: { id: grantId } });
     if (
       !grant ||
+      grant.organizationId !== organizationId ||
       grant.expiresAt <= new Date() ||
       grant.revokedAt ||
       grant.viewerId !== actor.session.user.id
@@ -48,7 +34,8 @@ export async function GET(request: Request, context: { params: Promise<{ cameraI
       return { status: 401 as const };
     if (grant.cameraId !== cameraId) return { status: 403 as const };
     const camera = await db.restaurantCamera.findUnique({ where: { id: cameraId } });
-    if (!camera || camera.organizationId !== organizationId) return { status: 403 as const };
+    if (!camera || !camera.enabled || camera.organizationId !== organizationId)
+      return { status: 403 as const };
     const gateway = await db.restaurantCameraGateway.findUnique({
       where: { id: camera.gatewayId },
     });
@@ -60,44 +47,40 @@ export async function GET(request: Request, context: { params: Promise<{ cameraI
       gateway.revokedAt
     )
       return { status: 403 as const };
-    return { status: 200 as const, gateway };
+    return { status: 200 as const, gateway, camera, expiresAt: grant.expiresAt };
   });
   if (state.status !== 200)
     return response(state.status === 401 ? 'Unauthorized' : 'Forbidden', state.status);
 
-  const base = new URL(state.gateway.baseUrl);
-  const segment = requestUrl.searchParams.get('segment');
-  const upstream = segment
-    ? new URL(
-        `cameras/${encodeURIComponent(cameraId)}/live/${SAFE_SEGMENT.test(segment) ? segment : '__invalid__'}`,
-        base
-      )
-    : new URL(`cameras/${encodeURIComponent(cameraId)}/live/index.m3u8`, base);
-  if (upstream.origin !== base.origin || (segment && !SAFE_SEGMENT.test(segment)))
-    return response('Bad request', 400);
+  if (cameraGatewayRuntime.mode !== 'mediamtx') return response('Camera gateway unavailable', 503);
   try {
-    const bytes = await boundedFetch(upstream, segment ? MAX_SEGMENT_BYTES : MAX_MANIFEST_BYTES);
-    if (segment)
-      return new Response(bytes, {
-        headers: { 'Content-Type': 'video/mp2t', 'Cache-Control': 'private, no-store' },
-      });
-    const text = new TextDecoder().decode(bytes);
+    const resource = await cameraGatewayRuntime.transport.read(
+      {
+        organizationId,
+        branchId: state.camera.branchId,
+        gatewayId: state.gateway.id,
+        cameraId,
+        baseUrl: state.gateway.baseUrl,
+      },
+      requestUrl.searchParams.get('segment') ?? 'index.m3u8'
+    );
+    if (state.expiresAt <= new Date()) return response('Unauthorized', 401);
     const prefix = `/api/restaurant/cameras/${encodeURIComponent(cameraId)}/stream?grant=${encodeURIComponent(grantId)}&segment=`;
-    const rewritten = text
-      .split('\n')
-      .map((line) =>
-        !line || line.startsWith('#')
-          ? line
-          : `${prefix}${encodeURIComponent(line.split('/').pop() ?? '')}`
-      )
-      .join('\n');
-    return new Response(rewritten, {
+    const body = resource.manifest
+      ? rewriteCameraManifest(
+          resource.bytes.toString('utf8'),
+          (name) => `${prefix}${encodeURIComponent(name)}`
+        )
+      : new Uint8Array(resource.bytes);
+    return new Response(body, {
       headers: {
-        'Content-Type': 'application/vnd.apple.mpegurl',
+        'Content-Type': resource.contentType,
         'Cache-Control': 'private, no-store',
+        'X-Content-Type-Options': 'nosniff',
       },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof CameraTransportError) return response(error.code, 502);
     return response('Gateway unavailable', 502);
   }
 }
