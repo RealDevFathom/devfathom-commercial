@@ -80,8 +80,11 @@ const suffix = randomBytes(6).toString('hex');
 const PURGED_ORG = `wha1209_purge_${suffix}`;
 const LIVE_ORG = `wha1209_live_${suffix}`;
 const BRANCH_ID = `wha1209_branch_${suffix}`;
+const LIVE_BRANCH_ID = `wha1209_live_branch_${suffix}`;
 const LOCATION_ID = `wha1209_loc_${suffix}`;
 const JOB_ID = `wha1209_job_${suffix}`;
+const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
+const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
 
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 
@@ -110,6 +113,30 @@ async function seedTenant(db: ScopedDb, organizationId: string, status: string) 
   );
 }
 
+async function seedRegulatoryProfile(
+  db: ScopedDb,
+  id: string,
+  organizationId: string,
+  branchId: string
+) {
+  await db.$executeRawUnsafe(
+    `INSERT INTO pharmacy_branch_regulatory_profiles (
+       id, "organizationId", "branchId", version, "effectiveFrom", "provinceCode",
+       "jurisdictionRuleSetId", premises, "licenceCategory", "licenceNumber",
+       "licenceValidFrom", "licenceValidTo", "licenceEvidenceFileRef", "permittedSchedules",
+       "qualifiedPersonRegistration", "qualifiedPersonValidFrom", "qualifiedPersonValidTo",
+       "qualifiedPersonCoverageRosterRef", "fiscalStatus", "retentionPolicy"
+     ) VALUES (
+       $1, $2, $3, 1, '2026-09-01', 'PK-PB', 'pk_pb_provisional_v1', '{}'::jsonb,
+       'PROVISIONAL', $1, '2026-01-01', '2027-01-01', '/test/licence', ARRAY[]::text[],
+       'PC-TEST', '2026-01-01', '2027-01-01', '/test/roster', 'UNCONFIRMED', '{}'::jsonb
+     )`,
+    id,
+    organizationId,
+    branchId
+  );
+}
+
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 describeIfDatabase('tenant purge, against PostgreSQL', () => {
@@ -129,6 +156,14 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         BRANCH_ID,
         PURGED_ORG
       );
+      await db.$executeRawUnsafe(
+        `INSERT INTO pharmacy_branches (id, "organizationId", code, name, "addressLine", city, "provinceCode", "updatedAt")
+         VALUES ($1, $2, $1, 'Live branch', '14 Mall Road', 'Lahore', 'PB', now())`,
+        LIVE_BRANCH_ID,
+        LIVE_ORG
+      );
+      await seedRegulatoryProfile(db, PURGED_PROFILE_ID, PURGED_ORG, BRANCH_ID);
+      await seedRegulatoryProfile(db, LIVE_PROFILE_ID, LIVE_ORG, LIVE_BRANCH_ID);
       await db.$executeRawUnsafe(
         `INSERT INTO pharmacy_stock_locations (id, "organizationId", "branchId", code, name, kind, "updatedAt")
          VALUES ($1, $2, $3, $1, 'Main store', 'STORE', now())`,
@@ -150,14 +185,9 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         JOB_ID,
         PURGED_ORG
       );
-
-      // The worker claims the oldest job whose `scheduledAt` has come, so any
-      // job a previous suite or seed left QUEUED would be claimed ahead of this
-      // one. Defer them rather than deleting them: the queue is left intact, and
-      // `processPlatformJobs(1)` can only pick the job under test.
       await db.$executeRawUnsafe(
-        `UPDATE platform_jobs SET "scheduledAt" = now() + interval '1 day'
-         WHERE status = 'QUEUED' AND id <> $1`,
+        `UPDATE platform_jobs SET "scheduledAt" = '1900-01-01', "createdAt" = '1900-01-01'
+         WHERE id = $1`,
         JOB_ID
       );
     });
@@ -193,7 +223,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
 
     const [remaining] = await withPlatformDb((db) =>
       db.$queryRawUnsafe<Array<Record<string, bigint>>>(
-        `SELECT (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches,
+        `SELECT (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
+                (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches,
                 (SELECT count(*) FROM pharmacy_stock_locations WHERE "organizationId" = $1) AS locations,
                 (SELECT count(*) FROM pharmacy_onboarding_events WHERE "organizationId" = $1) AS events,
                 (SELECT count(*) FROM pharmacy_onboarding_states WHERE "organizationId" = $1) AS states`,
@@ -205,11 +236,21 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     // literals, so compare against BigInt(0) rather than 0n.
     const none = BigInt(0);
     expect(remaining).toEqual({
+      profiles: none,
       branches: none,
       locations: none,
       events: none,
       states: none,
     });
+
+    const [live] = await withPlatformDb((db) =>
+      db.$queryRawUnsafe<Array<Record<string, bigint>>>(
+        `SELECT (SELECT count(*) FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = $1) AS profiles,
+                (SELECT count(*) FROM pharmacy_branches WHERE "organizationId" = $1) AS branches`,
+        LIVE_ORG
+      )
+    );
+    expect(live).toEqual({ profiles: BigInt(1), branches: BigInt(1) });
 
     const organization = await withPlatformDb((db) =>
       db.organization.findUniqueOrThrow({
@@ -218,6 +259,66 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       })
     );
     expect(organization.status).toBe('PURGED');
+  });
+
+  it('keeps regulatory profiles append-only outside the exact purge context', async () => {
+    const role = await withPlatformDb(
+      (db) =>
+        db.$queryRaw<Array<{ rolsuper: boolean; rolbypassrls: boolean }>>`
+        SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user
+      `
+    );
+    expect(role[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+
+    await expect(
+      withPlatformDb((db) =>
+        db.$executeRawUnsafe(
+          `DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1`,
+          LIVE_PROFILE_ID
+        )
+      )
+    ).rejects.toThrow(/append-only/);
+
+    await expect(
+      withPlatformDb((db) =>
+        db.$executeRawUnsafe(
+          `UPDATE pharmacy_branch_regulatory_profiles SET "licenceNumber" = 'rewritten' WHERE id = $1`,
+          LIVE_PROFILE_ID
+        )
+      )
+    ).rejects.toThrow(/append-only/);
+
+    await expect(
+      withPlatformDb(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${PURGED_ORG}, true)`;
+        return db.$executeRawUnsafe(
+          `DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1`,
+          LIVE_PROFILE_ID
+        );
+      })
+    ).rejects.toThrow(/append-only/);
+
+    await withPlatformDb((db) =>
+      db.$executeRawUnsafe(
+        `UPDATE pharmacy_branch_regulatory_profiles SET "effectiveTo" = '2026-10-01' WHERE id = $1`,
+        LIVE_PROFILE_ID
+      )
+    );
+
+    const deletedRules = await withPlatformDb((db) =>
+      db.$executeRawUnsafe(
+        `DELETE FROM pharmacy_jurisdiction_rule_sets WHERE id = 'pk_pb_provisional_v1'`
+      )
+    );
+    expect(deletedRules).toBe(0);
+    const [rules] = await withPlatformDb(
+      (db) =>
+        db.$queryRaw<Array<{ count: bigint }>>`
+        SELECT count(*) AS count FROM pharmacy_jurisdiction_rule_sets
+        WHERE id = 'pk_pb_provisional_v1'
+      `
+    );
+    expect(rules.count).toBe(BigInt(1));
   });
 
   it('keeps the onboarding history append-only while the tenant exists', async () => {
@@ -252,6 +353,16 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     await withPlatformDb((db) =>
       db.$executeRawUnsafe(`DELETE FROM organizations WHERE id = $1`, LIVE_ORG)
     );
+
+    // Once the parent is gone, fixture teardown may remove the effective-dated
+    // profile without disabling its trigger, then remove its branch.
+    await withPlatformDb(async (db) => {
+      await db.$executeRawUnsafe(
+        `DELETE FROM pharmacy_branch_regulatory_profiles WHERE id = $1`,
+        LIVE_PROFILE_ID
+      );
+      await db.$executeRawUnsafe(`DELETE FROM pharmacy_branches WHERE id = $1`, LIVE_BRANCH_ID);
+    });
 
     const [after] = await withPlatformDb((db) =>
       db.$queryRawUnsafe<Array<{ count: bigint }>>(
