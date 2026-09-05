@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
-import { redirect, RedirectType } from 'next/navigation';
+import { PurchasingActionForm } from '../_components/action-form';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -127,7 +127,7 @@ export default async function PharmacySuppliersPage({
         kind: 'error',
       });
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function recordLicence(form: FormData) {
@@ -161,7 +161,7 @@ export default async function PharmacySuppliersPage({
         { supplier: supplierId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function setAuthorization(form: FormData) {
@@ -191,7 +191,7 @@ export default async function PharmacySuppliersPage({
         { supplier: supplierId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   return (
@@ -291,7 +291,7 @@ export default async function PharmacySuppliersPage({
             )}
 
             <SectionCard eyebrow="PUR-01" title="Add a supplier" titleLevel={2}>
-              <form action={createSupplier} className="grid gap-4 sm:grid-cols-2">
+              <PurchasingActionForm action={createSupplier} className="grid gap-4 sm:grid-cols-2">
                 <TextField
                   label="Trading name"
                   name="name"
@@ -327,7 +327,7 @@ export default async function PharmacySuppliersPage({
                 <div className="flex items-end sm:col-span-2">
                   <SubmitButton>Add supplier</SubmitButton>
                 </div>
-              </form>
+              </PurchasingActionForm>
               <p className="mt-3 text-sm text-text-muted">
                 A new supplier starts unauthorized and unlicensed, so it cannot be ordered from
                 until both are recorded. That is the PUR-01 gate, not a missing step.
@@ -348,8 +348,8 @@ function SupplierDetail({
 }: {
   supplier: SupplierSummary;
   notice: ReturnType<typeof noticeFrom>;
-  onRecordLicence: (form: FormData) => Promise<void>;
-  onSetAuthorization: (form: FormData) => Promise<void>;
+  onRecordLicence: (form: FormData) => Promise<string>;
+  onSetAuthorization: (form: FormData) => Promise<string>;
 }) {
   const supersedable = supplier.licences.filter((licence) => !licence.superseded);
   return (
@@ -386,13 +386,13 @@ function SupplierDetail({
           </p>
           {/* UX rule 15: the control is one action and it is never greyed out
               while the operator is clearly acting on it. */}
-          <form action={onSetAuthorization} className="mt-3">
+          <PurchasingActionForm action={onSetAuthorization} className="mt-3">
             <input name="supplierId" type="hidden" value={supplier.id} />
             <input name="authorized" type="hidden" value={supplier.authorized ? 'false' : 'true'} />
             <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
               {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
             </SubmitButton>
-          </form>
+          </PurchasingActionForm>
         </div>
       </SectionCard>
 
@@ -454,7 +454,7 @@ function SupplierDetail({
           </ul>
         )}
 
-        <form action={onRecordLicence} className="mt-5 grid gap-4 sm:grid-cols-2">
+        <PurchasingActionForm action={onRecordLicence} className="mt-5 grid gap-4 sm:grid-cols-2">
           <input name="supplierId" type="hidden" value={supplier.id} />
           <TextField label="Licence type" name="licenceType" notice={notice} required />
           <TextField label="Licence number" name="licenceNumber" notice={notice} required />
@@ -523,7 +523,7 @@ function SupplierDetail({
             label="Gate"
             value="Only a verified, unexpired licence makes a supplier orderable."
           />
-        </form>
+        </PurchasingActionForm>
       </SectionCard>
     </>
   );

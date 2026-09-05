@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
-import { redirect, RedirectType } from 'next/navigation';
+import { PurchasingActionForm } from '../_components/action-form';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -175,7 +175,7 @@ export default async function PharmacyOrdersPage({
         kind: 'error',
       });
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function submitRequisition(form: FormData) {
@@ -199,7 +199,7 @@ export default async function PharmacyOrdersPage({
         { req: requisitionId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function recordQuote(form: FormData) {
@@ -252,7 +252,7 @@ export default async function PharmacyOrdersPage({
         { req: requisitionId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   /**
@@ -324,7 +324,7 @@ export default async function PharmacyOrdersPage({
         { req: requisitionId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function createDirectOrder(form: FormData) {
@@ -361,7 +361,7 @@ export default async function PharmacyOrdersPage({
         kind: 'error',
       });
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function advanceOrder(form: FormData) {
@@ -401,7 +401,7 @@ export default async function PharmacyOrdersPage({
         { po: purchaseOrderId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   if (loadError || !workspace) {
@@ -512,7 +512,7 @@ export default async function PharmacyOrdersPage({
                 steps={[{ label: 'Open the medicine register', href: '/pharmacy' }]}
               />
             ) : (
-              <form action={createRequisition} className="space-y-4">
+              <PurchasingActionForm action={createRequisition} className="space-y-4">
                 <div className="grid gap-4 sm:grid-cols-3">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
@@ -543,7 +543,7 @@ export default async function PharmacyOrdersPage({
                 </fieldset>
                 <TextAreaField label="Note" name="note" notice={notice} />
                 <SubmitButton>Draft requisition</SubmitButton>
-              </form>
+              </PurchasingActionForm>
             )}
           </SectionCard>
         </div>
@@ -624,7 +624,7 @@ export default async function PharmacyOrdersPage({
                 steps={[{ label: 'Open the medicine register', href: '/pharmacy' }]}
               />
             ) : (
-              <form action={createDirectOrder} className="space-y-4">
+              <PurchasingActionForm action={createDirectOrder} className="space-y-4">
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
@@ -683,7 +683,7 @@ export default async function PharmacyOrdersPage({
                 </div>
                 <TextAreaField label="Note" name="note" notice={notice} />
                 <SubmitButton>Draft order</SubmitButton>
-              </form>
+              </PurchasingActionForm>
             )}
           </SectionCard>
         </div>
@@ -709,9 +709,9 @@ function RequisitionDetailPanel({
   comparisons: LineComparison[];
   workspace: PurchasingWorkspace;
   notice: Notice | null;
-  onSubmit: (form: FormData) => Promise<void>;
-  onRecordQuote: (form: FormData) => Promise<void>;
-  onOrderFromQuote: (form: FormData) => Promise<void>;
+  onSubmit: (form: FormData) => Promise<string>;
+  onRecordQuote: (form: FormData) => Promise<string>;
+  onOrderFromQuote: (form: FormData) => Promise<string>;
 }) {
   return (
     <>
@@ -745,10 +745,10 @@ function RequisitionDetailPanel({
           ))}
         </ul>
         {requisition.status === 'DRAFT' ? (
-          <form action={onSubmit} className="mt-4">
+          <PurchasingActionForm action={onSubmit} className="mt-4">
             <input name="requisitionId" type="hidden" value={requisition.id} />
             <SubmitButton>Submit requisition</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
       </SectionCard>
 
@@ -823,7 +823,10 @@ function RequisitionDetailPanel({
               The order is built from this requisition&rsquo;s lines at the chosen quote&rsquo;s
               terms, so what you approve is what the comparison explained.
             </p>
-            <form action={onOrderFromQuote} className="mt-3 grid gap-4 sm:grid-cols-2">
+            <PurchasingActionForm
+              action={onOrderFromQuote}
+              className="mt-3 grid gap-4 sm:grid-cols-2"
+            >
               <input name="requisitionId" type="hidden" value={requisition.id} />
               <SelectField
                 emptyHint="No quotes recorded yet."
@@ -853,13 +856,13 @@ function RequisitionDetailPanel({
               <div className="sm:col-span-2">
                 <SubmitButton>Raise purchase order from this quote</SubmitButton>
               </div>
-            </form>
+            </PurchasingActionForm>
           </div>
         ) : null}
       </SectionCard>
 
       <SectionCard eyebrow="PUR-02" title="Record a quote" titleLevel={2}>
-        <form action={onRecordQuote} className="space-y-4">
+        <PurchasingActionForm action={onRecordQuote} className="space-y-4">
           <input name="requisitionId" type="hidden" value={requisition.id} />
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <SelectField
@@ -954,7 +957,7 @@ function RequisitionDetailPanel({
           </div>
           <TextAreaField label="Quote note" name="quoteNote" notice={notice} />
           <SubmitButton>Record quote</SubmitButton>
-        </form>
+        </PurchasingActionForm>
       </SectionCard>
     </>
   );
@@ -983,7 +986,7 @@ function OrderDetailPanel({
   } | null;
   actorId: string;
   notice: Notice | null;
-  onAdvance: (form: FormData) => Promise<void>;
+  onAdvance: (form: FormData) => Promise<string>;
 }) {
   // PUR-02 segregation of duties, stated before the button is pressed rather
   // than as a refusal afterwards.
@@ -1094,11 +1097,11 @@ function OrderDetailPanel({
 
       <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
         {order.status === 'DRAFT' ? (
-          <form action={onAdvance}>
+          <PurchasingActionForm action={onAdvance}>
             <input name="purchaseOrderId" type="hidden" value={order.id} />
             <input name="action" type="hidden" value="submit" />
             <SubmitButton>Submit for approval</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
 
         {order.status === 'SUBMITTED' ? (
@@ -1108,7 +1111,7 @@ function OrderDetailPanel({
               duties rule — ask a second person to decide.
             </p>
           ) : (
-            <form action={onAdvance} className="flex flex-wrap items-end gap-3">
+            <PurchasingActionForm action={onAdvance} className="flex flex-wrap items-end gap-3">
               <input name="purchaseOrderId" type="hidden" value={order.id} />
               <TextField
                 className="min-w-56"
@@ -1123,12 +1126,12 @@ function OrderDetailPanel({
               <SubmitButton name="action" value="reject" variant="destructive">
                 Reject
               </SubmitButton>
-            </form>
+            </PurchasingActionForm>
           )
         ) : null}
 
         {order.status === 'APPROVED' ? (
-          <form action={onAdvance}>
+          <PurchasingActionForm action={onAdvance}>
             <input name="purchaseOrderId" type="hidden" value={order.id} />
             <input name="action" type="hidden" value="send" />
             <SubmitButton>Send to supplier</SubmitButton>
@@ -1136,7 +1139,7 @@ function OrderDetailPanel({
               The supplier&rsquo;s authorization and licence are checked again at this moment;
               either can have lapsed since the order was drafted.
             </p>
-          </form>
+          </PurchasingActionForm>
         ) : null}
 
         {order.status === 'SENT' || order.status === 'RECEIVING' ? (
