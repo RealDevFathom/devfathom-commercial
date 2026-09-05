@@ -238,6 +238,36 @@ describe.skipIf(!database)('receipt caller snapshots with enforcing RLS', () => 
     expect(evidence).toEqual({ events: 1, outbox: 1 });
   });
 
+  it('rejects Unicode and invalid raw receipts before any job/event, then admits later ASCII work', async () => {
+    const receipt = await bill();
+    const before = await tenancy.withTenantDb(orgA, (db) => db.restaurantPrintJob.count());
+    for (const [name, code, fallback] of [
+      ['اردو e\u0301 𐐀 👩‍🍳', 'UNSUPPORTED_PRINT_TEXT', 'BROWSER_OS'],
+      ['bad\u001bname', 'INVALID_PRINT_DOCUMENT', null],
+    ] as const) {
+      await tenancy.withTenantDb(orgA, (db) =>
+        db.restaurantBillLine.updateMany({ where: { billId: receipt.id }, data: { name } })
+      );
+      const result = await tenancy.withTenantDb(orgA, (db) =>
+        dispatchReceipt(args(db, receipt.id))
+      );
+      expect(result).toBeInstanceOf(Response);
+      expect((result as Response).status).toBe(422);
+      expect(await (result as Response).json()).toMatchObject({ code, fallback });
+      const evidence = await tenancy.withTenantDb(orgA, async (db) => ({
+        jobs: await db.restaurantPrintJob.count(),
+        events: await db.restaurantOrderEvent.count({ where: { orderId: receipt.orderId } }),
+        outbox: await db.restaurantEventOutbox.count({ where: { aggregateId: receipt.orderId } }),
+      }));
+      expect(evidence).toEqual({ jobs: before, events: 0, outbox: 0 });
+    }
+    await tenancy.withTenantDb(orgA, (db) =>
+      db.restaurantBillLine.updateMany({ where: { billId: receipt.id }, data: { name: 'Meal' } })
+    );
+    const later = await tenancy.withTenantDb(orgA, (db) => dispatchReceipt(args(db, receipt.id)));
+    expect(later).toMatchObject({ outcome: 'QUEUED', replayed: false });
+  });
+
   it('rolls queue, event and outbox back together when the owning transaction fails', async () => {
     const receipt = await bill();
     let jobId = '';

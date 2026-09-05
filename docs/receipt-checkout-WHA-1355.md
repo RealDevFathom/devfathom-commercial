@@ -1,5 +1,150 @@
 # WHA-1355 Restaurant receipt checkout dispatch
 
+## Authorized consumer correction — September 5
+
+This section supersedes the earlier Unicode, runtime typing and fake-TCP failures below.
+Board authorized one private correction in comment `66105b3e-cd4f-4ac4-88b8-76243bdbbfd1`.
+Starting assigned branch/clean HEAD: `2d90ac2b1a48ed56ffe4194feba67daf34ba9bf2`.
+Studio contract read in full; installed Next route/client guidance from the preceding pass
+remains applicable. Existing Studio buttons, inputs, semantic tokens, wrapping and status
+semantics reused. No shared/runtime source was edited by the owned correction.
+
+Producer parents/scopes verified before applying these exact corrections, in order:
+
+| Original producer correction               | Private cherry-pick                        | Private parent                             |
+| ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
+| `bdea63a2cd3d35eab300dc585e7e1352cf64c4e4` | `aaae082b745a88b53ce3bbc66ad48bae4653484c` | `2d90ac2b1a48ed56ffe4194feba67daf34ba9bf2` |
+| `513d05ad34f3268c2229c2ea5703786726e7ccde` | `a902808a9271bc617c83f17a8301f20910303f02` | `aaae082b745a88b53ce3bbc66ad48bae4653484c` |
+| `5c222a54ef24993693b4c07d4066c89a2ac5fb9b` | `5baea4db89c494e9183989f306cc5ab984a03c5e` | `a902808a9271bc617c83f17a8301f20910303f02` |
+| `ceed2f40a78bafbc24d68506f010218c30a0a6fe` | `f0f0fed35181327db506f4bf622a9ab7cf953c24` | `5baea4db89c494e9183989f306cc5ab984a03c5e` |
+
+Original parents respectively: `411306de8d88b8eea574caa93750a972afa028d7`,
+`bdea63a2cd3d35eab300dc585e7e1352cf64c4e4`,
+`bc0693705163c618c3445ffcc7c8b89f13ac8024`,
+`655c7f9a1668c122b6319a5fea33910564b9cfa7`.
+The runtime correction was delivered during this pass in WHA-1356 comment
+`0ead2968-b94e-4a96-8812-a5497c04b27b`; the Board explicitly permitted consuming that
+single subsequent artifact. All cherry-picks applied cleanly; no original producer commits
+were repeated. The wider semantic schema and matching queue guard were applied together
+before verification. Earlier prerequisite ancestry is recorded in the next section.
+
+Owned correction-only parent: `f0f0fed35181327db506f4bf622a9ab7cf953c24`.
+Exact correction SHA is recorded in the completion comment. A composer with prerequisites
+already present should take only this owned correction after the prior owned integration.
+
+### Changed paths and resulting behavior
+
+- `src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts`
+- `src/app/api/restaurant/checkout/receipt/route.test.ts`
+- `src/app/api/restaurant/checkout/receipt/receipt-dispatch.db.test.ts`
+- `src/components/restaurant/pos/receipt-browser-print.ts`
+- `src/components/restaurant/pos/receipt-print-controls.tsx`
+- `src/components/restaurant/pos/receipt-print-controls.test.tsx`
+- `docs/receipt-checkout-WHA-1355.md`
+
+Browser output now uses only the shared safe-Unicode `buildReceiptPreview` via inert
+`textContent` and `white-space: pre-wrap`. Urdu business/header/footer/item text, combining
+characters, supplementary characters and joining sequences are preserved. The temporary
+plain-text renderer and consumer ASCII regex are removed. Existing ASCII golden output,
+canonical financial facts, captured job layout/width, original/reprint idempotency, branch/payment
+guards, queue/event/outbox atomicity and settings routing/designer entry remain covered.
+
+New raw jobs use `validateRawPrintDocument`; shared enqueue independently enforces the same
+boundary. Dedicated caller returns HTTP 422 with the safe `RawPrintValidationError` fields:
+`UNSUPPORTED_PRINT_TEXT` / `fallback: BROWSER_OS` permits the shared browser receipt;
+`INVALID_PRINT_DOCUMENT` / `fallback: null` permits no print fallback. Neither persists a new
+job or event. Corrupt semantic data yields no browser preview; a missing preview cannot fall
+through to an unvalidated plain renderer. Typed refusals do not claim uncertain delivery;
+network failures retain existing same-request retry and duplicate-copy checks.
+
+The existing TerminalRequest adapter exposes only status and safe message on errors. The UI
+recognizes the shared unsupported-text constant for 422; other 422 responses fail closed as
+invalid, without matching arbitrary payload text. GET also supplies structured preview validation.
+Browser rendering requires valid text and an allowed fallback, while still enforcing duplicate-copy
+acknowledgement for existing or uncertain jobs. Browser dialog closure never proves printing.
+No new polling, feature policy, schema, dependency, palette or motion system was introduced.
+
+### Exact checks and results
+
+- First caller/UI check: **36 passed, 0 failed, 0 skipped**, two files.
+- Combined final check: **207 passed, 0 failed, 0 skipped**, 18 files. This includes **24 DB
+  cases**: caller 5, queue/current-claim 11, legacy printing/fake TCP 4, persisted layout 4.
+  Remaining 183 cases cover caller/controls, layouts, shared renderer/goldens, route permissions,
+  station-route preservation, and 60 runtime tests with synthetic transport/native-process seams.
+- Runtime-inclusive scoped TypeScript: **exit 0, 0 diagnostics**, actual Next ambient types and
+  transitive imports, including producer service/renderer/API and runtime/tests. Both former
+  runtime TS2352 findings are resolved in this composition by the producer correction.
+- Scoped ESLint, formatting and diff checks: **exit 0**, no lint warnings/errors.
+- No test or typecheck failures occurred during this correction. No full build/typecheck,
+  local app/browser service, visual screenshots or physical/native printer execution.
+
+New database `wha1355_disposable_31b07959a9` was provisioned using the previously documented
+WHA-1354 pattern on the identity-verified WHA-1350 PG16.15 cluster, `127.0.0.1:52027`.
+No existing test database was used. Dedicated runtime had NOSUPERUSER, NOBYPASSRLS,
+NOCREATEDB, NOCREATEROLE, NOINHERIT, and owned **0 application tables**. Branch/job/bill
+tables had ENABLE/FORCE RLS. **105 migrations, 0 unsuccessful, 0 checksum mismatches**.
+No schema change required client regeneration. Provisioning, extension preparation, migrations,
+scoped grants and evidence checks succeeded. After evidence capture, identity-checked cleanup
+removed only this new database and its dedicated owner/runtime roles, without FORCE, stopping
+the shared cluster, or terminating another session. Private credentials/scripts stayed in run scratch.
+
+Commands, with owner/runtime URLs sourced privately and reports retained in run scratch:
+
+```sh
+node "$PAPERCLIP_RUN_SCRATCH_DIR/provision.cjs"
+EXTENSION_ADMIN_DATABASE_URL="$OWNER_DATABASE_URL" node --import tsx prisma/prepare-extensions.ts
+node node_modules/prisma/build/index.js migrate deploy --config "$WHA1355_ENV_DIR/migration.config.mjs"
+node "$PAPERCLIP_RUN_SCRATCH_DIR/db-control.cjs" grant
+node node_modules/vitest/vitest.mjs run src/app/api/restaurant/checkout/receipt/route.test.ts src/components/restaurant/pos/receipt-print-controls.test.tsx --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile="$PAPERCLIP_RUN_SCRATCH_DIR/caller-tests.json"
+node node_modules/vitest/vitest.mjs run src/app/api/restaurant/checkout/receipt src/components/restaurant/pos/receipt-print-controls.test.tsx src/components/restaurant/pos/receipt-view.test.tsx src/components/restaurant/restaurant-devices-console.test.tsx 'src/app/(app)/settings/settings-entitlements.test.tsx' src/lib/restaurant/checkout-routes.test.ts src/lib/restaurant/printing src/lib/receipts src/components/receipts/receipt-designer.test.tsx src/app/api/restaurant/receipt-layout/route.test.ts src/app/api/restaurant/print-bridge/route.test.ts tests/print-bridge.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile="$WHA1355_ENV_DIR/combined-tests.json"
+node node_modules/typescript/bin/tsc --noEmit -p "$PAPERCLIP_RUN_SCRATCH_DIR/correction-tsconfig.json"
+node node_modules/eslint/bin/eslint.js src/app/api/restaurant/checkout/receipt/{receipt-dispatch.ts,route.test.ts,receipt-dispatch.db.test.ts} src/components/restaurant/pos/{receipt-browser-print.ts,receipt-print-controls.tsx,receipt-print-controls.test.tsx}
+node node_modules/prettier/bin/prettier.cjs --check src/app/api/restaurant/checkout/receipt/{receipt-dispatch.ts,route.test.ts,receipt-dispatch.db.test.ts} src/components/restaurant/pos/{receipt-browser-print.ts,receipt-print-controls.tsx,receipt-print-controls.test.tsx} docs/receipt-checkout-WHA-1355.md
+node "$PAPERCLIP_RUN_SCRATCH_DIR/db-control.cjs" evidence
+node "$PAPERCLIP_RUN_SCRATCH_DIR/db-control.cjs" cleanup
+git diff --check
+```
+
+`correction-tsconfig.json` extends this checkout's absolute `tsconfig.json`, sets
+`incremental: false` and `noEmit: true`, excludes `node_modules`, and includes these patterns
+resolved to absolute paths (no stubs or suppressed dependency diagnostics):
+
+```json
+[
+  "next-env.d.ts",
+  "src/types/**/*.d.ts",
+  "vitest.setup.ts",
+  "src/app/api/restaurant/checkout/receipt/**/*.ts",
+  "src/components/restaurant/pos/receipt-browser-print.ts",
+  "src/components/restaurant/pos/receipt-print-controls.tsx",
+  "src/components/restaurant/pos/receipt-print-controls.test.tsx",
+  "src/lib/restaurant/printing/**/*.ts",
+  "src/lib/receipts/**/*.ts",
+  "src/app/api/restaurant/print-bridge/**/*.ts",
+  "src/app/api/restaurant/receipt-layout/**/*.ts",
+  "src/components/receipts/**/*.tsx",
+  "src/app/(app)/settings/receipts/page.tsx",
+  "scripts/print-bridge.ts",
+  "tests/print-bridge.test.ts"
+]
+```
+
+### Remaining acceptance and recovery
+
+Private correction evidence is complete; release acceptance is **blocked** on Board/assigned
+WHA-1362 independent combined review and authoritative composition, Verification Engineer's
+approved staging build/full Studio matrix, and Saad/hardware owner's explicit supported-host,
+driver/connection and physical printer targets. Passing synthetic TCP/native subprocess tests
+does not establish Windows/macOS execution, glyph metrics, paper/cut behavior or physical
+delivery. Windows98/Vista/7 remain unsupported modern runtime hosts. No universal compatibility,
+native Unicode ESC/POS or physical exactly-once guarantee is claimed.
+
+No extra worker/review, nested CLI, push, merge, staging or deployment was started. Rollback
+before composition: omit this owned correction and its prerequisites as a coordinated set;
+never deploy widened semantic validation without the queue guard. Retain captured jobs and
+attempt state; inspect uncertain deliveries before manual copies. Additive database data must
+not be destroyed to undo this caller-only correction.
+
 ## Authorized private development integration — September 5
 
 This section supersedes the initial-pass snapshot/DB limitations below. It is **private

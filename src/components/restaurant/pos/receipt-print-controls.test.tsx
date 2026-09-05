@@ -4,6 +4,9 @@ import { ReceiptPrintControls, type ReceiptPrinting } from './receipt-print-cont
 import { requestReceiptDialog } from './receipt-browser-print';
 import type { Receipt } from './receipt-view';
 import type { TerminalRequest } from './checkout-panel';
+import { buildReceiptPreview, SAMPLE_RECEIPT } from '@/lib/receipts/preview';
+import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
+import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 
 const receipt: Receipt = {
   billId: 'bill-1',
@@ -17,7 +20,7 @@ const receipt: Receipt = {
   lines: [
     {
       id: 'line-1',
-      name: '<img src=x onerror=alert(1)> اردو',
+      name: '<img src=x onerror=alert(1)> اردو e\u0301 𐐀 👩‍🍳',
       quantity: 1,
       unitPrice: '24.00',
       lineSubtotal: '24.00',
@@ -38,12 +41,29 @@ const receipt: Receipt = {
     grandTotal: '26.05',
   },
 };
+const previewText = (width: 58 | 80) =>
+  buildReceiptPreview(
+    {
+      ...DEFAULT_RECEIPT_LAYOUT,
+      paperWidth: width,
+      businessText: 'کاروبار',
+      headerText: 'خوش آمدید',
+      footerText: 'شکریہ',
+    },
+    {
+      ...SAMPLE_RECEIPT,
+      lines: [receipt.lines[0].name],
+      totals: ['TOTAL 26.05', 'Delivery 3.00', 'Rounding 0.05'],
+      payments: ['Tip 1.50 / Change 3.95'],
+    }
+  );
 const initial: ReceiptPrinting = {
   branchId: 'branch-1',
   registerId: 'register-1',
   registerName: 'Counter',
   printerId: 'queue:///Receipt',
   latestJob: null,
+  preview: { text: previewText(80), paperWidth: 80, source: 'saved' },
 };
 const queued: ReceiptPrinting = {
   ...initial,
@@ -182,17 +202,73 @@ describe('Browser receipt fallback', () => {
     expect(popup.document.querySelector('pre')?.textContent).toBe(text);
     expect(popup.document.querySelector('style')?.textContent).toContain('width: 54mm');
   });
-  it('labels unsupported shared previews honestly while preserving plain Unicode fallback', () => {
+  it('keeps shared Unicode browser output available while disabling unsupported raw dispatch', () => {
     render(
       <ReceiptPrintControls
         receipt={receipt}
-        initial={{ ...initial, preview: { text: null, paperWidth: 58, source: 'saved' } }}
+        initial={{
+          ...initial,
+          preview: {
+            text: previewText(58),
+            paperWidth: 58,
+            source: 'saved',
+            validation: {
+              code: 'UNSUPPORTED_PRINT_TEXT',
+              fallback: 'BROWSER_OS',
+              error: new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT').message,
+            },
+          },
+        }}
         request={vi.fn()}
       />
     );
-    expect(screen.getByText(/Shared printer layout cannot represent/)).toBeVisible();
+    expect(screen.getByText(/Unsupported printer text/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
     expect(screen.getByRole('button', { name: 'Open browser print dialog' })).toBeEnabled();
   });
+  it('disables all printing for invalid previews, without a plain-text bypass', () => {
+    render(
+      <ReceiptPrintControls
+        receipt={receipt}
+        initial={{
+          ...initial,
+          preview: {
+            text: null,
+            paperWidth: 80,
+            source: 'saved',
+            validation: {
+              code: 'INVALID_PRINT_DOCUMENT',
+              fallback: null,
+              error: new RawPrintValidationError('INVALID_PRINT_DOCUMENT').message,
+            },
+          },
+        }}
+        request={vi.fn()}
+      />
+    );
+    expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Open browser print dialog' })).toBeDisabled();
+  });
+  it.each(['INVALID_PRINT_DOCUMENT', 'UNSUPPORTED_PRINT_TEXT'] as const)(
+    'handles a server %s refusal without claiming uncertain delivery',
+    async (code) => {
+      const failure = Object.assign(new RawPrintValidationError(code), { status: 422 });
+      render(
+        <ReceiptPrintControls
+          receipt={receipt}
+          initial={initial}
+          request={vi.fn().mockRejectedValue(failure)}
+        />
+      );
+      fireEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
+      expect(await screen.findByRole('alert')).toHaveTextContent(failure.message);
+      expect(screen.getByRole('alert')).not.toHaveTextContent('uncertain');
+      expect(screen.queryByRole('checkbox')).toBeNull();
+      const button = screen.getByRole('button', { name: 'Open browser print dialog' });
+      if (code === 'INVALID_PRINT_DOCUMENT') expect(button).toBeDisabled();
+      else expect(button).toBeEnabled();
+    }
+  );
   it.each([58, 80] as const)(
     'requests %s mm paper with canonical facts and inert Unicode text',
     (width) => {
@@ -203,7 +279,10 @@ describe('Browser receipt fallback', () => {
         opener: window,
       };
       vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
-      requestReceiptDialog(receipt, width);
+      const text = previewText(width);
+      requestReceiptDialog(receipt, width, text);
+      expect(popup.document.querySelector('pre')?.textContent).toBe(text);
+      expect(popup.document.querySelector('style')?.textContent).toContain('white-space: pre-wrap');
       expect(popup.document.querySelector('style')?.textContent).toContain(`width: ${width - 4}mm`);
       for (const fact of [
         'TOTAL 26.05',
@@ -221,6 +300,15 @@ describe('Browser receipt fallback', () => {
   );
   it('reports blocked popups without claiming a dialog', () => {
     vi.spyOn(window, 'open').mockReturnValue(null);
-    expect(() => requestReceiptDialog(receipt, 80)).toThrow('Print window blocked');
+    expect(() => requestReceiptDialog(receipt, 80, previewText(80))).toThrow(
+      'Print window blocked'
+    );
+  });
+  it('refuses missing validated text before opening a popup', () => {
+    const open = vi.spyOn(window, 'open');
+    expect(() => requestReceiptDialog(receipt, 80, '')).toThrow(
+      'Validated receipt preview unavailable'
+    );
+    expect(open).not.toHaveBeenCalled();
   });
 });

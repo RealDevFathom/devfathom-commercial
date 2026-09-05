@@ -233,6 +233,7 @@ describe('Restaurant receipt dispatch', () => {
       text: buildReceiptPreview(snapshot.layout, snapshot.facts),
       paperWidth: 58,
       source: 'queued',
+      validation: null,
     });
     jobs[0].status = 'PRINTED';
     await post(copy);
@@ -286,7 +287,7 @@ describe('Restaurant receipt dispatch', () => {
       'CASH / EXCLUSIVE / Rate 0.1\nTaxable 20.00 / Tax 2.00 / Gross 22.00\nPre-discount gross 24.00 / Before-tax discount 1.00 / After-tax discount 0.50',
     ]);
   });
-  it('returns saved-layout preview before dispatch and keeps Unicode intact for plain browser fallback', async () => {
+  it('preserves shared Urdu layout and logical Unicode text but refuses raw queue acceptance', async () => {
     const get = () =>
       GET(new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1'));
     const ascii = await (await get()).json();
@@ -295,13 +296,26 @@ describe('Restaurant receipt dispatch', () => {
       source: 'saved',
       text: expect.stringContaining('Saved footer'),
     });
-    receipt!.lines[0].name = 'اردو';
+    const name = '<img src=x> اردو e\u0301 𐐀 👩‍🍳';
+    receipt!.lines[0].name = name;
+    receipt!.branch.name = 'کاروبار';
+    layout = { ...layout, businessText: 'پتہ', headerText: 'خوش آمدید', footerText: 'شکریہ' };
     const unicode = await (await get()).json();
-    expect(unicode.lines[0].name).toBe('اردو');
-    expect(unicode.printing.preview).toMatchObject({ paperWidth: 58, text: null });
-    expect(unicode.printing.preview.plainText).toContain('اردو');
-    expect(unicode.printing.preview.plainText).toContain('Discount 0.50');
-    expect((await post()).status).toBe(422);
+    expect(unicode.lines[0].name).toBe(name);
+    expect(unicode.printing.preview).toMatchObject({
+      paperWidth: 58,
+      validation: { code: 'UNSUPPORTED_PRINT_TEXT', fallback: 'BROWSER_OS' },
+    });
+    for (const fact of [name, 'کاروبار', 'پتہ', 'خوش آمدید', 'شکریہ', 'Discount 0.50'])
+      expect(unicode.printing.preview.text).toContain(fact);
+    expect(unicode.printing.preview).not.toHaveProperty('plainText');
+    const rejected = await post();
+    expect(rejected.status).toBe(422);
+    expect(await rejected.json()).toEqual({
+      error: 'Unsupported printer text. Use a browser/OS-rendered receipt.',
+      code: 'UNSUPPORTED_PRINT_TEXT',
+      fallback: 'BROWSER_OS',
+    });
     expect(jobs).toHaveLength(0);
   });
   it('deduplicates first prints across transport keys and preserves offline status after routing removal', async () => {
@@ -347,7 +361,10 @@ describe('Restaurant receipt dispatch', () => {
       receiptLayout: { ...layout, paperWidth: 42 },
       receiptLayoutRevision: 1,
     });
-    await expect(post()).rejects.toThrow();
+    expect(await (await post()).json()).toMatchObject({
+      code: 'INVALID_PRINT_DOCUMENT',
+      fallback: null,
+    });
     expect(jobs).toHaveLength(0);
   });
   it.each(['PENDING', 'OFFLINE', 'NO_PRINTER'])(
@@ -408,6 +425,24 @@ describe('Restaurant receipt dispatch', () => {
       receipt!.lines[0].name = name;
       expect((await post()).status).toBe(422);
       expect(createJob).not.toHaveBeenCalled();
+    }
+  );
+  it.each(['bad\u001bname', 'x'.repeat(2001)])(
+    'invalid facts receive no browser fallback: %s',
+    async (name) => {
+      receipt!.lines[0].name = name;
+      expect(await (await post()).json()).toMatchObject({
+        code: 'INVALID_PRINT_DOCUMENT',
+        fallback: null,
+      });
+      const response = await GET(
+        new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1')
+      );
+      expect((await response.json()).printing.preview).toMatchObject({
+        text: null,
+        validation: { code: 'INVALID_PRINT_DOCUMENT', fallback: null },
+      });
+      expect(jobs).toHaveLength(0);
     }
   );
   it('returns scoped receipt preview/status with no-store and no raw job document exposure', async () => {

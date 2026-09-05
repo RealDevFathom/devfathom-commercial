@@ -8,6 +8,7 @@ import { Input } from '@/components/ui/input';
 import type { TerminalRequest } from './checkout-panel';
 import type { Receipt } from './receipt-view';
 import { requestReceiptDialog } from './receipt-browser-print';
+import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
 
 export type ReceiptPrinting = {
   branchId: string;
@@ -16,7 +17,11 @@ export type ReceiptPrinting = {
   printerId: string | null;
   preview?: {
     text: string | null;
-    plainText?: string;
+    validation?: {
+      code: RawPrintValidationError['code'];
+      fallback: 'BROWSER_OS' | null;
+      error: string;
+    } | null;
     paperWidth: 58 | 80;
     source: 'queued' | 'saved';
   };
@@ -59,6 +64,7 @@ export function ReceiptPrintControls({
   const [pending, setPending] = useState(false);
   const busy = useRef(false);
   const [error, setError] = useState('');
+  const [refusal, setRefusal] = useState<RawPrintValidationError | null>(null);
   const [reason, setReason] = useState('');
   const width = state.preview?.paperWidth ?? 80;
   const [dialogStatus, setDialogStatus] = useState('');
@@ -72,6 +78,7 @@ export function ReceiptPrintControls({
     busy.current = true;
     setPending(true);
     setError('');
+    setRefusal(null);
     const copy =
       retry ?? (canReprint ? { requestId: crypto.randomUUID(), reason: reason.trim() } : null);
     setRetry(copy);
@@ -87,6 +94,19 @@ export function ReceiptPrintControls({
       setRetry(null);
       setReason('');
     } catch (cause) {
+      // TerminalRequest retains only HTTP status and the safe server message. Unknown 422s
+      // fail closed; recognize the shared constant unsupported-text message, never payload text.
+      if (cause instanceof Error && 'status' in cause && cause.status === 422) {
+        const unsupported = new RawPrintValidationError('UNSUPPORTED_PRINT_TEXT');
+        const rejected =
+          cause.message === unsupported.message
+            ? unsupported
+            : new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
+        setRefusal(rejected);
+        setRetry(null);
+        setError(rejected.message);
+        return;
+      }
       setError(
         `${cause instanceof Error ? cause.message : 'Print request failed.'} Delivery may be uncertain. Retry keeps the same request; check status before another copy.`
       );
@@ -106,6 +126,7 @@ export function ReceiptPrintControls({
         `${endpoint}?billId=${encodeURIComponent(receipt.billId)}`
       );
       setState(next.printing);
+      setRefusal(null);
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Print status could not be loaded.');
     } finally {
@@ -153,6 +174,7 @@ export function ReceiptPrintControls({
           onClick={() => void dispatch()}
           disabled={
             pending ||
+            Boolean(state.preview?.validation) ||
             !state.printerId ||
             receipt.receiptNumber === null ||
             (!retry && (canReprint ? reason.trim().length < 3 : Boolean(state.latestJob)))
@@ -193,13 +215,10 @@ export function ReceiptPrintControls({
         Choose matching {width} mm paper in the OS print dialog. The receipt content uses this width
         with 2 mm margins.
       </p>
-      {state.preview?.text === null ? (
-        <p className="text-xs text-text-muted">
-          Shared printer layout cannot represent this receipt. Browser fallback preserves the
-          original text and amounts in a plain receipt; OS font support must be checked.
-        </p>
+      {state.preview?.validation ? (
+        <p className="text-xs text-text-muted">{state.preview.validation.error}</p>
       ) : null}
-      {state.latestJob || error ? (
+      {state.latestJob || (error && !refusal) ? (
         <label className="flex items-start gap-2 text-sm text-text-body">
           <input
             type="checkbox"
@@ -214,10 +233,18 @@ export function ReceiptPrintControls({
         type="button"
         variant="outline"
         className="min-h-11"
-        disabled={pending || (Boolean(state.latestJob || error) && !duplicateAccepted)}
+        disabled={
+          pending ||
+          typeof state.preview?.text !== 'string' ||
+          refusal?.fallback === null ||
+          state.preview?.validation?.fallback === null ||
+          (Boolean(state.latestJob || (error && !refusal)) && !duplicateAccepted)
+        }
         onClick={() => {
           try {
-            requestReceiptDialog(receipt, width, state.preview?.text ?? state.preview?.plainText);
+            if (typeof state.preview?.text !== 'string')
+              throw new Error('Validated receipt preview unavailable. Check print status.');
+            requestReceiptDialog(receipt, width, state.preview.text);
             setDialogStatus(
               'Print dialog requested. Closing the dialog does not confirm printing.'
             );

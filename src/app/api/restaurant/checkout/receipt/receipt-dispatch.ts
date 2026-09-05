@@ -7,7 +7,9 @@ import { buildReceiptForBranch } from '@/lib/restaurant/checkout-routes';
 import { appendOrderEvent } from '@/lib/restaurant/outbox';
 import {
   PrintDocumentSchema,
-  ReceiptPrintSnapshotSchema,
+  RawPrintValidationError,
+  validateRawPrintDocument,
+  type ReceiptPrintSnapshot,
 } from '@/lib/restaurant/printing/contract';
 import { PrintBridgeService } from '@/lib/restaurant/printing/service';
 import type { TerminalContext } from '@/lib/restaurant/terminal-auth';
@@ -127,39 +129,49 @@ async function receiptFacts(
   };
 }
 
-async function browserPreview(ctx: TerminalContext, receipt: SettledReceipt, document?: unknown) {
-  const stored = document ? PrintDocumentSchema.parse(document).receiptSnapshot : undefined;
-  if (stored)
-    return {
-      text: buildReceiptPreview(stored.layout, stored.facts),
-      paperWidth: stored.layout.paperWidth,
-      source: 'queued' as const,
-    };
-  const { layout } = await getRestaurantReceiptLayout(
-    ctx.db,
-    ctx.organizationId,
-    ctx.device.branchId
-  );
-  const facts = await receiptFacts(ctx, receipt);
-  const snapshot = ReceiptPrintSnapshotSchema.safeParse({ layout, facts });
+function printDocument(receipt: SettledReceipt, snapshot: ReceiptPrintSnapshot, reason?: string) {
   return {
-    text: snapshot.success ? buildReceiptPreview(snapshot.data.layout, snapshot.data.facts) : null,
-    paperWidth: layout.paperWidth,
-    source: 'saved' as const,
-    // Lossless inert text fallback only. Shared Unicode layout parity belongs to WHA-1354.
-    plainText: snapshot.success
-      ? undefined
-      : [
-          facts.businessName,
-          `Invoice: ${facts.invoiceNumber}`,
-          facts.issuedAt,
-          `Order: ${facts.orderNumber} / Channel: ${facts.channel}`,
-          ...facts.lines,
-          ...facts.taxLines,
-          ...facts.totals,
-          ...facts.payments,
-        ].join('\n'),
+    type: 'RECEIPT' as const,
+    reference: reference(receipt.billId),
+    title: `Receipt ${receipt.receiptNumber}${reason ? ' - COPY' : ''}`,
+    createdAt: receipt.settledAt!.toISOString(),
+    lines: [{ quantity: 1, label: 'Settled receipt; see captured receipt snapshot.' }],
+    footer: reason ? `Receipt copy\nReprint: ${reason}` : undefined,
+    receiptSnapshot: snapshot,
   };
+}
+
+function validationDetails(error: RawPrintValidationError) {
+  return { code: error.code, fallback: error.fallback, error: error.message };
+}
+
+async function browserPreview(ctx: TerminalContext, receipt: SettledReceipt, document?: unknown) {
+  const source = document ? ('queued' as const) : ('saved' as const);
+  try {
+    const stored = document ? PrintDocumentSchema.parse(document) : undefined;
+    const snapshot = stored?.receiptSnapshot ?? {
+      layout: (await getRestaurantReceiptLayout(ctx.db, ctx.organizationId, ctx.device.branchId))
+        .layout,
+      facts: await receiptFacts(ctx, receipt),
+    };
+    const text = buildReceiptPreview(snapshot.layout, snapshot.facts);
+    let validation = null;
+    try {
+      validateRawPrintDocument(stored?.receiptSnapshot ? stored : printDocument(receipt, snapshot));
+    } catch (error) {
+      if (!(error instanceof RawPrintValidationError)) throw error;
+      validation = validationDetails(error);
+    }
+    return { text, paperWidth: snapshot.layout.paperWidth, source, validation };
+  } catch (error) {
+    if (!(error instanceof z.ZodError)) throw error;
+    return {
+      text: null,
+      paperWidth: 80 as const,
+      source,
+      validation: validationDetails(new RawPrintValidationError('INVALID_PRINT_DOCUMENT')),
+    };
+  }
 }
 
 export async function receiptPrintState(ctx: TerminalContext, receipt: SettledReceipt) {
@@ -269,50 +281,40 @@ export async function dispatchReceipt({
   }
   if (!state.printerId) return { ...state, outcome: 'NO_PRINTER' as const, replayed: false };
 
-  const { layout } = await getRestaurantReceiptLayout(
-    ctx.db,
-    ctx.organizationId,
-    ctx.device.branchId
-  );
-  // Shared snapshot is authoritative; legacy envelope fields are compatibility metadata only.
-  const document = PrintDocumentSchema.safeParse({
-    type: 'RECEIPT',
-    reference: documentReference,
-    title: `Receipt ${receipt.receiptNumber}${data.action === 'reprint' ? ' - COPY' : ''}`,
-    createdAt: receipt.settledAt.toISOString(),
-    lines: [{ quantity: 1, label: 'Settled receipt; see captured receipt snapshot.' }],
-    footer: data.action === 'reprint' ? `Receipt copy\nReprint: ${data.reason}` : undefined,
-    receiptSnapshot: {
-      layout,
-      facts: await receiptFacts(ctx, receipt, data.action === 'reprint' ? data.reason : undefined),
-    },
-  });
-  if (
-    !document.success ||
-    [
-      document.data.title,
-      ...document.data.lines.map((line) => line.label),
-      document.data.footer ?? '',
-    ].some((value) => /[^\x20-\x7e\n]/.test(value))
-  ) {
-    return Response.json(
-      {
-        error:
-          'This receipt exceeds the current printer layout limits. Use the browser receipt or ask an administrator to configure a supported layout.',
-      },
-      { status: 422 }
+  let result;
+  try {
+    const { layout } = await getRestaurantReceiptLayout(
+      ctx.db,
+      ctx.organizationId,
+      ctx.device.branchId
     );
+    const reason = data.action === 'reprint' ? data.reason : undefined;
+    const document = validateRawPrintDocument(
+      printDocument(
+        receipt,
+        {
+          layout,
+          facts: await receiptFacts(ctx, receipt, reason),
+        },
+        reason
+      )
+    );
+    result = await new PrintBridgeService(ctx.db).enqueue(
+      ctx.organizationId,
+      {
+        branchId: ctx.device.branchId,
+        routes: [
+          { documentType: 'RECEIPT', stationId: null, printerId: state.printerId, enabled: true },
+        ],
+      },
+      { branchId: ctx.device.branchId, stationId: null, idempotencyKey, document }
+    );
+  } catch (error) {
+    const validation =
+      error instanceof z.ZodError ? new RawPrintValidationError('INVALID_PRINT_DOCUMENT') : error;
+    if (!(validation instanceof RawPrintValidationError)) throw error;
+    return Response.json(validationDetails(validation), { status: 422 });
   }
-  const result = await new PrintBridgeService(ctx.db).enqueue(
-    ctx.organizationId,
-    {
-      branchId: ctx.device.branchId,
-      routes: [
-        { documentType: 'RECEIPT', stationId: null, printerId: state.printerId, enabled: true },
-      ],
-    },
-    { branchId: ctx.device.branchId, stationId: null, idempotencyKey, document: document.data }
-  );
   if (result.status !== 'NO_PRINTER' && !result.replayed) {
     await appendOrderEvent(ctx.db, {
       orderId: receipt.orderId,
