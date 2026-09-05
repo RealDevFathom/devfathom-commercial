@@ -1,8 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
 import {
+  addSaleLine,
   addRestockInterest,
   captureSafeRestockArrival,
+  changeSaleStatus,
   PharmacySaleError,
   priceFromLot,
   recoverDemandWithAlternate,
@@ -12,6 +14,138 @@ import {
 } from './sales';
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+
+describe('POS sale voiding', () => {
+  it('restores exact allocated canonical units once with append-only reversals', async () => {
+    let status = 'OPEN';
+    const originals = [
+      {
+        id: 'sale-movement-a',
+        inventoryLotId: 'lot-a',
+        stockLocationId: 'shelf-a',
+        disposition: 'AVAILABLE',
+        quantityUnits: -7,
+        sealedPackDelta: 0,
+        looseUnitDelta: -7,
+        idempotencyKey: 'sale:line-a:0',
+      },
+      {
+        id: 'sale-movement-b',
+        inventoryLotId: 'lot-b',
+        stockLocationId: 'shelf-b',
+        disposition: 'AVAILABLE',
+        quantityUnits: -5,
+        sealedPackDelta: -1,
+        looseUnitDelta: 0,
+        idempotencyKey: 'sale:line-a:1',
+      },
+    ];
+    const reversals: Array<Record<string, unknown>> = [];
+    let allocationQuery: Record<string, unknown> | undefined;
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status }),
+        // Keeps this regression runnable against the original implementation:
+        // baseline reaches reversal assertions and fails on missing behavior,
+        // rather than failing because its former update method is absent.
+        update: async ({ data }: { data: { status: string } }) => {
+          status = data.status;
+          return { id: 'sale-a', status };
+        },
+        updateMany: async ({
+          where,
+          data,
+        }: {
+          where: { status: string };
+          data: { status: string };
+        }) => {
+          if (status !== where.status) return { count: 0 };
+          status = data.status;
+          return { count: 1 };
+        },
+      },
+      pharmacySaleLineAllocation: {
+        findMany: async (query: Record<string, unknown>) => {
+          allocationQuery = query;
+          return originals.map((movement) => ({ stockMovementId: movement.id }));
+        },
+      },
+      pharmacyStockMovement: {
+        findFirst: async ({ where }: { where: { id: string } }) =>
+          originals.find((movement) => movement.id === where.id) ?? null,
+        create: async ({ data }: { data: Record<string, unknown> }) => {
+          reversals.push(data);
+          return { id: `reversal-${reversals.length}`, ...data };
+        },
+      },
+      pharmacySaleEvent: { create: async ({ data }: { data: Record<string, unknown> }) => data },
+    };
+
+    await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
+
+    expect(allocationQuery).toMatchObject({
+      where: {
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        saleLine: { saleId: 'sale-a' },
+      },
+      select: { stockMovementId: true },
+    });
+    expect(originals.map((movement) => movement.quantityUnits)).toEqual([-7, -5]);
+    expect(reversals).toEqual([
+      expect.objectContaining({
+        reversesMovementId: 'sale-movement-a',
+        quantityUnits: 7,
+        looseUnitDelta: 7,
+      }),
+      expect.objectContaining({
+        reversesMovementId: 'sale-movement-b',
+        quantityUnits: 5,
+        sealedPackDelta: 1,
+      }),
+    ]);
+    expect(Math.abs(Number(reversals[0]?.sealedPackDelta))).toBe(0);
+    expect(Math.abs(Number(reversals[1]?.looseUnitDelta))).toBe(0);
+    expect(reversals.reduce((units, movement) => units + Number(movement.quantityUnits), 0)).toBe(
+      12
+    );
+
+    await expect(changeSaleStatus(db as never, scope, 'sale-a', 'void')).rejects.toThrow(
+      'INVALID_STATE'
+    );
+    expect(reversals).toHaveLength(2);
+  });
+
+  it('stops a losing add-line race before stock allocation', async () => {
+    let medicineReads = 0;
+    const db = {
+      pharmacySale: {
+        findFirst: async () => ({ id: 'sale-a', status: 'OPEN' }),
+        updateMany: async () => ({ count: 0 }),
+      },
+      medicine: {
+        findFirst: async () => {
+          medicineReads += 1;
+          return null;
+        },
+      },
+    };
+
+    await expect(
+      addSaleLine(db as never, scope, {
+        saleId: 'sale-a',
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        packLevelId: 'pack-level-a',
+        saleUnit: 'UNIT',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: 'line-a',
+      })
+    ).rejects.toThrow('INVALID_STATE');
+    expect(medicineReads).toBe(0);
+  });
+});
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
   it('derives a strip price from the allocated lot printed MRP', () => {

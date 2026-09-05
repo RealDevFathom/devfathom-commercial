@@ -2,7 +2,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
-import { allocateForSale } from './stock-ledger';
+import { allocateForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
 /**
@@ -112,6 +112,20 @@ export async function addSaleLine(
 ) {
   const sale = await saleInScope(db, scope, input.saleId);
   if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
+  // Lock the sale row before allocating stock. At PostgreSQL READ COMMITTED,
+  // this conditional update makes an add-line transaction serialize with a
+  // concurrent void: whichever loses the row lock observes the new status and
+  // rolls back before it can leave an allocation on a void sale.
+  const locked = await db.pharmacySale.updateMany({
+    where: {
+      id: input.saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'OPEN',
+    },
+    data: { status: 'OPEN' },
+  });
+  if (locked.count !== 1) throw new PharmacySaleError('INVALID_STATE');
   if (
     !Number.isSafeInteger(input.quantity) ||
     input.quantity <= 0 ||
@@ -224,12 +238,36 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
-  const updated = await db.pharmacySale.update({
-    where: { organizationId_id: { organizationId: scope.organizationId, id: saleId } },
+  const claimed = await db.pharmacySale.updateMany({
+    where: {
+      id: saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: from,
+    },
     data: { status: to, completedAt: action === 'complete' ? new Date() : undefined },
   });
+  if (claimed.count !== 1) throw new PharmacySaleError('INVALID_STATE');
+
+  if (action === 'void') {
+    const allocations = await db.pharmacySaleLineAllocation.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleLine: { saleId },
+      },
+      orderBy: { createdAt: 'asc' },
+      select: { stockMovementId: true },
+    });
+    await reverseMovements(db, scope, {
+      movementIds: allocations.map((allocation) => allocation.stockMovementId),
+      reason: reason ?? 'Sale voided',
+      at: new Date(),
+    });
+  }
+
   await event(db, scope, saleId, kind, reason);
-  return updated;
+  return saleInScope(db, scope, saleId);
 }
 
 export async function returnSaleLine(
