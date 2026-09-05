@@ -39,7 +39,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   dateOnly,
   dateTime,
   destination,
@@ -187,12 +188,14 @@ export default async function PharmacyReceivingPage({
     'use server';
     const branch = field(form, 'branchId');
     const purchaseOrderId = field(form, 'purchaseOrderId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const order = (await actionCaller.purchaseOrders()).find((row) => row.id === purchaseOrderId);
-      if (!order) throw new Error('That order no longer exists. Reload the page.');
+      if (!order)
+        throw new PurchasingValidationError('That order no longer exists. Reload the page.');
 
       const lines = order.lines.flatMap((line) => {
         // A line with no batch number was not delivered on this consignment.
@@ -210,13 +213,13 @@ export default async function PharmacyReceivingPage({
       });
       if (lines.length === 0) {
         throw Object.assign(
-          new Error(
+          new PurchasingValidationError(
             'Enter a batch number on at least one line — that is what marks it as arrived.'
           ),
           { field: 'batchNumber' }
         );
       }
-      const receipt = await actionCaller.createGoodsReceipt({
+      const receipt = await outcome.write(actionCaller.createGoodsReceipt)({
         branchId: branch,
         reference: field(form, 'reference'),
         supplierId: order.supplierId,
@@ -240,7 +243,7 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not draft the receipt.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not draft the receipt.'), kind: 'error' },
         { branch, order: purchaseOrderId }
       );
     }
@@ -250,10 +253,11 @@ export default async function PharmacyReceivingPage({
   async function receiveDirect(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = DIRECT_SLOTS.flatMap((slot) => {
         const pack = readPack(field(form, `directPack-${slot}`));
         if (!pack) return [];
@@ -267,11 +271,14 @@ export default async function PharmacyReceivingPage({
         ];
       });
       if (lines.length === 0) {
-        throw Object.assign(new Error('Choose a medicine and pack for at least one line.'), {
-          field: 'directPack-0',
-        });
+        throw Object.assign(
+          new PurchasingValidationError('Choose a medicine and pack for at least one line.'),
+          {
+            field: 'directPack-0',
+          }
+        );
       }
-      const receipt = await actionCaller.createGoodsReceipt({
+      const receipt = await outcome.write(actionCaller.createGoodsReceipt)({
         branchId: branch,
         reference: field(form, 'directReference'),
         supplierId: field(form, 'supplierId'),
@@ -298,7 +305,7 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not draft the direct purchase.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not draft the direct purchase.'), kind: 'error' },
         { branch }
       );
     }
@@ -309,11 +316,15 @@ export default async function PharmacyReceivingPage({
     'use server';
     const branch = field(form, 'branchId');
     const goodsReceiptId = field(form, 'goodsReceiptId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      const result = await actionCaller.postGoodsReceipt({ branchId: branch, goodsReceiptId });
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      const result = await outcome.write(actionCaller.postGoodsReceipt)({
+        branchId: branch,
+        goodsReceiptId,
+      });
       revalidatePath(ROUTE);
       const raised = result.exceptions?.length ?? 0;
       next = destination(
@@ -330,7 +341,7 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not post the receipt.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not post the receipt.'), kind: 'error' },
         { branch, receipt: goodsReceiptId }
       );
     }
@@ -341,11 +352,12 @@ export default async function PharmacyReceivingPage({
     'use server';
     const branch = field(form, 'branchId');
     const goodsReceiptId = field(form, 'goodsReceiptId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.reverseGoodsReceipt({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.reverseGoodsReceipt)({
         branchId: branch,
         goodsReceiptId,
         reason: field(form, 'reversalReason'),
@@ -363,7 +375,7 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not reverse the receipt.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not reverse the receipt.'), kind: 'error' },
         { branch, receipt: goodsReceiptId }
       );
     }
@@ -374,11 +386,12 @@ export default async function PharmacyReceivingPage({
     'use server';
     const branch = field(form, 'branchId');
     const receivingExceptionId = field(form, 'receivingExceptionId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.resolveReceivingException({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.resolveReceivingException)({
         branchId: branch,
         receivingExceptionId,
         resolutionNote: field(form, 'resolutionNote'),
@@ -395,7 +408,7 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not resolve the exception.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not resolve the exception.'), kind: 'error' },
         { branch, receipt: optionalField(form, 'goodsReceiptId') }
       );
     }
@@ -1187,7 +1200,10 @@ function percentToBps(form: FormData, name: string, label: string): number {
   const raw = field(form, name);
   if (!raw) return 0;
   if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
-    throw Object.assign(new Error(`${label}: enter a percentage like 5 or 12.5.`), { field: name });
+    throw Object.assign(
+      new PurchasingValidationError(`${label}: enter a percentage like 5 or 12.5.`),
+      { field: name }
+    );
   }
   return Math.round(Number(raw) * 100);
 }

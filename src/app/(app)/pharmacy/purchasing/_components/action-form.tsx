@@ -90,7 +90,10 @@ export function PurchasingActionForm({
             ) {
               throw new Error('Invalid purchasing destination');
             }
-            if (target.searchParams.get('kind') === 'error') {
+            if (
+              target.searchParams.get('kind') === 'error' &&
+              target.searchParams.get('outcome') === 'rejected'
+            ) {
               // Keep the live controls and selected record; do not reset entered values.
               setNotice({
                 message: target.searchParams.get('notice') || 'The change could not be saved.',
@@ -98,6 +101,14 @@ export function PurchasingActionForm({
               });
               locked.current = false;
               setSubmitted(false);
+              return;
+            }
+            if (
+              target.searchParams.get('kind') !== 'success' ||
+              target.searchParams.get('outcome') !== 'committed'
+            ) {
+              // Missing/unknown classification, including post-write failures, never unlocks.
+              setFailed(true);
               return;
             }
             window.location.replace(target.href);

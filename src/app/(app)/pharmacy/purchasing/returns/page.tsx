@@ -30,7 +30,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   dateField,
   dateOnly,
   dateTime,
@@ -168,10 +169,11 @@ export default async function PharmacyReturnsPage({
   async function createReturn(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = RETURN_SLOTS.flatMap((slot) => {
         const picked = field(form, `lot-${slot}`);
         if (!picked) return [];
@@ -197,9 +199,11 @@ export default async function PharmacyReturnsPage({
         ];
       });
       if (lines.length === 0) {
-        throw Object.assign(new Error('Choose at least one lot to return.'), { field: 'lot-0' });
+        throw Object.assign(new PurchasingValidationError('Choose at least one lot to return.'), {
+          field: 'lot-0',
+        });
       }
-      const created = await actionCaller.createPurchaseReturn({
+      const created = await outcome.write(actionCaller.createPurchaseReturn)({
         branchId: branch,
         supplierId: field(form, 'supplierId'),
         kind: field(form, 'kind') === 'EXPIRY_CLAIM' ? 'EXPIRY_CLAIM' : 'PURCHASE_RETURN',
@@ -219,7 +223,7 @@ export default async function PharmacyReturnsPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not draft the return.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not draft the return.'), kind: 'error' },
         { branch }
       );
     }
@@ -231,16 +235,20 @@ export default async function PharmacyReturnsPage({
     const branch = field(form, 'branchId');
     const purchaseReturnId = field(form, 'purchaseReturnId');
     const action = field(form, 'action');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       let message: string;
       if (action === 'submit') {
-        await actionCaller.submitPurchaseReturn({ branchId: branch, purchaseReturnId });
+        await outcome.write(actionCaller.submitPurchaseReturn)({
+          branchId: branch,
+          purchaseReturnId,
+        });
         message = 'Return submitted. The quantity is reserved and can no longer be sold.';
       } else if (action === 'dispatch') {
-        await actionCaller.dispatchPurchaseReturn({
+        await outcome.write(actionCaller.dispatchPurchaseReturn)({
           branchId: branch,
           purchaseReturnId,
           // The reservation is already unique per return, so the document's own
@@ -250,21 +258,21 @@ export default async function PharmacyReturnsPage({
         });
         message = 'Return dispatched. The stock has left and the reservation is released.';
       } else if (action === 'debit') {
-        await actionCaller.issueDebitNote({
+        await outcome.write(actionCaller.issueDebitNote)({
           branchId: branch,
           purchaseReturnId,
           reference: field(form, 'debitReference'),
         });
         message = 'Debit note issued. Expected credit is frozen from the return lines.';
       } else {
-        throw new Error('Unknown action.');
+        throw new PurchasingValidationError('Unknown action.');
       }
       revalidatePath(ROUTE);
       next = destination(ROUTE, { message, kind: 'success' }, { branch, return: purchaseReturnId });
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not move the return on.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not move the return on.'), kind: 'error' },
         { branch, return: purchaseReturnId }
       );
     }
@@ -274,11 +282,12 @@ export default async function PharmacyReturnsPage({
   async function recordCredit(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.recordSupplierCredit({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.recordSupplierCredit)({
         branchId: branch,
         supplierId: field(form, 'supplierId'),
         reference: field(form, 'creditReference'),
@@ -297,7 +306,7 @@ export default async function PharmacyReturnsPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not record the credit.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not record the credit.'), kind: 'error' },
         { branch }
       );
     }
@@ -307,11 +316,12 @@ export default async function PharmacyReturnsPage({
   async function allocateCredit(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.allocateSupplierCredit({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.allocateSupplierCredit)({
         branchId: branch,
         supplierCreditId: field(form, 'supplierCreditId'),
         debitNoteId: field(form, 'debitNoteId'),
@@ -326,7 +336,7 @@ export default async function PharmacyReturnsPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not allocate the credit.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not allocate the credit.'), kind: 'error' },
         { branch, return: optionalField(form, 'purchaseReturnId') }
       );
     }

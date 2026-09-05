@@ -30,7 +30,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   bps,
   dateOnly,
   dateTime,
@@ -146,17 +147,21 @@ export default async function PharmacyOrdersPage({
 
   async function createRequisition(form: FormData) {
     'use server';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = readLineSlots(form);
       if (lines.length === 0) {
-        throw Object.assign(new Error('Add at least one medicine and quantity.'), {
-          field: 'medicineId-0',
-        });
+        throw Object.assign(
+          new PurchasingValidationError('Add at least one medicine and quantity.'),
+          {
+            field: 'medicineId-0',
+          }
+        );
       }
-      const created = await actionCaller.createRequisition({
+      const created = await outcome.write(actionCaller.createRequisition)({
         reference: field(form, 'reference'),
         branchId: optionalField(form, 'branchId'),
         neededBy: optionalDateField(form, 'neededBy', 'Needed by'),
@@ -171,7 +176,7 @@ export default async function PharmacyOrdersPage({
       );
     } catch (error) {
       next = destination(ROUTE, {
-        ...actionFailure(error, 'Could not draft the requisition.'),
+        ...outcome.failure(error, 'Could not draft the requisition.'),
         kind: 'error',
       });
     }
@@ -181,11 +186,12 @@ export default async function PharmacyOrdersPage({
   async function submitRequisition(form: FormData) {
     'use server';
     const requisitionId = field(form, 'requisitionId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.submitRequisition({ requisitionId });
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.submitRequisition)({ requisitionId });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -195,7 +201,7 @@ export default async function PharmacyOrdersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not submit the requisition.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not submit the requisition.'), kind: 'error' },
         { req: requisitionId }
       );
     }
@@ -205,10 +211,11 @@ export default async function PharmacyOrdersPage({
   async function recordQuote(form: FormData) {
     'use server';
     const requisitionId = field(form, 'requisitionId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lineIds = form.getAll('requisitionLineId').map(String);
       const lines = lineIds.flatMap((lineId) => {
         const price = field(form, `price:${lineId}`);
@@ -228,9 +235,9 @@ export default async function PharmacyOrdersPage({
         ];
       });
       if (lines.length === 0) {
-        throw new Error('Enter a price for at least one line of this quote.');
+        throw new PurchasingValidationError('Enter a price for at least one line of this quote.');
       }
-      await actionCaller.recordQuote({
+      await outcome.write(actionCaller.recordQuote)({
         requisitionId,
         supplierId: field(form, 'supplierId'),
         reference: optionalField(form, 'quoteReference'),
@@ -248,7 +255,7 @@ export default async function PharmacyOrdersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not record the quote.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not record the quote.'), kind: 'error' },
         { req: requisitionId }
       );
     }
@@ -265,14 +272,17 @@ export default async function PharmacyOrdersPage({
     'use server';
     const requisitionId = field(form, 'requisitionId');
     const quoteId = field(form, 'quoteId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const source = (await actionCaller.requisitions()).find((row) => row.id === requisitionId);
-      if (!source) throw new Error('That requisition no longer exists. Reload the page.');
+      if (!source)
+        throw new PurchasingValidationError('That requisition no longer exists. Reload the page.');
       const quote = source.quotes.find((row) => row.id === quoteId);
-      if (!quote) throw new Error('That quote no longer exists. Reload the page.');
+      if (!quote)
+        throw new PurchasingValidationError('That quote no longer exists. Reload the page.');
 
       const lines = source.lines.flatMap((line) => {
         const quoted = quote.lines.find((row) => row.requisitionLineId === line.id);
@@ -295,9 +305,9 @@ export default async function PharmacyOrdersPage({
         ];
       });
       if (lines.length === 0) {
-        throw new Error('That quote prices none of this requisition’s lines.');
+        throw new PurchasingValidationError('That quote prices none of this requisition’s lines.');
       }
-      const created = await actionCaller.createPurchaseOrder({
+      const created = await outcome.write(actionCaller.createPurchaseOrder)({
         reference: field(form, 'reference'),
         supplierId: quote.supplierId,
         branchId: source.branchId ?? undefined,
@@ -320,7 +330,7 @@ export default async function PharmacyOrdersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not raise the order.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not raise the order.'), kind: 'error' },
         { req: requisitionId }
       );
     }
@@ -329,17 +339,21 @@ export default async function PharmacyOrdersPage({
 
   async function createDirectOrder(form: FormData) {
     'use server';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = readOrderLineSlots(form);
       if (lines.length === 0) {
-        throw Object.assign(new Error('Add at least one medicine, quantity and price.'), {
-          field: 'orderMedicineId-0',
-        });
+        throw Object.assign(
+          new PurchasingValidationError('Add at least one medicine, quantity and price.'),
+          {
+            field: 'orderMedicineId-0',
+          }
+        );
       }
-      const created = await actionCaller.createPurchaseOrder({
+      const created = await outcome.write(actionCaller.createPurchaseOrder)({
         reference: field(form, 'reference'),
         supplierId: field(form, 'supplierId'),
         branchId: optionalField(form, 'branchId'),
@@ -357,7 +371,7 @@ export default async function PharmacyOrdersPage({
       );
     } catch (error) {
       next = destination(ROUTE, {
-        ...actionFailure(error, 'Could not draft the order.'),
+        ...outcome.failure(error, 'Could not draft the order.'),
         kind: 'error',
       });
     }
@@ -368,16 +382,17 @@ export default async function PharmacyOrdersPage({
     'use server';
     const purchaseOrderId = field(form, 'purchaseOrderId');
     const action = field(form, 'action');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       let message: string;
       if (action === 'submit') {
-        await actionCaller.submitPurchaseOrder({ purchaseOrderId });
+        await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
         message = 'Order submitted for approval. Somebody else has to approve it.';
       } else if (action === 'approve' || action === 'reject') {
-        await actionCaller.approvePurchaseOrder({
+        await outcome.write(actionCaller.approvePurchaseOrder)({
           purchaseOrderId,
           decision: action === 'approve' ? 'APPROVED' : 'REJECTED',
           reason: optionalField(form, 'reason'),
@@ -387,17 +402,17 @@ export default async function PharmacyOrdersPage({
             ? 'Order approved. Send it once you are ready.'
             : 'Order rejected and returned to draft. The decision is on the record.';
       } else if (action === 'send') {
-        await actionCaller.sendPurchaseOrder({ purchaseOrderId });
+        await outcome.write(actionCaller.sendPurchaseOrder)({ purchaseOrderId });
         message = 'Order sent. Receive against it on the goods-in bench.';
       } else {
-        throw new Error('Unknown action.');
+        throw new PurchasingValidationError('Unknown action.');
       }
       revalidatePath(ROUTE);
       next = destination(ROUTE, { message, kind: 'success' }, { po: purchaseOrderId });
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not move the order on.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not move the order on.'), kind: 'error' },
         { po: purchaseOrderId }
       );
     }
@@ -1275,7 +1290,10 @@ function percentToBps(form: FormData, name: string, label: string): number {
   const raw = field(form, name);
   if (!raw) return 0;
   if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
-    throw Object.assign(new Error(`${label}: enter a percentage like 5 or 12.5.`), { field: name });
+    throw Object.assign(
+      new PurchasingValidationError(`${label}: enter a percentage like 5 or 12.5.`),
+      { field: name }
+    );
   }
   return Math.round(Number(raw) * 100);
 }
