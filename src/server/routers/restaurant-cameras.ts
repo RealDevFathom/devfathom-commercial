@@ -232,7 +232,42 @@ export const restaurantCamerasRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
+      annotateAudit(ctx, { skipInput: true });
+      if (cameraGatewayRuntime.mode === 'mediamtx') {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message:
+            'Connection checks require a registered camera and a provisioned gateway. Ask your administrator to run the configured gateway diagnostic.',
+        });
+      }
       return requireCameraGateway().testConnection({ outcome: input.outcome });
+    }),
+  configuredConnectionDiagnostics: adminProcedure
+    .input(strict({ cameraId: z.string().min(1) }))
+    .query(async ({ ctx, input }) => {
+      entitled(ctx);
+      const camera = await ctx.db.restaurantCamera.findUnique({ where: { id: input.cameraId } });
+      if (!camera || camera.organizationId !== ctx.session.user.organizationId)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Camera not found.' });
+      const gateway = await ctx.db.restaurantCameraGateway.findUnique({
+        where: { id: camera.gatewayId },
+      });
+      if (
+        !gateway ||
+        gateway.organizationId !== camera.organizationId ||
+        gateway.branchId !== camera.branchId ||
+        gateway.status !== 'ACTIVE' ||
+        gateway.revokedAt
+      )
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Camera gateway unavailable.' });
+      if (cameraGatewayRuntime.mode !== 'mediamtx') return { outcome: 'not-configured' as const };
+      return cameraGatewayRuntime.transport.diagnose({
+        organizationId: camera.organizationId,
+        branchId: camera.branchId,
+        gatewayId: gateway.id,
+        cameraId: camera.id,
+        baseUrl: gateway.baseUrl,
+      });
     }),
   register: adminProcedure
     .input(
@@ -248,6 +283,7 @@ export const restaurantCamerasRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
+      annotateAudit(ctx, { skipInput: true });
       await requireBranch(ctx.db, input.branchId);
       const gateway = await ctx.db.restaurantCameraGateway.findFirst({
         where: { id: input.gatewayId, branchId: input.branchId, status: 'ACTIVE' },
