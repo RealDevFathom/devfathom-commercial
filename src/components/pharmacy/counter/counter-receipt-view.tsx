@@ -3,6 +3,7 @@
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
+import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
 import {
   buildCounterReceiptDocument,
   COUNTER_RECEIPT_DIRECTION,
@@ -18,13 +19,13 @@ export type CounterReceiptViewProps = {
   receipt: CounterReceipt | null;
   state: 'idle' | 'loading' | 'ready' | 'error';
   locale: CounterReceiptLocale;
-  format: 'THERMAL' | 'A4';
+  format: CounterReceiptFormat;
   /** True once this receipt has been rendered at least once in this session. */
   reprint: boolean;
   printing?: boolean;
   error?: string | null;
   onLocaleChange: (locale: CounterReceiptLocale) => void;
-  onFormatChange: (format: 'THERMAL' | 'A4') => void;
+  onFormatChange: (format: CounterReceiptFormat) => void;
   onPrint: () => void;
   onRetry: () => void;
 };
@@ -97,6 +98,7 @@ export function CounterReceiptView({
           <select
             id="receipt-locale"
             value={locale}
+            disabled={printing}
             onChange={(event) => onLocaleChange(event.target.value as CounterReceiptLocale)}
             className="h-11 rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
@@ -109,20 +111,22 @@ export function CounterReceiptView({
           <select
             id="receipt-format"
             value={format}
-            onChange={(event) => onFormatChange(event.target.value as 'THERMAL' | 'A4')}
+            disabled={printing}
+            onChange={(event) => onFormatChange(event.target.value as CounterReceiptFormat)}
             className="h-11 rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
-            <option value="THERMAL">Thermal</option>
+            <option value="THERMAL">Thermal · 80 mm</option>
+            <option value="THERMAL_58">Thermal · 58 mm</option>
             <option value="A4">A4</option>
           </select>
         </div>
         <Button
           type="button"
           className="h-11"
-          disabled={printing || document === null}
+          disabled={printing || document === null || receipt.receiptNumber === null}
           onClick={onPrint}
         >
-          {printing ? 'Sending…' : 'Print receipt'}
+          {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
         </Button>
         {receipt.receiptNumber === null ? (
           <StatusPill status="unissued" tone="warning" label={strings.unissued} />
@@ -132,6 +136,12 @@ export function CounterReceiptView({
           <StatusPill status="settled" tone="success" label={`#${receipt.receiptNumber}`} />
         )}
       </div>
+
+      <p className="text-sm text-text-muted">
+        Browser / OS print fallback: allow pop-ups, then select your printer and matching paper size
+        in the print dialog. These paper choices apply to this session; saved designer settings are
+        not connected yet. Printing cannot be confirmed here.
+      </p>
 
       {documentError ? (
         <p className="text-sm text-destructive" role="alert">
@@ -144,7 +154,11 @@ export function CounterReceiptView({
         lang={language}
         dir={direction}
         className={`space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 ${
-          format === 'THERMAL' ? 'max-w-[22rem] font-mono text-xs' : 'text-sm'
+          format === 'THERMAL_58'
+            ? 'max-w-[16rem] font-mono text-xs'
+            : format === 'THERMAL'
+              ? 'max-w-[22rem] font-mono text-xs'
+              : 'text-sm'
         }`}
       >
         <header className="space-y-1 border-b border-border-subtle pb-3">
@@ -222,7 +236,7 @@ export function CounterReceiptView({
       {document ? (
         <details className="rounded-md border border-border-subtle p-3">
           <summary className="cursor-pointer text-sm font-semibold text-text-strong">
-            Print document sent to the seam
+            Shared protocol document preview (not queued)
           </summary>
           <pre className="mt-2 overflow-x-auto font-mono text-xs text-text-body">
             {[
