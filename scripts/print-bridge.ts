@@ -105,7 +105,11 @@ export function printerAllowlist(value: string | undefined): string[] {
 }
 
 /** Fixed native operations only. Child processes never inherit bridge tokens or receipt metadata. */
-export function queueCommand(target: Extract<Transport, { kind: 'queue' }>) {
+export function queueCommand(target: Extract<Transport, { kind: 'queue' }>): {
+  file: string;
+  args: string[];
+  env: NodeJS.ProcessEnv;
+} {
   if (target.platform === 'darwin') {
     return {
       file: '/usr/bin/lp',
@@ -125,7 +129,7 @@ export function queueCommand(target: Extract<Transport, { kind: 'queue' }>) {
         '--',
         '-',
       ],
-      env: { PATH: '/usr/bin:/bin', LANG: 'C' } as NodeJS.ProcessEnv,
+      env: { PATH: '/usr/bin:/bin', LANG: 'C', NODE_ENV: 'production' },
     };
   }
   const systemRoot = process.env.SystemRoot || 'C:\\Windows';
@@ -142,13 +146,14 @@ export function queueCommand(target: Extract<Transport, { kind: 'queue' }>) {
       fileURLToPath(new URL('./print-bridge-windows.ps1', import.meta.url)),
     ],
     env: {
+      NODE_ENV: 'production',
       SystemRoot: systemRoot,
       WINDIR: systemRoot,
       TEMP: process.env.TEMP,
       TMP: process.env.TMP,
       PATH: win32.join(systemRoot, 'System32'),
       DEVFATHOM_PRINT_QUEUE: target.queue,
-    } as NodeJS.ProcessEnv,
+    },
   };
 }
 
