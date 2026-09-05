@@ -1,11 +1,25 @@
 # DevFathom delivery status
 
-Last reconciled: 2026-09-05 05:40 PKT (00:40 UTC) — Cowork supervisor check-in #214.
+Last reconciled: 2026-09-05 06:10 PKT (01:10 UTC) — Cowork supervisor check-in #216.
 Everything below the "Handoff" section is the 2026-09-02 checkpoint, kept for history.
 
 ## HANDOFF 2026-09-04 — read this first (for the Codex supervisor / owner)
 
 ### Where things are
+- **01:05 UTC — PUSHED. `origin/restaurantv2` is now `54fcfb22`** (`a1e729ff..54fcfb22`, 467 objects).
+  This is the first time the remote has carried the restaurant-completion programme, the a11y
+  programme, the five gate repairs and the whole pharmacy P0+P1 programme. The gate fires on push to
+  `restaurantv2`, so a run for `54fcfb22` should register within a minute or two.
+- **Gate reader dispatched as `f96e243e`** (Platform Engineer 3 `405bf857`, critical). Deliberately a NEW
+  lane rather than re-firing the old one: the old issue's own title named `a1e729ff`, and reusing it
+  would have repeated tonight's mistake. The new brief **names no commit** — it derives
+  `SHA=$(git rev-parse origin/restaurantv2)` and selects its run with
+  `gh run list --json databaseId,headSha,... --jq 'select(.headSha==$SHA)'`. It reports only: no fixes,
+  no pushes, no Azure. It is told to group failures by likely root cause, to treat **pending as
+  failing**, and that the 27 tenant-isolation assertions now genuinely execute, so a failure among them
+  is a real finding rather than an environment artefact.
+- **Do not deploy staging until that run is green.** When it is, use `DevFathom hub/deploy-staging.md`
+  (the sha-agnostic one) and nothing else.
 - **00:40 UTC 2026-09-05 — NEAR MISS: a sha-pinned deploy prompt almost put staging on a 37-commit
   stale, known-red build. Root cause fixed; read this before writing any operator prompt.**
   Saad opened `deploy-staging-a1e729ff-prompt.md` and its gate step told Claude Code to wait on run
