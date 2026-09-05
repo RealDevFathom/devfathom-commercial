@@ -15,12 +15,39 @@ describe('shared receipt design input', () => {
     expect(preview.split('\n').every((line) => line.length <= receiptColumns(layout))).toBe(true);
     expect(preview.replaceAll('\n', '')).toContain('a'.repeat(100));
   });
-  it.each(['\x1b@', '\x1dV', '\x00', '\r', '<script>alert(1)</script>', '\u202e', '🙂'])(
-    'rejects unsafe text %j',
-    (footerText) => {
-      expect(ReceiptLayoutSchema.safeParse({ ...DEFAULT_RECEIPT_LAYOUT, footerText }).success).toBe(
-        false
-      );
+  it.each([
+    '\x1b@',
+    '\x1dV',
+    '\x00',
+    '\r',
+    '<script>alert(1)</script>',
+    '\u202e',
+    '\u0085',
+    '\ud800',
+  ])('rejects unsafe text %j', (footerText) => {
+    expect(ReceiptLayoutSchema.safeParse({ ...DEFAULT_RECEIPT_LAYOUT, footerText }).success).toBe(
+      false
+    );
+  });
+  it.each([58, 80] as const)(
+    'preserves Unicode layout and facts for %imm browser output',
+    (paperWidth) => {
+      const unicode = 'چائے کِتاب e\u0301 👩‍👩‍👧‍👦 '.repeat(5);
+      const layout = {
+        ...DEFAULT_RECEIPT_LAYOUT,
+        paperWidth,
+        businessText: 'دکان',
+        headerText: 'خوش آمدید',
+        footerText: unicode,
+      };
+      const facts = { ...SAMPLE_RECEIPT, businessName: 'دکان', lines: [unicode] };
+      const preview = buildReceiptPreview(layout, facts);
+      expect(preview).toContain(unicode);
+      expect(preview).toContain(layout.headerText);
+      expect(preview).toContain(layout.businessText);
+      expect(preview).toContain('Total: PKR 1050.00');
+      expect(preview).toContain('Change: PKR 50.00');
+      expect(wrapReceiptText(unicode, paperWidth === 58 ? 32 : 48)).toEqual([unicode]);
     }
   );
   it('rejects money-hiding fields, arbitrary widths and excessive input', () => {

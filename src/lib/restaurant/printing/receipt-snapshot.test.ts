@@ -1,7 +1,14 @@
 import { describe, expect, it } from 'vitest';
+import { createElement } from 'react';
+import { renderToStaticMarkup } from 'react-dom/server';
 import { DEFAULT_RECEIPT_LAYOUT } from '@/lib/receipts/configuration';
 import { buildReceiptPreview, SAMPLE_RECEIPT } from '@/lib/receipts/preview';
-import { PrintDocumentSchema, type PrintDocument } from './contract';
+import {
+  PrintDocumentSchema,
+  RawPrintValidationError,
+  validateRawPrintDocument,
+  type PrintDocument,
+} from './contract';
 import { renderEscPos } from './esc-pos';
 
 const document: PrintDocument = {
@@ -62,10 +69,88 @@ describe('queued receipt snapshot', () => {
     ).toThrow();
   });
 
-  it.each(['\u001b@', 'اردو'])('rejects unsafe or unsupported legacy text: %s', (label) => {
-    expect(() => renderEscPos({ ...document, lines: [{ quantity: 1, label }] })).toThrow(
-      'Use a browser/OS-rendered receipt'
-    );
+  it.each(['title', 'reference', 'footer', 'label'] as const)(
+    'rejects raw Unicode in legacy %s with a usable fallback',
+    (field) => {
+      const input =
+        field === 'label'
+          ? { ...document, lines: [{ quantity: 1, label: 'چائے' }] }
+          : { ...document, [field]: 'چائے' };
+      expect(PrintDocumentSchema.safeParse(input).success).toBe(true);
+      for (const run of [() => validateRawPrintDocument(input), () => renderEscPos(input)]) {
+        expect(run).toThrow(RawPrintValidationError);
+        try {
+          run();
+        } catch (error) {
+          expect(error).toMatchObject({ code: 'UNSUPPORTED_PRINT_TEXT', fallback: 'BROWSER_OS' });
+          expect((error as Error).message).not.toContain('چائے');
+        }
+      }
+    }
+  );
+
+  it.each(['\u001b@', '\n\u001dV', '\rtitle', '\titem', '\u0085', '\ud800'])(
+    'rejects commands/invalid text before trimming or rendering: %j',
+    (value) => {
+      for (const input of [
+        { ...document, title: value },
+        { ...document, lines: [{ quantity: 1, label: value }] },
+        {
+          ...document,
+          receiptSnapshot: {
+            layout: { ...DEFAULT_RECEIPT_LAYOUT },
+            facts: { ...SAMPLE_RECEIPT, businessName: value },
+          },
+        },
+      ]) {
+        expect(() => validateRawPrintDocument(input)).toThrow(RawPrintValidationError);
+        try {
+          validateRawPrintDocument(input);
+        } catch (error) {
+          expect(error).toMatchObject({ code: 'INVALID_PRINT_DOCUMENT', fallback: null });
+        }
+      }
+    }
+  );
+
+  it.each([58, 80] as const)(
+    'shares complete Unicode facts with inert %smm browser output, never raw printing',
+    (paperWidth) => {
+      const text = 'چائے e\u0301 👩‍👩‍👧‍👦 '.repeat(6);
+      const layout = {
+        ...DEFAULT_RECEIPT_LAYOUT,
+        paperWidth,
+        headerText: 'خوش آمدید',
+        footerText: text,
+      };
+      const facts = {
+        ...SAMPLE_RECEIPT,
+        businessName: 'دکان',
+        lines: [text, '<img src=x onerror=alert(1)>'],
+      };
+      const parsed = PrintDocumentSchema.parse({ ...document, receiptSnapshot: { layout, facts } });
+      const preview = buildReceiptPreview(
+        parsed.receiptSnapshot!.layout,
+        parsed.receiptSnapshot!.facts
+      );
+      expect(preview).toContain(text);
+      expect(preview).toContain('Total: PKR 1050.00');
+      expect(preview).toContain('Change: PKR 50.00');
+      const html = renderToStaticMarkup(createElement('pre', null, preview));
+      expect(html).toContain(text);
+      expect(html).toContain('&lt;img');
+      expect(html).not.toContain('<img');
+      expect(() => validateRawPrintDocument(parsed)).toThrow('Use a browser/OS-rendered receipt');
+      expect(() => renderEscPos(parsed)).toThrow('Use a browser/OS-rendered receipt');
+    }
+  );
+
+  it('accepts complete ASCII snapshots through the explicit raw boundary', () => {
+    const input = {
+      ...document,
+      receiptSnapshot: { layout: { ...DEFAULT_RECEIPT_LAYOUT }, facts: SAMPLE_RECEIPT },
+    };
+    expect(validateRawPrintDocument(input)).toEqual(input);
   });
 
   it('rejects missing monetary facts and injected commands in snapshots', () => {
