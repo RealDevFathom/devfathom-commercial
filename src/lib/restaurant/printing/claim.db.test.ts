@@ -1,7 +1,8 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
-import { acknowledgePrintJob, claimNextPrintJob } from './service';
+import { acknowledgePrintJob, claimNextPrintJob, PrintBridgeService } from './service';
+import type { PrintJob } from './contract';
 
 if (!process.env.TEST_DATABASE_URL) throw new Error('Disposable TEST_DATABASE_URL required.');
 process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
@@ -152,5 +153,103 @@ describe('durable claim authorization', () => {
   it('lets only one concurrent claimant obtain bytes', async () => {
     const jobs = await Promise.all([claim(), claim('device-b')]);
     expect(jobs.filter(Boolean)).toHaveLength(1);
+  });
+
+  it('rejects raw Unicode from a direct typed enqueue caller before persistence', async () => {
+    const invalid = { ...document, lines: [{ quantity: 1, label: 'اردو' }] };
+    const key = randomUUID();
+    await expect(
+      run((db) =>
+        new PrintBridgeService(db).enqueue(
+          org,
+          {
+            branchId: branch,
+            routes: [
+              {
+                documentType: 'BAR_TICKET',
+                stationId: null,
+                printerId: 'printer-a',
+                enabled: true,
+              },
+            ],
+          },
+          { branchId: branch, stationId: null, idempotencyKey: key, document: invalid } as PrintJob
+        )
+      )
+    ).rejects.toMatchObject({
+      code: 'UNSUPPORTED_PRINT_TEXT',
+      fallback: 'BROWSER_OS',
+    });
+    expect(await run((db) => db.restaurantPrintJob.count({ where: { idempotencyKey: key } }))).toBe(
+      0
+    );
+  });
+
+  it('holds stored invalid Urdu before dispatch and progresses to ASCII across repeated claims', async () => {
+    const first = await run((db) => db.restaurantPrintJob.findFirstOrThrow());
+    const invalid = { ...document, lines: [{ quantity: 1, label: 'اردو' }] };
+    await run((db) =>
+      db.restaurantPrintJob.update({
+        where: { id: first.id },
+        data: {
+          document: invalid,
+          createdAt: new Date(now.getTime() - 1000),
+        },
+      })
+    );
+    const valid = await run((db) =>
+      db.restaurantPrintJob.create({
+        data: {
+          organizationId: org,
+          branchId: branch,
+          idempotencyKey: randomUUID(),
+          documentType: 'BAR_TICKET',
+          document,
+          printerId: 'printer-a',
+          createdAt: now,
+        },
+      })
+    );
+    const job = (await claim())!;
+    expect(job.id).toBe(valid.id);
+    const held = await run((db) =>
+      db.restaurantPrintJob.findUniqueOrThrow({ where: { id: first.id } })
+    );
+    expect(held).toMatchObject({
+      status: 'OFFLINE',
+      attemptCount: 0,
+      lastAttemptAt: null,
+      printedAt: null,
+      byteCount: null,
+      printerId: 'printer-a',
+      document: invalid,
+    });
+    expect(await claim('device-b', new Date(now.getTime() + 60000))).toBeNull();
+    expect(await claim('device-b', new Date(now.getTime() + 120000))).toBeNull();
+    expect(
+      await run((db) => db.restaurantPrintJob.findUniqueOrThrow({ where: { id: first.id } }))
+    ).toEqual(held);
+    expect(
+      await run((db) => db.restaurantPrintJob.findUniqueOrThrow({ where: { id: valid.id } }))
+    ).toMatchObject({ status: 'PENDING', attemptCount: 1, lastAttemptAt: now });
+    expect(await ack(job.id, job.claimToken)).toMatchObject({ acknowledged: true });
+  });
+
+  it('never changes an invalid document whose physical attempt is uncertain', async () => {
+    const first = await run((db) => db.restaurantPrintJob.findFirstOrThrow());
+    const uncertain = await run((db) =>
+      db.restaurantPrintJob.update({
+        where: { id: first.id },
+        data: {
+          document: { ...document, lines: [{ quantity: 1, label: 'اردو' }] },
+          attemptCount: 1,
+          lastAttemptAt: now,
+        },
+      })
+    );
+    expect(await claim('device-b', new Date(now.getTime() + 60000))).toBeNull();
+    expect(
+      await run((db) => db.restaurantPrintJob.findUniqueOrThrow({ where: { id: first.id } }))
+    ).toEqual(uncertain);
   });
 });
