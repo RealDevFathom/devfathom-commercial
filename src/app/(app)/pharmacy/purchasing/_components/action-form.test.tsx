@@ -1,5 +1,6 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
+import { renderToString } from 'react-dom/server';
 import { PurchasingActionForm } from './action-form';
 
 afterEach(() => vi.unstubAllGlobals());
@@ -19,20 +20,89 @@ function setup(action: (form: FormData) => Promise<string>) {
 }
 
 describe('purchasing outcome delivery', () => {
-  it.each(['success', 'error'])(
-    'navigates explicitly with %s notice and selection intact',
-    async (kind) => {
-      const destination = `/pharmacy/purchasing/orders?kind=${kind}&notice=Outcome&branch=b1&order=o1&field=reference`;
-      const action = vi.fn().mockResolvedValue(destination);
-      const { replace } = setup(action);
-      await act(async () => {
-        fireEvent.click(screen.getByRole('button'));
-      });
-      expect(replace).toHaveBeenCalledWith(`https://workspace.test${destination}`);
-      expect(action.mock.calls[0][0].get('reference')).toBe('PO-1');
-      expect(action.mock.calls[0][0].get('decision')).toBe('approve');
+  it('navigates explicitly with success notice and selection intact', async () => {
+    const destination =
+      '/pharmacy/purchasing/orders?kind=success&notice=Outcome&branch=b1&order=o1';
+    const action = vi.fn().mockResolvedValue(destination);
+    const { replace } = setup(action);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(replace).toHaveBeenCalledWith(`https://workspace.test${destination}`);
+    expect(action.mock.calls[0][0].get('reference')).toBe('PO-1');
+    expect(action.mock.calls[0][0].get('decision')).toBe('approve');
+  });
+
+  it('retains edited values and focuses the invalid field on server validation failure', async () => {
+    const action = vi
+      .fn()
+      .mockResolvedValue(
+        '/pharmacy/purchasing/orders?kind=error&notice=Reference+already+used&field=reference&order=o1'
+      );
+    const { replace } = setup(action);
+    const input = screen.getByLabelText('Reference');
+    fireEvent.change(input, { target: { value: 'EDITED-PO' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(replace).not.toHaveBeenCalled();
+    expect(input).toHaveValue('EDITED-PO');
+    expect(input).toHaveFocus();
+    expect(input).toHaveAttribute('aria-invalid', 'true');
+    expect(input).toHaveAccessibleDescription('Reference already used');
+    expect(screen.getByRole('button')).not.toBeDisabled();
+    fireEvent.change(input, { target: { value: 'CORRECTED-PO' } });
+    action.mockResolvedValue('/pharmacy/purchasing/orders?kind=success');
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(action).toHaveBeenCalledTimes(2);
+    expect(action.mock.calls[1][0].get('reference')).toBe('CORRECTED-PO');
+    expect(replace).toHaveBeenCalledOnce();
+    expect(input).not.toHaveAttribute('aria-invalid');
+  });
+
+  it('focuses the error message when the server supplies no visible field', async () => {
+    const { replace } = setup(
+      vi.fn().mockResolvedValue('/pharmacy/purchasing/orders?kind=error&notice=Permission+denied')
+    );
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(screen.getByRole('alert')).toHaveFocus();
+    expect(screen.getByRole('alert')).toHaveTextContent('Permission denied');
+    expect(replace).not.toHaveBeenCalled();
+  });
+
+  it.each(['space-y-4', 'grid gap-4', 'flex flex-wrap gap-3'])(
+    'keeps %s on a real parent of the original controls',
+    (className) => {
+      const { container } = render(
+        <PurchasingActionForm action={vi.fn()} className={className}>
+          <div>Fields</div>
+          <button>Save</button>
+        </PurchasingActionForm>
+      );
+      const fieldset = container.querySelector('fieldset')!;
+      expect(fieldset).toHaveClass(className);
+      expect(fieldset).not.toHaveClass('contents');
+      expect([...fieldset.children].map((child) => child.tagName)).toEqual(['DIV', 'BUTTON']);
     }
   );
+
+  it('renders disabled pre-hydration controls with no-JS and stalled-hydration guidance', () => {
+    const html = renderToString(
+      <PurchasingActionForm action={vi.fn()}>
+        <input name="reference" />
+        <button>Save</button>
+      </PurchasingActionForm>
+    );
+    const container = document.createElement('div');
+    container.innerHTML = html;
+    expect(container.querySelector('fieldset')).toHaveAttribute('disabled');
+    expect(container.textContent).toContain('If controls stay disabled, reload this page.');
+    expect(container.querySelector('noscript')?.textContent).toContain('Enable JavaScript');
+  });
 
   it('blocks duplicate submissions while awaiting the outcome and navigation', async () => {
     let resolve!: (value: string) => void;

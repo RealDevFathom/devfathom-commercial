@@ -1,6 +1,16 @@
 'use client';
 
-import { useSyncExternalStore, useRef, useState, useTransition, type ReactNode } from 'react';
+import {
+  useSyncExternalStore,
+  useRef,
+  useState,
+  useTransition,
+  useEffect,
+  useId,
+  type ReactNode,
+} from 'react';
+
+import { cn } from '@/lib/utils';
 
 const subscribe = () => () => {};
 const clientReady = () => true;
@@ -25,10 +35,37 @@ export function PurchasingActionForm({
   const [failed, setFailed] = useState(false);
   const [, startTransition] = useTransition();
   const locked = useRef(false);
+  const formRef = useRef<HTMLFormElement>(null);
+  const errorRef = useRef<HTMLParagraphElement>(null);
+  const errorId = useId();
+  const [notice, setNotice] = useState<{ message: string; field: string | null } | null>(null);
+
+  useEffect(() => {
+    if (!notice) return;
+    const control = notice.field ? formRef.current?.elements.namedItem(notice.field) : null;
+    if (
+      !(control instanceof HTMLElement) ||
+      (control instanceof HTMLInputElement && control.type === 'hidden')
+    ) {
+      errorRef.current?.focus();
+      return;
+    }
+    const invalid = control.getAttribute('aria-invalid');
+    const describedBy = control.getAttribute('aria-describedby');
+    control.setAttribute('aria-invalid', 'true');
+    control.setAttribute('aria-describedby', [describedBy, errorId].filter(Boolean).join(' '));
+    control.focus();
+    return () => {
+      if (invalid === null) control.removeAttribute('aria-invalid');
+      else control.setAttribute('aria-invalid', invalid);
+      if (describedBy === null) control.removeAttribute('aria-describedby');
+      else control.setAttribute('aria-describedby', describedBy);
+    };
+  }, [notice, errorId]);
 
   return (
     <form
-      className={className}
+      ref={formRef}
       aria-busy={submitted && !failed}
       onSubmit={(event) => {
         event.preventDefault();
@@ -39,6 +76,7 @@ export function PurchasingActionForm({
           (event.nativeEvent as SubmitEvent).submitter
         );
         locked.current = true;
+        setNotice(null);
         setSubmitted(true);
         startTransition(async () => {
           try {
@@ -52,6 +90,16 @@ export function PurchasingActionForm({
             ) {
               throw new Error('Invalid purchasing destination');
             }
+            if (target.searchParams.get('kind') === 'error') {
+              // Keep the live controls and selected record; do not reset entered values.
+              setNotice({
+                message: target.searchParams.get('notice') || 'The change could not be saved.',
+                field: target.searchParams.get('field'),
+              });
+              locked.current = false;
+              setSubmitted(false);
+              return;
+            }
             window.location.replace(target.href);
           } catch {
             // A lost response may follow a committed write. Never retry it automatically.
@@ -60,9 +108,26 @@ export function PurchasingActionForm({
         });
       }}
     >
-      <fieldset className="contents" disabled={!ready || submitted}>
+      {/* Layout utilities must target real child boxes, including space-y selectors.
+          Disable until hydration: no native GET or unhandled POST fallback is safe
+          for this explicit-result protocol. No-JS submission is intentionally unavailable. */}
+      <fieldset className={cn('min-w-0', className)} disabled={!ready || submitted}>
         {children}
       </fieldset>
+      {!ready ? (
+        <p role="status">Preparing purchasing form. If controls stay disabled, reload this page.</p>
+      ) : null}
+      {notice ? (
+        <p
+          ref={errorRef}
+          id={errorId}
+          role="alert"
+          tabIndex={-1}
+          className="text-sm text-destructive"
+        >
+          {notice.message}
+        </p>
+      ) : null}
       <noscript>Enable JavaScript to submit purchasing changes.</noscript>
       {submitted && !failed ? <p role="status">Saving and loading the outcome…</p> : null}
       {failed ? (
