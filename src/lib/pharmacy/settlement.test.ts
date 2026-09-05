@@ -103,12 +103,50 @@ describe('pharmacy settlement invariants', () => {
         findFirst: vi.fn().mockResolvedValue({
           id: 'sale-1',
           status: 'OPEN',
-          lines: [{ quantity: 1, unitPriceMinor: 100, discountMinor: 0 }],
+          lines: [
+            {
+              id: 'line-1',
+              organizationId: 'org-1',
+              branchId: 'branch-1',
+              medicineId: 'medicine-1',
+              presentationId: 'presentation-1',
+              quantity: 1,
+              canonicalUnits: 1,
+              unitPriceMinor: 100,
+              discountMinor: 0,
+              medicine: { organizationId: 'org-1', productName: 'Issued medicine', strengths: [] },
+              presentation: {
+                organizationId: 'org-1',
+                medicineId: 'medicine-1',
+                presentation: 'Tablet',
+              },
+              allocations: [
+                {
+                  id: 'allocation-1',
+                  organizationId: 'org-1',
+                  branchId: 'branch-1',
+                  inventoryLotId: 'lot-1',
+                  canonicalUnits: 1,
+                  lot: {
+                    organizationId: 'org-1',
+                    branchId: 'branch-1',
+                    batch: {
+                      organizationId: 'org-1',
+                      medicineId: 'medicine-1',
+                      batchNumber: 'B1',
+                      expiresAt: new Date('2030-01-01'),
+                    },
+                  },
+                },
+              ],
+            },
+          ],
           tenders: [],
         }),
         update: saleUpdate,
       },
       pharmacyTender: { create: tenderCreate },
+      pharmacySaleEvent: { create: vi.fn().mockResolvedValue({}) },
     };
     const input = {
       saleId: 'sale-1',
@@ -152,5 +190,6 @@ describe('pharmacy settlement invariants', () => {
     expect(replay).toMatchObject({ tenderId: 'tender-1', receiptNumber: 41, replayed: true });
     expect(tenderCreate).toHaveBeenCalledTimes(1);
     expect(saleUpdate).toHaveBeenCalledTimes(1);
+    expect(db.pharmacySaleEvent.create).toHaveBeenCalledTimes(1);
   });
 });
