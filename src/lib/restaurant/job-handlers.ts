@@ -28,6 +28,7 @@ import {
   NOTIFICATION_WEBHOOK_JOB_TYPE,
   notificationWebhookJobHandler,
 } from '@/lib/restaurant/notification-webhook';
+import { DEMO_RESET_JOB_TYPE, demoResetJobHandler } from '@/lib/demo/jobs';
 
 /**
  * M7-L1 — the typed job-handler registry. The scheduler primitive
@@ -79,6 +80,7 @@ export const restaurantJobHandlers: Record<string, RestaurantJobHandler> = {
   [INSIGHTS_ROLLUP_DAY_JOB]: rollupDayHandler,
   [MENU_IMPORT_EXTRACT_JOB]: menuImportExtractHandler,
   [NOTIFICATION_WEBHOOK_JOB_TYPE]: notificationWebhookJobHandler,
+  [DEMO_RESET_JOB_TYPE]: demoResetJobHandler,
 };
 
 /** Look up the handler registered for a job type (undefined when none is). */

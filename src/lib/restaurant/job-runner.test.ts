@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/restaurant/job-handlers', () => ({
   runRestaurantJob: mocks.runRestaurantJob,
 }));
+vi.mock('@/lib/demo/jobs', () => ({ DEMO_RESET_JOB_TYPE: 'demo-reset' }));
 
 import {
   runRestaurantWorker,
@@ -40,9 +41,15 @@ function applyData(target: Row, data: Row): void {
 
 function matchWhere(row: Row, where: Row): boolean {
   for (const [key, cond] of Object.entries(where)) {
-    if (cond && typeof cond === 'object' && !(cond instanceof Date) && 'lt' in cond) {
-      const current = row[key] as Date | null | undefined;
-      if (!(current instanceof Date) || !(current < (cond as { lt: Date }).lt)) return false;
+    if (cond && typeof cond === 'object' && !(cond instanceof Date)) {
+      if ('lt' in cond) {
+        const current = row[key] as Date | null | undefined;
+        if (!(current instanceof Date) || !(current < (cond as { lt: Date }).lt)) return false;
+      } else if ('not' in cond) {
+        if (row[key] === (cond as { not: unknown }).not) return false;
+      } else {
+        return false;
+      }
     } else if (row[key] !== cond) {
       return false;
     }
@@ -90,10 +97,17 @@ function createJobDb(seed: Row[] = []) {
 
   const db = {
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
-    $queryRaw: async (sql: { values: unknown[] }) => {
+    $queryRaw: async (sql: { values: unknown[]; strings?: readonly string[] }) => {
       const now = sql.values[0] as Date;
+      const typeFilter = sql.values[1] as string | undefined;
+      const excludesType = sql.strings?.join('').includes('<>') ?? false;
       const due = [...jobs.values()]
-        .filter((row) => row.status === 'QUEUED' && (row.nextAttemptAt as Date) <= now)
+        .filter(
+          (row) =>
+            row.status === 'QUEUED' &&
+            (row.nextAttemptAt as Date) <= now &&
+            (!typeFilter || (excludesType ? row.type !== typeFilter : row.type === typeFilter))
+        )
         .sort(
           (a, b) =>
             (a.nextAttemptAt as Date).getTime() - (b.nextAttemptAt as Date).getTime() ||
@@ -254,6 +268,35 @@ describe('runRestaurantWorkerTick', () => {
     expect(org.jobs.get('j1')!.status).toBe('QUEUED');
     expect(org.executions).toHaveLength(1);
     expect(org.executions[0]!.outcome).toBe('FAILED');
+  });
+
+  it('leaves demo-reset claims and stale recovery to the dedicated demo worker', async () => {
+    const stale = new Date(T0.getTime() - 20 * 60_000);
+    const org = createJobDb([
+      queuedJob({ id: 'demo_due', type: 'demo-reset', createdAt: new Date(T0.getTime() - 2_000) }),
+      queuedJob({ id: 'ordinary_due', type: 'sop.sweep' }),
+      queuedJob({
+        id: 'demo_running',
+        type: 'demo-reset',
+        status: 'RUNNING',
+        attempts: 1,
+        claimedAt: stale,
+      }),
+    ]);
+
+    const result = await runRestaurantWorkerTick({
+      workerId: 'worker-1',
+      now: T0,
+      discoverOrganizations: async () => ['org_a'],
+      runInOrg: (_orgId, work) => work(org.db),
+      outboxClient: () => createOutboxDb().db,
+    });
+
+    expect(result.recovered).toBe(0);
+    expect(result.jobs).toMatchObject({ claimed: 1, succeeded: 1 });
+    expect(org.jobs.get('ordinary_due')!.status).toBe('SUCCEEDED');
+    expect(org.jobs.get('demo_due')!.status).toBe('QUEUED');
+    expect(org.jobs.get('demo_running')!.status).toBe('RUNNING');
   });
 
   it('recovers a job abandoned past its lease', async () => {

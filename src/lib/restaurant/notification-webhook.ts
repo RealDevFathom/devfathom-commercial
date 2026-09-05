@@ -17,6 +17,7 @@ import {
 } from '@/lib/restaurant/outbox-dispatcher';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { enqueue } from '@/lib/restaurant/scheduler';
+import { isDemoTenant } from '@/lib/demo/isolation';
 
 export const NOTIFICATION_WEBHOOK_EVENT_TYPE = 'restaurant.notification.webhook.v1';
 export const NOTIFICATION_WEBHOOK_JOB_TYPE = 'notification.webhook.deliver.v1';
@@ -220,6 +221,7 @@ export function createNotificationWebhookConsumer(): OutboxConsumer {
     ) {
       throw new Error('Notification webhook outbox identity does not match its payload.');
     }
+    if (await isDemoTenant(tx)) return;
     await enqueue(tx, {
       type: NOTIFICATION_WEBHOOK_JOB_TYPE,
       idempotencyKey: `notification-webhook:${record.id}:initial`,
@@ -247,6 +249,7 @@ export function createNotificationWebhookJobHandler(
   const failureDb = options.failureDb ?? createTenantDb;
   return async ({ db: tx, job }) => {
     const payload = notificationWebhookJobPayloadSchema.parse(job.payload);
+    if (await isDemoTenant(tx)) return;
     const config = await tx.restaurantNotificationWebhook.findFirst();
     if (!config?.enabled) return;
 
@@ -355,6 +358,7 @@ export const notificationWebhookConsumer = createNotificationWebhookConsumer();
 export const notificationWebhookJobHandler = createNotificationWebhookJobHandler();
 
 export function registerNotificationWebhookConsumer(registry: OutboxConsumerRegistry): void {
+  if (registry.has(NOTIFICATION_WEBHOOK_EVENT_TYPE)) return;
   registry.register(NOTIFICATION_WEBHOOK_EVENT_TYPE, notificationWebhookConsumer);
 }
 

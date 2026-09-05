@@ -29,15 +29,19 @@ const entitlements = (enabled: boolean): EntitlementView => ({
 });
 
 describe('emitEvent entitlement enforcement', () => {
+  let demo = false;
+  const findOrganization = vi.fn(async () => ({ isDemo: demo }));
   const findMany = vi.fn();
   const createDelivery = vi.fn();
   const db = {
+    organization: { findUnique: findOrganization },
     webhook: { findMany },
     webhookDelivery: { create: createDelivery },
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
+    demo = false;
     vi.stubGlobal('fetch', vi.fn());
     createDelivery.mockResolvedValue({});
   });
@@ -65,5 +69,19 @@ describe('emitEvent entitlement enforcement', () => {
       'https://example.com/hook',
       expect.objectContaining({ method: 'POST' })
     );
+  });
+
+  it('sinks enabled outbound webhooks for a demo organization', async () => {
+    demo = true;
+    emitEvent(db as never, entitlements(true), 'task.created', { taskId: 'task_1' });
+
+    await vi.waitFor(() => expect(findOrganization).toHaveBeenCalledOnce());
+    expect(findOrganization).toHaveBeenCalledWith({
+      where: { id: 'org_1' },
+      select: { isDemo: true },
+    });
+    expect(findMany).not.toHaveBeenCalled();
+    expect(fetch).not.toHaveBeenCalled();
+    expect(createDelivery).not.toHaveBeenCalled();
   });
 });

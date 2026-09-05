@@ -75,7 +75,7 @@ export async function POST(
   // fallback, and never a client-supplied org. An unknown host is indistinguishable
   // from an absent one: a flat 404.
   const organization = await resolveExplicitOrganizationByHost(requestHost(request));
-  if (!organization) {
+  if (!organization || organization.isDemo) {
     return NextResponse.json({ error: 'Unknown tenant.' }, { status: 404 });
   }
 

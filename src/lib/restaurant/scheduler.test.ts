@@ -52,10 +52,12 @@ function applyData(target: Row, data: Row): void {
 function matchWhere(row: Row, where: Row): boolean {
   for (const [key, condition] of Object.entries(where)) {
     if (condition && typeof condition === 'object' && !(condition instanceof Date)) {
-      const cond = condition as { lt?: Date };
+      const cond = condition as { lt?: Date; not?: unknown };
       if ('lt' in cond) {
         const current = row[key] as Date | null | undefined;
         if (!(current instanceof Date) || !(current < cond.lt!)) return false;
+      } else if ('not' in cond) {
+        if (row[key] === cond.not) return false;
       } else {
         return false;
       }
@@ -143,10 +145,17 @@ function createFakeDb(seed: Row[] = []) {
 
   const db = {
     $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
-    $queryRaw: async (sql: { values: unknown[] }) => {
+    $queryRaw: async (sql: { values: unknown[]; strings?: readonly string[] }) => {
       const now = sql.values[0] as Date;
+      const typeFilter = sql.values[1] as string | undefined;
+      const excludesType = sql.strings?.join('').includes('<>') ?? false;
       const due = [...jobs.values()]
-        .filter((row) => row.status === 'QUEUED' && (row.nextAttemptAt as Date) <= now)
+        .filter(
+          (row) =>
+            row.status === 'QUEUED' &&
+            (row.nextAttemptAt as Date) <= now &&
+            (!typeFilter || (excludesType ? row.type !== typeFilter : row.type === typeFilter))
+        )
         .sort(
           (a, b) =>
             (a.nextAttemptAt as Date).getTime() - (b.nextAttemptAt as Date).getTime() ||
@@ -319,6 +328,56 @@ describe('recoverStaleJobs', () => {
     expect(jobs.get('stale')!.status).toBe('QUEUED');
     expect(jobs.get('fresh')!.status).toBe('RUNNING');
   });
+
+  it('recovers only the requested job type', async () => {
+    const stale = new Date(T0.getTime() - DEFAULT_LEASE_MS - 1_000);
+    const { db, jobs } = createFakeDb([
+      {
+        id: 'demo',
+        type: 'demo-reset',
+        status: 'RUNNING',
+        attempts: 1,
+        maxAttempts: 5,
+        claimedAt: stale,
+      },
+      {
+        id: 'other',
+        type: 'sop.sweep',
+        status: 'RUNNING',
+        attempts: 1,
+        maxAttempts: 5,
+        claimedAt: stale,
+      },
+    ]);
+    expect(await recoverStaleJobs(db, { now: T0, jobType: 'demo-reset' })).toBe(1);
+    expect(jobs.get('demo')!.status).toBe('QUEUED');
+    expect(jobs.get('other')!.status).toBe('RUNNING');
+  });
+
+  it('leaves an excluded stale job running', async () => {
+    const stale = new Date(T0.getTime() - DEFAULT_LEASE_MS - 1_000);
+    const { db, jobs } = createFakeDb([
+      {
+        id: 'demo',
+        type: 'demo-reset',
+        status: 'RUNNING',
+        attempts: 1,
+        maxAttempts: 5,
+        claimedAt: stale,
+      },
+      {
+        id: 'other',
+        type: 'sop.sweep',
+        status: 'RUNNING',
+        attempts: 1,
+        maxAttempts: 5,
+        claimedAt: stale,
+      },
+    ]);
+    expect(await recoverStaleJobs(db, { now: T0, excludeJobType: 'demo-reset' })).toBe(1);
+    expect(jobs.get('demo')!.status).toBe('RUNNING');
+    expect(jobs.get('other')!.status).toBe('QUEUED');
+  });
 });
 
 describe('releaseClaim', () => {
@@ -384,6 +443,77 @@ describe('claimNextDue', () => {
     await expect(claimNextDue(db, { workerId: ' ', now: T0 })).rejects.toMatchObject({
       reason: 'INVALID',
     });
+    await expect(claimNextDue(db, { workerId: 'w', now: T0, jobType: ' ' })).rejects.toMatchObject({
+      reason: 'INVALID',
+    });
+    await expect(
+      claimNextDue(db, {
+        workerId: 'w',
+        now: T0,
+        jobType: 'demo-reset',
+        excludeJobType: 'sop.sweep',
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID' });
+  });
+
+  it('claims only the requested job type', async () => {
+    const earlier = new Date(T0.getTime() - 2_000);
+    const later = new Date(T0.getTime() - 1_000);
+    const { db, jobs } = createFakeDb([
+      {
+        id: 'other',
+        type: 'sop.sweep',
+        status: 'QUEUED',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: earlier,
+        createdAt: earlier,
+        payload: {},
+      },
+      {
+        id: 'demo',
+        type: 'demo-reset',
+        status: 'QUEUED',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: later,
+        createdAt: later,
+        payload: {},
+      },
+    ]);
+    expect((await claimNextDue(db, { workerId: 'w', now: T0, jobType: 'demo-reset' }))?.id).toBe(
+      'demo'
+    );
+    expect(jobs.get('other')!.status).toBe('QUEUED');
+  });
+
+  it('does not claim an excluded job type', async () => {
+    const { db, jobs } = createFakeDb([
+      {
+        id: 'demo',
+        type: 'demo-reset',
+        status: 'QUEUED',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: new Date(T0.getTime() - 2_000),
+        createdAt: new Date(T0.getTime() - 2_000),
+        payload: {},
+      },
+      {
+        id: 'other',
+        type: 'sop.sweep',
+        status: 'QUEUED',
+        attempts: 0,
+        maxAttempts: 5,
+        nextAttemptAt: new Date(T0.getTime() - 1_000),
+        createdAt: new Date(T0.getTime() - 1_000),
+        payload: {},
+      },
+    ]);
+    expect(
+      (await claimNextDue(db, { workerId: 'w', now: T0, excludeJobType: 'demo-reset' }))?.id
+    ).toBe('other');
+    expect(jobs.get('demo')!.status).toBe('QUEUED');
   });
 });
 

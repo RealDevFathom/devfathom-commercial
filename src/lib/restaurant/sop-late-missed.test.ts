@@ -33,6 +33,7 @@ function makeContext(payloadOverride: Record<string, unknown> = {}): {
     db,
     job: {
       id: 'job_1',
+      organizationId: 'org_1',
       type: 'sop.sweepLateMissed',
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       payload: payloadOverride as any,
