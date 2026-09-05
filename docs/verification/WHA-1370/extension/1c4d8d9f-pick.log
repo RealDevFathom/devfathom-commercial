@@ -1,0 +1,3 @@
+[WHA-1370-verify-hw-private-restaurant-camera-and-receipt-compatibility-build-then-pharmacy-consumer bd218de8] test(e2e): repair current browser gate harness
+ Date: Sat Sep 5 22:05:11 2026 +0500
+ 8 files changed, 30 insertions(+), 14 deletions(-)

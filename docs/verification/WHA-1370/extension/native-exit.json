@@ -1,0 +1,11 @@
+{
+  "command": [
+    "bun",
+    "test",
+    "src/lib/restaurant/cameras/mediamtx.protocol.test.mts",
+    "src/lib/restaurant/cameras/mediamtx-runtime.test.mts",
+    "src/lib/restaurant/cameras/mediamtx-route.test.mts"
+  ],
+  "returncode": 0,
+  "head": "bd218de8fa39c1c464a3b22b16a0021a86b736e1"
+}

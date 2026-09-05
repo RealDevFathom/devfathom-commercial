@@ -1,0 +1,41 @@
+{
+  "671a5974": {
+    "returncode": 0,
+    "paths": [
+      "src/lib/pharmacy/sales.ts",
+      "src/lib/pharmacy/sales.test.ts"
+    ],
+    "diff": ""
+  },
+  "8958012b": {
+    "returncode": 0,
+    "paths": [
+      "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+      "src/app/(app)/pharmacy/purchasing/loading.tsx",
+      "src/app/(app)/pharmacy/purchasing/page.tsx",
+      "src/app/(app)/pharmacy/purchasing/suppliers/loading.tsx",
+      "src/app/(app)/pharmacy/purchasing/suppliers/page.tsx",
+      "src/app/(app)/pharmacy/purchasing/_lib/types.ts",
+      "src/app/(app)/pharmacy/purchasing/_lib/console.ts",
+      "src/app/(app)/pharmacy/purchasing/_components/form-controls.tsx",
+      "src/app/(app)/pharmacy/purchasing/_components/action-form.tsx",
+      "src/app/(app)/pharmacy/purchasing/_components/branch-scope.tsx",
+      "src/app/(app)/pharmacy/purchasing/_components/console-chrome.tsx",
+      "src/app/(app)/pharmacy/purchasing/_components/action-form.test.tsx",
+      "src/app/(app)/pharmacy/purchasing/receiving/loading.tsx",
+      "src/app/(app)/pharmacy/purchasing/receiving/page.tsx",
+      "src/app/(app)/pharmacy/purchasing/returns/loading.tsx",
+      "src/app/(app)/pharmacy/purchasing/returns/page.tsx",
+      "src/app/(app)/pharmacy/purchasing/orders/loading.tsx",
+      "src/app/(app)/pharmacy/purchasing/orders/page.tsx"
+    ],
+    "diff": ""
+  },
+  "c462f5f6": {
+    "returncode": 0,
+    "paths": [
+      "prisma/migrations/20260905080000_pharmacy_regulatory_profile_tenant_purge/migration.sql"
+    ],
+    "diff": ""
+  }
+}

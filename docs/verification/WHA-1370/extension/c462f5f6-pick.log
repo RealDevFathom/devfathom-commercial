@@ -1,0 +1,4 @@
+[WHA-1370-verify-hw-private-restaurant-camera-and-receipt-compatibility-build-then-pharmacy-consumer 77135089] fix(pharmacy): authorize profile tenant purge
+ Date: Sat Sep 5 22:04:35 2026 +0500
+ 3 files changed, 148 insertions(+), 18 deletions(-)
+ create mode 100644 prisma/migrations/20260905080000_pharmacy_regulatory_profile_tenant_purge/migration.sql
