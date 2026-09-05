@@ -8,13 +8,23 @@ import type {
   PrintRoutingConfig,
 } from './contract';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { PrintDocumentSchema } from './contract';
+import { PrintDocumentSchema, RawPrintValidationError, validateRawPrintDocument } from './contract';
 import { renderEscPos } from './esc-pos';
 import { resolvePrintRoute } from './routing';
 
 const CLAIM_LEASE_MS = 30_000;
 
 type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob'>;
+
+function renderRawDocument(document: unknown): Uint8Array {
+  try {
+    return renderEscPos(validateRawPrintDocument(document));
+  } catch (error) {
+    if (error instanceof RawPrintValidationError) throw error;
+    // Never expose receipt contents or parser diagnostics to the bridge/logs.
+    throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
+  }
+}
 
 export class PrintBridgeService {
   private readonly adapter: PrintBridgeAdapter | null;
@@ -61,6 +71,9 @@ export class PrintBridgeService {
     if (prior) {
       return { status: 'QUEUED', printerId: prior.printerId ?? route.printerId, replayed: true };
     }
+    // Typed callers are not a runtime validation boundary. Validate before any
+    // new job is persisted, using the same raw renderer as the claim path.
+    renderRawDocument(job.document);
     await this.db.restaurantPrintJob.create({
       data: {
         organizationId,
@@ -209,8 +222,26 @@ export async function claimNextPrintJob(
   });
   for (const candidate of candidates) {
     if (!candidate.printerId) continue;
-    const document = PrintDocumentSchema.parse(candidate.document);
-    const bytes = Buffer.from(renderEscPos(document)).toString('base64');
+    let bytes: string;
+    try {
+      bytes = Buffer.from(renderRawDocument(candidate.document)).toString('base64');
+    } catch (error) {
+      if (!(error instanceof RawPrintValidationError)) throw error;
+      // OFFLINE + zero attempts + no timestamp is a pre-dispatch hold. Retain
+      // the original document/route for reconciliation, and continue this batch.
+      // The predicate cannot change a job already claimed by another worker.
+      await db.restaurantPrintJob.updateMany({
+        where: {
+          id: candidate.id,
+          branchId,
+          status: 'PENDING',
+          attemptCount: 0,
+          lastAttemptAt: null,
+        },
+        data: { status: 'OFFLINE' },
+      });
+      continue;
+    }
     const token = claimToken({ ...candidate, attemptCount: 1, lastAttemptAt: now }, deviceId);
     const claimed = await db.restaurantPrintJob.updateMany({
       where: {

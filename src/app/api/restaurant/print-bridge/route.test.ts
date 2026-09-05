@@ -11,7 +11,8 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.context }));
-vi.mock('@/lib/restaurant/printing/service', () => ({
+vi.mock('@/lib/restaurant/printing/service', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/printing/service')>()),
   claimNextPrintJob: mocks.claim,
   acknowledgePrintJob: mocks.ack,
   PrintBridgeService: class {
@@ -90,6 +91,46 @@ describe('print bridge authorization boundary', () => {
     expect(db.restaurantPrintRoute.deleteMany).not.toHaveBeenCalled();
     mocks.can.mockResolvedValue(true);
     expect((await PUT(request('PUT', { branchId: 'branch-b', routes: [] }))).status).toBe(200);
+  });
+  it('returns actionable raw Unicode fallback without persisting through the real enqueue service', async () => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+    const { PrintBridgeService } = await vi.importActual<
+      typeof import('@/lib/restaurant/printing/service')
+    >('@/lib/restaurant/printing/service');
+    const create = vi.fn();
+    const serviceDb = {
+      $executeRawUnsafe: vi.fn(),
+      restaurantPrintJob: { findUnique: vi.fn().mockResolvedValue(null), create },
+    };
+    const config = {
+      branchId: 'branch-b',
+      routes: [
+        {
+          documentType: 'BAR_TICKET' as const,
+          stationId: null,
+          printerId: 'printer-a',
+          enabled: true,
+        },
+      ],
+    };
+    mocks.enqueue.mockImplementation((_org, _config, input) =>
+      new PrintBridgeService(
+        serviceDb as unknown as import('@/lib/tenancy/scoped-db').ScopedDb
+      ).enqueue('org', config, input)
+    );
+    const response = await POST(
+      request('POST', {
+        ...job,
+        document: { ...document, lines: [{ quantity: 1, label: 'اردو' }] },
+      })
+    );
+    expect(response.status).toBe(422);
+    expect(await response.json()).toMatchObject({
+      code: 'UNSUPPORTED_PRINT_TEXT',
+      fallback: 'BROWSER_OS',
+      retryable: false,
+    });
+    expect(create).not.toHaveBeenCalled();
   });
   it('passes authenticated device identity when claiming', async () => {
     const response = await GET(request('GET', undefined, true));
