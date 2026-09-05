@@ -103,9 +103,10 @@ Adding an MSE HLS player requires a separately reviewed dependency/UI change.
 Saad must supply the device model/photo, channel and codec configuration. The staging
 owner must verify private routing, TLS, reader restrictions, physical live frames, expiry
 and revoke behavior, and browser playback on the approved revision. Do not call fixtures
-hardware completion. The infra owner/Chief of Staff must reconcile credential-key commit
-`e7749967`: it exists locally but is not an ancestor of assigned base
-`fe1e3e383c8b966cdb68669ba5366db00fe2320a`. This change does not redo that infrastructure.
+hardware completion. Source comparison confirms credential-key wiring from `e7749967`
+already exists in the assigned base despite different ancestry: secure Bicep parameter,
+vault secret, runtime reference, container environment and dependency, staging export,
+all three parameter files and `.env.example`. No infra reconciliation is required.
 
 To disable, select `CAMERA_GATEWAY_MODE=unavailable`; grants then fail closed. Reverting
 this private camera-only commit requires no schema rollback. Configuration secrets must
@@ -118,10 +119,9 @@ HLS access and browser-player constraints. Its [configuration reference](https:/
 defines HLS variants and source/authentication options. Verify the owner's installed version
 against those options before provisioning. MediaMTX does not imply automatic transcoding.
 
-Bundled Next docs and installed Next are absent from this worktree and the checked local
-dependency tree. The official [route reference](https://nextjs.org/docs/app/api-reference/file-conventions/route)
-was checked as a fallback; the route retains the existing async params and Request/Response
-contract. Version-matched build validation remains pending.
+Continuation read installed Next 16.2.12 bundled documentation at
+`node_modules/next/dist/docs/01-app/01-getting-started/15-route-handlers.md`.
+The route retains existing async params and Request/Response contracts. Build remains pending.
 
 Native fixtures are deliberately `.test.mts`, outside Vitest discovery. Run explicitly:
 
@@ -185,15 +185,58 @@ Exact formatter invocation:
 node '/Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub/node_modules/prettier/bin/prettier.cjs' --write src/lib/restaurant/cameras/mediamtx.ts src/lib/restaurant/cameras/mediamtx.protocol.test.mts src/lib/restaurant/cameras/mediamtx-runtime.test.mts src/lib/restaurant/cameras/mediamtx-route.test.mts src/lib/restaurant/camera-gateway-runtime.ts 'src/app/api/restaurant/cameras/[cameraId]/stream/route.ts' 'src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts' src/server/routers/restaurant-cameras.ts industry-specific-docs/restaurants/cameras/002-configured-mediamtx.md
 ```
 
-Pending verification groups: **5** — actual Vitest suites, ESLint, dependency-complete
+Historical first-pass pending groups (superseded below): **5** — actual Vitest suites, ESLint, dependency-complete
 router/route typecheck plus Next build, independent review, and staging/hardware/browser
 acceptance. Next/Vitest/ESLint are absent from the available dependency tree. No production
 build, database/migration execution, app/browser service, deployment or physical acceptance
 was attempted. No RLS claim is made from mocked database tests. Claude-Mem/graph/Ponytail
 tools were unavailable; narrow local reads used, no tool repair or nested agent session.
 
-Disposition: blocked. Chief of Staff must supply dependency-complete validation and a
+Historical first-pass disposition (superseded below): blocked. Chief of Staff must supply dependency-complete validation and a
 designated independent reviewer, and coordinate the infra ancestry discrepancy. Saad and
 the staging/network owner must supply the target configuration and conduct gated physical
 acceptance. The wizard diagnostic UI and broader browser player remain explicit gaps;
 this private commit is not end-to-end hardware completion.
+
+## Verification continuation — September 5, 2026
+
+Start HEAD `773a1a8e9b4b85ca8a3ae08aba87055c9726513c`, parent/base
+`fe1e3e383c8b966cdb68669ba5366db00fe2320a`; assigned branch unchanged, tree clean.
+This continuation changes only this document. Prior 15 passing native fixtures reused;
+runtime source unchanged, with the prior one-line compiler correction caveat above.
+
+Absent local `node_modules` was safely symlinked to supplied WHA-1116 dependency store.
+No packages installed or shared artifacts changed. Commands:
+
+```sh
+node node_modules/vitest/vitest.mjs run src/lib/restaurant/camera-gateway-runtime.test.ts src/lib/restaurant/camera-credentials.test.ts src/lib/restaurant/cameras.test.ts src/lib/restaurant/camera-schema.test.ts src/lib/restaurant/camera-gateway.test.ts src/server/routers/restaurant-cameras.test.ts 'src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts' --maxWorkers=1 --no-file-parallelism
+node node_modules/eslint/bin/eslint.js src/lib/restaurant/camera-gateway-runtime.ts src/lib/restaurant/cameras/*.mts src/lib/restaurant/cameras/mediamtx.ts 'src/app/api/restaurant/cameras/[cameraId]/stream/route.ts' 'src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts' src/server/routers/restaurant-cameras.ts
+node node_modules/prettier/bin/prettier.cjs --check src/lib/restaurant/camera-gateway-runtime.ts src/lib/restaurant/cameras/*.mts src/lib/restaurant/cameras/mediamtx.ts 'src/app/api/restaurant/cameras/[cameraId]/stream/route.ts' 'src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts' src/server/routers/restaurant-cameras.ts industry-specific-docs/restaurants/cameras/002-configured-mediamtx.md
+node node_modules/typescript/bin/tsc --project "$PAPERCLIP_RUN_SCRATCH_DIR/camera-tsconfig.json"
+```
+
+Vitest: **23 passed, 0 failed, 1 skipped**, seven files, exit 0. Skip requires
+`CAMERA_TEST_DATABASE_URL`; no database accessed. Router contract tests inspect source,
+not runtime database behavior. ESLint and Prettier exit 0, no diagnostics. Final scoped
+TypeScript exit 0, no diagnostics. Initial scratch config omitted existing auth declaration,
+causing session-type diagnostics; adding `src/types/next-auth.d.ts` resolved them without
+source changes.
+
+Compiler reproduction: copy root tsconfig into run scratch; disable incremental, use
+absolute checkout `baseUrl`, `@/*` and `node_modules/@types` typeRoots. Include absolute
+paths to mediamtx transport, camera runtime, router, stream route and auth declaration;
+clear exclude. Map `@/generated/prisma/*` to
+`/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1350-env-ph-purge-provision-bounded-verification-prerequisites-for-regulatory-profile-repair/src/generated/prisma/*`.
+Its schema was byte-equal before read-only type reuse. No generated client or fixture
+environment changed; no credentials loaded.
+
+Remaining verification groups: **4** — isolated camera DB/RLS test, production build,
+independent review, staging/hardware/browser acceptance. No app/browser service, build,
+migration, deployment or physical acceptance attempted. No RLS claim. Claude-Mem, graph
+and Ponytail unavailable; narrow fallback without setup repair or nested sessions.
+
+Current supervisor/board owns review and target handoff, replacing paused leadership.
+Saad supplies confirmed model/channel/codec; staging/network owner supplies private TLS
+gateway and approved revision for physical acceptance. Assignee resumes upon handoff.
+Wizard diagnostic UI and broader browser player remain gaps. No hardware completion
+claim. This documentation-only continuation requires no runtime rollback.
