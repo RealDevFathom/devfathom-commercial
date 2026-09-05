@@ -19,6 +19,8 @@ export async function GET(request: Request, context: { params: Promise<{ cameraI
   if (!cameraGatewayRuntime.available) return response('Camera gateway unavailable', 503);
   const { cameraId } = await context.params;
   const requestUrl = new URL(request.url);
+  if (requestUrl.searchParams.has('recording'))
+    return response('Recording playback unsupported', 400);
   const grantId = requestUrl.searchParams.get('grant');
   if (!grantId) return response('Unauthorized', 401);
 

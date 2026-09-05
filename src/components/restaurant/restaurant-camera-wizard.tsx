@@ -36,6 +36,7 @@ export function RestaurantCameraWizard({
   onTest,
   onSubmit,
   busy = false,
+  ownerProvisioned = false,
 }: {
   branches: CameraWizardBranch[];
   presets: CameraWizardPreset[];
@@ -47,6 +48,7 @@ export function RestaurantCameraWizard({
   ) => Promise<{ outcome: 'ok' | 'auth-failed' | 'unreachable'; discoveredProfile?: string }>;
   onSubmit: (values: CameraWizardValues) => Promise<void>;
   busy?: boolean;
+  ownerProvisioned?: boolean;
 }) {
   const manual = presets.length === 0;
   const [selected, setSelected] = useState<string>(manual ? 'manual' : '');
@@ -54,6 +56,7 @@ export function RestaurantCameraWizard({
   const [outcome, setOutcome] = useState('');
   const [branchId, setBranchId] = useState(branches.length === 1 ? branches[0]!.id : '');
   const [gatewayId, setGatewayId] = useState('');
+  const [pending, setPending] = useState(false);
   const effectiveBranchId = branchId || (branches.length === 1 ? branches[0]!.id : '');
   const chosen = useMemo(
     () => presets.find((preset) => preset.key === selected),
@@ -70,27 +73,56 @@ export function RestaurantCameraWizard({
       sourceRef: String(data.get('sourceRef')),
       username: String(data.get('username')),
       password: String(data.get('password')),
-      registerAnyway: data.get('registerAnyway') === 'on',
+      registerAnyway: ownerProvisioned ? false : data.get('registerAnyway') === 'on',
     };
   }
   async function test(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const result = await onTest(await values(event.currentTarget));
-    setTested(result.outcome === 'ok');
-    setOutcome(
-      result.outcome === 'ok'
-        ? `Connected · ${result.discoveredProfile ?? 'ONVIF profile'}`
-        : result.outcome === 'auth-failed'
-          ? 'Authentication failed.'
-          : 'Camera is unreachable.'
-    );
+    setPending(true);
+    try {
+      const result = await onTest(await values(event.currentTarget));
+      setTested(result.outcome === 'ok');
+      setOutcome(
+        result.outcome === 'ok'
+          ? `Connected · ${result.discoveredProfile ?? 'ONVIF profile'}`
+          : result.outcome === 'auth-failed'
+            ? 'Authentication failed.'
+            : 'Camera is unreachable.'
+      );
+    } catch {
+      setTested(false);
+      setOutcome('Connection check failed. Check gateway setup and try again.');
+    } finally {
+      setPending(false);
+    }
   }
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    await onSubmit(await values(event.currentTarget));
+    setPending(true);
+    try {
+      await onSubmit(await values(event.currentTarget));
+      setOutcome(
+        ownerProvisioned
+          ? 'Camera registered. Run Check configured connection on its camera card. Registration does not prove live video.'
+          : 'Camera registered.'
+      );
+    } catch {
+      setOutcome('Registration failed. Check your access and gateway setup, then try again.');
+    } finally {
+      setPending(false);
+    }
   }
   return (
     <SectionCard eyebrow="Camera setup" title="Register a camera">
+      {ownerProvisioned && (
+        <p className="mb-4 text-sm text-text-muted">
+          Owner-provisioned live gateway: your administrator must configure the DVR source, RTSP
+          port, credentials and private gateway connection separately. This form registers the
+          camera; it does not configure the DVR. Stored credentials do not rotate gateway or DVR
+          credentials. After registration, ask the owner to bind the registered camera, then run its
+          connection check.
+        </p>
+      )}
       {branches.length > 1 && (
         <label className="mb-4 block text-sm font-medium text-text-strong">
           Branch
@@ -158,7 +190,11 @@ export function RestaurantCameraWizard({
         <form
           id="camera-wizard"
           className="grid gap-4 md:grid-cols-2"
-          onSubmit={tested ? submit : test}
+          onSubmit={ownerProvisioned || tested ? submit : test}
+          onChange={() => {
+            setTested(false);
+            setOutcome('');
+          }}
         >
           <label className="text-sm font-medium text-text-strong">
             Camera name
@@ -174,7 +210,7 @@ export function RestaurantCameraWizard({
               onChange={setGatewayId}
               loading={gatewaysLoading}
               error={gatewaysError}
-              disabled={!effectiveBranchId || busy}
+              disabled={!effectiveBranchId || busy || pending}
               emptyLabel="No active gateways for this branch"
               options={gateways
                 .filter(
@@ -197,15 +233,10 @@ export function RestaurantCameraWizard({
               defaultValue={chosen?.mainStreamPathTemplate ?? ''}
             />
           </label>
-          <label className="text-sm font-medium text-text-strong">
-            RTSP port
-            <Input name="rtspPort" type="number" defaultValue={chosen?.rtspPort ?? 554} />
-            <span className="text-xs text-text-muted">
-              {chosen
-                ? `Suggested by ${chosen.familyName}; editable`
-                : 'Generic RTSP default; editable'}
-            </span>
-          </label>
+          <p className="text-sm text-text-muted">
+            Configure the RTSP port on the gateway host. The source reference here is a registration
+            label and does not configure a network connection. Do not include passwords in it.
+          </p>
           <label className="text-sm font-medium text-text-strong">
             Username
             <Input
@@ -224,21 +255,21 @@ export function RestaurantCameraWizard({
               {outcome}
             </p>
           )}
-          {!tested && outcome && (
+          {!ownerProvisioned && !tested && outcome && (
             <label className="md:col-span-2 flex items-center gap-2 text-sm">
               <input type="checkbox" name="registerAnyway" /> Register anyway while this camera is
               offline
             </label>
           )}
           <div className="md:col-span-2 flex flex-wrap gap-3">
-            <Button type="submit" disabled={busy}>
-              {tested ? 'Register camera' : 'Test connection'}
+            <Button type="submit" disabled={busy || pending || !effectiveBranchId || !gatewayId}>
+              {ownerProvisioned || tested ? 'Register camera' : 'Test connection'}
             </Button>
-            {!tested && outcome && (
+            {!ownerProvisioned && !tested && outcome && (
               <Button
                 type="button"
                 variant="secondary"
-                disabled={busy}
+                disabled={busy || pending}
                 onClick={(event) =>
                   void submit({
                     preventDefault() {},

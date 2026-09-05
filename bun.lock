@@ -49,6 +49,7 @@
         "exceljs": "^4.4.0",
         "googleapis": "^173.0.0",
         "gsap": "^3.15.0",
+        "hls.js": "1.7.2",
         "jsonwebtoken": "^9.0.3",
         "livekit-client": "^2.22.1",
         "livekit-server-sdk": "^2.18.0",
@@ -111,6 +112,7 @@
     "sharp": "0.35.3",
   },
   "packages": {
+    "hls.js": ["hls.js@1.7.2", "", {}, "sha512-CW/pPvSOFIRsosbwxrYaE9ERmpTo5fbTqL7wCvuCFlqW1Bmb1K5fXsY7yiH95rmlr4rVuA7UXHbM/cIXQ6AXwg=="],
     "@ably/msgpack-js": ["@ably/msgpack-js@0.4.1", "", { "dependencies": { "bops": "^1.0.1" } }, "sha512-Sjxj6SOr17hExAVrsycN7u6oV4PhZcK7Z2S8dM71CH/butgO47cSo/TL6FJPCXUyDAzKkOWjMUpJGyZkEpyu4Q=="],
 
     "@adobe/css-tools": ["@adobe/css-tools@4.5.0", "", {}, "sha512-6OzddxPio9UiWTCemp4N8cYLV2ZN1ncRnV1cVGtve7dhPOtRkleRyx32GQCYSwDYgaHU3USMm84tNsvKzRCa1Q=="],

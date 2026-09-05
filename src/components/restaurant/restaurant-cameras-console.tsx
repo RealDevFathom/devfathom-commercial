@@ -8,14 +8,55 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { trpc } from '@/lib/trpc';
 import { RestaurantCameraWizard, type CameraWizardValues } from './restaurant-camera-wizard';
+import { RestaurantCameraPlayer } from './restaurant-camera-player';
+
+const diagnostics = {
+  'not-configured':
+    'No server binding exists yet. Ask the gateway owner to bind this registered camera.',
+  'credentials-missing':
+    'Gateway reader credentials are missing. Ask the gateway owner to configure them.',
+  'auth-failed':
+    'Gateway reader authentication failed. Ask the gateway owner to check credentials.',
+  'gateway-unreachable':
+    'Gateway unreachable. Ask the gateway owner to check private routing and TLS.',
+  'unsupported-stream':
+    'Stream unavailable or unsupported. Ask the gateway owner to check the source and HLS format.',
+  ok: 'Supported manifest received. Live frames and codec compatibility still require playback verification.',
+};
+
+function CameraConnectionCheck({ cameraId }: { cameraId: string }) {
+  const check = trpc.restaurantCameras.configuredConnectionDiagnostics.useQuery(
+    { cameraId },
+    {
+      enabled: false,
+      retry: false,
+    }
+  );
+  return (
+    <div className="mt-3 space-y-2">
+      <Button variant="secondary" disabled={check.isFetching} onClick={() => void check.refetch()}>
+        Check configured connection
+      </Button>
+      <p role="status" className="text-sm text-text-muted">
+        {check.isFetching
+          ? 'Checking gateway…'
+          : check.isError
+            ? 'Connection check failed. Check your access and gateway setup.'
+            : check.data
+              ? diagnostics[check.data.outcome]
+              : 'Connection not checked.'}
+      </p>
+    </div>
+  );
+}
 
 export function RestaurantCamerasConsole() {
   const enabled = useEntitlements().enabledModules.includes('restaurant-integrations');
   const utils = trpc.useUtils();
   const [selectedCameraId, setSelectedCameraId] = useState('');
-  const [playbackUrl, setPlaybackUrl] = useState('');
   const availability = trpc.restaurantCameras.availability.useQuery(undefined, { enabled });
   const gatewayAvailable = availability.data?.available === true;
+  const ownerProvisioned = availability.data?.mode === 'mediamtx';
   const presets = trpc.restaurantCameras.presets.useQuery(undefined, {
     enabled: enabled && gatewayAvailable,
   });
@@ -30,7 +71,10 @@ export function RestaurantCamerasConsole() {
   });
   const recordings = trpc.restaurantCameras.listRecordings.useQuery(
     { cameraId: selectedCameraId },
-    { enabled: enabled && gatewayAvailable && Boolean(selectedCameraId) }
+    {
+      enabled: enabled && gatewayAvailable && !ownerProvisioned && Boolean(selectedCameraId),
+      retry: false,
+    }
   );
   const branches = useMemo(() => {
     const map = new Map<string, string>();
@@ -45,7 +89,7 @@ export function RestaurantCamerasConsole() {
       void utils.restaurantCameras.list.invalidate();
     },
   });
-  const grant = trpc.restaurantCameras.issueStreamGrant.useMutation();
+  const grant = trpc.restaurantCameras.issueStreamGrant.useMutation({ retry: false });
   const retention = trpc.restaurantCameras.setRetention.useMutation({
     onSuccess: () => {
       toast.success('Retention updated.');
@@ -88,13 +132,6 @@ export function RestaurantCamerasConsole() {
   async function onSubmit(values: CameraWizardValues) {
     await register.mutateAsync(values);
   }
-  async function openStream(cameraId: string) {
-    const issued = await grant.mutateAsync({ cameraId });
-    setSelectedCameraId(cameraId);
-    setPlaybackUrl(
-      `/api/restaurant/cameras/${encodeURIComponent(cameraId)}/stream?grant=${encodeURIComponent(issued.grantId)}`
-    );
-  }
   function updateRetention(event: FormEvent<HTMLFormElement>, branchId: string) {
     event.preventDefault();
     retention.mutate({ branchId, days: Number(new FormData(event.currentTarget).get('days')) });
@@ -104,7 +141,11 @@ export function RestaurantCamerasConsole() {
       <PageHeader
         eyebrow="Device settings"
         heading="Cameras"
-        description="Secure live views, gateway-local recordings, and retention by branch."
+        description={
+          ownerProvisioned
+            ? 'Live views through your owner-provisioned gateway. Recorded playback is unsupported.'
+            : 'Camera gateway settings and live views.'
+        }
       />
       <RestaurantCameraWizard
         branches={branches}
@@ -115,6 +156,7 @@ export function RestaurantCamerasConsole() {
         onTest={onTest}
         onSubmit={onSubmit}
         busy={test.isPending || register.isPending}
+        ownerProvisioned={ownerProvisioned}
       />
       <SectionCard eyebrow="Live view" title="Camera feeds">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
@@ -124,13 +166,13 @@ export function RestaurantCamerasConsole() {
               className="rounded-md border border-border-subtle bg-surface-sunken p-4"
             >
               <div className="flex aspect-video items-center justify-center rounded-sm bg-foreground/10 text-sm text-text-muted">
-                {selectedCameraId === camera.id && playbackUrl ? (
-                  <video
-                    className="h-full w-full"
-                    controls
-                    autoPlay
-                    src={playbackUrl}
-                    aria-label={`${camera.name} playback panel`}
+                {selectedCameraId === camera.id && camera.enabled ? (
+                  <RestaurantCameraPlayer
+                    cameraId={camera.id}
+                    name={camera.name}
+                    issue={(previousGrantId) =>
+                      grant.mutateAsync({ cameraId: camera.id, previousGrantId })
+                    }
                   />
                 ) : (
                   'Live feed paused'
@@ -138,16 +180,19 @@ export function RestaurantCamerasConsole() {
               </div>
               <h3 className="mt-3 font-semibold text-text-strong">{camera.name}</h3>
               <p className="text-sm text-text-muted">
-                {camera.enabled ? 'Ready for live view' : 'Registered offline'}
+                {camera.enabled
+                  ? 'Registered · connection requires verification'
+                  : 'Registered offline'}
               </p>
               <Button
                 className="mt-3"
                 variant="secondary"
-                disabled={!camera.enabled || grant.isPending}
-                onClick={() => void openStream(camera.id)}
+                disabled={!camera.enabled}
+                onClick={() => setSelectedCameraId(selectedCameraId === camera.id ? '' : camera.id)}
               >
-                Open live view
+                {selectedCameraId === camera.id ? 'Close live view' : 'Open live view'}
               </Button>
+              {ownerProvisioned && <CameraConnectionCheck cameraId={camera.id} />}
             </article>
           ))}
           {cameras.data?.length === 0 && (
@@ -156,10 +201,19 @@ export function RestaurantCamerasConsole() {
         </div>
       </SectionCard>
       <SectionCard eyebrow="Playback" title="Gateway recordings">
-        {!selectedCameraId ? (
+        {ownerProvisioned ? (
+          <p className="text-sm text-text-muted">
+            Recordings unsupported by this live gateway. Live video is never substituted for
+            recorded footage.
+          </p>
+        ) : !selectedCameraId ? (
           <p className="text-sm text-text-muted">Open a camera to load its recordings.</p>
         ) : recordings.isLoading ? (
           <p className="text-sm text-text-muted">Loading recordings…</p>
+        ) : recordings.isError ? (
+          <p role="alert" className="text-sm text-text-muted">
+            Recordings could not be loaded.
+          </p>
         ) : recordings.data?.length ? (
           <ul className="divide-y divide-border-subtle">
             {recordings.data.map((recording) => (
@@ -170,15 +224,8 @@ export function RestaurantCamerasConsole() {
                 <span className="text-sm text-text-strong">
                   {new Date(recording.startedAt).toLocaleString()} · {recording.durationSeconds}s
                 </span>
-                <Button
-                  variant="secondary"
-                  onClick={() =>
-                    setPlaybackUrl(
-                      `/api/restaurant/cameras/${encodeURIComponent(selectedCameraId)}/stream?grant=${encodeURIComponent(grant.data?.grantId ?? '')}&recording=${encodeURIComponent(recording.id)}`
-                    )
-                  }
-                >
-                  Play in panel
+                <Button variant="secondary" disabled>
+                  Recording playback unsupported
                 </Button>
               </li>
             ))}
@@ -188,34 +235,41 @@ export function RestaurantCamerasConsole() {
         )}
       </SectionCard>
       <SectionCard eyebrow="Gateway" title="Retention by branch">
-        <div className="grid gap-4 md:grid-cols-2">
-          {(gateways.data ?? []).map((gateway) => (
-            <form
-              key={gateway.id}
-              onSubmit={(event) => updateRetention(event, gateway.branchId)}
-              className="rounded-md border border-border-subtle p-4"
-            >
-              <p className="font-semibold text-text-strong">{gateway.name}</p>
-              <p className="mb-3 text-sm text-text-muted">
-                {gateway.health} · current policy {gateway.retentionDays} days
-              </p>
-              <label className="text-sm font-medium text-text-strong">
-                Retention days
-                <Input
-                  name="days"
-                  type="number"
-                  min={1}
-                  max={90}
-                  defaultValue={gateway.retentionDays}
-                  required
-                />
-              </label>
-              <Button className="mt-3" disabled={retention.isPending}>
-                Save retention
-              </Button>
-            </form>
-          ))}
-        </div>
+        {ownerProvisioned ? (
+          <p className="text-sm text-text-muted">
+            Manage retention on the gateway host. This live integration does not configure recording
+            retention.
+          </p>
+        ) : (
+          <div className="grid gap-4 md:grid-cols-2">
+            {(gateways.data ?? []).map((gateway) => (
+              <form
+                key={gateway.id}
+                onSubmit={(event) => updateRetention(event, gateway.branchId)}
+                className="rounded-md border border-border-subtle p-4"
+              >
+                <p className="font-semibold text-text-strong">{gateway.name}</p>
+                <p className="mb-3 text-sm text-text-muted">
+                  {gateway.health} · current policy {gateway.retentionDays} days
+                </p>
+                <label className="text-sm font-medium text-text-strong">
+                  Retention days
+                  <Input
+                    name="days"
+                    type="number"
+                    min={1}
+                    max={90}
+                    defaultValue={gateway.retentionDays}
+                    required
+                  />
+                </label>
+                <Button className="mt-3" disabled={retention.isPending}>
+                  Save retention
+                </Button>
+              </form>
+            ))}
+          </div>
+        )}
       </SectionCard>
     </div>
   );

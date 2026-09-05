@@ -187,6 +187,20 @@ test('route rejects cross-camera, tenant, branch, disabled camera and revoked ga
   }
 });
 
+test('recording requests never substitute live media or read upstream', async () => {
+  for (const query of [
+    '?grant=grant-a&recording=archive',
+    '?grant=grant-a&recording=',
+    '?grant=grant-a&segment=seg0.ts&recording=archive',
+  ]) {
+    reset();
+    const result = await get(query);
+    assert.equal(result.status, 400);
+    assert.equal(await result.text(), 'Recording playback unsupported');
+    assert.equal(calls, 0);
+  }
+});
+
 test('revocation takes effect on the next segment request', async () => {
   reset();
   assert.equal((await get()).status, 200);
