@@ -204,15 +204,51 @@ export const restaurantCamerasRouter = router({
     .input(strict({ cameraId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       entitled(ctx);
+      if (cameraGatewayRuntime.mode === 'mediamtx')
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Recordings unsupported by this live gateway.',
+        });
       return requireCameraGateway().listRecordings(input.cameraId);
     }),
   issueStreamGrant: adminProcedure
-    .input(strict({ cameraId: z.string().min(1) }))
+    .input(strict({ cameraId: z.string().min(1), previousGrantId: z.string().min(1).optional() }))
     .mutation(async ({ ctx, input }) => {
       entitled(ctx);
+      annotateAudit(ctx, { skipInput: true });
       requireCameraGateway();
       const camera = await ctx.db.restaurantCamera.findUnique({ where: { id: input.cameraId } });
       if (!camera) throw new TRPCError({ code: 'NOT_FOUND', message: 'Camera not found.' });
+      const gateway = await ctx.db.restaurantCameraGateway.findUnique({
+        where: { id: camera.gatewayId },
+      });
+      if (
+        !camera.enabled ||
+        camera.organizationId !== ctx.session.user.organizationId ||
+        !gateway ||
+        gateway.organizationId !== camera.organizationId ||
+        gateway.branchId !== camera.branchId ||
+        gateway.status !== 'ACTIVE' ||
+        gateway.revokedAt
+      )
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Camera unavailable.' });
+      if (input.previousGrantId) {
+        const previous = await ctx.db.restaurantCameraStreamGrant.findUnique({
+          where: { id: input.previousGrantId },
+        });
+        if (
+          !previous ||
+          previous.cameraId !== camera.id ||
+          previous.organizationId !== camera.organizationId ||
+          previous.viewerId !== ctx.session.user.id ||
+          previous.revokedAt ||
+          previous.expiresAt <= new Date()
+        )
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Live view authorization ended. Open a new view to request access.',
+          });
+      }
       const grant = await ctx.db.restaurantCameraStreamGrant.create({
         data: {
           cameraId: camera.id,

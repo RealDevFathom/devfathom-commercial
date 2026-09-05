@@ -88,17 +88,21 @@ A failed upstream DVR source may appear as an unavailable/missing HLS stream; th
 cannot distinguish its root cause. It never returns an upstream error body or URL.
 
 The old pre-registration simulated connection test returns an explicit precondition
-failure in real mode. Registration remains available through the existing administrative
-contract; the new diagnostic query is not yet exposed in the wizard UI. Recording,
+failure in real mode. The real-mode wizard instead labels setup as owner-provisioned,
+registers through the existing administrative contract and directs the operator to the
+registered camera card's manual connection diagnostic. The unused RTSP port input is removed;
+the gateway owner configures that port. Stored credentials do not provision the DVR. Recording,
 retention usage, PTZ, audio and export are not implemented by this live transport.
 
 ## Compatibility and acceptance gates
 
-The current console uses native browser HLS. Test on a supported native-HLS browser and
-supported OS first. Windows 98/Vista/7 cannot host this modern browser/Node application;
+The console detects native HLS first, otherwise lazily loads pinned hls.js 1.7.2 for
+MediaSource-capable browsers. Neither path guarantees codec or hardware compatibility.
+Windows 98/Vista/7 cannot host this modern browser/Node application;
 use a separate supported gateway host and viewing workstation. No universal Windows 10
 or macOS claim: OS maintenance, browser HLS support and device codec all need validation.
-Adding an MSE HLS player requires a separately reviewed dependency/UI change.
+The board authorized only the official hls.js dependency for this correction; no CDN scripts,
+LiveKit substitution, WHEP transport, or other dependency upgrades were added.
 
 Saad must supply the device model/photo, channel and codec configuration. The staging
 owner must verify private routing, TLS, reader restrictions, physical live frames, expiry
@@ -240,3 +244,93 @@ Saad supplies confirmed model/channel/codec; staging/network owner supplies priv
 gateway and approved revision for physical acceptance. Assignee resumes upon handoff.
 Wizard diagnostic UI and broader browser player remain gaps. No hardware completion
 claim. This documentation-only continuation requires no runtime rollback.
+
+## WHA-1363 correction pass — September 5, 2026
+
+Correction parent: `977eed1eb3bb2a611ee139bf65592630b420b5d3`; original base unchanged.
+Full review attachment `cf0af5b1-dab3-4a20-afbf-f9e9d58e7e2b` and board cancellation of
+interaction `d669c322-64d7-48a4-8890-f6b9b0a03588` authorize this single pass for F1–F4.
+
+- F1: any `recording` query, even empty or combined with a segment, returns 400 before
+  upstream access. Real-mode recording RPC returns PRECONDITION_FAILED. Console explicitly
+  labels recordings unsupported; it never substitutes live media. Real-mode retention
+  directs the operator to the gateway host instead of implying app configuration applies there.
+- F2: native-HLS feature detection, camera-only dynamic hls.js import for MSE, explicit
+  unsupported browser/codec, loading, autoplay-interaction, timeout and media-error states.
+  Destroy adapter, detach source and cancel timers on close/unmount, replacement or denial.
+  No application recovery loop; manifest/playlist/fragment retry policies disabled. The
+  library's worker is disabled; decoding/transmuxing behavior remains the official library's.
+- F3: each open view issues a grant and renews 15 seconds before expiry, carrying the prior
+  grant ID. Server rechecks enabled camera, active matching tenant/branch gateway and prior
+  grant viewer/camera/tenant/expiry/revocation through the same admin procedure. Audit input
+  is suppressed because renewal includes a grant ID. Server 60-second expiry is unchanged.
+  Maximum 30 grants per open view (roughly 22.5 minutes with immediate responses); then
+  operator must reopen. Authorization deadline 10 seconds, video-loading deadline 20 seconds.
+  First denied/failed renewal stops; late responses cannot reopen closed views. Renewal
+  reloads the playback source and may briefly interrupt playback; physical acceptance must
+  evaluate that transition. Already delivered buffered frames cannot be recalled server-side.
+- F4: real wizard bypasses the simulated pre-registration check, preserves registration
+  inputs, explains separate gateway setup and handles errors locally. Registered cards expose
+  manual diagnostics for missing bindings/credentials, authentication, reachability and stream
+  support, with automatic query retries disabled. A readable manifest is not live-frame proof.
+
+Dependency evidence: official registry `https://registry.npmjs.org/hls.js/latest` and
+[official release v1.7.2](https://github.com/video-dev/hls.js/releases/tag/v1.7.2) agreed on
+1.7.2, released September 2, 2026. Registry license Apache-2.0, zero runtime dependencies.
+GitHub repository security-advisories API returned `[]`; registry bulk advisory request
+for only `{"hls.js":["1.7.2"]}` returned `{}`. This is a point-in-time check, not a guarantee
+of no vulnerabilities. Official registry tarball SHA-512 verified against lockfile integrity.
+Package extracted only into run-owned private dependency directory, with read-only symlinks
+to existing dependencies. No shared installation, lifecycle scripts or global installation.
+Structural lock comparison after removing the two hls.js entries equals parent lock exactly.
+
+Correction paths in addition to this document:
+
+- `package.json`, `bun.lock`
+- `src/app/api/restaurant/cameras/[cameraId]/stream/route.ts`
+- `src/server/routers/restaurant-cameras.ts`
+- `src/components/restaurant/restaurant-camera-wizard.tsx` and `.test.tsx`
+- `src/components/restaurant/restaurant-cameras-console.tsx` and `.test.tsx`
+- `src/components/restaurant/restaurant-camera-player.tsx` and `.test.tsx`
+- `src/lib/restaurant/cameras/live-session.ts` and `.test.ts`
+- `src/lib/restaurant/cameras/stream-grants.test.ts`
+- `src/lib/restaurant/cameras/mediamtx-route.test.mts`
+
+Executed correction checks:
+
+```sh
+node node_modules/vitest/vitest.mjs run src/components/restaurant/restaurant-camera-player.test.tsx src/components/restaurant/restaurant-camera-wizard.test.tsx src/components/restaurant/restaurant-cameras-console.test.tsx src/lib/restaurant/cameras/live-session.test.ts src/lib/restaurant/cameras/stream-grants.test.ts src/server/routers/restaurant-cameras.test.ts src/lib/restaurant/camera-gateway-runtime.test.ts src/lib/restaurant/camera-credentials.test.ts src/lib/restaurant/cameras.test.ts src/lib/restaurant/camera-gateway.test.ts 'src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts' --maxWorkers=1 --no-file-parallelism
+bun test src/lib/restaurant/cameras/mediamtx.protocol.test.mts src/lib/restaurant/cameras/mediamtx-runtime.test.mts src/lib/restaurant/cameras/mediamtx-route.test.mts
+node node_modules/typescript/bin/tsc --project "$PAPERCLIP_RUN_SCRATCH_DIR/camera-tsconfig.json"
+node node_modules/eslint/bin/eslint.js src/components/restaurant/restaurant-camera-player*.tsx src/components/restaurant/restaurant-camera-wizard*.tsx src/components/restaurant/restaurant-cameras-console*.tsx src/lib/restaurant/cameras/live-session*.ts src/lib/restaurant/cameras/stream-grants.test.ts src/lib/restaurant/cameras/mediamtx-route.test.mts src/server/routers/restaurant-cameras.ts 'src/app/api/restaurant/cameras/[cameraId]/stream/route.ts'
+```
+
+Vitest **45 passed, 0 failed, 0 skipped**, 11 files; protocol **16 passed, 0 failed**,
+three files. Unit fixtures mock the media adapter and router admin middleware/database;
+they prove application decisions, not MSE decoding or database authorization. Initial
+fixture imported an unrelated missing generated DB client; mocking unrelated preset and
+terminal services isolated the intended router test. Initial lint prefer-const warning
+resolved with explicit session holder. UI/runtime compiler passed; adding tests to the
+scratch config also requires existing `vitest.setup.ts` for matcher declarations. No
+source types weakened. Scratch config otherwise follows the earlier reproduction, adding
+changed UI/lifecycle files and their tests to include. Final commands/results recorded in
+the issue comment; no full workspace build or browser service was run. Final source/test
+compiler exit 0 with no diagnostics; final scoped ESLint and Prettier check exit 0;
+`git diff --check` exit 0. After adding renewal audit-input suppression, reran
+`node node_modules/vitest/vitest.mjs run src/lib/restaurant/cameras/stream-grants.test.ts --maxWorkers=1 --no-file-parallelism`:
+**4 passed, 0 failed**, exit 0; reran scoped compiler and router/test lint, both exit 0.
+
+WHA-1363 independently passed camera schema **4/4** and credential-table RLS probes **3/3**
+using a new isolated PostgreSQL cluster and NOSUPERUSER/NOBYPASSRLS runtime, then stopped it.
+That review evidence closes the earlier skipped camera DB gate; no schema changed here.
+
+Three verification groups remain: independent WHA-1363 correction review, production build,
+and authorized staging physical/browser/Studio matrix. Studio tokens, SectionCard, Button,
+Input and existing responsive grid reused; no new shell or palette. No screenshots or
+375/768/1024/1440, theme, motion, keyboard, browser-console matrix claimed. Owner must verify
+native Safari and supported Windows/macOS MSE browsers, actual frames, codec, renewal after
+60 seconds, close/denial and recovery on the approved revision. Hardware configuration remains
+pending; this correction does not answer the owner's hardware question. No gateway deployment,
+device probe, secrets generation, push or merge. Rollback: unavailable mode remains fail-closed;
+reverting this correction restores the reviewed usability defects, so do not activate real
+transport on that older revision. Current supervisor and WHA-1363 own review re-entry.

@@ -1,9 +1,12 @@
 import { readFileSync } from 'node:fs';
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen } from '@testing-library/react';
 import { beforeEach, describe, expect, test, vi } from 'vitest';
 import { RestaurantCamerasConsole } from './restaurant-cameras-console';
 
 const query = vi.fn();
+const cameraQuery = vi.fn(() => ({ data: [] as { id: string; name: string; enabled: boolean }[] }));
+const diagnosticQuery = vi.fn();
+const recordingQuery = vi.fn(() => ({ data: [] }));
 const source = readFileSync('src/components/restaurant/restaurant-cameras-console.tsx', 'utf8');
 
 vi.mock('@/components/entitlements-provider', () => ({
@@ -18,9 +21,12 @@ vi.mock('@/lib/trpc', () => ({
     restaurantCameras: {
       availability: { useQuery: (...args: unknown[]) => query(...args) },
       presets: { useQuery: vi.fn(() => ({ data: [] })) },
-      list: { useQuery: vi.fn(() => ({ data: [] })) },
+      list: { useQuery: (...args: unknown[]) => cameraQuery(...(args as [])) },
       listGateways: { useQuery: vi.fn(() => ({ data: [] })) },
-      listRecordings: { useQuery: vi.fn(() => ({ data: [] })) },
+      listRecordings: { useQuery: (...args: unknown[]) => recordingQuery(...(args as [])) },
+      configuredConnectionDiagnostics: {
+        useQuery: (...args: unknown[]) => diagnosticQuery(...args),
+      },
       testConnection: { useMutation: vi.fn(() => ({ isPending: false })) },
       register: { useMutation: vi.fn(() => ({ isPending: false })) },
       issueStreamGrant: { useMutation: vi.fn(() => ({ isPending: false })) },
@@ -52,10 +58,29 @@ describe('RestaurantCamerasConsole gateway availability', () => {
   test('preserves the existing camera controls behind the availability gate', () => {
     expect(source).toContain("includes('restaurant-integrations')");
     expect(source).toContain('Open live view');
-    expect(source).toContain('Play in panel');
+    expect(source).toContain('Recording playback unsupported');
     expect(source).toContain('Save retention');
     expect(source.match(/<RestaurantCameraWizard/g)).toHaveLength(1);
     expect(source).toContain('onTest={onTest}');
     expect(source).toContain('onSubmit={onSubmit}');
+  });
+  test('real-mode diagnostics are explicit, manual and never load recordings', () => {
+    query.mockReturnValue({ data: { available: true, mode: 'mediamtx' } });
+    cameraQuery.mockReturnValue({ data: [{ id: 'c', name: 'Kitchen', enabled: true }] });
+    const refetch = vi.fn();
+    diagnosticQuery.mockReturnValue({ data: { outcome: 'credentials-missing' }, refetch });
+    render(<RestaurantCamerasConsole />);
+    expect(screen.getByText(/Recordings unsupported by this live gateway/)).toBeVisible();
+    expect(screen.getByText(/Gateway reader credentials are missing/)).toBeVisible();
+    fireEvent.click(screen.getByRole('button', { name: 'Check configured connection' }));
+    expect(refetch).toHaveBeenCalledOnce();
+    expect(diagnosticQuery).toHaveBeenCalledWith(
+      { cameraId: 'c' },
+      { enabled: false, retry: false }
+    );
+    expect(recordingQuery).toHaveBeenLastCalledWith(
+      { cameraId: '' },
+      { enabled: false, retry: false }
+    );
   });
 });
