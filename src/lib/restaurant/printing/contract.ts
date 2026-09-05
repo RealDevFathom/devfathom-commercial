@@ -1,4 +1,11 @@
 import { z } from 'zod';
+import { ReceiptLayoutSchema } from '@/lib/receipts/configuration';
+import { ReceiptPreviewFactsSchema } from '@/lib/receipts/preview';
+
+export const ReceiptPrintSnapshotSchema = z
+  .object({ layout: ReceiptLayoutSchema, facts: ReceiptPreviewFactsSchema })
+  .strict();
+export type ReceiptPrintSnapshot = z.infer<typeof ReceiptPrintSnapshotSchema>;
 
 export const PrintDocumentTypeSchema = z.enum(['KITCHEN_TICKET', 'BAR_TICKET', 'RECEIPT']);
 export type PrintDocumentType = z.infer<typeof PrintDocumentTypeSchema>;
@@ -15,8 +22,13 @@ export const PrintDocumentSchema = z
     createdAt: z.string().datetime(),
     lines: z.array(PrintLineSchema).min(1).max(200),
     footer: z.string().trim().max(500).optional(),
+    receiptSnapshot: ReceiptPrintSnapshotSchema.optional(),
   })
-  .strict();
+  .strict()
+  .refine((document) => !document.receiptSnapshot || document.type === 'RECEIPT', {
+    message: 'Receipt snapshots require a RECEIPT document.',
+    path: ['receiptSnapshot'],
+  });
 export type PrintDocument = z.infer<typeof PrintDocumentSchema>;
 
 export const PrintRouteSchema = z
@@ -58,6 +70,8 @@ export type PrintEnqueueResult =
 
 export type ClaimedPrintJob = {
   id: string;
+  /** Opaque 64 lowercase hex HMAC; echo unchanged to the authenticated ACK endpoint. */
+  claimToken: string;
   printerId: string;
   documentType: PrintDocumentType;
   bytes: string;

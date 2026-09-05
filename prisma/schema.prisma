@@ -187,6 +187,8 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  receiptLayout          Json?
+  receiptLayoutRevision  Int     @default(0)
   id                     String  @id @default(cuid())
   organizationId         String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                   String
