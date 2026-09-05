@@ -3,6 +3,10 @@ import type { ComponentPropsWithoutRef } from 'react';
 import { describe, expect, it, vi } from 'vitest';
 
 const motionState = vi.hoisted(() => ({ reduce: false }));
+const motionProps = vi.hoisted(() => ({
+  initial: undefined as unknown,
+  transition: undefined as unknown,
+}));
 
 vi.mock('next/navigation', () => ({ usePathname: () => '/dashboard' }));
 vi.mock('motion/react', () => ({
@@ -19,9 +23,9 @@ vi.mock('motion/react', () => ({
       animate?: unknown;
       transition?: unknown;
     }) => {
-      void _initial;
+      motionProps.initial = _initial;
       void _animate;
-      void _transition;
+      motionProps.transition = _transition;
       return (
         <div data-motion-element="true" {...props}>
           {children}
@@ -34,7 +38,7 @@ vi.mock('motion/react', () => ({
 import { PageTransition } from './page-transition';
 
 describe('PageTransition', () => {
-  it('renders static visible content when reduced motion is requested', () => {
+  it('keeps the motion element static when reduced motion is requested', () => {
     motionState.reduce = true;
 
     render(<PageTransition className="stage">Dashboard</PageTransition>);
@@ -42,7 +46,9 @@ describe('PageTransition', () => {
     const transition = screen.getByText('Dashboard');
     expect(transition).toHaveAttribute('data-slot', 'page-transition');
     expect(transition).toHaveClass('stage');
-    expect(transition).not.toHaveAttribute('data-motion-element');
+    expect(transition).toHaveAttribute('data-motion-element', 'true');
+    expect(motionProps.initial).toBe(false);
+    expect(motionProps.transition).toMatchObject({ duration: 0 });
   });
 
   it('retains the route animation when reduced motion is not requested', () => {
@@ -51,5 +57,7 @@ describe('PageTransition', () => {
     render(<PageTransition>Dashboard</PageTransition>);
 
     expect(screen.getByText('Dashboard')).toHaveAttribute('data-motion-element', 'true');
+    expect(motionProps.initial).toEqual({ opacity: 0, y: 10 });
+    expect(motionProps.transition).toMatchObject({ duration: 0.42 });
   });
 });
