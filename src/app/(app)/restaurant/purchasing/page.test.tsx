@@ -49,9 +49,8 @@ function contextStub(enabledModules = ['restaurant-purchasing']) {
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.can.mockResolvedValue(true);
-  mocks.hasModule.mockImplementation(
-    (entitlements: { enabledModules: string[] }, module: string) =>
-      entitlements.enabledModules.includes(module)
+  mocks.hasModule.mockImplementation((entitlements: { enabledModules: string[] }, module: string) =>
+    entitlements.enabledModules.includes(module)
   );
   mocks.createCaller.mockReturnValue({
     listSuppliers: vi.fn().mockResolvedValue({ suppliers: [] }),
@@ -116,5 +115,57 @@ describe('PurchasingPage tenancy resolution', () => {
 
     expect(screen.getByRole('heading', { name: 'Permission denied' })).toBeDefined();
     expect(mocks.createCaller).not.toHaveBeenCalled();
+  });
+});
+
+describe('PurchasingPage order selection', () => {
+  it('defaults to a received order and renders its receipt evidence', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub());
+    const getPurchaseOrder = vi.fn().mockResolvedValue({
+      id: 'received-order',
+      reference: 'PO-RECEIVED',
+      supplierName: 'Receipt Supplier',
+      expectedDate: null,
+      status: 'RECEIVED',
+      lines: [],
+      receipts: [{ id: 'receipt-1' }],
+    });
+    const getReceipt = vi.fn().mockResolvedValue({
+      id: 'receipt-1',
+      reference: 'RECEIPT-001',
+      receivedAt: '2026-09-01T12:00:00.000Z',
+      discrepancies: [],
+      lines: [],
+    });
+    mocks.createCaller.mockReturnValue({
+      listSuppliers: vi.fn().mockResolvedValue({ suppliers: [] }),
+      listPurchaseOrders: vi.fn().mockResolvedValue({
+        orders: [
+          {
+            id: 'newer-order',
+            reference: 'PO-NEW',
+            supplierName: 'New Supplier',
+            status: 'DRAFT',
+            receiptCount: 0,
+          },
+          {
+            id: 'received-order',
+            reference: 'PO-RECEIVED',
+            supplierName: 'Receipt Supplier',
+            status: 'RECEIVED',
+            receiptCount: 1,
+          },
+        ],
+      }),
+      getPurchaseOrder,
+      getReceipt,
+    });
+
+    render(await PurchasingPage({ searchParams }));
+
+    expect(getPurchaseOrder).toHaveBeenCalledWith({ purchaseOrderId: 'received-order' });
+    expect(screen.getByRole('heading', { name: 'Receipt history' })).toBeDefined();
+    expect(screen.getByText('RECEIPT-001')).toBeDefined();
   });
 });

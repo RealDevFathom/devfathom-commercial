@@ -34,6 +34,7 @@ function ticket(
     items: statuses.map((status, i) => ({
       orderItemId: `oi_${ticketNumber}_${i}`,
       name: `Item ${i}`,
+      modifierNames: [],
       course: 1,
       seatNumber: null,
       quantity: 1,

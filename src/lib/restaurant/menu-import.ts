@@ -31,6 +31,7 @@ import { addPriceListEntry, createPriceListVersion } from '@/lib/restaurant/pric
 import { enqueue } from '@/lib/restaurant/scheduler';
 import { deleteUpload, getUpload, putUpload } from '@/lib/storage';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { isDemoTenant } from '@/lib/demo/isolation';
 
 /**
  * R-lane / WHA-194 — the menu-import domain: upload -> asynchronous extraction
@@ -499,6 +500,7 @@ export async function runMenuImportExtraction(
 export function createMenuImportExtractHandler(runtime?: MenuImportRuntime): RestaurantJobHandler {
   return async ({ db, job }: RestaurantJobContext) => {
     const payload = EXTRACT_PAYLOAD.parse(job.payload);
+    if (await isDemoTenant(db)) return;
     await runMenuImportExtraction(db, payload.importId, { runtime });
   };
 }

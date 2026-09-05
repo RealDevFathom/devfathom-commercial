@@ -354,7 +354,7 @@ export default async function InventoryPage({
           </div>
         </SectionCard>
 
-        <SectionCard>
+        <SectionCard data-tour="inventory-low-stock">
           <div className="flex flex-wrap items-center justify-between gap-3">
             <h2 className="text-lg font-semibold text-text-strong">Low-stock rules</h2>
             <span className="font-mono text-xs text-text-muted">

@@ -1,6 +1,6 @@
 'use client';
 
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, useEffect, useState } from 'react';
 
 import {
   RestaurantStaffSelect,
@@ -43,8 +43,10 @@ type Result = {
   serviceChargeRefundAmount: string;
   replayed: boolean;
 };
+type DemoApproval = { staffProfileId: string; displayName: string; expiresAt: number };
 
 const amountPattern = /^\d+(\.\d{1,2})?$/;
+const demoApprovalExpiredMessage = 'Demo access expired. Reopen the restaurant demo.';
 const moneyNumber = (value: string) => Number(value);
 const errorMessage = (error: unknown) =>
   error instanceof Error ? error.message : 'Refund request failed. Retry safely.';
@@ -53,11 +55,13 @@ export function RefundPanel({
   request,
   operators,
   actingOperatorId,
+  demo = false,
   disabled = false,
 }: {
   request: TerminalRequest;
   operators: RestaurantStaffOption[];
   actingOperatorId: string;
+  demo?: boolean;
   disabled?: boolean;
 }) {
   const [open, setOpen] = useState(false);
@@ -68,20 +72,69 @@ export function RefundPanel({
   const [reason, setReason] = useState('');
   const [managerId, setManagerId] = useState('');
   const [managerSecret, setManagerSecret] = useState('');
+  const [demoApproval, setDemoApproval] = useState<DemoApproval | null>(null);
   const [state, setState] = useState<
     'idle' | 'loading' | 'ready' | 'confirming' | 'submitting' | 'denied' | 'error'
   >('idle');
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<Result | null>(null);
   const selected = tenders.find((tender) => tender.tenderId === tenderId) ?? null;
-  const managers = operators.filter((operator) => operator.id !== actingOperatorId);
+  const listedDemoApproval =
+    demo &&
+    demoApproval &&
+    Number.isFinite(demoApproval.expiresAt) &&
+    demoApproval.staffProfileId !== actingOperatorId
+      ? demoApproval
+      : null;
+  const managers = demo
+    ? listedDemoApproval
+      ? [
+          {
+            id: listedDemoApproval.staffProfileId,
+            displayName: listedDemoApproval.displayName,
+            role: 'Designated approver',
+          },
+        ]
+      : []
+    : operators.filter((operator) => operator.id !== actingOperatorId);
+
+  useEffect(() => {
+    if (!demo || !demoApproval) return;
+    const remaining = demoApproval.expiresAt - Date.now();
+    const timer = window.setTimeout(
+      () => {
+        setDemoApproval(null);
+        setManagerId('');
+        setError(demoApprovalExpiredMessage);
+        setState((current) => (current === 'confirming' ? 'ready' : current));
+      },
+      Math.max(0, Math.min(remaining, 2_147_483_647))
+    );
+    return () => window.clearTimeout(timer);
+  }, [demo, demoApproval]);
 
   async function load() {
     setState('loading');
     setError(null);
     setResult(null);
     try {
-      const data = await request<{ tenders: Tender[] }>('/api/restaurant/checkout/refund');
+      const data = await request<{ tenders: Tender[]; demoApproval?: DemoApproval }>(
+        '/api/restaurant/checkout/refund'
+      );
+      if (demo) {
+        const approval = data.demoApproval;
+        const usable =
+          approval &&
+          typeof approval.staffProfileId === 'string' &&
+          typeof approval.displayName === 'string' &&
+          Number.isFinite(approval.expiresAt) &&
+          approval.expiresAt > Date.now() &&
+          approval.staffProfileId !== actingOperatorId
+            ? approval
+            : null;
+        setDemoApproval(usable);
+        setManagerId(usable?.staffProfileId ?? '');
+      }
       setTenders(
         data.tenders.filter(
           (tender) =>
@@ -99,6 +152,10 @@ export function RefundPanel({
   function setPanelOpen(next: boolean) {
     setOpen(next);
     if (next) {
+      if (demo) {
+        setDemoApproval(null);
+        setManagerId('');
+      }
       void load();
     } else {
       setManagerSecret('');
@@ -117,6 +174,11 @@ export function RefundPanel({
   }
 
   function validate() {
+    const approval =
+      listedDemoApproval && listedDemoApproval.expiresAt > Date.now() ? listedDemoApproval : null;
+    if (demo && (!approval || managerId !== approval.staffProfileId)) {
+      return demoApprovalExpiredMessage;
+    }
     if (!selected) return 'Choose a refundable receipt.';
     if (
       !amountPattern.test(amount) ||
@@ -132,8 +194,9 @@ export function RefundPanel({
       return 'Enter a tip amount within the remaining tip balance.';
     if (!reason.trim() || reason.trim().length > 240)
       return 'Enter a reason between 1 and 240 characters.';
-    if (!managerId || managerId === actingOperatorId || !/^\d{4,8}$/.test(managerSecret))
-      return 'Select a distinct manager and enter their 4–8 digit PIN.';
+    if (!managerId || managerId === actingOperatorId) return 'Select a distinct approving manager.';
+    if (!demo && !/^\d{4,8}$/.test(managerSecret))
+      return 'Enter the approving manager’s 4–8 digit PIN.';
     return null;
   }
 
@@ -146,12 +209,22 @@ export function RefundPanel({
 
   async function confirm() {
     if (!selected || state !== 'confirming') return;
+    const approval =
+      listedDemoApproval && listedDemoApproval.expiresAt > Date.now() ? listedDemoApproval : null;
+    if (demo && (!approval || managerId !== approval.staffProfileId)) {
+      setError(demoApprovalExpiredMessage);
+      setState('ready');
+      return;
+    }
+    const approvingStaffProfileId = approval?.staffProfileId ?? managerId;
     const body = {
       originalTenderId: selected.tenderId,
       amount,
       ...(moneyNumber(tipAmount) ? { tipRefundAmount: tipAmount } : {}),
       reason: reason.trim(),
-      approving: { staffProfileId: managerId, type: 'PIN' as const, secret: managerSecret },
+      approving: demo
+        ? { staffProfileId: approvingStaffProfileId, type: 'DEMO' as const }
+        : { staffProfileId: managerId, type: 'PIN' as const, secret: managerSecret },
     };
     setState('submitting');
     setError(null);
@@ -165,7 +238,7 @@ export function RefundPanel({
           tipRefundAmount: tipAmount,
           kind: 'REFUND',
           reason: reason.trim(),
-          approvingStaffProfileId: managerId,
+          approvingStaffProfileId,
         })}`,
       });
       setManagerSecret('');
@@ -319,28 +392,48 @@ export function RefundPanel({
               />
             </div>
             <div>
-              <Label htmlFor="refund-manager">Approving manager</Label>
+              <Label htmlFor="refund-manager">
+                {demo ? 'Demo approving manager' : 'Approving manager'}
+              </Label>
               <RestaurantStaffSelect
                 id="refund-manager"
-                label="Approving manager"
+                label={demo ? 'Demo approving manager' : 'Approving manager'}
                 staff={managers}
                 value={managerId}
                 onChange={setManagerId}
               />
             </div>
-            <div>
-              <Label htmlFor="refund-pin">Manager PIN</Label>
-              <Input
-                id="refund-pin"
-                type="password"
-                inputMode="numeric"
-                minLength={4}
-                maxLength={8}
-                value={managerSecret}
-                onChange={(e) => setManagerSecret(e.target.value.replace(/\D/g, ''))}
-              />
-            </div>
-            <Button type="submit" variant="destructive" className="h-11 w-full">
+            {demo && listedDemoApproval ? (
+              <p className="text-sm text-text-muted">
+                Demo approval is ready with the designated manager. No PIN entry is needed.
+              </p>
+            ) : demo ? (
+              <p role="alert" className="text-sm text-destructive">
+                {demoApprovalExpiredMessage}{' '}
+                <a className="underline" href="/demo/restaurants">
+                  Reopen demo
+                </a>
+              </p>
+            ) : (
+              <div>
+                <Label htmlFor="refund-pin">Manager PIN</Label>
+                <Input
+                  id="refund-pin"
+                  type="password"
+                  inputMode="numeric"
+                  minLength={4}
+                  maxLength={8}
+                  value={managerSecret}
+                  onChange={(e) => setManagerSecret(e.target.value.replace(/\D/g, ''))}
+                />
+              </div>
+            )}
+            <Button
+              type="submit"
+              variant="destructive"
+              className="h-11 w-full"
+              disabled={demo && !listedDemoApproval}
+            >
               Review refund
             </Button>
           </form>

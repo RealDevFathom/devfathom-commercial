@@ -180,6 +180,29 @@ describeIfDatabase('M6 purchasing — suppliers CRUD', () => {
 });
 
 describeIfDatabase('M6 purchasing — PO state machine (server-side guards)', () => {
+  it('accepts only a finite internal creation instant', async () => {
+    const now = new Date('2026-06-01T04:20:00.000Z');
+    const created = await deps.withTenantDb(orgId, (tx) =>
+      deps.purchasing.createPurchaseOrder(tx, {
+        supplierId: ids.supplier,
+        branchId: ids.branch,
+        locationId: ids.location,
+        now,
+      })
+    );
+    expect(created.createdAt).toEqual(now);
+
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        deps.purchasing.createPurchaseOrder(tx, {
+          supplierId: ids.supplier,
+          branchId: ids.branch,
+          now: new Date(Number.NaN),
+        })
+      )
+    ).rejects.toMatchObject({ name: 'PurchasingError', reason: 'INVALID' });
+  }, 30_000);
+
   it('walks DRAFT → SUBMITTED → APPROVED and blocks illegal transitions', async () => {
     const created = await deps.withTenantDb(orgId, (tx) =>
       deps.purchasing.createPurchaseOrder(tx, {

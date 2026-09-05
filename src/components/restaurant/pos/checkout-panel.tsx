@@ -638,7 +638,7 @@ export function CheckoutPanel({
         ) : null}
 
         {connected && !loading && summary ? (
-          <div className="space-y-4">
+          <div className="space-y-4" data-tour="bill-settlement">
             <SectionCard
               eyebrow="Settlement"
               title="Order balance"

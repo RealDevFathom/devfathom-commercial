@@ -41,6 +41,7 @@ import {
 export type InventoryErrorReason =
   | 'NOT_FOUND'
   | 'INVALID'
+  | 'STOCK_ITEM_EXISTS'
   | 'COUNT_NOT_DRAFT'
   | 'COUNT_NOT_SUBMITTED'
   | 'TRANSFER_NOT_DRAFT'
@@ -64,6 +65,51 @@ const ZERO = new Prisma.Decimal(0);
 
 function dec(v: Prisma.Decimal | string | number): Prisma.Decimal {
   return new Prisma.Decimal(v);
+}
+
+export type CreateStockItemInput = {
+  ingredientId: string;
+  canonicalUnitId: string;
+  trackBatches?: boolean;
+};
+
+export async function createStockItem(db: ScopedDb, input: CreateStockItemInput) {
+  const ingredient = await db.restaurantIngredient.findUnique({
+    where: { id: input.ingredientId },
+    select: { id: true, baseUnitId: true },
+  });
+  if (!ingredient) throw new InventoryError('Ingredient not found.', 'NOT_FOUND');
+
+  const unit = await db.restaurantUnit.findUnique({
+    where: { id: input.canonicalUnitId },
+    select: { id: true },
+  });
+  if (!unit) throw new InventoryError('Canonical unit not found.', 'NOT_FOUND');
+  if (ingredient.baseUnitId !== unit.id) {
+    throw new InventoryError(
+      "A stock item's canonical unit must match its ingredient base unit.",
+      'INVALID'
+    );
+  }
+
+  const existing = await db.restaurantStockItem.findUnique({
+    where: { ingredientId: ingredient.id },
+    select: { id: true },
+  });
+  if (existing) {
+    throw new InventoryError(
+      'A stock item already exists for this ingredient.',
+      'STOCK_ITEM_EXISTS'
+    );
+  }
+
+  return db.restaurantStockItem.create({
+    data: {
+      ingredientId: ingredient.id,
+      canonicalUnitId: unit.id,
+      trackBatches: input.trackBatches ?? false,
+    },
+  });
 }
 
 // ── Physical counts ───────────────────────────────────────────────────────────

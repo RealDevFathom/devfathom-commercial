@@ -203,9 +203,14 @@ export type CreatePurchaseOrderInput = {
   expectedDate?: Date | null;
   createdByStaffProfileId?: string | null;
   lines?: readonly PurchaseOrderLineInput[];
+  /** Internal authoritative creation instant; public routers never accept it. */
+  now?: Date;
 };
 
 export async function createPurchaseOrder(db: ScopedDb, input: CreatePurchaseOrderInput) {
+  if (input.now && !Number.isFinite(input.now.getTime())) {
+    throw new PurchasingError('Purchase order creation time must be valid.', 'INVALID');
+  }
   const order = await db.restaurantPurchaseOrder.create({
     data: {
       supplierId: input.supplierId,
@@ -214,6 +219,7 @@ export async function createPurchaseOrder(db: ScopedDb, input: CreatePurchaseOrd
       reference: input.reference ?? null,
       expectedDate: input.expectedDate ?? null,
       createdByStaffProfileId: input.createdByStaffProfileId ?? null,
+      ...(input.now ? { createdAt: input.now } : {}),
       status: 'DRAFT',
       lines: input.lines?.length
         ? {

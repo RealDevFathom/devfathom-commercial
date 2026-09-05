@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   listStockCounts: vi.fn(),
   listStockTransfers: vi.fn(),
   listStockBatches: vi.fn(),
+  createStockItem: vi.fn(),
   createStockCount: vi.fn(),
   addStockCountLine: vi.fn(),
   submitStockCount: vi.fn(),
@@ -66,6 +67,7 @@ vi.mock('@/lib/restaurant/inventory', () => ({
   listStockCounts: mocks.listStockCounts,
   listStockTransfers: mocks.listStockTransfers,
   listStockBatches: mocks.listStockBatches,
+  createStockItem: mocks.createStockItem,
   createStockCount: mocks.createStockCount,
   addStockCountLine: mocks.addStockCountLine,
   submitStockCount: mocks.submitStockCount,
@@ -165,10 +167,26 @@ beforeEach(() => {
   mocks.countStockLocations.mockResolvedValue(0);
   mocks.createStockLocation.mockResolvedValue({ id: 'loc_new', isActive: true });
   mocks.updateStockLocation.mockResolvedValue({ id: 'loc_1', isActive: true });
+  mocks.createStockItem.mockResolvedValue({ id: 'stock_item_new' });
   mocks.queryRaw.mockResolvedValue([]);
 });
 
 describe('restaurantInventoryRouter', () => {
+  it('creates a stock item through the domain service for an active restaurant actor', async () => {
+    await expect(
+      caller().createStockItem({
+        ingredientId: 'ingredient_1',
+        canonicalUnitId: 'unit_1',
+        trackBatches: true,
+      })
+    ).resolves.toEqual({ id: 'stock_item_new' });
+    expect(mocks.createStockItem).toHaveBeenCalledWith(db, {
+      ingredientId: 'ingredient_1',
+      canonicalUnitId: 'unit_1',
+      trackBatches: true,
+    });
+  });
+
   describe('stock location commercial ceiling', () => {
     it('creates below the active organization-wide ceiling under an advisory lock', async () => {
       await expect(

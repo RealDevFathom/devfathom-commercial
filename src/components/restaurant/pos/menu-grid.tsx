@@ -86,6 +86,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
 
   return (
     <SectionCard
+      data-tour="pos-order"
       eyebrow="Effective menu"
       title={menu?.menu.name ?? 'Menu'}
       actions={
@@ -135,6 +136,9 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                       const name = item.displayName ?? item.product.name;
                       return (
                         <Button
+                          data-demo-modifier-item={
+                            (item.modifierGroups?.length ?? 0) > 0 ? 'true' : undefined
+                          }
                           key={item.id}
                           type="button"
                           variant={selectedId === item.id ? 'default' : 'outline'}
@@ -207,6 +211,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
             </div>
             {(selected?.modifierGroups ?? []).map((group) => (
               <fieldset
+                data-demo-modifier-group="true"
                 key={group.id}
                 className="space-y-2 rounded-lg border border-border-subtle p-3"
               >

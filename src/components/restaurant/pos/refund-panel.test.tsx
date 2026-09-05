@@ -92,6 +92,88 @@ describe('RefundPanel', () => {
     expect(submission?.[1]?.intent).not.toContain('1234');
   });
 
+  it('uses the explicit server-side approval mode for a demo without exposing a PIN', async () => {
+    const demoApproval = {
+      staffProfileId: 'manager',
+      displayName: 'Bilal Khan',
+      expiresAt: Date.now() + 60_000,
+    };
+    const request = mockRequest(async (_path, options) =>
+      options?.method === 'POST'
+        ? {
+            amount: '20.00',
+            tipRefundAmount: '0.00',
+            businessDate: '2026-08-30',
+            paymentStatus: 'REFUNDED',
+            taxRefundAmount: '2.50',
+            serviceChargeRefundAmount: '1.50',
+            replayed: false,
+          }
+        : { tenders: [tender], demoApproval }
+    );
+    render(
+      <RefundPanel
+        request={request}
+        operators={[
+          { id: 'other-manager', displayName: 'Aaron Manager', role: 'Manager' },
+          ...managers,
+        ]}
+        actingOperatorId="actor"
+        demo
+      />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
+    await screen.findByRole('option', { name: /R-0042/ });
+    expect(screen.queryByLabelText('Manager PIN')).not.toBeInTheDocument();
+    expect(screen.getByText(/approval is ready with the designated manager/i)).toBeVisible();
+    expect(screen.getByLabelText('Demo approving manager')).toHaveValue('manager');
+    expect(screen.queryByRole('option', { name: /Aaron Manager/ })).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Settled receipt'), {
+      target: { value: tender.tenderId },
+    });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Demo walkthrough' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+    await screen.findByText('refund recorded');
+    const submission = vi
+      .mocked(request)
+      .mock.calls.find(([, options]) => options?.method === 'POST');
+    expect(submission?.[1]?.body).toEqual({
+      originalTenderId: tender.tenderId,
+      amount: '20.00',
+      reason: 'Demo walkthrough',
+      approving: { staffProfileId: 'manager', type: 'DEMO' },
+    });
+    expect(submission?.[1]?.intent).toContain('"approvingStaffProfileId":"manager"');
+    expect(JSON.stringify(submission?.[1])).not.toContain('secret');
+  });
+
+  it.each([
+    ['missing', undefined],
+    [
+      'expired',
+      { staffProfileId: 'manager', displayName: 'Bilal Khan', expiresAt: Date.now() - 1 },
+    ],
+  ])(
+    'does not offer DEMO approval when public approval metadata is %s',
+    async (_label, approval) => {
+      const request = mockRequest(async () => ({
+        tenders: [tender],
+        ...(approval ? { demoApproval: approval } : {}),
+      }));
+      render(<RefundPanel request={request} operators={managers} actingOperatorId="actor" demo />);
+      fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
+      await screen.findByRole('option', { name: /R-0042/ });
+
+      expect(screen.getByRole('alert')).toHaveTextContent('Demo access expired');
+      expect(screen.getByLabelText('Demo approving manager')).toHaveValue('');
+      expect(screen.getByRole('button', { name: 'Review refund' })).toBeDisabled();
+      expect(vi.mocked(request).mock.calls.some(([, options]) => options?.method === 'POST')).toBe(
+        false
+      );
+    }
+  );
+
   it('surfaces a permission denial without exposing a retry loop', async () => {
     const denied = mockRequest(async () => {
       throw new Error('Permission denied: capability missing');

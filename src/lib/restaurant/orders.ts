@@ -1257,9 +1257,14 @@ export async function cancelOrder(
       active.some((a) => a.id === i.id) ? 'VOIDED' : i.status
     ) as OrderItemStatus[];
     assertOrderStatusChange(order.status, 'CANCELLED', finalStatuses);
+    const cancelledAt = new Date();
     await tx.restaurantOrder.update({
       where: { id: order.id },
-      data: { status: 'CANCELLED', cancelledAt: new Date() },
+      data: { status: 'CANCELLED', cancelledAt },
+    });
+    await tx.restaurantOrderTable.updateMany({
+      where: { orderId: order.id, active: true },
+      data: { active: false, unlinkedAt: cancelledAt },
     });
     await record(tx, order, input.actor, 'order.cancelled', {
       reason,
@@ -1271,7 +1276,7 @@ export async function cancelOrder(
   });
 }
 
-export type CloseOrderInput = { orderId: string; actor: CommandActor };
+export type CloseOrderInput = { orderId: string; actor: CommandActor; now?: Date };
 
 /** Close an order. Guarded: every item must be resolved (served or voided) and no
  * remake may remain unresolved (§11.1). Walks SERVED→PAYMENT_PENDING→CLOSED
@@ -1281,6 +1286,10 @@ export async function closeOrder(
   db: ScopedDb,
   input: CloseOrderInput
 ): Promise<{ orderId: string; replayed: boolean }> {
+  const closedAt = input.now ?? new Date();
+  if (!(closedAt instanceof Date) || !Number.isFinite(closedAt.getTime())) {
+    throw new OrderCommandError('The close timestamp is invalid.', 'INVALID');
+  }
   return runInTransaction(db, async (tx) => {
     const idem = await beginIdempotent(tx, input.actor, 'order.close');
     if (idem.replay) return { orderId: input.orderId, replayed: true };
@@ -1339,10 +1348,13 @@ export async function closeOrder(
       );
     }
     assertOrderStatusChange(status, 'CLOSED', itemStatuses);
-    const closedAt = new Date();
     await tx.restaurantOrder.update({
       where: { id: order.id },
       data: { status: 'CLOSED', closedAt },
+    });
+    await tx.restaurantOrderTable.updateMany({
+      where: { orderId: order.id, active: true },
+      data: { active: false, unlinkedAt: closedAt },
     });
     await record(tx, order, input.actor, 'order.closed', {});
     await earnLoyaltyForClosedOrder(tx, order.id, closedAt);

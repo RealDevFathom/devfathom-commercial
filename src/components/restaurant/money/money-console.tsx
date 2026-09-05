@@ -1525,7 +1525,11 @@ function DailyCloseLedger({
   const chains = query.data?.chains ?? [];
   return (
     <div className="space-y-5">
-      <SectionCard eyebrow="Close register" title="Daily close correction chains">
+      <SectionCard
+        data-tour="daily-close"
+        eyebrow="Close register"
+        title="Daily close correction chains"
+      >
         {query.isLoading ? (
           <LoadingState label="Loading daily closes" />
         ) : query.error ? (
