@@ -18,9 +18,33 @@ import {
   PharmacyDemoRefusal,
   targetNamespace,
   validateObservedMapping,
+  pharmacyScalarHash,
+  runDisposablePharmacyDraft,
 } from './seed-pharmacy-demo';
 
 const NOW = new Date('2026-09-07T07:00:00.000Z');
+test('SQL receipt scalar hash includes timestamps and generated IDs', () => {
+  const row = {
+    id: 'service-generated',
+    createdAt: new Date('2026-09-07T07:00:00.000Z'),
+    note: null,
+  };
+  assert.equal(pharmacyScalarHash(row), pharmacyScalarHash(JSON.parse(JSON.stringify(row))));
+  assert.notEqual(pharmacyScalarHash(row), pharmacyScalarHash({ ...row, id: 'replacement' }));
+  assert.notEqual(
+    pharmacyScalarHash(row),
+    pharmacyScalarHash({ ...row, createdAt: new Date('2026-09-07T07:00:01.000Z') })
+  );
+});
+test('SQL disposable path refuses malformed input before connecting', async () => {
+  await assert.rejects(
+    runDisposablePharmacyDraft(
+      { directory: '/not-a-disposable', database: 'production' },
+      {} as Parameters<typeof runDisposablePharmacyDraft>[1]
+    ),
+    /INVALID_EVIDENCE_KEYS/
+  );
+});
 test('canonical namespace contract preserves target identity without lane rewriting', () => {
   const target = {
     environment: 'disposable' as const,

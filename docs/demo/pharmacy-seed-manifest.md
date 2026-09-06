@@ -1,5 +1,102 @@
 # Pharmacy demo evidence runner — WHA-1388
 
+## Current revision: disposable draft and atomic receipt
+
+This section supersedes the historical offline-only limitations below for the
+**fresh disposable TEST target only**. LAN and Azure application remain disabled
+and unauthorized. No helper artifacts are integrated. No product service, schema,
+migration, dependency version, account, permission or clinical record is changed
+on an existing target.
+
+The new `runDisposablePharmacyDraft` uses the genuine `withTenantDb` owning
+transaction and `createCentralPurchaseOrder`. It creates exactly one namespaced
+DRAFT purchase order with one canonical-unit line, zero synthetic draft price,
+one awaited `tx.auditLog` receipt and one awaited tombstone. Database-generated
+PO, line and audit IDs are retained; none are forced. Every PO/line scalar,
+including timestamps and status, contributes to its retained SHA256. Reference
+IDs and scalar hashes survive later changes and package revisions. No stock,
+approval, goods receipt, posted revenue, payment, journal or external effect is
+created. This is DRAFT-ONLY coverage, not Pharmacy onboarding or all-functions
+acceptance. Existing coverage gaps below still apply.
+
+`--evidence` retains the original offline behavior. The new executable form is:
+
+```sh
+bun --no-env-file --conditions=react-server scripts/seed-pharmacy-demo.ts --disposable /owned/path/request.pharmacy-demo.json
+```
+
+The document has exactly `target`, `request`, `options`. See the exported
+`DisposablePharmacyTarget`, `PharmacyDraftRequest` and `PharmacyDraftOptions`
+types. Empty options perform actual SQL observation in a READ ONLY transaction.
+Apply requires that observation's `reviewedDigest` and an expiry within one hour.
+Those fields bind a reviewed plan; they do not authorize a live environment.
+The runtime accepts no arbitrary URL and loads no dotenv files or credentials.
+It binds only an owner-private `wha1388-pg-*` directory under the system temp
+directory and its Unix socket. It independently asserts actual database name,
+cluster identity, runtime role, no network address, NOSUPERUSER, NOBYPASSRLS,
+tenant/user settings, row security, forced RLS on all 13 involved tables, and
+the complete applied 106-migration checksum manifest. The schema source is pinned.
+The verifier creates this identity; no existing database is reused.
+
+Actual tenant, active unique owner, active existing test purchaser, org-wide
+purchasing access, branch, currency, timezone, date, effective procurement
+entitlement, supplier/licence and medicine/presentation/pack relationships are
+queried. User queries exclude password/token/2FA fields. Entitlements use the
+existing resolver's separate **read** transaction. It is not covered by the
+draft transaction; no writes are performed there. The domain service and both
+receipt rows use the one owning transaction. This TEST-only path makes no claim
+to authenticate a live browser session or owner email.
+
+An advisory transaction lock serializes each stable database/tenant/branch
+namespace. SHARE table locks prevent prerequisite mutation during apply. The
+disposable runtime has SELECT, INSERT on the three output tables and UPDATE on
+the ten prerequisite tables solely because PostgreSQL requires that privilege
+for SHARE locks. Runner code never issues UPDATE or DELETE. Fixture bootstrap
+is privileged; all actual runner/RLS tests use the restricted role. No policy,
+constraint, trigger or migration is weakened.
+
+The operator history is a required private, bounded, retained file initialized
+once by the fresh verifier. The runner never creates a replacement genesis.
+It fsyncs intent before business writes and the original generated mappings
+before transaction completion. A successful replay compares both stored audit
+rows, all generated IDs, original scalar hashes and references **before dynamic
+planning**, then returns zero writes without modifying the file. Concurrent
+processes reread history after acquiring the database lock. Changed, partial,
+foreign, missing or prior-package history refuses; no delete/reseed repair exists.
+If SQL rolls back or the process dies after history fsync, the retained intent
+or prepared mapping deliberately prevents automatic resurrection. An operator
+must retain the directory independently of database retention; deletion or
+replacement of both the database and its only external history cannot be
+detected by any local-only protocol. Live enrollment/history custody remains a
+separate future scope.
+
+Fresh reproduction command (source must be committed and published first):
+
+```sh
+bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts
+```
+
+The verifier creates ONE private PostgreSQL cluster, uses a socket only, applies
+all 106 unchanged migrations through Prisma, creates explicitly synthetic TEST
+prerequisites, runs targeted checks, stops the cluster and retains `evidence.json`,
+migration output, database data and operator histories. Checks cover default
+zero-write observation, generated-ID draft/receipt, identical replay, changed or
+missing references, two independent concurrent processes, SQL receipt-permission
+failure with rollback, removed history, operator scalar edits and preservation.
+Reproduction results will be published as retained issue evidence after execution;
+no real-PG PASS is claimed by this pre-verifier source publication.
+
+Implementation base: `9691ab142cf05b46cc6154d20302dc9e4cdbe4cf`, parent
+`586ad042b5250340d64f9982d50c8b1c4f6a135f`, tree
+`c2093e54c52a8043debf9c6a8bfffc43dd5e6e8b`; clean
+`codex/pharmacy-demo-runner` checkout. Exact original product remains
+`37906386a59700ce4a168e410ca68594baa97c75`.
+Ownership: the four root files plus the explicitly permitted
+`scripts/verify-pharmacy-demo.ts`. Independent actual-PG review belongs to active
+Codex Desktop. No existing human-only interaction is changed by this work.
+
+## Historical source and evidence (prior revisions)
+
 ## Canonical namespace correction routing — GitHub 100
 
 Independent WHA-1392 review of root `72ac8671` and delivered helpers reproduced
