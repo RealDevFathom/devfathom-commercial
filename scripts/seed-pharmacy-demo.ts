@@ -8,6 +8,8 @@ import {
   PHARMACY_DEMO_VERSION,
   SCHEMA_SHA256,
   type DemoGap,
+  type DemoObservedRecord,
+  type DemoPlannedRecord,
   type PharmacyDemoEvidence,
 } from './pharmacy-demo-contract';
 
@@ -64,6 +66,25 @@ function instant(value: unknown): number {
 }
 function hash(value: unknown): void {
   requireFact(typeof value === 'string' && /^[a-f0-9]{64}$/.test(value), 'INVALID_DIGEST');
+}
+/** Validate an already observed mapping; this never establishes live provenance or writes a receipt. */
+export function validateObservedMapping(
+  plan: DemoPlannedRecord,
+  observed: DemoObservedRecord
+): DemoObservedRecord {
+  requireFact(
+    observed.planKey === plan.key && observed.model === plan.model,
+    'OBSERVED_PLAN_MISMATCH'
+  );
+  token(observed.persistedId);
+  token(observed.receiptReference);
+  hash(observed.observedHash);
+  requireFact(
+    observed.observedHash === plan.expectedHash &&
+      canonical(observed.observedFacts) === canonical(plan.expectedFacts),
+    'OBSERVED_FACTS_MISMATCH'
+  );
+  return structuredClone(observed);
 }
 function canonical(value: unknown): string {
   if (Array.isArray(value)) return `[${value.map(canonical).join(',')}]`;

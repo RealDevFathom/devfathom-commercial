@@ -7,6 +7,8 @@ import {
   PHARMACY_DEMO_VERSION,
   SCHEMA_SHA256,
   type PharmacyDemoEvidence,
+  type DemoPlannedRecord,
+  type DemoObservedRecord,
 } from './pharmacy-demo-contract';
 import {
   dryRun,
@@ -14,9 +16,43 @@ import {
   main,
   PharmacyDemoRefusal,
   targetNamespace,
+  validateObservedMapping,
 } from './seed-pharmacy-demo';
 
 const NOW = new Date('2026-09-07T07:00:00.000Z');
+test('generated-ID mapping preserves service IDs separately from planned references', () => {
+  const plan: DemoPlannedRecord = {
+    key: 'demo:unit:po',
+    reference: 'demo:unit:purchase-order',
+    model: 'PharmacyPurchaseOrder',
+    expectedHash: 'a'.repeat(64),
+    expectedFacts: { status: 'DRAFT' },
+  };
+  const observed: DemoObservedRecord = {
+    planKey: plan.key,
+    model: plan.model,
+    persistedId: 'cmexamplegeneratedid',
+    receiptReference: 'retained:unit:receipt',
+    observedHash: plan.expectedHash,
+    observedFacts: { status: 'DRAFT' },
+  };
+  assert.equal('id' in plan, false);
+  assert.deepEqual(validateObservedMapping(plan, observed), observed);
+  assert.notEqual(validateObservedMapping(plan, observed), observed);
+  for (const change of [
+    { planKey: 'demo:other:po' },
+    { model: 'PharmacySale' },
+    { persistedId: '' },
+    { receiptReference: '' },
+    { observedHash: 'b'.repeat(64) },
+    { observedFacts: { status: 'ISSUED' } },
+  ]) {
+    assert.throws(
+      () => validateObservedMapping(plan, { ...observed, ...change }),
+      PharmacyDemoRefusal
+    );
+  }
+});
 /** Synthetic unit input only. No workspace, identity or approval is provisioned. */
 function fixture(): PharmacyDemoEvidence {
   const evidence: PharmacyDemoEvidence = {
