@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import type { AllocationCandidate } from '../src/lib/pharmacy/inventory';
@@ -12,6 +13,10 @@ import {
   executePreparedInventoryReceipt,
   type InventoryPreparedReceipt,
   type InventoryPreparedReceiptInput,
+  planInventoryReceiptValuation,
+  executeInventoryReceiptValuation,
+  type InventoryReceiptValuationInput,
+  type InventoryDemoReconciliation,
 } from './pharmacy-demo-inventory';
 import type {
   PharmacyDemoContext,
@@ -488,6 +493,220 @@ describe('shared inventory contract and prepared receiving composition', () => {
       exceptionCreate,
     };
   }
+
+  describe('receipt accounting valuation increment', () => {
+    function valuation() {
+      const p = prepared();
+      p.receipt.status = 'POSTED';
+      p.receipt.postedAt = new Date(p.input.scenarioAt);
+      const line = p.receipt.lines[0]!;
+      line.inventoryLotId = 'generated-lot';
+      p.input.actors[0]!.capabilities.push('admin:access');
+      p.input.modules.push({ key: 'finance', enabled: true });
+      p.actorRead.mockResolvedValue({ id: 'purchaser', status: 'ACTIVE', role: 'ADMIN' });
+      const permissionRead = vi
+        .fn()
+        .mockResolvedValue({ organizationRole: null, permissionOverrides: [] });
+      Object.assign(p.tx.user, { findUnique: permissionRead });
+      const f = {
+        status: 'POSTED',
+        goodsReceiptLineId: line.id,
+        inventoryLotId: line.inventoryLotId,
+        acceptedMovementId: 'generated-accepted',
+        quarantineMovementId: 'generated-quarantine',
+        acceptedUnits: 28,
+        rejectedUnits: 2,
+        unitCostMinor: 1000,
+        inventoryValueMinor: 30000,
+        medicineId: 'medicine',
+        packLevelId: 'pack',
+        stockLocationId: 'location',
+        quarantineLocationId: 'quarantine',
+        postedAt: p.receipt.postedAt.toISOString(),
+        expiresAt: '2027-01-02T00:00:00.000Z',
+      };
+      // These are explicitly TEST-only synthetic DB/retained observations.
+      const input: InventoryReceiptValuationInput = {
+        actorId: 'purchaser',
+        postedReceiptHash: inventoryDemoReceiptHash(p.receipt),
+        received: {
+          planKey: `${p.input.namespace}:inventory:receipt:v1`,
+          model: 'PharmacyGoodsReceipt',
+          persistedId: p.receipt.id,
+          receiptReference: p.receipt.reference,
+          observedHash: createHash('sha256').update(JSON.stringify(f)).digest('hex'),
+          observedFacts: f,
+        },
+      };
+      const lotRead = vi.fn().mockResolvedValue({
+        id: 'generated-lot',
+        unitCostMinor: 1000,
+        unitsPerPack: 10,
+        packLevelId: 'pack',
+        supplierInvoiceRef: `${p.receipt.supplierInvoiceRef}#1`,
+        batch: { medicineId: 'medicine', batchNumber: line.batchNumber },
+      });
+      const movementRead = vi.fn().mockImplementation(async ({ where }) => {
+        const accepted = where.id === 'generated-accepted';
+        return {
+          id: where.id,
+          kind: 'RECEIPT',
+          quantityUnits: accepted ? 28 : 2,
+          disposition: accepted ? 'AVAILABLE' : 'QUARANTINE',
+          stockLocationId: accepted ? 'location' : 'quarantine',
+          idempotencyKey: `pharmacy-receipt:${line.id}:${accepted ? 'accepted' : 'quarantine'}`,
+        };
+      });
+      const entryRead = vi.fn().mockResolvedValue(null);
+      let header: Record<string, unknown> = {};
+      const journalLines: Record<string, unknown>[] = [];
+      const entryCreate = vi
+        .fn()
+        .mockImplementation(async ({ data }) => (header = { ...data, id: 'generated-entry' }));
+      const lineCreate = vi.fn().mockImplementation(async ({ data }) => {
+        const row = { ...data, id: `generated-journal-line-${journalLines.length + 1}` };
+        journalLines.push(row);
+        return row;
+      });
+      Object.assign(p.tx, {
+        pharmacyInventoryLot: { findFirst: lotRead },
+        pharmacyStockMovement: { findFirst: movementRead },
+        financeJournalEntry: {
+          findFirst: entryRead,
+          create: entryCreate,
+          findFirstOrThrow: vi
+            .fn()
+            .mockImplementation(async () => ({ ...header, lines: journalLines })),
+        },
+        financeJournalLine: { create: lineCreate },
+      });
+      const execute = () =>
+        executeInventoryReceiptValuation(p.tx, p.input, input, {
+          state: 'new',
+          hash: planInventoryReceiptValuation(p.input, input).digest,
+        });
+      return {
+        ...p,
+        valuationInput: input,
+        executeValuation: execute,
+        permissionRead,
+        lotRead,
+        movementRead,
+        entryRead,
+        entryCreate,
+        lineCreate,
+        journalLines,
+      };
+    }
+
+    it('uses real posting and journal rules to balance paid/bonus/quarantine value and return generated IDs', async () => {
+      const p = valuation();
+      const result = await p.executeValuation();
+      expect(result).toMatchObject({
+        status: 'applied',
+        records: [
+          {
+            persistedId: 'generated-entry',
+            observedFacts: {
+              inventoryMinor: 30000,
+              accrualMinor: 30000,
+              paidUnits: 20,
+              bonusUnits: 10,
+              acceptedUnits: 28,
+              quarantinedUnits: 2,
+              unitCostMinor: 1000,
+            },
+          },
+        ],
+      });
+      expect(p.journalLines.map((l) => [l.accountCode, l.side, l.amountMinor])).toEqual([
+        ['INVENTORY', 'DEBIT', 28000],
+        ['INVENTORY', 'DEBIT', 2000],
+        ['GOODS_RECEIVED_ACCRUAL', 'CREDIT', 30000],
+      ]);
+      expect(p.entryCreate).toHaveBeenCalledOnce();
+      expect(p.journalLines[0]).toMatchObject({
+        lotId: 'generated-lot',
+        locationId: 'location',
+        sourceLineId: 'prepared-line',
+      });
+      expect(p.journalLines[1]).toMatchObject({ lotId: 'generated-lot', locationId: 'quarantine' });
+      expect(p.permissionRead).toHaveBeenCalled();
+    });
+
+    it.each(['tenant', 'branch', 'edited', 'not-posted', 'lot', 'movement', 'cost'])(
+      'refuses %s source without journal writes',
+      async (change) => {
+        const p = valuation();
+        if (change === 'tenant') p.receipt.organizationId = 'foreign';
+        if (change === 'branch') p.receipt.branchId = 'foreign';
+        if (change === 'edited') p.receipt.warrantyEvidenceRef = 'edited';
+        if (change === 'not-posted') p.receipt.status = 'DRAFT';
+        if (change === 'lot') p.lotRead.mockResolvedValue(null);
+        if (change === 'movement') p.movementRead.mockResolvedValue(null);
+        if (change === 'cost') {
+          p.receipt.lines[0]!.unitCostMinor = 999;
+          p.valuationInput.postedReceiptHash = inventoryDemoReceiptHash(p.receipt);
+        }
+        expect((await p.executeValuation()).status).toBe('refused');
+        expect(p.entryCreate).not.toHaveBeenCalled();
+      }
+    );
+
+    it('rejects existing valuation instead of adopting or posting it twice', async () => {
+      const p = valuation();
+      p.entryRead.mockResolvedValue({ id: 'existing-entry' });
+      expect(await p.executeValuation()).toMatchObject({
+        status: 'refused',
+        unmetPrerequisites: ['RECEIPT_VALUATION_ALREADY_EXISTS'],
+      });
+      expect(p.entryCreate).not.toHaveBeenCalled();
+      expect(p.lineCreate).not.toHaveBeenCalled();
+    });
+
+    it('uses real ABAC denial even when observation claims admin capability', async () => {
+      const p = valuation();
+      p.permissionRead.mockResolvedValue({
+        organizationRole: null,
+        permissionOverrides: [{ capability: 'admin:access', effect: 'DENY' }],
+      });
+      expect(await p.executeValuation()).toMatchObject({
+        status: 'refused',
+        unmetPrerequisites: ['FINANCE_POSTING_FORBIDDEN'],
+      });
+      expect(p.entryCreate).not.toHaveBeenCalled();
+    });
+
+    it('refuses missing authority, tampered retained hash, replay and tombstone before writes', async () => {
+      const p = valuation();
+      const plan = planInventoryReceiptValuation(p.input, p.valuationInput);
+      const reconciliations: InventoryDemoReconciliation[] = [
+        { state: 'preserve', hash: plan.digest, records: [] },
+        { state: 'refuse', reason: 'TOMBSTONE' },
+        { state: 'new', hash: 'wrong' },
+      ];
+      for (const reconciliation of reconciliations)
+        expect(
+          (await executeInventoryReceiptValuation(p.tx, p.input, p.valuationInput, reconciliation))
+            .status
+        ).toBe('refused');
+      p.valuationInput.received.observedHash = 'f'.repeat(64);
+      expect((await p.executeValuation()).status).toBe('refused');
+      p.input.modules = [];
+      expect(planInventoryReceiptValuation(p.input, p.valuationInput).unmet).toContain(
+        'VERIFIED_FINANCE_AUTHORITY_REQUIRED'
+      );
+      expect(p.entryCreate).not.toHaveBeenCalled();
+    });
+
+    it('propagates failure after entry creation to the owning transaction, never reports applied', async () => {
+      const p = valuation();
+      p.lineCreate.mockRejectedValueOnce(new Error('JOURNAL_CONSTRAINT'));
+      await expect(p.executeValuation()).rejects.toThrow('JOURNAL_CONSTRAINT');
+      expect(p.entryCreate).toHaveBeenCalledOnce();
+      // A mock cannot prove SQL rollback: the root must discard the entire transaction.
+    });
+  });
 
   it('binds shared context/plan/result while observing a service-generated PO id', async () => {
     const input = facts();
