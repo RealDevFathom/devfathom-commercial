@@ -1,17 +1,10 @@
 import { createHash } from 'node:crypto';
 import type { RepeatReceipt } from '../src/lib/pharmacy/repeat-purchasing';
+import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
+  PharmacyDemoResult } from './pharmacy-demo-contract';
 
 /** Expected cases only. These rows must NEVER be persisted as sale history. */
-export type PharmacyDemoRetentionInput = {
-  organizationId: string;
-  branchId: string;
-  ownerUserId: string;
-  namespace: string;
-  businessDate: string;
-  scenarioAt: string;
-  timezone: string;
-  currency: 'PKR';
-};
+export type PharmacyDemoRetentionInput = PharmacyDemoContext;
 
 const DAY = 86_400_000;
 export function planPharmacyDemoRetention(input: PharmacyDemoRetentionInput) {
@@ -63,6 +56,17 @@ export function planPharmacyDemoRetention(input: PharmacyDemoRetentionInput) {
   const filters = { branchIds: [input.branchId], from: at(-90).toISOString().slice(0, 10),
     to: at(-10).toISOString().slice(0, 10), asOf: asOf.toISOString() };
   const plan = {
+    lane: 'retention' as const, namespace: input.namespace,
+    // Expected receipts/personas are reference fixtures, never executable records.
+    records: [] as DemoPlannedRecord[],
+    gaps: [
+      { function: 'repeat-purchasing', status: 'UNSEEDED',
+        reason: 'Requires legitimately linked synthetic customers and finance service-generated receipt history; expected cases are not persisted records.' },
+      { function: 'recovery', status: 'UNSEEDED',
+        reason: 'No recovery activity or consent is seeded; absence of a repeat is not churn or clinical evidence.' },
+      { function: 'gross-margin-comparison', status: 'UNSEEDED',
+        reason: 'Requires approved service-generated journal references for both comparison windows; unavailable is not zero.' },
+    ] satisfies DemoGap[],
     version: 1 as const, status: 'EXPECTED_CASE_ONLY' as const,
     target: { organizationId: input.organizationId, branchId: input.branchId,
       ownerUserId: input.ownerUserId, namespace: input.namespace,
@@ -99,15 +103,17 @@ export function planPharmacyDemoRetention(input: PharmacyDemoRetentionInput) {
       'No export writer, network effect, regulatory state, patient data or contact address is produced.',
     ],
   };
-  return { ...plan, hash: createHash('sha256').update(JSON.stringify(plan)).digest('hex') };
+  return { ...plan, digest: createHash('sha256').update(JSON.stringify(plan)).digest('hex') } satisfies PharmacyDemoPlan;
 }
 
 /** Deliberate refusal: no safe consent-free customer creation service exists at this base.
  * Root may consume the expected plan; this is never a substitute for service execution.
  * No database client, transaction, callback or top-level executable is accepted here.
  */
-export async function executePharmacyDemoRetention(input: PharmacyDemoRetentionInput) {
+export async function executePharmacyDemoRetention(
+  input: PharmacyDemoRetentionInput,
+): Promise<PharmacyDemoResult> {
   const plan = planPharmacyDemoRetention(input);
-  return { status: 'UNSEEDED' as const, planHash: plan.hash, writes: 0 as const,
-    reasons: plan.prerequisites, coverage: { repeat: false, recovery: false, margin: false } };
+  // Manually supplied actors, approved references and module flags cannot lift this refusal.
+  return { status: 'refused', unmetPrerequisites: plan.prerequisites };
 }

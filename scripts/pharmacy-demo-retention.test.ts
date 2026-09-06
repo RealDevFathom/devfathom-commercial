@@ -2,10 +2,12 @@ import { describe, expect, it } from 'vitest';
 import { summarizeRepeatPurchasing } from '../src/lib/pharmacy/repeat-purchasing';
 import { marginComparisonPeriods } from '../src/lib/pharmacy/finance-reports';
 import { executePharmacyDemoRetention, planPharmacyDemoRetention } from './pharmacy-demo-retention';
+import type { PharmacyDemoContext, PharmacyDemoPlan, PharmacyDemoResult } from './pharmacy-demo-contract';
 
-const input = { organizationId: 'existing-org', branchId: 'existing-branch',
+const input: PharmacyDemoContext = { organizationId: 'existing-org', branchId: 'existing-branch',
   ownerUserId: 'existing-owner', namespace: 'demo-retention', businessDate: '2026-09-07',
-  scenarioAt: '2026-09-07T12:00:00.000Z', timezone: 'Asia/Karachi', currency: 'PKR' as const };
+  scenarioAt: '2026-09-07T12:00:00.000Z', timezone: 'Asia/Karachi', currency: 'PKR',
+  actors: [], references: [], modules: [] };
 const plan = () => planPharmacyDemoRetention(input);
 
 describe('Pharmacy demo retention expected cases (no database writes)', () => {
@@ -18,15 +20,25 @@ describe('Pharmacy demo retention expected cases (no database writes)', () => {
   it('is deterministic, bounded, namespaced and sensitive to target facts', () => {
     expect(plan()).toEqual(plan());
     const { currency, ...rest } = input;
-    expect(planPharmacyDemoRetention({ currency, ...rest }).hash).toBe(plan().hash);
-    expect(plan().hash).toMatch(/^[a-f0-9]{64}$/);
-    expect(planPharmacyDemoRetention({ ...input, branchId: 'other' }).hash).not.toBe(plan().hash);
+    expect(planPharmacyDemoRetention({ currency, ...rest }).digest).toBe(plan().digest);
+    expect(plan().digest).toMatch(/^[a-f0-9]{64}$/);
+    expect(planPharmacyDemoRetention({ ...input, branchId: 'other' }).digest).not.toBe(plan().digest);
     expect(plan().personas).toHaveLength(6);
     for (const persona of plan().personas) {
       expect(persona.ref.startsWith('demo-retention:retention:')).toBe(true);
       expect(persona.displayName.startsWith('DEMO ')).toBe(true);
       expect(Object.keys(persona).sort()).toEqual(['displayName', 'ref', 'status']);
     }
+  });
+  it('exposes the shared plan without advertising expected fixtures as executable records', () => {
+    const p: PharmacyDemoPlan = plan();
+    expect(p.lane).toBe('retention');
+    expect(p.namespace).toBe(input.namespace);
+    expect(p.records).toEqual([]);
+    expect(p.gaps.map((gap) => [gap.function, gap.status])).toEqual([
+      ['repeat-purchasing', 'UNSEEDED'], ['recovery', 'UNSEEDED'],
+      ['gross-margin-comparison', 'UNSEEDED'],
+    ]);
   });
   it.each(['=FORMULA', '+formula', '@address', 'demo-' + 'x'.repeat(49)])(
     'rejects unsafe or unbounded namespace %s', (namespace) => {
@@ -71,10 +83,24 @@ describe('Pharmacy demo retention expected cases (no database writes)', () => {
   });
   it('refuses execution, preserving all coverage gaps and input without callbacks or writes', async () => {
     const before = JSON.stringify(input);
-    const result = await executePharmacyDemoRetention(input);
-    expect(result).toMatchObject({ status: 'UNSEEDED', planHash: plan().hash, writes: 0,
-      coverage: { repeat: false, recovery: false, margin: false } });
-    expect(result.reasons.join(' ')).toContain('LOYALTY consent');
+    const result: PharmacyDemoResult = await executePharmacyDemoRetention(input);
+    expect(result).toEqual({ status: 'refused', unmetPrerequisites: plan().prerequisites });
+    if (result.status !== 'refused') throw new Error('Expected refusal');
+    expect(result.unmetPrerequisites.join(' ')).toContain('LOYALTY consent');
     expect(JSON.stringify(input)).toBe(before);
+  });
+  it('does not treat manually supplied actor and approval facts as execution authority', async () => {
+    const supplied: PharmacyDemoContext = { ...input,
+      actors: [{ userId: 'demo-user', actorId: 'demo-actor', organizationId: input.organizationId,
+        branchId: input.branchId, active: true, synthetic: true, capabilities: ['*'] }],
+      references: [{ kind: 'medicine', id: 'demo-medicine', organizationId: input.organizationId,
+        branchId: input.branchId, approved: true, observedHash: 'unverified' }],
+      modules: [{ key: 'pharmacy', enabled: true }],
+    };
+    const before = JSON.stringify(supplied);
+    expect(await executePharmacyDemoRetention(supplied)).toEqual({
+      status: 'refused', unmetPrerequisites: plan().prerequisites,
+    });
+    expect(JSON.stringify(supplied)).toBe(before);
   });
 });
