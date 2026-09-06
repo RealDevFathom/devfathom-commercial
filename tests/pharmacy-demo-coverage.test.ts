@@ -2,6 +2,8 @@
 // Bind these independent expectations to immutable helper results when Desktop delivers them.
 // No seed entrypoint, database client, regulatory fixture or external effect is imported.
 import { describe, expect, it } from 'vitest';
+import { createHash } from 'node:crypto';
+import { readFile } from 'node:fs/promises';
 // Unchanged support source: 5b00a056775fad283ed305e9e582effcc224b534.
 import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
   PharmacyDemoResult } from '../scripts/pharmacy-demo-contract';
@@ -88,6 +90,131 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
     expect(() => assertMoney(postings.map((e, i) => i === 2 ? { ...e, cash: 0 } : e))).toThrow();
   });
 });
+
+// Opt-in immutable review input; the original 16 checks remain runnable alone.
+// No absent-source imports or skipped/failing placeholders in the private checkout.
+const reviewRoot = process.env.PHARMACY_DEMO_REVIEW_ROOT;
+if (reviewRoot) {
+  const { summarizeRepeatPurchasing } = await import(/* @vite-ignore */ `${reviewRoot}/src/lib/pharmacy/repeat-purchasing.ts`);
+  const runner = await import(/* @vite-ignore */ `${reviewRoot}/scripts/seed-pharmacy-demo.ts`);
+  const inventory = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-inventory.ts`);
+  const finance = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-finance.ts`);
+  const retention = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-retention.ts`);
+  const contract = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-contract.ts`);
+  const context: PharmacyDemoContext = {
+    organizationId: 'oracle-org', branchId: 'oracle-branch', ownerUserId: 'oracle-owner',
+    namespace: 'unused', businessDate: '2026-09-07', scenarioAt: at.toISOString(),
+    timezone: 'Asia/Karachi', currency: 'PKR', actors: [], references: [], modules: [],
+  };
+  const inventoryFacts = { ...context, namespace: 'demo:oracle', actorId: 'oracle-actor',
+    purchasingEntitled: false, organizationPurchaser: false,
+    approvedCatalog: { medicineId: 'oracle-medicine', presentationId: 'oracle-presentation',
+      packLevelId: 'oracle-pack', stockLocationId: 'oracle-location', canonicalUnitsPerPack: 10 },
+    supplier: { id: 'oracle-supplier', authorized: false, licences: [] },
+    orderedPacks: 10, listPricePerPackMinor: 1200 };
+
+  describe('delivered source characterization — NOT composed seed acceptance', () => {
+    it('pins every consumed root/helper source blob to the review manifest', async () => {
+      const manifest = JSON.parse(await readFile(`${reviewRoot}/../review-provenance.json`, 'utf8'));
+      expect(Object.keys(manifest)).toHaveLength(9);
+      for (const [path, entry] of Object.entries(manifest)) {
+        const actual = createHash('sha256').update(await readFile(`${reviewRoot}/${path}`)).digest('hex');
+        expect(actual).toBe((entry as { sha256: string }).sha256);
+      }
+      expect(manifest['scripts/seed-pharmacy-demo.ts'].commit)
+        .toBe('72ac8671086a4d7c46ab2075d80685bb50a508e4');
+      expect(manifest['scripts/pharmacy-demo-contract.ts'].commit)
+        .toBe('5b00a056775fad283ed305e9e582effcc224b534');
+    });
+
+    it('records the actual root namespace incompatibility in all three delivered planners', () => {
+      const target = { environment: 'disposable', targetKey: 'oracle-only', ...context };
+      const rootNamespace = runner.targetNamespace(target);
+      expect(rootNamespace).toMatch(/^phdemo_[a-f0-9]{24}_$/);
+      expect(runner.targetNamespace({ ...target, businessDate: '2026-09-08' })).toBe(rootNamespace);
+      expect(runner.targetNamespace({ ...target, branchId: 'other' })).not.toBe(rootNamespace);
+      expect(inventory.planInventoryDemo({ ...inventoryFacts, namespace: rootNamespace }).unmet)
+        .toContain('INVALID_NAMESPACE');
+      expect(() => finance.planPharmacyDemoFinance({ ...context, namespace: rootNamespace }))
+        .toThrow('INVALID_DEMO_NAMESPACE');
+      expect(() => retention.planPharmacyDemoRetention({ ...context, namespace: rootNamespace }))
+        .toThrow('Use a bounded demo- namespace.');
+      // Characterizes an integration defect; this passing check is NOT acceptance.
+    });
+
+    it('root produces zero records/writes and refuses apply despite valid synthetic JSON', async () => {
+      const target = { environment: 'disposable', targetKey: 'oracle-only',
+        organizationId: context.organizationId, branchId: context.branchId,
+        ownerUserId: context.ownerUserId, vertical: 'PHARMACY', currency: 'PKR',
+        timezone: context.timezone, businessDate: context.businessDate,
+        scenarioAt: context.scenarioAt, namespace: '' };
+      target.namespace = runner.targetNamespace(target);
+      const evidence = { version: contract.PHARMACY_DEMO_VERSION, target,
+        observed: { environment: target.environment, targetKey: target.targetKey,
+          observedAt: '2026-09-07T06:55:00.000Z', organizationId: context.organizationId,
+          vertical: 'PHARMACY', organizationActive: true, branchId: context.branchId,
+          branchActive: true, currency: 'PKR', timezone: context.timezone,
+          owners: [{ userId: context.ownerUserId, email: 'owner@chaichowk.pk', active: true,
+            role: 'ADMIN', branchIds: [context.branchId],
+            capabilities: ['reports:operational', 'reports:financial'] }],
+          runtimeRole: { superuser: false, bypassRls: false, forceRls: true },
+          schemaSha256: contract.SCHEMA_SHA256, migrationsSha256: contract.MIGRATIONS_SHA256,
+          migrationCount: 106, actors: [], references: [], modules: [] },
+        history: { namespace: target.namespace, receiptPresent: false,
+          tombstonePresent: false, namespaceRecordCount: 0 },
+        confirmation: { workspaceConfirmed: true, approvalReference: 'oracle-not-approval',
+          evidenceDigest: '', expiresAt: '2026-09-07T07:30:00.000Z' } };
+      evidence.confirmation.evidenceDigest = runner.evidenceDigest(evidence);
+      const report = runner.dryRun(evidence, at);
+      expect(report).toMatchObject({ writes: 0, plannedRecords: 0,
+        applyEnabled: false, liveTargetVerified: false, receipt: { seedReceipt: false } });
+      expect(report.coverage).toHaveLength(10);
+      expect(report.unmetPrerequisites.references).toHaveLength(5);
+      const output: string[] = [];
+      expect(await runner.main(['--apply'], (line: string) => output.push(line))).toBe(2);
+      expect(JSON.parse(output[0])).toMatchObject({ code: 'APPLY_DISABLED', writes: 0 });
+    });
+
+    it('inventory only projects a draft; finance arithmetic does not prove stock or cash', async () => {
+      const draft = inventory.planInventoryDemo(inventoryFacts);
+      expect(draft.expected).toEqual({ status: 'DRAFT', canonicalUnits: 100,
+        grossMinor: 12000, deliveredStock: [] });
+      expect(draft.unmet).toContain('PURCHASING_CAPABILITY_REQUIRED');
+      expect(draft.unmet).toContain('APPROVED_SUPPLIER_LICENCE_REQUIRED');
+      expect(draft).not.toHaveProperty('records'); // Known older structural contract.
+      const row = { key: 'oracle-retained-line', revenueMinor: 3600,
+        discountMinor: 180, cogsMinor: 1800, grossMarginMinor: 1620 };
+      expect(finance.inspectPharmacyDemoJournalArithmetic([row], [row.key]))
+        .toMatchObject({ moneyStockReconciled: false, drawerProof: false,
+          journalInspection: 'JOURNAL_ARITHMETIC_ONLY', rows: [row] });
+      expect(() => finance.inspectPharmacyDemoJournalArithmetic(
+        [{ ...row, grossMarginMinor: 1621 }], [row.key])).toThrow('JOURNAL_MARGIN_MISMATCH');
+      const input = { ...context, namespace: 'pharmacy-demo:oracle' };
+      const plan = finance.planPharmacyDemoFinance(input);
+      expect(plan.records).toEqual([]);
+      expect(plan.examples).toEqual([]);
+      expect((await finance.executePharmacyDemoFinance(input, undefined, plan.digest)).status)
+        .toBe('refused');
+    });
+
+    it('retention cases reconcile through the real pure report but cannot seed receipts', async () => {
+      const input = { ...context, namespace: 'demo-oracle' };
+      const plan = retention.planPharmacyDemoRetention(input);
+      expect(plan.records).toEqual([]);
+      expect(plan.expectedReceipts).toHaveLength(14);
+      const report = summarizeRepeatPurchasing(plan.expectedReceipts,
+        input.organizationId, plan.filters, at);
+      expect(report).toMatchObject({ enrolledCustomers: 4, completedReceipts: 11,
+        identifiedReceipts: 10, anonymousReceipts: 1 });
+      expect(report.horizons.map((h: { days: number; eligible: number; repeated: number; immature: number }) =>
+        [h.days, h.eligible, h.repeated, h.immature]))
+        .toEqual([[30, 3, 1, 1], [60, 3, 1, 1], [90, 3, 1, 1]]);
+      expect(await retention.executePharmacyDemoRetention(input))
+        .toEqual({ status: 'refused', unmetPrerequisites: plan.prerequisites });
+      expect(plan.margin.status).toBe('UNSEEDED');
+    });
+  });
+}
 
 describe('PH-DEMO expected cohort identities (not report execution)', () => {
   // First observed qualifying originals; elapsed UTC days, NOT local calendar days.
