@@ -2,6 +2,37 @@
 
 ## Approved additional fixture-repair pass
 
+**Result: incomplete; receiving scenario failed.** Tested immutable source
+`432f63a825d4a2191c59a57424e0c37b5e29c8bb`, tree
+`35fb23704e0ddce96a535f4f4578d007f410a705`, package digest
+`59b34ad821fb2b296a9254b1cceb5cd4be49215c8ea5fa7a146dca782f2ba309`.
+The exact fresh `--integrated` command below exited **1** on the only newly
+created cluster `/private/tmp/wha1388-pg-yksd0V`. All 106 unchanged migrations
+passed; the read-only preservation case passed under NOSUPERUSER/NOBYPASSRLS/
+FORCE RLS with zero writes and unchanged rows/sequences/operator bytes.
+Totals: **2 checks PASS, 1 FAIL; 8 integrated selected, 2 executed (1 pass/1 fail),
+6 unexecuted, 0 skipped**. No cash/report/replay/concurrency/late-rollback
+acceptance is claimed.
+
+The actual `postGoodsReceipt` path failed on `pharmacyGoodsReceipt.update`,
+SQLSTATE `23514`: `a goods receipt can only be posted against a sent purchase order`.
+The TEST fixture creates an APPROVED PO, whereas unchanged
+`pharmacy_assert_goods_receipt_postable` in migration
+`20260902150000_pharmacy_goods_receiving` requires SENT or RECEIVING.
+The static field/CHECK/FK/enum preflight described below missed this runtime
+lifecycle trigger; it was not sufficient to establish service compatibility.
+This is a remaining root TEST-fixture defect, not a new finance eligibility
+regression. Neither the trigger nor the frozen root/helper sources were changed.
+
+The new cluster stopped; `pg_ctl -D /private/tmp/wha1388-pg-yksd0V/data status`
+reported `no server running` (exit 3). Its `evidence.json`, `failure.txt`,
+`migrations.log` and PostgreSQL log remain intact. No previous cluster was
+accessed. Scoped TypeScript, ESLint, Prettier and diff checks exited 0.
+This result section is an evidence-only update after the tested commit;
+the verifier remains byte-identical to that tested source. The approved single
+additional pass is exhausted. Further fixture correction and proof require a
+new bounded decision; no new issue, routing card or correction loop was started.
+
 Saad's explicit additional-pass approval is relayed in Desktop comment
 `8ce202a8-545b-4624-ae6f-f4e0d63c1ba1`. Starting clean source:
 `fde9e44605792e3748b74bf5b7072e3cbe03a2cc`, parent
