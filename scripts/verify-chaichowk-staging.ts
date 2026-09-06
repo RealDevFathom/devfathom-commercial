@@ -476,11 +476,12 @@ async function main() {
     assert.equal(integrated.counts.restaurantShift, 4);
     assert.equal(integrated.counts.restaurantSopOccurrence, 4);
     assert.equal(integrated.counts.restaurantSopVerification, 1);
-    const receiptRow = (
+    const receiptJson: string = (
       await admin.query(
-        `SELECT * FROM audit_logs WHERE action='chaichowk.seed.v1' AND "targetId"='branch_demo'`
+        `SELECT row_to_json(t)::text AS raw FROM audit_logs t WHERE action='chaichowk.seed.v1' AND "targetId"='branch_demo'`
       )
-    ).rows[0];
+    ).rows[0].raw;
+    const receiptRow = JSON.parse(receiptJson);
     assert.equal(
       receiptRow.metadata.rows.filter((row: { id: string }) => row.id.includes('_catering.'))
         .length,
@@ -494,11 +495,14 @@ async function main() {
     assertions.push(
       'integrated Catering 65 rows and Operations 43 rows observed and receipt-tracked'
     );
-    const cateringLine = (
+    // Keep PostgreSQL JSON text lossless: pg parses TIMESTAMP WITHOUT TIME ZONE
+    // as process-local Date values, which would shift a JSON restore outside UTC.
+    const cateringJson: string = (
       await admin.query(
-        `SELECT * FROM restaurant_catering_order_lines WHERE "organizationId"='org_demo' LIMIT 1`
+        `SELECT row_to_json(t)::text AS raw FROM restaurant_catering_order_lines t WHERE "organizationId"='org_demo' LIMIT 1`
       )
-    ).rows[0];
+    ).rows[0].raw;
+    const cateringLine = JSON.parse(cateringJson);
     await admin.query(
       `UPDATE restaurant_catering_order_lines SET description='Operator edited demo' WHERE id=$1`,
       [cateringLine.id]
@@ -520,7 +524,7 @@ async function main() {
     assert.equal(await snapshot(), missingBefore);
     await admin.query(
       `INSERT INTO restaurant_catering_order_lines SELECT (json_populate_record(null::restaurant_catering_order_lines,$1::json)).*`,
-      [JSON.stringify(cateringLine)]
+      [cateringJson]
     );
     await admin.query(`DELETE FROM audit_logs WHERE id=$1`, [receiptRow.id]);
     const receiptMissingBefore = await snapshot();
@@ -530,10 +534,24 @@ async function main() {
     assert.equal(await snapshot(), receiptMissingBefore);
     await admin.query(
       `INSERT INTO audit_logs SELECT (json_populate_record(null::audit_logs,$1::json)).*`,
-      [JSON.stringify(receiptRow)]
+      [receiptJson]
     );
     assertions.push(
       'changed/deleted helper row and missing receipt refuse with zero repair writes'
+    );
+    assert.equal(
+      await snapshot(),
+      after,
+      'failure probes must restore every row and sequence exactly'
+    );
+    for (const apply of [false, true]) {
+      const restored = await run(apply);
+      assert.equal(restored.code, 0, restored.output + restored.diagnostics);
+      assert.equal(JSON.parse(restored.output).writes, 0);
+      assert.equal(await snapshot(), after);
+    }
+    assertions.push(
+      'post-restoration original-target dry-run/apply replay succeeds with all rows/sequences unchanged'
     );
     // New scenario branches in the SAME owned DB; no reset, new DB or seed-row deletion.
     for (const key of ['rollback', 'race-final']) {
