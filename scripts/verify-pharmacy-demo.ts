@@ -194,25 +194,26 @@ try {
     { mode: 0o600 }
   );
   if (databaseExists) {
-    assert.equal(
-      sql(`SELECT migration_name FROM _prisma_migrations
-      WHERE finished_at IS NULL AND rolled_back_at IS NULL;`),
-      '20260830120000_btree_gist_public_execute_acl'
+    const failedMigration = sql(`SELECT migration_name FROM _prisma_migrations
+      WHERE finished_at IS NULL AND rolled_back_at IS NULL;`);
+    assert.ok(
+      failedMigration === '' || failedMigration === '20260830120000_btree_gist_public_execute_acl'
     );
-    command(
-      'node',
-      [
-        'node_modules/prisma/build/index.js',
-        'migrate',
-        'resolve',
-        '--rolled-back',
-        '20260830120000_btree_gist_public_execute_acl',
-        '--config',
-        config,
-      ],
-      undefined,
-      { ...environment, DATABASE_URL: adminUrl }
-    );
+    if (failedMigration)
+      command(
+        'node',
+        [
+          'node_modules/prisma/build/index.js',
+          'migrate',
+          'resolve',
+          '--rolled-back',
+          '20260830120000_btree_gist_public_execute_acl',
+          '--config',
+          config,
+        ],
+        undefined,
+        { ...environment, DATABASE_URL: adminUrl }
+      );
   }
   const migrationLog = command(
     'node',
@@ -233,7 +234,17 @@ try {
     status: 'pass',
     facts: { count: migrations.length, exit: 0 },
   });
-  sql(`CREATE ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+  const fixtureExists =
+    sql("SELECT count(*) FROM organizations WHERE id='wha1388_test_org';") === '1';
+  if (fixtureExists) {
+    assert.ok(retry);
+    assert.deepEqual(
+      counts(),
+      { orders: 0, lines: 0, audit: 0 },
+      'Bootstrap resume cannot reset executed scenarios'
+    );
+  } else {
+    sql(`CREATE ROLE ${role} LOGIN NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
     GRANT CONNECT ON DATABASE ${database} TO ${role}; GRANT USAGE ON SCHEMA public TO ${role};
     GRANT SELECT ON ALL TABLES IN SCHEMA public TO ${role};
     GRANT INSERT ON pharmacy_purchase_orders, pharmacy_purchase_order_lines, audit_logs TO ${role};
@@ -241,8 +252,8 @@ try {
     GRANT UPDATE ON organizations,users,organization_modules,pharmacy_branches,
       pharmacy_central_purchasing_access,pharmacy_suppliers,pharmacy_supplier_licences,
       pharmacy_medicines,pharmacy_presentations,pharmacy_pack_levels TO ${role};`);
-  // Bootstrap creates ONLY synthetic TEST prerequisites in this NEW database.
-  sql(`INSERT INTO organizations (id,slug,"legalName","displayName",vertical,status,timezone,currency,"updatedAt") VALUES
+    // Bootstrap creates ONLY synthetic TEST prerequisites in this NEW database.
+    sql(`INSERT INTO organizations (id,slug,"legalName","displayName",vertical,status,timezone,currency,"updatedAt") VALUES
     ('wha1388_test_org','wha1388-test','TEST FIXTURE ONLY','TEST FIXTURE ONLY','PHARMACY','ACTIVE','Asia/Karachi','PKR',now()),
     ('wha1388_foreign_org','wha1388-foreign','FOREIGN TEST FIXTURE','FOREIGN TEST FIXTURE','PHARMACY','ACTIVE','Asia/Karachi','PKR',now());
     INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt")
@@ -252,8 +263,8 @@ try {
       ('wha1388_actor','wha1388_test_org','TEST PURCHASER','purchaser@wha1388.invalid','EMPLOYEE','wha1388-test-fixtures','TEST ONLY',now());
     INSERT INTO platform_modules (id,key,name,category,band,vertical,"updatedAt")
       VALUES ('wha1388_module','pharmacy-procurement','TEST PROCUREMENT','Pharmacy','VERTICAL_OPTIONAL','PHARMACY',now());
-    INSERT INTO organization_modules (id,"organizationId","moduleId","updatedAt")
-      VALUES ('wha1388_entitlement','wha1388_test_org','wha1388_module',now());
+    INSERT INTO organization_modules (id,"organizationId","moduleId","startsAt","updatedAt")
+      VALUES ('wha1388_entitlement','wha1388_test_org','wha1388_module',TIMESTAMP '2020-01-01 00:00:00',now());
     INSERT INTO pharmacy_central_purchasing_access (id,"organizationId","userId","grantedById") VALUES
       ('wha1388_owner_access','wha1388_test_org','wha1388_owner','wha1388_owner'),
       ('wha1388_actor_access','wha1388_test_org','wha1388_actor','wha1388_owner');
@@ -270,6 +281,7 @@ try {
       VALUES ('wha1388_presentation','wha1388_test_org','wha1388_medicine','SYNTHETIC TEST UNIT',now());
     INSERT INTO pharmacy_pack_levels (id,"organizationId","presentationId","versionGroupId",version,level,"unitsPerParent","effectiveFrom")
       VALUES ('wha1388_pack','wha1388_test_org','wha1388_presentation','wha1388_pack_version',1,'UNIT',1,now()-interval '1 day');`);
+  }
   const scenarioAt = new Date().toISOString();
   const baseRequest: PharmacyDraftRequest = {
     organizationId: 'wha1388_test_org',
@@ -300,11 +312,18 @@ try {
     'changed',
     'foreign',
   ]) {
-    await writeFile(
-      pharmacyHistoryPath(target, request(name)),
-      JSON.stringify(pharmacyHistoryGenesis(target, request(name))) + '\n',
-      { flag: 'wx', mode: 0o600 }
-    );
+    if (fixtureExists)
+      assert.equal(
+        await readFile(pharmacyHistoryPath(target, request(name)), 'utf8'),
+        JSON.stringify(pharmacyHistoryGenesis(target, request(name))) + '\n',
+        'Only unexecuted genesis can resume'
+      );
+    else
+      await writeFile(
+        pharmacyHistoryPath(target, request(name)),
+        JSON.stringify(pharmacyHistoryGenesis(target, request(name))) + '\n',
+        { flag: 'wx', mode: 0o600 }
+      );
   }
   const confirm = (digest: string) => ({
     apply: { reviewedDigest: digest, expiresAt: new Date(Date.now() + 600_000).toISOString() },
