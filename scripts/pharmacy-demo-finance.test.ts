@@ -3,6 +3,7 @@ import { test, vi } from 'vitest';
 import {
   executePharmacyDemoFinance,
   executePharmacyDemoCashSale,
+  executePharmacyDemoCashReturn,
   type PharmacyDemoCashRoot,
   planPharmacyDemoFinance,
   inspectPharmacyDemoJournalArithmetic,
@@ -16,6 +17,10 @@ import type {
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import { arrangementFor } from '../src/lib/pharmacy/inventory';
 
+vi.mock('server-only', () => ({}));
+// Load the real cash-fold kernel without constructing a global database client.
+vi.mock('../src/lib/db', () => ({ db: {} }));
+
 // Composition-only mocks of the actual imported services, not a production
 // adapter and not database/RLS evidence. Actual ScopedDb is typechecked below.
 const cashServices = vi.hoisted(() => ({
@@ -27,17 +32,26 @@ const cashServices = vi.hoisted(() => ({
   grossMargin: vi.fn(),
   readCounterReceipt: vi.fn(),
   assertBranchMayOperate: vi.fn(),
+  returnSaleLine: vi.fn(),
+  refundPharmacyTender: vi.fn(),
+  postSaleReturnEntry: vi.fn(),
+  postTenderRefundEntry: vi.fn(),
 }));
 vi.mock('../src/lib/pharmacy/sales', () => ({
   createSale: cashServices.createSale,
   addSaleLine: cashServices.addSaleLine,
+  returnSaleLine: cashServices.returnSaleLine,
 }));
-vi.mock('../src/lib/pharmacy/settlement', () => ({
+vi.mock('../src/lib/pharmacy/settlement', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('../src/lib/pharmacy/settlement')>()),
   applyPharmacyTender: cashServices.applyPharmacyTender,
+  refundPharmacyTender: cashServices.refundPharmacyTender,
 }));
 vi.mock('../src/lib/pharmacy/finance-postings', () => ({
   postSaleLineEntry: cashServices.postSaleLineEntry,
   postTenderEntry: cashServices.postTenderEntry,
+  postSaleReturnEntry: cashServices.postSaleReturnEntry,
+  postTenderRefundEntry: cashServices.postTenderRefundEntry,
 }));
 vi.mock('../src/lib/pharmacy/finance-reports', () => ({ grossMargin: cashServices.grossMargin }));
 vi.mock('../src/lib/pharmacy/counter', () => ({
@@ -429,6 +443,333 @@ test('stock eligibility #101: insufficient, partial-pack, inconsistent and unsaf
     });
     assert.equal(f.db.pharmacyDrawerMovement.aggregate.mock.calls.length, 0);
     assert.equal(cashServices.createSale.mock.calls.length, 0);
+  }
+});
+
+async function returnFixture() {
+  const f = cashFixture();
+  const arrangement = arrangementFor(2, 1);
+  f.db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+    id: f.input.inventoryLotId,
+    unitsPerPack: 1,
+    printedMrpMinor: 33,
+    unitCostMinor: 20,
+  });
+  f.db.pharmacyStockBalance.findMany.mockResolvedValue([
+    {
+      inventoryLotId: f.input.inventoryLotId,
+      stockLocationId: f.input.stockLocationId,
+      disposition: 'AVAILABLE',
+      onHandUnits: 2,
+      ...arrangement,
+    },
+  ]);
+  f.db.pharmacyStockBalance.findFirst.mockResolvedValue({
+    inventoryLotId: f.input.inventoryLotId,
+    stockLocationId: f.input.stockLocationId,
+    disposition: 'AVAILABLE',
+    onHandUnits: 1,
+    sealedPacks: 1,
+    looseUnits: 0,
+  });
+  for (const [mock, entryId] of [
+    [cashServices.postSaleLineEntry, 'sale-journal-generated'],
+    [cashServices.postTenderEntry, 'tender-journal-generated'],
+  ] as const) {
+    const entry = await mock();
+    entry.lines = entry.lines.map((leg: object, i: number) => ({
+      ...leg,
+      id: `${entryId}-leg-${i}`,
+      entryId,
+    }));
+    mock.mockResolvedValue(entry);
+  }
+  // Setup uses the accepted f191 cash composition and actual receiving arrangement
+  // kernel, with mocked service/Prisma boundaries. This is NOT committed SQL proof.
+  const original = await executePharmacyDemoCashSale(f.tx, f.root, f.input);
+  if (original.status !== 'applied') throw new Error('cash fixture setup failed');
+  const quarantineId = 'quarantine-generated';
+  f.root.records = [
+    ...f.root.records,
+    ...original.records,
+    {
+      model: 'PharmacyStockLocation',
+      persistedId: quarantineId,
+      planKey: `${f.root.namespace}quarantine`,
+      receiptReference: `${f.root.namespace}prerequisites`,
+      observedHash: 'test-only',
+      observedFacts: {},
+    },
+  ];
+  const allocation = {
+    id: original.allocationIds[0],
+    canonicalUnits: 1,
+    stockMovementId: original.stockMovementIds[0],
+    inventoryLotId: f.input.inventoryLotId,
+    stockLocationId: f.input.stockLocationId,
+  };
+  const sourceLine = {
+    id: original.saleLineId,
+    medicineId: f.input.medicineId,
+    canonicalUnits: 1,
+    quantity: 1,
+    saleUnit: 'UNIT',
+    canonicalUnitsPerSaleUnit: 1,
+    unitPriceMinor: 33,
+    discountMinor: 0,
+    allocations: [allocation],
+    returnLines: [] as object[],
+  };
+  const sourceTender = {
+    id: original.tenderId,
+    type: 'CASH',
+    actorId: f.root.scope.actorId,
+    amountMinor: 33,
+    cashReceivedMinor: 50,
+    changeGivenMinor: 17,
+    deviceId: f.input.deviceId,
+    drawerSessionId: f.input.drawerSessionId,
+    refunds: [] as object[],
+  };
+  const sourceSale = {
+    id: original.saleId,
+    status: 'COMPLETED',
+    createdByUserId: f.root.scope.actorId,
+    customerId: null,
+    receiptNumber: original.receiptNumber,
+    receiptDeviceId: f.input.deviceId,
+    completedAt: original.issuedAt,
+    lines: [sourceLine],
+    tenders: [sourceTender],
+    returns: [] as object[],
+  };
+  f.db.pharmacySale.findFirst.mockResolvedValue(sourceSale);
+  const newInput = {
+    quarantineLocationId: quarantineId,
+    reason: 'Supplied test operator reason',
+    integrityDecision: 'Supplied test quarantine decision',
+  };
+  const returnLine = {
+    id: 'return-line-generated',
+    saleLineId: original.saleLineId,
+    inventoryLotId: f.input.inventoryLotId,
+    stockLocationId: quarantineId,
+    canonicalUnits: 1,
+    integrityDecision: newInput.integrityDecision,
+    stockMovementId: 'return-movement-generated',
+  };
+  cashServices.returnSaleLine.mockResolvedValue({
+    saleReturn: { id: 'return-generated', originalSaleId: original.saleId },
+    returnLine,
+    movement: {
+      id: 'return-movement-generated',
+      kind: 'RETURN',
+      disposition: 'QUARANTINE',
+      quantityUnits: 1,
+    },
+  });
+  cashServices.refundPharmacyTender.mockResolvedValue({ replayed: false });
+  const refund = {
+    id: 'refund-generated',
+    originalTenderId: original.tenderId,
+    saleId: original.saleId,
+    amountMinor: 33,
+    drawerSessionId: f.input.drawerSessionId,
+    providerRef: null,
+    createdAt: new Date(original.issuedAt.getTime() + 1000),
+  };
+  const before = [{ id: 'cash-drawer-generated', kind: 'CASH_SALE', amountMinor: 33 }];
+  const after = [
+    ...before,
+    { id: 'refund-drawer-generated', kind: 'CASH_REFUND', amountMinor: 33 },
+  ];
+  const extra = {
+    pharmacyStockLocation: { findFirst: vi.fn().mockResolvedValue({ id: quarantineId }) },
+    financeJournalEntry: {
+      findMany: vi.fn().mockResolvedValue([
+        {
+          id: original.journalEntryIds[0],
+          sourceKind: 'PHARMACY_SALE_LINE',
+          sourceId: original.saleLineId,
+          lines: original.journalLines.filter((leg) => leg.entryId === original.journalEntryIds[0]),
+        },
+        {
+          id: original.journalEntryIds[1],
+          sourceKind: 'PHARMACY_TENDER',
+          sourceId: original.tenderId,
+          lines: original.journalLines.filter((leg) => leg.entryId === original.journalEntryIds[1]),
+        },
+      ]),
+    },
+    pharmacyRefund: { findMany: vi.fn().mockResolvedValue([refund]) },
+    pharmacySaleReturnLine: { findMany: vi.fn().mockResolvedValue([returnLine]) },
+  };
+  const drawerFind = vi.fn().mockResolvedValueOnce(before).mockResolvedValueOnce(after);
+  Object.assign(f.db, extra);
+  Object.assign(f.db.pharmacyDrawerMovement, { findMany: drawerFind });
+  let quarantineReads = 0;
+  f.db.pharmacyStockBalance.findFirst
+    .mockReset()
+    .mockImplementation(async ({ where }) =>
+      where.disposition === 'QUARANTINE'
+        ? ++quarantineReads === 1
+          ? null
+          : { onHandUnits: 1 }
+        : { onHandUnits: original.stockAfter }
+    );
+  cashServices.postSaleReturnEntry.mockResolvedValue({
+    id: 'return-journal-generated',
+    lines: original.journalLines
+      .filter((leg) => leg.entryId === original.journalEntryIds[0])
+      .map((leg) => ({ ...leg, side: leg.side === 'DEBIT' ? 'CREDIT' : 'DEBIT' })),
+  });
+  cashServices.postTenderRefundEntry.mockResolvedValue({
+    id: 'refund-journal-generated',
+    lines: original.journalLines
+      .filter((leg) => leg.entryId === original.journalEntryIds[1])
+      .map((leg) => ({ ...leg, side: leg.side === 'DEBIT' ? 'CREDIT' : 'DEBIT' })),
+  });
+  cashServices.grossMargin.mockResolvedValue([
+    {
+      key: original.saleLineId,
+      revenueMinor: 0,
+      discountMinor: 0,
+      cogsMinor: 0,
+      grossMarginMinor: 0,
+    },
+  ]);
+  return {
+    ...f,
+    original,
+    newInput,
+    sourceSale,
+    sourceLine,
+    sourceTender,
+    extra,
+    drawerFind,
+    before,
+    after,
+  };
+}
+
+test('return boundary: full cash refund maps generated IDs, quarantine and balanced reversal journals', async () => {
+  const f = await returnFixture();
+  const result: PharmacyDemoResult = await executePharmacyDemoCashReturn(
+    f.tx,
+    f.root,
+    f.original,
+    f.newInput
+  );
+  assert.equal(result.status, 'applied');
+  if (result.status !== 'applied') assert.fail('expected fresh applied return');
+  assert.equal(
+    result.records.find((row) => row.model === 'PharmacyRefund')!.persistedId,
+    'refund-generated'
+  );
+  assert.equal(
+    result.records.find((row) => row.model === 'PharmacySaleReturn')!.observedFacts
+      .originalReceiptNumber,
+    27
+  );
+  assert.equal(
+    result.records.find((row) => row.model === 'PharmacyStockMovement')!.observedFacts.disposition,
+    'QUARANTINE'
+  );
+  assert.equal(cashServices.returnSaleLine.mock.calls[0]![0], f.tx);
+  assert.equal(
+    cashServices.returnSaleLine.mock.calls[0]![2].integrityDecision,
+    f.newInput.integrityDecision
+  );
+  assert.equal(
+    cashServices.returnSaleLine.mock.calls[0]![2].idempotencyKey,
+    `${f.root.namespace}finance:cash:full-return`
+  );
+  assert.equal(
+    cashServices.refundPharmacyTender.mock.calls[0]![2].originalTenderId,
+    f.original.tenderId
+  );
+  assert.equal(cashServices.refundPharmacyTender.mock.calls[0]![2].amountMinor, 33);
+  assert.equal(cashServices.refundPharmacyTender.mock.calls[0]![2].adapter, undefined);
+  assert.equal(
+    cashServices.postSaleReturnEntry.mock.calls[0]![2].saleReturnLineId,
+    'return-line-generated'
+  );
+  assert.equal(cashServices.postTenderRefundEntry.mock.calls[0]![2].refundId, 'refund-generated');
+  assert.ok(result.gaps.some((gap) => gap.function === 'sales.changeSaleStatus:void'));
+});
+
+test('return boundary: foreign, changed, non-synthetic and previously reversed sources refuse before reversal writes', async () => {
+  for (const kind of [
+    'foreign',
+    'unrecorded',
+    'receipt',
+    'amount',
+    'partial',
+    'returned',
+    'refunded',
+    'quarantine',
+    'card',
+  ] as const) {
+    const f = await returnFixture();
+    if (kind === 'foreign') f.db.pharmacySale.findFirst.mockResolvedValue(null);
+    if (kind === 'unrecorded') f.root.records = [];
+    if (kind === 'receipt') f.sourceSale.receiptNumber = 99;
+    if (kind === 'amount') f.sourceTender.amountMinor = 34;
+    if (kind === 'partial') f.sourceLine.canonicalUnits = 2;
+    if (kind === 'returned') f.sourceLine.returnLines.push({ id: 'prior-return' });
+    if (kind === 'refunded') f.sourceTender.refunds.push({ id: 'prior-refund' });
+    if (kind === 'quarantine') f.extra.pharmacyStockLocation.findFirst.mockResolvedValue(null);
+    if (kind === 'card') f.sourceTender.type = 'CARD';
+    assert.equal(
+      (await executePharmacyDemoCashReturn(f.tx, f.root, f.original, f.newInput)).status,
+      'refused',
+      kind
+    );
+    assert.equal(cashServices.returnSaleLine.mock.calls.length, 0, kind);
+    assert.equal(cashServices.refundPharmacyTender.mock.calls.length, 0, kind);
+  }
+});
+
+test('return boundary: late service errors propagate identically for root whole-transaction rollback', async () => {
+  for (const step of [
+    'returnSaleLine',
+    'refundPharmacyTender',
+    'postSaleReturnEntry',
+    'postTenderRefundEntry',
+    'grossMargin',
+  ] as const) {
+    const f = await returnFixture();
+    const failure = new Error(step);
+    cashServices[step].mockRejectedValue(failure);
+    await assert.rejects(
+      executePharmacyDemoCashReturn(f.tx, f.root, f.original, f.newInput),
+      (error) => error === failure
+    );
+  }
+});
+
+test('return boundary: replayed refund, wrong cash/stock and rewritten receipt cannot return success', async () => {
+  for (const kind of ['replay', 'cash', 'stock', 'receipt', 'journal', 'drawer'] as const) {
+    const f = await returnFixture();
+    if (kind === 'replay') cashServices.refundPharmacyTender.mockResolvedValue({ replayed: true });
+    if (kind === 'cash') f.extra.pharmacyRefund.findMany.mockResolvedValue([]);
+    if (kind === 'stock')
+      f.db.pharmacyStockBalance.findFirst
+        .mockReset()
+        .mockResolvedValue({ onHandUnits: f.original.stockAfter });
+    if (kind === 'receipt')
+      cashServices.readCounterReceipt
+        .mockReset()
+        .mockResolvedValueOnce(f.original.receipt)
+        .mockResolvedValueOnce({ ...f.original.receipt, receiptNumber: 99 });
+    if (kind === 'journal')
+      cashServices.postTenderRefundEntry.mockResolvedValue({ id: 'bad', lines: [] });
+    if (kind === 'drawer') f.drawerFind.mockReset().mockResolvedValue(f.before);
+    await assert.rejects(
+      executePharmacyDemoCashReturn(f.tx, f.root, f.original, f.newInput),
+      /ROLLBACK/,
+      kind
+    );
   }
 });
 
