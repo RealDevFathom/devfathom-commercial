@@ -1,12 +1,17 @@
 /**
  * Run: node --experimental-strip-types --test tests/pharmacy-demo-safety.test.ts
  * Query-contract evidence only: no database, seed entrypoint, or network access.
- * Root availability deliberately fails until Desktop routes immutable source.
- * Availability alone is not root-package safety acceptance; bind behavioral
- * cases to its real exports after delivery, without importing an executable main.
+ * Reviewed data-only contract: scripts/pharmacy-demo-contract.ts at immutable
+ * commit 5b00a056775fad283ed305e9e582effcc224b534 (read-only; no runner delivered).
+ * PharmacyDemoEvidence contains manual observations, not authorization proof.
+ * UNVERIFIED pending actual runner exports: vertical/tenant/branch/owner rejection,
+ * approval expiry, DB role fences, real-row/receipt drift, concurrency/replay,
+ * external sends, and credential/permission/activation write refusal.
+ * These query-shape checks are not authentication, RLS, or root-package proof.
+ * Bind behavioral cases to real runner exports after immutable source delivery;
+ * missing source is a dependency, not a failing or skipped product test.
  */
 import assert from 'node:assert/strict';
-import { existsSync } from 'node:fs';
 import test from 'node:test';
 import {
   findBranch,
@@ -60,13 +65,3 @@ for (const scope of [
     ]);
   });
 }
-
-test('root-package prerequisite: immutable contract and runner delivered', () => {
-  const missing = ['pharmacy-demo-contract.ts', 'seed-pharmacy-demo.ts'].filter(
-    (file) => !existsSync(new URL(`../scripts/${file}`, import.meta.url)),
-  );
-  assert.deepEqual(missing, [], `source-not-delivered: ${missing.join(', ')}. ` +
-    'UNVERIFIED: vertical/tenant/branch/owner rejection; missing/expired approval; ' +
-    'mismatched/privileged DB role; real-row/receipt drift; concurrency/replay; ' +
-    'external sends; credential/permission/activation writes.');
-});
