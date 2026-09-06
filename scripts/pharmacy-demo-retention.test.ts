@@ -1,5 +1,6 @@
 import { describe, expect, expectTypeOf, it, vi } from 'vitest';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
+import { linkCustomerToSale } from '../src/lib/pharmacy/customer-loyalty';
 import { summarizeRepeatPurchasing } from '../src/lib/pharmacy/repeat-purchasing';
 import { marginComparisonPeriods } from '../src/lib/pharmacy/finance-reports';
 import { executePharmacyDemoRetention, planPharmacyDemoRetention, readbackPharmacyDemoRetention } from './pharmacy-demo-retention';
@@ -10,6 +11,42 @@ const input: PharmacyDemoContext = { organizationId: 'existing-org', branchId: '
   scenarioAt: '2026-09-07T12:00:00.000Z', timezone: 'Asia/Karachi', currency: 'PKR',
   actors: [], references: [], modules: [] };
 const plan = () => planPharmacyDemoRetention(input);
+
+describe('non-contactable demo linkage service boundary (mocked queries)', () => {
+  it.each([null, { granted: false, revokedAt: null },
+    { granted: true, revokedAt: new Date('2026-01-01T00:00:00Z') }])
+  ('refuses missing, denied or revoked LOYALTY consent without touching identities/history: %j', async (consent) => {
+    // These identifiers represent caller references only; no records or consent are created.
+    const request: Parameters<typeof linkCustomerToSale>[2] = {
+      saleId: 'service-generated-sale-ref', patientId: 'existing-synthetic-patient-ref',
+      displayName: 'DEMO non-contactable',
+    };
+    const scope: Parameters<typeof linkCustomerToSale>[1] = {
+      organizationId: input.organizationId, branchId: input.branchId, actorId: 'existing-service-actor',
+    };
+    const existingCustomer = { id: 'existing-customer', displayName: 'Operator edited', active: false };
+    const existingSale = { id: request.saleId, customerId: null, status: 'COMPLETED' };
+    const before = JSON.stringify({ request, existingCustomer, existingSale });
+    const consentRead = vi.fn().mockResolvedValue(consent);
+    const saleRead = vi.fn().mockResolvedValue(existingSale);
+    const customerWrite = vi.fn();
+    const saleWrite = vi.fn();
+    const db = { patientConsent: { findFirst: consentRead },
+      pharmacyCustomer: { upsert: customerWrite },
+      pharmacySale: { findFirst: saleRead, update: saleWrite } } as unknown as ScopedDb;
+    await expect(linkCustomerToSale(db, scope, request)).rejects.toMatchObject({ reason: 'CONSENT_REQUIRED' });
+    expect(consentRead).toHaveBeenCalledExactlyOnceWith({
+      where: { organizationId: input.organizationId, patientId: request.patientId, purpose: 'LOYALTY' },
+      orderBy: [{ version: 'desc' }, { recordedAt: 'desc' }],
+      select: { granted: true, revokedAt: true },
+    });
+    expect(request).not.toHaveProperty('phoneLast4');
+    expect(saleRead).not.toHaveBeenCalled();
+    expect(customerWrite).not.toHaveBeenCalled();
+    expect(saleWrite).not.toHaveBeenCalled();
+    expect(JSON.stringify({ request, existingCustomer, existingSale })).toBe(before);
+  });
+});
 
 describe('actual reader readback composition (mocked queries, no SQL proof)', () => {
   const window = { repeat: { from: '2026-01-01', to: '2026-01-01', asOf: '2026-01-01T12:00:00.000Z' },
