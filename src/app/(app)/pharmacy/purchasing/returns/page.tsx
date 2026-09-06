@@ -1,3 +1,5 @@
+import { FollowUpQueue } from './follow-up-queue';
+import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
@@ -357,6 +359,18 @@ export default async function PharmacyReturnsPage({
         <Stat label="Windows closing" value={closingSoon.length} sub="Within 7 days or past" />
       </div>
 
+      <FollowUpQueue
+        branchId={branchId}
+        queue={supplierCreditFollowUp({
+          scope: { organizationId: ctx.entitlements.organizationId, branchId },
+          returns,
+          credits,
+          asOf: new Date(),
+          // Existing server-side read projections return all rows in the authorized branch.
+          coverage: 'complete',
+        })}
+      />
+
       {/* ── the near-expiry board's return windows ─────────────────────────── */}
       <SectionCard eyebrow="PUR-06" title="Return windows" titleLevel={2}>
         {closingSoon.length === 0 ? (
@@ -608,6 +622,7 @@ export default async function PharmacyReturnsPage({
                     <li
                       className="rounded-[var(--radius-sm)] border border-border-subtle p-3"
                       key={credit.id}
+                      id={`credit-${encodeURIComponent(credit.id)}`}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="font-medium text-text-strong">
