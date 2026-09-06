@@ -1,10 +1,10 @@
-/** Run only against a newly owned, migrated disposable DB via WHA1372_TEST_DATABASE_URL. */
+/** Run only against a newly owned, migrated disposable DB via WHA1372_TEST_DATABASE_URL or TEST_DATABASE_URL. */
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { grossMargin, grossMarginComparison } from './finance-reports';
 
-const url = process.env.WHA1372_TEST_DATABASE_URL;
+const url = process.env.WHA1372_TEST_DATABASE_URL || process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
 const suite = url ? describe : describe.skip;
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
