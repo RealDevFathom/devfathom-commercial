@@ -1,5 +1,33 @@
 # Pharmacy demo evidence runner — WHA-1388
 
+## Canonical namespace correction routing — GitHub 100
+
+Independent WHA-1392 review of root `72ac8671` and delivered helpers reproduced
+three mutually exclusive helper namespace rules: inventory `2728f0d` requires
+`demo:`, finance `6d84d2b` requires `pharmacy-demo:`, retention `f46bca8` requires
+`demo-`. No root-only prefix choice can satisfy all three.
+
+Canonical choice stays **`phdemo_<24 lowercase hex>_`**, exactly the existing
+`targetNamespace` output. The shared contract exports `isPharmacyDemoNamespace`;
+root validation consumes it. Helpers must import that predicate and accept the
+root namespace unchanged, replacing only their local namespace predicate and
+updating their own fixtures. Never translate prefixes per lane or change existing
+namespace/hash inputs to bypass retained history. This source publication does
+not claim helper compatibility until their corrected artifacts are delivered and
+the unchanged namespace passes all three real planners.
+
+New focused check:
+`bun --no-env-file test scripts/seed-pharmacy-demo.test.ts --test-name-pattern 'canonical namespace contract'`
+— 1 pass, 0 fail, 54 filtered, exit 0. Includes a pinned pre-existing namespace,
+target-dimension separation, and malformed/alternate-prefix refusal. No prior
+suite replay. Independent review's 121 checks characterize the old mismatch;
+they are not acceptance evidence for this correction or live seeding.
+
+Root correction is limited to publishing/consuming the shared predicate. Helper
+owners WHA-1389/1390/1391 own binding and focused planner evidence; WHA-1392 owns
+independent cross-lane verification. Receipt integration remains incomplete as
+documented below. No helper files, product services, database or live targets changed.
+
 ## Generated-ID contract correction (2026-09-07)
 
 Previous source/evidence remains at `72ac8671086a4d7c46ab2075d80685bb50a508e4`.

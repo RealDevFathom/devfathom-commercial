@@ -7,6 +7,7 @@ import {
   MIGRATIONS_SHA256,
   PHARMACY_DEMO_VERSION,
   SCHEMA_SHA256,
+  isPharmacyDemoNamespace,
   type DemoGap,
   type DemoObservedRecord,
   type DemoPlannedRecord,
@@ -274,6 +275,7 @@ export function validateEvidence(input: unknown, now: Date): PharmacyDemoEvidenc
     'EXPIRED_OR_UNBOUNDED_CONFIRMATION'
   );
   const evidence = input as PharmacyDemoEvidence;
+  requireFact(isPharmacyDemoNamespace(t.namespace), 'NAMESPACE_MISMATCH');
   requireFact(t.namespace === targetNamespace(evidence.target), 'NAMESPACE_MISMATCH');
   requireFact(c.evidenceDigest === evidenceDigest(evidence), 'CONFIRMATION_DIGEST_MISMATCH');
   return evidence;
