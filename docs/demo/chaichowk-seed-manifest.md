@@ -73,6 +73,34 @@ WHA-1384 owns the deployment handoff.
 
 ## Commands, counts and limitations
 
+### WHA-1383 comment reconciliation (2026-09-06)
+
+- Reviewed comments `4e5e74ec-7749-48ca-b670-7537508a50dc` and
+  `43e70cbe-2856-4b44-90d6-522c8278323e`. Neither supplies the missing
+  WHA-1384 staging identity/permission evidence; implementation remains blocked.
+- Source-planned counts are **34 orders = 30 historical closed + 1 current-day
+  closed + 3 live**, hence **31 bills/tenders**, not 32. The live statuses are
+  `SENT`, `IN_PREPARATION`, and `READY` (`planDay`, lines 848–868). These are
+  legacy fixture expectations, not observed staging counts or promised new-seed coverage.
+- Owner actor prerequisite: `seedPeople` creates the owner and branch assignment
+  outside the staff-profile loop. `src/server/restaurant-actor.ts` requires
+  exactly one ACTIVE user-linked profile and authorized branch access.
+  After identity/permission verification, assess reuse of
+  `src/lib/restaurant/administrator-staff-profile.ts:ensureAdministratorStaffProfile`
+  within the owning transaction for an absent administrator profile. It leaves
+  existing profiles untouched, including suspended profiles, and selects an
+  active default/oldest branch. Validate that branch against the approved target;
+  do not broaden roles, change assignments or reactivate profiles to pass the gate.
+  Missing/ambiguous actor authorization must stop with an explicit blocker.
+- Legacy dates are fixed to August 21–27, 2026, with related stock/purchase dates
+  outside that range. The future seed must use an explicit, confirmed staging
+  business date and business timezone, consistently anchor dependent timestamps,
+  and preserve that anchor on rerun. Do not silently move existing rows with the
+  wall clock or label August 27 as the actual staging current day.
+- This heartbeat started clean at `72727ebb9680d4769e5881984331f5122e600cf5`,
+  whose parent is the exact assigned source base above. Only this manifest is
+  being amended; seed implementation and runtime verification remain outstanding.
+
 - `pwd`, `git status --short`, `git branch --show-current`, `git rev-parse HEAD`:
   exit 0; correct checkout, clean initial state, assigned branch and exact base.
 - `codebase-memory-mcp cli list_projects '{}'`: succeeded; assigned checkout was
