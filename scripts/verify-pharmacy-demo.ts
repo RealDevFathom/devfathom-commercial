@@ -15,12 +15,18 @@ import {
   pharmacyMigrationManifest,
   pharmacySourceDigest,
   runDisposablePharmacyDraft,
+  INTEGRATED_TABLES,
 } from './seed-pharmacy-demo';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Harness TMPDIR can exceed PostgreSQL's 103-byte socket path limit on macOS.
 const retry = process.argv[2] === '--resume-initialized' ? process.argv[3] : undefined;
-assert.ok(process.argv.length === 2 || (retry && process.argv.length === 4));
+const integrated = process.argv[2] === '--integrated';
+assert.ok(
+  process.argv.length === 2 ||
+    (integrated && process.argv.length === 3) ||
+    (retry && process.argv.length === 4)
+);
 const directory = await realpath(retry ?? (await mkdtemp('/tmp/wha1388-pg-')));
 assert.equal(dirname(directory), await realpath('/tmp'));
 const database = retry
@@ -128,6 +134,291 @@ async function processRun(path: string) {
       }
     });
   });
+}
+
+async function verifyIntegrated(base: PharmacyDraftRequest) {
+  // The bootstrap role constructs TEST-only prerequisites in this NEW database.
+  // The runner never creates approval, licence, actor, device or prepared receipt.
+  sql(`GRANT INSERT, UPDATE ON ${INTEGRATED_TABLES.join(', ')} TO ${role};
+    GRANT UPDATE ON audit_logs,pharmacy_stock_locations,pharmacy_registered_devices,
+      pharmacy_branch_regulatory_profiles,pharmacy_jurisdiction_rule_sets,
+      organization_roles,organization_role_permissions,user_permission_overrides,organization_limits TO ${role};
+    INSERT INTO platform_modules (id,key,name,category,band,vertical,"updatedAt") VALUES
+      ('test_counter','pharmacy-counter','TEST COUNTER','Pharmacy','VERTICAL_OPTIONAL','PHARMACY',now()),
+      ('test_reports','pharmacy-reports','TEST REPORTS','Pharmacy','VERTICAL_OPTIONAL','PHARMACY',now());
+    INSERT INTO organization_modules (id,"organizationId","moduleId","startsAt","updatedAt") VALUES
+      ('test_counter_entitlement','wha1388_test_org','test_counter',now()-interval '1 day',now()),
+      ('test_reports_entitlement','wha1388_test_org','test_reports',now()-interval '1 day',now());
+    INSERT INTO organization_roles (id,"organizationId",key,name,"updatedAt") VALUES
+      ('test_report_role','wha1388_test_org','test-report-owner','TEST REPORT OWNER',now());
+    INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability) VALUES
+      ('test_report_financial','wha1388_test_org','test_report_role','reports:financial'),
+      ('test_report_operational','wha1388_test_org','test_report_role','reports:operational');
+    UPDATE users SET "organizationRoleId"='test_report_role' WHERE id='wha1388_owner';
+    UPDATE pharmacy_medicines SET otc=true,rx=false,restricted=false,controlled=false,
+      "highAlert"=false,"coldChain"=false WHERE id='wha1388_medicine';
+    INSERT INTO pharmacy_jurisdiction_rule_sets (id,code,version,"effectiveFrom","licenceCategories","permittedSchedules",
+      "prescriptionOnlyClasses","prescriptionRetentionDays","controlledRegisterFlags","pharmacistCoverageRule","recordRetentionByClass") VALUES
+      ('test_rules','TEST_ONLY',1,now()-interval '1 day','{"provisional":false,"values":["TEST_ONLY"]}',
+      '{"provisional":false,"values":[]}','{}','{}','{}','{"provisional":false}','{}');`);
+  const cases = ['happy', 'concurrent', 'rollback', 'removed', 'changed', 'foreign'];
+  const requests = new Map<string, PharmacyDraftRequest>();
+  for (const name of cases) {
+    const branchId = `wha1388_${name}`;
+    const req: PharmacyDraftRequest = {
+      ...base,
+      branchId,
+      actorUserId: `test_actor_${name}`,
+      integration: {
+        goodsReceiptId: `test_receipt_${name}`,
+        stockLocationId: `test_location_${name}`,
+        deviceId: `test_device_${name}`,
+        drawerSessionId: `test_drawer_${name}`,
+        cashReceivedMinor: 150,
+      },
+    };
+    requests.set(name, req);
+    const namespace = pharmacyHistoryGenesis(target, req).namespace;
+    sql(`INSERT INTO users (id,"organizationId",name,email,role,department,"updatedAt") VALUES
+      ('${req.actorUserId}','wha1388_test_org','${namespace}TEST ACTOR','${name}@test.invalid','EMPLOYEE','wha1388-test-fixtures',now());
+      INSERT INTO pharmacy_central_purchasing_access (id,"organizationId","userId","grantedById") VALUES
+      ('test_access_${name}','wha1388_test_org','${req.actorUserId}','wha1388_owner');
+      INSERT INTO pharmacy_stock_locations (id,"organizationId","branchId",code,name,kind,"updatedAt") VALUES
+      ('test_location_${name}','wha1388_test_org','${branchId}','TEST','${namespace}TEST SHELF','RACK_BIN',now());
+      INSERT INTO pharmacy_registered_devices (id,"organizationId","branchId",name,"deviceSecretHash","enrolledByActorId","updatedAt") VALUES
+      ('test_device_${name}','wha1388_test_org','${branchId}','${namespace}TEST DEVICE','NOT_A_CREDENTIAL_${name}','wha1388_owner',now());
+      INSERT INTO pharmacy_drawer_sessions (id,"organizationId","branchId","deviceId","businessDate","openingFloatMinor","openedByActorId") VALUES
+      ('test_drawer_${name}','wha1388_test_org','${branchId}','test_device_${name}','${base.businessDate}',0,'${req.actorUserId}');
+      INSERT INTO pharmacy_branch_regulatory_profiles (id,"organizationId","branchId",version,"effectiveFrom","provinceCode",
+      "jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef",
+      "permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo",
+      "qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy") VALUES
+      ('test_profile_${name}','wha1388_test_org','${branchId}',1,now()-interval '1 day','PB','test_rules','{}','TEST_ONLY','NOT A LICENCE',
+      now()-interval '1 day',now()+interval '1 day','TEST ONLY',ARRAY[]::text[],'TEST ONLY',now()-interval '1 day',now()+interval '1 day','TEST ONLY','UNSEEDED','{}');
+      INSERT INTO pharmacy_purchase_orders (id,"organizationId","branchId",reference,status,"supplierId","createdByUserId","approvedAt","approvedByUserId","updatedAt") VALUES
+      ('test_po_${name}','wha1388_test_org','${branchId}','${namespace}prepared-po','APPROVED','wha1388_supplier','${req.actorUserId}',now(),'wha1388_owner',now());
+      INSERT INTO pharmacy_purchase_order_lines (id,"organizationId","purchaseOrderId","lineNumber","medicineId","packLevelId","orderedPacks",
+      "canonicalUnitsPerPack","orderedCanonicalUnits","listPricePerPackMinor") VALUES
+      ('test_po_line_${name}','wha1388_test_org','test_po_${name}',1,'wha1388_medicine','wha1388_pack',2,1,2,20);
+      INSERT INTO pharmacy_purchase_order_approvals (id,"organizationId","purchaseOrderId","actorUserId",policy,decision,"fromStatus","toStatus") VALUES
+      ('test_approval_${name}','wha1388_test_org','test_po_${name}','wha1388_owner','PUR-02:SEGREGATION_OF_DUTIES','APPROVED','SUBMITTED','APPROVED');
+      INSERT INTO pharmacy_goods_receipts (id,"organizationId","branchId",reference,"supplierId","purchaseOrderId","supplierInvoiceRef",
+      "supplierInvoiceDate","warrantyEvidenceRef","receivedByUserId","receivedAt","updatedAt") VALUES
+      ('test_receipt_${name}','wha1388_test_org','${branchId}','${namespace}receipt','wha1388_supplier','test_po_${name}','${namespace}invoice',
+      '${base.scenarioAt}','TEST ONLY','${req.actorUserId}','${base.scenarioAt}',now());
+      INSERT INTO pharmacy_goods_receipt_lines (id,"organizationId","branchId","goodsReceiptId","lineNumber","purchaseOrderLineId","medicineId","packLevelId",
+      "batchNumber","printedExpiry","expiryPrecision","printedMrpMinor","canonicalUnitsPerPack","receivedPacks","receivedCanonicalUnits",
+      "acceptedCanonicalUnits","invoicedPricePerPackMinor","unitCostMinor","stockLocationId") VALUES
+      ('test_receipt_line_${name}','wha1388_test_org','${branchId}','test_receipt_${name}',1,'test_po_line_${name}','wha1388_medicine','wha1388_pack',
+      '${namespace}batch',now()+interval '180 days','DAY',100,1,2,2,2,20,20,'test_location_${name}');`);
+    await writeFile(
+      pharmacyHistoryPath(target, req),
+      JSON.stringify(pharmacyHistoryGenesis(target, req)) + '\n',
+      { flag: 'wx', mode: 0o600 }
+    );
+  }
+  // Full scalar snapshots use SQL JSON text: no driver Date/microsecond conversion.
+  const snapshot = () =>
+    [...INTEGRATED_TABLES, 'audit_logs']
+      .map((table) =>
+        sql(
+          `SELECT COALESCE(json_agg(row_to_json(t) ORDER BY id),'[]'::json)::text FROM "${table}" t;`
+        )
+      )
+      .join('\n') +
+    '\n' +
+    sql(`SELECT COALESCE(json_agg(s ORDER BY sequencename),'[]'::json)::text FROM
+      (SELECT schemaname,sequencename,last_value FROM pg_sequences WHERE schemaname='public') s;`) +
+    '\n' +
+    sql(
+      `SELECT json_agg(u ORDER BY id)::text FROM (SELECT id,"organizationId",name,status,role,department,"organizationRoleId","updatedAt" FROM users) u;`
+    ) +
+    '\n' +
+    sql(
+      `SELECT json_agg(d ORDER BY id)::text FROM (SELECT id,"organizationId","branchId",name,status,"revokedAt","updatedAt" FROM pharmacy_registered_devices) d;`
+    );
+  const confirm = (digest: string) => ({
+    apply: { reviewedDigest: digest, expiresAt: new Date(Date.now() + 600_000).toISOString() },
+  });
+  const happy = requests.get('happy')!;
+  let happyDigest = '';
+  await check(
+    'integrated default dry-run preserves all rows sequences and operator bytes',
+    async () => {
+      const before = snapshot();
+      const history = await readFile(pharmacyHistoryPath(target, happy));
+      const result = await runDisposablePharmacyDraft(target, happy);
+      happyDigest = result.planDigest;
+      assert.equal(result.mode, 'database-dry-run');
+      assert.equal(result.writes, 0);
+      assert.deepEqual(result.runtimeRole, {
+        role,
+        superuser: false,
+        bypassRls: false,
+        forceRls: true,
+      });
+      assert.equal(snapshot(), before);
+      assert.deepEqual(await readFile(pharmacyHistoryPath(target, happy)), history);
+      return { writes: 0, runtimeRole: result.runtimeRole };
+    }
+  );
+  await check(
+    'integrated genuine goods receipt cash stock drawer journals receipt and reports',
+    async () => {
+      const result = await runDisposablePharmacyDraft(target, happy, confirm(happyDigest));
+      assert.equal(result.mode, 'applied');
+      const receipt = result.receipt!.integrated!;
+      const { cash, inventory, reports } = receipt.result;
+      assert.equal(inventory.status, 'applied');
+      assert.equal(cash.status, 'applied');
+      assert.equal(cash.stockBefore, 2);
+      assert.equal(cash.stockAfter, 1);
+      assert.equal(cash.amountMinor, 100);
+      assert.equal(cash.cashReceivedMinor, 150);
+      assert.equal(cash.changeGivenMinor, 50);
+      assert.equal(cash.drawerMoneyDeltaMinor, 100);
+      assert.equal(cash.journalEntryIds.length, 2);
+      assert.equal(cash.journalLines.length, 6);
+      assert.equal(cash.margin.grossMarginMinor, 80);
+      assert.equal(cash.receipt.totals.netMinor, 100);
+      assert.equal(reports.repeat.completedReceipts, 1);
+      assert.equal(reports.repeat.anonymousReceipts, 1);
+      assert.equal(reports.repeat.enrolledCustomers, 0);
+      assert.ok(reports.repeat.horizons.every((h) => h.eligible === 0 && h.ratePercent === null));
+      assert.equal(reports.margin.current.revenueMinor, 100);
+      assert.equal(reports.margin.current.grossMarginMinor, 80);
+      const created = receipt.rows.filter(
+        (row) =>
+          !receipt.beforeRows.some((before) => before.model === row.model && before.id === row.id)
+      );
+      assert.ok(created.length > 20);
+      assert.ok(
+        created.every((row) => !row.id.startsWith('test_') && !row.id.startsWith('phdemo_'))
+      );
+      assert.equal(
+        sql(`SELECT status FROM pharmacy_goods_receipts WHERE id='test_receipt_happy';`),
+        'POSTED'
+      );
+      return {
+        writes: result.writes,
+        created: created.length,
+        retained: receipt.rows.length,
+        sale: cash.saleId,
+        amount: cash.amountMinor,
+        change: cash.changeGivenMinor,
+        stock: cash.stockAfter,
+        journalEntries: 2,
+        journalLegs: 6,
+        margin: 80,
+        reports: reports.repeat,
+        runtimeRole: result.runtimeRole,
+      };
+    }
+  );
+  await check(
+    'integrated original dry-run and apply replay preserve every row sequence and operator byte',
+    async () => {
+      const before = snapshot();
+      const history = await readFile(pharmacyHistoryPath(target, happy));
+      for (const options of [{}, confirm(happyDigest)]) {
+        const result = await runDisposablePharmacyDraft(target, happy, options);
+        assert.equal(result.mode, 'replayed');
+        assert.equal(result.writes, 0);
+        assert.equal(snapshot(), before);
+        assert.deepEqual(await readFile(pharmacyHistoryPath(target, happy)), history);
+      }
+      return { replays: 2, writes: 0 };
+    }
+  );
+  await check('integrated simultaneous same-target applies once and replays once', async () => {
+    const req = requests.get('concurrent')!;
+    const plan = await runDisposablePharmacyDraft(target, req);
+    const path = join(directory, 'integrated-concurrent.pharmacy-demo.json');
+    await writeFile(
+      path,
+      JSON.stringify({ target, request: req, options: confirm(plan.planDigest) }),
+      { flag: 'wx', mode: 0o600 }
+    );
+    const results = await Promise.all([processRun(path), processRun(path)]);
+    assert.deepEqual(
+      results.map((r) => r.exit),
+      [0, 0]
+    );
+    assert.deepEqual(results.map((r) => r.value.mode).sort(), ['applied', 'replayed']);
+    assert.equal(
+      sql(`SELECT count(*) FROM pharmacy_sales WHERE "branchId"='wha1388_concurrent';`),
+      '1'
+    );
+    assert.ok(results.every((r) => r.stderr === ''));
+    return { processes: 2, applied: 1, replayed: 1, sales: 1 };
+  });
+  await check(
+    'integrated late tombstone failure rolls back receiving cash reports and all rows',
+    async () => {
+      const req = requests.get('rollback')!;
+      const plan = await runDisposablePharmacyDraft(target, req);
+      const namespace = pharmacyHistoryGenesis(target, req).namespace;
+      sql(`CREATE FUNCTION test_late_audit_failure() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN
+      IF NEW."targetId"='${namespace}' AND NEW.action='pharmacy.demo.draft.tombstone.v1' THEN
+      RAISE EXCEPTION 'TEST_LATE_TOMBSTONE_FAILURE'; END IF; RETURN NEW; END $$;
+      CREATE TRIGGER test_late_audit_failure BEFORE INSERT ON audit_logs FOR EACH ROW EXECUTE FUNCTION test_late_audit_failure();`);
+      const before = snapshot();
+      await assert.rejects(
+        runDisposablePharmacyDraft(target, req, confirm(plan.planDigest)),
+        /TEST_LATE_TOMBSTONE_FAILURE/
+      );
+      assert.equal(snapshot(), before);
+      const history = await readFile(pharmacyHistoryPath(target, req), 'utf8');
+      assert.equal(history.trim().split('\n').length, 2); // Intent is conservatively retained.
+      await assert.rejects(runDisposablePharmacyDraft(target, req), /PARTIAL_OR_REMOVED_HISTORY/);
+      assert.equal(snapshot(), before);
+      sql(
+        'DROP TRIGGER test_late_audit_failure ON audit_logs; DROP FUNCTION test_late_audit_failure();'
+      );
+      return { wholeTransactionRolledBack: true, retainedIntent: true };
+    }
+  );
+  await check('integrated changed generated receipt sequence refuses without writes', async () => {
+    sql(
+      `UPDATE pharmacy_receipt_number_sequences SET "nextNumber"="nextNumber"+1 WHERE "branchId"='wha1388_happy';`
+    );
+    const before = snapshot();
+    const history = await readFile(pharmacyHistoryPath(target, happy));
+    await assert.rejects(
+      runDisposablePharmacyDraft(target, happy),
+      /CHANGED_OR_REMOVED_INTEGRATED_HISTORY/
+    );
+    assert.equal(snapshot(), before);
+    assert.deepEqual(await readFile(pharmacyHistoryPath(target, happy)), history);
+  });
+  await check('integrated removed generated sequence refuses without resurrection', async () => {
+    const req = requests.get('removed')!;
+    const plan = await runDisposablePharmacyDraft(target, req);
+    await runDisposablePharmacyDraft(target, req, confirm(plan.planDigest));
+    // Simulate deleted history in this TEST database, without a trigger bypass.
+    sql(`DELETE FROM pharmacy_receipt_number_sequences WHERE "branchId"='wha1388_removed';`);
+    const before = snapshot();
+    await assert.rejects(
+      runDisposablePharmacyDraft(target, req),
+      /CHANGED_OR_REMOVED_INTEGRATED_HISTORY/
+    );
+    assert.equal(snapshot(), before);
+  });
+  await check(
+    'integrated foreign external operator history refuses and preserves bytes',
+    async () => {
+      const req = requests.get('foreign')!;
+      await writeFile(
+        pharmacyHistoryPath(target, req),
+        await readFile(pharmacyHistoryPath(target, happy))
+      );
+      const before = snapshot();
+      const history = await readFile(pharmacyHistoryPath(target, req));
+      await assert.rejects(runDisposablePharmacyDraft(target, req), /FOREIGN_OPERATOR_HISTORY/);
+      assert.equal(snapshot(), before);
+      assert.deepEqual(await readFile(pharmacyHistoryPath(target, req)), history);
+    }
+  );
 }
 
 try {
@@ -302,195 +593,200 @@ try {
     timezone: 'Asia/Karachi',
     currency: 'PKR',
   };
-  const request = (name: string) => ({ ...baseRequest, branchId: `wha1388_${name}` });
-  for (const name of [
-    'happy',
-    'concurrent',
-    'rollback',
-    'missing',
-    'removed',
-    'changed',
-    'foreign',
-  ]) {
-    if (fixtureExists)
-      assert.equal(
-        await readFile(pharmacyHistoryPath(target, request(name)), 'utf8'),
-        JSON.stringify(pharmacyHistoryGenesis(target, request(name))) + '\n',
-        'Only unexecuted genesis can resume'
-      );
-    else
-      await writeFile(
-        pharmacyHistoryPath(target, request(name)),
-        JSON.stringify(pharmacyHistoryGenesis(target, request(name))) + '\n',
-        { flag: 'wx', mode: 0o600 }
-      );
-  }
-  const confirm = (digest: string) => ({
-    apply: { reviewedDigest: digest, expiresAt: new Date(Date.now() + 600_000).toISOString() },
-  });
-  const snapshot = () =>
-    sql(`SELECT json_build_object(
+  if (integrated) {
+    assert.ok(!retry, 'Integrated evidence requires a new one-shot cluster');
+    await verifyIntegrated(baseRequest);
+  } else {
+    const request = (name: string) => ({ ...baseRequest, branchId: `wha1388_${name}` });
+    for (const name of [
+      'happy',
+      'concurrent',
+      'rollback',
+      'missing',
+      'removed',
+      'changed',
+      'foreign',
+    ]) {
+      if (fixtureExists)
+        assert.equal(
+          await readFile(pharmacyHistoryPath(target, request(name)), 'utf8'),
+          JSON.stringify(pharmacyHistoryGenesis(target, request(name))) + '\n',
+          'Only unexecuted genesis can resume'
+        );
+      else
+        await writeFile(
+          pharmacyHistoryPath(target, request(name)),
+          JSON.stringify(pharmacyHistoryGenesis(target, request(name))) + '\n',
+          { flag: 'wx', mode: 0o600 }
+        );
+    }
+    const confirm = (digest: string) => ({
+      apply: { reviewedDigest: digest, expiresAt: new Date(Date.now() + 600_000).toISOString() },
+    });
+    const snapshot = () =>
+      sql(`SELECT json_build_object(
     'users',(SELECT json_agg(json_build_array(id,"organizationId",status,role,department,"updatedAt") ORDER BY id) FROM users),
     'stock',(SELECT count(*) FROM pharmacy_inventory_lots),
     'supplier',(SELECT json_agg(json_build_array(id,authorized,active,"updatedAt") ORDER BY id) FROM pharmacy_suppliers),
     'access',(SELECT json_agg(json_build_array(id,"userId","branchId") ORDER BY id) FROM pharmacy_central_purchasing_access));`);
-  const before = snapshot();
-  await check('restricted runtime and cross-tenant RLS', () => {
-    const observed = sql(
-      `BEGIN; SELECT set_config('app.current_organization_id','wha1388_foreign_org',true);
+    const before = snapshot();
+    await check('restricted runtime and cross-tenant RLS', () => {
+      const observed = sql(
+        `BEGIN; SELECT set_config('app.current_organization_id','wha1388_foreign_org',true);
       SELECT set_config('app.current_user_id','wha1388_actor',true);
       SELECT set_config('app.is_platform_admin','false',true);
       SELECT json_build_object('superuser',rolsuper,'bypass',rolbypassrls,
        'foreignUsers',(SELECT count(*) FROM users WHERE "organizationId"='wha1388_test_org')) FROM pg_roles WHERE rolname=current_user; ROLLBACK;`,
-      role
-    );
-    const facts = JSON.parse(observed.split('\n').find((line) => line.startsWith('{'))!);
-    assert.deepEqual(facts, { superuser: false, bypass: false, foreignUsers: 0 });
-    return facts;
-  });
-  let happyDigest = '';
-  await check('default actual database dry-run writes zero', async () => {
-    const beforeCounts = counts();
-    const result = await runDisposablePharmacyDraft(target, baseRequest);
-    happyDigest = result.planDigest;
-    assert.equal(result.mode, 'database-dry-run');
-    assert.equal(result.writes, 0);
-    assert.deepEqual(counts(), beforeCounts);
-    return result.runtimeRole;
-  });
-  await check('one generated-ID draft plus atomic receipt and tombstone', async () => {
-    const beforeCounts = counts();
-    const result = await runDisposablePharmacyDraft(target, baseRequest, confirm(happyDigest));
-    assert.equal(result.mode, 'applied');
-    assert.equal(result.writes, 4);
-    assert.equal(result.receipt?.rows.length, 2);
-    assert.ok(
-      result.receipt!.rows.every(
-        (row) => !row.id.startsWith('phdemo_') && !row.id.startsWith('wha1388_')
-      )
-    );
-    assert.deepEqual(counts(), {
-      orders: beforeCounts.orders + 1,
-      lines: beforeCounts.lines + 1,
-      audit: beforeCounts.audit + 2,
-    });
-    return { writes: result.writes, mapping: result.receipt!.rows };
-  });
-  await check('identical replay has zero writes and unchanged operator history', async () => {
-    const beforeCounts = counts();
-    const history = await readFile(pharmacyHistoryPath(target, baseRequest));
-    const result = await runDisposablePharmacyDraft(target, baseRequest, confirm(happyDigest));
-    assert.equal(result.mode, 'replayed');
-    assert.equal(result.writes, 0);
-    assert.deepEqual(counts(), beforeCounts);
-    assert.deepEqual(await readFile(pharmacyHistoryPath(target, baseRequest)), history);
-    return { writes: 0 };
-  });
-  await check('changed request refused before dynamic planning', async () => {
-    const beforeCounts = counts();
-    await assert.rejects(
-      runDisposablePharmacyDraft(target, { ...baseRequest, supplierId: 'absent' }),
-      /PRIOR_PACKAGE_OR_CHANGED_REQUEST/
-    );
-    assert.deepEqual(counts(), beforeCounts);
-  });
-  await check('missing and foreign references refused', async () => {
-    const beforeCounts = counts();
-    await assert.rejects(
-      runDisposablePharmacyDraft(target, { ...request('missing'), medicineId: 'missing' }),
-      /MISSING_OR_FOREIGN_REFERENCE/
-    );
-    await assert.rejects(
-      runDisposablePharmacyDraft(target, {
-        ...request('foreign'),
-        organizationId: 'wha1388_foreign_org',
-      })
-    );
-    assert.deepEqual(counts(), beforeCounts);
-  });
-  await check('concurrent independent processes create one draft', async () => {
-    const req = request('concurrent');
-    const plan = await runDisposablePharmacyDraft(target, req);
-    const path = join(directory, 'concurrent.pharmacy-demo.json');
-    await writeFile(
-      path,
-      JSON.stringify({ target, request: req, options: confirm(plan.planDigest) }),
-      { mode: 0o600 }
-    );
-    const beforeCounts = counts();
-    const results = await Promise.all([processRun(path), processRun(path)]);
-    assert.ok(results.every((result) => result.exit === 0 && result.stderr === ''));
-    assert.deepEqual(results.map((result) => result.value.mode).sort(), ['applied', 'replayed']);
-    assert.deepEqual(counts(), {
-      orders: beforeCounts.orders + 1,
-      lines: beforeCounts.lines + 1,
-      audit: beforeCounts.audit + 2,
-    });
-    return results.map((result) => ({
-      exit: result.exit,
-      mode: result.value.mode,
-      writes: result.value.writes,
-    }));
-  });
-  await check('receipt permission failure rolls back service draft and line', async () => {
-    const req = request('rollback');
-    const plan = await runDisposablePharmacyDraft(target, req);
-    const beforeCounts = counts();
-    sql(`REVOKE INSERT ON audit_logs FROM ${role};`);
-    try {
-      await assert.rejects(
-        runDisposablePharmacyDraft(target, req, confirm(plan.planDigest)),
-        /permission denied|permission|access/i
+        role
       );
-    } finally {
-      sql(`GRANT INSERT ON audit_logs TO ${role};`);
-    }
-    assert.deepEqual(counts(), beforeCounts);
-    await assert.rejects(runDisposablePharmacyDraft(target, req), /PARTIAL_OR_REMOVED_HISTORY/);
-    return { committedOrders: 0, committedLines: 0, committedReceipts: 0, retainedIntent: true };
-  });
-  await check('removed database history cannot resurrect retained namespace', async () => {
-    const req = request('removed');
-    const plan = await runDisposablePharmacyDraft(target, req);
-    const result = await runDisposablePharmacyDraft(target, req, confirm(plan.planDigest));
-    sql(`DELETE FROM pharmacy_purchase_order_lines WHERE "purchaseOrderId" IN
+      const facts = JSON.parse(observed.split('\n').find((line) => line.startsWith('{'))!);
+      assert.deepEqual(facts, { superuser: false, bypass: false, foreignUsers: 0 });
+      return facts;
+    });
+    let happyDigest = '';
+    await check('default actual database dry-run writes zero', async () => {
+      const beforeCounts = counts();
+      const result = await runDisposablePharmacyDraft(target, baseRequest);
+      happyDigest = result.planDigest;
+      assert.equal(result.mode, 'database-dry-run');
+      assert.equal(result.writes, 0);
+      assert.deepEqual(counts(), beforeCounts);
+      return result.runtimeRole;
+    });
+    await check('one generated-ID draft plus atomic receipt and tombstone', async () => {
+      const beforeCounts = counts();
+      const result = await runDisposablePharmacyDraft(target, baseRequest, confirm(happyDigest));
+      assert.equal(result.mode, 'applied');
+      assert.equal(result.writes, 4);
+      assert.equal(result.receipt?.rows.length, 2);
+      assert.ok(
+        result.receipt!.rows.every(
+          (row) => !row.id.startsWith('phdemo_') && !row.id.startsWith('wha1388_')
+        )
+      );
+      assert.deepEqual(counts(), {
+        orders: beforeCounts.orders + 1,
+        lines: beforeCounts.lines + 1,
+        audit: beforeCounts.audit + 2,
+      });
+      return { writes: result.writes, mapping: result.receipt!.rows };
+    });
+    await check('identical replay has zero writes and unchanged operator history', async () => {
+      const beforeCounts = counts();
+      const history = await readFile(pharmacyHistoryPath(target, baseRequest));
+      const result = await runDisposablePharmacyDraft(target, baseRequest, confirm(happyDigest));
+      assert.equal(result.mode, 'replayed');
+      assert.equal(result.writes, 0);
+      assert.deepEqual(counts(), beforeCounts);
+      assert.deepEqual(await readFile(pharmacyHistoryPath(target, baseRequest)), history);
+      return { writes: 0 };
+    });
+    await check('changed request refused before dynamic planning', async () => {
+      const beforeCounts = counts();
+      await assert.rejects(
+        runDisposablePharmacyDraft(target, { ...baseRequest, supplierId: 'absent' }),
+        /PRIOR_PACKAGE_OR_CHANGED_REQUEST/
+      );
+      assert.deepEqual(counts(), beforeCounts);
+    });
+    await check('missing and foreign references refused', async () => {
+      const beforeCounts = counts();
+      await assert.rejects(
+        runDisposablePharmacyDraft(target, { ...request('missing'), medicineId: 'missing' }),
+        /MISSING_OR_FOREIGN_REFERENCE/
+      );
+      await assert.rejects(
+        runDisposablePharmacyDraft(target, {
+          ...request('foreign'),
+          organizationId: 'wha1388_foreign_org',
+        })
+      );
+      assert.deepEqual(counts(), beforeCounts);
+    });
+    await check('concurrent independent processes create one draft', async () => {
+      const req = request('concurrent');
+      const plan = await runDisposablePharmacyDraft(target, req);
+      const path = join(directory, 'concurrent.pharmacy-demo.json');
+      await writeFile(
+        path,
+        JSON.stringify({ target, request: req, options: confirm(plan.planDigest) }),
+        { mode: 0o600 }
+      );
+      const beforeCounts = counts();
+      const results = await Promise.all([processRun(path), processRun(path)]);
+      assert.ok(results.every((result) => result.exit === 0 && result.stderr === ''));
+      assert.deepEqual(results.map((result) => result.value.mode).sort(), ['applied', 'replayed']);
+      assert.deepEqual(counts(), {
+        orders: beforeCounts.orders + 1,
+        lines: beforeCounts.lines + 1,
+        audit: beforeCounts.audit + 2,
+      });
+      return results.map((result) => ({
+        exit: result.exit,
+        mode: result.value.mode,
+        writes: result.value.writes,
+      }));
+    });
+    await check('receipt permission failure rolls back service draft and line', async () => {
+      const req = request('rollback');
+      const plan = await runDisposablePharmacyDraft(target, req);
+      const beforeCounts = counts();
+      sql(`REVOKE INSERT ON audit_logs FROM ${role};`);
+      try {
+        await assert.rejects(
+          runDisposablePharmacyDraft(target, req, confirm(plan.planDigest)),
+          /permission denied|permission|access/i
+        );
+      } finally {
+        sql(`GRANT INSERT ON audit_logs TO ${role};`);
+      }
+      assert.deepEqual(counts(), beforeCounts);
+      await assert.rejects(runDisposablePharmacyDraft(target, req), /PARTIAL_OR_REMOVED_HISTORY/);
+      return { committedOrders: 0, committedLines: 0, committedReceipts: 0, retainedIntent: true };
+    });
+    await check('removed database history cannot resurrect retained namespace', async () => {
+      const req = request('removed');
+      const plan = await runDisposablePharmacyDraft(target, req);
+      const result = await runDisposablePharmacyDraft(target, req, confirm(plan.planDigest));
+      sql(`DELETE FROM pharmacy_purchase_order_lines WHERE "purchaseOrderId" IN
       (SELECT id FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_removed');
       DELETE FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_removed';
       DELETE FROM audit_logs WHERE "targetId"='${result.namespace}';`);
-    const beforeCounts = counts();
-    await assert.rejects(
-      runDisposablePharmacyDraft(target, req, confirm(plan.planDigest)),
-      /PARTIAL_OR_REMOVED_HISTORY/
+      const beforeCounts = counts();
+      await assert.rejects(
+        runDisposablePharmacyDraft(target, req, confirm(plan.planDigest)),
+        /PARTIAL_OR_REMOVED_HISTORY/
+      );
+      assert.deepEqual(counts(), beforeCounts);
+    });
+    await check('operator scalar change refuses replay without repair', async () => {
+      sql(
+        `UPDATE pharmacy_purchase_orders SET note='TEST OPERATOR EDIT' WHERE "branchId"='wha1388_happy';`
+      );
+      const beforeCounts = counts();
+      await assert.rejects(
+        runDisposablePharmacyDraft(target, baseRequest, confirm(happyDigest)),
+        /CHANGED_OR_REMOVED_DRAFT/
+      );
+      assert.equal(
+        sql(`SELECT note FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_happy';`),
+        'TEST OPERATOR EDIT'
+      );
+      assert.deepEqual(counts(), beforeCounts);
+    });
+    await check('untouched fixture identities, access, supplier and stock preserved', () =>
+      assert.equal(snapshot(), before)
     );
-    assert.deepEqual(counts(), beforeCounts);
-  });
-  await check('operator scalar change refuses replay without repair', async () => {
-    sql(
-      `UPDATE pharmacy_purchase_orders SET note='TEST OPERATOR EDIT' WHERE "branchId"='wha1388_happy';`
-    );
-    const beforeCounts = counts();
-    await assert.rejects(
-      runDisposablePharmacyDraft(target, baseRequest, confirm(happyDigest)),
-      /CHANGED_OR_REMOVED_DRAFT/
-    );
-    assert.equal(
-      sql(`SELECT note FROM pharmacy_purchase_orders WHERE "branchId"='wha1388_happy';`),
-      'TEST OPERATOR EDIT'
-    );
-    assert.deepEqual(counts(), beforeCounts);
-  });
-  await check('untouched fixture identities, access, supplier and stock preserved', () =>
-    assert.equal(snapshot(), before)
-  );
-  await check('changed prerequisite scalar refuses zero-write replay', async () => {
-    const req = request('changed');
-    const plan = await runDisposablePharmacyDraft(target, req);
-    await runDisposablePharmacyDraft(target, req, confirm(plan.planDigest));
-    sql(`UPDATE pharmacy_suppliers SET "paymentTermsDays"=3 WHERE id='wha1388_supplier';`);
-    const beforeCounts = counts();
-    await assert.rejects(runDisposablePharmacyDraft(target, req), /CHANGED_REFERENCE/);
-    assert.deepEqual(counts(), beforeCounts);
-  });
+    await check('changed prerequisite scalar refuses zero-write replay', async () => {
+      const req = request('changed');
+      const plan = await runDisposablePharmacyDraft(target, req);
+      await runDisposablePharmacyDraft(target, req, confirm(plan.planDigest));
+      sql(`UPDATE pharmacy_suppliers SET "paymentTermsDays"=3 WHERE id='wha1388_supplier';`);
+      const beforeCounts = counts();
+      await assert.rejects(runDisposablePharmacyDraft(target, req), /CHANGED_REFERENCE/);
+      assert.deepEqual(counts(), beforeCounts);
+    });
+  }
 } catch (error) {
   failed = true;
   await writeFile(

@@ -14,6 +14,7 @@ import type {
   PharmacyDemoResult,
 } from './pharmacy-demo-contract';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
+import { arrangementFor } from '../src/lib/pharmacy/inventory';
 
 // Composition-only mocks of the actual imported services, not a production
 // adapter and not database/RLS evidence. Actual ScopedDb is typechecked below.
@@ -95,6 +96,7 @@ function cashFixture() {
     stockLocationId: input.stockLocationId,
     disposition: 'AVAILABLE',
     onHandUnits: 10,
+    sealedPacks: 0,
     looseUnits: 10,
   };
   const db = {
@@ -334,6 +336,100 @@ test('cash boundary: incorrect journal, drawer and receipt evidence cannot succe
     executePharmacyDemoCashSale(f.tx, f.root, f.input),
     /RECEIPT_MISMATCH_ROLLBACK/
   );
+});
+
+test('stock eligibility #101: service-received sealed UNIT reaches the pre-write boundary', async () => {
+  const f = cashFixture();
+  const arrangement = arrangementFor(2, 1);
+  assert.deepEqual(arrangement, { sealedPacks: 2, looseUnits: 0 });
+  f.db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+    id: f.input.inventoryLotId,
+    unitsPerPack: 1,
+    printedMrpMinor: 33,
+    unitCostMinor: 20,
+  });
+  f.db.pharmacyStockBalance.findMany.mockResolvedValue([
+    {
+      inventoryLotId: f.input.inventoryLotId,
+      stockLocationId: f.input.stockLocationId,
+      disposition: 'AVAILABLE',
+      onHandUnits: 2,
+      ...arrangement,
+    },
+  ]);
+  const reached = new Error('CASH_ALLOCATION_REACHED');
+  f.db.pharmacyDrawerMovement.aggregate.mockReset().mockRejectedValue(reached);
+  await assert.rejects(
+    executePharmacyDemoCashSale(f.tx, f.root, f.input),
+    (error) => error === reached
+  );
+  assert.equal(cashServices.createSale.mock.calls.length, 0);
+});
+
+test('stock eligibility #101: genuine loose UNIT still reaches the pre-write boundary', async () => {
+  const f = cashFixture();
+  const arrangement = arrangementFor(2, 30);
+  assert.deepEqual(arrangement, { sealedPacks: 0, looseUnits: 2 });
+  f.db.pharmacyStockBalance.findMany.mockResolvedValue([
+    {
+      inventoryLotId: f.input.inventoryLotId,
+      stockLocationId: f.input.stockLocationId,
+      disposition: 'AVAILABLE',
+      onHandUnits: 2,
+      ...arrangement,
+    },
+  ]);
+  const reached = new Error('CASH_ALLOCATION_REACHED');
+  f.db.pharmacyDrawerMovement.aggregate.mockReset().mockRejectedValue(reached);
+  await assert.rejects(
+    executePharmacyDemoCashSale(f.tx, f.root, f.input),
+    (error) => error === reached
+  );
+  assert.equal(cashServices.createSale.mock.calls.length, 0);
+});
+
+test('stock eligibility #101: insufficient, partial-pack, inconsistent and unsafe balances refuse', async () => {
+  const invalid = [
+    { unitsPerPack: 30, onHandUnits: 60, ...arrangementFor(60, 30) },
+    { unitsPerPack: 1, onHandUnits: 0, sealedPacks: 0, looseUnits: 0 },
+    { unitsPerPack: 1, onHandUnits: 2, sealedPacks: 1, looseUnits: 0 },
+    ...[-1, 0.5, NaN, Infinity, Number.MAX_SAFE_INTEGER + 1].flatMap((value) => [
+      { unitsPerPack: 1, onHandUnits: value, sealedPacks: 2, looseUnits: 0 },
+      { unitsPerPack: 1, onHandUnits: 2, sealedPacks: value, looseUnits: 0 },
+      { unitsPerPack: 1, onHandUnits: 2, sealedPacks: 2, looseUnits: value },
+      { unitsPerPack: value, onHandUnits: 2, sealedPacks: 2, looseUnits: 0 },
+    ]),
+    { unitsPerPack: 0, onHandUnits: 2, sealedPacks: 2, looseUnits: 0 },
+    {
+      unitsPerPack: 2,
+      onHandUnits: Number.MAX_SAFE_INTEGER,
+      sealedPacks: Number.MAX_SAFE_INTEGER,
+      looseUnits: 1,
+    },
+  ];
+  for (const balance of invalid) {
+    const f = cashFixture();
+    f.db.pharmacyInventoryLot.findFirst.mockResolvedValue({
+      id: f.input.inventoryLotId,
+      unitsPerPack: balance.unitsPerPack,
+      printedMrpMinor: 33,
+      unitCostMinor: 20,
+    });
+    f.db.pharmacyStockBalance.findMany.mockResolvedValue([
+      {
+        inventoryLotId: f.input.inventoryLotId,
+        stockLocationId: f.input.stockLocationId,
+        disposition: 'AVAILABLE',
+        ...balance,
+      },
+    ]);
+    assert.deepEqual(await executePharmacyDemoCashSale(f.tx, f.root, f.input), {
+      status: 'refused',
+      unmetPrerequisites: ['UNSEEDED: EXCLUSIVE_PRERECORDED_SYNTHETIC_STOCK'],
+    });
+    assert.equal(f.db.pharmacyDrawerMovement.aggregate.mock.calls.length, 0);
+    assert.equal(cashServices.createSale.mock.calls.length, 0);
+  }
 });
 
 const context: PharmacyDemoContext = {

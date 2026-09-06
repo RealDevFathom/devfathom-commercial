@@ -23,6 +23,14 @@ export type PharmacyDraftRequest = {
   scenarioAt: string;
   timezone: string;
   currency: 'PKR';
+  /** Existing, namespaced TEST prerequisites; never provisioned by the runner. */
+  integration?: {
+    goodsReceiptId: string;
+    stockLocationId: string;
+    deviceId: string;
+    drawerSessionId: string;
+    cashReceivedMinor: number;
+  };
 };
 export type PharmacyDraftOptions = {
   /** Omission means a real read-only database observation. */

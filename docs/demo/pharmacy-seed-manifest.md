@@ -1,6 +1,97 @@
 # Pharmacy demo evidence runner — WHA-1388
 
-## Current revision: disposable draft and atomic receipt
+## Current revision: integrated disposable TEST execution
+
+Desktop delivery `a3fc7328-1288-47d4-99e9-6f5c03b6e9af` clears the GitHub101
+source-delivery blocker. Starting checkout was clean `f1770314613994a012f7e86c4bf8e170da532742`,
+parent `0d5e9de3e2ca4d4942e779138031edbd46b94b90`, tree
+`eaac4c84909a952ff4a005d9efc50bca866c3638`, on the existing
+`codex/pharmacy-demo-runner` branch. The original failed regression and report
+below are retained. Their blocker disposition is historical.
+
+Only the finance source/test pair is replaced with accepted
+`f1919dbdbfe9825f0290ac8d1ab62f8e664073f5` bytes. SHA256 values:
+source `ad8b515e160126c0278928b9636f81e72b55f4d7cc382b78127faa928303ccfe`,
+test `68c59f04ca2337747420535d0c9398548b785a0189451d4e4bdf7a318720083b`.
+Inventory `d6f6b683` and retention `fc47454b` pairs stay byte-identical. Shared
+helper contract semantics and namespace are unchanged. `PharmacyDraftRequest`
+adds an optional `integration` object containing existing `goodsReceiptId`,
+`stockLocationId`, `deviceId`, `drawerSessionId` and integer `cashReceivedMinor`.
+The default remains read-only; only the existing private disposable SQL fence
+accepts a reviewed digest/expiry. LAN/Azure and top-level `--apply` remain disabled.
+
+The root now composes its existing draft PO with accepted
+`executePreparedInventoryReceipt` (`postGoodsReceipt` / `receiveLot`), then the
+actual generated lot with `executePharmacyDemoCashSale`, then
+`readbackPharmacyDemoRetention`. All execute in the same owning `withTenantDb`
+transaction. No helper opens a connection, creates an account or owns a nested
+independent transaction. No receipt valuation journal is invented: receiving is
+stock-only; the cash helper posts its actual sale/tender journals.
+
+Root checks actual runtime/migrations/FORCE RLS, active Pharmacy target/owner,
+existing purchasing grants, active namespaced TEST actor/device/location/drawer,
+current OTC UNIT product/pack, prepared receipt/approval, current branch profile,
+effective module entitlements and the owner's real ABAC report capabilities.
+No request flag creates permission. Applying holds the stable namespace advisory
+lock and table locks covering prerequisites and affected domain tables.
+Entitlement control-plane resolution remains a **separate transaction**; neither
+atomic tenant observation nor SQL READ ONLY is claimed for that callback. Default
+dry-run is a sequence of tenant read-only observations, not an atomic snapshot;
+apply reobserves and checks the reviewed digest under its locks.
+
+Replay reconciles original external history and both audit markers before dynamic
+planning or fresh-only helper calls. The atomic receipt retains original TEST
+prerequisite rows, every resulting branch-domain ID/scalar hash, receipt-number
+sequence, and original service/report results. Database JSON preserves scalar
+timestamp precision for domain rows. Returns/refunds and other rows in this bounded
+TEST footprint also participate in preservation checks. Missing, added, or edited
+retained rows refuse; nothing is reconstructed. Safe projections exclude user
+credentials and device secret hashes. Replayed reports are retained observations
+at their original cutoff, not refreshed business metrics. `writes` on apply counts
+distinct inserted/changed retained rows plus the two audit markers, not SQL statements.
+
+The external intent and prepared record use the existing awaited fsync protocol.
+An uncertain or rolled-back transaction keeps its intent and refuses recreation.
+No crash/fsync injection or adversarial external-file atomicity proof is claimed.
+
+Run the genuinely new integrated proof after publishing the immutable source:
+
+```sh
+bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts --integrated
+```
+
+This reuses the existing verifier bootstrap, creates one new short-socket private
+TEST cluster, applies all 106 unchanged migrations after extension preparation,
+and checks restricted NOSUPERUSER/NOBYPASSRLS/FORCE RLS execution. Six target
+branches have TEST-only prerequisite fixtures; the runner creates only its
+business outputs. Cases cover actual receiving/cash/report readback, original
+zero-write replay with all row/sequence/operator-byte preservation, concurrent
+same-target apply, late tombstone failure rolling back all business outputs,
+changed/removed generated sequence refusal and foreign external history refusal.
+The verifier stops its cluster and retains `evidence.json`, migrations and any
+failure diagnostics in its owned directory. No previous cluster is reused.
+Proof results and exact immutable source SHA/digest are published on WHA-1388;
+this pre-execution section does not claim a passing SQL result.
+
+Scoped TypeScript and ESLint cover the changed root files and actual imports;
+Prettier excludes the immutable helper pairs. Initial TypeScript identified three
+nullable-actor errors; an explicit assertion corrected those before SQL execution.
+An initial exact-copy patch had malformed hunk headers and changed nothing;
+corrected application preserved accepted bytes. No product dependency changes.
+Read-only sibling toolchain package, lock and Prisma schema match local SHA256.
+Relevant installed Next guide and security/privacy gate applied; unavailable
+graph/Claude-Mem/Ponytail tools remain unavailable, without claimed activation.
+
+Coverage remains limited: starter TEST receipt stock, one anonymous OTC cash sale,
+its receipt/drawer/journals/margin, and actual branch report readback. Prepared
+approvals, licences, profiles, actors and devices are TEST prerequisites, not newly
+seeded authorization or onboarding. Procurement approval/send, receipt valuation,
+supplier settlement, Rx/controlled/clinical workflows, fiscal/provider/printing,
+customer consent/outreach, mature cohorts and hardware remain UNSEEDED/OWNER-INPUT.
+No all-functions claim, live execution, deployment, push or merge. Independent
+integrated review must be routed by active Desktop after this proof.
+
+## Historical revision: disposable draft and atomic receipt
 
 This section supersedes the historical offline-only limitations below for the
 **fresh disposable TEST target only**. LAN and Azure application remain disabled

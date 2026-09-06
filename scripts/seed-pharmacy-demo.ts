@@ -514,6 +514,417 @@ export function pharmacyHistoryGenesis(
 }
 
 type RetainedRow = { model: string; id: string; hash: string };
+// Fixed inventory/cash footprint. This is not a generic seed adapter. Rows from
+// other branches are excluded; all rows in this bounded TEST branch are retained.
+export const INTEGRATED_TABLES = [
+  'pharmacy_purchase_orders',
+  'pharmacy_purchase_order_lines',
+  'pharmacy_purchase_order_approvals',
+  'pharmacy_goods_receipts',
+  'pharmacy_goods_receipt_lines',
+  'pharmacy_receiving_exceptions',
+  'pharmacy_manufacturing_batches',
+  'pharmacy_inventory_lots',
+  'pharmacy_stock_movements',
+  'pharmacy_stock_balances',
+  'pharmacy_sales',
+  'pharmacy_sale_lines',
+  'pharmacy_sale_line_allocations',
+  'pharmacy_sale_events',
+  'pharmacy_tenders',
+  'pharmacy_refunds',
+  'pharmacy_sale_returns',
+  'pharmacy_sale_return_lines',
+  'pharmacy_drawer_sessions',
+  'pharmacy_drawer_movements',
+  'pharmacy_money_idempotency_keys',
+  'pharmacy_receipt_number_sequences',
+  'finance_journal_entries',
+  'finance_journal_lines',
+] as const;
+const INTEGRATED_REFERENCE_TABLES = [
+  'pharmacy_stock_locations',
+  'pharmacy_registered_devices',
+  'pharmacy_branch_regulatory_profiles',
+  'pharmacy_jurisdiction_rule_sets',
+  'organization_roles',
+  'organization_role_permissions',
+  'user_permission_overrides',
+  'organization_limits',
+];
+
+async function integratedRows(tx: ScopedDb, request: PharmacyDraftRequest): Promise<RetainedRow[]> {
+  const joins: Record<string, string> = {
+    pharmacy_purchase_order_lines: `t."purchaseOrderId" IN (SELECT id FROM pharmacy_purchase_orders WHERE "branchId"=$2)`,
+    pharmacy_purchase_order_approvals: `t."purchaseOrderId" IN (SELECT id FROM pharmacy_purchase_orders WHERE "branchId"=$2)`,
+    pharmacy_manufacturing_batches: `t.id IN (SELECT "manufacturingBatchId" FROM pharmacy_inventory_lots WHERE "branchId"=$2)`,
+    pharmacy_drawer_movements: `t."drawerSessionId" IN (SELECT id FROM pharmacy_drawer_sessions WHERE "branchId"=$2)`,
+    pharmacy_money_idempotency_keys: `t."deviceId" IN (SELECT id FROM pharmacy_registered_devices WHERE "branchId"=$2)`,
+  };
+  const rows: RetainedRow[] = [];
+  for (const table of INTEGRATED_TABLES) {
+    // row_to_json preserves database scalar precision, including microseconds.
+    const values = await tx.$queryRawUnsafe<Array<{ id: string; value: string }>>(
+      `SELECT t.id, row_to_json(t)::text AS value FROM "${table}" t
+       WHERE t."organizationId"=$1 AND (${joins[table] ?? 't."branchId"=$2'}) ORDER BY t.id LIMIT 101`,
+      request.organizationId,
+      request.branchId
+    );
+    requireFact(values.length <= 100, 'INTEGRATED_FOOTPRINT_LIMIT');
+    rows.push(
+      ...values.map((row) => ({
+        model: table,
+        id: row.id,
+        hash: pharmacyScalarHash(JSON.parse(row.value)),
+      }))
+    );
+  }
+  return rows;
+}
+
+async function integratedPrerequisites(
+  tx: ScopedDb,
+  request: PharmacyDraftRequest,
+  namespace: string
+) {
+  const input = request.integration!;
+  const scoped = { organizationId: request.organizationId, branchId: request.branchId };
+  const actor = await tx.user.findFirst({
+    where: { id: request.actorUserId, organizationId: request.organizationId },
+    select: { id: true, name: true, role: true, status: true, department: true },
+  });
+  requireFact(actor, 'NAMESPACED_TEST_ACTOR_REQUIRED');
+  requireFact(
+    actor?.name.startsWith(namespace) && actor.status === 'ACTIVE',
+    'NAMESPACED_TEST_ACTOR_REQUIRED'
+  );
+  const owner = await tx.user.findFirst({
+    where: { id: request.ownerUserId, organizationId: request.organizationId },
+    select: { id: true, role: true, status: true, department: true },
+  });
+  requireFact(owner?.role === 'ADMIN' && owner.status === 'ACTIVE', 'ACTUAL_REPORT_OWNER_REQUIRED');
+  const { can, subjectFromSession } = await import('../src/lib/abac');
+  for (const capability of ['reports:operational', 'reports:financial'] as const)
+    requireFact(
+      await can(subjectFromSession(owner), capability, undefined, { db: tx }),
+      'ACTUAL_REPORT_CAPABILITY_REQUIRED'
+    );
+  // Explicit existing purchasing access binds both identities to this branch.
+  const { purchasingAccess } = await import('../src/lib/pharmacy/central-purchasing');
+  await purchasingAccess(
+    tx,
+    { organizationId: request.organizationId, actorId: actor.id },
+    request.branchId
+  );
+  await purchasingAccess(
+    tx,
+    { organizationId: request.organizationId, actorId: owner.id },
+    request.branchId
+  );
+  const { resolveOrganizationEntitlements, hasModule } = await import('../src/lib/entitlements');
+  const entitlements = await resolveOrganizationEntitlements(request.organizationId, tx);
+  for (const key of ['pharmacy-procurement', 'pharmacy-counter', 'pharmacy-reports'])
+    requireFact(hasModule(entitlements, key), 'ACTUAL_INTEGRATED_ENTITLEMENT_REQUIRED');
+  const location = await tx.pharmacyStockLocation.findFirst({
+    where: { ...scoped, id: input.stockLocationId, active: true },
+  });
+  // Never read deviceSecretHash, user credentials or session material.
+  const device = await tx.pharmacyRegisteredDevice.findFirst({
+    where: { ...scoped, id: input.deviceId, status: 'ACTIVE', revokedAt: null },
+    select: {
+      id: true,
+      organizationId: true,
+      branchId: true,
+      name: true,
+      kind: true,
+      status: true,
+      revokedAt: true,
+      enrolledByActorId: true,
+      createdAt: true,
+      updatedAt: true,
+    },
+  });
+  const drawer = await tx.pharmacyDrawerSession.findFirst({
+    where: {
+      ...scoped,
+      id: input.drawerSessionId,
+      deviceId: input.deviceId,
+      openedByActorId: actor.id,
+      status: 'OPEN',
+      businessDate: new Date(request.businessDate),
+    },
+  });
+  requireFact(
+    location?.name.startsWith(namespace) && device?.name.startsWith(namespace) && drawer,
+    'ACTUAL_SCOPED_SYNTHETIC_DEVICE_LOCATION_DRAWER_REQUIRED'
+  );
+  const profiles = await tx.branchRegulatoryProfile.findMany({
+    where: {
+      ...scoped,
+      effectiveFrom: { lte: new Date() },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
+    },
+    include: { jurisdictionRuleSet: true },
+    orderBy: { id: 'asc' },
+  });
+  requireFact(profiles.length === 1, 'ACTUAL_UNAMBIGUOUS_REGULATORY_PROFILE_REQUIRED');
+  const { assertBranchMayOperate } = await import('../src/lib/pharmacy/regulatory');
+  assertBranchMayOperate(
+    { ...profiles[0], ruleSet: profiles[0].jurisdictionRuleSet, auditDenied: () => undefined },
+    { name: 'pharmacy-demo.integrated-test', at: new Date() }
+  );
+  const permissions = await tx.organizationRolePermission.findMany({
+    where: { organizationId: request.organizationId },
+    orderBy: { id: 'asc' },
+  });
+  const overrides = await tx.userPermissionOverride.findMany({
+    where: { organizationId: request.organizationId, userId: { in: [owner.id, actor.id] } },
+    orderBy: { id: 'asc' },
+  });
+  const observed = [actor, owner, location, device, profiles, permissions, overrides, entitlements];
+  return {
+    actor,
+    owner,
+    location,
+    device,
+    drawer,
+    entitlements,
+    reference: {
+      model: 'IntegratedPrerequisites',
+      id: request.branchId,
+      hash: pharmacyScalarHash(observed),
+    },
+  };
+}
+
+async function planIntegrated(
+  tx: ScopedDb,
+  request: PharmacyDraftRequest,
+  namespace: string,
+  prerequisites: Awaited<ReturnType<typeof integratedPrerequisites>>
+) {
+  const today = new Intl.DateTimeFormat('en-CA', {
+    timeZone: request.timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date());
+  requireFact(
+    request.businessDate === today && Date.parse(request.scenarioAt) <= Date.now(),
+    'CURRENT_TEST_BUSINESS_DATE_REQUIRED'
+  );
+  const inventory = await import('./pharmacy-demo-inventory');
+  const context = {
+    ...request,
+    namespace,
+    actors: [
+      {
+        userId: request.actorUserId,
+        actorId: request.actorUserId,
+        organizationId: request.organizationId,
+        branchId: request.branchId,
+        active: true as const,
+        synthetic: true as const,
+        capabilities: [
+          'pharmacyPurchasing.createCentralPurchaseOrder',
+          'pharmacyPurchasing.postGoodsReceipt',
+        ],
+      },
+    ],
+    references: [],
+    modules: prerequisites.entitlements.enabledModules.map((key) => ({ key, enabled: true })),
+  };
+  const receipt = await inventory.observeInventoryDemoReceipt(
+    tx,
+    context,
+    request.integration!.goodsReceiptId
+  );
+  requireFact(
+    receipt?.status === 'DRAFT' &&
+      receipt.reference.startsWith(namespace) &&
+      receipt.supplierInvoiceRef.startsWith(namespace) &&
+      receipt.receivedByUserId === request.actorUserId &&
+      receipt.lines.length === 1 &&
+      receipt.lines[0].acceptedCanonicalUnits === 2 &&
+      receipt.lines[0].rejectedCanonicalUnits === 0,
+    'EXISTING_NAMESPACED_TEST_RECEIPT_REQUIRED'
+  );
+  const line = receipt.lines[0];
+  const order = receipt.purchaseOrder;
+  const approval = order?.approvals[0];
+  requireFact(
+    order &&
+      order.reference.startsWith(namespace) &&
+      order.branchId === request.branchId &&
+      order.supplierId === request.supplierId &&
+      order.approvedAt &&
+      order.approvedByUserId &&
+      ['APPROVED', 'SENT', 'RECEIVING'].includes(order.status) &&
+      approval?.decision === 'APPROVED' &&
+      approval.actorUserId === order.approvedByUserId &&
+      approval.policy === 'PUR-02:SEGREGATION_OF_DUTIES' &&
+      approval.toStatus === 'APPROVED',
+    'EXISTING_TEST_APPROVAL_REQUIRED'
+  );
+  const { assertApprovalAllowed } = await import('../src/lib/pharmacy/purchasing');
+  assertApprovalAllowed({
+    approverId: approval.actorUserId,
+    createdById: order.createdByUserId,
+    requestedById: order.requisition?.requestedByUserId ?? null,
+  });
+  requireFact(
+    line.medicineId === request.medicineId &&
+      line.packLevelId === request.packLevelId &&
+      line.stockLocationId === request.integration!.stockLocationId &&
+      line.batchNumber.startsWith(namespace) &&
+      !line.inventoryLotId &&
+      line.purchaseOrderLine?.purchaseOrderId === order.id,
+    'ACTUAL_PREPARED_LINE_REQUIRED'
+  );
+  requireFact(
+    line.canonicalUnitsPerPack === 1 &&
+      line.printedMrpMinor > 0 &&
+      request.integration!.cashReceivedMinor >= line.printedMrpMinor,
+    'INTEGRATED_UNIT_PRICE_REQUIRED'
+  );
+  const references = [
+    ['medicine', request.medicineId],
+    ['presentation', request.presentationId],
+    ['pack', request.packLevelId],
+    ['supplier', request.supplierId],
+    ['location', request.integration!.stockLocationId],
+  ].map(([kind, id]) => ({
+    kind: kind as 'medicine' | 'presentation' | 'pack' | 'supplier' | 'location',
+    id,
+    organizationId: request.organizationId,
+    branchId: request.branchId,
+    approved: true as const,
+    observedHash: pharmacyScalarHash({ receipt, id, prerequisite: prerequisites.reference }),
+  }));
+  const facts = {
+    ...context,
+    references,
+    actorId: request.actorUserId,
+    purchasingEntitled: true,
+    organizationPurchaser: true,
+    approvedCatalog: {
+      medicineId: request.medicineId,
+      presentationId: request.presentationId,
+      packLevelId: request.packLevelId,
+      stockLocationId: request.integration!.stockLocationId,
+      canonicalUnitsPerPack: 1,
+    },
+    supplier: {
+      id: receipt.supplierId,
+      authorized: receipt.supplier.authorized,
+      licences: receipt.supplier.licences.map((l) => ({
+        id: l.id,
+        verified: l.verifiedAt !== null,
+        expiresAt: l.expiresAt.toISOString(),
+      })),
+    },
+    orderedPacks: 2,
+    listPricePerPackMinor: line.invoicedPricePerPackMinor,
+  };
+  const input = {
+    goodsReceiptId: receipt.id,
+    reference: receipt.reference,
+    snapshotHash: inventory.inventoryDemoReceiptHash(receipt),
+    operatorConfirmationReference: `${namespace}reviewed-test-plan`,
+    acceptedUnits: 2,
+    rejectedUnits: 0,
+    unitCostMinor: line.unitCostMinor,
+  };
+  const plan = inventory.planPreparedInventoryReceipt(facts, input);
+  requireFact(plan.unmet.length === 0, 'INTEGRATED_INVENTORY_PLAN_REFUSED');
+  const beforeRows = await integratedRows(tx, request);
+  // Only TEST prepared PO/approval/receipt/drawer fixtures may exist initially.
+  const allowed = [
+    'pharmacy_purchase_orders',
+    'pharmacy_purchase_order_lines',
+    'pharmacy_purchase_order_approvals',
+    'pharmacy_goods_receipts',
+    'pharmacy_goods_receipt_lines',
+    'pharmacy_drawer_sessions',
+  ];
+  requireFact(
+    beforeRows.every((row) => allowed.includes(row.model)) &&
+      allowed.every((model) => beforeRows.filter((row) => row.model === model).length === 1),
+    'INTEGRATED_FRESH_FOOTPRINT_REQUIRED'
+  );
+  return { facts, input, plan, beforeRows, amountMinor: line.printedMrpMinor };
+}
+
+async function executeIntegrated(
+  tx: ScopedDb,
+  request: PharmacyDraftRequest,
+  planned: Awaited<ReturnType<typeof planIntegrated>>,
+  prerequisites: Awaited<ReturnType<typeof integratedPrerequisites>>
+) {
+  const namespace = planned.facts.namespace;
+  const { executePreparedInventoryReceipt } = await import('./pharmacy-demo-inventory');
+  const inventory = await executePreparedInventoryReceipt(tx, planned.facts, planned.input, {
+    state: 'new',
+    hash: planned.plan.digest,
+  });
+  requireFact(inventory.status === 'applied', 'INTEGRATED_RECEIVING_REFUSED_ROLLBACK');
+  const lotId = inventory.records[0]?.observedFacts.inventoryLotId;
+  requireFact(typeof lotId === 'string', 'ACTUAL_GENERATED_LOT_REQUIRED');
+  const lot = await tx.pharmacyInventoryLot.findFirst({
+    where: { id: lotId, organizationId: request.organizationId, branchId: request.branchId },
+  });
+  requireFact(lot, 'ACTUAL_GENERATED_LOT_REQUIRED');
+  const records = [
+    ['User', prerequisites.actor],
+    ['PharmacyRegisteredDevice', prerequisites.device],
+    ['PharmacyDrawerSession', prerequisites.drawer],
+    ['PharmacyStockLocation', prerequisites.location],
+    ['PharmacyInventoryLot', lot],
+  ].map(([model, value]) => ({
+    model: model as string,
+    persistedId: (value as { id: string }).id,
+    planKey: `${namespace}${model}`,
+    receiptReference: `${namespace}test-prerequisites`,
+    observedHash: pharmacyScalarHash(value),
+    observedFacts: {},
+  }));
+  const { executePharmacyDemoCashSale } = await import('./pharmacy-demo-finance');
+  const cash = await executePharmacyDemoCashSale(
+    tx,
+    {
+      scope: {
+        organizationId: request.organizationId,
+        branchId: request.branchId,
+        actorId: request.actorUserId,
+      },
+      namespace,
+      entitlements: prerequisites.entitlements,
+      records,
+      businessDate: new Date(request.businessDate),
+    },
+    {
+      ...request.integration!,
+      medicineId: request.medicineId,
+      presentationId: request.presentationId,
+      packLevelId: request.packLevelId,
+      inventoryLotId: lot.id,
+      expectedAmountMinor: planned.amountMinor,
+    }
+  );
+  requireFact(cash.status === 'applied', 'INTEGRATED_CASH_REFUSED_ROLLBACK');
+  const { readbackPharmacyDemoRetention } = await import('./pharmacy-demo-retention');
+  const asOf = new Date(Math.max(Date.now(), cash.issuedAt.getTime() + 1));
+  const reports = await readbackPharmacyDemoRetention(tx, planned.facts, {
+    repeat: {
+      from: cash.issuedAt.toISOString().slice(0, 10),
+      to: cash.issuedAt.toISOString().slice(0, 10),
+      asOf: asOf.toISOString(),
+    },
+    margin: { from: new Date(asOf.getTime() - 86_400_000), to: asOf },
+  });
+  return { inventory, cash, reports };
+}
+
 type DraftReceipt = {
   version: string;
   namespace: string;
@@ -522,6 +933,11 @@ type DraftReceipt = {
   planDigest: string;
   references: RetainedRow[];
   rows: RetainedRow[];
+  integrated?: {
+    beforeRows: RetainedRow[];
+    rows: RetainedRow[];
+    result: Awaited<ReturnType<typeof executeIntegrated>>;
+  };
 };
 
 async function openHistory(
@@ -615,10 +1031,19 @@ async function assertSqlRuntime(
   >(
     `SELECT relname AS name, relforcerowsecurity AS forced, relrowsecurity AS enabled
        FROM pg_class WHERE relnamespace='public'::regnamespace AND relname=ANY($1::text[])`,
-    SQL_TABLES
+    [
+      ...new Set([
+        ...SQL_TABLES,
+        ...(request.integration ? [...INTEGRATED_TABLES, ...INTEGRATED_REFERENCE_TABLES] : []),
+      ]),
+    ]
   );
   requireFact(
-    tables.length === SQL_TABLES.length && tables.every((t) => t.forced && t.enabled),
+    tables.length ===
+      new Set([
+        ...SQL_TABLES,
+        ...(request.integration ? [...INTEGRATED_TABLES, ...INTEGRATED_REFERENCE_TABLES] : []),
+      ]).size && tables.every((t) => t.forced && t.enabled),
     'FORCED_RLS_REQUIRED'
   );
   const expected = await pharmacyMigrationManifest();
@@ -713,7 +1138,21 @@ async function draftReferences(tx: ScopedDb, request: PharmacyDraftRequest) {
     orderBy: { id: 'asc' },
   });
   const medicine = await tx.medicine.findFirst({
-    where: { id: request.medicineId, organizationId, saleable: true },
+    where: {
+      id: request.medicineId,
+      organizationId,
+      saleable: true,
+      ...(request.integration
+        ? {
+            otc: true,
+            rx: false,
+            restricted: false,
+            controlled: false,
+            highAlert: false,
+            coldChain: false,
+          }
+        : {}),
+    },
   });
   const presentation = await tx.presentation.findFirst({
     where: {
@@ -765,7 +1204,8 @@ async function reconcileDraft(
   organizationId: string,
   entries: unknown[],
   requestHash: string,
-  sourceDigest: string
+  sourceDigest: string,
+  request: PharmacyDraftRequest
 ) {
   const audit = await tx.auditLog.findMany({
     where: { organizationId, targetId: namespace },
@@ -776,11 +1216,14 @@ async function reconcileDraft(
     include: { lines: { orderBy: { id: 'asc' } } },
   });
   if (entries.length === 1) {
-    requireFact(audit.length === 0 && orders.length === 0, 'UNRETAINED_NAMESPACE_COLLISION');
+    requireFact(
+      audit.length === 0 && (request.integration ? orders.length === 1 : orders.length === 0),
+      'UNRETAINED_NAMESPACE_COLLISION'
+    );
     return null;
   }
   requireFact(
-    entries.length === 3 && audit.length === 2 && orders.length === 1,
+    entries.length === 3 && audit.length === 2 && orders.length === (request.integration ? 2 : 1),
     'PARTIAL_OR_REMOVED_HISTORY'
   );
   const intent = object(entries[1], 'kind requestHash sourceDigest planDigest');
@@ -793,6 +1236,7 @@ async function reconcileDraft(
     'PRIOR_PACKAGE_OR_CHANGED_REQUEST'
   );
   const receipt = prepared.receipt as DraftReceipt;
+  requireFact(Boolean(receipt.integrated) === Boolean(request.integration), 'FOREIGN_RECEIPT');
   requireFact(
     receipt.version === SQL_VERSION &&
       receipt.namespace === namespace &&
@@ -817,7 +1261,15 @@ async function reconcileDraft(
         canonical({ receiptId: receiptRow.id, receiptHash: pharmacyScalarHash(receipt) }),
     'FOREIGN_RECEIPT'
   );
-  const { lines, ...order } = orders[0];
+  if (request.integration) {
+    requireFact(
+      canonical(await integratedRows(tx, request)) === canonical(receipt.integrated!.rows),
+      'CHANGED_OR_REMOVED_INTEGRATED_HISTORY'
+    );
+  }
+  const draft = orders.find((row) => row.reference === `${namespace}draft-po`);
+  requireFact(draft, 'CHANGED_OR_REMOVED_DRAFT');
+  const { lines, ...order } = draft;
   const rows = [
     { model: 'PharmacyPurchaseOrder', id: order.id, hash: pharmacyScalarHash(order) },
     ...lines.map((row) => ({
@@ -833,8 +1285,8 @@ async function reconcileDraft(
   return receipt;
 }
 
-/** Genuine owning transaction, actual RLS observations, one service-created draft.
- * Exported only for the runnable disposable verifier; no helper integration or live apply. */
+/** Genuine owning transaction and actual RLS observations. Optional integration
+ * consumes existing TEST prerequisites through reviewed services; never live apply. */
 export async function runDisposablePharmacyDraft(
   target: DisposablePharmacyTarget,
   request: PharmacyDraftRequest,
@@ -842,9 +1294,23 @@ export async function runDisposablePharmacyDraft(
 ) {
   object(
     request,
-    'organizationId branchId ownerUserId actorUserId supplierId medicineId presentationId packLevelId businessDate scenarioAt timezone currency'
+    'organizationId branchId ownerUserId actorUserId supplierId medicineId presentationId packLevelId businessDate scenarioAt timezone currency' +
+      (request.integration ? ' integration' : '')
   );
-  for (const value of Object.values(request)) token(value);
+  for (const [key, value] of Object.entries(request)) if (key !== 'integration') token(value);
+  if (request.integration) {
+    object(
+      request.integration,
+      'goodsReceiptId stockLocationId deviceId drawerSessionId cashReceivedMinor'
+    );
+    for (const [key, value] of Object.entries(request.integration))
+      if (key !== 'cashReceivedMinor') token(value);
+    requireFact(
+      Number.isSafeInteger(request.integration.cashReceivedMinor) &&
+        request.integration.cashReceivedMinor > 0,
+      'INVALID_INTEGRATED_CASH'
+    );
+  }
   requireFact(request.currency === 'PKR', 'CURRENCY_MISMATCH');
   const scenario = instant(request.scenarioAt);
   const date = new Intl.DateTimeFormat('en-CA', {
@@ -876,7 +1342,7 @@ export async function runDisposablePharmacyDraft(
       await tx.$executeRawUnsafe("SET LOCAL lock_timeout = '5s'");
       await tx.$queryRawUnsafe('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', namespace);
       // Prevent concurrent prerequisite edits while the service and receipt execute.
-      if (options.apply)
+      if (options.apply && !request.integration)
         await tx.$executeRawUnsafe(
           `LOCK TABLE ${SQL_TABLES.filter(
             (t) =>
@@ -887,6 +1353,14 @@ export async function runDisposablePharmacyDraft(
             .map((t) => `"${t}"`)
             .join(', ')} IN SHARE MODE`
         );
+      if (options.apply && request.integration)
+        await tx.$executeRawUnsafe(
+          `LOCK TABLE ${[
+            ...new Set([...SQL_TABLES, ...INTEGRATED_TABLES, ...INTEGRATED_REFERENCE_TABLES]),
+          ]
+            .map((table) => `"${table}"`)
+            .join(', ')} IN SHARE ROW EXCLUSIVE MODE`
+        );
       const history = await openHistory(target, request, Boolean(options.apply));
       try {
         // Retained IDs and original hashes are checked BEFORE any dynamic reference planning.
@@ -896,18 +1370,38 @@ export async function runDisposablePharmacyDraft(
           request.organizationId,
           history.entries,
           requestHash,
-          sourceDigest
+          sourceDigest,
+          request
         );
         const references = await draftReferences(tx, request);
+        const prerequisites = request.integration
+          ? await integratedPrerequisites(tx, request, namespace)
+          : undefined;
+        if (prerequisites) references.push(prerequisites.reference);
         if (prior)
           requireFact(canonical(prior.references) === canonical(references), 'CHANGED_REFERENCE');
-        const planDigest = pharmacyScalarHash({
-          version: SQL_VERSION,
-          namespace,
-          sourceDigest,
-          requestHash,
-          references,
-        });
+        // Fresh receipt planning is forbidden on replay: the original receipt is now POSTED.
+        const integratedPlan =
+          prerequisites && !prior
+            ? await planIntegrated(tx, request, namespace, prerequisites)
+            : undefined;
+        const planDigest =
+          prior?.planDigest ??
+          pharmacyScalarHash({
+            version: SQL_VERSION,
+            namespace,
+            sourceDigest,
+            requestHash,
+            references,
+            ...(integratedPlan
+              ? {
+                  integrated: {
+                    digest: integratedPlan.plan.digest,
+                    beforeRows: integratedPlan.beforeRows,
+                  },
+                }
+              : {}),
+          });
         if (options.apply)
           requireFact(options.apply.reviewedDigest === planDigest, 'REVIEWED_DIGEST_MISMATCH');
         const coverage = [
@@ -918,6 +1412,13 @@ export async function runDisposablePharmacyDraft(
           },
           ...COVERAGE,
         ];
+        if (request.integration)
+          coverage.unshift({
+            function: 'disposable receiving / OTC cash / branch reports',
+            status: prior ? 'OBSERVED' : 'PLANNED',
+            reason:
+              'Existing TEST approval/receipt/device prerequisites; one real receipt, cash sale and reader composition. No live authority or mature retention.',
+          });
         if (!options.apply || prior)
           return {
             mode: prior ? 'replayed' : 'database-dry-run',
@@ -956,6 +1457,10 @@ export async function runDisposablePharmacyDraft(
           }
         );
         requireFact(order.status === 'DRAFT' && lines.length === 1, 'UNEXPECTED_SERVICE_RESULT');
+        const integratedResult =
+          integratedPlan && prerequisites
+            ? await executeIntegrated(tx, request, integratedPlan, prerequisites)
+            : undefined;
         const receipt: DraftReceipt = {
           version: SQL_VERSION,
           namespace,
@@ -971,6 +1476,15 @@ export async function runDisposablePharmacyDraft(
               hash: pharmacyScalarHash(row),
             })),
           ],
+          ...(integratedResult && integratedPlan
+            ? {
+                integrated: {
+                  beforeRows: integratedPlan.beforeRows,
+                  rows: await integratedRows(tx, request),
+                  result: integratedResult,
+                },
+              }
+            : {}),
         };
         const data = {
           organizationId: request.organizationId,
@@ -980,8 +1494,9 @@ export async function runDisposablePharmacyDraft(
           category: 'SYSTEM',
           targetType: 'PharmacyDemoDraft',
           targetId: namespace,
-          description:
-            'Synthetic disposable TEST draft only; no clinical, stock, financial or external action.',
+          description: request.integration
+            ? 'Synthetic disposable TEST receiving/cash/report composition; no live authority or external action.'
+            : 'Synthetic disposable TEST draft only; no clinical, stock, financial or external action.',
         };
         const receiptRow = await tx.auditLog.create({
           data: { ...data, action: RECEIPT_ACTION, metadata: JSON.parse(JSON.stringify(receipt)) },
@@ -1003,7 +1518,15 @@ export async function runDisposablePharmacyDraft(
         // A crash/rollback after this fsync remains detectable; never erase the retained history.
         return {
           mode: 'applied',
-          writes: 4,
+          writes: receipt.integrated
+            ? receipt.integrated.rows.filter(
+                (row) =>
+                  !receipt.integrated!.beforeRows.some(
+                    (before) =>
+                      before.model === row.model && before.id === row.id && before.hash === row.hash
+                  )
+              ).length + 2
+            : 4,
           planDigest,
           namespace,
           sourceDigest,

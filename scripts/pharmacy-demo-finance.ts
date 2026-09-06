@@ -196,7 +196,20 @@ export async function executePharmacyDemoCashSale(
     balances[0]!.inventoryLotId !== lot.id ||
     balances[0]!.stockLocationId !== input.stockLocationId ||
     balances[0]!.disposition !== 'AVAILABLE' ||
-    balances[0]!.looseUnits < 1
+    !Number.isSafeInteger(lot.unitsPerPack) ||
+    lot.unitsPerPack < 1 ||
+    !Number.isSafeInteger(balances[0]!.onHandUnits) ||
+    balances[0]!.onHandUnits < 1 ||
+    !Number.isSafeInteger(balances[0]!.sealedPacks) ||
+    balances[0]!.sealedPacks < 0 ||
+    !Number.isSafeInteger(balances[0]!.looseUnits) ||
+    balances[0]!.looseUnits < 0 ||
+    !Number.isSafeInteger(balances[0]!.sealedPacks * lot.unitsPerPack + balances[0]!.looseUnits) ||
+    balances[0]!.sealedPacks * lot.unitsPerPack + balances[0]!.looseUnits !==
+      balances[0]!.onHandUnits ||
+    // postSaleMovements consumes loose units first, then only whole sealed packs.
+    // A sealed canonical UNIT is sellable; larger packs still require BREAK_PACK.
+    (1 - Math.min(balances[0]!.looseUnits, 1)) % lot.unitsPerPack !== 0
   )
     return refuse('EXCLUSIVE_PRERECORDED_SYNTHETIC_STOCK');
   const quote = priceFromLot({
