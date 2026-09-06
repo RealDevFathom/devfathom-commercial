@@ -6,6 +6,7 @@ import {
   MIGRATIONS_SHA256,
   PHARMACY_DEMO_VERSION,
   SCHEMA_SHA256,
+  isPharmacyDemoNamespace,
   type PharmacyDemoEvidence,
   type DemoPlannedRecord,
   type DemoObservedRecord,
@@ -20,6 +21,45 @@ import {
 } from './seed-pharmacy-demo';
 
 const NOW = new Date('2026-09-07T07:00:00.000Z');
+test('canonical namespace contract preserves target identity without lane rewriting', () => {
+  const target = {
+    environment: 'disposable' as const,
+    targetKey: 'unit-only',
+    organizationId: 'unit-org',
+    branchId: 'unit-branch',
+  };
+  const namespace = targetNamespace(target);
+  assert.equal(namespace, 'phdemo_7e4628db66d64cc5ffc610e4_');
+  assert.equal(isPharmacyDemoNamespace(namespace), true);
+  assert.equal(namespace.length, 32);
+  assert.equal(targetNamespace({ ...target }), namespace);
+  for (const change of [
+    { environment: 'lan' as const },
+    { targetKey: 'another-target' },
+    { organizationId: 'another-org' },
+    { branchId: 'another-branch' },
+  ]) {
+    const other = targetNamespace({ ...target, ...change });
+    assert.equal(isPharmacyDemoNamespace(other), true);
+    assert.notEqual(other, namespace);
+  }
+  for (const invalid of [
+    undefined,
+    null,
+    42,
+    '',
+    'demo:unit',
+    'pharmacy-demo:unit',
+    'demo-unit',
+    namespace.toUpperCase(),
+    `${namespace}:inventory`,
+    namespace.slice(0, -1),
+    ` ${namespace}`,
+    `${namespace}\n`,
+  ]) {
+    assert.equal(isPharmacyDemoNamespace(invalid), false);
+  }
+});
 test('generated-ID mapping preserves service IDs separately from planned references', () => {
   const plan: DemoPlannedRecord = {
     key: 'demo:unit:po',
