@@ -73,6 +73,31 @@ failure diagnostics in its owned directory. No previous cluster is reused.
 Proof results and exact immutable source SHA/digest are published on WHA-1388;
 this pre-execution section does not claim a passing SQL result.
 
+Initial source `082d1974c9d2e1c781508170c041cb2dacea5090`, digest
+`a80cd21e3e40b40b8a08e5e3fe011eeac694fdc8b30983ecaf3109be641c2983`,
+ran the command above on new owned `/private/tmp/wha1388-pg-BVqlKW`.
+All 106 migrations passed; initialization failed before any scenario because the
+TEST actor insert omitted required `users.title`: **1 migration check pass,
+1 bootstrap failure, exit 1**. Cluster stopped; original diagnostics retained.
+One correction supplies the fixture title and makes each branch fixture batch
+transactional. Static schema inspection also corrected the footprint observer:
+stock balances have a composite primary key, not an `id` column. Their retained
+identity is the actual organization/lot/location/disposition tuple, not an
+invented generated ID. The verification snapshot similarly orders by SQL row JSON.
+
+The corrected verifier permits **one same-run initialization continuation only**:
+
+```sh
+bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts --resume-integrated-initialized /private/tmp/wha1388-pg-BVqlKW
+```
+
+It checks the original run marker, PostgreSQL version, previous bootstrap-only
+evidence, absent TEST actors and zero orders/lines/audits. It preserves the first
+report and failure under `initial-bootstrap-*`, does not redeploy migrations or
+reset business data, and cannot resume executed scenarios. This is not a clean
+one-shot bootstrap claim and creates no second PostgreSQL cluster. The remaining
+integrated proof is still required; corrected source is published before execution.
+
 Scoped TypeScript and ESLint cover the changed root files and actual imports;
 Prettier excludes the immutable helper pairs. Initial TypeScript identified three
 nullable-actor errors; an explicit assertion corrected those before SQL execution.

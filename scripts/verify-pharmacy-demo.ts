@@ -20,8 +20,10 @@ import {
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
 // Harness TMPDIR can exceed PostgreSQL's 103-byte socket path limit on macOS.
-const retry = process.argv[2] === '--resume-initialized' ? process.argv[3] : undefined;
-const integrated = process.argv[2] === '--integrated';
+const integratedRetry = process.argv[2] === '--resume-integrated-initialized';
+const retry =
+  process.argv[2] === '--resume-initialized' || integratedRetry ? process.argv[3] : undefined;
+const integrated = process.argv[2] === '--integrated' || integratedRetry;
 assert.ok(
   process.argv.length === 2 ||
     (integrated && process.argv.length === 3) ||
@@ -39,6 +41,24 @@ if (retry) {
     process.env.PAPERCLIP_RUN_ID
   );
   assert.equal(await readFile(join(directory, 'data/PG_VERSION'), 'utf8'), '16\n');
+  if (integratedRetry) {
+    const previous = JSON.parse(await readFile(join(directory, 'evidence.json'), 'utf8'));
+    assert.deepEqual(
+      previous.evidence.map((item: { name: string }) => item.name),
+      ['normal unchanged migrations']
+    );
+    assert.equal(previous.counts.failed, 1);
+    await writeFile(
+      join(directory, 'initial-bootstrap-evidence.json'),
+      JSON.stringify(previous, null, 2),
+      { flag: 'wx', mode: 0o600 }
+    );
+    await writeFile(
+      join(directory, 'initial-bootstrap-failure.txt'),
+      await readFile(join(directory, 'failure-command.txt')),
+      { flag: 'wx', mode: 0o600 }
+    );
+  }
 }
 const target = { directory, database };
 const socket = join(directory, 'socket');
@@ -139,7 +159,15 @@ async function processRun(path: string) {
 async function verifyIntegrated(base: PharmacyDraftRequest) {
   // The bootstrap role constructs TEST-only prerequisites in this NEW database.
   // The runner never creates approval, licence, actor, device or prepared receipt.
-  sql(`GRANT INSERT, UPDATE ON ${INTEGRATED_TABLES.join(', ')} TO ${role};
+  if (integratedRetry) {
+    assert.equal(sql(`SELECT count(*) FROM users WHERE id LIKE 'test_actor_%';`), '0');
+    assert.equal(
+      sql(`SELECT count(*) FROM pharmacy_jurisdiction_rule_sets WHERE id='test_rules';`),
+      '1'
+    );
+    assert.deepEqual(counts(), { orders: 0, lines: 0, audit: 0 });
+  } else
+    sql(`GRANT INSERT, UPDATE ON ${INTEGRATED_TABLES.join(', ')} TO ${role};
     GRANT UPDATE ON audit_logs,pharmacy_stock_locations,pharmacy_registered_devices,
       pharmacy_branch_regulatory_profiles,pharmacy_jurisdiction_rule_sets,
       organization_roles,organization_role_permissions,user_permission_overrides,organization_limits TO ${role};
@@ -179,8 +207,8 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
     };
     requests.set(name, req);
     const namespace = pharmacyHistoryGenesis(target, req).namespace;
-    sql(`INSERT INTO users (id,"organizationId",name,email,role,department,"updatedAt") VALUES
-      ('${req.actorUserId}','wha1388_test_org','${namespace}TEST ACTOR','${name}@test.invalid','EMPLOYEE','wha1388-test-fixtures',now());
+    sql(`BEGIN; INSERT INTO users (id,"organizationId",name,email,role,department,title,"updatedAt") VALUES
+      ('${req.actorUserId}','wha1388_test_org','${namespace}TEST ACTOR','${name}@test.invalid','EMPLOYEE','wha1388-test-fixtures','TEST ONLY',now());
       INSERT INTO pharmacy_central_purchasing_access (id,"organizationId","userId","grantedById") VALUES
       ('test_access_${name}','wha1388_test_org','${req.actorUserId}','wha1388_owner');
       INSERT INTO pharmacy_stock_locations (id,"organizationId","branchId",code,name,kind,"updatedAt") VALUES
@@ -210,7 +238,7 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
       "batchNumber","printedExpiry","expiryPrecision","printedMrpMinor","canonicalUnitsPerPack","receivedPacks","receivedCanonicalUnits",
       "acceptedCanonicalUnits","invoicedPricePerPackMinor","unitCostMinor","stockLocationId") VALUES
       ('test_receipt_line_${name}','wha1388_test_org','${branchId}','test_receipt_${name}',1,'test_po_line_${name}','wha1388_medicine','wha1388_pack',
-      '${namespace}batch',now()+interval '180 days','DAY',100,1,2,2,2,20,20,'test_location_${name}');`);
+      '${namespace}batch',now()+interval '180 days','DAY',100,1,2,2,2,20,20,'test_location_${name}'); COMMIT;`);
     await writeFile(
       pharmacyHistoryPath(target, req),
       JSON.stringify(pharmacyHistoryGenesis(target, req)) + '\n',
@@ -222,7 +250,7 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
     [...INTEGRATED_TABLES, 'audit_logs']
       .map((table) =>
         sql(
-          `SELECT COALESCE(json_agg(row_to_json(t) ORDER BY id),'[]'::json)::text FROM "${table}" t;`
+          `SELECT COALESCE(json_agg(row_to_json(t) ORDER BY row_to_json(t)::text),'[]'::json)::text FROM "${table}" t;`
         )
       )
       .join('\n') +
@@ -506,16 +534,19 @@ try {
         { ...environment, DATABASE_URL: adminUrl }
       );
   }
-  const migrationLog = command(
-    'node',
-    ['node_modules/prisma/build/index.js', 'migrate', 'deploy', '--config', config],
-    undefined,
-    {
-      ...environment,
-      DATABASE_URL: adminUrl,
-    }
-  );
-  await writeFile(join(directory, 'migrations.log'), migrationLog, { mode: 0o600 });
+  const migrationLog = integratedRetry
+    ? await readFile(join(directory, 'migrations.log'), 'utf8')
+    : command(
+        'node',
+        ['node_modules/prisma/build/index.js', 'migrate', 'deploy', '--config', config],
+        undefined,
+        {
+          ...environment,
+          DATABASE_URL: adminUrl,
+        }
+      );
+  if (!integratedRetry)
+    await writeFile(join(directory, 'migrations.log'), migrationLog, { mode: 0o600 });
   assert.equal(
     Number(sql('SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NOT NULL;')),
     106
@@ -594,7 +625,7 @@ try {
     currency: 'PKR',
   };
   if (integrated) {
-    assert.ok(!retry, 'Integrated evidence requires a new one-shot cluster');
+    assert.ok(!retry || integratedRetry, 'Only this run unexecuted initialization may resume');
     await verifyIntegrated(baseRequest);
   } else {
     const request = (name: string) => ({ ...baseRequest, branchId: `wha1388_${name}` });
