@@ -1,5 +1,45 @@
 # Chai Chowk LAN / staging seed package — WHA-1382
 
+## Exact-682 review correction and fresh verification
+
+Reviewer comment `8263f047-633a-40de-9d70-02725006f01b` identified SQLSTATE23505
+in fresh `--billing-check`: the verifier copied payments:collect from GROUPS,
+then inserted that permission again. The earlier successful billing run used an
+incrementally bootstrapped database, so it did not prove a fresh exact-682 setup.
+That fresh-billing claim is superseded by this evidence.
+
+Correction commit **`9e38babbb4b97372d5b3a920bf137c75713bf396`**, exact parent
+`682327b3c437db188bfadbe012044c57747974a6`, removes only the redundant four-line
+permission insert in `scripts/verify-chaichowk-staging.ts`. Runner, fixture helpers,
+product/schema, permissions in existing databases and dependencies are unchanged.
+The correction was committed before the following verification; later manifest
+updates do not alter tested source. Exact product base remains
+`2d3c0effc3af5d5bdd2351f831f231909b4432c0`.
+
+One fresh run-owned disposable PostgreSQL16 cluster received all 106 unchanged
+migrations and the restricted runtime. In order, on that same database:
+
+```sh
+CHAICHOWK_VERIFY_OWNED_DISPOSABLE=1 TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/verify-chaichowk-staging.ts
+CHAICHOWK_VERIFY_OWNED_DISPOSABLE=1 TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/verify-chaichowk-staging.ts --billing-check
+CHAICHOWK_VERIFY_OWNED_DISPOSABLE=1 TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/verify-chaichowk-staging.ts --billing-replay-check
+```
+
+All three exited **0** without source corrections or database reinitialization.
+Main: all ten reported preservation/rollback/concurrency/RLS assertions passed;
+**227 fixture rows plus two audit markers**, including four OPEN bills,
+65 Catering rows and 43 Operations rows. Billing: two first applications, one
+shared owner actor, eight OPEN bills totaling PKR1320, four fractional bills,
+zero tenders/print intents/pending external outbox. Billing replay: both branches'
+default dry-run and apply replay preserved every public row and sequence value.
+
+Scoped TypeScript over the eight scripts/imports, ESLint on the changed verifier,
+Prettier and diff checks exited 0. Existing 35 focused unit tests were not rerun
+for this four-line bootstrap deletion; the fresh database sequence directly
+reproduces the review failure and proves its correction. No app build/browser,
+live LAN or Azure access. Owned database stopped after checks; temporary dependency
+symlink removed. Financial/loyalty and all other documented limitations remain.
+
 ## Current integrated package
 
 The package supports explicitly approved **LAN**, **Azure staging**, and isolated
@@ -136,8 +176,8 @@ NOSUPERUSER/NOBYPASSRLS; every registered fixture surface was checked FORCE RLS.
 Administrative bootstrap grants/users/permissions existed only in this synthetic
 cluster, before runtime verification.
 
-The full Operations prerequisite scenario observed **218 created fixture rows +
-two audit markers**. Its existing synthetic owner profile/grants were preserved.
+The full Operations prerequisite scenario observed **227 created fixture rows +
+two audit markers**. Its existing synthetic owner profile/grants were preserved. Fresh bootstrap also grants the existing billing capability, yielding four OPEN bills.
 
 | Surface                | Observed coverage                                                                                                                                                                                           |
 | ---------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
