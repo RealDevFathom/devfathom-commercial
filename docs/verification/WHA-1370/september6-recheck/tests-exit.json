@@ -1,0 +1,35 @@
+{
+  "command": [
+    "bun",
+    "run",
+    "test",
+    "src/app/(app)/pharmacy/purchasing/_components/action-form.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+    "src/components/pharmacy/medicine-pack-setup.procedure.test.ts",
+    "src/components/pharmacy/medicine-pack-setup.test.tsx",
+    "src/lib/pharmacy/onboarding-checklist.test.ts",
+    "src/components/onboarding/first-run-checklist.test.tsx",
+    "src/app/(app)/team/team-content.departments.test.ts",
+    "src/app/(app)/team/team-content.test.tsx",
+    "tests/e2e/fixtures/pharmacy-first-sale.test.tsx",
+    "--reporter=json",
+    "--outputFile=/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/docs/verification/WHA-1370/september6-recheck/tests.json"
+  ],
+  "returncode": 0,
+  "environmentKeys": [
+    "BUN_INSTALL_CACHE_DIR",
+    "HOME",
+    "LANG",
+    "NEXT_TELEMETRY_DISABLED",
+    "NODE_ENV",
+    "PAPERCLIP_RUN_SCRATCH_DIR",
+    "PATH",
+    "SHELL",
+    "TMPDIR",
+    "USER",
+    "XDG_CACHE_HOME"
+  ]
+}
