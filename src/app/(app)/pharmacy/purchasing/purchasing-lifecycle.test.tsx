@@ -1,7 +1,7 @@
 import { revalidatePath } from 'next/cache';
 import ReturnsPage from './returns/page';
 import { beforeEach, expect, it, vi } from 'vitest';
-import { act, fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 
 // Actual purchasing page/action lifecycle regressions; first two replay WHA-1349 findings.
 const mocks = vi.hoisted(() => ({
@@ -452,7 +452,15 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   list.mockResolvedValue([{ ...row, status: 'SUBMITTED' }]);
   view.rerender(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
   expect(screen.getByRole('button', { name: 'Dispatch to supplier' })).toBeEnabled();
-  expect(screen.getByRole('status')).toHaveTextContent('reserved');
+  const outcome = screen.getByRole('link', { name: 'View saved record' }).parentElement!;
+  expect(within(outcome).getByRole('status')).toHaveTextContent(
+    /^Return submitted\. The quantity is reserved and can no longer be sold\. Check the updated record before starting another change\.$/
+  );
+  expect(
+    screen.getByText(
+      '1 records excluded because scope or financial data could not be validated. Review source records before reconciliation.'
+    )
+  ).toHaveAttribute('role', 'status');
   expect(draft).toHaveValue('Unsaved credit');
   expect(draft).toHaveFocus();
   expect([draft.selectionStart, draft.selectionEnd]).toEqual([1, 5]);
