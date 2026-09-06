@@ -1,0 +1,100 @@
+[
+  {
+    "file": "src/components/onboarding/first-run-checklist.test.tsx",
+    "passed": 3,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/components/pharmacy/medicine-pack-setup.procedure.test.ts",
+    "passed": 6,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/components/pharmacy/medicine-pack-setup.test.tsx",
+    "passed": 9,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "tests/e2e/fixtures/pharmacy-first-sale.test.tsx",
+    "passed": 1,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/app/(app)/team/team-content.departments.test.ts",
+    "passed": 4,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/app/(app)/team/team-content.test.tsx",
+    "passed": 8,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/lib/pharmacy/onboarding-checklist.test.ts",
+    "passed": 11,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+    "passed": 32,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+    "passed": 18,
+    "failed": 1,
+    "pending": 0,
+    "failures": [
+      {
+        "name": "keeps Returns success and sibling credit draft when Submit becomes Dispatch",
+        "error": "TestingLibraryElementError: Found multiple elements with the role \"status\""
+      }
+    ]
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/_components/action-form.test.tsx",
+    "passed": 18,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.test.tsx",
+    "passed": 4,
+    "failed": 0,
+    "pending": 0,
+    "failures": []
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+    "passed": 2,
+    "failed": 2,
+    "pending": 0,
+    "failures": [
+      {
+        "name": "does not render priorities after branch read denial",
+        "error": "TestingLibraryElementError: Unable to find an element with the text: Returns for this branch could not be read. Nothing was written.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible."
+      },
+      {
+        "name": "loads the queue from the existing authorized branch reads",
+        "error": "Error: [vitest] No \"useRouter\" export is defined on the \"next/navigation\" mock. Did you forget to return it from \"vi.mock\"?\nIf you need to partially mock a module, you can use \"importOriginal\" helper inside:"
+      }
+    ]
+  }
+]
