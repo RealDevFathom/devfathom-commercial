@@ -9,7 +9,12 @@ import {
   validateConnection,
   type SeedTarget,
 } from './seed-chaichowk-staging';
-import { planFixtures, assertNoCollisions, verifyRows } from './chaichowk-staging-fixtures';
+import {
+  planFixtures,
+  assertNoCollisions,
+  verifyRows,
+  rowHash,
+} from './chaichowk-staging-fixtures';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 
 const now = new Date('2026-09-06T12:00:00.000Z');
@@ -206,4 +211,35 @@ test('collision and missing-row checks refuse instead of overwriting or repairin
     verifyRows(missing, [{ model: 'restaurantProduct', id: 'missing' }]),
     /SEED_ROW_MISSING/
   );
+});
+
+test('LAN is an explicit fenced target with a distinct confirmation', () => {
+  const lan = target({
+    environment: 'lan',
+    port: 65377,
+    database: 'devfathom_win7_lan_test_20260906',
+  });
+  assert.notEqual(targetDigest(lan), targetDigest(target()));
+  assert.throws(() => target({ ...lan, port: 65378 }), /LAN_TARGET_REQUIRED/);
+  assert.throws(() => target({ ...lan, database: 'other_existing_db' }), /LAN_TARGET_REQUIRED/);
+  assert.throws(() => target({ ...lan, environment: 'staging' }), /STAGING_TARGET_REQUIRED/);
+  assert.throws(
+    () => validateConnection(lan, { CHAICHOWK_SEED_DATABASE_URL: url }),
+    /TARGET_MISMATCH/
+  );
+});
+test('complete receipt hashes detect changes and duplicates before replay', async () => {
+  const original = { id: 'synthetic', name: 'Demo', updatedAt: new Date('2026-09-06') };
+  const mock = {
+    restaurantProduct: { findFirst: async () => ({ ...original }) },
+  } as unknown as ScopedDb;
+  const row = { model: 'restaurantProduct' as const, id: original.id, hash: rowHash(original) };
+  assert.deepEqual(await verifyRows(mock, [row]), { restaurantProduct: 1 });
+  assert.equal(
+    rowHash(original),
+    rowHash({ updatedAt: original.updatedAt, name: original.name, id: original.id })
+  );
+  await assert.rejects(verifyRows(mock, [row, row]), /RECEIPT_ROW_INVALID/);
+  original.name = 'Operator changed this';
+  await assert.rejects(verifyRows(mock, [row]), /SEED_ROW_CHANGED/);
 });

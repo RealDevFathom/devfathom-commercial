@@ -93,6 +93,38 @@ async function main() {
       await admin.query(
         'INSERT INTO restaurant_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES (\'assignment_demo\',\'org_demo\',\'branch_demo\',\'owner_demo\',now())'
       );
+      for (const [key, value] of [
+        ['restaurant.operators.max', 100],
+        ['sop.templates.max', 100],
+        ['sop.evidenceRetentionDays', 365],
+      ] as const) {
+        await admin.query(
+          `INSERT INTO organization_limits (id,"organizationId",key,value,"updatedAt") VALUES ($1,'org_demo',$1,$2,now())`,
+          [key, value]
+        );
+      }
+      // Existing synthetic actors/grants are bootstrap inputs, never seed-runner writes.
+      for (const key of ['owner', 'employee', 'replacement']) {
+        if (key === 'employee')
+          await admin.query(
+            `INSERT INTO users (id,"organizationId",name,email,password,role,department,title,"updatedAt") VALUES ('employee_demo','org_demo','DEMO employee','employee@demo.invalid',$1,'EMPLOYEE','ADMIN','Training',now())`,
+            [hashSync(randomBytes(32).toString('hex'), 10)]
+          );
+        await admin.query(
+          `INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName","primaryBranchId",status,"updatedAt") VALUES ($1,'org_demo',$2,$3,'branch_demo','ACTIVE',now())`,
+          [`profile_${key}`, key === 'replacement' ? null : `${key}_demo`, `DEMO ${key}`]
+        );
+        for (const capability of key === 'owner'
+          ? ['staff:manage', 'sop:manage', 'sop:complete', 'sop:verify']
+          : key === 'employee'
+            ? ['sop:complete']
+            : []) {
+          await admin.query(
+            `INSERT INTO restaurant_staff_capability_grants (id,"organizationId","staffProfileId","branchId",capability,effect,"updatedAt") VALUES ($1,'org_demo',$2,'branch_demo',$3,'ALLOW',now())`,
+            [`grant_${key}_${capability}`, `profile_${key}`, capability]
+          );
+        }
+      }
       await admin.query('COMMIT');
       await writeFile(join(root, 'bootstrap-complete'), 'WHA-1382-owned-disposable');
     }
@@ -172,100 +204,6 @@ async function main() {
           child.on('close', (code) => resolveRun({ code, output, diagnostics }));
         }
       );
-    if (process.argv.includes('--final-check')) {
-      // Final source check on another synthetic tenant in the SAME owned DB.
-      // Two branch packages start with one existing owner and no actor profile.
-      await admin.query('BEGIN');
-      await admin.query(
-        "INSERT INTO organizations (id,slug,\"legalName\",\"displayName\",vertical,status,currency,timezone,\"updatedAt\") VALUES ('org_final','synthetic-final','Synthetic final','Synthetic final','RESTAURANT','ACTIVE','PKR','Asia/Karachi',now())"
-      );
-      await admin.query(
-        "INSERT INTO organization_departments (id,\"organizationId\",key,name,\"updatedAt\") VALUES ('dept_final','org_final','ADMIN','Synthetic administration',now())"
-      );
-      await admin.query(
-        "INSERT INTO organization_roles (id,\"organizationId\",key,name,\"updatedAt\") VALUES ('role_final','org_final','demo-owner','Synthetic role',now())"
-      );
-      await admin.query(
-        "INSERT INTO organization_role_permissions (id,\"organizationId\",\"organizationRoleId\",capability,effect) SELECT id || '_final','org_final','role_final',capability,effect FROM organization_role_permissions WHERE \"organizationId\"='org_demo'"
-      );
-      await admin.query(
-        'INSERT INTO organization_modules (id,"organizationId","moduleId",status,"updatedAt") SELECT id || \'_final\',\'org_final\',"moduleId",status,now() FROM organization_modules WHERE "organizationId"=\'org_demo\''
-      );
-      await admin.query(
-        "INSERT INTO organization_limits (id,\"organizationId\",key,value,\"updatedAt\") VALUES ('limit_final','org_final','pos.orders.monthly',100,now())"
-      );
-      await admin.query(
-        "INSERT INTO users (id,\"organizationId\",\"organizationRoleId\",name,email,password,role,department,title,\"updatedAt\") VALUES ('owner_final','org_final','role_final','Synthetic owner','owner@chaichowk.pk',$1,'ADMIN','ADMIN','Owner',now())",
-        [hashSync(randomBytes(32).toString('hex'), 10)]
-      );
-      for (const key of ['A', 'B']) {
-        await admin.query(
-          "INSERT INTO restaurant_branches (id,\"organizationId\",name,code,timezone,\"updatedAt\") VALUES ($1,'org_final','Synthetic branch',$2,'Asia/Karachi',now())",
-          [`branch_final_${key}`, `SYNTHETIC-FINAL-${key}`]
-        );
-        await admin.query(
-          'INSERT INTO restaurant_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES ($1,\'org_final\',$2,\'owner_final\',now())',
-          [`assignment_final_${key}`, `branch_final_${key}`]
-        );
-      }
-      await admin.query('COMMIT');
-      const results = await Promise.all(
-        ['A', 'B'].map(async (key) => {
-          const approved = {
-            ...target,
-            organizationId: 'org_final',
-            organizationSlug: 'synthetic-final',
-            ownerUserId: 'owner_final',
-            branchId: `branch_final_${key}`,
-            branchCode: `SYNTHETIC-FINAL-${key}`,
-          };
-          const path = join(root, `final-${key}.json`);
-          await writeFile(path, JSON.stringify(approved));
-          const result = await run(true, path, targetDigest(approved));
-          assert.equal(result.code, 0, result.output + result.diagnostics);
-          assert.equal(JSON.parse(result.output).mode, 'applied');
-          return JSON.parse(result.output);
-        })
-      );
-      assert.equal(
-        (
-          await admin.query(
-            'SELECT count(*)::int AS n FROM restaurant_staff_profiles WHERE "userId"=\'owner_final\''
-          )
-        ).rows[0].n,
-        1
-      );
-      assert.equal(
-        (
-          await admin.query(
-            'SELECT count(*)::int AS n FROM restaurant_print_jobs WHERE "organizationId"=\'org_final\''
-          )
-        ).rows[0].n,
-        0
-      );
-      assert.equal(
-        (
-          await admin.query(
-            "SELECT count(*)::int AS n FROM restaurant_event_outbox WHERE \"organizationId\"='org_final' AND status <> 'DEAD'"
-          )
-        ).rows[0].n,
-        0
-      );
-      const report = {
-        checks: [
-          'two concurrent first branch applications',
-          'exactly one owner actor',
-          'zero print intents',
-          'zero pending external outbox',
-        ],
-        results,
-      };
-      await writeFile(join(root, 'final-verification.json'), JSON.stringify(report, null, 2));
-      console.log(
-        JSON.stringify({ checks: report.checks, modes: results.map((result) => result.mode) })
-      );
-      return;
-    }
     const snapshot = async () => {
       const tables = (
         await admin.query(
@@ -286,6 +224,170 @@ async function main() {
       hash.update(JSON.stringify(sequences.rows));
       return hash.digest('hex');
     };
+    if (process.argv.includes('--billing-replay-check')) {
+      const before = await snapshot();
+      for (const key of ['A', 'B']) {
+        const path = join(root, `billing-${key}.json`);
+        const approved = JSON.parse(await readFile(path, 'utf8'));
+        for (const apply of [false, true]) {
+          const replay = await run(apply, path, targetDigest(approved));
+          assert.equal(replay.code, 0, replay.output + replay.diagnostics);
+          assert.equal(JSON.parse(replay.output).writes, 0);
+          assert.equal(JSON.parse(replay.output).counts.restaurantBill, 4);
+          assert.equal(await snapshot(), before);
+        }
+      }
+      console.log(
+        JSON.stringify({
+          checks: [
+            'both billing branches: dry-run and apply replay preserve all public rows/sequences, including bills and money idempotency',
+          ],
+        })
+      );
+      return;
+    }
+    if (process.argv.includes('--final-check') || process.argv.includes('--billing-check')) {
+      const billingCheck = process.argv.includes('--billing-check');
+      const suffix = billingCheck ? 'billing' : 'final';
+      const finalQuery = (sql: string, values?: unknown[]) =>
+        admin.query(
+          sql
+            .replaceAll('_final', `_${suffix}`)
+            .replaceAll('-final', `-${suffix}`)
+            .replaceAll('-FINAL', `-${suffix.toUpperCase()}`),
+          values?.map((value) =>
+            typeof value === 'string'
+              ? value
+                  .replaceAll('_final', `_${suffix}`)
+                  .replaceAll('-FINAL', `-${suffix.toUpperCase()}`)
+              : value
+          )
+        );
+      // Final source check on another synthetic tenant in the SAME owned DB.
+      // Two branch packages start with one existing owner and no actor profile.
+      await finalQuery('BEGIN');
+      await finalQuery(
+        "INSERT INTO organizations (id,slug,\"legalName\",\"displayName\",vertical,status,currency,timezone,\"updatedAt\") VALUES ('org_final','synthetic-final','Synthetic final','Synthetic final','RESTAURANT','ACTIVE','PKR','Asia/Karachi',now())"
+      );
+      await finalQuery(
+        "INSERT INTO organization_departments (id,\"organizationId\",key,name,\"updatedAt\") VALUES ('dept_final','org_final','ADMIN','Synthetic administration',now())"
+      );
+      await finalQuery(
+        "INSERT INTO organization_roles (id,\"organizationId\",key,name,\"updatedAt\") VALUES ('role_final','org_final','demo-owner','Synthetic role',now())"
+      );
+      await finalQuery(
+        "INSERT INTO organization_role_permissions (id,\"organizationId\",\"organizationRoleId\",capability,effect) SELECT id || '_final','org_final','role_final',capability,effect FROM organization_role_permissions WHERE \"organizationId\"='org_demo'"
+      );
+      await finalQuery(
+        'INSERT INTO organization_modules (id,"organizationId","moduleId",status,"updatedAt") SELECT id || \'_final\',\'org_final\',"moduleId",status,now() FROM organization_modules WHERE "organizationId"=\'org_demo\''
+      );
+      await finalQuery(
+        `INSERT INTO organization_limits (id,"organizationId",key,value,"updatedAt") SELECT id || '_final','org_final',key,value,now() FROM organization_limits WHERE "organizationId"='org_demo'`
+      );
+      await finalQuery(
+        "INSERT INTO users (id,\"organizationId\",\"organizationRoleId\",name,email,password,role,department,title,\"updatedAt\") VALUES ('owner_final','org_final','role_final','Synthetic owner','owner@chaichowk.pk',$1,'ADMIN','ADMIN','Owner',now())",
+        [hashSync(randomBytes(32).toString('hex'), 10)]
+      );
+      for (const key of ['A', 'B']) {
+        await finalQuery(
+          "INSERT INTO restaurant_branches (id,\"organizationId\",name,code,timezone,\"updatedAt\") VALUES ($1,'org_final','Synthetic branch',$2,'Asia/Karachi',now())",
+          [`branch_${suffix}_${key}`, `SYNTHETIC-${suffix.toUpperCase()}-${key}`]
+        );
+        await finalQuery(
+          'INSERT INTO restaurant_branch_assignments (id,"organizationId","branchId","userId","updatedAt") VALUES ($1,\'org_final\',$2,\'owner_final\',now())',
+          [`assignment_final_${key}`, `branch_${suffix}_${key}`]
+        );
+      }
+      if (billingCheck)
+        await finalQuery(
+          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ('perm_collect_final','org_final','role_final','payments:collect','ALLOW')`
+        );
+      await finalQuery('COMMIT');
+      const results = await Promise.all(
+        ['A', 'B'].map(async (key) => {
+          const approved = {
+            ...target,
+            organizationId: `org_${suffix}`,
+            organizationSlug: `synthetic-${suffix}`,
+            ownerUserId: `owner_${suffix}`,
+            branchId: `branch_${suffix}_${key}`,
+            branchCode: `SYNTHETIC-${suffix.toUpperCase()}-${key}`,
+          };
+          const path = join(root, `${suffix}-${key}.json`);
+          await writeFile(path, JSON.stringify(approved));
+          const result = await run(true, path, targetDigest(approved));
+          assert.equal(result.code, 0, result.output + result.diagnostics);
+          assert.equal(JSON.parse(result.output).mode, 'applied');
+          return JSON.parse(result.output);
+        })
+      );
+      assert.equal(
+        (
+          await finalQuery(
+            'SELECT count(*)::int AS n FROM restaurant_staff_profiles WHERE "userId"=\'owner_final\''
+          )
+        ).rows[0].n,
+        1
+      );
+      assert.equal(
+        (
+          await finalQuery(
+            'SELECT count(*)::int AS n FROM restaurant_print_jobs WHERE "organizationId"=\'org_final\''
+          )
+        ).rows[0].n,
+        0
+      );
+      assert.equal(
+        (
+          await finalQuery(
+            "SELECT count(*)::int AS n FROM restaurant_event_outbox WHERE \"organizationId\"='org_final' AND status <> 'DEAD'"
+          )
+        ).rows[0].n,
+        0
+      );
+      if (billingCheck) {
+        for (const result of results) assert.equal(result.counts.restaurantBill, 4);
+        const bills = (
+          await finalQuery(
+            `SELECT status, "splitKind", "grandTotal"::text AS total FROM restaurant_bills WHERE "organizationId"='org_final'`
+          )
+        ).rows;
+        assert.equal(bills.length, 8);
+        assert(bills.every((bill) => bill.status === 'OPEN'));
+        assert.equal(bills.filter((bill) => bill.splitKind === 'FRACTIONAL').length, 4);
+        assert.equal(
+          bills.reduce((sum, bill) => sum + Number(bill.total), 0),
+          1320
+        );
+        assert.equal(
+          (
+            await finalQuery(
+              `SELECT count(*)::int AS n FROM restaurant_tenders WHERE "organizationId"='org_final'`
+            )
+          ).rows[0].n,
+          0
+        );
+      }
+      const report = {
+        checks: [
+          ...(billingCheck
+            ? [
+                'eight OPEN bills reconcile to PKR 1320 across two branches; four fractional bills; zero tenders',
+              ]
+            : []),
+          'two concurrent first branch applications',
+          'exactly one owner actor',
+          'zero print intents',
+          'zero pending external outbox',
+        ],
+        results,
+      };
+      await writeFile(join(root, `${suffix}-verification.json`), JSON.stringify(report, null, 2));
+      console.log(
+        JSON.stringify({ checks: report.checks, modes: results.map((result) => result.mode) })
+      );
+      return;
+    }
     const preserved = async () =>
       createHash('sha256')
         .update(
@@ -370,6 +472,72 @@ async function main() {
     );
     assertions.push(
       'three KDS states; three stock balances of 1000; linked receipt; no pending outbox or print jobs'
+    );
+    const integrated = JSON.parse(applied.output);
+    assert.equal(integrated.counts.restaurantCateringOrder, 4);
+    assert.equal(integrated.counts.restaurantCateringDelivery, 3);
+    assert.equal(integrated.counts.restaurantCateringExtraCost, 16);
+    assert.equal(integrated.counts.restaurantShift, 4);
+    assert.equal(integrated.counts.restaurantSopOccurrence, 4);
+    assert.equal(integrated.counts.restaurantSopVerification, 1);
+    const receiptRow = (
+      await admin.query(
+        `SELECT * FROM audit_logs WHERE action='chaichowk.seed.v1' AND "targetId"='branch_demo'`
+      )
+    ).rows[0];
+    assert.equal(
+      receiptRow.metadata.rows.filter((row: { id: string }) => row.id.includes('_catering.'))
+        .length,
+      65
+    );
+    assert.equal(
+      receiptRow.metadata.rows.filter((row: { id: string }) => row.id.includes('_operations.'))
+        .length,
+      43
+    );
+    assertions.push(
+      'integrated Catering 65 rows and Operations 43 rows observed and receipt-tracked'
+    );
+    const cateringLine = (
+      await admin.query(
+        `SELECT * FROM restaurant_catering_order_lines WHERE "organizationId"='org_demo' LIMIT 1`
+      )
+    ).rows[0];
+    await admin.query(
+      `UPDATE restaurant_catering_order_lines SET description='Operator edited demo' WHERE id=$1`,
+      [cateringLine.id]
+    );
+    const driftBefore = await snapshot();
+    const drift = await run(true);
+    assert.equal(drift.code, 1);
+    assert(drift.diagnostics.includes('SEED_ROW_CHANGED'));
+    assert.equal(await snapshot(), driftBefore);
+    await admin.query(`UPDATE restaurant_catering_order_lines SET description=$2 WHERE id=$1`, [
+      cateringLine.id,
+      cateringLine.description,
+    ]);
+    await admin.query(`DELETE FROM restaurant_catering_order_lines WHERE id=$1`, [cateringLine.id]);
+    const missingBefore = await snapshot();
+    const missing = await run(true);
+    assert.equal(missing.code, 1);
+    assert(missing.diagnostics.includes('SEED_ROW_MISSING'));
+    assert.equal(await snapshot(), missingBefore);
+    await admin.query(
+      `INSERT INTO restaurant_catering_order_lines SELECT (json_populate_record(null::restaurant_catering_order_lines,$1::json)).*`,
+      [JSON.stringify(cateringLine)]
+    );
+    await admin.query(`DELETE FROM audit_logs WHERE id=$1`, [receiptRow.id]);
+    const receiptMissingBefore = await snapshot();
+    const receiptMissing = await run(true);
+    assert.equal(receiptMissing.code, 1);
+    assert(receiptMissing.diagnostics.includes('SEED_RECEIPT_INCOMPLETE'));
+    assert.equal(await snapshot(), receiptMissingBefore);
+    await admin.query(
+      `INSERT INTO audit_logs SELECT (json_populate_record(null::audit_logs,$1::json)).*`,
+      [JSON.stringify(receiptRow)]
+    );
+    assertions.push(
+      'changed/deleted helper row and missing receipt refuse with zero repair writes'
     );
     // New scenario branches in the SAME owned DB; no reset, new DB or seed-row deletion.
     for (const key of ['rollback', 'race-final']) {
