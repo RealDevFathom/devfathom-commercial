@@ -1,5 +1,53 @@
 # Chai Chowk LAN / staging seed package — WHA-1382
 
+## Timestamp-restoration review correction
+
+Reviewer comment `ff1e3e1c-75ff-4d08-a458-74d50636cfc5` found that the main
+verifier could exit0 after its deletion/restore probe yet leave one Catering line
+with shifted timestamps. pg interprets TIMESTAMP WITHOUT TIME ZONE as a local JS
+Date; converting that Date to JSON under Asia/Karachi moved the restored value by
+five hours. The runner correctly returned SEED_ROW_CHANGED on subsequent replay.
+The earlier verifier did not assert original-target replay after restoration;
+its successful exit was insufficient evidence of exact restoration.
+
+Source correction **`372e1e90d976942eb2deec1a50156332998b9c19`**, parent
+`c290be560e871b70ac3a776f90e85e4eb8633c05`, changes only the verifier
+(26 insertions, 8 deletions). Both Catering-line and audit-receipt snapshots now
+use PostgreSQL `row_to_json(t)::text`, passed unchanged to json_populate_record.
+No JS Date conversion, timestamp truncation, driver-global parser change or forced
+UTC process setting is used to mask the defect. The verifier additionally asserts
+complete row/sequence snapshot equality after restoration, then runs original-target
+default dry-run AND apply replay, checking zero writes and unchanged snapshots.
+The duplicate payments:collect correction in `9e38babb` remains intact.
+
+The source correction was committed before verification on one fresh owned
+PostgreSQL16 disposable cluster with all 106 unchanged migrations. Commands, in
+order on that same cluster:
+
+```sh
+TZ=Asia/Karachi CHAICHOWK_VERIFY_OWNED_DISPOSABLE=1 TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/verify-chaichowk-staging.ts
+TZ=Asia/Karachi CHAICHOWK_VERIFY_OWNED_DISPOSABLE=1 TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/verify-chaichowk-staging.ts --billing-check
+TZ=Asia/Karachi CHAICHOWK_VERIFY_OWNED_DISPOSABLE=1 TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/verify-chaichowk-staging.ts --billing-replay-check
+```
+
+All exit0. Main reports **11 passing assertions**, including post-restoration
+original-target dry-run/apply replay with all rows/sequences unchanged; observed
+227 fixtures plus two audit markers, Catering65 and Operations43. Runtime asserts
+NOSUPERUSER/NOBYPASSRLS and FORCE RLS. Billing still observes eight OPEN bills,
+PKR1320 total, four fractional bills, zero tenders/print intents/pending external
+outbox, exactly one shared owner actor. Both billing branches' dry-run/apply
+replays preserve all public rows and sequences. No database reinitialization or
+source correction occurred within this verification sequence.
+
+Scoped TypeScript on the verifier and actual imports, TypeScript ESLint, Prettier
+and diff checks exited0. No full app build/browser or repeat of unrelated unit
+tests. Scratch dependency resolution initially failed for the pinned
+@typescript-eslint/type-utils version; one forced metadata refresh succeeded at
+the same pinned versions. No repository dependency/lockfile changes. Owned DB
+stopped and temporary dependency symlink removed after checks. No LAN/Azure writes,
+runner/helper/product edits or live-writer recommendation; independent review and
+the existing financial/loyalty limitations remain outstanding.
+
 ## Exact-682 review correction and fresh verification
 
 Reviewer comment `8263f047-633a-40de-9d70-02725006f01b` identified SQLSTATE23505
