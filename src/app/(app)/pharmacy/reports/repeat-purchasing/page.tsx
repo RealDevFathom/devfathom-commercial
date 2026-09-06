@@ -43,7 +43,7 @@ export default async function RepeatPurchasingPage({
         ? 'Owner financial-report access, an enabled pharmacy reports module and an authorized active branch are required. Contact your workspace administrator.'
         : cause instanceof TRPCError && cause.code === 'BAD_REQUEST'
           ? 'Check the enrollment dates (maximum 90 days) and nonfuture ISO UTC cutoff, then apply again.'
-          : 'Report unavailable. The complete scope could not be read, or exceeds 10,000 receipts / 1,000 details per relation. Select fewer branches or retry; no partial rates are shown.';
+          : 'Report unavailable. The complete report could not be generated. Retry or select a single branch using the filters; no partial rates are shown.';
   }
   return (
     <main className="min-w-0 space-y-6">

@@ -1,6 +1,7 @@
 import { render, screen, cleanup } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { TRPCError } from '@trpc/server';
+import { renderToStaticMarkup } from 'react-dom/server';
 
 const mocks = vi.hoisted(() => ({ repeatPurchasing: vi.fn(), branches: vi.fn() }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn().mockResolvedValue({}) }));
@@ -74,6 +75,35 @@ describe('repeat purchasing page', () => {
       expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();
     }
   );
+  it.each([
+    'canceling statement due to statement timeout',
+    'Backend connection failed: internal-report-host',
+  ])('preserves filters and suppresses rates when report rejects: %s', async (message) => {
+    mocks.repeatPurchasing.mockRejectedValueOnce(new Error(message));
+    const query = {
+      asOf: '2026-05-01T00:00:00Z',
+      from: '2026-01-01',
+      to: '2026-01-31',
+      branch: 'b1',
+    };
+    const html = renderToStaticMarkup(await Page({ searchParams: Promise.resolve(query) }));
+    render(<div dangerouslySetInnerHTML={{ __html: html }} />);
+    const alert = screen.getByRole('alert');
+    expect(alert).toHaveTextContent('Report unavailable.');
+    expect(alert).toHaveTextContent('Retry or select a single branch');
+    expect(alert).toHaveTextContent('no partial rates are shown');
+    expect(alert).not.toHaveTextContent(/10,000 receipts|1,000 details|timeout|timed out/i);
+    expect(html).not.toContain(message);
+    expect(screen.getByLabelText('Enrollment from (UTC)')).toHaveValue(query.from);
+    expect(screen.getByLabelText('Enrollment through (UTC)')).toHaveValue(query.to);
+    expect(screen.getByLabelText('As-of cutoff (ISO UTC)')).toHaveValue(query.asOf);
+    expect(screen.getByLabelText('Selected authorized branches')).toHaveValue(query.branch);
+    expect(screen.getByRole('option', { name: 'Main' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Apply cohort window' })).toBeEnabled();
+    expect(screen.queryByText('Identity coverage')).not.toBeInTheDocument();
+    expect(screen.queryByText('Fully elapsed follow-up')).not.toBeInTheDocument();
+    expect(screen.queryByText(/\d+(?:\.\d+)?%/)).not.toBeInTheDocument();
+  });
   it('suppresses results if branch lookup fails', async () => {
     mocks.branches.mockRejectedValueOnce(new Error('Unavailable'));
     render(await Page({ searchParams: Promise.resolve({}) }));
