@@ -4,7 +4,7 @@
 import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
-// Unchanged support source: 5b00a056775fad283ed305e9e582effcc224b534.
+// Typecheck against immutable support 9691ab14 in the review union.
 import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
   PharmacyDemoResult } from '../scripts/pharmacy-demo-contract';
 import { packConversions } from '../src/lib/pharmacy/pack-conversion';
@@ -106,14 +106,15 @@ if (reviewRoot) {
     namespace: 'unused', businessDate: '2026-09-07', scenarioAt: at.toISOString(),
     timezone: 'Asia/Karachi', currency: 'PKR', actors: [], references: [], modules: [],
   };
-  const inventoryFacts = { ...context, namespace: 'demo:oracle', actorId: 'oracle-actor',
+  context.namespace = runner.targetNamespace({ ...context, environment: 'disposable', targetKey: 'oracle-only' });
+  const inventoryFacts = { ...context, actorId: 'oracle-actor',
     purchasingEntitled: false, organizationPurchaser: false,
     approvedCatalog: { medicineId: 'oracle-medicine', presentationId: 'oracle-presentation',
       packLevelId: 'oracle-pack', stockLocationId: 'oracle-location', canonicalUnitsPerPack: 10 },
     supplier: { id: 'oracle-supplier', authorized: false, licences: [] },
     orderedPacks: 10, listPricePerPackMinor: 1200 };
 
-  describe('delivered source characterization — NOT composed seed acceptance', () => {
+  describe('corrected namespace compatibility — NOT composed seed acceptance', () => {
     it('pins every consumed root/helper source blob to the review manifest', async () => {
       const manifest = JSON.parse(await readFile(`${reviewRoot}/../review-provenance.json`, 'utf8'));
       expect(Object.keys(manifest)).toHaveLength(9);
@@ -122,24 +123,80 @@ if (reviewRoot) {
         expect(actual).toBe((entry as { sha256: string }).sha256);
       }
       expect(manifest['scripts/seed-pharmacy-demo.ts'].commit)
-        .toBe('72ac8671086a4d7c46ab2075d80685bb50a508e4');
+        .toBe('9691ab142cf05b46cc6154d20302dc9e4cdbe4cf');
       expect(manifest['scripts/pharmacy-demo-contract.ts'].commit)
-        .toBe('5b00a056775fad283ed305e9e582effcc224b534');
+        .toBe('9691ab142cf05b46cc6154d20302dc9e4cdbe4cf');
+      for (const [lane, commit] of Object.entries({
+        inventory: 'a1daf1d97b4acf5ed6530a5f6f54a1e71fced1f9',
+        finance: 'bdd491b103ca8ef1dea415ab02a5f8216d7682c1',
+        retention: '0ec58027b33e68f71ad6c0dbf00a8f234992a80d',
+      })) expect(manifest[`scripts/pharmacy-demo-${lane}.ts`].commit).toBe(commit);
     });
 
-    it('records the actual root namespace incompatibility in all three delivered planners', () => {
+    it('accepts unchanged root namespace in all three actual planners', () => {
       const target = { environment: 'disposable', targetKey: 'oracle-only', ...context };
       const rootNamespace = runner.targetNamespace(target);
       expect(rootNamespace).toMatch(/^phdemo_[a-f0-9]{24}_$/);
       expect(runner.targetNamespace({ ...target, businessDate: '2026-09-08' })).toBe(rootNamespace);
       expect(runner.targetNamespace({ ...target, branchId: 'other' })).not.toBe(rootNamespace);
-      expect(inventory.planInventoryDemo({ ...inventoryFacts, namespace: rootNamespace }).unmet)
-        .toContain('INVALID_NAMESPACE');
-      expect(() => finance.planPharmacyDemoFinance({ ...context, namespace: rootNamespace }))
-        .toThrow('INVALID_DEMO_NAMESPACE');
-      expect(() => retention.planPharmacyDemoRetention({ ...context, namespace: rootNamespace }))
-        .toThrow('Use a bounded demo- namespace.');
-      // Characterizes an integration defect; this passing check is NOT acceptance.
+      const draft = inventory.planInventoryDemo({ ...inventoryFacts, namespace: rootNamespace });
+      expect(draft.unmet).not.toContain('INVALID_NAMESPACE');
+      expect(draft.dependencies.namespace).toBe(rootNamespace);
+      expect(draft.input.reference).toBe(`${rootNamespace}:inventory:po:v1`);
+      expect(draft.input).not.toHaveProperty('id');
+      const quotes = finance.planPharmacyDemoFinance(context, {
+        medicineId: 'oracle-medicine', presentationId: 'oracle-presentation',
+        inventoryLotId: 'oracle-lot', stockLocationId: 'oracle-location',
+        printedMrpMinor: 1200, unitsPerPack: 10,
+        units: [{ saleUnit: 'PACK', packLevelId: 'oracle-pack', canonicalUnitsPerSaleUnit: 10 }],
+      });
+      expect(quotes.namespace).toBe(rootNamespace);
+      expect(quotes.examples[0].ref).toBe(`${rootNamespace}:finance:pack`);
+      expect(quotes.records).toEqual([]);
+      const cases = retention.planPharmacyDemoRetention(context);
+      expect(cases.namespace).toBe(rootNamespace);
+      expect(cases.personas[0].ref).toBe(`${rootNamespace}:retention:repeat`);
+      expect(cases.records).toEqual([]);
+    });
+
+    it('refuses malformed namespaces and binds changed target identity without normalization', async () => {
+      for (const namespace of ['demo:oracle', context.namespace.toUpperCase(),
+        `${context.namespace}:inventory`, context.namespace.slice(0, -1), ` ${context.namespace}`]) {
+        expect(inventory.planInventoryDemo({ ...inventoryFacts, namespace }).unmet).toContain('INVALID_NAMESPACE');
+        expect(() => finance.planPharmacyDemoFinance({ ...context, namespace }))
+          .toThrow(namespace.startsWith(' ') ? 'INVALID_REFERENCE' : 'INVALID_DEMO_NAMESPACE');
+        expect(() => retention.planPharmacyDemoRetention({ ...context, namespace })).toThrow('canonical');
+      }
+      const changed = { ...context, branchId: 'oracle-other-branch' };
+      changed.namespace = runner.targetNamespace({ ...changed, environment: 'disposable', targetKey: 'oracle-only' });
+      expect(changed.namespace).not.toBe(context.namespace);
+      expect(inventory.planInventoryDemo({ ...inventoryFacts, ...changed }).hash)
+        .not.toBe(inventory.planInventoryDemo(inventoryFacts).hash);
+      expect(retention.planPharmacyDemoRetention(changed).digest)
+        .not.toBe(retention.planPharmacyDemoRetention(context).digest);
+      const original = finance.planPharmacyDemoFinance(context);
+      expect(await finance.executePharmacyDemoFinance(changed, undefined, original.digest))
+        .toEqual({ status: 'refused', unmetPrerequisites: ['PLAN_CHANGED'] });
+      expect(inventory.planInventoryDemo({ ...inventoryFacts, organizationId: '' }).unmet)
+        .toContain('EXISTING_TARGET_REFERENCES_REQUIRED');
+      expect(() => finance.planPharmacyDemoFinance({ ...context, organizationId: '' })).toThrow('INVALID_REFERENCE');
+      expect(() => retention.planPharmacyDemoRetention({ ...context, organizationId: '' })).toThrow('target IDs');
+    });
+
+    it('keeps planned business references distinct from observed database IDs', () => {
+      const plan: DemoPlannedRecord = { key: `${context.namespace}:po`, model: 'PharmacyPurchaseOrder',
+        reference: `${context.namespace}:inventory:po:v1`, expectedHash: 'a'.repeat(64),
+        expectedFacts: { status: 'DRAFT', grossMinor: 12000 } };
+      const observed = { planKey: plan.key, model: plan.model, persistedId: 'service-generated-id',
+        receiptReference: `${context.namespace}:receipt`, observedHash: plan.expectedHash,
+        observedFacts: { ...plan.expectedFacts } };
+      expect(runner.validateObservedMapping(plan, observed)).toEqual(observed);
+      expect(observed.persistedId).not.toBe(plan.reference);
+      expect(() => runner.validateObservedMapping(plan, { ...observed, planKey: 'other' }))
+        .toThrow('OBSERVED_PLAN_MISMATCH');
+      expect(() => runner.validateObservedMapping(plan, { ...observed, observedFacts: { grossMinor: 1 } }))
+        .toThrow('OBSERVED_FACTS_MISMATCH');
+      // Supplied observations only: no service call or persisted receipt proven.
     });
 
     it('root produces zero records/writes and refuses apply despite valid synthetic JSON', async () => {
@@ -189,7 +246,7 @@ if (reviewRoot) {
           journalInspection: 'JOURNAL_ARITHMETIC_ONLY', rows: [row] });
       expect(() => finance.inspectPharmacyDemoJournalArithmetic(
         [{ ...row, grossMarginMinor: 1621 }], [row.key])).toThrow('JOURNAL_MARGIN_MISMATCH');
-      const input = { ...context, namespace: 'pharmacy-demo:oracle' };
+      const input = { ...context };
       const plan = finance.planPharmacyDemoFinance(input);
       expect(plan.records).toEqual([]);
       expect(plan.examples).toEqual([]);
@@ -198,7 +255,7 @@ if (reviewRoot) {
     });
 
     it('retention cases reconcile through the real pure report but cannot seed receipts', async () => {
-      const input = { ...context, namespace: 'demo-oracle' };
+      const input = { ...context };
       const plan = retention.planPharmacyDemoRetention(input);
       expect(plan.records).toEqual([]);
       expect(plan.expectedReceipts).toHaveLength(14);
@@ -279,10 +336,10 @@ describe('PH-DEMO contract envelope oracle (synthetic input, no helper execution
     expect(['inventory', 'finance', 'retention']).toContain(plan.lane);
     expect(plan.digest.trim().length).toBeGreaterThan(0);
     expect(plan.records.length).toBeLessThanOrEqual(100);
-    expect(new Set(plan.records.map(r => r.id)).size).toBe(plan.records.length);
+    expect(new Set(plan.records.map(r => r.reference)).size).toBe(plan.records.length);
     expect(new Set(plan.records.map(r => r.key)).size).toBe(plan.records.length);
     for (const record of plan.records) {
-      expect(record.id.startsWith(`${context.namespace}:`)).toBe(true);
+      expect(record.reference.startsWith(`${context.namespace}:`)).toBe(true);
       expect(record.key.startsWith(`${context.namespace}:`)).toBe(true);
       expect(record.expectedHash.trim().length).toBeGreaterThan(0);
     }
@@ -293,7 +350,7 @@ describe('PH-DEMO contract envelope oracle (synthetic input, no helper execution
     }
   }
   const record: DemoPlannedRecord = {
-    id: `${namespace}:receipt`, key: `${namespace}:receipt`, model: 'oracle-only',
+    reference: `${namespace}:receipt`, key: `${namespace}:receipt`, model: 'oracle-only',
     expectedHash: 'opaque-oracle-hash-not-helper-evidence',
     expectedFacts: { available: 115, quarantine: 5, outside: -120 },
   };
@@ -311,12 +368,12 @@ describe('PH-DEMO contract envelope oracle (synthetic input, no helper execution
   });
   it('rejects cross-namespace records, duplicate identities and overlarge plans', () => {
     expect(() => assertEnvelope({ ...plan, namespace: 'different-target' })).toThrow();
-    expect(() => assertEnvelope({ ...plan, records: [{ ...record, id: 'legitimate-row' }] })).toThrow();
+    expect(() => assertEnvelope({ ...plan, records: [{ ...record, reference: 'legitimate-row' }] })).toThrow();
     expect(() => assertEnvelope({ ...plan, records: [{ ...record, key: 'other-target:key' }] })).toThrow();
     expect(() => assertEnvelope({ ...plan, records: [record, { ...record, key: `${namespace}:other` }] })).toThrow();
-    expect(() => assertEnvelope({ ...plan, records: [record, { ...record, id: `${namespace}:other` }] })).toThrow();
+    expect(() => assertEnvelope({ ...plan, records: [record, { ...record, reference: `${namespace}:other` }] })).toThrow();
     expect(() => assertEnvelope({ ...plan, records: Array.from({ length: 101 }, (_, i) => ({
-      ...record, id: `${namespace}:${i}`, key: `${namespace}:${i}`,
+      ...record, reference: `${namespace}:${i}`, key: `${namespace}:${i}`,
     })) })).toThrow();
   });
 });
