@@ -92,7 +92,14 @@ export type PharmacyDemoEvidence = {
     branchActive: true;
     currency: 'PKR';
     timezone: string;
-    owners: { userId: string; email: 'owner@chaichowk.pk'; active: true; role: 'ADMIN'; branchIds: string[]; capabilities: string[] }[];
+    owners: {
+      userId: string;
+      email: 'owner@chaichowk.pk';
+      active: true;
+      role: 'ADMIN';
+      branchIds: string[];
+      capabilities: string[];
+    }[];
     runtimeRole: { superuser: false; bypassRls: false; forceRls: true };
     schemaSha256: string;
     migrationsSha256: string;
