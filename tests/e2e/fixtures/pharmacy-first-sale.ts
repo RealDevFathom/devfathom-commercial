@@ -206,6 +206,12 @@ async function noRawIdEntry(page: Page) {
   ).toEqual([]);
 }
 
+/** Full accessible link name used by the shared readiness renderer. */
+export function pharmacyChecklistLinkName(gate: string, link: string): RegExp {
+  const escape = (value: string) => value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  return new RegExp(`^${escape(link)}\\s*—\\s*${escape(gate)}$`);
+}
+
 export async function freshPharmacyFirstSale(
   page: Page,
   browser: Browser,
@@ -247,7 +253,11 @@ export async function freshPharmacyFirstSale(
       .getByRole('listitem')
       .filter({ hasText: label });
   const follow = async (actor: Page, gate: string, link: string) => {
-    await click(row(actor, gate).getByRole('link', { name: link, exact: true }));
+    const target = row(actor, gate).getByRole('link', {
+      name: pharmacyChecklistLinkName(gate, link),
+    });
+    await expect(target).toHaveCount(1);
+    await click(target);
     await noRawIdEntry(actor);
   };
   const formFor = (actor: Page, submit: string) =>
