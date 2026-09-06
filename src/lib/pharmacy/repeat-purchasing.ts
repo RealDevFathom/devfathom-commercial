@@ -1,14 +1,14 @@
 import 'server-only';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const DAY = 86_400_000;
-export const REPEAT_SCAN_LIMIT = 10_000;
-const DETAIL_LIMIT = 1_000;
+const QUERY_TIMEOUT_MS = 10_000;
 export const REPEAT_DEFINITION =
   'First observed qualifying original completed receipt across all available data in selected authorized branches; not first-ever customers. Enrollment dates are inclusive UTC days, clipped at the frozen as-of instant. Follow-up uses elapsed 24-hour days; a repeat is a distinct receipt strictly later than first observation, at or before the horizon boundary.';
 export const REPEAT_LIMITS =
-  'Qualification requires a receipt number, completion timestamp, positive original line value and remaining original units after posted returns, with posted refunds below original line value, all as of cutoff. Partial reversals can qualify. Returns and refunds have no direct matching link: these are independent exclusion tests, not a reconciled net-revenue measure. Current sale status and commercial identity are used; past status/identity changes cannot be reconstructed. Data start, missing receipts, ingestion delays, outages and off-system purchases are unknown; elapsed follow-up does not prove complete observation. No adherence, competitor churn or uplift inference. Anonymous receipts remain in coverage totals, outside person rates. Interactive scans fail explicitly above 10,000 receipts or 1,000 details per relation; no truncated rates.';
+  'Qualification requires a receipt number, completion timestamp, positive original line value and remaining original units after posted returns, with posted refunds below original line value, all as of cutoff. Partial reversals can qualify. Returns and refunds have no direct matching link: these are independent exclusion tests, not a reconciled net-revenue measure. Current sale status and commercial identity are used; past status/identity changes cannot be reconstructed. Data start, missing receipts, ingestion delays, outages and off-system purchases are unknown; elapsed follow-up does not prove complete observation. No adherence, competitor churn or uplift inference. Anonymous receipts remain in coverage totals, outside person rates. All available selected history is aggregated in the database; receipt and detail counts are not truncated. Reports exceeding the 10-second database execution budget fail without partial rates. Large branch or chain histories may still exceed this budget; narrower enrollment dates do not reduce the history required.';
 
 export type RepeatFilters = { branchIds: string[]; from: string; to: string; asOf: string };
 export function validateRepeatFilters(input: RepeatFilters, now = new Date()) {
@@ -68,6 +68,7 @@ const distinct = <T extends { id: string }>(rows: T[]) => [
   ...new Map(rows.map((row) => [row.id, row])).values(),
 ];
 
+/** Pure reference for focused semantic tests; production reads aggregate in PostgreSQL. */
 export function summarizeRepeatPurchasing(
   rows: RepeatReceipt[],
   organizationId: string,
@@ -75,10 +76,6 @@ export function summarizeRepeatPurchasing(
   now = new Date()
 ) {
   const { from, toExclusive, asOf } = validateRepeatFilters(input, now);
-  if (rows.length > REPEAT_SCAN_LIMIT)
-    throw new Error(
-      'Repeat report unavailable: receipt scan limit exceeded. Select fewer authorized branches; no partial rates were calculated.'
-    );
   const selected = distinct(rows).filter(
     (s) =>
       s.organizationId === organizationId &&
@@ -112,14 +109,6 @@ export function summarizeRepeatPurchasing(
       if (enrolledReceipt) excludedPurchases++;
       continue;
     }
-    if (
-      sale.lines.length > DETAIL_LIMIT ||
-      sale.refunds.length > DETAIL_LIMIT ||
-      sale.lines.some((l) => l.returnLines.length > DETAIL_LIMIT)
-    )
-      throw new Error(
-        'Repeat report unavailable: receipt detail limit exceeded. No partial rates were calculated.'
-      );
     const lines = distinct(sale.lines).filter((l) => l.createdAt <= asOf);
     const gross = lines.reduce(
       (sum, l) => sum + l.quantity * l.unitPriceMinor - l.discountMinor,
@@ -199,60 +188,146 @@ export async function readRepeatPurchasing(
   organizationId: string,
   input: RepeatFilters
 ) {
-  const { asOf } = validateRepeatFilters(input);
-  // ponytail: fail closed at explicit interactive limits; move aggregation to SQL if larger scopes are required.
-  const rows = await db.pharmacySale.findMany({
-    where: {
-      organizationId,
-      branchId: { in: input.branchIds },
-      status: 'COMPLETED',
-      originalSaleId: null,
-      createdAt: { lte: asOf },
-      OR: [{ completedAt: null }, { completedAt: { lte: asOf } }],
-    },
-    take: REPEAT_SCAN_LIMIT + 1,
-    select: {
-      id: true,
-      organizationId: true,
-      branchId: true,
-      status: true,
-      originalSaleId: true,
-      customerId: true,
-      completedAt: true,
-      receiptNumber: true,
-      createdAt: true,
-      lines: {
-        take: DETAIL_LIMIT + 1,
-        select: {
-          id: true,
-          quantity: true,
-          unitPriceMinor: true,
-          discountMinor: true,
-          canonicalUnits: true,
-          createdAt: true,
-          returnLines: {
-            take: DETAIL_LIMIT + 1,
-            where: {
-              organizationId,
-              branchId: { in: input.branchIds },
-              createdAt: { lte: asOf },
-              saleReturn: { createdAt: { lte: asOf } },
-            },
-            select: {
-              id: true,
-              canonicalUnits: true,
-              createdAt: true,
-              saleReturn: { select: { createdAt: true } },
-            },
-          },
-        },
-      },
-      refunds: {
-        take: DETAIL_LIMIT + 1,
-        where: { organizationId, branchId: { in: input.branchIds }, createdAt: { lte: asOf } },
-        select: { id: true, amountMinor: true, createdAt: true },
-      },
-    },
+  const { from, toExclusive, asOf } = validateRepeatFilters(input);
+  const branches = Prisma.join(input.branchIds);
+  // Match String.trim() for identity presence, without changing identity grouping.
+  const whitespace =
+    ' \t\n\r\f\v\u00a0\u1680\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200a\u2028\u2029\u202f\u205f\u3000\ufeff';
+  type Aggregate = {
+    earliestObservedAt: Date | null;
+    completedReceipts: bigint;
+    identifiedReceipts: bigint;
+    missingTimestamp: bigint;
+    missingReceipt: bigint;
+    excludedPurchases: bigint;
+    firstObservedBeforeEnrollment: bigint;
+    enrolledCustomers: bigint;
+    days: number;
+    eligible: bigint;
+    repeated: bigint;
+  };
+  // ponytail: one snapshot, no nested Prisma payloads or lifetime receipt cap.
+  // All relation fan-out stays in PostgreSQL; exactly three scalar rows leave it.
+  const rows = await db.$transaction(async (tx) => {
+    const [previous] = await tx.$queryRaw<{ timeout: string }[]>`
+      SELECT current_setting('statement_timeout') AS timeout`;
+    // Respect any stricter caller budget, then restore it after a successful read.
+    await tx.$queryRaw(Prisma.sql`
+      SELECT set_config('statement_timeout',
+        CASE WHEN current_setting('statement_timeout')::interval > interval '0'
+          AND current_setting('statement_timeout')::interval < interval '10 seconds'
+          THEN current_setting('statement_timeout') ELSE ${String(QUERY_TIMEOUT_MS)} END, true)`);
+    const result = await tx.$queryRaw<Aggregate[]>(Prisma.sql`
+      WITH originals AS MATERIALIZED (
+        SELECT s.id, s."organizationId", s."branchId", s."customerId", s."completedAt", s."receiptNumber",
+          COALESCE(length(btrim(s."customerId", ${whitespace})) > 0, false) AS identified,
+          s."completedAt" >= ${from} AND s."completedAt" < ${toExclusive} AS enrolled
+        FROM pharmacy_sales s
+        WHERE s."organizationId" = ${organizationId} AND s."branchId" IN (${branches})
+          AND s.status = 'COMPLETED' AND s."originalSaleId" IS NULL
+          AND s."createdAt" <= ${asOf} AND (s."completedAt" IS NULL OR s."completedAt" <= ${asOf})
+      ), eligible_originals AS MATERIALIZED (
+        SELECT * FROM originals WHERE "completedAt" IS NOT NULL AND "receiptNumber" IS NOT NULL
+      ), lines AS MATERIALIZED (
+        SELECT l.id, l."saleId", l."organizationId", l."branchId", l."canonicalUnits",
+          l.quantity::numeric * l."unitPriceMinor" - l."discountMinor" AS gross
+        FROM pharmacy_sale_lines l JOIN eligible_originals s
+          ON s.id = l."saleId" AND s."organizationId" = l."organizationId" AND s."branchId" = l."branchId"
+        WHERE l."organizationId" = ${organizationId} AND l."branchId" IN (${branches}) AND l."createdAt" <= ${asOf}
+      ), returned AS (
+        SELECT l.id, sum(r."canonicalUnits"::numeric) AS units
+        FROM lines l JOIN pharmacy_sale_return_lines r
+          ON r."saleLineId" = l.id AND r."organizationId" = l."organizationId" AND r."branchId" = l."branchId"
+        JOIN pharmacy_sale_returns h ON h.id = r."returnId" AND h."organizationId" = r."organizationId"
+          AND h."branchId" = r."branchId" AND h."originalSaleId" = l."saleId"
+        WHERE r."organizationId" = ${organizationId} AND r."branchId" IN (${branches}) AND r."createdAt" <= ${asOf}
+          AND h."organizationId" = ${organizationId} AND h."branchId" IN (${branches}) AND h."createdAt" <= ${asOf}
+        GROUP BY l.id
+      ), line_totals AS (
+        SELECT l."saleId", sum(l.gross) AS gross,
+          sum(greatest(0, l."canonicalUnits" - coalesce(r.units, 0))) AS units
+        FROM lines l LEFT JOIN returned r ON r.id = l.id GROUP BY l."saleId"
+      ), refunded AS (
+        SELECT s.id, sum(r."amountMinor"::numeric) AS amount
+        FROM eligible_originals s JOIN pharmacy_refunds r
+          ON r."saleId" = s.id AND r."organizationId" = s."organizationId" AND r."branchId" = s."branchId"
+        WHERE r."organizationId" = ${organizationId} AND r."branchId" IN (${branches}) AND r."createdAt" <= ${asOf}
+        GROUP BY s.id
+      ), qualified AS (
+        SELECT s.id FROM eligible_originals s JOIN line_totals l ON l."saleId" = s.id
+        LEFT JOIN refunded r ON r.id = s.id
+        WHERE l.gross > 0 AND l.units > 0 AND coalesce(r.amount, 0) < l.gross
+      ), purchases AS (
+        SELECT s."customerId", s."completedAt",
+          dense_rank() OVER (PARTITION BY s."customerId" ORDER BY s."completedAt") AS observation
+        FROM originals s JOIN qualified q ON q.id = s.id WHERE s.identified
+      ), people AS (
+        SELECT "customerId", min("completedAt") AS first,
+          min("completedAt") FILTER (WHERE observation = 2) AS repeat
+        FROM purchases GROUP BY "customerId"
+      ), coverage AS (
+        SELECT min(s."completedAt") AS "earliestObservedAt",
+          count(*) FILTER (WHERE s.enrolled) AS "completedReceipts",
+          count(*) FILTER (WHERE s.enrolled AND s.identified) AS "identifiedReceipts",
+          count(*) FILTER (WHERE s."completedAt" IS NULL) AS "missingTimestamp",
+          count(*) FILTER (WHERE s."completedAt" IS NOT NULL AND s."receiptNumber" IS NULL) AS "missingReceipt",
+          count(*) FILTER (WHERE s.enrolled AND q.id IS NULL) AS "excludedPurchases"
+        FROM originals s LEFT JOIN qualified q ON q.id = s.id
+      ), cohorts AS (
+        SELECT count(*) FILTER (WHERE first < ${from}) AS "firstObservedBeforeEnrollment",
+          count(*) FILTER (WHERE first >= ${from} AND first < ${toExclusive}) AS "enrolledCustomers"
+        FROM people
+      ), horizons AS (
+        SELECT h.days,
+          count(*) FILTER (WHERE p.first + h.days * interval '24 hours' <= ${asOf}) AS eligible,
+          count(*) FILTER (WHERE p.first + h.days * interval '24 hours' <= ${asOf}
+            AND p.repeat <= p.first + h.days * interval '24 hours') AS repeated
+        FROM (VALUES (30), (60), (90)) h(days)
+        LEFT JOIN people p ON p.first >= ${from} AND p.first < ${toExclusive}
+        GROUP BY h.days
+      )
+      SELECT * FROM coverage CROSS JOIN cohorts CROSS JOIN horizons ORDER BY days
+    `);
+    await tx.$queryRaw`SELECT set_config('statement_timeout', ${previous.timeout}, true)`;
+    return result;
   });
-  return summarizeRepeatPurchasing(rows, organizationId, input);
+  if (rows.length !== 3) throw new Error('Repeat report unavailable: incomplete aggregate result.');
+  const count = (value: bigint) => {
+    const result = Number(value);
+    if (!Number.isSafeInteger(result) || result < 0)
+      throw new Error('Repeat report unavailable: aggregate count exceeds safe response limits.');
+    return result;
+  };
+  const totals = rows[0];
+  const completedReceipts = count(totals.completedReceipts);
+  const identifiedReceipts = count(totals.identifiedReceipts);
+  const enrolledCustomers = count(totals.enrolledCustomers);
+  return {
+    from: input.from,
+    to: input.to,
+    asOf: asOf.toISOString(),
+    earliestObservedAt: totals.earliestObservedAt?.toISOString() ?? null,
+    completedReceipts,
+    identifiedReceipts,
+    anonymousReceipts: completedReceipts - identifiedReceipts,
+    identificationCoveragePercent: completedReceipts
+      ? (identifiedReceipts / completedReceipts) * 100
+      : null,
+    missingTimestamp: count(totals.missingTimestamp),
+    missingReceipt: count(totals.missingReceipt),
+    excludedPurchases: count(totals.excludedPurchases),
+    firstObservedBeforeEnrollment: count(totals.firstObservedBeforeEnrollment),
+    enrolledCustomers,
+    horizons: rows.map((row) => {
+      const eligible = count(row.eligible);
+      const repeated = count(row.repeated);
+      return {
+        days: row.days,
+        eligible,
+        repeated,
+        immature: enrolledCustomers - eligible,
+        ratePercent: eligible ? (repeated / eligible) * 100 : null,
+      };
+    }),
+  };
 }

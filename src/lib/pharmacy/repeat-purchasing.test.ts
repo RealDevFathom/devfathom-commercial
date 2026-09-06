@@ -2,7 +2,6 @@ import { describe, expect, it, vi } from 'vitest';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   readRepeatPurchasing,
-  REPEAT_SCAN_LIMIT,
   summarizeRepeatPurchasing,
   validateRepeatFilters,
   type RepeatReceipt,
@@ -160,13 +159,12 @@ describe('first-observed repeat-purchase cohorts', () => {
     a.refunds = [{ id: 'f', amountMinor: 100, createdAt: at(10) }];
     expect(summarize([a, receipt('b', 20)]).horizons[0].repeated).toBe(1);
   });
-  it('fails closed instead of reporting a capped denominator', () => {
-    expect(() => summarize(Array(REPEAT_SCAN_LIMIT + 1).fill(receipt('a', 0)))).toThrow(
-      'scan limit exceeded'
-    );
-    const a = receipt('a', 0);
-    a.lines = Array(1001).fill(a.lines[0]);
-    expect(() => summarize([a])).toThrow('detail limit exceeded');
+  it('keeps complete history and deduplicates details in the reference summary', () => {
+    const old = receipt('old', -1);
+    old.lines = Array(1201).fill(old.lines[0]);
+    expect(
+      summarize([...Array(10001).fill(old), receipt('new', 0)]).firstObservedBeforeEnrollment
+    ).toBe(1);
   });
   it.each([
     { from: '2026-02-30' },
@@ -190,22 +188,76 @@ describe('first-observed repeat-purchase cohorts', () => {
     ])
       expect(report).not.toContain(value);
   });
-  it('reads only tenant-selected originals without an enrollment lower bound or tenders/clinical joins', async () => {
-    const findMany = vi.fn().mockResolvedValue([receipt('a', 0)]);
-    await readRepeatPurchasing(
-      { pharmacySale: { findMany } } as unknown as ScopedDb,
-      'org',
-      filters
+  it('parameterizes tenant/scope and returns fixed aggregate horizons', async () => {
+    const queryRaw = vi
+      .fn()
+      .mockResolvedValueOnce([{ timeout: '0' }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(aggregateRows())
+      .mockResolvedValueOnce([]);
+    const result = await readRepeatPurchasing(mockDb(queryRaw), 'org', filters);
+    expect(result).toEqual(summarize([receipt('a', 0)]));
+    const sql = queryRaw.mock.calls[2][0];
+    expect(sql.values).toEqual(expect.arrayContaining(['org', 'b1', 'b2']));
+    expect(sql.text).toContain('WITH originals AS MATERIALIZED');
+    expect(sql.text).not.toMatch(/patient|medicine|tenders|phone|displayName/);
+    expect(queryRaw.mock.calls[3][1]).toBe('0');
+  });
+  it.each(['database error', 'canceling statement due to statement timeout'])(
+    'propagates %s without zero rates',
+    async (message) => {
+      const queryRaw = vi
+        .fn()
+        .mockResolvedValueOnce([{ timeout: '0' }])
+        .mockResolvedValueOnce([])
+        .mockRejectedValueOnce(new Error(message));
+      await expect(readRepeatPurchasing(mockDb(queryRaw), 'org', filters)).rejects.toThrow(message);
+    }
+  );
+  it.each(
+    [
+      [],
+      aggregateRows().slice(0, 2),
+      aggregateRows().map((row) => ({ ...row, eligible: BigInt('9007199254740992') })),
+    ].map((rows) => ({ rows }))
+  )('rejects incomplete or unsafe aggregate counts', async ({ rows }) => {
+    const queryRaw = vi
+      .fn()
+      .mockResolvedValueOnce([{ timeout: '0' }])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce(rows)
+      .mockResolvedValueOnce([]);
+    await expect(readRepeatPurchasing(mockDb(queryRaw), 'org', filters)).rejects.toThrow(
+      'Repeat report unavailable'
     );
-    const args = findMany.mock.calls[0][0];
-    expect(args.where).toMatchObject({
-      organizationId: 'org',
-      branchId: { in: ['b1', 'b2'] },
-      status: 'COMPLETED',
-      originalSaleId: null,
-    });
-    expect(args.where.completedAt).toBeUndefined();
-    expect(args.take).toBe(REPEAT_SCAN_LIMIT + 1);
-    expect(JSON.stringify(args.select)).not.toMatch(/patient|medicine|tenders|phone|displayName/);
+  });
+  it('rejects invalid dates before starting database work', async () => {
+    const queryRaw = vi.fn();
+    await expect(
+      readRepeatPurchasing(mockDb(queryRaw), 'org', { ...filters, asOf: 'invalid' })
+    ).rejects.toThrow('valid UTC');
+    expect(queryRaw).not.toHaveBeenCalled();
   });
 });
+
+function aggregateRows() {
+  return [30, 60, 90].map((days) => ({
+    earliestObservedAt: at(0),
+    completedReceipts: BigInt(1),
+    identifiedReceipts: BigInt(1),
+    missingTimestamp: BigInt(0),
+    missingReceipt: BigInt(0),
+    excludedPurchases: BigInt(0),
+    firstObservedBeforeEnrollment: BigInt(0),
+    enrolledCustomers: BigInt(1),
+    days,
+    eligible: BigInt(1),
+    repeated: BigInt(0),
+  }));
+}
+function mockDb(queryRaw: ReturnType<typeof vi.fn>): ScopedDb {
+  const tx = { $queryRaw: queryRaw };
+  return {
+    $transaction: (run: (db: typeof tx) => Promise<unknown>) => run(tx),
+  } as unknown as ScopedDb;
+}

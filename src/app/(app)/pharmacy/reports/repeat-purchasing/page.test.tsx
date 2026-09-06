@@ -30,6 +30,8 @@ describe('repeat purchasing page', () => {
     expect(screen.getAllByText('Unavailable')).toHaveLength(4);
     expect(screen.getByText(/No identified customers first observed/)).toBeInTheDocument();
     expect(screen.getByText(/off-system purchases are unknown/)).toBeInTheDocument();
+    expect(screen.getByText(/10-second database execution budget/)).toBeInTheDocument();
+    expect(screen.queryByText(/above 10,000 receipts/)).not.toBeInTheDocument();
     expect(screen.getByLabelText('Enrollment from (UTC)')).toBeRequired();
   });
   it('preserves frozen cutoff and selected scope on submission', async () => {
