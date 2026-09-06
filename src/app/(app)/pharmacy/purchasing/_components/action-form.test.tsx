@@ -1,8 +1,13 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
-import { afterEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToString } from 'react-dom/server';
 import { PurchasingActionForm } from './action-form';
 
+const router = vi.hoisted(() => ({ refresh: vi.fn() }));
+vi.mock('next/navigation', () => ({ useRouter: () => router }));
+beforeEach(() => {
+  router.refresh.mockReset();
+});
 afterEach(() => vi.unstubAllGlobals());
 
 function setup(action: (form: FormData) => Promise<string>) {
@@ -20,7 +25,7 @@ function setup(action: (form: FormData) => Promise<string>) {
 }
 
 describe('purchasing outcome delivery', () => {
-  it('navigates explicitly with success notice and selection intact', async () => {
+  it('shows success and refreshes the current selection without document navigation', async () => {
     const destination =
       '/pharmacy/purchasing/orders?kind=success&outcome=committed&notice=Outcome&branch=b1&order=o1';
     const action = vi.fn().mockResolvedValue(destination);
@@ -28,7 +33,9 @@ describe('purchasing outcome delivery', () => {
     await act(async () => {
       fireEvent.click(screen.getByRole('button'));
     });
-    expect(replace).toHaveBeenCalledWith(`https://workspace.test${destination}`);
+    expect(replace).not.toHaveBeenCalled();
+    expect(router.refresh).toHaveBeenCalledOnce();
+    expect(screen.getByRole('status')).toHaveTextContent('Outcome');
     expect(action.mock.calls[0][0].get('reference')).toBe('PO-1');
     expect(action.mock.calls[0][0].get('decision')).toBe('approve');
   });
@@ -58,7 +65,8 @@ describe('purchasing outcome delivery', () => {
     });
     expect(action).toHaveBeenCalledTimes(2);
     expect(action.mock.calls[1][0].get('reference')).toBe('CORRECTED-PO');
-    expect(replace).toHaveBeenCalledOnce();
+    expect(replace).not.toHaveBeenCalled();
+    expect(router.refresh).toHaveBeenCalledOnce();
     expect(input).not.toHaveAttribute('aria-invalid');
   });
 
@@ -123,7 +131,8 @@ describe('purchasing outcome delivery', () => {
     expect(screen.getByRole('button')).toBeDisabled();
     expect(screen.getByRole('status')).toHaveTextContent('Saving');
     await act(async () => resolve('/pharmacy/purchasing/orders?kind=success&outcome=committed'));
-    expect(replace).toHaveBeenCalledTimes(1);
+    expect(replace).not.toHaveBeenCalled();
+    expect(router.refresh).toHaveBeenCalledTimes(1);
     fireEvent.submit(form);
     expect(action).toHaveBeenCalledTimes(1);
   });
@@ -167,5 +176,87 @@ it.each([
     fireEvent.submit(form);
   });
   expect(action).toHaveBeenCalledTimes(1);
+  expect(replace).not.toHaveBeenCalled();
+});
+
+it('preserves sibling drafts, selection and focus while refreshing committed data', async () => {
+  let complete!: (value: string) => void;
+  const action = vi.fn(
+    () =>
+      new Promise<string>((resolve) => {
+        complete = resolve;
+      })
+  );
+  function Workspace({ count }: { count: number }) {
+    return (
+      <>
+        <p>Records: {count}</p>
+        <PurchasingActionForm action={action}>
+          <button>Save record</button>
+        </PurchasingActionForm>
+        <PurchasingActionForm action={vi.fn()}>
+          <input aria-label="Sibling draft" name="draft" defaultValue="Original" />
+          <select aria-label="Sibling supplier" name="supplier" defaultValue="a">
+            <option value="a">A</option>
+            <option value="b">B</option>
+          </select>
+        </PurchasingActionForm>
+      </>
+    );
+  }
+  const view = render(<Workspace count={0} />);
+  // Model the boundary that destroys browser drafts: a new document remounts defaults.
+  const replace = vi.fn(() => view.rerender(<Workspace key="new-document" count={1} />));
+  const location = {
+    origin: 'https://workspace.test',
+    href: 'https://workspace.test/pharmacy/purchasing/orders?branch=b1&po=existing',
+    replace,
+  };
+  vi.stubGlobal('window', { document, location });
+  router.refresh.mockImplementation(() => view.rerender(<Workspace count={1} />));
+  fireEvent.click(screen.getByRole('button', { name: 'Save record' }));
+  fireEvent.change(screen.getByLabelText('Sibling supplier'), { target: { value: 'b' } });
+  const draft = screen.getByLabelText('Sibling draft') as HTMLInputElement;
+  fireEvent.change(draft, { target: { value: 'Unsaved sibling text' } });
+  draft.focus();
+  draft.setSelectionRange(2, 7);
+  await act(async () => {
+    complete(
+      '/pharmacy/purchasing/orders?kind=success&outcome=committed&notice=Order+saved&po=new'
+    );
+  });
+  expect(screen.getByLabelText('Sibling draft')).toHaveValue('Unsaved sibling text');
+  expect(screen.getByLabelText('Sibling supplier')).toHaveValue('b');
+  expect(draft).toHaveFocus();
+  expect([draft.selectionStart, draft.selectionEnd]).toEqual([2, 7]);
+  expect(location.href).toContain('po=existing');
+  expect(replace).not.toHaveBeenCalled();
+  expect(router.refresh).toHaveBeenCalledOnce();
+  expect(screen.getByText('Records: 1')).toBeVisible();
+  expect(screen.getByRole('status')).toHaveTextContent('Order saved');
+  expect(screen.getByRole('button')).toBeDisabled();
+});
+
+it('keeps confirmed writes locked when requesting the refresh throws', async () => {
+  const action = vi
+    .fn()
+    .mockResolvedValue(
+      '/pharmacy/purchasing/orders?kind=success&outcome=committed&notice=Order+saved'
+    );
+  const { form, replace } = setup(action);
+  router.refresh.mockImplementation(() => {
+    throw new Error('refresh unavailable');
+  });
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button'));
+  });
+  expect(screen.getByRole('status')).toHaveTextContent('Order saved');
+  expect(screen.getByRole('alert')).toHaveTextContent('records could not be refreshed');
+  expect(screen.getByRole('button')).toBeDisabled();
+  await act(async () => {
+    fireEvent.submit(form);
+  });
+  expect(action).toHaveBeenCalledOnce();
+  expect(router.refresh).toHaveBeenCalledOnce();
   expect(replace).not.toHaveBeenCalled();
 });

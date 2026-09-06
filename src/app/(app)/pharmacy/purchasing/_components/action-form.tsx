@@ -10,6 +10,8 @@ import {
   type ReactNode,
 } from 'react';
 
+import { useRouter } from 'next/navigation';
+
 import { cn } from '@/lib/utils';
 
 const subscribe = () => () => {};
@@ -18,8 +20,8 @@ const serverReady = () => false;
 
 /**
  * WHA-1344: consume the action result explicitly. The affected client loses
- * x-action-redirect outcomes; a document navigation loads the existing notice
- * and selected record without depending on the client router's redirect path.
+ * x-action-redirect outcomes; render the result locally and refresh the current
+ * route without replacing the document, selection or unrelated form drafts.
  */
 export function PurchasingActionForm({
   action,
@@ -30,6 +32,8 @@ export function PurchasingActionForm({
   children: ReactNode;
   className?: string;
 }) {
+  const router = useRouter();
+  const [success, setSuccess] = useState<string | null>(null);
   const ready = useSyncExternalStore(subscribe, clientReady, serverReady);
   const [submitted, setSubmitted] = useState(false);
   const [failed, setFailed] = useState(false);
@@ -66,7 +70,7 @@ export function PurchasingActionForm({
   return (
     <form
       ref={formRef}
-      aria-busy={submitted && !failed}
+      aria-busy={submitted && !failed && !success}
       onSubmit={(event) => {
         event.preventDefault();
         if (locked.current) return;
@@ -111,7 +115,11 @@ export function PurchasingActionForm({
               setFailed(true);
               return;
             }
-            window.location.replace(target.href);
+            // Outcome delivery does not depend on navigation or refresh completion.
+            // refresh() merges the current route's RSC payload; it returns no success
+            // acknowledgement. Keep this attempt locked even if the refresh fails.
+            setSuccess(target.searchParams.get('notice') || 'The change was saved.');
+            router.refresh();
           } catch {
             // A lost response may follow a committed write. Never retry it automatically.
             setFailed(true);
@@ -140,10 +148,19 @@ export function PurchasingActionForm({
         </p>
       ) : null}
       <noscript>Enable JavaScript to submit purchasing changes.</noscript>
-      {submitted && !failed ? <p role="status">Saving and loading the outcome…</p> : null}
+      {success ? (
+        <p role="status" className="text-sm text-success">
+          {success} Check the updated record before starting another change.
+        </p>
+      ) : null}
+      {submitted && !failed && !success ? (
+        <p role="status">Saving and loading the outcome…</p>
+      ) : null}
       {failed ? (
         <p role="alert" className="text-sm text-destructive">
-          Could not confirm the outcome. Reload this page and check the record before retrying.
+          {success
+            ? 'The change was saved, but the records could not be refreshed. Check the record before retrying.'
+            : 'Could not confirm the outcome. Reload this page and check the record before retrying.'}
         </p>
       ) : null}
     </form>
