@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { VERTICALS } from '@/lib/vertical-catalog';
 
 import {
   PHARMACY_GATE_GUIDANCE,
@@ -159,5 +161,36 @@ describe('pharmacy onboarding checklist', () => {
     // Long lists are truncated so the sentence stays a sentence; the rows
     // beneath it carry the full list.
     expect(summary).toContain('and 9 more');
+  });
+});
+
+describe('fresh Pharmacy setup destinations', () => {
+  it('connects derived catalog, stock and supplier gates without turning them into attestations', () => {
+    const items = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items;
+    for (const [key, href] of [
+      ['MEDICINE_CATALOG_READINESS', '/pharmacy/medicines'],
+      ['OPENING_STOCK_READINESS', '/pharmacy/purchasing/receiving'],
+      ['PARTIES_AND_BALANCES', '/pharmacy/purchasing/suppliers'],
+    ]) {
+      expect(items.find((item) => item.key === key)).toMatchObject({
+        href,
+        attestable: false,
+        state: 'NEEDS_YOU',
+      });
+    }
+    expect(VERTICALS.PHARMACY.firstRunChecklist.find((item) => item.key === 'catalog')?.href).toBe(
+      '/pharmacy'
+    );
+  });
+
+  it('offers catalog, receiving and canonical setup links from empty inventory', () => {
+    const page = readFileSync('src/app/(app)/pharmacy/inventory/page.tsx', 'utf8');
+    const empty = page.slice(
+      page.indexOf('No available lots yet.'),
+      page.indexOf('No available lots yet.') + 1100
+    );
+    for (const href of ['/pharmacy/medicines', '/pharmacy/purchasing/receiving', '/pharmacy']) {
+      expect(empty).toContain(`href="${href}"`);
+    }
   });
 });
