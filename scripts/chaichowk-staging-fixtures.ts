@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Prisma } from '../src/generated/prisma/client';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import { requireSeed, type SeedTarget } from './seed-chaichowk-staging';
@@ -26,7 +27,11 @@ export const GROUPS = [
     modules: ['restaurant-menu', 'restaurant-pos'],
     capabilities: ['menu:write', 'orders:read', 'orders:manage'],
   },
-  { key: 'workforce', modules: ['restaurant-core'], capabilities: ['staff:manage'] },
+  {
+    key: 'billing',
+    modules: ['restaurant-menu', 'restaurant-pos'],
+    capabilities: ['menu:write', 'orders:read', 'orders:manage', 'payments:collect'],
+  },
   {
     key: 'customers',
     modules: ['restaurant-loyalty'],
@@ -34,23 +39,42 @@ export const GROUPS = [
   },
   {
     key: 'catering',
-    modules: ['restaurant-menu', 'restaurant-core'],
-    capabilities: ['menu:write', 'catering:read', 'catering:manage'],
+    modules: ['restaurant-menu', 'restaurant-core', 'restaurant-loyalty'],
+    capabilities: ['menu:write', 'catering:read', 'catering:manage', 'customers:manage'],
   },
-  { key: 'sop', modules: ['restaurant-sop'], capabilities: ['sop:manage'] },
+  {
+    key: 'operations',
+    modules: ['restaurant-workforce', 'restaurant-sop'],
+    capabilities: ['staff:manage', 'sop:manage', 'sop:complete', 'sop:verify'],
+  },
 ] as const;
 
 export const ALWAYS_GATED = [
-  'settlements/payments/refunds/financial history/insight projections: no approved tax configuration or financial scenarios in v1; no fabricated approvals',
+  'settlements/payments/refunds/financial history/insight projections: settlement scenarios remain unimplemented; no tax approvals fabricated (open bills/splits only when payments:collect is already granted)',
   'loyalty accrual/redemption: requires settled-order/program scenarios; customers only',
-  'SOP completed/verified outcomes and attendance: no fabricated completion or clock-in evidence; templates and scheduled shifts only',
-  'Catering lifecycle/consumption/delivery/deposits: draft planning only; console hardcodes USD despite PKR',
+  'Catering confirmed/production/consumption/delivery/deposits: unavailable; console hardcodes USD despite PKR',
   'devices/printers/email/webhooks/AI/payment integrations: disabled; no hardware or external success claimed',
   'Pharmacy: separate workspace/account decision required; no provisioning',
   'absent owner: secure owner provisioning required before this existing-account package can run',
 ];
 
 export const MODEL_TABLES = {
+  restaurantBill: 'restaurant_bills',
+  restaurantBillLine: 'restaurant_bill_lines',
+  restaurantMoneyIdempotencyKey: 'restaurant_money_idempotency_keys',
+  restaurantCateringDelivery: 'restaurant_catering_deliveries',
+  restaurantCateringEvent: 'restaurant_catering_events',
+  restaurantShiftBreak: 'restaurant_shift_breaks',
+  restaurantShiftEvent: 'restaurant_shift_events',
+  restaurantShiftSwapRequest: 'restaurant_shift_swap_requests',
+  restaurantShiftSwapDecision: 'restaurant_shift_swap_decisions',
+  restaurantWorkforceCommand: 'restaurant_workforce_commands',
+  restaurantSopAssignment: 'restaurant_sop_assignments',
+  restaurantSopOccurrence: 'restaurant_sop_occurrences',
+  restaurantSopOccurrenceStep: 'restaurant_sop_occurrence_steps',
+  restaurantSopEvidence: 'restaurant_sop_evidence',
+  restaurantSopVerification: 'restaurant_sop_verifications',
+
   restaurantStaffProfile: 'restaurant_staff_profiles',
   restaurantBrand: 'restaurant_brands',
   restaurantCategory: 'restaurant_categories',
@@ -111,7 +135,7 @@ export const REQUIRED_RLS_TABLES = [
   ...Object.values(MODEL_TABLES),
 ];
 export type Model = keyof typeof MODEL_TABLES;
-export type RowReference = { model: Model; id: string };
+export type RowReference = { model: Model; id: string; hash?: string };
 export type PlannedRow = RowReference & { data: Record<string, unknown> };
 export type FixtureContext = {
   target: SeedTarget;
@@ -146,15 +170,6 @@ export function planFixtures(ctx: FixtureContext): PlannedRow[] {
       model,
       id: id(key),
       data: { ...data, id: id(key), organizationId: t.organizationId },
-    });
-  }
-  // Existing owner profiles are never updated, even to repair status/branch access.
-  if (ctx.ownerStaffProfileId === id('owner')) {
-    add('restaurantStaffProfile', 'owner', {
-      userId: t.ownerUserId,
-      displayName: 'Chai Chowk owner',
-      primaryBranchId: t.branchId,
-      status: 'ACTIVE',
     });
   }
   add('restaurantNotification', 'notice', {
@@ -315,73 +330,12 @@ export function planFixtures(ctx: FixtureContext): PlannedRow[] {
         unitCost: product.cost,
       });
   }
-  if (has('workforce')) {
-    for (let i = 1; i <= 2; i++) {
-      add('restaurantStaffProfile', `staff-${i}`, {
-        displayName: `Demo · Training colleague ${i}`,
-        primaryBranchId: t.branchId,
-        status: 'ACTIVE',
-      });
-      add('restaurantShift', `shift-${i}`, {
-        branchId: t.branchId,
-        staffProfileId: id(`staff-${i}`),
-        businessDate: date,
-        startAt: at,
-        endAt: new Date(at.getTime() + 8 * 3_600_000),
-        notes: 'Synthetic scheduled shift; no attendance claimed.',
-      });
-    }
-  }
   if (has('customers'))
     for (let i = 1; i <= 2; i++)
       add('restaurantCustomer', `customer-${i}`, {
         displayName: `Demo · Training guest ${i}`,
         notes: 'Synthetic guest. No real contact or personal details.',
       });
-  if (has('catering')) {
-    add('restaurantCateringOrder', 'catering', {
-      branchId: t.branchId,
-      eventName: 'Demo · Team tea gathering',
-      eventDate: date,
-      headcount: 20,
-      status: 'DRAFT',
-      notes: 'Synthetic draft; no payment, deposit, delivery or stock consumption claimed.',
-      createdByStaffId: ctx.ownerStaffProfileId,
-      customerId: has('customers') ? id('customer-1') : null,
-    });
-    for (const key of ['chai', 'paratha'])
-      add('restaurantCateringOrderLine', `catering-${key}`, {
-        orderId: id('catering'),
-        productId: id(`product-${key}`),
-        recipeId: id(`recipe-${key}`),
-        description: `Demo · ${key}`,
-        portions: '20',
-        unitPrice: key === 'chai' ? '220.00' : '180.00',
-      });
-    add('restaurantCateringExtraCost', 'catering-cost', {
-      orderId: id('catering'),
-      kind: 'TRANSPORT',
-      label: 'Demo · Estimated transport',
-      amount: '500.00',
-    });
-  }
-  if (has('sop')) {
-    add('restaurantSopTemplate', 'sop', {
-      name: 'Demo · Opening walkthrough',
-      description: 'Synthetic draft checklist; no completed or verified outcome.',
-    });
-    add('restaurantSopTemplateVersion', 'sop-version', {
-      templateId: id('sop'),
-      versionNumber: 1,
-      status: 'DRAFT',
-    });
-    add('restaurantSopTemplateStep', 'sop-step', {
-      templateVersionId: id('sop-version'),
-      stepOrder: 1,
-      title: 'Review the training area',
-      instructions: 'Demo-only checklist. Do not represent this as a real inspection.',
-    });
-  }
   if (has('orders')) {
     add('restaurantKitchenStation', 'station', {
       branchId: t.branchId,
@@ -416,15 +370,36 @@ export async function assertNoCollisions(tx: ScopedDb, plan: PlannedRow[]) {
       'SYNTHETIC_ID_COLLISION'
     );
 }
-export async function verifyRows(tx: ScopedDb, rows: RowReference[]) {
+/** Hash scalar rows without emitting their contents. JSON normalizes Dates/Decimals. */
+export function rowHash(value: unknown): string {
+  const canonical = (item: unknown): unknown => {
+    if (Array.isArray(item)) return item.map(canonical);
+    if (item && typeof item === 'object')
+      return Object.fromEntries(
+        Object.entries(item)
+          .sort(([a], [b]) => a.localeCompare(b))
+          .map(([key, child]) => [key, canonical(child)])
+      );
+    return item;
+  };
+  return createHash('sha256')
+    .update(JSON.stringify(canonical(JSON.parse(JSON.stringify(value)))))
+    .digest('hex');
+}
+export async function verifyRows(tx: ScopedDb, rows: RowReference[], capture = false) {
   const counts: Record<string, number> = {};
+  const seen = new Set<string>();
   for (const row of rows) {
     requireSeed(
-      row &&
-        typeof row.id === 'string' &&
-        (await delegate(tx, row.model).findFirst({ where: { id: row.id } })),
-      'SEED_ROW_MISSING'
+      row && typeof row.id === 'string' && !seen.has(`${row.model}:${row.id}`),
+      'RECEIPT_ROW_INVALID'
     );
+    seen.add(`${row.model}:${row.id}`);
+    const actual = await delegate(tx, row.model).findFirst({ where: { id: row.id } });
+    requireSeed(actual, 'SEED_ROW_MISSING');
+    const hash = rowHash(actual);
+    if (capture) row.hash = hash;
+    else requireSeed(row.hash === hash, 'SEED_ROW_CHANGED');
     counts[row.model] = (counts[row.model] ?? 0) + 1;
   }
   return counts;
@@ -521,6 +496,41 @@ export async function seedChaichowkFixtures(tx: ScopedDb, ctx: FixtureContext, p
           toStatus: 'PREPARED',
           actor: actor('prepare'),
         });
+    }
+    if (ctx.enabled.includes('billing')) {
+      const { cutBills } = await import('../src/lib/restaurant/bills');
+      const billIds: string[] = [];
+      for (const [index, orderId] of orderIds.entries()) {
+        const result = await cutBills(tx, {
+          orderId,
+          branchId: t.branchId,
+          split: index === 2 ? { kind: 'FRACTIONAL', weights: [1, 1] } : { kind: 'NONE' },
+          actor: {
+            staffProfileId: ctx.ownerStaffProfileId,
+            deviceId: id('device'),
+            idempotencyKey: id(`bill-${index}`),
+          },
+        });
+        billIds.push(...result.billIds);
+      }
+      remember(
+        'restaurantBill',
+        billIds.map((id) => ({ id }))
+      );
+      remember(
+        'restaurantBillLine',
+        await tx.restaurantBillLine.findMany({
+          where: { billId: { in: billIds } },
+          select: { id: true },
+        })
+      );
+      remember(
+        'restaurantMoneyIdempotencyKey',
+        await tx.restaurantMoneyIdempotencyKey.findMany({
+          where: { deviceId: id('device') },
+          select: { id: true },
+        })
+      );
     }
     const items = await tx.restaurantOrderItem.findMany({
       where: { orderId: { in: orderIds } },

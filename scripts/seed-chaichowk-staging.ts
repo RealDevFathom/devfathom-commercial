@@ -5,7 +5,7 @@ import { pathToFileURL } from 'node:url';
 import type { RowReference } from './chaichowk-staging-fixtures';
 
 export type SeedTarget = {
-  environment: 'staging' | 'disposable';
+  environment: 'staging' | 'lan' | 'disposable';
   host: string;
   port: number;
   database: string;
@@ -70,7 +70,7 @@ export function parseTarget(value: unknown, now = new Date()): SeedTarget {
     );
   }
   requireSeed(
-    input.environment === 'staging' || input.environment === 'disposable',
+    ['staging', 'lan', 'disposable'].includes(String(input.environment)),
     'ENVIRONMENT_REQUIRED'
   );
   requireSeed(
@@ -121,6 +121,13 @@ export function parseTarget(value: unknown, now = new Date()): SeedTarget {
     requireSeed(
       /^chaichowk_seed_disposable_[a-z0-9_]+$/.test(String(input.database)),
       'DISPOSABLE_DATABASE'
+    );
+  } else if (input.environment === 'lan') {
+    requireSeed(
+      input.host === '127.0.0.1' &&
+        input.port === 65377 &&
+        input.database === 'devfathom_win7_lan_test_20260906',
+      'LAN_TARGET_REQUIRED'
     );
   } else {
     requireSeed(
@@ -230,6 +237,8 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
   requireSeed(db === ownedDb, 'STANDALONE_PROCESS_REQUIRED');
   const namespace = seedNamespace(target);
   const receiptId = `${namespace}receipt`;
+  const tombstoneId = `${namespace}tombstone`;
+  const packageVersion = 'v2-integrated';
   try {
     return await db.$transaction(
       async (rawTx) => {
@@ -353,6 +362,19 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
           profiles.length <= 1 && profiles.every((profile) => profile.status === 'ACTIVE'),
           'OWNER_ACTOR_UNAVAILABLE'
         );
+        const [
+          { ensureAdministratorStaffProfile },
+          { evaluateSopDepth },
+          limitsApi,
+          catering,
+          operations,
+        ] = await Promise.all([
+          import('../src/lib/restaurant/administrator-staff-profile'),
+          import('../src/lib/module-catalog'),
+          import('../src/lib/entitlement-limits'),
+          import('./chaichowk-staging-catering-fixtures'),
+          import('./chaichowk-staging-operations-fixtures'),
+        ]);
         const entitlements = await resolveOrganizationEntitlements(target.organizationId, tx);
         requireSeed(
           entitlements.enabledModules.includes('restaurant-core'),
@@ -377,6 +399,15 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
           if (allowed) enabled.push(group.key);
           else gaps.push(`${group.key}: existing module/capability gate unavailable`);
         }
+        if (
+          enabled.includes('operations') &&
+          !operations.CHAICHOWK_OPERATIONS_REQUIRED_ACCESS.sopDepth.every(
+            (depth) => evaluateSopDepth(entitlements, depth).allowed
+          )
+        ) {
+          enabled.splice(enabled.indexOf('operations'), 1);
+          gaps.push('operations: effective SOP execution/evidence/verification depth unavailable');
+        }
         requireSeed(enabled.includes('catalog'), 'CATALOG_PERMISSION_REQUIRED');
         if (
           enabled.includes('orders') &&
@@ -387,10 +418,15 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
             'orders: enabled branch print routes require a separately approved simulation strategy'
           );
         }
+        if (enabled.includes('billing') && !enabled.includes('orders')) {
+          enabled.splice(enabled.indexOf('billing'), 1);
+          gaps.push('billing: order scenarios unavailable');
+        }
         // Date and enabled groups are immutable for a namespace; later approvals may renew expiry.
         const fingerprint = createHash('sha256')
           .update(
             JSON.stringify({
+              packageVersion,
               organizationId: target.organizationId,
               branchId: target.branchId,
               ownerUserId: target.ownerUserId,
@@ -402,14 +438,24 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
           )
           .digest('hex');
         const receipt = await tx.auditLog.findUnique({ where: { id: receiptId } });
+        const tombstone = await tx.auditLog.findUnique({ where: { id: tombstoneId } });
+        requireSeed(Boolean(receipt) === Boolean(tombstone), 'SEED_RECEIPT_INCOMPLETE');
         if (receipt) {
           requireSeed(
             receipt.action === 'chaichowk.seed.v1' && receipt.targetId === branch.id,
             'RECEIPT_COLLISION'
           );
-          const saved = receipt.metadata as { fingerprint?: string; rows?: RowReference[] } | null;
+          const saved = receipt.metadata as {
+            fingerprint?: string;
+            rows?: RowReference[];
+            gaps?: string[];
+          } | null;
           requireSeed(
-            saved?.fingerprint === fingerprint && Array.isArray(saved.rows),
+            saved?.fingerprint === fingerprint &&
+              Array.isArray(saved.rows) &&
+              tombstone?.action === 'chaichowk.seed.tombstone' &&
+              (tombstone.metadata as { receiptHash?: string } | null)?.receiptHash ===
+                fixtures.rowHash(receipt.metadata),
             'SEED_CONFIGURATION_CHANGED'
           );
           const counts = await fixtures.verifyRows(tx, saved.rows);
@@ -417,9 +463,48 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
             mode: apply ? 'already-applied' : 'dry-run',
             confirmation: targetDigest(target),
             counts,
-            gaps,
+            gaps: saved.gaps ?? gaps,
             writes: 0,
           };
+        }
+        if (apply)
+          await tx.$executeRawUnsafe(
+            'SELECT id FROM organizations WHERE id = $1 FOR UPDATE',
+            target.organizationId
+          );
+        if (!profiles.length) {
+          const capacity = limitsApi.resolveEntitlementLimit(
+            entitlements.limits,
+            limitsApi.RESTAURANT_OPERATORS_LIMIT
+          );
+          requireSeed(
+            capacity.status === 'configured' &&
+              (await tx.restaurantStaffProfile.count({ where: { status: 'ACTIVE' } })) <
+                capacity.value,
+            'OWNER_OPERATOR_CAPACITY_REQUIRED'
+          );
+        }
+        if (enabled.includes('operations')) {
+          const capacity = limitsApi.resolveEntitlementLimit(
+            entitlements.limits,
+            limitsApi.SOP_TEMPLATES_LIMIT
+          );
+          requireSeed(
+            capacity.status === 'configured' &&
+              (await tx.restaurantSopTemplate.count({ where: { isActive: true } })) +
+                operations.CHAICHOWK_OPERATIONS_REQUIRED_ACCESS.additionalTemplateFamilies <=
+                capacity.value,
+            'SOP_TEMPLATE_CAPACITY_REQUIRED'
+          );
+        }
+        // Receipt loss with surviving deterministic rows must never look like a new seed.
+        for (const table of Object.values(fixtures.MODEL_TABLES)) {
+          const [row] = await tx.$queryRawUnsafe<Array<{ n: number }>>(
+            `SELECT count(*)::int AS n FROM "${table}" WHERE left(id, $1) = $2`,
+            namespace.length,
+            namespace
+          );
+          requireSeed(row?.n === 0, 'UNRECEIPTED_NAMESPACE');
         }
         const context = {
           target,
@@ -435,14 +520,68 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
             mode: 'dry-run',
             confirmation: targetDigest(target),
             plannedCounts: fixtures.planCounts(plan),
+            ownerActorPrerequisite: profiles.length ? 'existing-preserved' : 'administrator-helper',
+            plannedHelperScenarios: enabled.filter((group) =>
+              ['catering', 'operations'].includes(group)
+            ),
             plannedServiceScenarios: enabled.filter((group) =>
-              ['purchasing', 'orders'].includes(group)
+              ['purchasing', 'orders', 'billing'].includes(group)
             ),
             gaps,
             writes: 0,
           };
-        const rows = await fixtures.seedChaichowkFixtures(tx, context, plan);
-        const counts = await fixtures.verifyRows(tx, rows);
+        const actor = await ensureAdministratorStaffProfile(tx, {
+          organizationId: target.organizationId,
+          userId: owner.id,
+          displayName: owner.name,
+          email: target.email,
+        });
+        context.ownerStaffProfileId = actor.staffProfileId;
+        // Re-plan references after the established helper chooses its generated ID/default branch.
+        const rows = await fixtures.seedChaichowkFixtures(
+          tx,
+          context,
+          fixtures.planFixtures(context)
+        );
+        if (actor.created) rows.push({ model: 'restaurantStaffProfile', id: actor.staffProfileId });
+        const helperContext = {
+          organizationId: target.organizationId,
+          branchId: target.branchId,
+          ownerUserId: target.ownerUserId,
+          businessDate: target.businessDate,
+          timezone: target.timezone,
+          id: context.id,
+        };
+        // Capture every helper create while preserving the raw transaction contract (no $transaction).
+        const helperTx = new Proxy(rawTx, {
+          has(object, key) {
+            return key !== '$transaction' && Reflect.has(object, key);
+          },
+          get(object, key) {
+            if (key === '$transaction') return undefined;
+            const value = Reflect.get(object, key);
+            if (typeof key !== 'string' || !Object.hasOwn(fixtures.MODEL_TABLES, key)) return value;
+            return new Proxy(value, {
+              get(model, action) {
+                if (action !== 'create') return Reflect.get(model, action);
+                return async (args: unknown) => {
+                  const row = await model.create(args);
+                  rows.push({ model: key as keyof typeof fixtures.MODEL_TABLES, id: row.id });
+                  return row;
+                };
+              },
+            });
+          },
+        });
+        if (enabled.includes('catering')) {
+          const result = await catering.seedChaichowkCateringFixtures(helperTx, helperContext);
+          gaps.push(...result.gaps);
+        }
+        if (enabled.includes('operations')) {
+          const result = await operations.seedChaichowkOperationsFixtures(helperTx, helperContext);
+          gaps.push(...result.gaps);
+        }
+        const counts = await fixtures.verifyRows(tx, rows, true);
         await tx.auditLog.create({
           data: {
             id: receiptId,
@@ -455,7 +594,22 @@ export async function runSeed(target: SeedTarget, apply = false, confirmation?: 
             targetId: branch.id,
             description:
               'Synthetic staging fixtures; external effects suppressed; no regulatory or hardware success asserted.',
-            metadata: { fingerprint, rows },
+            metadata: { fingerprint, rows, gaps },
+          },
+        });
+        await tx.auditLog.create({
+          data: {
+            id: tombstoneId,
+            organizationId: target.organizationId,
+            actorType: 'SYSTEM',
+            source: 'SYSTEM',
+            category: 'SYSTEM',
+            action: 'chaichowk.seed.tombstone',
+            targetType: 'RestaurantBranch',
+            targetId: branch.id,
+            description:
+              'Durable synthetic namespace marker; missing receipt requires investigation, never automatic reconstruction.',
+            metadata: { receiptHash: fixtures.rowHash({ fingerprint, rows, gaps }) },
           },
         });
         return { mode: 'applied', confirmation: targetDigest(target), counts, gaps };
