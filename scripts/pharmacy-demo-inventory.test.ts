@@ -6,11 +6,41 @@ import {
   planInventoryDemo,
   previewInventoryDemoFefo,
   type InventoryDemoFacts,
+  observeInventoryDemoReceipt,
+  inventoryDemoReceiptHash,
+  planPreparedInventoryReceipt,
+  executePreparedInventoryReceipt,
+  type InventoryPreparedReceipt,
+  type InventoryPreparedReceiptInput,
 } from './pharmacy-demo-inventory';
+import type {
+  PharmacyDemoContext,
+  PharmacyDemoPlan,
+  PharmacyDemoResult,
+} from './pharmacy-demo-contract';
 
-const createOrder = vi.hoisted(() => vi.fn().mockResolvedValue({ id: 'synthetic-po' }));
+const createOrder = vi.hoisted(() =>
+  vi.fn().mockImplementation(async (_db, _scope, input) => ({
+    id: 'synthetic-po',
+    reference: input.reference,
+    status: 'DRAFT',
+  }))
+);
+const access = vi.hoisted(() => vi.fn().mockResolvedValue({ organizationWide: true }));
+const receiveLot = vi.hoisted(() =>
+  vi.fn().mockResolvedValue({
+    lot: { id: 'generated-lot' },
+    movement: { id: 'generated-accepted' },
+    quarantineMovement: { id: 'generated-quarantine' },
+  })
+);
+vi.mock('../src/lib/pharmacy/stock-ledger', async (original) => ({
+  ...(await original<typeof import('../src/lib/pharmacy/stock-ledger')>()),
+  receiveLot,
+}));
 vi.mock('../src/lib/pharmacy/central-purchasing', () => ({
   createCentralPurchaseOrder: createOrder,
+  purchasingAccess: access,
 }));
 
 function facts(): InventoryDemoFacts {
@@ -24,6 +54,31 @@ function facts(): InventoryDemoFacts {
     scenarioAt: '2026-09-07T10:00:00Z',
     timezone: 'Asia/Karachi',
     currency: 'PKR',
+    actors: [
+      {
+        actorId: 'purchaser',
+        userId: 'purchaser',
+        organizationId: 'org',
+        branchId: 'branch',
+        active: true,
+        synthetic: true,
+        capabilities: [
+          'pharmacyPurchasing.createCentralPurchaseOrder',
+          'pharmacyPurchasing.postGoodsReceipt',
+        ],
+      },
+    ],
+    references: (['medicine', 'presentation', 'pack', 'location', 'supplier'] as const).map(
+      (kind) => ({
+        kind,
+        id: kind,
+        organizationId: 'org',
+        branchId: 'branch',
+        approved: true,
+        observedHash: 'a'.repeat(64),
+      })
+    ),
+    modules: [{ key: 'pharmacy-procurement', enabled: true }],
     purchasingEntitled: true,
     organizationPurchaser: true,
     approvedCatalog: {
@@ -45,8 +100,14 @@ function facts(): InventoryDemoFacts {
 
 function database(existing: { id: string } | null = null) {
   const findFirst = vi.fn().mockResolvedValue(existing);
-  // Deliberately only expose the permitted read; unexpected writes fail the test.
-  return { tx: { pharmacyPurchaseOrder: { findFirst } } as unknown as ScopedDb, findFirst };
+  // Deliberately expose only permitted reads; unexpected writes fail the test.
+  return {
+    tx: {
+      pharmacyPurchaseOrder: { findFirst },
+      user: { findFirst: vi.fn().mockResolvedValue({ id: 'purchaser', status: 'ACTIVE' }) },
+    } as unknown as ScopedDb,
+    findFirst,
+  };
 }
 
 describe('inventory demo plan', () => {
@@ -161,8 +222,8 @@ describe('inventory demo execution boundary', () => {
       { organizationId: 'org', actorId: 'purchaser' },
       plan.input
     );
-    expect(result.status).toBe('created-draft');
-    expect(result).toMatchObject({ deliveredStock: [], purchaseOrderId: 'synthetic-po' });
+    expect(result.status).toBe('applied');
+    expect(result).toMatchObject({ records: [{ persistedId: 'synthetic-po' }] });
   });
   it('preserves reconciled operator changes without reading or writing domain rows', async () => {
     createOrder.mockClear();
@@ -171,9 +232,18 @@ describe('inventory demo execution boundary', () => {
     const result = await executeInventoryDemo(tx, input, {
       state: 'preserve',
       hash: planInventoryDemo(input).hash,
-      purchaseOrderId: 'retained',
+      records: [
+        {
+          planKey: planInventoryDemo(input).records[0]!.key,
+          model: 'PharmacyPurchaseOrder',
+          persistedId: 'retained',
+          receiptReference: planInventoryDemo(input).input.reference,
+          observedHash: 'b'.repeat(64),
+          observedFacts: { status: 'DRAFT' },
+        },
+      ],
     });
-    expect(result.status).toBe('preserved');
+    expect(result.status).toBe('replayed');
     expect(findFirst).not.toHaveBeenCalled();
     expect(createOrder).not.toHaveBeenCalled();
   });
@@ -264,5 +334,365 @@ describe('observed lot preview only', () => {
     expect(() => preview(Array.from({ length: 33 }, (_, i) => lot(`${i}`, '2027-01-01')))).toThrow(
       'INVALID_OR_UNBOUNDED_LOT_FACTS'
     );
+  });
+});
+
+describe('shared inventory contract and prepared receiving composition', () => {
+  function prepared() {
+    const input = facts();
+    const at = new Date(input.scenarioAt);
+    const line = {
+      id: 'prepared-line',
+      organizationId: 'org',
+      branchId: 'branch',
+      goodsReceiptId: 'prepared-receipt',
+      lineNumber: 1,
+      purchaseOrderLineId: 'approved-order-line',
+      medicineId: 'medicine',
+      packLevelId: 'pack',
+      batchNumber: `${input.namespace}batch1`,
+      printedExpiry: new Date('2027-01-01'),
+      expiryPrecision: 'DAY',
+      printedMrpMinor: 20000,
+      canonicalUnitsPerPack: 10,
+      receivedPacks: 2,
+      bonusPacks: 1,
+      receivedCanonicalUnits: 20,
+      bonusCanonicalUnits: 10,
+      acceptedCanonicalUnits: 28,
+      rejectedCanonicalUnits: 2,
+      rejectionReason: 'Synthetic damaged-pack test',
+      invoicedPricePerPackMinor: 15000,
+      discountBps: 0,
+      taxBps: 0,
+      taxCreditable: false,
+      unitCostMinor: 1000,
+      stockLocationId: 'location',
+      quarantineLocationId: 'quarantine',
+      inventoryLotId: null,
+      ocrFieldEvidence: null,
+      ocrRegulatedConfirmedAt: null,
+      ocrRegulatedConfirmedById: null,
+      purchaseOrderLine: {
+        id: 'approved-order-line',
+        purchaseOrderId: 'approved-order',
+        medicineId: 'medicine',
+        packLevelId: 'pack',
+        canonicalUnitsPerPack: 10,
+        orderedCanonicalUnits: 40,
+        bonusCanonicalUnits: 0,
+        listPricePerPackMinor: 15000,
+      },
+    };
+    // Intentionally partial DB mock, never executed SQL or real regulatory observations.
+    const receipt = {
+      id: 'prepared-receipt',
+      organizationId: 'org',
+      branchId: 'branch',
+      reference: `${input.namespace}gr1`,
+      status: 'DRAFT',
+      directPurchase: false,
+      supplierId: 'supplier',
+      purchaseOrderId: 'approved-order',
+      supplierInvoiceRef: `${input.namespace}test-invoice`,
+      warrantyEvidenceRef: 'disposable-only-test-evidence',
+      receivedAt: at,
+      supplier: {
+        id: 'supplier',
+        name: 'Synthetic test supplier',
+        authorized: true,
+        licences: [{ id: 'licence', verifiedAt: at, expiresAt: new Date('2027-01-01') }],
+      },
+      purchaseOrder: {
+        id: 'approved-order',
+        organizationId: 'org',
+        branchId: 'branch',
+        supplierId: 'supplier',
+        reference: `${input.namespace}approved-po`,
+        status: 'SENT',
+        approvedAt: at,
+        approvedByUserId: 'test-approver',
+        createdByUserId: 'test-creator',
+        requisition: null,
+        approvals: [
+          {
+            decision: 'APPROVED',
+            actorUserId: 'test-approver',
+            policy: 'PUR-02:SEGREGATION_OF_DUTIES',
+            toStatus: 'APPROVED',
+          },
+        ],
+      },
+      lines: [line],
+    } as unknown as InventoryPreparedReceipt;
+    input.references.push({
+      kind: 'location',
+      id: 'quarantine',
+      organizationId: 'org',
+      branchId: 'branch',
+      approved: true,
+      observedHash: 'a'.repeat(64),
+    });
+    const expectation = (): InventoryPreparedReceiptInput => ({
+      goodsReceiptId: receipt.id,
+      reference: receipt.reference,
+      snapshotHash: inventoryDemoReceiptHash(receipt),
+      operatorConfirmationReference: 'root-retained-disposable-operator-confirmation',
+      acceptedUnits: 28,
+      rejectedUnits: 2,
+      unitCostMinor: 1000,
+    });
+    const updateReceipt = vi.fn().mockResolvedValue({});
+    const updateLine = vi.fn().mockResolvedValue({});
+    const batchCreate = vi
+      .fn()
+      .mockResolvedValue({ id: 'generated-batch', expiresAt: new Date('2027-01-02') });
+    const exceptionCreate = vi
+      .fn()
+      .mockImplementation(async ({ data }) => ({ ...data, id: `generated-${data.kind}` }));
+    const receiptRead = vi.fn().mockResolvedValue(receipt);
+    const actorRead = vi.fn().mockResolvedValue({ id: 'purchaser', status: 'ACTIVE' });
+    const batchRead = vi.fn().mockResolvedValue(null);
+    const tx = {
+      user: { findFirst: actorRead },
+      pharmacyGoodsReceipt: { findFirst: receiptRead, update: updateReceipt },
+      pharmacyGoodsReceiptLine: { update: updateLine, findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyManufacturingBatch: { findFirst: batchRead, create: batchCreate },
+      pharmacyPurchaseOrderLine: { findFirst: vi.fn().mockResolvedValue(line.purchaseOrderLine) },
+      pharmacyPurchaseOrder: {
+        findFirst: vi.fn().mockResolvedValue(receipt.purchaseOrder),
+        update: vi.fn().mockResolvedValue({}),
+      },
+      pharmacyReceivingException: { create: exceptionCreate },
+    } as unknown as ScopedDb;
+    const execute = (requested = expectation()) =>
+      executePreparedInventoryReceipt(tx, input, requested, {
+        state: 'new',
+        hash: planPreparedInventoryReceipt(input, requested).digest,
+      });
+    receiveLot.mockClear();
+    access.mockClear();
+    access.mockResolvedValue({ organizationWide: true });
+    return {
+      input,
+      receipt,
+      expectation,
+      tx,
+      execute,
+      actorRead,
+      receiptRead,
+      batchRead,
+      updateReceipt,
+      updateLine,
+      batchCreate,
+      exceptionCreate,
+    };
+  }
+
+  it('binds shared context/plan/result while observing a service-generated PO id', async () => {
+    const input = facts();
+    const context: PharmacyDemoContext = input;
+    const plan: PharmacyDemoPlan = planInventoryDemo(input);
+    const result: PharmacyDemoResult = await executeInventoryDemo(database().tx, input, {
+      state: 'new',
+      hash: plan.digest,
+    });
+    expect(plan.namespace).toBe(context.namespace);
+    expect(plan.records[0]).not.toHaveProperty('id');
+    expect(result).toMatchObject({
+      status: 'applied',
+      records: [
+        {
+          persistedId: 'synthetic-po',
+          receiptReference: plan.records[0]!.reference,
+          observedFacts: { status: 'DRAFT' },
+        },
+      ],
+    });
+  });
+
+  it('binds observed reference hashes and refuses missing shared context observations', () => {
+    const input = facts();
+    const original = planInventoryDemo(input);
+    input.references[0]!.observedHash = 'b'.repeat(64);
+    expect(planInventoryDemo(input).digest).not.toBe(original.digest);
+    input.actors = [];
+    input.references = [];
+    input.modules = [];
+    expect(planInventoryDemo(input).unmet).toEqual(
+      expect.arrayContaining([
+        'OBSERVED_SERVICE_ACTOR_REQUIRED',
+        'OBSERVED_APPROVED_REFERENCES_REQUIRED',
+        'OBSERVED_PROCUREMENT_ENTITLEMENT_REQUIRED',
+      ])
+    );
+  });
+
+  it('uses the real receipt service for bonus/quarantine stock and OPEN match exceptions', async () => {
+    const p = prepared();
+    const observed = await observeInventoryDemoReceipt(p.tx, p.input, p.receipt.id);
+    expect(observed).toBe(p.receipt);
+    const result = await p.execute();
+    expect(result).toMatchObject({
+      status: 'applied',
+      records: [
+        {
+          persistedId: 'prepared-receipt',
+          observedFacts: {
+            inventoryLotId: 'generated-lot',
+            acceptedMovementId: 'generated-accepted',
+            quarantineMovementId: 'generated-quarantine',
+            acceptedUnits: 28,
+            rejectedUnits: 2,
+            unitCostMinor: 1000,
+            inventoryValueMinor: 30000,
+          },
+        },
+      ],
+    });
+    expect(receiveLot).toHaveBeenCalledExactlyOnceWith(
+      p.tx,
+      { organizationId: 'org', branchId: 'branch', actorId: 'purchaser' },
+      expect.objectContaining({
+        quantityUnits: 28,
+        unitsPerPack: 10,
+        unitCostMinor: 1000,
+        quarantine: expect.objectContaining({ units: 2, stockLocationId: 'quarantine' }),
+      })
+    );
+    expect(p.updateLine).toHaveBeenCalledWith({
+      where: { id: 'prepared-line' },
+      data: { inventoryLotId: 'generated-lot' },
+    });
+    expect(p.updateReceipt).toHaveBeenCalledWith({
+      where: { id: 'prepared-receipt' },
+      data: { status: 'POSTED', postedAt: new Date(p.input.scenarioAt) },
+    });
+    expect(p.exceptionCreate).toHaveBeenCalled();
+    expect(result.status === 'applied' && result.records[0]!.observedFacts.exceptionIds).toContain(
+      'generated-SHORT'
+    );
+  });
+
+  it.each(['status', 'approval', 'expiry', 'quantity', 'cost', 'scope', 'batch'])(
+    'refuses unsafe prepared %s before any service writes',
+    async (change) => {
+      const p = prepared();
+      if (change === 'status') p.receipt.status = 'POSTED';
+      if (change === 'approval') p.receipt.purchaseOrder!.approvals = [];
+      if (change === 'expiry') p.receipt.lines[0]!.printedExpiry = new Date('2020-01-01');
+      if (change === 'quantity') p.receipt.lines[0]!.acceptedCanonicalUnits++;
+      if (change === 'cost') p.receipt.lines[0]!.unitCostMinor++;
+      if (change === 'scope') p.receipt.branchId = 'other-branch';
+      if (change === 'batch') p.receipt.lines[0]!.batchNumber = 'legitimate-batch';
+      expect((await p.execute()).status).toBe('refused');
+      expect(p.batchCreate).not.toHaveBeenCalled();
+      expect(receiveLot).not.toHaveBeenCalled();
+    }
+  );
+
+  it('refuses post-confirmation changes and pre-existing batch collisions', async () => {
+    const p = prepared();
+    const confirmed = p.expectation();
+    p.receipt.warrantyEvidenceRef = 'operator-changed';
+    expect(await p.execute(confirmed)).toMatchObject({
+      status: 'refused',
+      unmetPrerequisites: ['PREPARED_RECEIPT_CHANGED_OR_MISSING'],
+    });
+    p.batchRead.mockResolvedValue({ id: 'existing-batch' });
+    expect(await p.execute()).toMatchObject({
+      status: 'refused',
+      unmetPrerequisites: ['UNRECONCILED_BATCH_COLLISION'],
+    });
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it('refuses inactive actors, absent action observations and missing actual purchasing access', async () => {
+    const p = prepared();
+    p.actorRead.mockResolvedValue({ id: 'purchaser', status: 'INACTIVE' });
+    expect((await p.execute()).status).toBe('refused');
+    p.actorRead.mockResolvedValue({ id: 'purchaser', status: 'ACTIVE' });
+    access.mockResolvedValue({ organizationWide: false });
+    expect((await p.execute()).status).toBe('refused');
+    p.input.actors[0]!.capabilities = [];
+    expect((await p.execute()).status).toBe('refused');
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it('preserves retained generated IDs without domain reads/writes; refuses wrong target and tombstone', async () => {
+    const p = prepared();
+    const input = p.expectation();
+    const plan = planPreparedInventoryReceipt(p.input, input);
+    const result = await p.execute(input);
+    expect(result.status).toBe('applied');
+    if (result.status === 'refused') throw new Error('Expected applied fixture');
+    p.receiptRead.mockClear();
+    receiveLot.mockClear();
+    const replay = await executePreparedInventoryReceipt(p.tx, p.input, input, {
+      state: 'preserve',
+      hash: plan.digest,
+      records: result.records,
+    });
+    expect(replay).toMatchObject({ status: 'replayed', records: result.records });
+    for (const reconciliation of [
+      { state: 'refuse', reason: 'TOMBSTONE' } as const,
+      { state: 'new', hash: 'other-target' } as const,
+    ])
+      expect(
+        (await executePreparedInventoryReceipt(p.tx, p.input, input, reconciliation)).status
+      ).toBe('refused');
+    expect(p.receiptRead).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it.each(['warranty', 'licence', 'regulated-confirmation'])(
+    'propagates the real receiving service %s refusal for caller rollback',
+    async (missing) => {
+      const p = prepared();
+      if (missing === 'warranty') p.receipt.warrantyEvidenceRef = '';
+      if (missing === 'licence') p.receipt.supplier.licences = [];
+      if (missing === 'regulated-confirmation')
+        p.receipt.lines[0]!.ocrFieldEvidence = { syntheticProposal: true };
+      await expect(p.execute()).rejects.toThrow();
+      expect(receiveLot).not.toHaveBeenCalled();
+      expect(p.updateReceipt).not.toHaveBeenCalled();
+    }
+  );
+
+  it('propagates a ledger failure for rollback and never stamps the receipt POSTED', async () => {
+    const p = prepared();
+    receiveLot.mockRejectedValueOnce(new Error('LEDGER_CONSTRAINT'));
+    await expect(p.execute()).rejects.toThrow('LEDGER_CONSTRAINT');
+    expect(p.updateReceipt).not.toHaveBeenCalled();
+  });
+
+  it('refuses absent operator confirmation and mismatched retained records without reads', async () => {
+    const p = prepared();
+    const input = p.expectation();
+    expect((await p.execute({ ...input, operatorConfirmationReference: '' })).status).toBe(
+      'refused'
+    );
+    const result = await executePreparedInventoryReceipt(p.tx, p.input, input, {
+      state: 'preserve',
+      hash: planPreparedInventoryReceipt(p.input, input).digest,
+      records: [],
+    });
+    expect(result).toMatchObject({
+      status: 'refused',
+      unmetPrerequisites: ['MISSING_OR_MISMATCHED_RETAINED_RECORDS'],
+    });
+    expect(p.receiptRead).not.toHaveBeenCalled();
+    expect(receiveLot).not.toHaveBeenCalled();
+  });
+
+  it('refuses a draft mutation by an inactive actor even with supplied capability observations', async () => {
+    const input = facts();
+    const tx = database().tx;
+    vi.mocked(tx.user.findFirst).mockResolvedValueOnce(null);
+    createOrder.mockClear();
+    expect(
+      await executeInventoryDemo(tx, input, { state: 'new', hash: planInventoryDemo(input).digest })
+    ).toMatchObject({ status: 'refused', unmetPrerequisites: ['ACTIVE_SERVICE_ACTOR_REQUIRED'] });
+    expect(createOrder).not.toHaveBeenCalled();
   });
 });
