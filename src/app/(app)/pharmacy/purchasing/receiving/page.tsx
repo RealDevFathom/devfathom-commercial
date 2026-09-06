@@ -2,6 +2,7 @@ import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -497,6 +498,10 @@ export default async function PharmacyReceivingPage({
                   </p>
                 ) : (
                   <PurchasingActionForm
+                    operation={{
+                      resource: `receipt:${exception.goodsReceiptId}`,
+                      action: `resolve-exception:${exception.id}`,
+                    }}
                     action={resolveException}
                     className="mt-3 flex flex-wrap items-end gap-3"
                   >
@@ -573,7 +578,11 @@ export default async function PharmacyReceivingPage({
             ) : null}
 
             {selectedOrder ? (
-              <PurchasingActionForm action={receiveAgainstOrder} className="mt-5 space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: `order:${selectedOrder.id}`, action: `receive:${branchId}` }}
+                action={receiveAgainstOrder}
+                className="mt-5 space-y-4"
+              >
                 <input name="branchId" type="hidden" value={branchId} />
                 <input name="purchaseOrderId" type="hidden" value={selectedOrder.id} />
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -676,7 +685,11 @@ export default async function PharmacyReceivingPage({
             />
           </div>
         ) : (
-          <PurchasingActionForm action={receiveDirect} className="mt-4 space-y-4">
+          <PurchasingActionForm
+            operation={{ resource: `direct-receipt:${branchId}`, action: 'create' }}
+            action={receiveDirect}
+            className="mt-4 space-y-4"
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <TextField
@@ -847,7 +860,7 @@ function Frame({
   children: React.ReactNode;
 }) {
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       {branch?.kind === 'resolved' ? (
@@ -861,8 +874,9 @@ function Frame({
         </div>
       ) : null}
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
       {children}
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -1138,7 +1152,10 @@ function ReceiptDetail({
 
       <div className="mt-5 border-t border-border-subtle pt-5">
         {receipt.status === 'DRAFT' ? (
-          <PurchasingActionForm action={onPost}>
+          <PurchasingActionForm
+            operation={{ resource: `receipt:${receipt.id}`, action: 'post' }}
+            action={onPost}
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="goodsReceiptId" type="hidden" value={receipt.id} />
             <SubmitButton>Post into stock</SubmitButton>
@@ -1148,7 +1165,11 @@ function ReceiptDetail({
             </p>
           </PurchasingActionForm>
         ) : receipt.status === 'POSTED' ? (
-          <PurchasingActionForm action={onReverse} className="flex flex-wrap items-end gap-3">
+          <PurchasingActionForm
+            operation={{ resource: `receipt:${receipt.id}`, action: 'reverse' }}
+            action={onReverse}
+            className="flex flex-wrap items-end gap-3"
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="goodsReceiptId" type="hidden" value={receipt.id} />
             <TextField

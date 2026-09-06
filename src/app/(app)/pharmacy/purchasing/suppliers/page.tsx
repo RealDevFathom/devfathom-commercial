@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -199,10 +200,11 @@ export default async function PharmacySuppliersPage({
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
 
       {loadError || !suppliers ? (
         <LoadFailure
@@ -295,7 +297,11 @@ export default async function PharmacySuppliersPage({
             )}
 
             <SectionCard eyebrow="PUR-01" title="Add a supplier" titleLevel={2}>
-              <PurchasingActionForm action={createSupplier} className="grid gap-4 sm:grid-cols-2">
+              <PurchasingActionForm
+                operation={{ resource: 'supplier:new', action: 'create' }}
+                action={createSupplier}
+                className="grid gap-4 sm:grid-cols-2"
+              >
                 <TextField
                   label="Trading name"
                   name="name"
@@ -340,7 +346,7 @@ export default async function PharmacySuppliersPage({
           </div>
         </div>
       )}
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -390,7 +396,14 @@ function SupplierDetail({
           </p>
           {/* UX rule 15: the control is one action and it is never greyed out
               while the operator is clearly acting on it. */}
-          <PurchasingActionForm action={onSetAuthorization} className="mt-3">
+          <PurchasingActionForm
+            operation={{
+              resource: `supplier:${supplier.id}`,
+              action: supplier.authorized ? 'withdraw' : 'authorize',
+            }}
+            action={onSetAuthorization}
+            className="mt-3"
+          >
             <input name="supplierId" type="hidden" value={supplier.id} />
             <input name="authorized" type="hidden" value={supplier.authorized ? 'false' : 'true'} />
             <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
@@ -458,7 +471,11 @@ function SupplierDetail({
           </ul>
         )}
 
-        <PurchasingActionForm action={onRecordLicence} className="mt-5 grid gap-4 sm:grid-cols-2">
+        <PurchasingActionForm
+          operation={{ resource: `supplier:${supplier.id}`, action: 'record-licence' }}
+          action={onRecordLicence}
+          className="mt-5 grid gap-4 sm:grid-cols-2"
+        >
           <input name="supplierId" type="hidden" value={supplier.id} />
           <TextField label="Licence type" name="licenceType" notice={notice} required />
           <TextField label="Licence number" name="licenceNumber" notice={notice} required />

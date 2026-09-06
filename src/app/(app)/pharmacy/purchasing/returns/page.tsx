@@ -4,6 +4,7 @@ import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -479,7 +480,11 @@ export default async function PharmacyReturnsPage({
                 ]}
               />
             ) : (
-              <PurchasingActionForm action={createReturn} className="space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: `return:new:${branchId}`, action: 'create' }}
+                action={createReturn}
+                className="space-y-4"
+              >
                 <input name="branchId" type="hidden" value={branchId} />
                 <div className="grid gap-4 sm:grid-cols-3">
                   <TextField label="Reference" name="reference" notice={notice} required />
@@ -569,6 +574,7 @@ export default async function PharmacyReturnsPage({
 
           <SectionCard eyebrow="PUR-06" title="Supplier credit" titleLevel={2}>
             <PurchasingActionForm
+              operation={{ resource: `credit:new:${branchId}`, action: 'record' }}
               action={recordCredit}
               className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
             >
@@ -638,6 +644,7 @@ export default async function PharmacyReturnsPage({
                       </p>
                       {unallocated > 0 && openDebitNotes.length > 0 ? (
                         <PurchasingActionForm
+                          operation={{ resource: `credit:${credit.id}`, action: 'allocate' }}
                           action={allocateCredit}
                           className="mt-3 flex flex-wrap items-end gap-3"
                         >
@@ -696,7 +703,7 @@ function Frame({
   children: React.ReactNode;
 }) {
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       {branch?.kind === 'resolved' ? (
@@ -710,8 +717,9 @@ function Frame({
         </div>
       ) : null}
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
       {children}
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -820,6 +828,7 @@ function ReturnDetail({
                 </p>
                 {note.position.outstandingMinor > 0 && spendable.length > 0 ? (
                   <PurchasingActionForm
+                    operation={{ resource: `debit-note:${note.id}`, action: 'allocate' }}
                     action={onAllocate}
                     className="mt-3 flex flex-wrap items-end gap-3"
                   >
@@ -856,7 +865,10 @@ function ReturnDetail({
 
       <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
         {purchaseReturn.status === 'DRAFT' ? (
-          <PurchasingActionForm action={onAdvance}>
+          <PurchasingActionForm
+            operation={{ resource: `return:${purchaseReturn.id}`, action: 'submit' }}
+            action={onAdvance}
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
             <input name="action" type="hidden" value="submit" />
@@ -872,7 +884,10 @@ function ReturnDetail({
               return for the lines whose windows are still open.
             </p>
           ) : (
-            <PurchasingActionForm action={onAdvance}>
+            <PurchasingActionForm
+              operation={{ resource: `return:${purchaseReturn.id}`, action: 'dispatch' }}
+              action={onAdvance}
+            >
               <input name="branchId" type="hidden" value={branchId} />
               <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
               <input name="action" type="hidden" value="dispatch" />
@@ -882,7 +897,11 @@ function ReturnDetail({
         ) : null}
 
         {purchaseReturn.status === 'DISPATCHED' && purchaseReturn.debitNotes.length === 0 ? (
-          <PurchasingActionForm action={onAdvance} className="flex flex-wrap items-end gap-3">
+          <PurchasingActionForm
+            operation={{ resource: `return:${purchaseReturn.id}`, action: 'debit' }}
+            action={onAdvance}
+            className="flex flex-wrap items-end gap-3"
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
             <input name="action" type="hidden" value="debit" />
