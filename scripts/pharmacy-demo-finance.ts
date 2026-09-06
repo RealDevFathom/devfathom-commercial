@@ -25,6 +25,437 @@ export interface PharmacyDemoCashRoot {
   businessDate: Date;
 }
 
+export type PharmacyDemoOriginalCashSale = Extract<
+  Awaited<ReturnType<typeof executePharmacyDemoCashSale>>,
+  { status: 'applied' }
+>;
+
+/** Fresh-only FULL return of the accepted one-UNIT cash fixture. Root supplies
+ * its durable original result (not request JSON), authorizes the actual supplied
+ * integrity decision, locks/reconciles history, and owns this entire transaction.
+ * Existing return/refund idempotency is preserved. Root replay returns its retained
+ * reversal result; never invoke this step again or commit after any thrown error.
+ * Quarantine is NOT saleable restocking. A completed sale cannot use OPEN-only void.
+ */
+export async function executePharmacyDemoCashReturn(
+  tx: ScopedDb,
+  root: PharmacyDemoCashRoot,
+  original: PharmacyDemoOriginalCashSale,
+  input: { quarantineLocationId: string; reason: string; integrityDecision: string }
+) {
+  const { scope, namespace } = root;
+  const scoped = { organizationId: scope.organizationId, branchId: scope.branchId };
+  const refuse = (reason: string) => ({
+    status: 'refused' as const,
+    unmetPrerequisites: [`UNSEEDED: ${reason}`],
+  });
+  if (
+    !isPharmacyDemoNamespace(namespace) ||
+    root.entitlements.organizationId !== scope.organizationId ||
+    root.entitlements.vertical !== 'PHARMACY' ||
+    !root.entitlements.enabledModules.includes('pharmacy-counter')
+  )
+    return refuse('CURRENT_SCOPED_PHARMACY_AUTHORITY');
+  if (
+    !input.reason.trim() ||
+    !input.integrityDecision.trim() ||
+    !input.quarantineLocationId.trim() ||
+    !Number.isFinite(root.businessDate.getTime())
+  )
+    return refuse('SUPPLIED_RETURN_DISPOSITION_AND_BUSINESS_DATE');
+  const retained = (model: string, id: string) =>
+    root.records.filter(
+      (record) =>
+        record.model === model &&
+        record.persistedId === id &&
+        record.planKey.startsWith(namespace) &&
+        record.receiptReference.startsWith(namespace)
+    ).length === 1;
+  if (
+    original.coverage !== 'SYNTHETIC_CASH_SALE' ||
+    original.records.length !== 6 ||
+    original.records.some(
+      (record) =>
+        !retained(record.model, record.persistedId) ||
+        !record.planKey.startsWith(namespace) ||
+        !root.records.some(
+          (saved) =>
+            saved.planKey === record.planKey &&
+            saved.persistedId === record.persistedId &&
+            saved.observedHash === record.observedHash
+        )
+    ) ||
+    !retained('PharmacySale', original.saleId) ||
+    !retained('PharmacySaleLine', original.saleLineId) ||
+    !retained('PharmacyTender', original.tenderId) ||
+    !retained('User', scope.actorId) ||
+    !retained('PharmacyStockLocation', input.quarantineLocationId) ||
+    !original.receiptDeviceId ||
+    !retained('PharmacyRegisteredDevice', original.receiptDeviceId)
+  )
+    return refuse('ORIGINAL_ROOT_RETAINED_SYNTHETIC_IDENTITIES');
+  const actor = await tx.user.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      id: scope.actorId,
+      status: 'ACTIVE',
+      name: { startsWith: namespace },
+    },
+    select: { id: true },
+  });
+  const branch = await tx.pharmacyBranch.findFirst({
+    where: { organizationId: scope.organizationId, id: scope.branchId, active: true },
+    select: { id: true, name: true },
+  });
+  const device = await tx.pharmacyRegisteredDevice.findFirst({
+    where: {
+      ...scoped,
+      id: original.receiptDeviceId,
+      status: 'ACTIVE',
+      revokedAt: null,
+      name: { startsWith: namespace },
+    },
+    select: { id: true },
+  });
+  const quarantine = await tx.pharmacyStockLocation.findFirst({
+    where: {
+      ...scoped,
+      id: input.quarantineLocationId,
+      active: true,
+      kind: 'QUARANTINE',
+      code: { startsWith: namespace },
+    },
+    select: { id: true },
+  });
+  if (!actor || !branch || !device || !quarantine)
+    return refuse('ACTIVE_SYNTHETIC_RETURN_OPERATOR_DEVICE_QUARANTINE');
+  const sale = await tx.pharmacySale.findFirst({
+    where: { ...scoped, id: original.saleId },
+    include: {
+      lines: { include: { allocations: true, returnLines: true } },
+      tenders: { include: { refunds: true } },
+      returns: true,
+    },
+  });
+  const line = sale?.lines[0],
+    tender = sale?.tenders[0],
+    allocation = line?.allocations[0];
+  if (
+    !sale ||
+    sale.status !== 'COMPLETED' ||
+    sale.createdByUserId !== scope.actorId ||
+    sale.customerId !== null ||
+    sale.receiptNumber !== original.receiptNumber ||
+    sale.receiptDeviceId !== original.receiptDeviceId ||
+    sale.completedAt?.getTime() !== new Date(original.issuedAt).getTime() ||
+    sale.lines.length !== 1 ||
+    !line ||
+    line.id !== original.saleLineId ||
+    line.canonicalUnits !== 1 ||
+    line.quantity !== 1 ||
+    line.saleUnit !== 'UNIT' ||
+    line.canonicalUnitsPerSaleUnit !== 1 ||
+    line.discountMinor !== 0 ||
+    line.unitPriceMinor !== original.amountMinor ||
+    line.returnLines.length !== 0 ||
+    sale.returns.length !== 0 ||
+    line.allocations.length !== 1 ||
+    !allocation ||
+    allocation.canonicalUnits !== 1 ||
+    original.allocationIds.length !== 1 ||
+    allocation.id !== original.allocationIds[0] ||
+    allocation.stockMovementId !== original.stockMovementIds[0] ||
+    sale.tenders.length !== 1 ||
+    !tender ||
+    tender.id !== original.tenderId ||
+    tender.type !== 'CASH' ||
+    tender.refunds.length !== 0 ||
+    tender.actorId !== scope.actorId ||
+    tender.amountMinor !== original.amountMinor ||
+    tender.cashReceivedMinor !== original.cashReceivedMinor ||
+    tender.changeGivenMinor !== original.changeGivenMinor ||
+    tender.deviceId !== original.receiptDeviceId ||
+    !tender.drawerSessionId ||
+    !retained('PharmacyDrawerSession', tender.drawerSessionId) ||
+    allocation.stockLocationId === quarantine.id ||
+    !Number.isSafeInteger(original.amountMinor) ||
+    original.amountMinor <= 0
+  )
+    return refuse('FOREIGN_CHANGED_OR_ALREADY_REVERSED_ORIGINAL');
+  const drawers = await tx.pharmacyDrawerSession.findMany({
+    where: { ...scoped, deviceId: device.id, status: 'OPEN' },
+  });
+  if (
+    drawers.length !== 1 ||
+    drawers[0]!.id !== tender.drawerSessionId ||
+    drawers[0]!.openedByActorId !== scope.actorId ||
+    drawers[0]!.businessDate.toISOString().slice(0, 10) !==
+      root.businessDate.toISOString().slice(0, 10)
+  )
+    return refuse('ORIGINAL_OPEN_SYNTHETIC_DRAWER');
+  const lot = await tx.pharmacyInventoryLot.findFirst({
+    where: {
+      ...scoped,
+      id: allocation.inventoryLotId,
+      supplierInvoiceRef: { startsWith: namespace },
+      batch: { medicineId: line.medicineId },
+    },
+    select: { id: true, unitCostMinor: true, unitsPerPack: true },
+  });
+  if (
+    !lot ||
+    !retained('PharmacyInventoryLot', lot.id) ||
+    lot.unitsPerPack !== 1 ||
+    lot.unitCostMinor !== original.margin.cogsMinor
+  )
+    return refuse('ORIGINAL_RECEIVED_UNIT_LOT_COST');
+  const { readCounterReceipt } = await import('../src/lib/pharmacy/counter');
+  const receiptBefore = await readCounterReceipt(tx, scoped, sale.id, {
+    name: branch.name,
+    currency: 'PKR',
+  });
+  if (JSON.stringify(receiptBefore) !== JSON.stringify(original.receipt))
+    return refuse('ORIGINAL_ISSUED_RECEIPT_CHANGED');
+  const sourceEntries = await tx.financeJournalEntry.findMany({
+    where: { ...scoped, id: { in: original.journalEntryIds } },
+    include: { lines: true },
+  });
+  const legFacts = (legs: typeof original.journalLines) =>
+    JSON.stringify(
+      [...legs]
+        .sort((a, b) => a.id.localeCompare(b.id))
+        .map((leg) => ({
+          id: leg.id,
+          entryId: leg.entryId,
+          accountCode: leg.accountCode,
+          side: leg.side,
+          amountMinor: leg.amountMinor,
+          branchId: leg.branchId,
+          productId: leg.productId,
+          lotId: leg.lotId,
+          locationId: leg.locationId,
+          sourceLineId: leg.sourceLineId,
+        }))
+    );
+  if (
+    sourceEntries.length !== 2 ||
+    !sourceEntries.some(
+      (entry) => entry.sourceKind === 'PHARMACY_SALE_LINE' && entry.sourceId === line.id
+    ) ||
+    !sourceEntries.some(
+      (entry) => entry.sourceKind === 'PHARMACY_TENDER' && entry.sourceId === tender.id
+    ) ||
+    legFacts(sourceEntries.flatMap((entry) => entry.lines)) !== legFacts(original.journalLines)
+  )
+    return refuse('ORIGINAL_JOURNAL_CHANGED');
+  const availableWhere = {
+    ...scoped,
+    inventoryLotId: lot.id,
+    stockLocationId: allocation.stockLocationId,
+    disposition: 'AVAILABLE' as const,
+  };
+  const quarantineWhere = {
+    ...scoped,
+    inventoryLotId: lot.id,
+    stockLocationId: quarantine.id,
+    disposition: 'QUARANTINE' as const,
+  };
+  const availableBefore = await tx.pharmacyStockBalance.findFirst({ where: availableWhere });
+  const quarantineBefore = await tx.pharmacyStockBalance.findFirst({ where: quarantineWhere });
+  const drawerWhere = {
+    organizationId: scope.organizationId,
+    drawerSessionId: tender.drawerSessionId,
+  };
+  const drawerBefore = await tx.pharmacyDrawerMovement.findMany({ where: drawerWhere });
+  const { foldExpectedCash, refundPharmacyTender } = await import('../src/lib/pharmacy/settlement');
+  const cashMovement = (row: (typeof drawerBefore)[number]) => {
+    if (row.kind === 'CLOSING_COUNT')
+      throw new Error('UNSEEDED: ORIGINAL_DRAWER_HAS_CLOSING_COUNT');
+    return { kind: row.kind, amountMinor: row.amountMinor };
+  };
+  const cashBefore = foldExpectedCash(drawerBefore.map(cashMovement));
+  if (
+    availableBefore?.onHandUnits !== original.stockAfter ||
+    cashBefore < tender.amountMinor ||
+    (quarantineBefore &&
+      (!Number.isSafeInteger(quarantineBefore.onHandUnits) || quarantineBefore.onHandUnits < 0))
+  )
+    return refuse('CHANGED_STOCK_OR_INSUFFICIENT_DRAWER_CASH');
+  const { returnSaleLine } = await import('../src/lib/pharmacy/sales');
+  const { postSaleReturnEntry, postTenderRefundEntry } =
+    await import('../src/lib/pharmacy/finance-postings');
+  const returned = await returnSaleLine(tx, scope, {
+    saleLineId: line.id,
+    canonicalUnits: 1,
+    quarantineLocationId: quarantine.id,
+    reason: input.reason,
+    integrityDecision: input.integrityDecision,
+    idempotencyKey: `${namespace}finance:cash:full-return`,
+  });
+  if (
+    returned.saleReturn.originalSaleId !== sale.id ||
+    returned.returnLine.saleLineId !== line.id ||
+    returned.returnLine.inventoryLotId !== lot.id ||
+    returned.returnLine.stockLocationId !== quarantine.id ||
+    returned.returnLine.canonicalUnits !== 1 ||
+    returned.returnLine.integrityDecision !== input.integrityDecision ||
+    returned.returnLine.stockMovementId !== returned.movement.id ||
+    returned.movement.kind !== 'RETURN' ||
+    returned.movement.disposition !== 'QUARANTINE' ||
+    returned.movement.quantityUnits !== 1
+  )
+    throw new Error('DEMO_RETURN_STOCK_MISMATCH_ROLLBACK');
+  const refunded = await refundPharmacyTender(tx, scope, {
+    originalTenderId: tender.id,
+    deviceId: device.id,
+    businessDate: root.businessDate,
+    amountMinor: tender.amountMinor,
+    reason: input.reason,
+    idempotencyKey: `${namespace}finance:cash:full-refund`,
+  });
+  if (refunded.replayed) throw new Error('DEMO_RETURN_UNEXPECTED_REFUND_REPLAY_ROLLBACK');
+  const refunds = await tx.pharmacyRefund.findMany({
+    where: { ...scoped, originalTenderId: tender.id },
+  });
+  const refund = refunds[0];
+  if (
+    refunds.length !== 1 ||
+    !refund ||
+    refund.saleId !== sale.id ||
+    refund.amountMinor !== tender.amountMinor ||
+    refund.drawerSessionId !== tender.drawerSessionId ||
+    refund.providerRef !== null
+  )
+    throw new Error('DEMO_RETURN_CASH_MISMATCH_ROLLBACK');
+  const at = refund.createdAt;
+  const stockJournal = await postSaleReturnEntry(tx, scope, {
+    saleReturnLineId: returned.returnLine.id,
+    at,
+  });
+  const refundJournal = await postTenderRefundEntry(tx, scope, { refundId: refund.id, at });
+  const availableAfter = await tx.pharmacyStockBalance.findFirst({ where: availableWhere });
+  const quarantineAfter = await tx.pharmacyStockBalance.findFirst({ where: quarantineWhere });
+  const drawerAfter = await tx.pharmacyDrawerMovement.findMany({ where: drawerWhere });
+  const newDrawer = drawerAfter.filter((row) => !drawerBefore.some((prior) => prior.id === row.id));
+  const receiptAfter = await readCounterReceipt(tx, scoped, sale.id, {
+    name: branch.name,
+    currency: 'PKR',
+  });
+  const returnLines = await tx.pharmacySaleReturnLine.findMany({
+    where: { ...scoped, saleLineId: line.id },
+  });
+  const { grossMargin } = await import('../src/lib/pharmacy/finance-reports');
+  const margin = (
+    await grossMargin(tx, scoped, {
+      from: new Date(original.issuedAt),
+      to: new Date(at.getTime() + 1),
+      by: 'line',
+    })
+  ).filter((row) => row.key === line.id);
+  const net = new Map<string, number>();
+  for (const leg of [...stockJournal.lines, ...refundJournal.lines])
+    net.set(
+      leg.accountCode,
+      (net.get(leg.accountCode) ?? 0) + (leg.side === 'DEBIT' ? leg.amountMinor : -leg.amountMinor)
+    );
+  if (
+    net.get('CASH') !== -tender.amountMinor ||
+    net.get('SALES_CLEARING') !== 0 ||
+    net.get('SALES_REVENUE') !== tender.amountMinor ||
+    (net.get('INVENTORY') ?? 0) !== lot.unitCostMinor ||
+    (net.get('COST_OF_GOODS_SOLD') ?? 0) !== -lot.unitCostMinor ||
+    [...net.values()].reduce((a, b) => a + b, 0) !== 0 ||
+    availableAfter?.onHandUnits !== availableBefore.onHandUnits ||
+    quarantineAfter?.onHandUnits !== (quarantineBefore?.onHandUnits ?? 0) + 1 ||
+    returnLines.length !== 1 ||
+    returnLines[0]!.id !== returned.returnLine.id ||
+    newDrawer.length !== 1 ||
+    newDrawer[0]!.kind !== 'CASH_REFUND' ||
+    newDrawer[0]!.amountMinor !== tender.amountMinor ||
+    foldExpectedCash(drawerAfter.map(cashMovement)) - cashBefore !== -tender.amountMinor ||
+    JSON.stringify(receiptAfter) !== JSON.stringify(receiptBefore) ||
+    margin.length !== 1 ||
+    margin[0]!.revenueMinor !== 0 ||
+    margin[0]!.discountMinor !== 0 ||
+    margin[0]!.cogsMinor !== 0 ||
+    margin[0]!.grossMarginMinor !== 0
+  )
+    throw new Error('DEMO_RETURN_RECONCILIATION_MISMATCH_ROLLBACK');
+  const record = (
+    model: string,
+    id: string,
+    suffix: string,
+    facts: DemoObservedRecord['observedFacts']
+  ): DemoObservedRecord => ({
+    model,
+    persistedId: id,
+    planKey: `${namespace}finance:cash:${suffix}`,
+    receiptReference: `${namespace}finance:cash`,
+    observedFacts: facts,
+    observedHash: createHash('sha256').update(JSON.stringify({ model, id, facts })).digest('hex'),
+  });
+  return {
+    status: 'applied' as const,
+    records: [
+      record('PharmacySaleReturn', returned.saleReturn.id, 'full-return', {
+        originalSaleId: sale.id,
+        originalReceiptNumber: sale.receiptNumber,
+      }),
+      record('PharmacySaleReturnLine', returned.returnLine.id, 'full-return-line', {
+        saleLineId: line.id,
+        canonicalUnits: 1,
+        integrityDecision: input.integrityDecision,
+      }),
+      record('PharmacyStockMovement', returned.movement.id, 'return-stock', {
+        inventoryLotId: lot.id,
+        stockLocationId: quarantine.id,
+        disposition: 'QUARANTINE',
+        quantityUnits: 1,
+      }),
+      record('PharmacyRefund', refund.id, 'full-refund', {
+        originalTenderId: tender.id,
+        originalSaleId: sale.id,
+        amountMinor: refund.amountMinor,
+      }),
+      record('PharmacyDrawerMovement', newDrawer[0]!.id, 'refund-drawer', {
+        kind: 'CASH_REFUND',
+        amountMinor: tender.amountMinor,
+      }),
+      record('FinanceJournalEntry', stockJournal.id, 'return-journal', {
+        sourceId: returned.returnLine.id,
+      }),
+      record('FinanceJournalEntry', refundJournal.id, 'refund-journal', { sourceId: refund.id }),
+    ],
+    gaps: [
+      {
+        function: 'sales.returnSaleLine:partial',
+        status: 'UNSEEDED',
+        reason:
+          'The accepted cash fixture sold one canonical UNIT; a fractional-unit partial return is not eligible.',
+      },
+      {
+        function: 'sales.changeSaleStatus:void',
+        status: 'UNSEEDED',
+        reason:
+          'Void only accepts OPEN; this source is COMPLETED. This helper does not relabel a paid refund as void.',
+      },
+    ] satisfies DemoGap[],
+    originalSaleId: sale.id,
+    originalReceipt: receiptAfter,
+    refundId: refund.id,
+    returnedUnits: 1,
+    stockDisposition: 'QUARANTINE' as const,
+    refundedCashMinor: refund.amountMinor,
+    drawerCashDeltaMinor: -refund.amountMinor,
+    availableStockDelta: 0,
+    quarantineStockDelta: 1,
+    reversalJournalIds: [stockJournal.id, refundJournal.id],
+    reversalJournalLines: [...stockJournal.lines, ...refundJournal.lines],
+    margin: margin[0]!,
+    physicalDrawerProof: false as const,
+  };
+}
+
 /** One OTC UNIT from one prerecorded synthetic lot/location; no clinical
  * approvals, discounts, provider, printer, contact, refund or status shortcut.
  * Refusals precede sale creation. ALL later failures throw to root for rollback.
