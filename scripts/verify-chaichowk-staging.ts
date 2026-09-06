@@ -298,10 +298,6 @@ async function main() {
           [`assignment_final_${key}`, `branch_${suffix}_${key}`]
         );
       }
-      if (billingCheck)
-        await finalQuery(
-          `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ('perm_collect_final','org_final','role_final','payments:collect','ALLOW')`
-        );
       await finalQuery('COMMIT');
       const results = await Promise.all(
         ['A', 'B'].map(async (key) => {
