@@ -1,5 +1,25 @@
 # Pharmacy demo evidence runner — WHA-1388
 
+## Generated-ID contract correction (2026-09-07)
+
+Previous source/evidence remains at `72ac8671086a4d7c46ab2075d80685bb50a508e4`.
+The correction replaces planned `id` with a deterministic business `reference`;
+`key` remains the logical plan key. Execution results use `DemoObservedRecord`
+with `planKey`, service-returned `persistedId`, retained `receiptReference`, and
+observed facts/hash. Neither a reference nor a planned hash proves persistence.
+`validateObservedMapping` checks a supplied mapping without establishing its
+provenance, creating a receipt, or enabling apply. Helpers are not integrated.
+
+New focused check:
+`bun --no-env-file test scripts/seed-pharmacy-demo.test.ts --test-name-pattern 'generated-ID mapping'`
+— 1 passed, 0 failed, 53 unchanged tests filtered out, exit 0. It checks generated
+IDs distinct from logical references and rejects mismatched keys/models, missing
+IDs/receipt references, changed hashes and changed facts. Prior 53-test evidence
+is preserved above its original source revision; it was not replayed or presented
+as fresh evidence for this correction. Scoped strict TypeScript and ESLint checks
+using the previously documented matching sibling toolchain exited 0. Package,
+lock and schema bytes still match. `git diff --check` exited 0.
+
 Source-only offline dry-run. **No live application is implemented or approved.**
 This package validates a supplied non-secret evidence document, reconciles its
 namespace-history facts before coverage planning, and emits a retainable JSON

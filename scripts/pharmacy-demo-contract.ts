@@ -43,15 +43,27 @@ export type DemoGap = {
   reason: string;
 };
 export type DemoPlannedRecord = {
+  /** Deterministic namespaced logical key, never a database ID. */
   key: string;
   model: string;
-  id: string;
+  /** Namespaced business reference supported by the owning service. */
+  reference: string;
   expectedHash: string;
   expectedFacts: Record<string, DemoFact>;
 };
+/** Populated only from persisted service results and retained receipt observation. */
+export type DemoObservedRecord = {
+  planKey: string;
+  model: string;
+  persistedId: string;
+  receiptReference: string;
+  observedHash: string;
+  observedFacts: Record<string, DemoFact>;
+};
 /** Helpers export their own planner/executor with genuine service/transaction types.
  * This contract deliberately does not invent a transaction or an execution adapter.
- * Plans are bounded to <=100 records/lane and use namespace-prefixed IDs/keys.
+ * Plans are bounded to <=100 records/lane and use namespace-prefixed keys/references.
+ * Service-generated IDs are observed after execution; plans never prescribe them.
  * Helpers must independently validate their actual service prerequisites.
  */
 export type PharmacyDemoPlan = {
@@ -63,7 +75,7 @@ export type PharmacyDemoPlan = {
 };
 export type PharmacyDemoResult =
   | { status: 'refused'; unmetPrerequisites: string[] }
-  | { status: 'applied' | 'replayed'; records: DemoPlannedRecord[]; gaps: DemoGap[] };
+  | { status: 'applied' | 'replayed'; records: DemoObservedRecord[]; gaps: DemoGap[] };
 
 /** Non-secret, manually supplied observations. NOT a live authorization credential. */
 export type PharmacyDemoEvidence = {
