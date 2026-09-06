@@ -3,12 +3,16 @@ import { test } from 'node:test';
 import {
   executePharmacyDemoFinance,
   planPharmacyDemoFinance,
-  type PharmacyDemoFinanceContext,
+  inspectPharmacyDemoJournalArithmetic,
   type PharmacyDemoFinanceStock,
-  type PharmacyDemoMarginReader,
 } from './pharmacy-demo-finance';
+import type {
+  PharmacyDemoContext,
+  PharmacyDemoPlan,
+  PharmacyDemoResult,
+} from './pharmacy-demo-contract';
 
-const context: PharmacyDemoFinanceContext = {
+const context: PharmacyDemoContext = {
   organizationId: 'synthetic-org-a',
   branchId: 'synthetic-branch-a',
   ownerUserId: 'existing-owner-ref',
@@ -17,8 +21,9 @@ const context: PharmacyDemoFinanceContext = {
   scenarioAt: '2026-09-07T10:00:00+05:00',
   timezone: 'Asia/Karachi',
   currency: 'PKR',
-  pharmacySalesEnabled: true,
-  financialReportsAuthorized: true,
+  actors: [],
+  references: [],
+  modules: [],
 };
 const stock: PharmacyDemoFinanceStock = {
   medicineId: 'approved-medicine-ref',
@@ -33,13 +38,34 @@ const stock: PharmacyDemoFinanceStock = {
     { saleUnit: 'UNIT', packLevelId: 'unit-ref', canonicalUnitsPerSaleUnit: 1 },
   ],
 };
-const plan = () => planPharmacyDemoFinance(context, stock);
-const inspection = (readGrossMargin: PharmacyDemoMarginReader) => ({
-  from: '2026-09-07T00:00:00Z',
-  to: '2026-09-08T00:00:00Z',
-  retainedSaleLineIds: ['demo-line'],
-  readGrossMargin,
-});
+const observed: PharmacyDemoContext = {
+  ...context,
+  actors: [
+    {
+      userId: 'synthetic-user',
+      actorId: 'synthetic-actor',
+      organizationId: context.organizationId,
+      branchId: context.branchId,
+      active: true,
+      synthetic: true,
+      capabilities: ['reports:financial', 'reports:operational'],
+    },
+  ],
+  modules: [{ key: 'pharmacy-reports', enabled: true }],
+  references: [
+    { kind: 'medicine' as const, id: stock.medicineId },
+    { kind: 'presentation' as const, id: stock.presentationId },
+    { kind: 'location' as const, id: stock.stockLocationId },
+    ...stock.units.map((unit) => ({ kind: 'pack' as const, id: unit.packLevelId })),
+  ].map((item) => ({
+    ...item,
+    organizationId: context.organizationId,
+    branchId: context.branchId,
+    approved: true,
+    observedHash: 'synthetic-observation-hash',
+  })),
+};
+const plan = () => planPharmacyDemoFinance(observed, stock);
 const row = {
   key: 'demo-line',
   revenueMinor: 990,
@@ -48,7 +74,23 @@ const row = {
   grossMarginMinor: 390,
 };
 
-test('uses actual priceFromLot rounding for bounded pack/strip/unit quotes', () => {
+test('implements shared plan/result contract without invented persisted records', async () => {
+  const shared: PharmacyDemoPlan = plan();
+  assert.equal(shared.lane, 'finance');
+  assert.deepEqual(shared.records, []);
+  assert.ok(
+    shared.gaps.every(
+      (gap) => gap.function && ['OWNER-INPUT', 'UNSEEDED', 'DRAFT-ONLY'].includes(gap.status)
+    )
+  );
+  const result: PharmacyDemoResult = await executePharmacyDemoFinance(
+    observed,
+    stock,
+    shared.digest
+  );
+  assert.equal(result.status, 'refused');
+});
+test('uses actual priceFromLot rounding for pack/strip/unit quotes', () => {
   assert.deepEqual(
     plan().examples.map((x) => [x.saleUnit, x.canonicalUnits, x.unitPriceMinor]),
     [
@@ -60,22 +102,53 @@ test('uses actual priceFromLot rounding for bounded pack/strip/unit quotes', () 
   assert.equal(plan().writesEnabled, false);
   assert.equal(plan().coverage, 'ARITHMETIC_ONLY');
 });
-test('stable hash ignores input property and unit order', () => {
+test('stable digest ignores property, reference, capability and unit order', () => {
   assert.equal(
-    plan().hash,
-    planPharmacyDemoFinance({ ...context }, { ...stock, units: [...stock.units].reverse() }).hash
+    planPharmacyDemoFinance(context, stock).digest,
+    planPharmacyDemoFinance(context, { ...stock, units: [...stock.units].reverse() }).digest
+  );
+  assert.equal(
+    plan().digest,
+    planPharmacyDemoFinance(
+      {
+        ...observed,
+        references: [...observed.references].reverse(),
+        actors: observed.actors.map((actor) => ({
+          ...actor,
+          capabilities: [...actor.capabilities].reverse(),
+        })),
+      },
+      { ...stock, units: [...stock.units].reverse() }
+    ).digest
   );
 });
-test('hash binds both organizations, both branches, source refs and unrounded price', () => {
+test('digest binds organizations, branches, source refs and unrounded price', () => {
   for (const changed of [
     { organizationId: 'synthetic-org-b' },
     { branchId: 'synthetic-branch-b' },
     { ownerUserId: 'another-owner' },
     { namespace: 'pharmacy-demo:other' },
   ])
-    assert.notEqual(plan().hash, planPharmacyDemoFinance({ ...context, ...changed }, stock).hash);
+    assert.notEqual(
+      plan().digest,
+      planPharmacyDemoFinance({ ...observed, ...changed }, stock).digest
+    );
   for (const changed of [{ inventoryLotId: 'other-lot' }, { printedMrpMinor: 1002 }])
-    assert.notEqual(plan().hash, planPharmacyDemoFinance(context, { ...stock, ...changed }).hash);
+    assert.notEqual(
+      plan().digest,
+      planPharmacyDemoFinance(observed, { ...stock, ...changed }).digest
+    );
+});
+test('digest binds observed hashes, modules and actor capabilities', () => {
+  for (const changed of [
+    { references: observed.references.map((item) => ({ ...item, observedHash: 'changed' })) },
+    { modules: [{ key: 'pharmacy-reports', enabled: false }] },
+    { actors: observed.actors.map((actor) => ({ ...actor, capabilities: [] })) },
+  ])
+    assert.notEqual(
+      plan().digest,
+      planPharmacyDemoFinance({ ...observed, ...changed }, stock).digest
+    );
 });
 test('rejects bad namespace, calendar date, timezone and currency', () => {
   for (const changed of [
@@ -86,7 +159,7 @@ test('rejects bad namespace, calendar date, timezone and currency', () => {
     { currency: 'USD' },
   ])
     assert.throws(() =>
-      planPharmacyDemoFinance({ ...context, ...changed } as PharmacyDemoFinanceContext, stock)
+      planPharmacyDemoFinance({ ...observed, ...changed } as PharmacyDemoContext, stock)
     );
 });
 test('rejects invalid arithmetic and duplicate/unbounded unit examples', () => {
@@ -97,112 +170,74 @@ test('rejects invalid arithmetic and duplicate/unbounded unit examples', () => {
     { units: [...stock.units, stock.units[0]!] },
     { units: [{ saleUnit: 'UNIT' as const, packLevelId: 'u', canonicalUnitsPerSaleUnit: 2 }] },
   ])
-    assert.throws(() => planPharmacyDemoFinance(context, { ...stock, ...changed }));
+    assert.throws(() => planPharmacyDemoFinance(observed, { ...stock, ...changed }));
 });
 test('missing stock remains explicit, never fabricates records', async () => {
   const empty = planPharmacyDemoFinance(context);
   assert.deepEqual(empty.examples, []);
   assert.equal(empty.regulatory, 'UNSEEDED/OWNER-INPUT');
-  const result = await executePharmacyDemoFinance(context, undefined, empty.hash);
-  assert.equal(result.status, 'BLOCKED');
-  assert.equal(result.writes, 0);
-  assert.equal(result.gaps.length, 4);
-});
-test('changed plan refuses before service access', async () => {
-  await assert.rejects(
-    executePharmacyDemoFinance(
-      { ...context, branchId: 'synthetic-branch-b' },
-      stock,
-      plan().hash,
-      inspection(async () => {
-        assert.fail('must not read');
-      })
-    ),
-    /PLAN_CHANGED/
+  assert.ok(empty.gaps.some((gap) => gap.function === 'medicine.priceFromLot'));
+  assert.equal(
+    (await executePharmacyDemoFinance(context, undefined, empty.digest)).status,
+    'refused'
   );
 });
-test('missing module or report authorization performs no reads', async () => {
-  for (const changed of [{ pharmacySalesEnabled: false }, { financialReportsAuthorized: false }]) {
-    const scoped = { ...context, ...changed };
-    const result = await executePharmacyDemoFinance(
-      scoped,
+test('changed plan returns shared refusal result', async () => {
+  assert.deepEqual(
+    await executePharmacyDemoFinance(
+      { ...observed, branchId: 'synthetic-branch-b' },
       stock,
-      planPharmacyDemoFinance(scoped, stock).hash,
-      inspection(async () => {
-        assert.fail('must not read');
-      })
+      plan().digest
+    ),
+    { status: 'refused', unmetPrerequisites: ['PLAN_CHANGED'] }
+  );
+});
+test('missing, duplicate and cross-tenant/branch observations create precise gaps', () => {
+  for (const references of [
+    [],
+    [...observed.references, observed.references[0]!],
+    observed.references.map((item) => ({ ...item, organizationId: 'synthetic-org-b' })),
+    observed.references.map((item) => ({ ...item, branchId: 'synthetic-branch-b' })),
+  ])
+    assert.ok(
+      planPharmacyDemoFinance({ ...observed, references }, stock).gaps.some(
+        (gap) => gap.function === 'finance.reference'
+      )
     );
-    assert.equal(result.journalInspection, 'UNSEEDED/OWNER-INPUT');
+  assert.ok(!plan().gaps.some((gap) => gap.function === 'finance.reference'));
+});
+test('manual approval/capability facts still refuse execution on replay', async () => {
+  const first = await executePharmacyDemoFinance(observed, stock, plan().digest);
+  assert.equal(first.status, 'refused');
+  assert.deepEqual(await executePharmacyDemoFinance(observed, stock, plan().digest), first);
+  if (first.status === 'refused') {
+    assert.ok(first.unmetPrerequisites.some((gap) => gap.includes('createSale')));
+    assert.ok(first.unmetPrerequisites.some((gap) => gap.includes('grossMargin')));
   }
 });
-test('read execution passes exact tenant/branch scope and excludes unrelated revenue', async () => {
-  const result = await executePharmacyDemoFinance(
-    context,
-    stock,
-    plan().hash,
-    inspection(async (scope, input) => {
-      assert.deepEqual(scope, {
-        organizationId: context.organizationId,
-        branchId: context.branchId,
-      });
-      assert.equal(input.by, 'line');
-      return [row, { ...row, key: 'legitimate-line' }];
-    })
+test('pure journal assertion filters unrelated revenue without claiming reconciliation', () => {
+  const result = inspectPharmacyDemoJournalArithmetic(
+    [row, { ...row, key: 'legitimate-line' }],
+    ['demo-line']
   );
   assert.deepEqual(result.rows, [row]);
   assert.equal(result.journalInspection, 'JOURNAL_ARITHMETIC_ONLY');
   assert.equal(result.moneyStockReconciled, false);
   assert.equal(result.drawerProof, false);
 });
-test('replay stays read-only, never claims paid coverage', async () => {
-  let reads = 0;
-  const read = inspection(async () => {
-    reads++;
-    return [row];
-  });
-  const first = await executePharmacyDemoFinance(context, stock, plan().hash, read);
-  assert.deepEqual(await executePharmacyDemoFinance(context, stock, plan().hash, read), first);
-  assert.equal(reads, 2);
-  assert.equal(first.status, 'BLOCKED');
-  assert.equal(first.writes, 0);
+test('missing journal sources cannot pass inspection', () => {
+  assert.equal(
+    inspectPharmacyDemoJournalArithmetic([], ['demo-line']).journalInspection,
+    'MISSING_JOURNAL_LINES'
+  );
 });
-test('missing journal sources cannot pass inspection', async () => {
-  const result = await executePharmacyDemoFinance(
-    context,
-    stock,
-    plan().hash,
-    inspection(async () => [])
-  );
-  assert.equal(result.journalInspection, 'MISSING_JOURNAL_LINES');
-});
-test('journal mismatches, duplicates, outages and oversized windows fail closed', async () => {
-  for (const rows of [[{ ...row, grossMarginMinor: 391 }], [row, row]])
-    await assert.rejects(
-      executePharmacyDemoFinance(
-        context,
-        stock,
-        plan().hash,
-        inspection(async () => rows)
-      )
-    );
-  await assert.rejects(
-    executePharmacyDemoFinance(
-      context,
-      stock,
-      plan().hash,
-      inspection(async () => {
-        throw new Error('offline');
-      })
-    ),
-    /offline/
-  );
-  await assert.rejects(
-    executePharmacyDemoFinance(context, stock, plan().hash, {
-      ...inspection(async () => {
-        assert.fail('must not read');
-      }),
-      to: '2027-01-01T00:00:00Z',
-    }),
-    /INVALID_REPORT_PERIOD/
-  );
+test('journal mismatches, duplicates, unsafe numbers and unbounded refs fail closed', () => {
+  for (const rows of [
+    [{ ...row, grossMarginMinor: 391 }],
+    [row, row],
+    [{ ...row, revenueMinor: Infinity }],
+  ])
+    assert.throws(() => inspectPharmacyDemoJournalArithmetic(rows, ['demo-line']));
+  for (const ids of [[], ['a', 'b', 'c', 'd'], ['a', 'a']])
+    assert.throws(() => inspectPharmacyDemoJournalArithmetic([row], ids), /INVALID_RETAINED_LINES/);
 });

@@ -1,23 +1,18 @@
 import { createHash } from 'node:crypto';
 import { canonicalUnits, priceFromLot } from '../src/lib/pharmacy/medicine';
+import type {
+  DemoGap,
+  PharmacyDemoContext,
+  PharmacyDemoPlan,
+  PharmacyDemoResult,
+} from './pharmacy-demo-contract';
 
 /** Internal tooling only. Root must validate identity, branch assignment, module
  * and report capabilities, approved references and receipt/tombstones FIRST.
  * These facts are not an authorization token and must never come from a client.
  * No DB client, transaction, executable main or mutation is owned here.
  */
-export interface PharmacyDemoFinanceContext {
-  organizationId: string;
-  branchId: string;
-  ownerUserId: string;
-  namespace: string;
-  businessDate: string;
-  scenarioAt: string;
-  timezone: string;
-  currency: 'PKR';
-  pharmacySalesEnabled: boolean;
-  financialReportsAuthorized: boolean;
-}
+export type PharmacyDemoFinanceContext = PharmacyDemoContext;
 
 export interface PharmacyDemoFinanceStock {
   medicineId: string;
@@ -153,8 +148,8 @@ export function planPharmacyDemoFinance(
     scenarioAt: new Date(context.scenarioAt).toISOString(),
     timezone: context.timezone,
     currency: context.currency,
-    pharmacySalesEnabled: context.pharmacySalesEnabled,
-    financialReportsAuthorized: context.financialReportsAuthorized,
+    // Observations bind the quote, but never authorize a service call.
+    observations: canonicalObservations(context),
     // Include source price even when rounding produces the same quote.
     sourcePrice: stock
       ? { printedMrpMinor: stock.printedMrpMinor, unitsPerPack: stock.unitsPerPack }
@@ -165,13 +160,97 @@ export function planPharmacyDemoFinance(
     regulatory: 'UNSEEDED/OWNER-INPUT' as const,
     writesEnabled: false as const,
   };
-  return { ...facts, hash: createHash('sha256').update(JSON.stringify(facts)).digest('hex') };
+  const gaps: DemoGap[] = pharmacyDemoFinanceGaps.map((gap) => ({
+    function: gap.service,
+    status: 'OWNER-INPUT',
+    reason: gap.reason,
+  }));
+  gaps.push({
+    function: 'finance-reports.grossMargin',
+    status: 'UNSEEDED',
+    reason:
+      'The data-only context cannot authorize a report or establish retained sale-line ownership. Require the genuine scoped service context and root receipt reconciliation; journal arithmetic alone is not money/stock proof.',
+  });
+  if (!stock)
+    gaps.push({
+      function: 'medicine.priceFromLot',
+      status: 'OWNER-INPUT',
+      reason:
+        'Supply observed lot price and approved pack conversions; no stock reference was supplied.',
+    });
+  if (stock) {
+    const required = [
+      ['medicine', stock.medicineId],
+      ['presentation', stock.presentationId],
+      ['location', stock.stockLocationId],
+      ...stock.units.map((unit) => ['pack', unit.packLevelId]),
+    ];
+    for (const [kind, id] of required) {
+      const matches = context.references.filter((item) => item.kind === kind && item.id === id);
+      if (
+        matches.length !== 1 ||
+        !matches[0]!.approved ||
+        !matches[0]!.observedHash ||
+        matches[0]!.organizationId !== context.organizationId ||
+        matches[0]!.branchId !== context.branchId
+      )
+        gaps.push({
+          function: 'finance.reference',
+          status: 'OWNER-INPUT',
+          reason: `Missing or ambiguous scoped observation: ${kind}:${id}`,
+        });
+    }
+  }
+  gaps.sort((a, b) => {
+    const left = JSON.stringify(a),
+      right = JSON.stringify(b);
+    return left < right ? -1 : left > right ? 1 : 0;
+  });
+  const plan = {
+    lane: 'finance',
+    namespace: scope.namespace,
+    digest: createHash('sha256').update(JSON.stringify({ facts, gaps })).digest('hex'),
+    // Quotes are not persistent records. No model/ID or expected posted facts invented.
+    records: [],
+    gaps,
+  } satisfies PharmacyDemoPlan;
+  return { ...facts, ...plan };
 }
 
-/** Matches finance-reports.grossMargin's result and scope/input. Root binds its
- * existing scoped transaction: (scope, input) => grossMargin(tx, scope, input).
- * No alternative accounting query or write adapter is accepted.
- */
+function canonicalObservations(context: PharmacyDemoContext) {
+  const order = <T>(items: T[]) =>
+    items.sort((a, b) => {
+      const left = JSON.stringify(a),
+        right = JSON.stringify(b);
+      return left < right ? -1 : left > right ? 1 : 0;
+    });
+  return {
+    actors: order(
+      context.actors.map((actor) => ({
+        userId: actor.userId,
+        actorId: actor.actorId,
+        organizationId: actor.organizationId,
+        branchId: actor.branchId,
+        active: actor.active,
+        synthetic: actor.synthetic,
+        capabilities: [...actor.capabilities].sort(),
+      }))
+    ),
+    references: order(
+      context.references.map((item) => ({
+        kind: item.kind,
+        id: item.id,
+        organizationId: item.organizationId,
+        branchId: item.branchId,
+        approved: item.approved,
+        observedHash: item.observedHash,
+      }))
+    ),
+    modules: order(context.modules.map((module) => ({ key: module.key, enabled: module.enabled }))),
+  };
+}
+
+/** Pure assertion over genuine grossMargin output; not a DB execution adapter. */
 export interface PharmacyDemoMarginRow {
   key: string | null;
   revenueMinor: number;
@@ -179,61 +258,35 @@ export interface PharmacyDemoMarginRow {
   cogsMinor: number;
   grossMarginMinor: number;
 }
-export type PharmacyDemoMarginReader = (
-  scope: { organizationId: string; branchId: string },
-  input: { from: Date; to: Date; by: 'line' }
-) => Promise<PharmacyDemoMarginRow[]>;
-
-/** Read-only domain execution. Supplied line IDs must already belong to this
- * namespace's retained receipt; caller validates ownership before this call.
- * Report output proves journal arithmetic only, never tender/stock/drawer proof.
- * Failed reads propagate: do not disguise outages as missing demo coverage.
+/** No runnable root/service contract has been supplied. Manual observations are
+ * never authority, even when every approved/synthetic/capability flag is true.
+ * Refuse before any service call; do not invent a transaction or callback adapter.
  */
 export async function executePharmacyDemoFinance(
   context: PharmacyDemoFinanceContext,
   stock: PharmacyDemoFinanceStock | undefined,
-  expectedPlanHash: string,
-  inspection?: {
-    from: string;
-    to: string;
-    retainedSaleLineIds: readonly string[];
-    readGrossMargin: PharmacyDemoMarginReader;
-  }
-) {
+  expectedPlanHash: string
+): Promise<PharmacyDemoResult> {
   const plan = planPharmacyDemoFinance(context, stock);
-  if (plan.hash !== expectedPlanHash) throw new Error('PLAN_CHANGED');
-  const base = {
-    planHash: plan.hash,
-    status: 'BLOCKED' as const,
-    writes: 0,
-    gaps: plan.gaps,
-    moneyStockReconciled: false as const,
-    drawerProof: false as const,
+  if (plan.digest !== expectedPlanHash)
+    return { status: 'refused', unmetPrerequisites: ['PLAN_CHANGED'] };
+  return {
+    status: 'refused',
+    unmetPrerequisites: plan.gaps.map((gap) => `${gap.function}: ${gap.reason}`),
   };
-  if (!inspection || !context.pharmacySalesEnabled || !context.financialReportsAuthorized)
-    return { ...base, journalInspection: 'UNSEEDED/OWNER-INPUT' as const, rows: [] };
-  const ids = inspection.retainedSaleLineIds;
+}
+
+/** Root must establish retained-line ownership before supplying IDs. This pure
+ * check never claims authorization, live revenue or tender/stock reconciliation.
+ */
+export function inspectPharmacyDemoJournalArithmetic(
+  source: readonly PharmacyDemoMarginRow[],
+  ids: readonly string[]
+) {
   if (ids.length < 1 || ids.length > 3 || new Set(ids).size !== ids.length)
     throw new Error('INVALID_RETAINED_LINES');
   ids.forEach(ref);
-  const from = new Date(inspection.from),
-    to = new Date(inspection.to);
-  if (
-    !Number.isFinite(from.getTime()) ||
-    !Number.isFinite(to.getTime()) ||
-    from >= to ||
-    to.getTime() - from.getTime() > 31 * 86400000
-  )
-    throw new Error('INVALID_REPORT_PERIOD');
-  const rows = (
-    await inspection.readGrossMargin(
-      {
-        organizationId: context.organizationId,
-        branchId: context.branchId,
-      },
-      { from, to, by: 'line' }
-    )
-  ).filter((row) => row.key !== null && ids.includes(row.key));
+  const rows = source.filter((row) => row.key !== null && ids.includes(row.key));
   if (new Set(rows.map((row) => row.key)).size !== rows.length)
     throw new Error('DUPLICATE_REPORT_LINE');
   for (const row of rows) {
@@ -245,7 +298,8 @@ export async function executePharmacyDemoFinance(
       throw new Error('JOURNAL_MARGIN_MISMATCH');
   }
   return {
-    ...base,
+    moneyStockReconciled: false as const,
+    drawerProof: false as const,
     journalInspection:
       rows.length === ids.length
         ? ('JOURNAL_ARITHMETIC_ONLY' as const)
