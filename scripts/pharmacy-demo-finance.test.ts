@@ -16,7 +16,7 @@ const context: PharmacyDemoContext = {
   organizationId: 'synthetic-org-a',
   branchId: 'synthetic-branch-a',
   ownerUserId: 'existing-owner-ref',
-  namespace: 'pharmacy-demo:unit-test',
+  namespace: 'phdemo_0123456789abcdef01234567_',
   businessDate: '2026-09-07',
   scenarioAt: '2026-09-07T10:00:00+05:00',
   timezone: 'Asia/Karachi',
@@ -74,6 +74,46 @@ const row = {
   grossMarginMinor: 390,
 };
 
+test('namespace compatibility: preserve canonical identity and quote refs without persisted IDs', () => {
+  for (const namespace of [
+    'phdemo_0123456789abcdef01234567_',
+    'phdemo_abcdef0123456789abcdef01_',
+  ]) {
+    const input = { ...observed, namespace };
+    const result = planPharmacyDemoFinance(input, stock);
+    assert.equal(input.namespace, namespace);
+    assert.equal(result.namespace, namespace);
+    assert.equal(result.scope.namespace, namespace);
+    assert.deepEqual(result.records, []);
+    assert.deepEqual(
+      result.examples.map((example) => example.ref),
+      ['pack', 'strip', 'unit'].map((unit) => `${namespace}:finance:${unit}`)
+    );
+    assert.equal(result.digest, planPharmacyDemoFinance(input, stock).digest);
+  }
+  assert.notEqual(
+    plan().digest,
+    planPharmacyDemoFinance({ ...observed, namespace: 'phdemo_abcdef0123456789abcdef01_' }, stock)
+      .digest
+  );
+});
+
+test('namespace compatibility: refuse legacy, uppercase, malformed and rewritten prefixes', () => {
+  for (const namespace of [
+    'pharmacy-demo:unit-test',
+    'phdemo_ABCDEF0123456789abcdef01_',
+    'phdemo_0123456789abcdef0123456_',
+    'phdemo_0123456789abcdef012345678_',
+    'phdemo_0123456789abcdef01234567',
+    `${context.namespace}finance`,
+  ]) {
+    assert.throws(
+      () => planPharmacyDemoFinance({ ...observed, namespace }, stock),
+      /INVALID_DEMO_NAMESPACE/
+    );
+  }
+});
+
 test('implements shared plan/result contract without invented persisted records', async () => {
   const shared: PharmacyDemoPlan = plan();
   assert.equal(shared.lane, 'finance');
@@ -127,7 +167,7 @@ test('digest binds organizations, branches, source refs and unrounded price', ()
     { organizationId: 'synthetic-org-b' },
     { branchId: 'synthetic-branch-b' },
     { ownerUserId: 'another-owner' },
-    { namespace: 'pharmacy-demo:other' },
+    { namespace: 'phdemo_abcdef0123456789abcdef01_' },
   ])
     assert.notEqual(
       plan().digest,

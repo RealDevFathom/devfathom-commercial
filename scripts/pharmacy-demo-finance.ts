@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import { canonicalUnits, priceFromLot } from '../src/lib/pharmacy/medicine';
+import { isPharmacyDemoNamespace } from './pharmacy-demo-contract';
 import type {
   DemoGap,
   PharmacyDemoContext,
@@ -81,8 +82,7 @@ export function planPharmacyDemoFinance(
     ownerUserId: ref(context.ownerUserId),
     namespace: ref(context.namespace),
   };
-  if (!/^pharmacy-demo:[a-zA-Z0-9:_-]+$/.test(scope.namespace))
-    throw new Error('INVALID_DEMO_NAMESPACE');
+  if (!isPharmacyDemoNamespace(scope.namespace)) throw new Error('INVALID_DEMO_NAMESPACE');
   if (context.currency !== 'PKR') throw new Error('INVALID_CURRENCY');
   if (
     !/^\d{4}-\d{2}-\d{2}$/.test(context.businessDate) ||
