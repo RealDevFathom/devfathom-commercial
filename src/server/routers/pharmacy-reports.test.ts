@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  repeatRead: vi.fn().mockResolvedValue({ horizons: [] }),
   can: vi.fn(async () => false),
   branchFindMany: vi.fn(),
   settingUpsert: vi.fn(),
@@ -8,6 +9,13 @@ const mocks = vi.hoisted(() => ({
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
   reportUpdate: vi.fn(),
+}));
+
+vi.mock('@/lib/pharmacy/repeat-purchasing', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/repeat-purchasing')>(
+    '@/lib/pharmacy/repeat-purchasing'
+  )),
+  readRepeatPurchasing: mocks.repeatRead,
 }));
 
 vi.mock('server-only', () => ({}));
@@ -27,10 +35,11 @@ vi.mock('@/server/audit', () => ({
   recordTrpcAudit: vi.fn(),
 }));
 
+import { hasModule } from '@/lib/entitlements';
 import type { TRPCContext } from '../trpc';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 
-function caller() {
+function caller(role = 'ADMIN') {
   return pharmacyReportsRouter.createCaller({
     db: {
       pharmacyBranch: { findMany: mocks.branchFindMany, findFirst: mocks.branchFindFirst },
@@ -48,7 +57,7 @@ function caller() {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_admin', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org_1' },
+      user: { id: 'user_admin', role, status: 'ACTIVE', organizationId: 'org_1' },
     },
     organization: { id: 'org_1' },
     support: null,
@@ -197,5 +206,58 @@ describe('RX-08 pharmacovigilance state boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.reportFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('repeat purchasing authorization', () => {
+  const input = { from: '2026-01-01', to: '2026-01-31', asOf: '2026-05-01T00:00:00Z' };
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+  });
+  it('requires financial permission before data reads', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(caller().repeatPurchasing(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.repeatRead).not.toHaveBeenCalled();
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+  it('requires operational permission before data reads', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().repeatPurchasing(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+  it('denies non-admin role despite capabilities', async () => {
+    await expect(caller('EMPLOYEE').repeatPurchasing(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+  it('denies module access and foreign/omitted branch scope', async () => {
+    await expect(
+      caller().repeatPurchasing({ ...input, branchId: 'other-tenant-branch' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().repeatPurchasing(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+  it('passes only active tenant branches and fixed cutoff to read-only helper', async () => {
+    await caller().repeatPurchasing(input);
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
+    );
+    expect(mocks.repeatRead).toHaveBeenCalledWith(expect.anything(), 'org_1', {
+      ...input,
+      branchIds: ['branch_1'],
+    });
+  });
+  it('rejects future cutoff and irrelevant item filters', async () => {
+    await expect(
+      caller().repeatPurchasing({ ...input, asOf: '2999-01-01T00:00:00Z' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(
+      caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.repeatRead).not.toHaveBeenCalled();
   });
 });
