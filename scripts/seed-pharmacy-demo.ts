@@ -3,7 +3,6 @@ import { createHash } from 'node:crypto';
 import { constants } from 'node:fs';
 import { open, readFile, readdir, realpath, stat } from 'node:fs/promises';
 import { basename, dirname, join } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import {
@@ -455,7 +454,7 @@ async function bindDisposable(target: DisposablePharmacyTarget) {
   object(target, 'directory database');
   requireFact(/^wha1388_[a-f0-9]{24}$/.test(target.database), 'DISPOSABLE_ID_REQUIRED');
   const directory = await realpath(target.directory);
-  const parent = await realpath(tmpdir());
+  const parent = await realpath('/tmp');
   const info = await stat(directory);
   requireFact(
     directory === target.directory &&

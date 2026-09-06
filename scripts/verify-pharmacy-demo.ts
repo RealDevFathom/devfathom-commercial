@@ -7,7 +7,6 @@ import { randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
-import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import type { PharmacyDraftRequest } from './pharmacy-demo-contract';
 import {
@@ -19,8 +18,22 @@ import {
 } from './seed-pharmacy-demo';
 
 const root = dirname(dirname(fileURLToPath(import.meta.url)));
-const directory = await realpath(await mkdtemp(join(tmpdir(), 'wha1388-pg-')));
-const database = `wha1388_${randomBytes(12).toString('hex')}`;
+// Harness TMPDIR can exceed PostgreSQL's 103-byte socket path limit on macOS.
+const retry = process.argv[2] === '--resume-initialized' ? process.argv[3] : undefined;
+assert.ok(process.argv.length === 2 || (retry && process.argv.length === 4));
+const directory = await realpath(retry ?? (await mkdtemp('/tmp/wha1388-pg-')));
+assert.equal(dirname(directory), await realpath('/tmp'));
+const database = retry
+  ? await readFile(join(directory, 'cluster-id'), 'utf8')
+  : `wha1388_${randomBytes(12).toString('hex')}`;
+if (retry) {
+  assert.ok(process.env.PAPERCLIP_RUN_ID);
+  assert.equal(
+    await readFile(join(directory, 'initializing-run'), 'utf8'),
+    process.env.PAPERCLIP_RUN_ID
+  );
+  assert.equal(await readFile(join(directory, 'data/PG_VERSION'), 'utf8'), '16\n');
+}
 const target = { directory, database };
 const socket = join(directory, 'socket');
 const data = join(directory, 'data');
@@ -120,19 +133,27 @@ async function processRun(path: string) {
 try {
   // Do not even read any inherited connection string, password, or token.
   delete process.env.DATABASE_URL;
-  await mkdir(socket, { mode: 0o700 });
-  await writeFile(join(directory, 'cluster-id'), database, { mode: 0o600, flag: 'wx' });
+  if (!retry) {
+    await mkdir(socket, { mode: 0o700 });
+    await writeFile(join(directory, 'cluster-id'), database, { mode: 0o600, flag: 'wx' });
+    await writeFile(
+      join(directory, 'initializing-run'),
+      process.env.PAPERCLIP_RUN_ID ?? 'standalone',
+      { mode: 0o600, flag: 'wx' }
+    );
+  }
   const migrations = await pharmacyMigrationManifest();
-  command('initdb', [
-    '-D',
-    data,
-    '-U',
-    bootstrap,
-    '--auth-local=trust',
-    '--auth-host=reject',
-    '--no-locale',
-    '--encoding=UTF8',
-  ]);
+  if (!retry)
+    command('initdb', [
+      '-D',
+      data,
+      '-U',
+      bootstrap,
+      '--auth-local=trust',
+      '--auth-host=reject',
+      '--no-locale',
+      '--encoding=UTF8',
+    ]);
   command('pg_ctl', [
     '-D',
     data,

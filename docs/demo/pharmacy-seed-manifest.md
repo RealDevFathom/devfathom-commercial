@@ -31,7 +31,7 @@ types. Empty options perform actual SQL observation in a READ ONLY transaction.
 Apply requires that observation's `reviewedDigest` and an expiry within one hour.
 Those fields bind a reviewed plan; they do not authorize a live environment.
 The runtime accepts no arbitrary URL and loads no dotenv files or credentials.
-It binds only an owner-private `wha1388-pg-*` directory under the system temp
+It binds only an owner-private `wha1388-pg-*` directory under canonical `/tmp`
 directory and its Unix socket. It independently asserts actual database name,
 cluster identity, runtime role, no network address, NOSUPERUSER, NOBYPASSRLS,
 tenant/user settings, row security, forced RLS on all 13 involved tables, and
@@ -85,6 +85,14 @@ missing references, two independent concurrent processes, SQL receipt-permission
 failure with rollback, removed history, operator scalar edits and preservation.
 Reproduction results will be published as retained issue evidence after execution;
 no real-PG PASS is claimed by this pre-verifier source publication.
+
+The first bootstrap attempt at source `375f4b172b01bf30ac8efcb776feb2494b67296c`
+failed before PostgreSQL startup or migration: the harness TMPDIR produced a
+socket path longer than macOS PostgreSQL's 103-byte limit. The correction uses
+canonical `/tmp`. The same initialized, never-started cluster was relocated;
+`--resume-initialized <directory>` permits one bootstrap continuation only for
+the same initializing Paperclip run, without another `initdb` or database reuse.
+No second cluster is required. Initial failure logs are retained with it.
 
 Implementation base: `9691ab142cf05b46cc6154d20302dc9e4cdbe4cf`, parent
 `586ad042b5250340d64f9982d50c8b1c4f6a135f`, tree
