@@ -563,10 +563,14 @@ async function integratedRows(tx: ScopedDb, request: PharmacyDraftRequest): Prom
   };
   const rows: RetainedRow[] = [];
   for (const table of INTEGRATED_TABLES) {
+    const identity =
+      table === 'pharmacy_stock_balances'
+        ? `json_build_array(t."organizationId",t."inventoryLotId",t."stockLocationId",t.disposition)::text`
+        : 't.id';
     // row_to_json preserves database scalar precision, including microseconds.
     const values = await tx.$queryRawUnsafe<Array<{ id: string; value: string }>>(
-      `SELECT t.id, row_to_json(t)::text AS value FROM "${table}" t
-       WHERE t."organizationId"=$1 AND (${joins[table] ?? 't."branchId"=$2'}) ORDER BY t.id LIMIT 101`,
+      `SELECT ${identity} AS id, row_to_json(t)::text AS value FROM "${table}" t
+       WHERE t."organizationId"=$1 AND (${joins[table] ?? 't."branchId"=$2'}) ORDER BY id LIMIT 101`,
       request.organizationId,
       request.branchId
     );
