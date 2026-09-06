@@ -165,7 +165,26 @@ try {
     'start',
   ]);
   started = true;
-  command('createdb', ['-h', socket, '-U', bootstrap, database]);
+  const databaseExists =
+    command('psql', [
+      '-X',
+      '-h',
+      socket,
+      '-U',
+      bootstrap,
+      '-d',
+      'postgres',
+      '-Atc',
+      `SELECT count(*) FROM pg_database WHERE datname='${database}'`,
+    ]) === '1';
+  assert.ok(!databaseExists || retry, 'Only this initializing run can resume its database');
+  if (!databaseExists) command('createdb', ['-h', socket, '-U', bootstrap, database]);
+  const adminUrl = `postgresql://${bootstrap}@localhost/${database}?host=${encodeURIComponent(socket)}`;
+  // Normal repository deployment prerequisite; no migration/ACL guard is weakened.
+  command(process.execPath, ['--no-env-file', 'prisma/prepare-extensions.ts'], undefined, {
+    ...environment,
+    EXTENSION_ADMIN_DATABASE_URL: adminUrl,
+  });
   const config = join(directory, 'prisma.config.ts');
   await writeFile(
     config,
@@ -174,13 +193,34 @@ try {
     datasource: { url: process.env.DATABASE_URL } };\n`,
     { mode: 0o600 }
   );
+  if (databaseExists) {
+    assert.equal(
+      sql(`SELECT migration_name FROM _prisma_migrations
+      WHERE finished_at IS NULL AND rolled_back_at IS NULL;`),
+      '20260830120000_btree_gist_public_execute_acl'
+    );
+    command(
+      'node',
+      [
+        'node_modules/prisma/build/index.js',
+        'migrate',
+        'resolve',
+        '--rolled-back',
+        '20260830120000_btree_gist_public_execute_acl',
+        '--config',
+        config,
+      ],
+      undefined,
+      { ...environment, DATABASE_URL: adminUrl }
+    );
+  }
   const migrationLog = command(
     'node',
     ['node_modules/prisma/build/index.js', 'migrate', 'deploy', '--config', config],
     undefined,
     {
       ...environment,
-      DATABASE_URL: `postgresql://${bootstrap}@localhost/${database}?host=${encodeURIComponent(socket)}`,
+      DATABASE_URL: adminUrl,
     }
   );
   await writeFile(join(directory, 'migrations.log'), migrationLog, { mode: 0o600 });
