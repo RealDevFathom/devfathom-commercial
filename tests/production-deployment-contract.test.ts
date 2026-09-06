@@ -123,10 +123,10 @@ describe('production deployment contract', () => {
     );
   });
 
-  it('retains the existing staging seed inputs', () => {
+  it('disables generic staging seeding while retaining initialization inputs', () => {
     const staging = read('infra', 'staging.bicepparam');
 
-    expect(staging).toContain('param seedDatabase = true');
+    expect(staging).toContain('param seedDatabase = false');
     expect(staging).toContain('param bootstrapDatabase = false');
     expect(staging).toContain("param emailDeliveryMode = 'capture'");
     expect(staging).toContain("readEnvironmentVariable('DEVFATHOM_STAGING_SEED_PASSWORD', '')");
