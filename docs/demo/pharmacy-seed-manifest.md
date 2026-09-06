@@ -392,3 +392,81 @@ No live RLS, stock, financial, preservation or database concurrency proof is
 claimed. Synthetic test assertions do not prove real onboarding. Independent
 technical/source safety review remains with active Codex Desktop. Recovery needs
 no database rollback: source removal is sufficient; all business-row writes are 0.
+
+# WHA-1388 integration continuation: blocked on finance helper
+
+Desktop comment `66d4b04d-6ee2-4fc2-93f1-e69f83ea029c` authorized private
+composition, not live application. Starting checkout was clean at
+`/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/pharmacy-demo-runner`,
+branch `codex/pharmacy-demo-runner`, HEAD
+`0d5e9de3e2ca4d4942e779138031edbd46b94b90`, parent
+`d8747b9e42bb87f603fd34126f2beea5eea39c3b`, tree
+`1c8e4ae09fd41f29210b35fe1b2f0f1e27e2a76e`. Product ancestry
+`37906386a59700ce4a168e410ca68594baa97c75` verified, exit 0.
+
+Added exactly the six authorized helper source/test files, byte-identical to:
+
+- inventory: `d6f6b68349d556619c28748c48c30db89de4be54`
+- finance: `711b631420ca8344f5f42c821274faa3b283f1ff`
+- retention: `fc47454b38ba3e1a37ad97b8e59ecc954ed3440e`
+
+The package digest now includes these composition inputs. The shared contract,
+root transaction and verifier remain unchanged. Helpers are not yet wired into
+the executable. Do not describe this package as integrated or successfully seeded.
+
+**Blocking defect:** [GitHub #101](https://github.com/WhatTheStack1/devfathom-commercial/issues/101)
+(`qa`, `pharmacy`, `S2`). Receiving calls `postGoodsReceipt`, `receiveLot`, then
+`postReceipt`, whose actual `arrangementFor(2, 1)` result is two sealed packs and
+zero loose units. The accepted cash helper refuses zero loose units, even for
+UNIT packs. The normal stock service permits a sealed UNIT sale because
+`fromSealed % unitsPerPack === 0`. Root's existing pack prerequisite requires
+canonical UNIT packs. No fabricated loose balance or unnecessary pack-breaking
+workflow was introduced to bypass the mismatch.
+
+Preserved failing check in `scripts/seed-pharmacy-demo.test.ts`:
+
+```sh
+bun --no-env-file --conditions=react-server test scripts/seed-pharmacy-demo.test.ts -t 'integrated receiving UNIT stock reaches cash allocation'
+```
+
+Result: **0 pass, 1 fail, 57 filtered, exit 1**. Expected
+`CASH_ALLOCATION_REACHED`; actual refusal
+`UNSEEDED: EXCLUSIVE_PRERECORDED_SYNTHETIC_STOCK`. This is a mocked-read contract
+reproduction with the actual arrangement and regulatory kernels. Its in-memory
+TEST guard values establish no live clinical authority. The sentinel is the first
+read after eligibility, before business writes; this is not a completed-sale or
+SQL proof. The failing assertion is intentionally retained, not skipped or changed
+to expect the erroneous refusal.
+
+Scoped type/lint/diff checks completed, exit 0 each. The first final Prettier
+check flagged this new manifest section (exit 1); one formatting correction
+followed, then the final check passed (exit 0).
+
+```sh
+node_modules/.bin/prettier --write scripts/seed-pharmacy-demo.test.ts scripts/seed-pharmacy-demo.ts
+node_modules/.bin/tsc --noEmit --project "$PAPERCLIP_RUN_SCRATCH_DIR/pharmacy-integration-tsconfig.json"
+node_modules/.bin/eslint --no-config-lookup --config "$PAPERCLIP_RUN_SCRATCH_DIR/pharmacy-eslint.config.mjs" scripts/seed-pharmacy-demo.test.ts scripts/seed-pharmacy-demo.ts
+git diff --check
+```
+
+The scratch TypeScript project extends `scripts/tsconfig.json`, disables
+incremental output, includes the root test and its actual imports. Scratch ESLint
+uses installed Next TypeScript rules. No dependency installation or helper
+formatting. Graph/Claude-Mem tools and Ponytail skill unavailable in this run;
+narrow source reads used. Relevant installed Next TypeScript guide read.
+
+No new PostgreSQL cluster or integrated SQL proof was attempted: Desktop's explicit
+helper-defect boundary requires routing to the original owner. Existing root
+review's 13 PostgreSQL checks remain historical evidence for exact `0d5e9de3`,
+not this changed package digest. Preserve its limits: PO-note tamper, no external
+operator-file tamper or crash/fsync injection; platform entitlement callback is a
+separate transaction. No unchanged characterization suites, builds or services.
+
+Unblock owner: active Codex Desktop routes the finance correction and independent
+review, then delivers exact accepted source to WHA-1388. Resume root composition
+and the assigned one-cluster integrated proof only after that delivery. Receiving,
+cash, reports, replay, rollback and concurrency integration remain unverified.
+LAN/Azure apply remains disabled; clinical, Rx, controlled, fiscal, provider,
+consent, outreach and mature retention coverage remain UNSEEDED/OWNER-INPUT.
+No live writes, authentication changes, provisioning, push, merge or deployment.
+Source-only recovery needs no database rollback; preserve other workers' files.
