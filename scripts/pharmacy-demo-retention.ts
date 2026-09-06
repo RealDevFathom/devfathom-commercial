@@ -1,5 +1,8 @@
 import { createHash } from 'node:crypto';
 import type { RepeatReceipt } from '../src/lib/pharmacy/repeat-purchasing';
+import { readRepeatPurchasing, validateRepeatFilters } from '../src/lib/pharmacy/repeat-purchasing';
+import { grossMarginComparison, marginComparisonPeriods } from '../src/lib/pharmacy/finance-reports';
+import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import { isPharmacyDemoNamespace } from './pharmacy-demo-contract';
 import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
   PharmacyDemoResult } from './pharmacy-demo-contract';
@@ -8,6 +11,68 @@ import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
 export type PharmacyDemoRetentionInput = PharmacyDemoContext;
 
 const DAY = 86_400_000;
+
+/** Internal readback for root's already authorized Pharmacy report scope, inside its
+ * owning tenant transaction. ScopedDb is not an authorization credential: root must
+ * validate identity, branch access, capabilities and entitlements before calling.
+ * No context flags grant access here. Results cover ALL branch history, not demo IDs.
+ */
+export async function readbackPharmacyDemoRetention(
+  db: ScopedDb,
+  context: Pick<PharmacyDemoContext, 'organizationId' | 'branchId' | 'namespace'>,
+  window: {
+    repeat: Omit<Parameters<typeof readRepeatPurchasing>[2], 'branchIds'>;
+    margin: Parameters<typeof grossMarginComparison>[2];
+  },
+) {
+  const scope = { organizationId: context.organizationId, branchId: context.branchId };
+  const namespace = context.namespace;
+  if (!isPharmacyDemoNamespace(namespace) ||
+    ![scope.organizationId, scope.branchId].every((id) => /^[a-zA-Z0-9_-]{3,128}$/.test(id)))
+    throw new Error('Explicit validated target scope required.');
+  const filters = { from: window.repeat.from, to: window.repeat.to,
+    asOf: window.repeat.asOf, branchIds: [scope.branchId] };
+  const { asOf } = validateRepeatFilters(filters);
+  const marginWindow = { from: new Date(window.margin.from), to: new Date(window.margin.to) };
+  marginComparisonPeriods(marginWindow.from, marginWindow.to);
+  if (marginWindow.to > asOf) throw new Error('Margin window exceeds observation cutoff.');
+
+  // Sequential reads reuse caller's normal ScopedDb transaction exposure.
+  const repeat = await readRepeatPurchasing(db, scope.organizationId, filters);
+  const count = (value: number) => Number.isSafeInteger(value) && value >= 0;
+  if (repeat.from !== filters.from || repeat.to !== filters.to || repeat.asOf !== asOf.toISOString() ||
+    ![repeat.completedReceipts, repeat.identifiedReceipts, repeat.anonymousReceipts,
+      repeat.missingTimestamp, repeat.missingReceipt, repeat.excludedPurchases,
+      repeat.firstObservedBeforeEnrollment, repeat.enrolledCustomers].every(count) ||
+    repeat.identifiedReceipts + repeat.anonymousReceipts !== repeat.completedReceipts ||
+    repeat.identificationCoveragePercent !== (repeat.completedReceipts
+      ? repeat.identifiedReceipts / repeat.completedReceipts * 100 : null) ||
+    (repeat.earliestObservedAt !== null &&
+      (!Number.isFinite(Date.parse(repeat.earliestObservedAt)) || new Date(repeat.earliestObservedAt) > asOf)) ||
+    repeat.horizons.length !== 3 || repeat.horizons.some((h, i) =>
+      h.days !== [30, 60, 90][i] || ![h.eligible, h.repeated, h.immature].every(count) ||
+      h.repeated > h.eligible || h.eligible + h.immature !== repeat.enrolledCustomers ||
+      h.ratePercent !== (h.eligible ? h.repeated / h.eligible * 100 : null)))
+    throw new Error('Repeat readback unavailable: incomplete or inconsistent result.');
+  // Owning reader validates branch groups, integer money and accounting identity.
+  const margin = await grossMarginComparison(db, scope, marginWindow);
+  if (margin.branchId !== scope.branchId) throw new Error('Margin readback target mismatch.');
+  return {
+    status: 'OBSERVED' as const, scope: { ...scope, namespace },
+    coverage: 'BRANCHWIDE' as const, filters: { repeat: filters, margin: marginWindow },
+    repeat, margin,
+    limitations: [
+      'Observed selected branch history; not namespace-filtered or proof that reference fixtures were seeded.',
+      'Zero eligible customers yields null rates; elapsed maturity does not establish complete history.',
+      'Margin hasEntries=false means no matching posted entries, not verified zero trading. Accounting deltas are not uplift or churn evidence.',
+      'Caller owns authorization and transaction snapshot consistency across these two readers.',
+    ],
+    gaps: [{ function: 'synthetic-customer-cohorts', status: 'OWNER-INPUT',
+      reason: 'Readback does not establish authentic synthetic customer linkage, consent or historical cohort prerequisites.' },
+    { function: 'recovery', status: 'UNSEEDED', reason: 'No outreach, consent or clinical inference is created.' }] satisfies DemoGap[],
+  };
+}
+
 export function planPharmacyDemoRetention(input: PharmacyDemoRetentionInput) {
   for (const id of [input.organizationId, input.branchId, input.ownerUserId]) {
     if (!id.trim() || id.length > 128) throw new Error('Explicit existing target IDs required.');

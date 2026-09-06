@@ -1,7 +1,8 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, expectTypeOf, it, vi } from 'vitest';
+import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import { summarizeRepeatPurchasing } from '../src/lib/pharmacy/repeat-purchasing';
 import { marginComparisonPeriods } from '../src/lib/pharmacy/finance-reports';
-import { executePharmacyDemoRetention, planPharmacyDemoRetention } from './pharmacy-demo-retention';
+import { executePharmacyDemoRetention, planPharmacyDemoRetention, readbackPharmacyDemoRetention } from './pharmacy-demo-retention';
 import type { PharmacyDemoContext, PharmacyDemoPlan, PharmacyDemoResult } from './pharmacy-demo-contract';
 
 const input: PharmacyDemoContext = { organizationId: 'existing-org', branchId: 'existing-branch',
@@ -9,6 +10,77 @@ const input: PharmacyDemoContext = { organizationId: 'existing-org', branchId: '
   scenarioAt: '2026-09-07T12:00:00.000Z', timezone: 'Asia/Karachi', currency: 'PKR',
   actors: [], references: [], modules: [] };
 const plan = () => planPharmacyDemoRetention(input);
+
+describe('actual reader readback composition (mocked queries, no SQL proof)', () => {
+  const window = { repeat: { from: '2026-01-01', to: '2026-01-01', asOf: '2026-01-01T12:00:00.000Z' },
+    margin: { from: new Date('2026-01-01T00:00:00Z'), to: new Date('2026-01-01T12:00:00Z') } };
+  const rows = () => [30, 60, 90].map((days) => ({ days, earliestObservedAt: new Date('2026-01-01T01:00:00Z'),
+    completedReceipts: BigInt(2), identifiedReceipts: BigInt(1), missingTimestamp: BigInt(0), missingReceipt: BigInt(0),
+    excludedPurchases: BigInt(0), firstObservedBeforeEnrollment: BigInt(0), enrolledCustomers: BigInt(1),
+    eligible: BigInt(0), repeated: BigInt(0) }));
+  function queryFixture(aggregates = rows(), ledger: object[] = []) {
+    // Only the Prisma query boundary is mocked. Both production report readers run.
+    const query = vi.fn().mockResolvedValueOnce([{ timeout: '0' }]).mockResolvedValueOnce([])
+      .mockResolvedValueOnce(aggregates).mockResolvedValueOnce([]).mockResolvedValueOnce(ledger);
+    const transaction = vi.fn(async (run: (tx: ScopedDb) => Promise<unknown>) => run(db));
+    const db = { $queryRaw: query, $transaction: transaction } as unknown as ScopedDb;
+    return { db, query, transaction };
+  }
+  it('uses true ScopedDb signature and real readers, preserving immature/null and absent ledger evidence', async () => {
+    expectTypeOf<Parameters<typeof readbackPharmacyDemoRetention>[0]>().toEqualTypeOf<ScopedDb>();
+    const { db, query, transaction } = queryFixture();
+    const result = await readbackPharmacyDemoRetention(db, input, window);
+    expect(result).toMatchObject({ status: 'OBSERVED', coverage: 'BRANCHWIDE',
+      scope: { organizationId: input.organizationId, branchId: input.branchId, namespace: input.namespace },
+      repeat: { completedReceipts: 2, identifiedReceipts: 1, anonymousReceipts: 1, enrolledCustomers: 1 },
+      margin: { branchId: input.branchId, previous: { hasEntries: false }, current: { hasEntries: false } } });
+    expect(result.repeat.horizons.map((h) => [h.eligible, h.immature, h.ratePercent])).toEqual([
+      [0, 1, null], [0, 1, null], [0, 1, null],
+    ]);
+    expect(result).not.toHaveProperty('expectedReceipts');
+    expect(transaction).toHaveBeenCalledTimes(1);
+    expect(query).toHaveBeenCalledTimes(5);
+    for (const call of [query.mock.calls[2], query.mock.calls[4]]) {
+      expect(call[0].values).toContain(input.organizationId);
+      expect(call[0].values).toContain(input.branchId);
+    }
+    expect(result.filters.repeat.branchIds).toEqual([input.branchId]);
+  });
+  it('retains real reader accounting composition without comparing branch totals to fixtures', async () => {
+    const { db } = queryFixture(rows(), [{ period: 'current', key: input.branchId,
+      revenueMinor: 2300, discountMinor: 100, cogsMinor: 1200, grossMarginMinor: 1000 }]);
+    const result = await readbackPharmacyDemoRetention(db, input, window);
+    expect(result.margin).toMatchObject({ current: { hasEntries: true, grossMarginMinor: 1000 },
+      differenceMinor: 1000, reconciledMinor: 1000 });
+    expect(result.gaps.map((g) => g.status)).toEqual(['OWNER-INPUT', 'UNSEEDED']);
+  });
+  it('rejects invalid scope and cutoff before queries', async () => {
+    const { db, query } = queryFixture();
+    await expect(readbackPharmacyDemoRetention(db, { ...input, branchId: '' }, window)).rejects.toThrow('scope');
+    await expect(readbackPharmacyDemoRetention(db, input, { ...window,
+      margin: { ...window.margin, to: new Date('2026-01-02') } })).rejects.toThrow('cutoff');
+    expect(query).not.toHaveBeenCalled();
+  });
+  it('propagates query failure without observed or partial evidence', async () => {
+    const { db, query } = queryFixture();
+    query.mockReset().mockRejectedValue(new Error('statement timeout'));
+    await expect(readbackPharmacyDemoRetention(db, input, window)).rejects.toThrow('statement timeout');
+    expect(query).toHaveBeenCalledTimes(1);
+  });
+  it('rejects incomplete and inconsistent aggregate results before margin read', async () => {
+    for (const aggregates of [rows().slice(0, 2), rows().map((r) => ({ ...r, days: 30 })),
+      rows().map((r) => ({ ...r, eligible: BigInt(2) })), rows().map((r) => ({ ...r, repeated: BigInt(1) }))]) {
+      const { db, query } = queryFixture(aggregates);
+      await expect(readbackPharmacyDemoRetention(db, input, window)).rejects.toThrow(/incomplete|inconsistent/);
+      expect(query).toHaveBeenCalledTimes(4);
+    }
+  });
+  it('rejects ledger attribution mismatch through the actual owning reader', async () => {
+    const { db } = queryFixture(rows(), [{ period: 'current', key: 'another-branch',
+      revenueMinor: 10, discountMinor: 0, cogsMinor: 0, grossMarginMinor: 10 }]);
+    await expect(readbackPharmacyDemoRetention(db, input, window)).rejects.toThrow('Unexpected ledger branch group');
+  });
+});
 
 describe('canonical namespace planner compatibility', () => {
   it('preserves canonical namespace identity, reference prefixes and digest input', () => {
