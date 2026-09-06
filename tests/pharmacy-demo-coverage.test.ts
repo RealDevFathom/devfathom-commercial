@@ -2,6 +2,9 @@
 // Bind these independent expectations to immutable helper results when Desktop delivers them.
 // No seed entrypoint, database client, regulatory fixture or external effect is imported.
 import { describe, expect, it } from 'vitest';
+// Unchanged support source: 5b00a056775fad283ed305e9e582effcc224b534.
+import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
+  PharmacyDemoResult } from '../scripts/pharmacy-demo-contract';
 import { packConversions } from '../src/lib/pharmacy/pack-conversion';
 import { receiptLineQuantities, receiptLineUnitCostMinor } from '../src/lib/pharmacy/receiving';
 
@@ -36,7 +39,7 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
     { available: -20, quarantine: 0, outside: 20 },
     { available: 0, quarantine: 2, outside: -2 },
     { available: 0, quarantine: -5, outside: 5 },
-  ];
+  ] satisfies DemoPlannedRecord['expectedFacts'][];
   function assertStock(rows: typeof events) {
     let available = 0, quarantine = 0;
     for (const row of rows) {
@@ -62,7 +65,7 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
     { inventory: -2000, payable: 0, cash: 3800, revenue: -4000, discount: 200, cogs: 2000 },
     { inventory: 200, payable: 0, cash: -380, revenue: 400, discount: -20, cogs: -200 },
     { inventory: -500, payable: 500, cash: 0, revenue: 0, discount: 0, cogs: 0 },
-  ];
+  ] satisfies DemoPlannedRecord['expectedFacts'][];
   function assertMoney(rows: typeof postings) {
     for (const row of rows) {
       expect(Object.values(row).every(Number.isSafeInteger)).toBe(true);
@@ -116,18 +119,77 @@ describe('PH-DEMO expected cohort identities (not report execution)', () => {
 });
 
 describe('PH-DEMO declared coverage gaps (not target validation)', () => {
-  const gaps = [
+  const gaps: DemoGap[] = ([
     ['approved medicine/presentation/pack/location/supplier references', 'OWNER-INPUT'],
     ['existing owner, service actor capabilities and observed entitlements', 'OWNER-INPUT'],
     ['regulatory, Rx, controlled, fiscal and provider evidence', 'UNSEEDED'],
     ['D07/D08/D11, first sale real inputs and hardware', 'OWNER-INPUT'],
     ['Local LAN owner@chaichowk.pk acceptance', 'UNSEEDED'],
     ['Azure STAGING owner@chaichowk.pk acceptance', 'UNSEEDED'],
-  ] as const;
+  ] as const).map(([label, status]) => ({ function: label, status, reason: 'Awaiting owner evidence' }));
   it('retains explicit prerequisites without claiming posted or live coverage', () => {
     expect(gaps).toHaveLength(6);
-    expect(gaps.every(([label, status]) => label.length > 0
+    expect(gaps.every(({ function: label, status }) => label.length > 0
       && ['OWNER-INPUT', 'UNSEEDED'].includes(status))).toBe(true);
-    expect(gaps.filter(([label]) => label.includes('owner@chaichowk.pk'))).toHaveLength(2);
+    expect(gaps.filter(({ function: label }) => label.includes('owner@chaichowk.pk'))).toHaveLength(2);
+  });
+});
+
+describe('PH-DEMO contract envelope oracle (synthetic input, no helper execution)', () => {
+  const context: PharmacyDemoContext = {
+    organizationId: `${namespace}:org`, branchId: `${namespace}:branch`,
+    ownerUserId: `${namespace}:owner`, namespace, businessDate: '2026-09-07',
+    scenarioAt: at.toISOString(), timezone: 'Asia/Karachi', currency: 'PKR',
+    actors: [], references: [], modules: [],
+  };
+  const gaps: DemoGap[] = [{ function: 'approved references and capable actors',
+    status: 'OWNER-INPUT', reason: 'No target observations supplied' }];
+
+  // Independent acceptance of the documented envelope, not a planner or fence.
+  // Digest/hash algorithms and service-specific facts remain helper-owned.
+  function assertEnvelope(plan: PharmacyDemoPlan) {
+    expect(plan.namespace).toBe(context.namespace);
+    expect(['inventory', 'finance', 'retention']).toContain(plan.lane);
+    expect(plan.digest.trim().length).toBeGreaterThan(0);
+    expect(plan.records.length).toBeLessThanOrEqual(100);
+    expect(new Set(plan.records.map(r => r.id)).size).toBe(plan.records.length);
+    expect(new Set(plan.records.map(r => r.key)).size).toBe(plan.records.length);
+    for (const record of plan.records) {
+      expect(record.id.startsWith(`${context.namespace}:`)).toBe(true);
+      expect(record.key.startsWith(`${context.namespace}:`)).toBe(true);
+      expect(record.expectedHash.trim().length).toBeGreaterThan(0);
+    }
+    for (const gap of plan.gaps) {
+      expect(['UNSEEDED', 'OWNER-INPUT', 'DRAFT-ONLY']).toContain(gap.status);
+      expect(gap.function.trim().length).toBeGreaterThan(0);
+      expect(gap.reason.trim().length).toBeGreaterThan(0);
+    }
+  }
+  const record: DemoPlannedRecord = {
+    id: `${namespace}:receipt`, key: `${namespace}:receipt`, model: 'oracle-only',
+    expectedHash: 'opaque-oracle-hash-not-helper-evidence',
+    expectedFacts: { available: 115, quarantine: 5, outside: -120 },
+  };
+  const plan: PharmacyDemoPlan = { lane: 'inventory', namespace,
+    digest: 'opaque-oracle-digest-not-helper-evidence', records: [record], gaps };
+
+  it('accepts namespaced expected facts without declaring target authorization', () => {
+    assertEnvelope(plan);
+    expect(context.references).toEqual([]);
+    expect(context.actors).toEqual([]);
+    const expectedRefusal: PharmacyDemoResult = { status: 'refused',
+      unmetPrerequisites: gaps.map(gap => `${gap.function}: ${gap.reason}`) };
+    expect(expectedRefusal.unmetPrerequisites).toHaveLength(1);
+    // Expected refusal only. No executor has produced this result.
+  });
+  it('rejects cross-namespace records, duplicate identities and overlarge plans', () => {
+    expect(() => assertEnvelope({ ...plan, namespace: 'different-target' })).toThrow();
+    expect(() => assertEnvelope({ ...plan, records: [{ ...record, id: 'legitimate-row' }] })).toThrow();
+    expect(() => assertEnvelope({ ...plan, records: [{ ...record, key: 'other-target:key' }] })).toThrow();
+    expect(() => assertEnvelope({ ...plan, records: [record, { ...record, key: `${namespace}:other` }] })).toThrow();
+    expect(() => assertEnvelope({ ...plan, records: [record, { ...record, id: `${namespace}:other` }] })).toThrow();
+    expect(() => assertEnvelope({ ...plan, records: Array.from({ length: 101 }, (_, i) => ({
+      ...record, id: `${namespace}:${i}`, key: `${namespace}:${i}`,
+    })) })).toThrow();
   });
 });
