@@ -14,7 +14,7 @@ vi.mock('@/server/routers/pharmacy-purchasing', () => ({
   pharmacyPurchasingRouter: { createCaller: mocks.caller },
 }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
-vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
+vi.mock('next/navigation', () => ({ redirect: vi.fn(), useRouter: () => ({ refresh: vi.fn() }) }));
 import ReturnsPage from './page';
 import Loading from './loading';
 
@@ -58,7 +58,9 @@ it('does not render priorities after branch read denial', async () => {
   reads.purchaseReturns.mockRejectedValue(new Error('FORBIDDEN'));
   render(await ReturnsPage({ searchParams: params() }));
   expect(
-    screen.getByText('Returns for this branch could not be read. Nothing was written.')
+    screen.getByText(
+      'Returns for this branch could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying.'
+    )
   ).toBeVisible();
   expect(screen.queryByRole('heading', { name: 'Supplier-credit follow-up' })).toBeNull();
 });
