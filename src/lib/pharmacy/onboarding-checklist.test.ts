@@ -165,6 +165,28 @@ describe('pharmacy onboarding checklist', () => {
 });
 
 describe('fresh Pharmacy setup destinations', () => {
+  it('links stock-location creation without changing branch attestation or readiness', () => {
+    const pending = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items.find(
+      (item) => item.key === 'BRANCHES_AND_LOCATIONS'
+    );
+    expect(pending).toMatchObject({
+      href: '/pharmacy/inventory',
+      linkLabel: 'Create or review stock locations',
+      attestable: true,
+      state: 'NEEDS_YOU',
+      blocksActivation: true,
+    });
+    const recorded = pharmacyOnboardingChecklist(
+      evaluateReadiness('org', [attested('BRANCHES_AND_LOCATIONS')], {})
+    ).items.find((item) => item.key === 'BRANCHES_AND_LOCATIONS');
+    expect(recorded).toMatchObject({
+      href: '/pharmacy/inventory',
+      attestable: true,
+      state: 'DONE',
+      blocksActivation: false,
+    });
+  });
+
   it('connects derived catalog, stock and supplier gates without turning them into attestations', () => {
     const items = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items;
     for (const [key, href] of [
@@ -181,6 +203,19 @@ describe('fresh Pharmacy setup destinations', () => {
     expect(VERTICALS.PHARMACY.firstRunChecklist.find((item) => item.key === 'catalog')?.href).toBe(
       '/pharmacy'
     );
+  });
+
+  it('offers the existing counter without replacing parallel-run evidence with a click', () => {
+    const item = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items.find(
+      (row) => row.key === 'READINESS_AND_PARALLEL_RUN'
+    );
+    expect(item).toMatchObject({
+      href: '/pharmacy/counter',
+      linkLabel: 'Open pharmacy counter',
+      attestable: true,
+      state: 'NEEDS_YOU',
+      blocksActivation: true,
+    });
   });
 
   it('offers catalog, receiving and canonical setup links from empty inventory', () => {
