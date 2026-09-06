@@ -3,7 +3,6 @@
 import {
   useSyncExternalStore,
   useRef,
-  useState,
   useTransition,
   useEffect,
   useId,
@@ -13,6 +12,12 @@ import {
 import { useRouter } from 'next/navigation';
 
 import { cn } from '@/lib/utils';
+import {
+  PurchasingOutcome,
+  usePurchasingOutcome,
+  operationKey,
+  type PurchasingOperation,
+} from './action-outcomes';
 
 const subscribe = () => () => {};
 const clientReady = () => true;
@@ -23,26 +28,35 @@ const serverReady = () => false;
  * x-action-redirect outcomes; render the result locally and refresh the current
  * route without replacing the document, selection or unrelated form drafts.
  */
-export function PurchasingActionForm({
-  action,
-  children,
-  className,
-}: {
+type ActionFormProps = {
   action: (form: FormData) => Promise<string>;
   children: ReactNode;
   className?: string;
-}) {
+  operation?: PurchasingOperation;
+};
+
+export function PurchasingActionForm(props: ActionFormProps) {
+  const fallbackId = useId();
+  const operation = props.operation ?? { resource: fallbackId, action: 'submit' };
+  // Only the explicit business operation changes form identity, never action props
+  // or refresh completion. The page store retains the old operation's lock.
+  return <ActionAttempt key={operationKey(operation)} {...props} operation={operation} />;
+}
+
+function ActionAttempt({
+  action,
+  children,
+  className,
+  operation,
+}: ActionFormProps & { operation: PurchasingOperation }) {
   const router = useRouter();
-  const [success, setSuccess] = useState<string | null>(null);
   const ready = useSyncExternalStore(subscribe, clientReady, serverReady);
-  const [submitted, setSubmitted] = useState(false);
-  const [failed, setFailed] = useState(false);
+  const { store, shared, attempt, blocked } = usePurchasingOutcome(operation);
   const [, startTransition] = useTransition();
-  const locked = useRef(false);
   const formRef = useRef<HTMLFormElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
   const errorId = useId();
-  const [notice, setNotice] = useState<{ message: string; field: string | null } | null>(null);
+  const notice = attempt?.phase === 'rejected' ? attempt : null;
 
   useEffect(() => {
     if (!notice) return;
@@ -70,18 +84,16 @@ export function PurchasingActionForm({
   return (
     <form
       ref={formRef}
-      aria-busy={submitted && !failed && !success}
+      aria-busy={attempt?.phase === 'pending'}
       onSubmit={(event) => {
         event.preventDefault();
-        if (locked.current) return;
+        if (blocked) return;
         // Capture before disabling controls; include named submit buttons (decisions).
         const form = new FormData(
           event.currentTarget,
           (event.nativeEvent as SubmitEvent).submitter
         );
-        locked.current = true;
-        setNotice(null);
-        setSubmitted(true);
+        if (!store.begin(operation)) return;
         startTransition(async () => {
           try {
             const destination = await action(form);
@@ -99,12 +111,11 @@ export function PurchasingActionForm({
               target.searchParams.get('outcome') === 'rejected'
             ) {
               // Keep the live controls and selected record; do not reset entered values.
-              setNotice({
-                message: target.searchParams.get('notice') || 'The change could not be saved.',
-                field: target.searchParams.get('field'),
-              });
-              locked.current = false;
-              setSubmitted(false);
+              store.reject(
+                operation,
+                target.searchParams.get('notice') || 'The change could not be saved.',
+                target.searchParams.get('field')
+              );
               return;
             }
             if (
@@ -112,17 +123,21 @@ export function PurchasingActionForm({
               target.searchParams.get('outcome') !== 'committed'
             ) {
               // Missing/unknown classification, including post-write failures, never unlocks.
-              setFailed(true);
+              store.fail(operation);
               return;
             }
             // Outcome delivery does not depend on navigation or refresh completion.
             // refresh() merges the current route's RSC payload; it returns no success
             // acknowledgement. Keep this attempt locked even if the refresh fails.
-            setSuccess(target.searchParams.get('notice') || 'The change was saved.');
+            store.commit(
+              operation,
+              target.searchParams.get('notice') || 'The change was saved.',
+              target.href
+            );
             router.refresh();
           } catch {
             // A lost response may follow a committed write. Never retry it automatically.
-            setFailed(true);
+            store.fail(operation);
           }
         });
       }}
@@ -130,7 +145,7 @@ export function PurchasingActionForm({
       {/* Layout utilities must target real child boxes, including space-y selectors.
           Disable until hydration: no native GET or unhandled POST fallback is safe
           for this explicit-result protocol. No-JS submission is intentionally unavailable. */}
-      <fieldset className={cn('min-w-0', className)} disabled={!ready || submitted}>
+      <fieldset className={cn('min-w-0', className)} disabled={!ready || blocked}>
         {children}
       </fieldset>
       {!ready ? (
@@ -148,21 +163,7 @@ export function PurchasingActionForm({
         </p>
       ) : null}
       <noscript>Enable JavaScript to submit purchasing changes.</noscript>
-      {success ? (
-        <p role="status" className="text-sm text-success">
-          {success} Check the updated record before starting another change.
-        </p>
-      ) : null}
-      {submitted && !failed && !success ? (
-        <p role="status">Saving and loading the outcome…</p>
-      ) : null}
-      {failed ? (
-        <p role="alert" className="text-sm text-destructive">
-          {success
-            ? 'The change was saved, but the records could not be refreshed. Check the record before retrying.'
-            : 'Could not confirm the outcome. Reload this page and check the record before retrying.'}
-        </p>
-      ) : null}
+      {!shared ? <PurchasingOutcome attempt={attempt} /> : null}
     </form>
   );
 }

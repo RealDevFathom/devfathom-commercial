@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
 import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -421,15 +422,16 @@ export default async function PharmacyOrdersPage({
 
   if (loadError || !workspace) {
     return (
-      <main className="min-w-0 space-y-6">
+      <PurchasingOutcomeScope>
         <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
         <PurchasingTabs active={ROUTE} />
         <NoticeBanner notice={notice} />
+        <PurchasingOutcomes />
         <LoadFailure
           detail="Requisitions and orders could not be read. Nothing was written."
           retryHref={ROUTE}
         />
-      </main>
+      </PurchasingOutcomeScope>
     );
   }
 
@@ -437,10 +439,11 @@ export default async function PharmacyOrdersPage({
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
 
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
 
       <div className="grid gap-6 sm:grid-cols-3">
         <Stat
@@ -527,7 +530,11 @@ export default async function PharmacyOrdersPage({
                 steps={[{ label: 'Open the medicine register', href: '/pharmacy' }]}
               />
             ) : (
-              <PurchasingActionForm action={createRequisition} className="space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: 'requisition:new', action: 'create' }}
+                action={createRequisition}
+                className="space-y-4"
+              >
                 <div className="grid gap-4 sm:grid-cols-3">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
@@ -639,7 +646,11 @@ export default async function PharmacyOrdersPage({
                 steps={[{ label: 'Open the medicine register', href: '/pharmacy' }]}
               />
             ) : (
-              <PurchasingActionForm action={createDirectOrder} className="space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: 'order:new', action: 'create' }}
+                action={createDirectOrder}
+                className="space-y-4"
+              >
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
@@ -703,7 +714,7 @@ export default async function PharmacyOrdersPage({
           </SectionCard>
         </div>
       </div>
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -760,7 +771,11 @@ function RequisitionDetailPanel({
           ))}
         </ul>
         {requisition.status === 'DRAFT' ? (
-          <PurchasingActionForm action={onSubmit} className="mt-4">
+          <PurchasingActionForm
+            operation={{ resource: `requisition:${requisition.id}`, action: 'submit' }}
+            action={onSubmit}
+            className="mt-4"
+          >
             <input name="requisitionId" type="hidden" value={requisition.id} />
             <SubmitButton>Submit requisition</SubmitButton>
           </PurchasingActionForm>
@@ -839,6 +854,7 @@ function RequisitionDetailPanel({
               terms, so what you approve is what the comparison explained.
             </p>
             <PurchasingActionForm
+              operation={{ resource: `requisition:${requisition.id}`, action: 'award-quote' }}
               action={onOrderFromQuote}
               className="mt-3 grid gap-4 sm:grid-cols-2"
             >
@@ -877,7 +893,11 @@ function RequisitionDetailPanel({
       </SectionCard>
 
       <SectionCard eyebrow="PUR-02" title="Record a quote" titleLevel={2}>
-        <PurchasingActionForm action={onRecordQuote} className="space-y-4">
+        <PurchasingActionForm
+          operation={{ resource: `requisition:${requisition.id}`, action: 'record-quote' }}
+          action={onRecordQuote}
+          className="space-y-4"
+        >
           <input name="requisitionId" type="hidden" value={requisition.id} />
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <SelectField
@@ -1112,7 +1132,10 @@ function OrderDetailPanel({
 
       <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
         {order.status === 'DRAFT' ? (
-          <PurchasingActionForm action={onAdvance}>
+          <PurchasingActionForm
+            operation={{ resource: `order:${order.id}`, action: 'submit' }}
+            action={onAdvance}
+          >
             <input name="purchaseOrderId" type="hidden" value={order.id} />
             <input name="action" type="hidden" value="submit" />
             <SubmitButton>Submit for approval</SubmitButton>
@@ -1126,7 +1149,11 @@ function OrderDetailPanel({
               duties rule — ask a second person to decide.
             </p>
           ) : (
-            <PurchasingActionForm action={onAdvance} className="flex flex-wrap items-end gap-3">
+            <PurchasingActionForm
+              operation={{ resource: `order:${order.id}`, action: 'decide' }}
+              action={onAdvance}
+              className="flex flex-wrap items-end gap-3"
+            >
               <input name="purchaseOrderId" type="hidden" value={order.id} />
               <TextField
                 className="min-w-56"
@@ -1146,7 +1173,10 @@ function OrderDetailPanel({
         ) : null}
 
         {order.status === 'APPROVED' ? (
-          <PurchasingActionForm action={onAdvance}>
+          <PurchasingActionForm
+            operation={{ resource: `order:${order.id}`, action: 'send' }}
+            action={onAdvance}
+          >
             <input name="purchaseOrderId" type="hidden" value={order.id} />
             <input name="action" type="hidden" value="send" />
             <SubmitButton>Send to supplier</SubmitButton>
