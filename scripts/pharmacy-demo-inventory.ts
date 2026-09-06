@@ -607,6 +607,292 @@ export async function executePreparedInventoryReceipt(
   };
 }
 
+export type InventoryReceiptValuationInput = {
+  actorId: string;
+  /** Original retained output from executePreparedInventoryReceipt, not caller-made IDs. */
+  received: DemoObservedRecord;
+  /** Root-observed POSTED snapshot via observeInventoryDemoReceipt. */
+  postedReceiptHash: string;
+};
+
+export function planInventoryReceiptValuation(
+  context: PharmacyDemoContext,
+  input: InventoryReceiptValuationInput
+) {
+  const received = input.received;
+  const f = received.observedFacts;
+  const actor = context.actors.find(
+    (a) =>
+      a.actorId === input.actorId &&
+      a.userId === input.actorId &&
+      a.organizationId === context.organizationId &&
+      a.branchId === context.branchId &&
+      a.active &&
+      a.synthetic &&
+      a.capabilities.includes('admin:access')
+  );
+  const unmet: string[] = [];
+  if (!actor || !context.modules.some((m) => m.key === 'finance' && m.enabled))
+    unmet.push('VERIFIED_FINANCE_AUTHORITY_REQUIRED');
+  if (
+    !isPharmacyDemoNamespace(context.namespace) ||
+    context.currency !== 'PKR' ||
+    !Number.isFinite(new Date(context.scenarioAt).getTime()) ||
+    received.model !== 'PharmacyGoodsReceipt' ||
+    received.planKey !== `${context.namespace}:inventory:receipt:v1` ||
+    !received.receiptReference.startsWith(context.namespace) ||
+    !received.persistedId.trim() ||
+    f.status !== 'POSTED' ||
+    received.observedHash !== fingerprint(f) ||
+    !/^[a-f0-9]{64}$/.test(input.postedReceiptHash)
+  )
+    unmet.push('RETAINED_RECEIVING_EVIDENCE_REQUIRED');
+  const validMoney = [
+    f.acceptedUnits,
+    f.rejectedUnits,
+    f.unitCostMinor,
+    f.inventoryValueMinor,
+  ].every((v) => typeof v === 'number' && Number.isSafeInteger(v) && v >= 0);
+  if (!validMoney || typeof f.inventoryValueMinor !== 'number' || f.inventoryValueMinor <= 0)
+    unmet.push('POSITIVE_RECEIPT_VALUATION_REQUIRED');
+  const digest = fingerprint({ context, input });
+  const plan: PharmacyDemoPlan = {
+    lane: 'inventory',
+    namespace: context.namespace,
+    digest,
+    records: [
+      {
+        key: `${context.namespace}:inventory:valuation:v1`,
+        model: 'FinanceJournalEntry',
+        reference: received.receiptReference,
+        expectedHash: digest,
+        expectedFacts: {
+          sourceId: received.persistedId,
+          inventoryMinor: f.inventoryValueMinor ?? null,
+          accrualMinor: f.inventoryValueMinor ?? null,
+          currency: 'PKR',
+        },
+      },
+    ],
+    gaps: [
+      {
+        function: 'SUPPLIER-SETTLEMENT',
+        status: 'UNSEEDED',
+        reason: 'Receipt accrual is not a supplier payment or liability settlement.',
+      },
+    ],
+  };
+  return { ...plan, unmet };
+}
+
+/** Separate, fresh-only valuation increment; existing receiving behavior stays unchanged.
+ * Root owns authenticated authorization/entitlement observations, original receiving
+ * receipt, namespace lock, reconciliation BEFORE this call, and whole-transaction rollback.
+ * The base has no receipt-valuation router caller. This source-only composition requires
+ * the existing finance mutation gate (admin:access), re-evaluated against the actual user.
+ * Never infer authority from the JSON observation or finance:read alone.
+ */
+export async function executeInventoryReceiptValuation(
+  tx: ScopedDb,
+  context: PharmacyDemoContext,
+  input: InventoryReceiptValuationInput,
+  reconciled: InventoryDemoReconciliation
+): Promise<PharmacyDemoResult> {
+  const plan = planInventoryReceiptValuation(context, input);
+  const refuse = (reason: string): PharmacyDemoResult => ({
+    status: 'refused',
+    unmetPrerequisites: [reason],
+  });
+  if (plan.unmet.length) return { status: 'refused', unmetPrerequisites: plan.unmet };
+  if (reconciled.state === 'refuse') return refuse(reconciled.reason);
+  if (reconciled.state !== 'new')
+    return refuse('VALUATION_FRESH_ONLY_ROOT_RECONCILIATION_REQUIRED');
+  if (reconciled.hash !== plan.digest) return refuse('REPLAY_HASH_MISMATCH');
+  const user = await tx.user.findFirst({
+    where: { organizationId: context.organizationId, id: input.actorId },
+    select: { id: true, role: true, status: true },
+  });
+  const { can, subjectFromSession } = await import('../src/lib/abac');
+  if (
+    !user ||
+    !ACTIVE_STATUSES.has(user.status) ||
+    !(await can(subjectFromSession(user), 'admin:access', undefined, { db: tx, source: 'SYSTEM' }))
+  )
+    return refuse('FINANCE_POSTING_FORBIDDEN');
+  const receipt = await observeInventoryDemoReceipt(tx, context, input.received.persistedId);
+  if (
+    !receipt ||
+    receipt.organizationId !== context.organizationId ||
+    receipt.branchId !== context.branchId ||
+    receipt.status !== 'POSTED' ||
+    receipt.reference !== input.received.receiptReference ||
+    receipt.lines.length !== 1 ||
+    inventoryDemoReceiptHash(receipt) !== input.postedReceiptHash
+  )
+    return refuse('POSTED_RECEIPT_CHANGED_OR_FOREIGN');
+  const line = receipt.lines[0]!;
+  const f = input.received.observedFacts;
+  const quantities = receiptLineQuantities(line);
+  const cost = receiptLineUnitCostMinor(line);
+  const value = (quantities.acceptedCanonicalUnits + quantities.rejectedCanonicalUnits) * cost;
+  if (
+    !line.batchNumber.startsWith(context.namespace) ||
+    line.id !== f.goodsReceiptLineId ||
+    line.inventoryLotId !== f.inventoryLotId ||
+    !line.inventoryLotId ||
+    line.medicineId !== f.medicineId ||
+    line.packLevelId !== f.packLevelId ||
+    line.stockLocationId !== f.stockLocationId ||
+    line.quarantineLocationId !== f.quarantineLocationId ||
+    quantities.receivedCanonicalUnits !== line.receivedCanonicalUnits ||
+    quantities.bonusCanonicalUnits !== line.bonusCanonicalUnits ||
+    quantities.acceptedCanonicalUnits !== line.acceptedCanonicalUnits ||
+    line.acceptedCanonicalUnits !== f.acceptedUnits ||
+    line.rejectedCanonicalUnits !== f.rejectedUnits ||
+    cost !== line.unitCostMinor ||
+    cost !== f.unitCostMinor ||
+    !Number.isSafeInteger(value) ||
+    value !== f.inventoryValueMinor ||
+    receipt.postedAt?.toISOString() !== f.postedAt ||
+    expiryInstant(line.printedExpiry, line.expiryPrecision).toISOString() !== f.expiresAt
+  )
+    return refuse('RECEIVING_VALUATION_MISMATCH');
+  const lot = await tx.pharmacyInventoryLot.findFirst({
+    where: {
+      id: line.inventoryLotId,
+      organizationId: context.organizationId,
+      branchId: context.branchId,
+    },
+    include: { batch: true },
+  });
+  if (
+    !lot ||
+    lot.unitCostMinor !== cost ||
+    lot.unitsPerPack !== line.canonicalUnitsPerPack ||
+    lot.packLevelId !== line.packLevelId ||
+    lot.batch.medicineId !== line.medicineId ||
+    lot.batch.batchNumber !== line.batchNumber ||
+    lot.supplierInvoiceRef !== `${receipt.supplierInvoiceRef}#${line.lineNumber}`
+  )
+    return refuse('RECEIVED_LOT_MISMATCH');
+  for (const [id, units, location, disposition, suffix] of [
+    [
+      f.acceptedMovementId,
+      line.acceptedCanonicalUnits,
+      line.stockLocationId,
+      'AVAILABLE',
+      'accepted',
+    ],
+    [
+      f.quarantineMovementId,
+      line.rejectedCanonicalUnits,
+      line.quarantineLocationId,
+      'QUARANTINE',
+      'quarantine',
+    ],
+  ] as const) {
+    if (units === 0) {
+      if (id !== null) return refuse('RECEIVED_MOVEMENT_MISMATCH');
+      continue;
+    }
+    if (typeof id !== 'string' || !id || !location) return refuse('RECEIVED_MOVEMENT_MISMATCH');
+    const movement = await tx.pharmacyStockMovement.findFirst({
+      where: {
+        id,
+        organizationId: context.organizationId,
+        branchId: context.branchId,
+        inventoryLotId: line.inventoryLotId,
+      },
+      select: {
+        id: true,
+        kind: true,
+        quantityUnits: true,
+        disposition: true,
+        stockLocationId: true,
+        idempotencyKey: true,
+      },
+    });
+    if (
+      !movement ||
+      movement.kind !== 'RECEIPT' ||
+      movement.quantityUnits !== units ||
+      movement.disposition !== disposition ||
+      movement.stockLocationId !== location ||
+      movement.idempotencyKey !== `pharmacy-receipt:${line.id}:${suffix}`
+    )
+      return refuse('RECEIVED_MOVEMENT_MISMATCH');
+  }
+  // Refuse adoption of an existing entry, even though the underlying service is idempotent.
+  if (
+    await tx.financeJournalEntry.findFirst({
+      where: {
+        organizationId: context.organizationId,
+        OR: [
+          { sourceKind: 'PHARMACY_GOODS_RECEIPT', sourceId: receipt.id },
+          { idempotencyKey: `finance:PHARMACY_GOODS_RECEIPT:${receipt.id}` },
+        ],
+      },
+      select: { id: true },
+    })
+  )
+    return refuse('RECEIPT_VALUATION_ALREADY_EXISTS');
+  const { postGoodsReceiptEntry } = await import('../src/lib/pharmacy/finance-postings');
+  const entry = await postGoodsReceiptEntry(
+    tx,
+    { organizationId: context.organizationId, branchId: context.branchId, actorId: user.id },
+    { goodsReceiptId: receipt.id, at: new Date(context.scenarioAt) }
+  );
+  const debit = entry.lines
+    .filter((l) => l.accountCode === 'INVENTORY' && l.side === 'DEBIT')
+    .reduce((n, l) => n + l.amountMinor, 0);
+  const credit = entry.lines
+    .filter((l) => l.accountCode === 'GOODS_RECEIVED_ACCRUAL' && l.side === 'CREDIT')
+    .reduce((n, l) => n + l.amountMinor, 0);
+  if (
+    !entry.id ||
+    entry.organizationId !== context.organizationId ||
+    entry.branchId !== context.branchId ||
+    entry.currency !== 'PKR' ||
+    entry.sourceKind !== 'PHARMACY_GOODS_RECEIPT' ||
+    entry.sourceId !== receipt.id ||
+    debit !== value ||
+    credit !== value ||
+    entry.lines.some(
+      (l) =>
+        !(l.accountCode === 'INVENTORY' && l.side === 'DEBIT') &&
+        !(l.accountCode === 'GOODS_RECEIVED_ACCRUAL' && l.side === 'CREDIT')
+    )
+  )
+    throw new Error('RECEIPT_VALUATION_OUTPUT_MISMATCH_ROLLBACK_REQUIRED');
+  const observedFacts = {
+    sourceId: receipt.id,
+    inventoryLotId: lot.id,
+    inventoryMinor: debit,
+    accrualMinor: credit,
+    paidUnits: line.receivedCanonicalUnits,
+    bonusUnits: line.bonusCanonicalUnits,
+    acceptedUnits: line.acceptedCanonicalUnits,
+    quarantinedUnits: line.rejectedCanonicalUnits,
+    unitCostMinor: cost,
+    currency: entry.currency,
+    journalLineIds: JSON.stringify(entry.lines.map((l) => l.id)),
+  };
+  return {
+    status: 'applied',
+    records: [
+      {
+        planKey: plan.records[0]!.key,
+        model: 'FinanceJournalEntry',
+        persistedId: entry.id,
+        receiptReference: receipt.reference,
+        observedHash: fingerprint(observedFacts),
+        observedFacts,
+      },
+    ],
+    gaps: plan.gaps,
+  };
+}
+
 /** Read-only preview of observed lots. Does not reserve, mutate or claim stock. */
 export function previewInventoryDemoFefo(input: {
   organizationId: string;
