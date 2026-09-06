@@ -4,6 +4,7 @@
  * never delivered inventory and cannot satisfy finance's stock prerequisite.
  */
 import { createHash } from 'node:crypto';
+import { isPharmacyDemoNamespace } from './pharmacy-demo-contract';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import { assertSupplierEligible, costPurchaseOrderLine } from '../src/lib/pharmacy/purchasing';
 import { planAllocation, type AllocationCandidate } from '../src/lib/pharmacy/inventory';
@@ -59,7 +60,7 @@ export function planInventoryDemo(facts: InventoryDemoFacts) {
     facts.supplier.id,
   ];
   if (refs.some((ref) => !ref.trim())) unmet.push('EXISTING_TARGET_REFERENCES_REQUIRED');
-  if (!/^demo:[a-zA-Z0-9_-]{1,48}$/.test(facts.namespace)) unmet.push('INVALID_NAMESPACE');
+  if (!isPharmacyDemoNamespace(facts.namespace)) unmet.push('INVALID_NAMESPACE');
   if (facts.currency !== 'PKR') unmet.push('PKR_REQUIRED');
   if (!facts.purchasingEntitled || !facts.organizationPurchaser)
     unmet.push('PURCHASING_CAPABILITY_REQUIRED');

@@ -19,7 +19,7 @@ function facts(): InventoryDemoFacts {
     branchId: 'branch',
     ownerUserId: 'owner',
     actorId: 'purchaser',
-    namespace: 'demo:unit-test',
+    namespace: 'phdemo_0123456789abcdef01234567_',
     businessDate: '2026-09-07',
     scenarioAt: '2026-09-07T10:00:00Z',
     timezone: 'Asia/Karachi',
@@ -60,7 +60,7 @@ describe('inventory demo plan', () => {
       deliveredStock: [],
     });
     expect(plan.gaps).toHaveLength(4);
-    expect(plan.input.reference).toBe('demo:unit-test:inventory:po:v1');
+    expect(plan.input.reference).toBe('phdemo_0123456789abcdef01234567_:inventory:po:v1');
     expect(plan.hash).toMatch(/^[a-f0-9]{64}$/);
     expect(planInventoryDemo(facts()).hash).toBe(plan.hash);
   });
@@ -106,6 +106,46 @@ describe('inventory demo plan', () => {
     expect(planInventoryDemo({ ...facts(), timezone: 'invalid' }).unmet).toContain(
       'INVALID_TIME_CONTEXT'
     );
+  });
+});
+
+describe('inventory demo canonical namespace compatibility', () => {
+  it('preserves root namespace in dependencies and business reference', () => {
+    const input = facts();
+    const before = JSON.stringify(input);
+    const plan = planInventoryDemo(input);
+    expect(plan.unmet).toEqual([]);
+    expect(plan.dependencies.namespace).toBe(input.namespace);
+    expect(plan.input.reference).toBe(`${input.namespace}:inventory:po:v1`);
+    expect(plan.input).not.toHaveProperty('id');
+    expect(plan.expected.deliveredStock).toEqual([]);
+    expect(JSON.stringify(input)).toBe(before);
+    expect(planInventoryDemo(input).hash).toBe(plan.hash);
+  });
+
+  it('binds a second valid root namespace to a distinct hash and reference', () => {
+    const first = planInventoryDemo(facts());
+    const namespace = 'phdemo_abcdef0123456789abcdef01_';
+    const second = planInventoryDemo({ ...facts(), namespace });
+    expect(second.unmet).toEqual([]);
+    expect(second.dependencies.namespace).toBe(namespace);
+    expect(second.input.reference).toBe(`${namespace}:inventory:po:v1`);
+    expect(second.hash).not.toBe(first.hash);
+    expect(second.input.reference).not.toBe(first.input.reference);
+  });
+
+  it.each([
+    'demo:unit-test',
+    'phdemo_0123456789ABCDEF01234567_',
+    'phdemo_0123456789abcdef0123456_',
+    'phdemo_0123456789abcdef012345678_',
+    'phdemo_0123456789abcdef01234567',
+    'phdemo_0123456789abcdef01234567_:inventory',
+    ' phdemo_0123456789abcdef01234567_',
+  ])('refuses noncanonical namespace %s without normalizing it', (namespace) => {
+    const plan = planInventoryDemo({ ...facts(), namespace });
+    expect(plan.unmet).toEqual(['INVALID_NAMESPACE']);
+    expect(plan.dependencies.namespace).toBe(namespace);
   });
 });
 
