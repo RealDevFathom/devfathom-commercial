@@ -3,7 +3,7 @@
  * Run: bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts
  */
 import assert from 'node:assert/strict';
-import { randomBytes } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
@@ -207,6 +207,12 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
     };
     requests.set(name, req);
     const namespace = pharmacyHistoryGenesis(target, req).namespace;
+    // Public synthetic TEST input, never a live device credential. Match the
+    // unchanged 64-lowercase-hex CHECK and the independently reviewed fixture.
+    const testDeviceDigest = createHash('sha256')
+      .update(`${namespace}synthetic-only`)
+      .digest('hex');
+    assert.match(testDeviceDigest, /^[0-9a-f]{64}$/);
     sql(`BEGIN; INSERT INTO users (id,"organizationId",name,email,role,department,title,"updatedAt") VALUES
       ('${req.actorUserId}','wha1388_test_org','${namespace}TEST ACTOR','${name}@test.invalid','EMPLOYEE','wha1388-test-fixtures','TEST ONLY',now());
       INSERT INTO pharmacy_central_purchasing_access (id,"organizationId","userId","grantedById") VALUES
@@ -214,7 +220,7 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
       INSERT INTO pharmacy_stock_locations (id,"organizationId","branchId",code,name,kind,"updatedAt") VALUES
       ('test_location_${name}','wha1388_test_org','${branchId}','TEST','${namespace}TEST SHELF','RACK_BIN',now());
       INSERT INTO pharmacy_registered_devices (id,"organizationId","branchId",name,"deviceSecretHash","enrolledByActorId","updatedAt") VALUES
-      ('test_device_${name}','wha1388_test_org','${branchId}','${namespace}TEST DEVICE','NOT_A_CREDENTIAL_${name}','wha1388_owner',now());
+      ('test_device_${name}','wha1388_test_org','${branchId}','${namespace}TEST DEVICE','${testDeviceDigest}','wha1388_owner',now());
       INSERT INTO pharmacy_drawer_sessions (id,"organizationId","branchId","deviceId","businessDate","openingFloatMinor","openedByActorId") VALUES
       ('test_drawer_${name}','wha1388_test_org','${branchId}','test_device_${name}','${base.businessDate}',0,'${req.actorUserId}');
       INSERT INTO pharmacy_branch_regulatory_profiles (id,"organizationId","branchId",version,"effectiveFrom","provinceCode",
@@ -833,11 +839,22 @@ try {
   const report = {
     sourceDigest: await pharmacySourceDigest(),
     sourceSha: command('git', ['rev-parse', 'HEAD']),
+    sourceTree: command('git', ['show', '-s', '--format=%T', 'HEAD']),
     target: { database, directory, stopped: started },
     testFixturesOnly: true,
     counts: {
       passed: evidence.filter((item) => item.status === 'pass').length,
       failed: failed ? 1 : 0,
+      ...(integrated
+        ? {
+            integratedSelected: 8,
+            integratedExecuted: evidence.filter((item) => item.name.startsWith('integrated '))
+              .length,
+            integratedUnexecuted:
+              8 - evidence.filter((item) => item.name.startsWith('integrated ')).length,
+            skipped: 0,
+          }
+        : {}),
     },
     exit: failed ? 1 : 0,
     evidence,

@@ -1,5 +1,51 @@
 # Pharmacy demo evidence runner — WHA-1388
 
+## Approved additional fixture-repair pass
+
+Saad's explicit additional-pass approval is relayed in Desktop comment
+`8ce202a8-545b-4624-ae6f-f4e0d63c1ba1`. Starting clean source:
+`fde9e44605792e3748b74bf5b7072e3cbe03a2cc`, parent
+`082d1974c9d2e1c781508170c041cb2dacea5090`, tree
+`c7ccef15e76c1ed17ab67b6fa92c259feaaf96fe`, package digest
+`99d71d814cf884b99f40b63500de3042d7aa25a0069cf4050913f5c23695b6a8`.
+Only this verifier and manifest change. Root execution/contract/regression and
+accepted inventory d6f6, finance f191, retention fc474 inputs remain frozen.
+
+The original device placeholder violated the unchanged CHECK in
+`20260902200000_pharmacy_offline_counter_runtime/migration.sql`: the stored
+value must match `^[0-9a-f]{64}$`. The verifier now computes SHA-256 from the
+public namespace plus `synthetic-only`, matching the read-only inspected fixture
+pattern in the independent cash review's `tests/pharmacy-demo-cash-review.db.test.ts`.
+That uncommitted review file is not imported, copied or executed. No existing
+credential is read; the synthetic value is never used for device authentication.
+No constraint, schema, service or permission changes accompany the repair.
+
+Preflight covered all 28 INSERT statements against current Prisma required
+non-default scalar fields: no omissions remain, including `users.title`.
+Migration checks also cover device format/revocation/name/actor; open drawer
+float/close facts; profile date intervals; distinct PO creator/approver and paired
+approval timestamps; receipt PO-versus-direct shape; line quantity/money/accepted
+split; branch-scoped receipt/location/product/pack foreign keys; and enum values
+including RACK_BIN, UNIT, DAY, APPROVED and SUBMITTED. The prepared line has two
+accepted UNIT packs, no rejection, cost20/MRP100; cash150 is sufficient. These are
+static fixture checks, not database acceptance. Stock balances retain their actual
+composite primary key; the verifier does not fabricate an `id` or stock balance.
+
+Publish the corrected immutable source before exactly one **new** owned cluster:
+
+```sh
+bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts --integrated
+```
+
+The previous `BVqlKW` cluster and evidence stay untouched. No resume option is
+used for this pass. All 106 unchanged migrations follow extension preparation;
+all eight existing integrated cases remain selected. Evidence now explicitly
+reports selected/executed/unexecuted/skipped counts and the source tree. A failed
+bootstrap is never counted as an executed scenario. Results belong to the exact
+source SHA/digest in its retained report and the WHA-1388 issue comment; publication
+of this pre-execution manifest does not claim success. A passing builder result
+still requires a separate independent fresh integrated review routed by Desktop.
+
 ## Current revision: integrated disposable TEST execution
 
 Desktop delivery `a3fc7328-1288-47d4-99e9-6f5c03b6e9af` clears the GitHub101
