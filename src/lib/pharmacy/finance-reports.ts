@@ -111,6 +111,13 @@ export async function grossMargin(
   scope: ReportScope,
   input: { from: Date; to: Date; by: MarginDimension }
 ): Promise<MarginRow[]> {
+  return db.$queryRaw<MarginRow[]>(grossMarginQuery(scope, input));
+}
+
+function grossMarginQuery(
+  scope: ReportScope,
+  input: { from: Date; to: Date; by: MarginDimension }
+) {
   const key = {
     line: Prisma.sql`line."sourceLineId"`,
     batch: Prisma.sql`lot."manufacturingBatchId"`,
@@ -118,7 +125,7 @@ export async function grossMargin(
     branch: Prisma.sql`line."branchId"`,
   }[input.by];
 
-  return db.$queryRaw<MarginRow[]>(Prisma.sql`
+  return Prisma.sql`
     WITH signed AS (
       SELECT ${key} AS "key",
              line."accountCode",
@@ -146,7 +153,111 @@ export async function grossMargin(
            COALESCE(-SUM("debitMinor"), 0)::int AS "grossMarginMinor"
       FROM signed
      GROUP BY "key"
-     ORDER BY "key"`);
+     ORDER BY "key"`;
+}
+
+/** UTC elapsed-time windows; both use [from, to), capped at 92 days each. */
+export function marginComparisonPeriods(from: Date, to: Date) {
+  const duration = to.getTime() - from.getTime();
+  const previousFrom = new Date(from.getTime() - duration);
+  if (
+    !Number.isFinite(duration) ||
+    duration <= 0 ||
+    duration > 92 * 86_400_000 ||
+    !Number.isFinite(previousFrom.getTime())
+  )
+    throw new RangeError('Choose a valid period of at most 92 days.');
+  return { previous: { from: previousFrom, to: from }, current: { from, to } };
+}
+
+function exactMoney(value: bigint): number {
+  const result = Number(value);
+  if (!Number.isSafeInteger(result))
+    throw new RangeError('Ledger totals exceed safe integer-money bounds.');
+  return result;
+}
+
+/** Accounting identity only: no inference about price, quantity, mix or expenses. */
+export function explainGrossMargin(
+  previous: MarginRow | undefined,
+  current: MarginRow | undefined
+) {
+  const normalize = (row: MarginRow | undefined) => {
+    const totals = row ?? {
+      key: null,
+      revenueMinor: 0,
+      discountMinor: 0,
+      cogsMinor: 0,
+      grossMarginMinor: 0,
+    };
+    for (const value of [
+      totals.revenueMinor,
+      totals.discountMinor,
+      totals.cogsMinor,
+      totals.grossMarginMinor,
+    ]) {
+      if (!Number.isSafeInteger(value)) throw new RangeError('Invalid integer-money total.');
+    }
+    if (
+      BigInt(totals.revenueMinor) - BigInt(totals.discountMinor) - BigInt(totals.cogsMinor) !==
+      BigInt(totals.grossMarginMinor)
+    ) {
+      throw new RangeError('Ledger gross margin does not reconcile.');
+    }
+    return { ...totals, hasEntries: row !== undefined };
+  };
+  const before = normalize(previous);
+  const after = normalize(current);
+  const delta = (key: 'revenueMinor' | 'discountMinor' | 'cogsMinor' | 'grossMarginMinor') =>
+    exactMoney(BigInt(after[key]) - BigInt(before[key]));
+  const revenueDeltaMinor = delta('revenueMinor');
+  const discountDeltaMinor = delta('discountMinor');
+  const cogsDeltaMinor = delta('cogsMinor');
+  const differenceMinor = delta('grossMarginMinor');
+  return {
+    previous: before,
+    current: after,
+    revenueDeltaMinor,
+    discountDeltaMinor,
+    cogsDeltaMinor,
+    differenceMinor,
+    reconciledMinor: exactMoney(
+      BigInt(revenueDeltaMinor) - BigInt(discountDeltaMinor) - BigInt(cogsDeltaMinor)
+    ),
+  };
+}
+
+/** Reuses the posted-journal read model, with at most one group per period. */
+export async function grossMarginComparison(
+  db: ScopedDb,
+  scope: ReportScope & { branchId: string },
+  input: { from: Date; to: Date }
+) {
+  if (!scope.organizationId || !scope.branchId)
+    throw new RangeError('An explicit tenant and branch are required.');
+  const periods = marginComparisonPeriods(input.from, input.to);
+  // One statement guarantees a shared snapshot even through the tenant DB facade.
+  const rows = await db.$queryRaw<(MarginRow & { period: 'previous' | 'current' })[]>(Prisma.sql`
+    SELECT 'previous' AS "period", totals.*
+      FROM (${grossMarginQuery(scope, { ...periods.previous, by: 'branch' })}) totals
+    UNION ALL
+    SELECT 'current' AS "period", totals.*
+      FROM (${grossMarginQuery(scope, { ...periods.current, by: 'branch' })}) totals`);
+  const previous = rows.filter((row) => row.period === 'previous');
+  const current = rows.filter((row) => row.period === 'current');
+  if (
+    [previous, current].some(
+      (rows) => rows.length > 1 || rows.some((row) => row.key !== scope.branchId)
+    )
+  ) {
+    throw new RangeError('Unexpected ledger branch group.');
+  }
+  return {
+    branchId: scope.branchId,
+    timezone: 'UTC' as const,
+    periods,
+    ...explainGrossMargin(previous[0], current[0]),
+  };
 }
 
 export type LeakageRow = {
