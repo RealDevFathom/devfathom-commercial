@@ -1,6 +1,196 @@
-# Chai Chowk staging seed manifest — preflight only
+# Chai Chowk staging seed package — WHA-1382
 
-Issue: WHA-1382. Status: **blocked pending staging identity and permission metadata**.
+## Current package and scope
+
+Supervisor comment `0aafe0ec-66a7-41cd-84d4-7ea6ac552087` clarified that live
+identity blocks staging application, not source implementation or disposable-DB
+verification. The source package is now implemented. **No staging account or
+staging row counts have been verified, and no staging command has been executed.**
+The active Codex Desktop supervisor owns review; do not wake the paused Chief of Staff.
+
+Owned source files:
+
+- `scripts/seed-chaichowk-staging.ts`: explicit target validation, default dry-run,
+  tenant/account fence, restricted runtime/FORCE RLS checks, existing entitlements
+  and capability checks, branch advisory lock and additive audit receipt.
+- `scripts/chaichowk-staging-fixtures.ts`: pure relational plan and transaction-only
+  fixture application; uses purchasing and order services for their state changes.
+- `scripts/seed-chaichowk-staging.test.ts`: eight guard/plan regression tests.
+- `scripts/verify-chaichowk-staging.ts`: verification harness fenced to this run's
+  newly initialized disposable cluster. Never accepts a staging URL.
+- This manifest. Product code, schema, migrations, lockfile and old E2E seeds are unchanged.
+
+The package requires an existing ACTIVE ADMIN owner, existing branch assignment,
+Restaurant classification, PKR currency, active organization/branch and effective
+module/capability grants. It never reads or replaces the login password, changes
+roles/permissions, resets tenant tables, or activates an existing suspended profile.
+An absent owner fails with `OWNER_PROVISIONING_REQUIRED`; secure owner provisioning
+is a separate prerequisite. No fixed password or account-creation secret is consumed
+by this version. Missing owner actor profiles are added with a stable ID and the
+explicitly approved branch; existing profiles remain untouched. This follows the
+administrator-profile helper's preservation behavior while avoiding its generated
+ID and default-branch selection for this branch-fenced fixture.
+
+Namespace `ccdemo_v1_<hash(organizationId:branchId)>_` is stable across reruns.
+Collision without a valid receipt fails; a committed receipt checks that its rows
+still exist and returns without updating them. Business date, scenario instant,
+timezone, owner and enabled fixture groups are immutable for that namespace.
+Changing them refuses instead of creating another stock or money history.
+Generated service rows are tracked by receipt and stable command idempotency keys.
+
+## Executable inputs (Claude/owner application only)
+
+Secure environment input: `CHAICHOWK_SEED_DATABASE_URL`. It must identify the exact
+approved host, port and database, using the restricted runtime role. Staging requires
+`sslmode=verify-full`. Do not put its value in logs, documents or command arguments.
+Existing `DATABASE_URL`, `TEST_DATABASE_URL`, `DIRECT_URL`, and `SHADOW_DATABASE_URL`
+must be absent or exactly identical. Startup option/service overrides are refused.
+The script loads no dotenv files. Run in a fresh standalone process.
+
+The owner-reviewed non-secret JSON target document must contain exactly:
+`environment` (`staging`), `host`, `port`, `database`, `organizationId`,
+`organizationSlug`, `vertical` (`RESTAURANT`), `branchId`, `branchCode`,
+`ownerUserId`, `email` (`owner@chaichowk.pk`), `currency` (`PKR`), `timezone`,
+`businessDate` (`YYYY-MM-DD`), `scenarioAt` (UTC ISO instant with milliseconds),
+`approvalReference`, and `expiresAt` (future, at most 24 hours away).
+The server verifies that `scenarioAt` resolves to the stated business date using
+the actual branch timezone/cutoff. WHA-1384/owner must supply actual target metadata;
+fixture organization/branch IDs are not staging defaults.
+
+After normal repository dependency installation and Prisma generation:
+
+```sh
+TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/seed-chaichowk-staging.ts --target /secure/approved-chaichowk-target.json
+```
+
+This is the default dry-run; it opens a READ ONLY tenant transaction and reports
+planned static counts, service scenarios, gaps and a target-document confirmation
+digest. Review that result before the separately authorized staging application:
+
+```sh
+TSX_TSCONFIG_PATH=scripts/tsconfig.json node --import tsx scripts/seed-chaichowk-staging.ts --target /secure/approved-chaichowk-target.json --apply --confirm <digest-from-reviewed-dry-run>
+```
+
+Duplicate TLS parameters are refused. Cross-branch applications also lock the shared owner prerequisite to prevent duplicate actor profiles.
+
+These commands are package usage, not a deployment prompt or authorization to run
+against Azure. WHA-1384 retains the Claude deployment handoff.
+
+## Observed disposable coverage
+
+One new owned PostgreSQL 16.15 cluster, loopback TCP only; database
+`chaichowk_seed_disposable_wha1382`. Runtime `seed_runtime` explicitly asserted
+`rolsuper=false`, `rolbypassrls=false`; the runner checked FORCE RLS on its required
+surfaces. Bootstrap and migration administration used a separate role only in this
+new cluster. No existing local, staging, foreign or production database was used.
+
+For the original synthetic branch, observed **122 receipt-tracked rows plus one
+audit receipt** (including its previously missing owner actor):
+
+| Surface           | Observed rows/state                                                                                      |
+| ----------------- | -------------------------------------------------------------------------------------------------------- |
+| Catalog/menu      | 3 products, 3 menu items, 3 price entries; one menu/publication, category and brand                      |
+| Modifiers/recipes | 1 modifier group/option/link; 3 ingredients, recipes, active recipe versions and recipe lines            |
+| Floor             | 1 synthetic floor, 3 tables                                                                              |
+| Owner/staff       | 1 missing owner actor added; 2 synthetic staff profiles without logins                                   |
+| Workforce         | 2 scheduled shifts; no attendance asserted                                                               |
+| Purchasing        | 1 supplier, 1 received PO with 3 lines, 1 linked receipt with 3 lines                                    |
+| Inventory         | 3 stock items/movements; balances 1000 grams each in a separate synthetic pantry                         |
+| Orders/KDS        | 3 takeaway orders: 1 SENT, 1 IN_PREPARATION, 1 READY; 3 items/modifier snapshots/tickets/ticket items    |
+| Order history     | 12 order events and 12 command idempotency rows                                                          |
+| Customers         | 2 synthetic guests; no real contacts                                                                     |
+| Catering          | 1 DRAFT order, 2 recipe-linked lines, 1 estimated extra cost                                             |
+| SOP               | 1 DRAFT template/version/step; no completed or verified outcome                                          |
+| In-app notice     | 1 notice explaining synthetic data and integration limitations                                           |
+| External/device   | 1 revoked attribution-only device; 12 outbox rows DEAD with explicit suppression reason; zero print jobs |
+
+Order transitions and receiving use established service paths. Newly generated
+outbox events are retained in the existing DEAD state with an explicit suppression
+reason, never falsely marked dispatched. Branches with enabled print routes omit
+order scenarios; a final transaction check refuses any newly generated print intent
+if routing changes concurrently. No email, webhook, AI, payment or hardware call is
+made. No external success, regulatory approval or actual printer success is claimed.
+
+## Explicit missing coverage and review limits
+
+- No settled bills, payments, refunds, split settlement, daily closes or financial
+  projections. No approved tax configuration is created or inferred; no report
+  totals or fake historical financial facts are written.
+- No loyalty accrual/redemption; only synthetic customer records.
+- No clock-in/attendance, completed/verified SOP outcomes or external notification
+  delivery. Scheduled shifts and draft SOP templates are the current coverage.
+- Catering planning is draft-only: no deposit, production consumption, fulfilment
+  or delivered state. Existing console USD formatting for a PKR tenant remains a
+  product limitation outside this seed lane.
+- No absent-owner provisioning, Pharmacy membership, credentials for synthetic
+  staff, live devices or enabled integration examples.
+- This is a smaller package than the legacy showcase. The legacy 35 products /
+  34 orders / 31 bills are source-audit facts, not this package's counts.
+
+These gaps require active-supervisor review before describing the account as
+seeded for all functions. Staging identity, grants, module availability, target
+approval and execution remain with WHA-1384/owner and Claude.
+
+## Verification evidence and provenance
+
+Initial HEAD: `eba7a64017c00c26346de9c39d1fb4c156399469`; exact product base remains
+`2d3c0effc3af5d5bdd2351f831f231909b4432c0`. Assigned checkout/branch verified clean
+before editing. Prior manifest commits, including `d437b780`, are preserved.
+
+Commands/results:
+
+- `bun test scripts/seed-chaichowk-staging.test.ts`: 8 passed, 0 failed.
+- `prisma generate`: exit 0, generated client 7.9.1 from unchanged schema.
+- Applied all 106 existing migration SQL files with `psql -X -v ON_ERROR_STOP=1`
+  to the single new database. Extension ACL migration initially refused PUBLIC
+  EXECUTE; ran existing `prisma/prepare-extensions.ts` with its admin URL supplied
+  privately, then resumed unchanged migrations; exit 0. No schema bypass. This
+  SQL replay does not create Prisma's migration-history table and is not a claim
+  about staging migration status.
+- Scoped TypeScript check uses a run-owned config including the four owned scripts
+  and their actual imports: exit 0, no diagnostics. Command: `tsc -p "$PAPERCLIP_RUN_SCRATCH_DIR/seed-typecheck.json" --pretty false`.
+- Scoped ESLint with repository-lockfile `typescript-eslint@8.61.1` recommended rules: exit 0, no diagnostics. The Next lint-config installation could not resolve `next@16.2.12`, so this is the script-focused TypeScript ruleset, not a claim that the full Next lint preset ran. Prettier check over the four scripts and this manifest, and `git diff --check`: exit 0. No full app build/browser test: no app/product code changed.
+- `TSX_TSCONFIG_PATH=scripts/tsconfig.json CHAICHOWK_VERIFY_OWNED_DISPOSABLE=1 node --import tsx scripts/verify-chaichowk-staging.ts`:
+  exit 0. All public-table row and sequence snapshots unchanged on dry-run and
+  rerun; existing owner password/status/roles and existing/foreign business rows
+  preserved; foreign branch rejected before writes; late order-limit failure
+  rolled back prior catalog/receiving/stock changes; concurrent first applies
+  yielded one apply and one replay; concurrent reruns made no writes; runtime
+  role flags asserted and foreign rows invisible under tenant RLS.
+- The successful final verifier inspected the already-applied original branch
+  and performed a fresh first-application race on another synthetic branch in
+  the SAME database. Earlier first application succeeded before test-harness
+  enum-order/output-parsing assertions were corrected. No reset or fixture-row
+  deletion was used to repeat tests.
+
+Final source concurrency check: the same verifier with `--final-check` exited 0. Two concurrent first applications on different synthetic branches in the SAME disposable DB both applied, created exactly one user-linked owner actor, and left zero print intents and zero pending external outbox rows. This exercised the final shared-owner lock and print-intent guard.
+
+Verification setup limitations/corrections: full and initial minimal dependency
+installs hit ENOSPC. Reclaimed only run-owned failed output, pinned the minimal
+verification closure to repository lockfile versions and used hardlinks; install
+succeeded. Setup also corrected an overlong Unix socket path, bootstrap enum/branch
+code and timezone assumptions, and harness enum sorting, immutable-date reuse and
+stdout/stderr separation. Initial typecheck found three fixture field mismatches;
+corrected against generated Prisma types. pg emitted a query-concurrency deprecation
+warning during service execution; checks ran on the pinned pg 8.22.0 runtime.
+No raw password, hash or connection value is part of this evidence.
+
+The eight unit tests are not represented as database/RLS proof; the disposable
+verification provides that evidence. Database initialization, temporary dependencies,
+logs and generated output stayed in this worktree/run-owned scratch. No shared
+service restart, cloud write, deployment, push, merge or paused-agent wake occurred.
+There is no automatic cleanup/rollback command for an applied seed: preserve and
+review the receipt's exact rows rather than deleting tenant data. Application is
+atomic; failed transactions require no data repair.
+
+---
+
+The record below is historical evidence from before package authorization was
+clarified. Its blocked/no-implementation statements describe those earlier passes.
+
+# Historical preflight record
+
+Historical WHA-1382 status before supervisor clarification: **blocked pending staging identity and permission metadata**.
 No staging seed entry point has been implemented or executed. This document is
 source preflight evidence, not a deployment handoff or a verified coverage report.
 
@@ -38,15 +228,15 @@ is required before provisioning Pharmacy; do not convert the restaurant tenant.
 
 ## Existing seed safety findings
 
-| Source | Evidence | Staging implication |
-| --- | --- | --- |
-| `scripts/restaurant-e2e-database.ts` | Requires disposable database name, rejects staging hosts/targets and common PostgreSQL ports, checks competing URL settings | Preserve the complete guard; do not route staging through this entry point |
-| `scripts/pharmacy-e2e-environment.ts` | Requires explicit Pharmacy E2E opt-in and disposable target; rejects staging, shared targets and common ports | Preserve the complete guard; Pharmacy fixtures are not staging provisioning |
-| `scripts/seed-restaurant-e2e.ts:516` | Rejects runtime SUPERUSER/BYPASSRLS, then enters platform context; later replaces permission relations through nested `deleteMany` | Restricted runtime role alone does not make the seed additive |
-| `scripts/seed-restaurant-demo.ts:1034` | Upserts package/module configuration and updates organization commercial settings | Cannot preserve existing entitlements by calling this helper |
-| `scripts/seed-restaurant-demo.ts:1278` | Owner upsert replaces password on rerun and assigns fixture manager role on creation | Never invoke against an existing staging account |
-| `scripts/seed-restaurant-demo.ts:1142` | Updates base fixture catalog, prices and device presentation | Fixture IDs are not permission to overwrite staging business rows |
-| `scripts/seed-restaurant-demo.ts:2375` | `countSeeded()` returns planned array lengths | These are not observed database counts or proof of safe reruns |
+| Source                                 | Evidence                                                                                                                           | Staging implication                                                         |
+| -------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------- | --------------------------------------------------------------------------- |
+| `scripts/restaurant-e2e-database.ts`   | Requires disposable database name, rejects staging hosts/targets and common PostgreSQL ports, checks competing URL settings        | Preserve the complete guard; do not route staging through this entry point  |
+| `scripts/pharmacy-e2e-environment.ts`  | Requires explicit Pharmacy E2E opt-in and disposable target; rejects staging, shared targets and common ports                      | Preserve the complete guard; Pharmacy fixtures are not staging provisioning |
+| `scripts/seed-restaurant-e2e.ts:516`   | Rejects runtime SUPERUSER/BYPASSRLS, then enters platform context; later replaces permission relations through nested `deleteMany` | Restricted runtime role alone does not make the seed additive               |
+| `scripts/seed-restaurant-demo.ts:1034` | Upserts package/module configuration and updates organization commercial settings                                                  | Cannot preserve existing entitlements by calling this helper                |
+| `scripts/seed-restaurant-demo.ts:1278` | Owner upsert replaces password on rerun and assigns fixture manager role on creation                                               | Never invoke against an existing staging account                            |
+| `scripts/seed-restaurant-demo.ts:1142` | Updates base fixture catalog, prices and device presentation                                                                       | Fixture IDs are not permission to overwrite staging business rows           |
+| `scripts/seed-restaurant-demo.ts:2375` | `countSeeded()` returns planned array lengths                                                                                      | These are not observed database counts or proof of safe reruns              |
 
 Both environment guard files were read in full. Existing seed executables were
 not imported or run. Full seed/service correctness review remains outstanding.
