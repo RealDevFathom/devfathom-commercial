@@ -5,10 +5,34 @@ import { executePharmacyDemoRetention, planPharmacyDemoRetention } from './pharm
 import type { PharmacyDemoContext, PharmacyDemoPlan, PharmacyDemoResult } from './pharmacy-demo-contract';
 
 const input: PharmacyDemoContext = { organizationId: 'existing-org', branchId: 'existing-branch',
-  ownerUserId: 'existing-owner', namespace: 'demo-retention', businessDate: '2026-09-07',
+  ownerUserId: 'existing-owner', namespace: 'phdemo_0123456789abcdef01234567_', businessDate: '2026-09-07',
   scenarioAt: '2026-09-07T12:00:00.000Z', timezone: 'Asia/Karachi', currency: 'PKR',
   actors: [], references: [], modules: [] };
 const plan = () => planPharmacyDemoRetention(input);
+
+describe('canonical namespace planner compatibility', () => {
+  it('preserves canonical namespace identity, reference prefixes and digest input', () => {
+    const before = JSON.stringify(input);
+    const p = plan();
+    expect(p.namespace).toBe(input.namespace);
+    expect(p.target.namespace).toBe(input.namespace);
+    expect(p.records).toEqual([]);
+    expect(p.personas.every((persona) => persona.ref.startsWith(`${input.namespace}:retention:`))).toBe(true);
+    expect(p.expectedReceipts.every((receipt) => receipt.id.startsWith(`${input.namespace}:retention:`))).toBe(true);
+    expect(plan().digest).toBe(p.digest);
+    const other = planPharmacyDemoRetention({ ...input, namespace: 'phdemo_ffffffffffffffffffffffff_' });
+    expect(other.namespace).toBe('phdemo_ffffffffffffffffffffffff_');
+    expect(other.digest).not.toBe(p.digest);
+    expect(JSON.stringify(input)).toBe(before);
+  });
+  it.each(['demo-retention', 'phdemo_0123456789ABCDEF01234567_',
+    'phdemo_0123456789abcdef0123456_', 'phdemo_0123456789abcdef012345678_',
+    'phdemo_0123456789abcdef01234567', ' phdemo_0123456789abcdef01234567_',
+    'phdemo_0123456789abcdef01234567_\n', '=phdemo_0123456789abcdef01234567_'])
+  ('rejects noncanonical namespace without normalization: %j', (namespace) => {
+    expect(() => planPharmacyDemoRetention({ ...input, namespace })).toThrow('canonical');
+  });
+});
 
 describe('Pharmacy demo retention expected cases (no database writes)', () => {
   it('matches the existing repeat reference for all 14 cases and three horizons', () => {
@@ -25,7 +49,7 @@ describe('Pharmacy demo retention expected cases (no database writes)', () => {
     expect(planPharmacyDemoRetention({ ...input, branchId: 'other' }).digest).not.toBe(plan().digest);
     expect(plan().personas).toHaveLength(6);
     for (const persona of plan().personas) {
-      expect(persona.ref.startsWith('demo-retention:retention:')).toBe(true);
+      expect(persona.ref.startsWith(`${input.namespace}:retention:`)).toBe(true);
       expect(persona.displayName.startsWith('DEMO ')).toBe(true);
       expect(Object.keys(persona).sort()).toEqual(['displayName', 'ref', 'status']);
     }

@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto';
 import type { RepeatReceipt } from '../src/lib/pharmacy/repeat-purchasing';
+import { isPharmacyDemoNamespace } from './pharmacy-demo-contract';
 import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
   PharmacyDemoResult } from './pharmacy-demo-contract';
 
@@ -11,8 +12,8 @@ export function planPharmacyDemoRetention(input: PharmacyDemoRetentionInput) {
   for (const id of [input.organizationId, input.branchId, input.ownerUserId]) {
     if (!id.trim() || id.length > 128) throw new Error('Explicit existing target IDs required.');
   }
-  if (!/^demo-[a-z0-9-]{1,48}$/.test(input.namespace))
-    throw new Error('Use a bounded demo- namespace.');
+  if (!isPharmacyDemoNamespace(input.namespace))
+    throw new Error('Use the canonical phdemo_<24 lowercase hex>_ namespace.');
   const asOf = new Date(input.scenarioAt);
   if (!Number.isFinite(asOf.getTime()) || !/Z$/.test(input.scenarioAt))
     throw new Error('An explicit UTC scenario instant is required.');
