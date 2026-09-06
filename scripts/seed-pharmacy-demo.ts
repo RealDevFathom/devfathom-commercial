@@ -416,6 +416,12 @@ export async function pharmacySourceDigest(): Promise<string> {
     'scripts/seed-pharmacy-demo.ts',
     'scripts/seed-pharmacy-demo.test.ts',
     'scripts/verify-pharmacy-demo.ts',
+    'scripts/pharmacy-demo-inventory.ts',
+    'scripts/pharmacy-demo-inventory.test.ts',
+    'scripts/pharmacy-demo-finance.ts',
+    'scripts/pharmacy-demo-finance.test.ts',
+    'scripts/pharmacy-demo-retention.ts',
+    'scripts/pharmacy-demo-retention.test.ts',
     'docs/demo/pharmacy-seed-manifest.md',
   ];
   const digest = createHash('sha256');

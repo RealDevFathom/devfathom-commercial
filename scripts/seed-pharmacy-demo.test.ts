@@ -23,6 +23,122 @@ import {
 } from './seed-pharmacy-demo';
 
 const NOW = new Date('2026-09-07T07:00:00.000Z');
+test('integrated receiving UNIT stock reaches cash allocation', async () => {
+  // Contract reproduction only: mocked reads, no database or regulatory authority.
+  // Keep this failing assertion until the finance owner corrects the reviewed helper.
+  const { arrangementFor } = await import('../src/lib/pharmacy/inventory');
+  const { executePharmacyDemoCashSale } = await import('./pharmacy-demo-finance');
+  const namespace = 'phdemo_0123456789abcdef01234567_';
+  const scope = { organizationId: 'test-org', branchId: 'test-branch', actorId: 'test-actor' };
+  const businessDate = new Date('2026-09-07T00:00:00.000Z');
+  const arrangement = arrangementFor(2, 1); // postReceipt uses this exact kernel.
+  assert.deepEqual(arrangement, { sealedPacks: 2, looseUnits: 0 });
+  const input = {
+    deviceId: 'test-device',
+    drawerSessionId: 'test-drawer',
+    medicineId: 'test-medicine',
+    presentationId: 'test-presentation',
+    packLevelId: 'test-pack',
+    inventoryLotId: 'test-lot',
+    stockLocationId: 'test-location',
+    expectedAmountMinor: 100,
+    cashReceivedMinor: 100,
+  };
+  const found = (value: unknown) => ({ findFirst: async () => value });
+  const db = {
+    user: found({ id: scope.actorId }),
+    pharmacyBranch: found({ id: scope.branchId, name: 'TEST' }),
+    pharmacyRegisteredDevice: found({ id: input.deviceId }),
+    pharmacyDrawerSession: {
+      findMany: async () => [
+        {
+          id: input.drawerSessionId,
+          openedByActorId: scope.actorId,
+          businessDate,
+        },
+      ],
+    },
+    // In-memory guard fixture only. No approved workspace or clinical claim.
+    branchRegulatoryProfile: found({
+      licenceCategory: 'TEST',
+      licenceValidFrom: new Date(0),
+      licenceValidTo: new Date('2100-01-01'),
+      qualifiedPersonRegistration: 'TEST',
+      qualifiedPersonCoverageRosterRef: 'TEST',
+      qualifiedPersonValidFrom: new Date(0),
+      qualifiedPersonValidTo: new Date('2100-01-01'),
+      permittedSchedules: [],
+      jurisdictionRuleSet: {
+        licenceCategories: { provisional: false, values: ['TEST'] },
+        permittedSchedules: { provisional: false, values: [] },
+        pharmacistCoverageRule: { provisional: false },
+      },
+    }),
+    medicine: found({ id: input.medicineId }),
+    presentation: found({ id: input.presentationId }),
+    packLevel: found({ id: input.packLevelId }),
+    pharmacyInventoryLot: found({
+      id: input.inventoryLotId,
+      unitsPerPack: 1,
+      printedMrpMinor: 100,
+      unitCostMinor: 50,
+    }),
+    pharmacyStockBalance: {
+      findMany: async () => [
+        {
+          inventoryLotId: input.inventoryLotId,
+          stockLocationId: input.stockLocationId,
+          disposition: 'AVAILABLE',
+          onHandUnits: 2,
+          ...arrangement,
+        },
+      ],
+    },
+    pharmacyDrawerMovement: {
+      aggregate: async () => {
+        throw new Error('CASH_ALLOCATION_REACHED');
+      },
+    },
+  };
+  const result = await executePharmacyDemoCashSale(
+    db as unknown as Parameters<typeof executePharmacyDemoCashSale>[0],
+    {
+      scope,
+      namespace,
+      businessDate,
+      entitlements: {
+        organizationId: scope.organizationId,
+        vertical: 'PHARMACY',
+        seatLimit: 1,
+        activeSeats: 1,
+        enabledModules: ['pharmacy-counter'],
+        modules: [],
+        limits: {},
+      },
+      records: [
+        ['User', scope.actorId],
+        ['PharmacyRegisteredDevice', input.deviceId],
+        ['PharmacyDrawerSession', input.drawerSessionId],
+        ['PharmacyInventoryLot', input.inventoryLotId],
+        ['PharmacyStockLocation', input.stockLocationId],
+      ].map(([model, persistedId]) => ({
+        model,
+        persistedId,
+        planKey: `${namespace}${model}`,
+        receiptReference: `${namespace}test-prerequisites`,
+        observedHash: pharmacyScalarHash({ model, persistedId }),
+        observedFacts: {},
+      })),
+    },
+    input
+  ).then(
+    (value) => JSON.stringify(value),
+    (error: Error) => error.message
+  );
+  // UNIT stock is sellable without breaking a pack: fromSealed % unitsPerPack === 0.
+  assert.equal(result, 'CASH_ALLOCATION_REACHED');
+});
+
 test('SQL receipt scalar hash includes timestamps and generated IDs', () => {
   const row = {
     id: 'service-generated',
