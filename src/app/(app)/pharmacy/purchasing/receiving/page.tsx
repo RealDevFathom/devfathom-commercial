@@ -148,7 +148,7 @@ export default async function PharmacyReceivingPage({
     return (
       <Frame branch={scope} notice={notice}>
         <LoadFailure
-          detail="Receipts for this branch could not be read. Nothing was written."
+          detail="Receipts for this branch could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={`${ROUTE}?branch=${encodeURIComponent(branchId)}`}
         />
       </Frame>

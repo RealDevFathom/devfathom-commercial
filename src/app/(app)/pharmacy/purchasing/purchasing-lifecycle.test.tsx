@@ -458,3 +458,293 @@ it('keeps Returns success and sibling credit draft when Submit becomes Dispatch'
   expect([draft.selectionStart, draft.selectionEnd]).toEqual([1, 5]);
   expect(write).toHaveBeenCalledOnce();
 });
+
+it('review: same allocation cannot repeat through the credit and debit-note forms after uncertain outcome', async () => {
+  const note = {
+    id: 'dn-1',
+    reference: 'DN-1',
+    issuedAt: new Date('2026-09-01'),
+    position: {
+      expectedCreditMinor: 10000,
+      receivedCreditMinor: 0,
+      outstandingMinor: 10000,
+      varianceMinor: 0,
+      status: 'OPEN',
+    },
+  };
+  const ret = {
+    id: 'ret-1',
+    reference: 'RET-1',
+    status: 'DISPATCHED',
+    kind: 'PURCHASE_RETURN',
+    supplier: licensedSupplier,
+    createdAt: new Date('2026-09-01'),
+    lines: [],
+    debitNotes: [note],
+  };
+  const credit = {
+    id: 'cr-1',
+    reference: 'CR-1',
+    supplier: licensedSupplier,
+    supplierId: 'sup-ok',
+    amountMinor: 10000,
+    receivedAt: new Date('2026-09-01'),
+    allocations: [],
+  };
+  const write = vi.fn().mockRejectedValue(new Error('unknown write outcome'));
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      purchaseReturns: vi.fn().mockResolvedValue([ret]),
+      supplierCredits: vi.fn().mockResolvedValue([credit]),
+      allocateSupplierCredit: write,
+    })
+  );
+  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  render(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
+  const buttons = screen.getAllByRole('button', { name: 'Allocate' });
+  expect(buttons).toHaveLength(2);
+  for (const button of buttons) {
+    const form = button.closest('form')!;
+    fireEvent.change(form.querySelector('input[name="amountMinor"]')!, {
+      target: { value: '10.00' },
+    });
+    const select = form.querySelector('select')!;
+    fireEvent.change(select, {
+      target: { value: select.name === 'supplierCreditId' ? 'cr-1' : 'dn-1' },
+    });
+  }
+  await act(async () => {
+    fireEvent.click(buttons[0]);
+  });
+  expect(write).toHaveBeenCalledTimes(1);
+  expect(buttons[0]).toBeDisabled();
+  await act(async () => {
+    fireEvent.click(buttons[1]);
+  });
+  expect(write.mock.calls[0][0]).toMatchObject({
+    supplierCreditId: 'cr-1',
+    debitNoteId: 'dn-1',
+    amountMinor: 1000,
+  });
+  if (write.mock.calls.length > 1) expect(write.mock.calls[1][0]).toEqual(write.mock.calls[0][0]);
+  expect(write).toHaveBeenCalledTimes(1);
+});
+it('review: supplier outcome and same-operation lock survive refreshed read failure and recovery', async () => {
+  const list = vi.fn().mockResolvedValue([{ ...licensedSupplier, authorized: false }]);
+  const write = vi.fn().mockResolvedValue({});
+  mocks.createCaller.mockReturnValue(
+    callerStub({ suppliers: list, setSupplierAuthorization: write })
+  );
+  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+  const view = render(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+  await act(async () => {
+    fireEvent.click(screen.getByRole('button', { name: 'Authorize this supplier' }));
+  });
+  list.mockRejectedValue(new Error('read failed'));
+  view.rerender(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+  expect(screen.getByRole('status')).toHaveTextContent('Supplier authorized');
+  expect(
+    screen.getByText(/This read failure does not confirm or undo earlier changes/)
+  ).toBeVisible();
+  expect(screen.queryByText(/nothing was written/i)).toBeNull();
+  list.mockResolvedValue([{ ...licensedSupplier, authorized: false }]);
+  view.rerender(await SuppliersPage({ searchParams: params({ supplier: 'sup-ok' }) }));
+  const button = screen.getByRole('button', { name: 'Authorize this supplier' });
+  expect(button).toBeDisabled();
+  fireEvent.submit(button.closest('form')!);
+  expect(write).toHaveBeenCalledOnce();
+});
+
+function allocationFixture(write: ReturnType<typeof vi.fn>) {
+  const note = (id: string) => ({
+    id,
+    reference: id,
+    issuedAt: new Date('2026-09-01'),
+    position: {
+      expectedCreditMinor: 10000,
+      receivedCreditMinor: 0,
+      outstandingMinor: 10000,
+      varianceMinor: 0,
+      status: 'OPEN',
+    },
+  });
+  const ret = {
+    id: 'ret-1',
+    reference: 'RET-1',
+    status: 'DISPATCHED',
+    kind: 'PURCHASE_RETURN',
+    supplier: licensedSupplier,
+    createdAt: new Date('2026-09-01'),
+    lines: [],
+    debitNotes: [note('dn-1'), note('dn-2')],
+  };
+  const credit = (id: string) => ({
+    id,
+    reference: id,
+    supplier: licensedSupplier,
+    supplierId: 'sup-ok',
+    amountMinor: 10000,
+    receivedAt: new Date('2026-09-01'),
+    allocations: [],
+  });
+  mocks.createCaller.mockReturnValue(
+    callerStub({
+      purchaseReturns: vi.fn().mockResolvedValue([ret]),
+      supplierCredits: vi.fn().mockResolvedValue([credit('cr-1'), credit('cr-2')]),
+      allocateSupplierCredit: write,
+    })
+  );
+  vi.stubGlobal('window', { document, location: { origin: 'https://workspace.test' } });
+}
+
+function allocationForm(presentation: 'credit' | 'debit', id: string) {
+  const name = presentation === 'credit' ? 'supplierCreditId' : 'debitNoteId';
+  const form = screen
+    .getAllByRole('button', { name: 'Allocate' })
+    .map((button) => button.closest('form')!)
+    .find(
+      (form) =>
+        form.querySelector(`input[type="hidden"][name="${name}"]`)?.getAttribute('value') === id
+    );
+  if (!form) throw new Error(`Allocation presentation missing: ${presentation} ${id}`);
+  return form;
+}
+
+// Simulate stale enabled DOM and changed live selects without React change events.
+// Correctness must come from the synchronous dispatch guard, not disabled styling.
+function prepareLiveAllocation(form: HTMLFormElement, selection: string, amount = '10.00') {
+  form.querySelector('fieldset')!.disabled = false;
+  form.querySelector('select')!.value = selection;
+  (form.querySelector('input[name="amountMinor"]') as HTMLInputElement).value = amount;
+  const values = new FormData(form);
+  return {
+    branchId: values.get('branchId'),
+    supplierCreditId: values.get('supplierCreditId'),
+    debitNoteId: values.get('debitNoteId'),
+    amountMinor: Number(values.get('amountMinor')) * 100,
+  };
+}
+
+it.each([
+  ['credit', 'pending'],
+  ['debit', 'pending'],
+  ['credit', 'uncertain'],
+  ['debit', 'uncertain'],
+  ['credit', 'committed'],
+  ['debit', 'committed'],
+] as const)(
+  'blocks the opposite allocation presentation after %s dispatch is %s',
+  async (direction, phase) => {
+    let complete!: (value: object) => void;
+    const write =
+      phase === 'pending'
+        ? vi.fn(
+            () =>
+              new Promise((resolve) => {
+                complete = resolve;
+              })
+          )
+        : phase === 'uncertain'
+          ? vi.fn().mockRejectedValue(new Error('unknown result'))
+          : vi.fn().mockResolvedValue({});
+    allocationFixture(write);
+    const view = render(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
+    const first = allocationForm(direction, direction === 'credit' ? 'cr-1' : 'dn-1');
+    const expected = prepareLiveAllocation(first, direction === 'credit' ? 'dn-1' : 'cr-1');
+    await act(async () => {
+      fireEvent.submit(first);
+    });
+    expect(write).toHaveBeenCalledExactlyOnceWith(expected);
+    expect(expected).toEqual({
+      branchId: 'branch-1',
+      supplierCreditId: 'cr-1',
+      debitNoteId: 'dn-1',
+      amountMinor: 1000,
+    });
+    // Remove and restore selected debit forms without replacing the page store.
+    view.rerender(await ReturnsPage({ searchParams: params() }));
+    view.rerender(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
+    const opposite = allocationForm(
+      direction === 'credit' ? 'debit' : 'credit',
+      direction === 'credit' ? 'dn-1' : 'cr-1'
+    );
+    expect(prepareLiveAllocation(opposite, direction === 'credit' ? 'cr-1' : 'dn-1')).toEqual(
+      expected
+    );
+    await act(async () => {
+      fireEvent.submit(opposite);
+    });
+    expect(write).toHaveBeenCalledExactlyOnceWith(expected);
+    // Changing amount cannot turn the completed/uncertain pair into a fresh attempt.
+    prepareLiveAllocation(opposite, direction === 'credit' ? 'cr-1' : 'dn-1', '11.00');
+    await act(async () => {
+      fireEvent.submit(opposite);
+    });
+    expect(write).toHaveBeenCalledOnce();
+    if (phase === 'pending')
+      await act(async () => {
+        complete({});
+      });
+  }
+);
+
+it.each(['pending', 'uncertain'] as const)(
+  'blocks overlapping selections but permits unrelated pairs during an %s allocation',
+  async (phase) => {
+    let complete!: (value: object) => void;
+    const write = vi.fn().mockResolvedValue({});
+    if (phase === 'pending')
+      write.mockImplementationOnce(
+        () =>
+          new Promise((resolve) => {
+            complete = resolve;
+          })
+      );
+    else write.mockRejectedValueOnce(new Error('unknown result'));
+    allocationFixture(write);
+    const view = render(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
+    const draft = screen.getByLabelText(/Credit note reference/) as HTMLInputElement;
+    fireEvent.change(draft, { target: { value: 'Unrelated credit draft' } });
+    const first = allocationForm('credit', 'cr-1');
+    const expected = prepareLiveAllocation(first, 'dn-1');
+    await act(async () => {
+      fireEvent.submit(first);
+    });
+    expect(write).toHaveBeenCalledExactlyOnceWith(expected);
+    view.rerender(await ReturnsPage({ searchParams: params() }));
+    view.rerender(await ReturnsPage({ searchParams: params({ return: 'ret-1' }) }));
+    // Different credit, same debit; then same credit, different debit.
+    const otherCredit = allocationForm('credit', 'cr-2');
+    expect(prepareLiveAllocation(otherCredit, 'dn-1')).toEqual({
+      ...expected,
+      supplierCreditId: 'cr-2',
+    });
+    await act(async () => {
+      fireEvent.submit(otherCredit);
+    });
+    const otherDebit = allocationForm('debit', 'dn-2');
+    expect(prepareLiveAllocation(otherDebit, 'cr-1')).toEqual({ ...expected, debitNoteId: 'dn-2' });
+    await act(async () => {
+      fireEvent.submit(otherDebit);
+    });
+    expect(write).toHaveBeenCalledOnce();
+    const unrelated = prepareLiveAllocation(otherCredit, 'dn-2');
+    await act(async () => {
+      fireEvent.submit(otherCredit);
+    });
+    expect(write).toHaveBeenCalledTimes(2);
+    expect(write.mock.calls[1][0]).toEqual(unrelated);
+    expect(unrelated).toEqual({
+      branchId: 'branch-1',
+      supplierCreditId: 'cr-2',
+      debitNoteId: 'dn-2',
+      amountMinor: 1000,
+    });
+    expect(screen.getByLabelText(/Credit note reference/)).toBe(draft);
+    expect(draft).toHaveValue('Unrelated credit draft');
+    if (phase === 'pending')
+      await act(async () => {
+        complete({});
+      });
+  }
+);

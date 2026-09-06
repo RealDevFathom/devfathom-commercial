@@ -208,7 +208,7 @@ export default async function PharmacySuppliersPage({
 
       {loadError || !suppliers ? (
         <LoadFailure
-          detail="The supplier register could not be read. This is a read-only page, so nothing was written."
+          detail="The supplier register could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={ROUTE}
         />
       ) : (

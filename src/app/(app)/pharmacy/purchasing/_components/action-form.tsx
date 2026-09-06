@@ -3,6 +3,7 @@
 import {
   useSyncExternalStore,
   useRef,
+  useState,
   useTransition,
   useEffect,
   useId,
@@ -16,6 +17,7 @@ import {
   PurchasingOutcome,
   usePurchasingOutcome,
   operationKey,
+  allocationOperation,
   type PurchasingOperation,
 } from './action-outcomes';
 
@@ -33,6 +35,7 @@ type ActionFormProps = {
   children: ReactNode;
   className?: string;
   operation?: PurchasingOperation;
+  financialOperation?: 'supplier-credit-allocation';
 };
 
 export function PurchasingActionForm(props: ActionFormProps) {
@@ -48,10 +51,12 @@ function ActionAttempt({
   children,
   className,
   operation,
+  financialOperation,
 }: ActionFormProps & { operation: PurchasingOperation }) {
   const router = useRouter();
   const ready = useSyncExternalStore(subscribe, clientReady, serverReady);
-  const { store, shared, attempt, blocked } = usePurchasingOutcome(operation);
+  const [selection, setSelection] = useState<PurchasingOperation | null>(null);
+  const { store, shared, attempt, blocked } = usePurchasingOutcome(selection ?? operation);
   const [, startTransition] = useTransition();
   const formRef = useRef<HTMLFormElement>(null);
   const errorRef = useRef<HTMLParagraphElement>(null);
@@ -85,15 +90,26 @@ function ActionAttempt({
     <form
       ref={formRef}
       aria-busy={attempt?.phase === 'pending'}
+      onChange={
+        financialOperation
+          ? (event) => {
+              setSelection(allocationOperation(new FormData(event.currentTarget)));
+            }
+          : undefined
+      }
       onSubmit={(event) => {
         event.preventDefault();
-        if (blocked) return;
+        if (!financialOperation && blocked) return;
         // Capture before disabling controls; include named submit buttons (decisions).
         const form = new FormData(
           event.currentTarget,
           (event.nativeEvent as SubmitEvent).submitter
         );
-        if (!store.begin(operation)) return;
+        // Re-read live selections immediately before claiming the shared lock;
+        // rendered state, alternate forms and stale closures are not authority.
+        const attemptOperation = financialOperation ? allocationOperation(form) : operation;
+        if (financialOperation) setSelection(attemptOperation);
+        if (!store.begin(attemptOperation)) return;
         startTransition(async () => {
           try {
             const destination = await action(form);
@@ -112,7 +128,7 @@ function ActionAttempt({
             ) {
               // Keep the live controls and selected record; do not reset entered values.
               store.reject(
-                operation,
+                attemptOperation,
                 target.searchParams.get('notice') || 'The change could not be saved.',
                 target.searchParams.get('field')
               );
@@ -123,21 +139,21 @@ function ActionAttempt({
               target.searchParams.get('outcome') !== 'committed'
             ) {
               // Missing/unknown classification, including post-write failures, never unlocks.
-              store.fail(operation);
+              store.fail(attemptOperation);
               return;
             }
             // Outcome delivery does not depend on navigation or refresh completion.
             // refresh() merges the current route's RSC payload; it returns no success
             // acknowledgement. Keep this attempt locked even if the refresh fails.
             store.commit(
-              operation,
+              attemptOperation,
               target.searchParams.get('notice') || 'The change was saved.',
               target.href
             );
             router.refresh();
           } catch {
             // A lost response may follow a committed write. Never retry it automatically.
-            store.fail(operation);
+            store.fail(attemptOperation);
           }
         });
       }}

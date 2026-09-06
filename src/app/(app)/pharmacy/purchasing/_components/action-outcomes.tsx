@@ -2,7 +2,30 @@
 
 import { createContext, useContext, useState, useSyncExternalStore, type ReactNode } from 'react';
 
-export type PurchasingOperation = { resource: string; action: string };
+export type PurchasingOperation = {
+  resource: string;
+  action: string;
+  affectedResources?: string[];
+};
+
+/** Both allocation presentations address the same live credit/debit pair.
+ * Amount changes do not constitute a fresh attempt for a completed pair in this
+ * page lifetime. Server money parsing and validation remain authoritative.
+ */
+export function allocationOperation(form: FormData): PurchasingOperation {
+  const value = (name: string) => String(form.get(name) ?? '').trim();
+  const branch = value('branchId');
+  const credit = value('supplierCreditId');
+  const debit = value('debitNoteId');
+  return {
+    resource: JSON.stringify(['allocation', branch, credit, debit]),
+    action: 'allocate',
+    affectedResources: [
+      ...(credit ? [JSON.stringify(['credit', branch, credit])] : []),
+      ...(debit ? [JSON.stringify(['debit-note', branch, debit])] : []),
+    ],
+  };
+}
 type Attempt = PurchasingOperation &
   (
     | { phase: 'pending' }
@@ -21,7 +44,10 @@ function blocked(attempts: ReadonlyMap<string, Attempt>, operation: PurchasingOp
   // A new control is not evidence that an earlier uncertain write is safe.
   return [...attempts.values()].some(
     (attempt) =>
-      attempt.resource === operation.resource &&
+      (attempt.resource === operation.resource ||
+        attempt.affectedResources?.some((resource) =>
+          operation.affectedResources?.includes(resource)
+        )) &&
       (attempt.phase === 'pending' || attempt.phase === 'uncertain')
   );
 }
