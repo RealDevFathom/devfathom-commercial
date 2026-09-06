@@ -26,6 +26,49 @@ namespace-history facts before coverage planning, and emits a retainable JSON
 report. It never connects to a database, invokes a service, imports another seed,
 loads connection settings, provisions an account, or writes business data.
 
+## Transaction seam findings after the support correction
+
+- `src/lib/pharmacy/central-purchasing.ts:62` exports
+  `createCentralPurchaseOrder(db: ScopedDb, scope, input)`. It checks organization
+  purchasing grants, supplier authorization/current licence, active branch and
+  catalog existence, then returns the created order including generated line IDs.
+  It starts no independent transaction. `reference` is supported; caller IDs are not.
+- `src/lib/tenancy/scoped-db.ts:84` exports
+  `withTenantDb<T>(organizationId, run: (tx: ScopedDb) => Promise<T>, options)`.
+  It owns the Prisma transaction and tenant/user settings. A draft and awaited
+  receipt delegate writes can technically commit or roll back together here.
+  It does not authenticate the supplied user ID or grant purchasing authority.
+- The existing audit service is `recordAudit(row: AuditRowInput): void` at
+  `src/server/audit.ts:368`. It accepts no caller transaction. It opens its own
+  `withTenantDb`, returns before persistence, and catches/logs failure at line 436.
+  Calling it inside the draft transaction permits a committed draft with a failed
+  receipt, or an independently committed receipt followed by draft rollback.
+  `flushAuditWritesForTest` only waits for independent writes; it does not make
+  them atomic. This API cannot supply the required durable receipt contract.
+- The accepted Restaurant script uses direct `tx.auditLog.create` for its own
+  receipt/tombstone (lines 585–615), not this service. The table is available;
+  this is **not** evidence that PostgreSQL or `withTenantDb` lacks atomicity.
+  Reproducing that storage protocol would be new runner receipt code, requiring
+  namespace locking, generated-ID mapping, retained-fact reconciliation and
+  rollback/concurrency proof. No general seed framework was copied.
+- Existing authenticated paths are `resolveTenantActor` in
+  `src/lib/tenancy/tenant-actor.ts`, `createTRPCContext` and
+  `auditedProtectedProcedure` in `src/server/trpc.ts`, and the purchasing mutation
+  at `src/server/routers/pharmacy-purchasing.ts:1327`. The mutation receives its
+  actor from `ctx.session.user.id`, and middleware checks active session/module
+  access. Calling the domain service with evidence-JSON booleans would bypass
+  those checks; it is not an authenticated preflight.
+
+Integration remains incomplete. Under the instruction to stop at an exact missing
+service contract, the identified boundary is a caller-transaction receipt API
+that propagates failure. Active Codex Desktop owns routing that contract work
+outside the four-file lane, or directing a bounded runner-owned audit-delegate
+receipt implementation. No change to the purchase-order service is needed for
+the ID correction. This is a technical escalation, not a request to approve the
+offline evidence or grant live-write authority. No disposable PostgreSQL was
+created because no database-writing path was changed or claimed proven. No
+database, RLS, authorization, rollback or concurrency acceptance is claimed.
+
 The JSON observations are operator-supplied claims. A digest binds their content;
 it is **not a signature, proof of authorization, live observation, RLS test, or
 proof that an approved Pharmacy workspace exists**. A valid offline report sets
