@@ -1,0 +1,23 @@
+{
+  "command": [
+    "git",
+    "diff",
+    "--check",
+    "8bd6419c5c7dba9ee72aab5361949c11c65d482a",
+    "HEAD"
+  ],
+  "returncode": 0,
+  "environmentKeys": [
+    "BUN_INSTALL_CACHE_DIR",
+    "HOME",
+    "LANG",
+    "NEXT_TELEMETRY_DISABLED",
+    "NODE_ENV",
+    "PAPERCLIP_RUN_SCRATCH_DIR",
+    "PATH",
+    "SHELL",
+    "TMPDIR",
+    "USER",
+    "XDG_CACHE_HOME"
+  ]
+}

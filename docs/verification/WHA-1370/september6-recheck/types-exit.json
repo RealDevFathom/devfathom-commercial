@@ -1,0 +1,20 @@
+{
+  "command": [
+    "node",
+    "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/docs/verification/WHA-1370/september6-recheck/focused-types.cjs"
+  ],
+  "returncode": 0,
+  "environmentKeys": [
+    "BUN_INSTALL_CACHE_DIR",
+    "HOME",
+    "LANG",
+    "NEXT_TELEMETRY_DISABLED",
+    "NODE_ENV",
+    "PAPERCLIP_RUN_SCRATCH_DIR",
+    "PATH",
+    "SHELL",
+    "TMPDIR",
+    "USER",
+    "XDG_CACHE_HOME"
+  ]
+}

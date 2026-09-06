@@ -1,0 +1,35 @@
+{
+  "files": 12,
+  "unique": 119,
+  "passed": 119,
+  "failed": 0,
+  "skipped": 0,
+  "pending": 0,
+  "todo": 0,
+  "sameTestIdentitiesAsPriorRun": true,
+  "priorCounts": {
+    "passed": 116,
+    "failed": 3
+  },
+  "correctedFailures": [
+    {
+      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+      "test": "keeps Returns success and sibling credit draft when Submit becomes Dispatch",
+      "before": "failed",
+      "after": "passed"
+    },
+    {
+      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+      "test": "does not render priorities after branch read denial",
+      "before": "failed",
+      "after": "passed"
+    },
+    {
+      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+      "test": "loads the queue from the existing authorized branch reads",
+      "before": "failed",
+      "after": "passed"
+    }
+  ],
+  "unhandledErrors": 0
+}

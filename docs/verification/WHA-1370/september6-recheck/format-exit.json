@@ -1,0 +1,23 @@
+{
+  "command": [
+    "node",
+    "node_modules/prettier/bin/prettier.cjs",
+    "--check",
+    "src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx"
+  ],
+  "returncode": 0,
+  "environmentKeys": [
+    "BUN_INSTALL_CACHE_DIR",
+    "HOME",
+    "LANG",
+    "NEXT_TELEMETRY_DISABLED",
+    "NODE_ENV",
+    "PAPERCLIP_RUN_SCRATCH_DIR",
+    "PATH",
+    "SHELL",
+    "TMPDIR",
+    "USER",
+    "XDG_CACHE_HOME"
+  ]
+}

@@ -1,0 +1,14 @@
+{
+  "baseline": "2d3c0effc3af5d5bdd2351f831f231909b4432c0",
+  "testedHead": "37906386a59700ce4a168e410ca68594baa97c75",
+  "testedTree": "d4d077c986250ee69952ecaff508798143a8d2e7",
+  "allBaselineBlobsExceptTwoTestsUnchanged": true,
+  "unchangedBlobCount": 1811,
+  "manifestSHA256": "4ef270a6efc54a8cdd0978c710811d835470b77703b6bd562ece8eb2b2661773",
+  "allowedTestChanges": [
+    "src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx"
+  ],
+  "priorEvidenceREADMEsha256": "8c45a7e7c890241d6ad80f0e559e59ddc55ba75e5be279cb4a14a9fadc1e0af4",
+  "buildReuse": "prior bun run build exit 0 on baseline; runtime/config/lock/package/schema inputs identical; changed test diagnostics checked freshly, not full build/type replay"
+}
