@@ -71,6 +71,34 @@ report projection service paths still require assessment. No broader fixture fil
 ownership is claimed. WHA-1383 owns the independent workflow coverage report;
 WHA-1384 owns the deployment handoff.
 
+## Published source audit follow-through
+
+WHA-1383 comment `05c95eb0-3153-4c98-a6bd-61b566cf9d00` reports the
+[Chai Chowk coverage matrix](/api/issues/29a88c72-2c65-4774-8dfe-a8f93d1759d6/documents/chaichowk-seed-coverage),
+revision `ad94f771-8a84-4731-b9b4-8a7e0b189238`, against the assigned source
+base. This section records that audit's findings; it is not a second coverage
+audit or runtime verification. Its reported footprint is 35 showcase products,
+34 orders, 31 settled bills and three live orders; staging counts were not queried.
+
+After the identity gate clears, the seed implementation must assess these reported
+must-have gaps against actual enabled workflows and established service rules:
+
+- Owner ACTIVE staff actor and scenarios anchored to the actual business date.
+- Dish recipes and linked receiving documents; a `RECEIVED` purchase order alone
+  does not demonstrate receiving coverage.
+- Refunds and split payments; catering; roster and attendance.
+- SOP outcomes and notifications, with external delivery suppressed.
+
+The audit reports hardcoded USD in
+`src/components/restaurant/catering/catering-console.tsx:89` despite the PKR
+tenant. Record this as an unresolved product limitation for the Chief of Staff;
+it is not a seed fix, authorization to edit UI, or reason to change tenant currency.
+Hardware, external integrations, tax and Pharmacy remain separately gated.
+No additional fixture ownership is claimed. WHA-1382 retains the seed runner;
+WHA-1383 owns the matrix; WHA-1384 owns target verification and the Claude handoff.
+The audit supplies no staging identity or permission evidence, so the named
+WHA-1384 unblock action above remains required.
+
 ## Commands, counts and limitations
 
 ### WHA-1383 comment reconciliation (2026-09-06)
