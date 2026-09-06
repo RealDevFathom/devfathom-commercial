@@ -2,11 +2,426 @@ import { createHash } from 'node:crypto';
 import { canonicalUnits, priceFromLot } from '../src/lib/pharmacy/medicine';
 import { isPharmacyDemoNamespace } from './pharmacy-demo-contract';
 import type {
+  DemoObservedRecord,
   DemoGap,
   PharmacyDemoContext,
   PharmacyDemoPlan,
   PharmacyDemoResult,
 } from './pharmacy-demo-contract';
+import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
+import type { LedgerScope } from '../src/lib/pharmacy/stock-ledger';
+import type { EntitlementView } from '../src/lib/module-catalog';
+
+/** Internal, never JSON/request input. Root authenticates the current operator,
+ * resolves entitlements/branch access, reconciles receipt/tombstone history BEFORE
+ * calling once, and retains this result in its SAME withTenantDb transaction.
+ * records are root-observed prior synthetic provisioning, not approval flags.
+ */
+export interface PharmacyDemoCashRoot {
+  scope: LedgerScope;
+  namespace: string;
+  entitlements: EntitlementView;
+  records: readonly DemoObservedRecord[];
+  businessDate: Date;
+}
+
+/** One OTC UNIT from one prerecorded synthetic lot/location; no clinical
+ * approvals, discounts, provider, printer, contact, refund or status shortcut.
+ * Refusals precede sale creation. ALL later failures throw to root for rollback.
+ * Never catch an error and commit this transaction. This is not a replay API:
+ * root must return its retained result on rerun rather than call this step twice.
+ */
+export async function executePharmacyDemoCashSale(
+  tx: ScopedDb,
+  root: PharmacyDemoCashRoot,
+  input: {
+    deviceId: string;
+    drawerSessionId: string;
+    medicineId: string;
+    presentationId: string;
+    packLevelId: string;
+    inventoryLotId: string;
+    stockLocationId: string;
+    expectedAmountMinor: number;
+    cashReceivedMinor: number;
+  }
+) {
+  const { scope, namespace } = root;
+  const refuse = (reason: string) => ({
+    status: 'refused' as const,
+    unmetPrerequisites: [`UNSEEDED: ${reason}`],
+  });
+  if (!isPharmacyDemoNamespace(namespace)) return refuse('INVALID_DEMO_NAMESPACE');
+  if (
+    root.entitlements.organizationId !== scope.organizationId ||
+    root.entitlements.vertical !== 'PHARMACY' ||
+    !root.entitlements.enabledModules.includes('pharmacy-counter')
+  )
+    return refuse('CURRENT_PHARMACY_COUNTER_ENTITLEMENT');
+  if (!Number.isFinite(root.businessDate.getTime())) return refuse('BUSINESS_DATE');
+  if (
+    !Number.isSafeInteger(input.expectedAmountMinor) ||
+    input.expectedAmountMinor <= 0 ||
+    !Number.isSafeInteger(input.cashReceivedMinor) ||
+    input.cashReceivedMinor < input.expectedAmountMinor
+  )
+    return refuse('EXACT_CASH_INPUT');
+  const required = [
+    ['User', scope.actorId],
+    ['PharmacyRegisteredDevice', input.deviceId],
+    ['PharmacyDrawerSession', input.drawerSessionId],
+    ['PharmacyInventoryLot', input.inventoryLotId],
+    ['PharmacyStockLocation', input.stockLocationId],
+  ];
+  if (
+    required.some(
+      ([model, id]) =>
+        root.records.filter(
+          (record) =>
+            record.model === model &&
+            record.persistedId === id &&
+            record.planKey.startsWith(namespace) &&
+            record.receiptReference.startsWith(namespace)
+        ).length !== 1
+    )
+  )
+    return refuse('ROOT_PRERECORDED_SYNTHETIC_IDS');
+  const scoped = { organizationId: scope.organizationId, branchId: scope.branchId };
+  const actor = await tx.user.findFirst({
+    where: {
+      id: scope.actorId,
+      organizationId: scope.organizationId,
+      status: 'ACTIVE',
+      name: { startsWith: namespace },
+    },
+    select: { id: true },
+  });
+  const branch = await tx.pharmacyBranch.findFirst({
+    where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
+    select: { id: true, name: true },
+  });
+  const device = await tx.pharmacyRegisteredDevice.findFirst({
+    where: {
+      ...scoped,
+      id: input.deviceId,
+      name: { startsWith: namespace },
+      status: 'ACTIVE',
+      revokedAt: null,
+    },
+    select: { id: true },
+  });
+  const drawers = await tx.pharmacyDrawerSession.findMany({
+    where: { ...scoped, deviceId: input.deviceId, status: 'OPEN' },
+    select: { id: true, openedByActorId: true, businessDate: true },
+  });
+  if (
+    !actor ||
+    !branch ||
+    !device ||
+    drawers.length !== 1 ||
+    drawers[0]!.id !== input.drawerSessionId ||
+    drawers[0]!.openedByActorId !== scope.actorId ||
+    drawers[0]!.businessDate.toISOString().slice(0, 10) !==
+      root.businessDate.toISOString().slice(0, 10)
+  )
+    return refuse('ACTIVE_SCOPED_SYNTHETIC_OPERATOR_DEVICE_DRAWER');
+  const at = new Date(); // Real services allocate/issue at wall clock; never backdate them.
+  const profile = await tx.branchRegulatoryProfile.findFirst({
+    where: {
+      ...scoped,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    include: { jurisdictionRuleSet: true },
+    orderBy: { effectiveFrom: 'desc' },
+  });
+  if (!profile) return refuse('CURRENT_STORED_REGULATORY_PROFILE');
+  const { assertBranchMayOperate } = await import('../src/lib/pharmacy/regulatory');
+  // Root owns denial audit in its orchestration; no out-of-transaction audit client.
+  assertBranchMayOperate(
+    { ...profile, ruleSet: profile.jurisdictionRuleSet, auditDenied: () => undefined },
+    { name: 'pharmacy-demo.cash-sale', at }
+  );
+  const medicine = await tx.medicine.findFirst({
+    where: {
+      id: input.medicineId,
+      organizationId: scope.organizationId,
+      saleable: true,
+      otc: true,
+      rx: false,
+      restricted: false,
+      controlled: false,
+      highAlert: false,
+      coldChain: false,
+    },
+    select: { id: true },
+  });
+  const presentation = await tx.presentation.findFirst({
+    where: {
+      id: input.presentationId,
+      organizationId: scope.organizationId,
+      medicineId: input.medicineId,
+    },
+    select: { id: true },
+  });
+  const pack = await tx.packLevel.findFirst({
+    where: {
+      id: input.packLevelId,
+      organizationId: scope.organizationId,
+      presentationId: input.presentationId,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    select: { id: true },
+  });
+  const lot = await tx.pharmacyInventoryLot.findFirst({
+    where: {
+      ...scoped,
+      id: input.inventoryLotId,
+      packLevelId: input.packLevelId,
+      supplierInvoiceRef: { startsWith: namespace },
+      batch: { medicineId: input.medicineId },
+    },
+    select: { id: true, unitCostMinor: true, printedMrpMinor: true, unitsPerPack: true },
+  });
+  if (!medicine || !presentation || !pack || !lot)
+    return refuse('OBSERVED_OTC_PRODUCT_AND_MARKED_SYNTHETIC_LOT');
+  // FEFO is authoritative. Refuse mixed inventory before allocation; recheck the
+  // service's actual allocations afterwards to catch concurrent candidate changes.
+  const balances = await tx.pharmacyStockBalance.findMany({
+    where: { ...scoped, onHandUnits: { gt: 0 }, lot: { batch: { medicineId: input.medicineId } } },
+  });
+  if (
+    balances.length !== 1 ||
+    balances[0]!.inventoryLotId !== lot.id ||
+    balances[0]!.stockLocationId !== input.stockLocationId ||
+    balances[0]!.disposition !== 'AVAILABLE' ||
+    balances[0]!.looseUnits < 1
+  )
+    return refuse('EXCLUSIVE_PRERECORDED_SYNTHETIC_STOCK');
+  const quote = priceFromLot({
+    printedMrpMinor: lot.printedMrpMinor,
+    canonicalUnitsInPack: lot.unitsPerPack,
+    canonicalUnitsPerSaleUnit: 1,
+  });
+  if (quote.unitPriceMinor !== input.expectedAmountMinor) return refuse('OBSERVED_PRICE_CHANGED');
+  const { createSale, addSaleLine } = await import('../src/lib/pharmacy/sales');
+  const { applyPharmacyTender } = await import('../src/lib/pharmacy/settlement');
+  const { postSaleLineEntry, postTenderEntry } =
+    await import('../src/lib/pharmacy/finance-postings');
+  const drawerBefore = await tx.pharmacyDrawerMovement.aggregate({
+    where: { organizationId: scope.organizationId, drawerSessionId: input.drawerSessionId },
+    _count: true,
+    _sum: { amountMinor: true },
+  });
+  const sale = await createSale(tx, scope);
+  const added = await addSaleLine(tx, scope, {
+    saleId: sale.id,
+    medicineId: input.medicineId,
+    presentationId: input.presentationId,
+    packLevelId: input.packLevelId,
+    saleUnit: 'UNIT',
+    quantity: 1,
+    canonicalUnitsPerSaleUnit: 1,
+    idempotencyKey: `${namespace}finance:cash:line`,
+  });
+  if (
+    added.line.saleId !== sale.id ||
+    added.line.unitPriceMinor !== input.expectedAmountMinor ||
+    added.line.discountMinor !== 0 ||
+    added.allocation.allocations.length !== 1 ||
+    added.allocation.allocations[0]!.inventoryLotId !== lot.id ||
+    added.allocation.allocations[0]!.stockLocationId !== input.stockLocationId ||
+    added.allocation.allocations[0]!.units !== 1
+  )
+    throw new Error('DEMO_CASH_ALLOCATION_CHANGED_ROLLBACK');
+  const tenderResult = await applyPharmacyTender(tx, scope, {
+    saleId: sale.id,
+    deviceId: input.deviceId,
+    businessDate: root.businessDate,
+    type: 'CASH',
+    amountMinor: input.expectedAmountMinor,
+    cashReceivedMinor: input.cashReceivedMinor,
+    idempotencyKey: `${namespace}finance:cash:tender`,
+  });
+  // Tender replay result is deliberately broad in the owning API. Read actual
+  // persisted tender/sale instead of casting an idempotency JSON blob to facts.
+  const tenders = await tx.pharmacyTender.findMany({ where: { ...scoped, saleId: sale.id } });
+  const issued = await tx.pharmacySale.findFirst({ where: { ...scoped, id: sale.id } });
+  const tender = tenders[0];
+  if (
+    tenderResult.replayed ||
+    tenders.length !== 1 ||
+    !tender ||
+    tender.type !== 'CASH' ||
+    tender.amountMinor !== input.expectedAmountMinor ||
+    tender.cashReceivedMinor !== input.cashReceivedMinor ||
+    tender.changeGivenMinor !== input.cashReceivedMinor - input.expectedAmountMinor ||
+    tender.drawerSessionId !== input.drawerSessionId ||
+    issued?.status !== 'COMPLETED' ||
+    issued.receiptNumber === null ||
+    !issued.completedAt
+  )
+    throw new Error('DEMO_CASH_SETTLEMENT_MISMATCH_ROLLBACK');
+  const saleJournal = await postSaleLineEntry(tx, scope, {
+    saleLineId: added.line.id,
+    at: issued.completedAt,
+  });
+  const tenderJournal = await postTenderEntry(tx, scope, {
+    tenderId: tender.id,
+    at: issued.completedAt,
+  });
+  const { readCounterReceipt } = await import('../src/lib/pharmacy/counter');
+  const receipt = await readCounterReceipt(tx, scoped, sale.id, {
+    name: branch.name,
+    currency: 'PKR',
+  });
+  if (
+    receipt.receiptNumber !== issued.receiptNumber ||
+    receipt.saleId !== sale.id ||
+    receipt.lines.length !== 1 ||
+    receipt.lines[0]!.saleLineId !== added.line.id ||
+    receipt.lines[0]!.identityStatus !== 'ISSUED' ||
+    receipt.totals.netMinor !== input.expectedAmountMinor ||
+    receipt.totals.tenderedMinor !== input.expectedAmountMinor ||
+    receipt.totals.changeMinor !== input.cashReceivedMinor - input.expectedAmountMinor
+  )
+    throw new Error('DEMO_CASH_RECEIPT_MISMATCH_ROLLBACK');
+  const allocations = await tx.pharmacySaleLineAllocation.findMany({
+    where: { ...scoped, saleLineId: added.line.id },
+  });
+  const movements = await tx.pharmacyStockMovement.findMany({
+    where: { ...scoped, id: { in: added.allocation.movementIds } },
+  });
+  const after = await tx.pharmacyStockBalance.findFirst({
+    where: {
+      ...scoped,
+      inventoryLotId: lot.id,
+      stockLocationId: input.stockLocationId,
+      disposition: 'AVAILABLE',
+    },
+  });
+  const drawerAfter = await tx.pharmacyDrawerMovement.aggregate({
+    where: { organizationId: scope.organizationId, drawerSessionId: input.drawerSessionId },
+    _count: true,
+    _sum: { amountMinor: true },
+  });
+  const { grossMargin } = await import('../src/lib/pharmacy/finance-reports');
+  const margin = (
+    await grossMargin(tx, scoped, {
+      from: issued.completedAt,
+      to: new Date(issued.completedAt.getTime() + 1),
+      by: 'line',
+    })
+  ).filter((row) => row.key === added.line.id);
+  const expectedMargin = input.expectedAmountMinor - lot.unitCostMinor;
+  const journalNet = new Map<string, number>();
+  for (const leg of [...saleJournal.lines, ...tenderJournal.lines])
+    journalNet.set(
+      leg.accountCode,
+      (journalNet.get(leg.accountCode) ?? 0) +
+        (leg.side === 'DEBIT' ? leg.amountMinor : -leg.amountMinor)
+    );
+  if (
+    journalNet.get('CASH') !== input.expectedAmountMinor ||
+    journalNet.get('SALES_CLEARING') !== 0 ||
+    journalNet.get('SALES_REVENUE') !== -input.expectedAmountMinor ||
+    (journalNet.get('COST_OF_GOODS_SOLD') ?? 0) !== lot.unitCostMinor ||
+    (journalNet.get('INVENTORY') ?? 0) !== -lot.unitCostMinor ||
+    [...journalNet.values()].reduce((sum, value) => sum + value, 0) !== 0 ||
+    drawerAfter._count !== drawerBefore._count + 1 ||
+    (drawerAfter._sum.amountMinor ?? 0) - (drawerBefore._sum.amountMinor ?? 0) !==
+      input.expectedAmountMinor
+  )
+    throw new Error('DEMO_CASH_JOURNAL_DRAWER_MISMATCH_ROLLBACK');
+  if (
+    allocations.length !== 1 ||
+    allocations[0]!.canonicalUnits !== 1 ||
+    movements.length !== 1 ||
+    movements[0]!.quantityUnits !== -1 ||
+    after?.onHandUnits !== balances[0]!.onHandUnits - 1 ||
+    margin.length !== 1 ||
+    margin[0]!.revenueMinor !== input.expectedAmountMinor ||
+    margin[0]!.discountMinor !== 0 ||
+    margin[0]!.cogsMinor !== lot.unitCostMinor ||
+    margin[0]!.grossMarginMinor !== expectedMargin
+  )
+    throw new Error('DEMO_CASH_READBACK_MISMATCH_ROLLBACK');
+  const observedRecord = (
+    model: string,
+    persistedId: string,
+    suffix: string,
+    observedFacts: DemoObservedRecord['observedFacts']
+  ): DemoObservedRecord => ({
+    model,
+    persistedId,
+    planKey: `${namespace}finance:cash:${suffix}`,
+    receiptReference: `${namespace}finance:cash`,
+    observedFacts,
+    observedHash: createHash('sha256')
+      .update(JSON.stringify({ model, persistedId, observedFacts }))
+      .digest('hex'),
+  });
+  const records = [
+    observedRecord('PharmacySale', sale.id, 'sale', {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      receiptNumber: issued.receiptNumber,
+      receiptDeviceId: issued.receiptDeviceId,
+      status: issued.status,
+    }),
+    observedRecord('PharmacySaleLine', added.line.id, 'line', {
+      saleId: sale.id,
+      canonicalUnits: 1,
+      amountMinor: tender.amountMinor,
+    }),
+    observedRecord('PharmacyTender', tender.id, 'tender', {
+      saleId: sale.id,
+      drawerSessionId: input.drawerSessionId,
+      amountMinor: tender.amountMinor,
+      cashReceivedMinor: tender.cashReceivedMinor,
+      changeGivenMinor: tender.changeGivenMinor,
+    }),
+    observedRecord('FinanceJournalEntry', saleJournal.id, 'sale-journal', {
+      sourceId: added.line.id,
+    }),
+    observedRecord('FinanceJournalEntry', tenderJournal.id, 'tender-journal', {
+      sourceId: tender.id,
+    }),
+    observedRecord('PharmacyStockMovement', movements[0]!.id, 'stock', {
+      inventoryLotId: lot.id,
+      stockLocationId: input.stockLocationId,
+      quantityUnits: -1,
+    }),
+  ];
+  return {
+    status: 'applied' as const,
+    records,
+    gaps: [] as DemoGap[],
+    saleId: sale.id,
+    saleLineId: added.line.id,
+    tenderId: tender.id,
+    receiptNumber: issued.receiptNumber,
+    receiptDeviceId: issued.receiptDeviceId,
+    issuedAt: issued.completedAt,
+    receipt,
+    allocationIds: allocations.map((row) => row.id),
+    stockMovementIds: movements.map((row) => row.id),
+    journalEntryIds: [saleJournal.id, tenderJournal.id],
+    journalLines: [...saleJournal.lines, ...tenderJournal.lines],
+    drawerMovementCountDelta: drawerAfter._count - drawerBefore._count,
+    drawerMoneyDeltaMinor:
+      (drawerAfter._sum.amountMinor ?? 0) - (drawerBefore._sum.amountMinor ?? 0),
+    amountMinor: tender.amountMinor,
+    cashReceivedMinor: tender.cashReceivedMinor,
+    changeGivenMinor: tender.changeGivenMinor,
+    stockBefore: balances[0]!.onHandUnits,
+    stockAfter: after.onHandUnits,
+    margin: margin[0]!,
+    coverage: 'SYNTHETIC_CASH_SALE' as const,
+    physicalDrawerProof: false as const,
+  };
+}
 
 /** Internal tooling only. Root must validate identity, branch assignment, module
  * and report capabilities, approved references and receipt/tombstones FIRST.
