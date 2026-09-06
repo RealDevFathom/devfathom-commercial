@@ -139,7 +139,7 @@ export default async function PharmacyReturnsPage({
     return (
       <Frame branch={scope} notice={notice}>
         <LoadFailure
-          detail="Returns for this branch could not be read. Nothing was written."
+          detail="Returns for this branch could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={`${ROUTE}?branch=${encodeURIComponent(branchId)}`}
         />
       </Frame>
@@ -645,6 +645,7 @@ export default async function PharmacyReturnsPage({
                       {unallocated > 0 && openDebitNotes.length > 0 ? (
                         <PurchasingActionForm
                           operation={{ resource: `credit:${credit.id}`, action: 'allocate' }}
+                          financialOperation="supplier-credit-allocation"
                           action={allocateCredit}
                           className="mt-3 flex flex-wrap items-end gap-3"
                         >
@@ -829,6 +830,7 @@ function ReturnDetail({
                 {note.position.outstandingMinor > 0 && spendable.length > 0 ? (
                   <PurchasingActionForm
                     operation={{ resource: `debit-note:${note.id}`, action: 'allocate' }}
+                    financialOperation="supplier-credit-allocation"
                     action={onAllocate}
                     className="mt-3 flex flex-wrap items-end gap-3"
                   >

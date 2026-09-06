@@ -428,7 +428,7 @@ export default async function PharmacyOrdersPage({
         <NoticeBanner notice={notice} />
         <PurchasingOutcomes />
         <LoadFailure
-          detail="Requisitions and orders could not be read. Nothing was written."
+          detail="Requisitions and orders could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={ROUTE}
         />
       </PurchasingOutcomeScope>
