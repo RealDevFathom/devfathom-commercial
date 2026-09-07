@@ -236,6 +236,10 @@ async function verifyIntegrated(base: PharmacyDraftRequest) {
       ('test_po_line_${name}','wha1388_test_org','test_po_${name}',1,'wha1388_medicine','wha1388_pack',2,1,2,20);
       INSERT INTO pharmacy_purchase_order_approvals (id,"organizationId","purchaseOrderId","actorUserId",policy,decision,"fromStatus","toStatus") VALUES
       ('test_approval_${name}','wha1388_test_org','test_po_${name}','wha1388_owner','PUR-02:SEGREGATION_OF_DUTIES','APPROVED','SUBMITTED','APPROVED');
+      -- Prepared TEST prerequisite: mirror sendPurchaseOrder's persisted transition.
+      -- Normal supplier and status-machine triggers remain active; no external send.
+      UPDATE pharmacy_purchase_orders SET status='SENT',"sentAt"=now(),"updatedAt"=now()
+      WHERE "organizationId"='wha1388_test_org' AND id='test_po_${name}' AND status='APPROVED';
       INSERT INTO pharmacy_goods_receipts (id,"organizationId","branchId",reference,"supplierId","purchaseOrderId","supplierInvoiceRef",
       "supplierInvoiceDate","warrantyEvidenceRef","receivedByUserId","receivedAt","updatedAt") VALUES
       ('test_receipt_${name}','wha1388_test_org','${branchId}','${namespace}receipt','wha1388_supplier','test_po_${name}','${namespace}invoice',

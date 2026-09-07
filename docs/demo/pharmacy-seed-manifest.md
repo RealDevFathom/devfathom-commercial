@@ -1,5 +1,21 @@
 # Pharmacy demo evidence runner — WHA-1388
 
+## September 7 approved PO fixture pass
+
+Saad's approval in comment `5f3f3cdf-c2dd-4e45-99a6-16f9e462ff96`
+permits one additional correction and one fresh disposable verification cluster.
+Base: `054f48effef98d7669029b57fe15bbc4954dd01d`, clean assigned branch.
+The prepared TEST PO now transitions APPROVED to SENT after its approval event,
+recording sentAt as the existing sendPurchaseOrder procedure does. The unchanged
+supplier-licence and status-machine triggers validate that update. This fixture
+establishes a pre-existing sent order; it does not prove the send endpoint or
+contact a supplier. No runtime, helper, schema or permission changes.
+
+Preflight checked the existing transition function, send procedure, supplier
+backstop and receiving trigger. Prior failed evidence below remains retained.
+Corrected source is committed before the single integrated verification attempt.
+Acceptance results will be recorded separately; no new pass is yet claimed.
+
 ## Approved additional fixture-repair pass
 
 **Result: incomplete; receiving scenario failed.** Tested immutable source
