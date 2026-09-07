@@ -5,8 +5,13 @@ import { describe, expect, it } from 'vitest';
 import { createHash } from 'node:crypto';
 import { readFile } from 'node:fs/promises';
 // Typecheck against immutable support 9691ab14 in the review union.
-import type { DemoGap, DemoPlannedRecord, PharmacyDemoContext, PharmacyDemoPlan,
-  PharmacyDemoResult } from '../scripts/pharmacy-demo-contract';
+import type {
+  DemoGap,
+  DemoPlannedRecord,
+  PharmacyDemoContext,
+  PharmacyDemoPlan,
+  PharmacyDemoResult,
+} from '../scripts/pharmacy-demo-contract';
 import { packConversions } from '../src/lib/pharmacy/pack-conversion';
 import { receiptLineQuantities, receiptLineUnitCostMinor } from '../src/lib/pharmacy/receiving';
 
@@ -15,24 +20,49 @@ const at = new Date('2026-09-07T07:00:00.000Z'); // 12:00 Asia/Karachi
 
 describe('PH-DEMO expected stock and PKR identities (not executed workflows)', () => {
   it('derives canonical stock from pack facts, including bonus and quarantine', () => {
-    const [pack] = packConversions([
-      { id: `${namespace}:box`, level: 'BOX', unitsPerParent: 10,
-        parentPackLevelId: null, effectiveFrom: new Date('2026-01-01'), effectiveTo: null },
-    ], at);
-    const input = { receivedPacks: 10, bonusPacks: 2,
-      canonicalUnitsPerPack: pack.canonicalUnitsPerPack, rejectedCanonicalUnits: 5 };
-    expect(receiptLineQuantities(input)).toEqual({ receivedCanonicalUnits: 100,
-      bonusCanonicalUnits: 20, arrivedCanonicalUnits: 120,
-      acceptedCanonicalUnits: 115, rejectedCanonicalUnits: 5 });
+    const [pack] = packConversions(
+      [
+        {
+          id: `${namespace}:box`,
+          level: 'BOX',
+          unitsPerParent: 10,
+          parentPackLevelId: null,
+          effectiveFrom: new Date('2026-01-01'),
+          effectiveTo: null,
+        },
+      ],
+      at
+    );
+    const input = {
+      receivedPacks: 10,
+      bonusPacks: 2,
+      canonicalUnitsPerPack: pack.canonicalUnitsPerPack,
+      rejectedCanonicalUnits: 5,
+    };
+    expect(receiptLineQuantities(input)).toEqual({
+      receivedCanonicalUnits: 100,
+      bonusCanonicalUnits: 20,
+      arrivedCanonicalUnits: 120,
+      acceptedCanonicalUnits: 115,
+      rejectedCanonicalUnits: 5,
+    });
     expect(receiptLineUnitCostMinor({ ...input, invoicedPricePerPackMinor: 1200 })).toBe(100);
     // PKR 120 invoice / 120 units = PKR 1 per unit; bonus adds no revenue.
   });
 
-  it.each([0, 1.5, -10])('refuses unusable conversion %s instead of inventing stock', (conversion) => {
-    expect(() => receiptLineQuantities({ receivedPacks: 10, bonusPacks: 2,
-      canonicalUnitsPerPack: conversion, rejectedCanonicalUnits: 0 }))
-      .toThrow('MISSING_PACK_CONVERSION');
-  });
+  it.each([0, 1.5, -10])(
+    'refuses unusable conversion %s instead of inventing stock',
+    (conversion) => {
+      expect(() =>
+        receiptLineQuantities({
+          receivedPacks: 10,
+          bonusPacks: 2,
+          canonicalUnitsPerPack: conversion,
+          rejectedCanonicalUnits: 0,
+        })
+      ).toThrow('MISSING_PACK_CONVERSION');
+    }
+  );
 
   // Independent expected event deltas: receipt, sale, customer return to quarantine,
   // supplier return. No assertion that any helper actually posts these events yet.
@@ -43,7 +73,8 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
     { available: 0, quarantine: -5, outside: 5 },
   ] satisfies DemoPlannedRecord['expectedFacts'][];
   function assertStock(rows: typeof events) {
-    let available = 0, quarantine = 0;
+    let available = 0,
+      quarantine = 0;
     for (const row of rows) {
       expect(row.available + row.quarantine + row.outside).toBe(0);
       available += row.available;
@@ -53,11 +84,15 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
     }
     expect({ available, quarantine }).toEqual({ available: 95, quarantine: 2 });
   }
-  it('conserves 120 received units through sale and both return directions', () => assertStock(events));
+  it('conserves 120 received units through sale and both return directions', () =>
+    assertStock(events));
   it('detects bonus omission and unsafe returned-stock availability', () => {
-    expect(() => assertStock(events.map((e, i) => i === 0 ? { ...e, available: 95 } : e))).toThrow();
-    expect(() => assertStock(events.map((e, i) => i === 2
-      ? { ...e, available: 2, quarantine: 0 } : e))).toThrow();
+    expect(() =>
+      assertStock(events.map((e, i) => (i === 0 ? { ...e, available: 95 } : e)))
+    ).toThrow();
+    expect(() =>
+      assertStock(events.map((e, i) => (i === 2 ? { ...e, available: 2, quarantine: 0 } : e)))
+    ).toThrow();
   });
 
   // Signed debit-positive account deltas, PKR minor units. Sale gross 4000,
@@ -73,7 +108,8 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
       expect(Object.values(row).every(Number.isSafeInteger)).toBe(true);
       expect(Object.values(row).reduce((a, b) => a + b, 0)).toBe(0);
     }
-    const sum = (account: keyof typeof postings[number]) => rows.reduce((n, r) => n + r[account], 0);
+    const sum = (account: keyof (typeof postings)[number]) =>
+      rows.reduce((n, r) => n + r[account], 0);
     expect(sum('inventory')).toBe(9700); // 97 units at allocated lot cost 100
     expect(sum('payable')).toBe(-11500);
     expect(sum('cash')).toBe(3420);
@@ -81,13 +117,17 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
     expect(sum('cogs')).toBe(1800);
     expect(-sum('revenue') - sum('discount') - sum('cogs')).toBe(1620);
   }
-  it('reconciles balanced entries, inventory, payable, net revenue and margin', () => assertMoney(postings));
+  it('reconciles balanced entries, inventory, payable, net revenue and margin', () =>
+    assertMoney(postings));
   it('detects a balanced but incorrect bonus-revenue posting', () => {
-    expect(() => assertMoney(postings.map((e, i) => i === 0
-      ? { ...e, inventory: 14000, revenue: -2000 } : e))).toThrow();
+    expect(() =>
+      assertMoney(
+        postings.map((e, i) => (i === 0 ? { ...e, inventory: 14000, revenue: -2000 } : e))
+      )
+    ).toThrow();
   });
   it('detects a missing cash refund even when aggregate revenue looks correct', () => {
-    expect(() => assertMoney(postings.map((e, i) => i === 2 ? { ...e, cash: 0 } : e))).toThrow();
+    expect(() => assertMoney(postings.map((e, i) => (i === 2 ? { ...e, cash: 0 } : e)))).toThrow();
   });
 });
 
@@ -95,42 +135,79 @@ describe('PH-DEMO expected stock and PKR identities (not executed workflows)', (
 // No absent-source imports or skipped/failing placeholders in the private checkout.
 const reviewRoot = process.env.PHARMACY_DEMO_REVIEW_ROOT;
 if (reviewRoot) {
-  const { summarizeRepeatPurchasing } = await import(/* @vite-ignore */ `${reviewRoot}/src/lib/pharmacy/repeat-purchasing.ts`);
+  const { summarizeRepeatPurchasing } = await import(
+    /* @vite-ignore */ `${reviewRoot}/src/lib/pharmacy/repeat-purchasing.ts`
+  );
   const runner = await import(/* @vite-ignore */ `${reviewRoot}/scripts/seed-pharmacy-demo.ts`);
-  const inventory = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-inventory.ts`);
+  const inventory = await import(
+    /* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-inventory.ts`
+  );
   const finance = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-finance.ts`);
-  const retention = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-retention.ts`);
-  const contract = await import(/* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-contract.ts`);
+  const retention = await import(
+    /* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-retention.ts`
+  );
+  const contract = await import(
+    /* @vite-ignore */ `${reviewRoot}/scripts/pharmacy-demo-contract.ts`
+  );
   const context: PharmacyDemoContext = {
-    organizationId: 'oracle-org', branchId: 'oracle-branch', ownerUserId: 'oracle-owner',
-    namespace: 'unused', businessDate: '2026-09-07', scenarioAt: at.toISOString(),
-    timezone: 'Asia/Karachi', currency: 'PKR', actors: [], references: [], modules: [],
+    organizationId: 'oracle-org',
+    branchId: 'oracle-branch',
+    ownerUserId: 'oracle-owner',
+    namespace: 'unused',
+    businessDate: '2026-09-07',
+    scenarioAt: at.toISOString(),
+    timezone: 'Asia/Karachi',
+    currency: 'PKR',
+    actors: [],
+    references: [],
+    modules: [],
   };
-  context.namespace = runner.targetNamespace({ ...context, environment: 'disposable', targetKey: 'oracle-only' });
-  const inventoryFacts = { ...context, actorId: 'oracle-actor',
-    purchasingEntitled: false, organizationPurchaser: false,
-    approvedCatalog: { medicineId: 'oracle-medicine', presentationId: 'oracle-presentation',
-      packLevelId: 'oracle-pack', stockLocationId: 'oracle-location', canonicalUnitsPerPack: 10 },
+  context.namespace = runner.targetNamespace({
+    ...context,
+    environment: 'disposable',
+    targetKey: 'oracle-only',
+  });
+  const inventoryFacts = {
+    ...context,
+    actorId: 'oracle-actor',
+    purchasingEntitled: false,
+    organizationPurchaser: false,
+    approvedCatalog: {
+      medicineId: 'oracle-medicine',
+      presentationId: 'oracle-presentation',
+      packLevelId: 'oracle-pack',
+      stockLocationId: 'oracle-location',
+      canonicalUnitsPerPack: 10,
+    },
     supplier: { id: 'oracle-supplier', authorized: false, licences: [] },
-    orderedPacks: 10, listPricePerPackMinor: 1200 };
+    orderedPacks: 10,
+    listPricePerPackMinor: 1200,
+  };
 
   describe('corrected namespace compatibility — NOT composed seed acceptance', () => {
     it('pins every consumed root/helper source blob to the review manifest', async () => {
-      const manifest = JSON.parse(await readFile(`${reviewRoot}/../review-provenance.json`, 'utf8'));
+      const manifest = JSON.parse(
+        await readFile(`${reviewRoot}/../review-provenance.json`, 'utf8')
+      );
       expect(Object.keys(manifest)).toHaveLength(9);
       for (const [path, entry] of Object.entries(manifest)) {
-        const actual = createHash('sha256').update(await readFile(`${reviewRoot}/${path}`)).digest('hex');
+        const actual = createHash('sha256')
+          .update(await readFile(`${reviewRoot}/${path}`))
+          .digest('hex');
         expect(actual).toBe((entry as { sha256: string }).sha256);
       }
-      expect(manifest['scripts/seed-pharmacy-demo.ts'].commit)
-        .toBe('9691ab142cf05b46cc6154d20302dc9e4cdbe4cf');
-      expect(manifest['scripts/pharmacy-demo-contract.ts'].commit)
-        .toBe('9691ab142cf05b46cc6154d20302dc9e4cdbe4cf');
+      expect(manifest['scripts/seed-pharmacy-demo.ts'].commit).toBe(
+        '9691ab142cf05b46cc6154d20302dc9e4cdbe4cf'
+      );
+      expect(manifest['scripts/pharmacy-demo-contract.ts'].commit).toBe(
+        '9691ab142cf05b46cc6154d20302dc9e4cdbe4cf'
+      );
       for (const [lane, commit] of Object.entries({
         inventory: 'a1daf1d97b4acf5ed6530a5f6f54a1e71fced1f9',
         finance: 'bdd491b103ca8ef1dea415ab02a5f8216d7682c1',
         retention: '0ec58027b33e68f71ad6c0dbf00a8f234992a80d',
-      })) expect(manifest[`scripts/pharmacy-demo-${lane}.ts`].commit).toBe(commit);
+      }))
+        expect(manifest[`scripts/pharmacy-demo-${lane}.ts`].commit).toBe(commit);
     });
 
     it('accepts unchanged root namespace in all three actual planners', () => {
@@ -145,9 +222,12 @@ if (reviewRoot) {
       expect(draft.input.reference).toBe(`${rootNamespace}:inventory:po:v1`);
       expect(draft.input).not.toHaveProperty('id');
       const quotes = finance.planPharmacyDemoFinance(context, {
-        medicineId: 'oracle-medicine', presentationId: 'oracle-presentation',
-        inventoryLotId: 'oracle-lot', stockLocationId: 'oracle-location',
-        printedMrpMinor: 1200, unitsPerPack: 10,
+        medicineId: 'oracle-medicine',
+        presentationId: 'oracle-presentation',
+        inventoryLotId: 'oracle-lot',
+        stockLocationId: 'oracle-location',
+        printedMrpMinor: 1200,
+        unitsPerPack: 10,
         units: [{ saleUnit: 'PACK', packLevelId: 'oracle-pack', canonicalUnitsPerSaleUnit: 10 }],
       });
       expect(quotes.namespace).toBe(rootNamespace);
@@ -160,71 +240,147 @@ if (reviewRoot) {
     });
 
     it('refuses malformed namespaces and binds changed target identity without normalization', async () => {
-      for (const namespace of ['demo:oracle', context.namespace.toUpperCase(),
-        `${context.namespace}:inventory`, context.namespace.slice(0, -1), ` ${context.namespace}`]) {
-        expect(inventory.planInventoryDemo({ ...inventoryFacts, namespace }).unmet).toContain('INVALID_NAMESPACE');
-        expect(() => finance.planPharmacyDemoFinance({ ...context, namespace }))
-          .toThrow(namespace.startsWith(' ') ? 'INVALID_REFERENCE' : 'INVALID_DEMO_NAMESPACE');
-        expect(() => retention.planPharmacyDemoRetention({ ...context, namespace })).toThrow('canonical');
+      for (const namespace of [
+        'demo:oracle',
+        context.namespace.toUpperCase(),
+        `${context.namespace}:inventory`,
+        context.namespace.slice(0, -1),
+        ` ${context.namespace}`,
+      ]) {
+        expect(inventory.planInventoryDemo({ ...inventoryFacts, namespace }).unmet).toContain(
+          'INVALID_NAMESPACE'
+        );
+        expect(() => finance.planPharmacyDemoFinance({ ...context, namespace })).toThrow(
+          namespace.startsWith(' ') ? 'INVALID_REFERENCE' : 'INVALID_DEMO_NAMESPACE'
+        );
+        expect(() => retention.planPharmacyDemoRetention({ ...context, namespace })).toThrow(
+          'canonical'
+        );
       }
       const changed = { ...context, branchId: 'oracle-other-branch' };
-      changed.namespace = runner.targetNamespace({ ...changed, environment: 'disposable', targetKey: 'oracle-only' });
+      changed.namespace = runner.targetNamespace({
+        ...changed,
+        environment: 'disposable',
+        targetKey: 'oracle-only',
+      });
       expect(changed.namespace).not.toBe(context.namespace);
-      expect(inventory.planInventoryDemo({ ...inventoryFacts, ...changed }).hash)
-        .not.toBe(inventory.planInventoryDemo(inventoryFacts).hash);
-      expect(retention.planPharmacyDemoRetention(changed).digest)
-        .not.toBe(retention.planPharmacyDemoRetention(context).digest);
+      expect(inventory.planInventoryDemo({ ...inventoryFacts, ...changed }).hash).not.toBe(
+        inventory.planInventoryDemo(inventoryFacts).hash
+      );
+      expect(retention.planPharmacyDemoRetention(changed).digest).not.toBe(
+        retention.planPharmacyDemoRetention(context).digest
+      );
       const original = finance.planPharmacyDemoFinance(context);
-      expect(await finance.executePharmacyDemoFinance(changed, undefined, original.digest))
-        .toEqual({ status: 'refused', unmetPrerequisites: ['PLAN_CHANGED'] });
-      expect(inventory.planInventoryDemo({ ...inventoryFacts, organizationId: '' }).unmet)
-        .toContain('EXISTING_TARGET_REFERENCES_REQUIRED');
-      expect(() => finance.planPharmacyDemoFinance({ ...context, organizationId: '' })).toThrow('INVALID_REFERENCE');
-      expect(() => retention.planPharmacyDemoRetention({ ...context, organizationId: '' })).toThrow('target IDs');
+      expect(await finance.executePharmacyDemoFinance(changed, undefined, original.digest)).toEqual(
+        { status: 'refused', unmetPrerequisites: ['PLAN_CHANGED'] }
+      );
+      expect(
+        inventory.planInventoryDemo({ ...inventoryFacts, organizationId: '' }).unmet
+      ).toContain('EXISTING_TARGET_REFERENCES_REQUIRED');
+      expect(() => finance.planPharmacyDemoFinance({ ...context, organizationId: '' })).toThrow(
+        'INVALID_REFERENCE'
+      );
+      expect(() => retention.planPharmacyDemoRetention({ ...context, organizationId: '' })).toThrow(
+        'target IDs'
+      );
     });
 
     it('keeps planned business references distinct from observed database IDs', () => {
-      const plan: DemoPlannedRecord = { key: `${context.namespace}:po`, model: 'PharmacyPurchaseOrder',
-        reference: `${context.namespace}:inventory:po:v1`, expectedHash: 'a'.repeat(64),
-        expectedFacts: { status: 'DRAFT', grossMinor: 12000 } };
-      const observed = { planKey: plan.key, model: plan.model, persistedId: 'service-generated-id',
-        receiptReference: `${context.namespace}:receipt`, observedHash: plan.expectedHash,
-        observedFacts: { ...plan.expectedFacts } };
+      const plan: DemoPlannedRecord = {
+        key: `${context.namespace}:po`,
+        model: 'PharmacyPurchaseOrder',
+        reference: `${context.namespace}:inventory:po:v1`,
+        expectedHash: 'a'.repeat(64),
+        expectedFacts: { status: 'DRAFT', grossMinor: 12000 },
+      };
+      const observed = {
+        planKey: plan.key,
+        model: plan.model,
+        persistedId: 'service-generated-id',
+        receiptReference: `${context.namespace}:receipt`,
+        observedHash: plan.expectedHash,
+        observedFacts: { ...plan.expectedFacts },
+      };
       expect(runner.validateObservedMapping(plan, observed)).toEqual(observed);
       expect(observed.persistedId).not.toBe(plan.reference);
-      expect(() => runner.validateObservedMapping(plan, { ...observed, planKey: 'other' }))
-        .toThrow('OBSERVED_PLAN_MISMATCH');
-      expect(() => runner.validateObservedMapping(plan, { ...observed, observedFacts: { grossMinor: 1 } }))
-        .toThrow('OBSERVED_FACTS_MISMATCH');
+      expect(() => runner.validateObservedMapping(plan, { ...observed, planKey: 'other' })).toThrow(
+        'OBSERVED_PLAN_MISMATCH'
+      );
+      expect(() =>
+        runner.validateObservedMapping(plan, { ...observed, observedFacts: { grossMinor: 1 } })
+      ).toThrow('OBSERVED_FACTS_MISMATCH');
       // Supplied observations only: no service call or persisted receipt proven.
     });
 
     it('root produces zero records/writes and refuses apply despite valid synthetic JSON', async () => {
-      const target = { environment: 'disposable', targetKey: 'oracle-only',
-        organizationId: context.organizationId, branchId: context.branchId,
-        ownerUserId: context.ownerUserId, vertical: 'PHARMACY', currency: 'PKR',
-        timezone: context.timezone, businessDate: context.businessDate,
-        scenarioAt: context.scenarioAt, namespace: '' };
+      const target = {
+        environment: 'disposable',
+        targetKey: 'oracle-only',
+        organizationId: context.organizationId,
+        branchId: context.branchId,
+        ownerUserId: context.ownerUserId,
+        vertical: 'PHARMACY',
+        currency: 'PKR',
+        timezone: context.timezone,
+        businessDate: context.businessDate,
+        scenarioAt: context.scenarioAt,
+        namespace: '',
+      };
       target.namespace = runner.targetNamespace(target);
-      const evidence = { version: contract.PHARMACY_DEMO_VERSION, target,
-        observed: { environment: target.environment, targetKey: target.targetKey,
-          observedAt: '2026-09-07T06:55:00.000Z', organizationId: context.organizationId,
-          vertical: 'PHARMACY', organizationActive: true, branchId: context.branchId,
-          branchActive: true, currency: 'PKR', timezone: context.timezone,
-          owners: [{ userId: context.ownerUserId, email: 'owner@chaichowk.pk', active: true,
-            role: 'ADMIN', branchIds: [context.branchId],
-            capabilities: ['reports:operational', 'reports:financial'] }],
+      const evidence = {
+        version: contract.PHARMACY_DEMO_VERSION,
+        target,
+        observed: {
+          environment: target.environment,
+          targetKey: target.targetKey,
+          observedAt: '2026-09-07T06:55:00.000Z',
+          organizationId: context.organizationId,
+          vertical: 'PHARMACY',
+          organizationActive: true,
+          branchId: context.branchId,
+          branchActive: true,
+          currency: 'PKR',
+          timezone: context.timezone,
+          owners: [
+            {
+              userId: context.ownerUserId,
+              email: 'owner@chaichowk.pk',
+              active: true,
+              role: 'ADMIN',
+              branchIds: [context.branchId],
+              capabilities: ['reports:operational', 'reports:financial'],
+            },
+          ],
           runtimeRole: { superuser: false, bypassRls: false, forceRls: true },
-          schemaSha256: contract.SCHEMA_SHA256, migrationsSha256: contract.MIGRATIONS_SHA256,
-          migrationCount: 106, actors: [], references: [], modules: [] },
-        history: { namespace: target.namespace, receiptPresent: false,
-          tombstonePresent: false, namespaceRecordCount: 0 },
-        confirmation: { workspaceConfirmed: true, approvalReference: 'oracle-not-approval',
-          evidenceDigest: '', expiresAt: '2026-09-07T07:30:00.000Z' } };
+          schemaSha256: contract.SCHEMA_SHA256,
+          migrationsSha256: contract.MIGRATIONS_SHA256,
+          migrationCount: 106,
+          actors: [],
+          references: [],
+          modules: [],
+        },
+        history: {
+          namespace: target.namespace,
+          receiptPresent: false,
+          tombstonePresent: false,
+          namespaceRecordCount: 0,
+        },
+        confirmation: {
+          workspaceConfirmed: true,
+          approvalReference: 'oracle-not-approval',
+          evidenceDigest: '',
+          expiresAt: '2026-09-07T07:30:00.000Z',
+        },
+      };
       evidence.confirmation.evidenceDigest = runner.evidenceDigest(evidence);
       const report = runner.dryRun(evidence, at);
-      expect(report).toMatchObject({ writes: 0, plannedRecords: 0,
-        applyEnabled: false, liveTargetVerified: false, receipt: { seedReceipt: false } });
+      expect(report).toMatchObject({
+        writes: 0,
+        plannedRecords: 0,
+        applyEnabled: false,
+        liveTargetVerified: false,
+        receipt: { seedReceipt: false },
+      });
       expect(report.coverage).toHaveLength(10);
       expect(report.unmetPrerequisites.references).toHaveLength(5);
       const output: string[] = [];
@@ -234,24 +390,41 @@ if (reviewRoot) {
 
     it('inventory only projects a draft; finance arithmetic does not prove stock or cash', async () => {
       const draft = inventory.planInventoryDemo(inventoryFacts);
-      expect(draft.expected).toEqual({ status: 'DRAFT', canonicalUnits: 100,
-        grossMinor: 12000, deliveredStock: [] });
+      expect(draft.expected).toEqual({
+        status: 'DRAFT',
+        canonicalUnits: 100,
+        grossMinor: 12000,
+        deliveredStock: [],
+      });
       expect(draft.unmet).toContain('PURCHASING_CAPABILITY_REQUIRED');
       expect(draft.unmet).toContain('APPROVED_SUPPLIER_LICENCE_REQUIRED');
       expect(draft).not.toHaveProperty('records'); // Known older structural contract.
-      const row = { key: 'oracle-retained-line', revenueMinor: 3600,
-        discountMinor: 180, cogsMinor: 1800, grossMarginMinor: 1620 };
-      expect(finance.inspectPharmacyDemoJournalArithmetic([row], [row.key]))
-        .toMatchObject({ moneyStockReconciled: false, drawerProof: false,
-          journalInspection: 'JOURNAL_ARITHMETIC_ONLY', rows: [row] });
-      expect(() => finance.inspectPharmacyDemoJournalArithmetic(
-        [{ ...row, grossMarginMinor: 1621 }], [row.key])).toThrow('JOURNAL_MARGIN_MISMATCH');
+      const row = {
+        key: 'oracle-retained-line',
+        revenueMinor: 3600,
+        discountMinor: 180,
+        cogsMinor: 1800,
+        grossMarginMinor: 1620,
+      };
+      expect(finance.inspectPharmacyDemoJournalArithmetic([row], [row.key])).toMatchObject({
+        moneyStockReconciled: false,
+        drawerProof: false,
+        journalInspection: 'JOURNAL_ARITHMETIC_ONLY',
+        rows: [row],
+      });
+      expect(() =>
+        finance.inspectPharmacyDemoJournalArithmetic(
+          [{ ...row, grossMarginMinor: 1621 }],
+          [row.key]
+        )
+      ).toThrow('JOURNAL_MARGIN_MISMATCH');
       const input = { ...context };
       const plan = finance.planPharmacyDemoFinance(input);
       expect(plan.records).toEqual([]);
       expect(plan.examples).toEqual([]);
-      expect((await finance.executePharmacyDemoFinance(input, undefined, plan.digest)).status)
-        .toBe('refused');
+      expect((await finance.executePharmacyDemoFinance(input, undefined, plan.digest)).status).toBe(
+        'refused'
+      );
     });
 
     it('retention cases reconcile through the real pure report but cannot seed receipts', async () => {
@@ -259,15 +432,36 @@ if (reviewRoot) {
       const plan = retention.planPharmacyDemoRetention(input);
       expect(plan.records).toEqual([]);
       expect(plan.expectedReceipts).toHaveLength(14);
-      const report = summarizeRepeatPurchasing(plan.expectedReceipts,
-        input.organizationId, plan.filters, at);
-      expect(report).toMatchObject({ enrolledCustomers: 4, completedReceipts: 11,
-        identifiedReceipts: 10, anonymousReceipts: 1 });
-      expect(report.horizons.map((h: { days: number; eligible: number; repeated: number; immature: number }) =>
-        [h.days, h.eligible, h.repeated, h.immature]))
-        .toEqual([[30, 3, 1, 1], [60, 3, 1, 1], [90, 3, 1, 1]]);
-      expect(await retention.executePharmacyDemoRetention(input))
-        .toEqual({ status: 'refused', unmetPrerequisites: plan.prerequisites });
+      const report = summarizeRepeatPurchasing(
+        plan.expectedReceipts,
+        input.organizationId,
+        plan.filters,
+        at
+      );
+      expect(report).toMatchObject({
+        enrolledCustomers: 4,
+        completedReceipts: 11,
+        identifiedReceipts: 10,
+        anonymousReceipts: 1,
+      });
+      expect(
+        report.horizons.map(
+          (h: { days: number; eligible: number; repeated: number; immature: number }) => [
+            h.days,
+            h.eligible,
+            h.repeated,
+            h.immature,
+          ]
+        )
+      ).toEqual([
+        [30, 3, 1, 1],
+        [60, 3, 1, 1],
+        [90, 3, 1, 1],
+      ]);
+      expect(await retention.executePharmacyDemoRetention(input)).toEqual({
+        status: 'refused',
+        unmetPrerequisites: plan.prerequisites,
+      });
       expect(plan.margin.status).toBe('UNSEEDED');
     });
   });
@@ -287,47 +481,76 @@ describe('PH-DEMO expected cohort identities (not report execution)', () => {
     { days: 60, eligible: 2, repeated: 2, immature: 2 },
     { days: 90, eligible: 1, repeated: 1, immature: 3 },
   ])('uses mature identified customers for $days-day denominator', (expected) => {
-    const eligible = customers.filter(c => c.ageDays >= expected.days);
-    const repeated = eligible.filter(c => c.repeatAfterDays !== null
-      && c.repeatAfterDays > 0 && c.repeatAfterDays <= expected.days);
-    expect({ days: expected.days, eligible: eligible.length, repeated: repeated.length,
-      immature: customers.length - eligible.length }).toEqual(expected);
-    expect(new Set(customers.map(c => c.id)).size).toBe(4);
+    const eligible = customers.filter((c) => c.ageDays >= expected.days);
+    const repeated = eligible.filter(
+      (c) =>
+        c.repeatAfterDays !== null && c.repeatAfterDays > 0 && c.repeatAfterDays <= expected.days
+    );
+    expect({
+      days: expected.days,
+      eligible: eligible.length,
+      repeated: repeated.length,
+      immature: customers.length - eligible.length,
+    }).toEqual(expected);
+    expect(new Set(customers.map((c) => c.id)).size).toBe(4);
   });
   it('keeps receipt identity coverage distinct from person repeat rates', () => {
-    const identifiedReceipts = 7, anonymousReceipts = 2;
-    expect(identifiedReceipts / (identifiedReceipts + anonymousReceipts) * 100).toBeCloseTo(77.7777778);
-    expect(customers.filter(c => c.ageDays >= 30).length).toBe(3);
+    const identifiedReceipts = 7,
+      anonymousReceipts = 2;
+    expect((identifiedReceipts / (identifiedReceipts + anonymousReceipts)) * 100).toBeCloseTo(
+      77.7777778
+    );
+    expect(customers.filter((c) => c.ageDays >= 30).length).toBe(3);
     expect(at.toISOString()).toBe('2026-09-07T07:00:00.000Z');
   });
 });
 
 describe('PH-DEMO declared coverage gaps (not target validation)', () => {
-  const gaps: DemoGap[] = ([
-    ['approved medicine/presentation/pack/location/supplier references', 'OWNER-INPUT'],
-    ['existing owner, service actor capabilities and observed entitlements', 'OWNER-INPUT'],
-    ['regulatory, Rx, controlled, fiscal and provider evidence', 'UNSEEDED'],
-    ['D07/D08/D11, first sale real inputs and hardware', 'OWNER-INPUT'],
-    ['Local LAN owner@chaichowk.pk acceptance', 'UNSEEDED'],
-    ['Azure STAGING owner@chaichowk.pk acceptance', 'UNSEEDED'],
-  ] as const).map(([label, status]) => ({ function: label, status, reason: 'Awaiting owner evidence' }));
+  const gaps: DemoGap[] = (
+    [
+      ['approved medicine/presentation/pack/location/supplier references', 'OWNER-INPUT'],
+      ['existing owner, service actor capabilities and observed entitlements', 'OWNER-INPUT'],
+      ['regulatory, Rx, controlled, fiscal and provider evidence', 'UNSEEDED'],
+      ['D07/D08/D11, first sale real inputs and hardware', 'OWNER-INPUT'],
+      ['Local LAN owner@chaichowk.pk acceptance', 'UNSEEDED'],
+      ['Azure STAGING owner@chaichowk.pk acceptance', 'UNSEEDED'],
+    ] as const
+  ).map(([label, status]) => ({ function: label, status, reason: 'Awaiting owner evidence' }));
   it('retains explicit prerequisites without claiming posted or live coverage', () => {
     expect(gaps).toHaveLength(6);
-    expect(gaps.every(({ function: label, status }) => label.length > 0
-      && ['OWNER-INPUT', 'UNSEEDED'].includes(status))).toBe(true);
-    expect(gaps.filter(({ function: label }) => label.includes('owner@chaichowk.pk'))).toHaveLength(2);
+    expect(
+      gaps.every(
+        ({ function: label, status }) =>
+          label.length > 0 && ['OWNER-INPUT', 'UNSEEDED'].includes(status)
+      )
+    ).toBe(true);
+    expect(gaps.filter(({ function: label }) => label.includes('owner@chaichowk.pk'))).toHaveLength(
+      2
+    );
   });
 });
 
 describe('PH-DEMO contract envelope oracle (synthetic input, no helper execution)', () => {
   const context: PharmacyDemoContext = {
-    organizationId: `${namespace}:org`, branchId: `${namespace}:branch`,
-    ownerUserId: `${namespace}:owner`, namespace, businessDate: '2026-09-07',
-    scenarioAt: at.toISOString(), timezone: 'Asia/Karachi', currency: 'PKR',
-    actors: [], references: [], modules: [],
+    organizationId: `${namespace}:org`,
+    branchId: `${namespace}:branch`,
+    ownerUserId: `${namespace}:owner`,
+    namespace,
+    businessDate: '2026-09-07',
+    scenarioAt: at.toISOString(),
+    timezone: 'Asia/Karachi',
+    currency: 'PKR',
+    actors: [],
+    references: [],
+    modules: [],
   };
-  const gaps: DemoGap[] = [{ function: 'approved references and capable actors',
-    status: 'OWNER-INPUT', reason: 'No target observations supplied' }];
+  const gaps: DemoGap[] = [
+    {
+      function: 'approved references and capable actors',
+      status: 'OWNER-INPUT',
+      reason: 'No target observations supplied',
+    },
+  ];
 
   // Independent acceptance of the documented envelope, not a planner or fence.
   // Digest/hash algorithms and service-specific facts remain helper-owned.
@@ -336,8 +559,8 @@ describe('PH-DEMO contract envelope oracle (synthetic input, no helper execution
     expect(['inventory', 'finance', 'retention']).toContain(plan.lane);
     expect(plan.digest.trim().length).toBeGreaterThan(0);
     expect(plan.records.length).toBeLessThanOrEqual(100);
-    expect(new Set(plan.records.map(r => r.reference)).size).toBe(plan.records.length);
-    expect(new Set(plan.records.map(r => r.key)).size).toBe(plan.records.length);
+    expect(new Set(plan.records.map((r) => r.reference)).size).toBe(plan.records.length);
+    expect(new Set(plan.records.map((r) => r.key)).size).toBe(plan.records.length);
     for (const record of plan.records) {
       expect(record.reference.startsWith(`${context.namespace}:`)).toBe(true);
       expect(record.key.startsWith(`${context.namespace}:`)).toBe(true);
@@ -350,30 +573,54 @@ describe('PH-DEMO contract envelope oracle (synthetic input, no helper execution
     }
   }
   const record: DemoPlannedRecord = {
-    reference: `${namespace}:receipt`, key: `${namespace}:receipt`, model: 'oracle-only',
+    reference: `${namespace}:receipt`,
+    key: `${namespace}:receipt`,
+    model: 'oracle-only',
     expectedHash: 'opaque-oracle-hash-not-helper-evidence',
     expectedFacts: { available: 115, quarantine: 5, outside: -120 },
   };
-  const plan: PharmacyDemoPlan = { lane: 'inventory', namespace,
-    digest: 'opaque-oracle-digest-not-helper-evidence', records: [record], gaps };
+  const plan: PharmacyDemoPlan = {
+    lane: 'inventory',
+    namespace,
+    digest: 'opaque-oracle-digest-not-helper-evidence',
+    records: [record],
+    gaps,
+  };
 
   it('accepts namespaced expected facts without declaring target authorization', () => {
     assertEnvelope(plan);
     expect(context.references).toEqual([]);
     expect(context.actors).toEqual([]);
-    const expectedRefusal: PharmacyDemoResult = { status: 'refused',
-      unmetPrerequisites: gaps.map(gap => `${gap.function}: ${gap.reason}`) };
+    const expectedRefusal: PharmacyDemoResult = {
+      status: 'refused',
+      unmetPrerequisites: gaps.map((gap) => `${gap.function}: ${gap.reason}`),
+    };
     expect(expectedRefusal.unmetPrerequisites).toHaveLength(1);
     // Expected refusal only. No executor has produced this result.
   });
   it('rejects cross-namespace records, duplicate identities and overlarge plans', () => {
     expect(() => assertEnvelope({ ...plan, namespace: 'different-target' })).toThrow();
-    expect(() => assertEnvelope({ ...plan, records: [{ ...record, reference: 'legitimate-row' }] })).toThrow();
-    expect(() => assertEnvelope({ ...plan, records: [{ ...record, key: 'other-target:key' }] })).toThrow();
-    expect(() => assertEnvelope({ ...plan, records: [record, { ...record, key: `${namespace}:other` }] })).toThrow();
-    expect(() => assertEnvelope({ ...plan, records: [record, { ...record, reference: `${namespace}:other` }] })).toThrow();
-    expect(() => assertEnvelope({ ...plan, records: Array.from({ length: 101 }, (_, i) => ({
-      ...record, reference: `${namespace}:${i}`, key: `${namespace}:${i}`,
-    })) })).toThrow();
+    expect(() =>
+      assertEnvelope({ ...plan, records: [{ ...record, reference: 'legitimate-row' }] })
+    ).toThrow();
+    expect(() =>
+      assertEnvelope({ ...plan, records: [{ ...record, key: 'other-target:key' }] })
+    ).toThrow();
+    expect(() =>
+      assertEnvelope({ ...plan, records: [record, { ...record, key: `${namespace}:other` }] })
+    ).toThrow();
+    expect(() =>
+      assertEnvelope({ ...plan, records: [record, { ...record, reference: `${namespace}:other` }] })
+    ).toThrow();
+    expect(() =>
+      assertEnvelope({
+        ...plan,
+        records: Array.from({ length: 101 }, (_, i) => ({
+          ...record,
+          reference: `${namespace}:${i}`,
+          key: `${namespace}:${i}`,
+        })),
+      })
+    ).toThrow();
   });
 });
