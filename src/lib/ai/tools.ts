@@ -21,7 +21,13 @@
  * are only created when the capability holds; finance is empty for non-admins),
  * so selection never widens permissions — it only narrows what's offered.
  */
-import { createAssistantHelpers, type AssistantContext, type ToolSet } from '@/lib/ai/context';
+import {
+  assistantModuleGranted,
+  assistantVertical,
+  createAssistantHelpers,
+  type AssistantContext,
+  type ToolSet,
+} from '@/lib/ai/context';
 import { buildPeopleTools } from '@/lib/ai/tools/people';
 import { buildResignationsTools } from '@/lib/ai/tools/resignations';
 import { buildProjectsTools } from '@/lib/ai/tools/projects';
@@ -79,8 +85,8 @@ const FINANCE_INTENT =
 const PHARMACY_REPORT_INTENT =
   /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim/i;
 
-export function assistantToolChoice(hint: string) {
-  return SELF_LEAVE_REQUEST.test(hint)
+export function assistantToolChoice(hint: string, tools?: ToolSet) {
+  return SELF_LEAVE_REQUEST.test(hint) && (!tools || Object.hasOwn(tools, 'requestLeave'))
     ? ({ type: 'tool', toolName: 'requestLeave' } as const)
     : ('auto' as const);
 }
@@ -149,19 +155,34 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     return {};
 
   const h = createAssistantHelpers(ctx);
+  const granted = (key: string) => assistantModuleGranted(ctx, key);
+  const agency = assistantVertical(ctx.vertical) === 'AGENCY';
+  // Mixed-domain insights read finance, projects, HR, notes and activity. Until
+  // those builders can scope individual reads, require the complete dependency set.
+  const insightsEnabled =
+    agency &&
+    ['projects', 'clients', 'finance', 'hr', 'notes', 'meetings', 'chat', 'audit'].every(granted);
   const perDomain: Record<Domain, ToolSet> = {
-    insights: buildInsightsTools(h),
-    people: buildPeopleTools(h),
-    resignations: buildResignationsTools(h),
-    projects: buildProjectsTools(h),
-    tasks: buildTasksTools(h),
-    clients: buildClientsTools(h),
-    finance: buildFinanceTools(h),
-    chat: buildChatTools(h),
-    notes: buildNotesTools(h),
-    meetings: buildMeetingsTools(h),
-    pharmacyReports: buildPharmacyReportTools(h),
+    insights: insightsEnabled ? buildInsightsTools(h) : {},
+    people: granted('hr') ? buildPeopleTools(h) : {},
+    resignations: granted('hr') ? buildResignationsTools(h) : {},
+    projects: agency && granted('projects') ? buildProjectsTools(h) : {},
+    // Tasks belong to projects in the existing catalog, not a shared task module.
+    tasks: agency && granted('projects') ? buildTasksTools(h) : {},
+    clients: agency && granted('clients') ? buildClientsTools(h) : {},
+    finance: agency && granted('finance') ? buildFinanceTools(h) : {},
+    chat: granted('chat') ? buildChatTools(h) : {},
+    notes: agency && granted('notes') && granted('projects') ? buildNotesTools(h) : {},
+    meetings: agency && granted('meetings') && granted('projects') ? buildMeetingsTools(h) : {},
+    pharmacyReports:
+      assistantVertical(ctx.vertical) === 'PHARMACY' && granted('pharmacy-reports')
+        ? buildPharmacyReportTools(h)
+        : {},
   };
+  // This profile read also returns project/task workload; HR alone is insufficient.
+  if (!agency || !granted('projects')) delete perDomain.people.getTeamMember;
+  // Integration seam: add the real Restaurant builder here, behind its catalog
+  // vertical/module gates. It must join this map BEFORE hint/core selection.
 
   const selectAll = hint.length === 0;
   const domains = selectAll ? null : selectDomains(hint);
@@ -185,9 +206,8 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
     t.execute = async (...args: unknown[]) => {
       try {
         return await orig(...args);
-      } catch (e) {
-        console.error('[assistant tool] failed:', e);
-        return { error: e instanceof Error ? e.message : 'Tool failed.' };
+      } catch {
+        return { error: 'This action is currently unavailable. Please try again.' };
       }
     };
   }
