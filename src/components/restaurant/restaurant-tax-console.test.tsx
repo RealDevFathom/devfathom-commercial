@@ -1,5 +1,6 @@
-import { fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { webcrypto } from 'node:crypto';
+import { act, fireEvent, render, screen } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PAKISTAN_TAX_PROFILE_CATALOG } from '@/lib/restaurant/pakistan-tax-profiles';
 
@@ -7,6 +8,12 @@ const mocks = vi.hoisted(() => ({
   activate: vi.fn(),
   publishCustom: vi.fn(),
   invalidate: vi.fn(),
+  publicationOptions: {
+    onSuccess: () => {},
+    onError: (error: Error) => {
+      void error;
+    },
+  },
   previewCustom: vi.fn(() => ({
     data: { net: '1000.00', tax: '0.00', gross: '1000.00' },
   })),
@@ -34,7 +41,10 @@ vi.mock('@/lib/trpc', () => ({
       },
       activate: { useMutation: () => ({ mutate: mocks.activate, isPending: false }) },
       publishCustom: {
-        useMutation: () => ({ mutate: mocks.publishCustom, isPending: false }),
+        useMutation: (options: typeof mocks.publicationOptions) => {
+          mocks.publicationOptions = options;
+          return { mutate: mocks.publishCustom, isPending: false };
+        },
       },
     },
   },
@@ -44,6 +54,23 @@ import { RestaurantTaxConsole } from './restaurant-tax-console';
 
 describe('restaurant tax configuration UI', () => {
   beforeEach(() => vi.clearAllMocks());
+  afterEach(() => vi.unstubAllGlobals());
+
+  it('renders on HTTP LAN and retains a failed command key through rerender and retry', () => {
+    vi.stubGlobal('crypto', { getRandomValues: webcrypto.getRandomValues.bind(webcrypto) });
+    const view = render(<RestaurantTaxConsole />);
+    submitCustomRates(['16', '8', '15']);
+    const first = mocks.publishCustom.mock.calls[0]![0].idempotencyKey;
+    expect(first).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/);
+    act(() => mocks.publicationOptions.onError(new Error('Response lost')));
+    view.rerender(<RestaurantTaxConsole />);
+    const form = screen.getByRole('button', { name: 'Publish custom profile' }).closest('form')!;
+    fireEvent.submit(form);
+    expect(mocks.publishCustom.mock.calls[1]![0].idempotencyKey).toBe(first);
+    act(() => mocks.publicationOptions.onSuccess());
+    fireEvent.submit(form);
+    expect(mocks.publishCustom.mock.calls[2]![0].idempotencyKey).not.toBe(first);
+  });
 
   it('shows an unconfigured fail-closed state and disables unverified presets', () => {
     render(<RestaurantTaxConsole />);

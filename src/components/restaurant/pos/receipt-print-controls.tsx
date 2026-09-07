@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useRef, useState } from 'react';
 import Link from 'next/link';
 
@@ -79,8 +81,7 @@ export function ReceiptPrintControls({
     setPending(true);
     setError('');
     setRefusal(null);
-    const copy =
-      retry ?? (canReprint ? { requestId: crypto.randomUUID(), reason: reason.trim() } : null);
+    const copy = retry ?? (canReprint ? { requestId: browserUuid(), reason: reason.trim() } : null);
     setRetry(copy);
     try {
       const next = await request<ReceiptPrinting>(endpoint, {

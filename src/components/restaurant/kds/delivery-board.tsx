@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useCallback, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
@@ -125,7 +127,7 @@ export function DeliveryBoard({
   async function transition() {
     if (!confirm || pending) return;
     const intent = `${confirm.status}:${confirm.delivery.fulfillmentId}`;
-    const key = retryKeys.current.get(intent) ?? crypto.randomUUID();
+    const key = retryKeys.current.get(intent) ?? browserUuid();
     retryKeys.current.set(intent, key);
     setPending(intent);
     setNotice(null);

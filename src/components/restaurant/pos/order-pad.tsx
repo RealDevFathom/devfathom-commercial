@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import { CheckoutPanel, type TerminalRequest, type TerminalRequestOptions } from './checkout-panel';
@@ -382,7 +384,7 @@ export function OrderPad() {
   function keyFor(intent: string) {
     const existing = idempotencyKeys.current.get(intent);
     if (existing) return existing;
-    const key = crypto.randomUUID();
+    const key = browserUuid();
     idempotencyKeys.current.set(intent, key);
     return key;
   }
@@ -398,7 +400,7 @@ export function OrderPad() {
         `${options.method ?? 'GET'}:${path}:${JSON.stringify(options.body ?? {})}`;
       let idempotencyKey: string | null = null;
       if (mutation) {
-        idempotencyKey = idempotencyKeys.current.get(intent) ?? crypto.randomUUID();
+        idempotencyKey = idempotencyKeys.current.get(intent) ?? browserUuid();
         idempotencyKeys.current.set(intent, idempotencyKey);
       }
       try {
@@ -1643,7 +1645,7 @@ export function OrderPad() {
                     ...current,
                     {
                       ...input,
-                      lineId: crypto.randomUUID(),
+                      lineId: browserUuid(),
                       name: item.displayName ?? item.product.name,
                       quotedUnitPrice,
                     },

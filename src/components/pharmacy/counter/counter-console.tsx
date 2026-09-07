@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
 
@@ -60,7 +62,7 @@ function counterDeviceId(): string {
   const key = 'devfathom.pharmacy.counter.device';
   const existing = window.localStorage.getItem(key);
   if (existing) return existing;
-  const created = `counter-${crypto.randomUUID()}`;
+  const created = `counter-${browserUuid()}`;
   window.localStorage.setItem(key, created);
   return created;
 }
@@ -506,7 +508,7 @@ export function PharmacyCounterConsole({
         points: redeemPoints,
         deviceId: counterDeviceId(),
         businessDate: businessDate(),
-        idempotencyKey: `counter-loyalty:${saleId}:${crypto.randomUUID()}`,
+        idempotencyKey: `counter-loyalty:${saleId}:${browserUuid()}`,
       });
       await Promise.all([refreshCart(), customerQuery.refetch()]);
       setNotice({

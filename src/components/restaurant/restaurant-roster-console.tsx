@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useMemo, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
@@ -130,7 +132,7 @@ function branchInputToDate(value: string, timezone: string): Date {
 }
 
 function commandKey(kind: string, shiftId: string) {
-  return `${kind}:${shiftId}:${crypto.randomUUID()}`;
+  return `${kind}:${shiftId}:${browserUuid()}`;
 }
 
 function triggerCsvDownload(file: { filename: string; csv: string }) {
