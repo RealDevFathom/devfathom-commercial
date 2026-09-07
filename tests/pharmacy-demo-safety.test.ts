@@ -60,10 +60,10 @@ for (const scope of [
     } as unknown as Db;
     assert.equal(await getBranchPurchaseOrder(db, scope, 'synthetic-foreign-order'), null);
     assert.deepEqual(await listBranchPurchaseOrders(db, scope), []);
-    assert.deepEqual(queries.map(({ where }) => where), [
-      { ...scope, id: 'synthetic-foreign-order' },
-      scope,
-    ]);
+    assert.deepEqual(
+      queries.map(({ where }) => where),
+      [{ ...scope, id: 'synthetic-foreign-order' }, scope]
+    );
   });
 }
 
@@ -72,9 +72,17 @@ if (reviewRoot) {
   // Setup binding failures are input errors, not fabricated product test cases.
   for (const [name, digest] of [
     ['seed-pharmacy-demo.ts', '64f611db4607eaf94d178a4da7c474134b0228c5a94a74af73bf1a6fdd0e4c95'],
-    ['pharmacy-demo-contract.ts', 'd0d64970e9acc78c84d14aeef330a837089db396dd6b87607d701efa82e6c76c'],
+    [
+      'pharmacy-demo-contract.ts',
+      'd0d64970e9acc78c84d14aeef330a837089db396dd6b87607d701efa82e6c76c',
+    ],
   ]) {
-    assert.equal(createHash('sha256').update(readFileSync(join(reviewRoot, 'scripts', name))).digest('hex'), digest);
+    assert.equal(
+      createHash('sha256')
+        .update(readFileSync(join(reviewRoot, 'scripts', name)))
+        .digest('hex'),
+      digest
+    );
   }
 
   // Only I/O boundaries are doubled. All validation and refusal logic is real.
@@ -94,39 +102,83 @@ if (reviewRoot) {
           offset += bytesRead;
           return { bytesRead };
         },
-        close: async () => { io.push('close'); },
+        close: async () => {
+          io.push('close');
+        },
       };
     },
-    writeFile: async () => { io.push('writeFile'); throw new Error('unexpected write'); },
+    writeFile: async () => {
+      io.push('writeFile');
+      throw new Error('unexpected write');
+    },
   }));
   const originalFetch = globalThis.fetch;
-  globalThis.fetch = (async () => { io.push('fetch'); throw new Error('unexpected send'); }) as typeof fetch;
+  globalThis.fetch = (async () => {
+    io.push('fetch');
+    throw new Error('unexpected send');
+  }) as typeof fetch;
   const root = await import(pathToFileURL(join(reviewRoot, 'scripts/seed-pharmacy-demo.ts')).href);
-  const contract = await import(pathToFileURL(join(reviewRoot, 'scripts/pharmacy-demo-contract.ts')).href);
+  const contract = await import(
+    pathToFileURL(join(reviewRoot, 'scripts/pharmacy-demo-contract.ts')).href
+  );
   const NOW = new Date('2026-09-07T07:00:00.000Z');
   function fixture() {
     const e = {
       version: contract.PHARMACY_DEMO_VERSION,
       target: {
-        environment: 'disposable', targetKey: 'qa7-offline-only', organizationId: 'synthetic-org',
-        branchId: 'synthetic-branch', ownerUserId: 'synthetic-owner', vertical: 'PHARMACY',
-        currency: 'PKR', timezone: 'Asia/Karachi', businessDate: '2026-09-07',
-        scenarioAt: NOW.toISOString(), namespace: '',
+        environment: 'disposable',
+        targetKey: 'qa7-offline-only',
+        organizationId: 'synthetic-org',
+        branchId: 'synthetic-branch',
+        ownerUserId: 'synthetic-owner',
+        vertical: 'PHARMACY',
+        currency: 'PKR',
+        timezone: 'Asia/Karachi',
+        businessDate: '2026-09-07',
+        scenarioAt: NOW.toISOString(),
+        namespace: '',
       },
       observed: {
-        environment: 'disposable', targetKey: 'qa7-offline-only', organizationId: 'synthetic-org',
-        branchId: 'synthetic-branch', vertical: 'PHARMACY', organizationActive: true,
-        branchActive: true, currency: 'PKR', timezone: 'Asia/Karachi',
+        environment: 'disposable',
+        targetKey: 'qa7-offline-only',
+        organizationId: 'synthetic-org',
+        branchId: 'synthetic-branch',
+        vertical: 'PHARMACY',
+        organizationActive: true,
+        branchActive: true,
+        currency: 'PKR',
+        timezone: 'Asia/Karachi',
         observedAt: '2026-09-07T06:55:00.000Z',
-        owners: [{ userId: 'synthetic-owner', email: 'owner@chaichowk.pk', active: true,
-          role: 'ADMIN', branchIds: ['synthetic-branch'], capabilities: ['reports:operational', 'reports:financial'] }],
+        owners: [
+          {
+            userId: 'synthetic-owner',
+            email: 'owner@chaichowk.pk',
+            active: true,
+            role: 'ADMIN',
+            branchIds: ['synthetic-branch'],
+            capabilities: ['reports:operational', 'reports:financial'],
+          },
+        ],
         runtimeRole: { superuser: false, bypassRls: false, forceRls: true },
-        schemaSha256: contract.SCHEMA_SHA256, migrationsSha256: contract.MIGRATIONS_SHA256,
-        migrationCount: 106, actors: [], references: [], modules: [],
+        schemaSha256: contract.SCHEMA_SHA256,
+        migrationsSha256: contract.MIGRATIONS_SHA256,
+        migrationCount: 106,
+        actors: [],
+        references: [],
+        modules: [],
       },
-      history: { namespace: '', receiptPresent: false, tombstonePresent: false, namespaceRecordCount: 0 },
-      confirmation: { workspaceConfirmed: true, approvalReference: 'synthetic-not-an-approval',
-        evidenceDigest: '', expiresAt: '2026-09-07T07:30:00.000Z' },
+      history: {
+        namespace: '',
+        receiptPresent: false,
+        tombstonePresent: false,
+        namespaceRecordCount: 0,
+      },
+      confirmation: {
+        workspaceConfirmed: true,
+        approvalReference: 'synthetic-not-an-approval',
+        evidenceDigest: '',
+        expiresAt: '2026-09-07T07:30:00.000Z',
+      },
     };
     e.target.namespace = root.targetNamespace(e.target);
     e.history.namespace = e.target.namespace;
@@ -140,8 +192,11 @@ if (reviewRoot) {
     item[parts.at(-1)!] = value;
   }
   function refuses(e: unknown, code: string) {
-    assert.throws(() => root.dryRun(e, NOW), (error: unknown) =>
-      error instanceof root.PharmacyDemoRefusal && (error as { code: string }).code === code);
+    assert.throws(
+      () => root.dryRun(e, NOW),
+      (error: unknown) =>
+        error instanceof root.PharmacyDemoRefusal && (error as { code: string }).code === code
+    );
   }
   const mutations: [string, unknown, string][] = [
     ['target.vertical', 'RESTAURANT', 'APPROVED_PHARMACY_REQUIRED'],
@@ -181,7 +236,14 @@ if (reviewRoot) {
   }
   test('72ac namespace is stable across scenario/owner changes and separates targets', () => {
     const t = fixture().target;
-    assert.equal(root.targetNamespace(t), root.targetNamespace({ ...t, ownerUserId: 'different', scenarioAt: '2027-01-01T00:00:00.000Z' }));
+    assert.equal(
+      root.targetNamespace(t),
+      root.targetNamespace({
+        ...t,
+        ownerUserId: 'different',
+        scenarioAt: '2027-01-01T00:00:00.000Z',
+      })
+    );
     for (const key of ['environment', 'targetKey', 'organizationId', 'branchId']) {
       assert.notEqual(root.targetNamespace(t), root.targetNamespace({ ...t, [key]: 'different' }));
     }
@@ -202,32 +264,68 @@ if (reviewRoot) {
     const a = root.dryRun(e, NOW);
     assert.deepEqual(root.dryRun(e, NOW), a);
     assert.deepEqual(e, before);
-    assert.deepEqual([a.liveTargetVerified, a.applyEnabled, a.writes, a.plannedRecords], [false, false, 0, 0]);
+    assert.deepEqual(
+      [a.liveTargetVerified, a.applyEnabled, a.writes, a.plannedRecords],
+      [false, false, 0, 0]
+    );
     assert.equal(a.receipt.seedReceipt, false);
     assert.ok(a.applyBlockers.includes('LIVE_OBSERVATION_ADAPTER_REQUIRED'));
     assert.ok(a.applyBlockers.includes('SERVICE_CONCURRENCY_AND_RESUMPTION_PROOF_REQUIRED'));
-    assert.ok(a.coverage.every((gap: { status: string }) => ['UNSEEDED', 'OWNER-INPUT'].includes(gap.status)));
+    assert.ok(
+      a.coverage.every((gap: { status: string }) =>
+        ['UNSEEDED', 'OWNER-INPUT'].includes(gap.status)
+      )
+    );
     assert.deepEqual(io, []);
   });
   test('72ac apply rejects before opening supplied paths, including parallel invocations', async () => {
     io.length = 0;
     const outputs: string[] = [];
-    const results = await Promise.all(Array.from({ length: 3 }, () => root.main(
-      ['--evidence', 'SYNTHETIC_PRIVATE_MARKER.pharmacy-demo.json', '--apply'], (s: string) => outputs.push(s))));
+    const results = await Promise.all(
+      Array.from({ length: 3 }, () =>
+        root.main(
+          ['--evidence', 'SYNTHETIC_PRIVATE_MARKER.pharmacy-demo.json', '--apply'],
+          (s: string) => outputs.push(s)
+        )
+      )
+    );
     assert.deepEqual(results, [2, 2, 2]);
     assert.deepEqual(io, []);
-    for (const output of outputs) assert.deepEqual(JSON.parse(output), { mode: 'refused', code: 'APPLY_DISABLED', writes: 0, applyEnabled: false });
+    for (const output of outputs)
+      assert.deepEqual(JSON.parse(output), {
+        mode: 'refused',
+        code: 'APPLY_DISABLED',
+        writes: 0,
+        applyEnabled: false,
+      });
   });
   test('72ac credential/permission/activation fields refuse without echo or writes', async () => {
-    for (const field of ['password', 'token', 'connectionString', 'permissions', 'activation', 'sendEmail']) {
+    for (const field of [
+      'password',
+      'token',
+      'connectionString',
+      'permissions',
+      'activation',
+      'sendEmail',
+    ]) {
       io.length = 0;
       const e = fixture();
       set(e, field, 'SYNTHETIC_PRIVATE_MARKER');
       content = JSON.stringify(e);
       const outputs: string[] = [];
-      assert.equal(await root.main(['--evidence', 'synthetic.pharmacy-demo.json'], (s: string) => outputs.push(s)), 2);
+      assert.equal(
+        await root.main(['--evidence', 'synthetic.pharmacy-demo.json'], (s: string) =>
+          outputs.push(s)
+        ),
+        2
+      );
       assert.deepEqual(io, ['open', 'close']);
-      assert.deepEqual(JSON.parse(outputs[0]), { mode: 'refused', code: 'INVALID_EVIDENCE_KEYS', writes: 0, applyEnabled: false });
+      assert.deepEqual(JSON.parse(outputs[0]), {
+        mode: 'refused',
+        code: 'INVALID_EVIDENCE_KEYS',
+        writes: 0,
+        applyEnabled: false,
+      });
       assert.ok(!outputs.join('').includes('SYNTHETIC_PRIVATE_MARKER'));
     }
   });
@@ -236,8 +334,19 @@ if (reviewRoot) {
       openError = failOpen;
       content = 'SYNTHETIC_PRIVATE_MARKER invalid JSON';
       const outputs: string[] = [];
-      assert.equal(await root.main(['--evidence', 'SYNTHETIC_PRIVATE_MARKER.pharmacy-demo.json'], (s: string) => outputs.push(s)), 2);
-      assert.deepEqual(JSON.parse(outputs[0]), { mode: 'refused', code: 'EVIDENCE_READ_OR_PARSE_FAILED', writes: 0, applyEnabled: false });
+      assert.equal(
+        await root.main(
+          ['--evidence', 'SYNTHETIC_PRIVATE_MARKER.pharmacy-demo.json'],
+          (s: string) => outputs.push(s)
+        ),
+        2
+      );
+      assert.deepEqual(JSON.parse(outputs[0]), {
+        mode: 'refused',
+        code: 'EVIDENCE_READ_OR_PARSE_FAILED',
+        writes: 0,
+        applyEnabled: false,
+      });
     }
     openError = false;
     globalThis.fetch = originalFetch;
