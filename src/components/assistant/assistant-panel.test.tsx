@@ -340,6 +340,25 @@ describe('Ask Fathom request and result states', () => {
 });
 
 describe('Ask Fathom lifecycle and keyboard', () => {
+  it('blocks a queued request if the tenant changes before transport fetch', async () => {
+    const view = render(panel());
+    expect(fetchMock).not.toHaveBeenCalled();
+    enter('Prior tenant queued question');
+    fixtures.session.mockReturnValue({
+      data: { user: { ...user, organizationId: 'synthetic-org-b' } },
+      status: 'authenticated',
+    });
+    view.rerender(panel({ ...entitlement(), organizationId: 'synthetic-org-b' }));
+    // Let the real SDK resolve request options and invoke the old transport.
+    await act(async () => {});
+    expect(fetchMock).not.toHaveBeenCalled();
+    expect(screen.queryByText('Prior tenant queued question')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Your question')).toHaveValue('');
+    enter('New tenant question');
+    expect(await screen.findByText('Synthetic answer')).toBeVisible();
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(String(fetchMock.mock.calls[0][1]?.body)).not.toContain('Prior tenant queued question');
+  });
   it('aborts and removes the old conversation when tenant context changes', async () => {
     const signal = pendingFetch();
     const view = render(panel());

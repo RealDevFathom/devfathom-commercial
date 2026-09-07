@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { useState, useRef, useEffect, useCallback, type ReactNode } from 'react';
 import { useSession } from 'next-auth/react';
 import { useReducedMotion } from 'motion/react';
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -112,18 +112,24 @@ function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEn
   const submittedInput = useRef('');
   const reducedMotion = useReducedMotion();
 
+  // The SDK invokes this callback when sending, after transport construction.
+  // Keep the lifecycle ref read in that request callback, outside initialization.
+  const fetchForConversation = useCallback<typeof fetch>(
+    async (url, options) => {
+      if (!active.current || !entry.canChat) throw new DOMException('Stopped', 'AbortError');
+      const response = await fetch(url, options);
+      if (response.status === 401 || response.status === 403) {
+        throw new Error('ASSISTANT_PERMISSION_DENIED');
+      }
+      return response;
+    },
+    [entry.canChat]
+  );
   const [transport] = useState(
     () =>
       new DefaultChatTransport({
         api: '/api/assistant',
-        fetch: async (url, options) => {
-          if (!active.current || !entry.canChat) throw new DOMException('Stopped', 'AbortError');
-          const response = await fetch(url, options);
-          if (response.status === 401 || response.status === 403) {
-            throw new Error('ASSISTANT_PERMISSION_DENIED');
-          }
-          return response;
-        },
+        fetch: fetchForConversation,
       })
   );
 
