@@ -1,6 +1,11 @@
 'use client';
 
 import { useState, useRef, useEffect, type ReactNode } from 'react';
+import { useSession } from 'next-auth/react';
+import { useReducedMotion } from 'motion/react';
+import { useEntitlements } from '@/components/entitlements-provider';
+import { Button } from '@/components/ui/button';
+import { assistantEntry } from './assistant-suggestions';
 import { useChat } from '@ai-sdk/react';
 import {
   DefaultChatTransport,
@@ -8,7 +13,7 @@ import {
   lastAssistantMessageIsCompleteWithApprovalResponses,
 } from 'ai';
 import { Sparkles, ArrowUp, Check, X, Loader2, Wrench, Square } from 'lucide-react';
-import { Sheet, SheetContent } from '@/components/ui/sheet';
+import { Sheet, SheetContent, SheetTitle, SheetDescription } from '@/components/ui/sheet';
 import { useAssistant } from '@/lib/assistant-store';
 import { cn } from '@/lib/utils';
 import { AssistantMarkdown } from './markdown';
@@ -17,6 +22,7 @@ import { AssistantMarkdown } from './markdown';
 // tools use the approval-card titles in describeAction() instead. Unknown tools
 // fall back to a humanized form of the tool name.
 const TOOL_LABELS: Record<string, string> = {
+  askPharmacyReports: 'pharmacy reports',
   // People / HR
   listTeam: 'the team',
   getTeamMember: 'profile',
@@ -74,82 +80,214 @@ function humanizeTool(name: string): string {
     .toLowerCase();
 }
 
-const SUGGESTIONS = [
-  'Brief me on my day',
-  "What is Aisha working on?",
-  'Which projects are behind schedule?',
-  "How's our finance this month?",
-];
-
 export function AssistantPanel() {
+  const entitlements = useEntitlements();
+  const { data: session, status } = useSession();
+  const entry = assistantEntry(entitlements, session?.user, status);
+  // Match the shell's live-session identity boundary. Remount before rendering
+  // another tenant/user/access context; never reuse or persist their messages.
+  const contextKey = JSON.stringify([
+    entitlements.organizationId,
+    entitlements.vertical,
+    [...entitlements.enabledModules].sort(),
+    session?.user.id,
+    session?.user.organizationId,
+    session?.user.role,
+    session?.user.status,
+    session?.user.sessionRevoked,
+    status,
+    entry.canChat,
+  ]);
+  return <AssistantConversation key={contextKey} entry={entry} />;
+}
+
+function AssistantConversation({ entry }: { entry: ReturnType<typeof assistantEntry> }) {
   const { open, setOpen } = useAssistant();
   const [input, setInput] = useState('');
+  const [requestError, setRequestError] = useState<'permission' | 'provider' | null>(null);
+  const [notice, setNotice] = useState('');
+  const inputRef = useRef<HTMLTextAreaElement>(null);
+  const active = useRef(true);
+  const sending = useRef(false);
+  const submittedInput = useRef('');
+  const reducedMotion = useReducedMotion();
 
-  const { messages, sendMessage, status, stop, addToolApprovalResponse } = useChat({
-    transport: new DefaultChatTransport({ api: '/api/assistant' }),
-    // Auto-continue the run after EITHER tool results OR an approval response.
-    // The approval case is essential: when the user approves a write, its tool
-    // part is in state 'approval-responded', which lastAssistantMessageIsComplete-
-    // WithToolCalls does NOT recognise — so without the approval helper the
-    // approval is never sent to the server and the write silently never runs.
+  const [transport] = useState(
+    () =>
+      new DefaultChatTransport({
+        api: '/api/assistant',
+        fetch: async (url, options) => {
+          if (!active.current || !entry.canChat) throw new DOMException('Stopped', 'AbortError');
+          const response = await fetch(url, options);
+          if (response.status === 401 || response.status === 403) {
+            throw new Error('ASSISTANT_PERMISSION_DENIED');
+          }
+          return response;
+        },
+      })
+  );
+
+  const { messages, sendMessage, status, stop, clearError, addToolApprovalResponse } = useChat({
+    transport,
+    onError: (error) => {
+      if (!active.current) return;
+      sending.current = false;
+      setRequestError(error.message === 'ASSISTANT_PERMISSION_DENIED' ? 'permission' : 'provider');
+      // The SDK reports provider errors through onError; sendMessage can resolve
+      // on failure. Keep the draft, including failures in later tool steps.
+      setInput((draft) => draft || submittedInput.current);
+    },
+    onFinish: ({ isAbort, isError, message }) => {
+      if (!active.current) return;
+      sending.current = false;
+      if (isAbort || isError) return;
+      const parts = message.parts as AnyPart[];
+      const failed = parts.some(
+        (part) => part.state === 'output-error' || resultMessage(part.output)?.kind === 'error'
+      );
+      setInput((draft) =>
+        failed ? draft || submittedInput.current : draft === submittedInput.current ? '' : draft
+      );
+      const hasContent = parts.some(
+        (part) => (part.type === 'text' && part.text?.trim()) || part.type.startsWith('tool-')
+      );
+      setNotice(
+        hasContent ? '' : 'No answer was returned. Your question is still available to retry.'
+      );
+      if (!hasContent) setInput((draft) => draft || submittedInput.current);
+    },
+    // Auto-continue reads and explicit approval responses, but never a run that
+    // belonged to an unmounted tenant context.
     sendAutomaticallyWhen: (opts) =>
-      lastAssistantMessageIsCompleteWithApprovalResponses(opts) ||
-      lastAssistantMessageIsCompleteWithToolCalls(opts),
+      active.current &&
+      entry.canChat &&
+      (lastAssistantMessageIsCompleteWithApprovalResponses(opts) ||
+        lastAssistantMessageIsCompleteWithToolCalls(opts)),
   });
+
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+      void stop();
+    };
+  }, [stop]);
 
   const scrollRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
-    scrollRef.current?.scrollTo({ top: scrollRef.current.scrollHeight, behavior: 'smooth' });
-  }, [messages, status, open]);
+    scrollRef.current?.scrollTo({
+      top: scrollRef.current.scrollHeight,
+      behavior: reducedMotion ? 'auto' : 'smooth',
+    });
+  }, [messages, status, open, reducedMotion]);
 
   const busy = status === 'submitted' || status === 'streaming';
-
-  const send = (text: string) => {
+  const failed = requestError !== null || status === 'error';
+  const send = async (text: string) => {
     const t = text.trim();
-    if (!t || busy) return;
-    sendMessage({ text: t });
-    setInput('');
+    if (
+      !active.current ||
+      !t ||
+      busy ||
+      sending.current ||
+      !entry.canChat ||
+      requestError === 'permission'
+    )
+      return;
+    sending.current = true;
+    submittedInput.current = text;
+    setInput(text);
+    setRequestError(null);
+    setNotice('');
+    try {
+      await sendMessage({ text: t });
+    } catch {
+      if (active.current) setRequestError('provider');
+    } finally {
+      sending.current = false;
+    }
   };
 
-  const approve = (approvalId: string, approved: boolean) =>
-    addToolApprovalResponse({ id: approvalId, approved });
+  const approve = (approvalId: string, approved: boolean) => {
+    if (!active.current || !entry.canChat || busy || failed) return;
+    void Promise.resolve(addToolApprovalResponse({ id: approvalId, approved })).catch(() => {
+      if (active.current) setRequestError('provider');
+    });
+  };
 
   return (
     <Sheet open={open} onOpenChange={setOpen}>
       <SheetContent
         side="right"
         showCloseButton={false}
-        className="gap-0 p-0"
+        className="gap-0 p-0 motion-reduce:transition-none motion-reduce:transform-none"
         style={{ width: '100%', maxWidth: 460 }}
       >
         {/* Header */}
         <div className="flex items-center justify-between border-b border-border/60 px-4 py-3">
           <div className="flex items-center gap-2.5">
-            <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+            <div className="flex h-11 w-11 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <Sparkles className="h-4 w-4" />
             </div>
             <div>
-              <p className="font-display text-sm font-semibold leading-none">Assistant</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">DevFathom · Gemini</p>
+              <SheetTitle className="font-display text-sm font-semibold leading-none">
+                Ask Fathom
+              </SheetTitle>
+              <SheetDescription className="mt-1 text-[11px] text-muted-foreground">
+                Workspace assistant
+              </SheetDescription>
             </div>
           </div>
-          <button
+          <Button
+            variant="ghost"
             onClick={() => setOpen(false)}
-            className="flex h-8 w-8 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            className="flex h-11 w-11 items-center justify-center rounded-lg text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
             aria-label="Close assistant"
           >
             <X className="h-4 w-4" />
-          </button>
+          </Button>
         </div>
 
         {/* Messages */}
         <div ref={scrollRef} className="flex-1 space-y-4 overflow-y-auto px-4 py-5">
           {messages.length === 0 ? (
-            <EmptyState onPick={send} />
+            <EmptyState entry={entry} onPick={send} disabled={busy || failed} />
           ) : (
-            messages.map((m) => <MessageBubble key={m.id} message={m} onApprove={approve} />)
+            messages.map((m) => (
+              <MessageBubble key={m.id} message={m} onApprove={approve} disabled={busy || failed} />
+            ))
           )}
-          {status === 'submitted' && <Thinking />}
+          {busy && <Thinking />}
+          {notice && (
+            <p role="status" className="text-sm text-muted-foreground">
+              {notice}
+            </p>
+          )}
+          {failed && (
+            <div
+              role="alert"
+              className="space-y-2 rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              <p>
+                {requestError === 'permission'
+                  ? 'Permission denied. Your session or workspace access may have changed. Reload to check your access.'
+                  : 'Ask Fathom is currently unavailable. Your draft is retained. Review any action results before retrying.'}
+              </p>
+              {requestError !== 'permission' && (
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => {
+                    clearError();
+                    setRequestError(null);
+                    inputRef.current?.focus();
+                  }}
+                >
+                  Review and retry
+                </Button>
+              )}
+            </div>
+          )}
         </div>
 
         {/* Composer */}
@@ -160,42 +298,56 @@ export function AssistantPanel() {
           }}
           className="border-t border-border/60 p-3"
         >
+          <label
+            htmlFor="assistant-question"
+            className="mb-2 block text-xs font-medium text-foreground"
+          >
+            Your question
+          </label>
           <div className="flex items-end gap-2 rounded-2xl border border-border bg-background px-3 py-2 focus-within:border-primary/60 focus-within:ring-2 focus-within:ring-primary/15 transition-colors">
             <textarea
+              ref={inputRef}
+              id="assistant-question"
+              disabled={!entry.canChat || requestError === 'permission'}
               value={input}
               onChange={(e) => setInput(e.target.value)}
               onKeyDown={(e) => {
-                if (e.key === 'Enter' && !e.shiftKey) {
+                if (e.key === 'Enter' && !e.shiftKey && !e.nativeEvent.isComposing) {
                   e.preventDefault();
                   send(input);
                 }
               }}
               rows={1}
-              placeholder="Ask about projects, tasks, clients…"
-              className="max-h-32 min-h-[24px] flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
+              placeholder="Ask about your workspace…"
+              className="max-h-32 min-h-[44px] min-w-0 flex-1 resize-none bg-transparent text-sm text-foreground outline-none placeholder:text-muted-foreground"
             />
             {busy ? (
-              <button
+              <Button
                 type="button"
-                onClick={() => stop()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground transition-colors hover:bg-secondary"
+                onClick={() => {
+                  sending.current = false;
+                  void stop();
+                  setNotice('Response stopped. Completed actions are not undone.');
+                }}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-muted text-foreground transition-colors hover:bg-secondary"
+                variant="secondary"
                 aria-label="Stop"
               >
                 <Square className="h-3.5 w-3.5 fill-current" />
-              </button>
+              </Button>
             ) : (
-              <button
+              <Button
                 type="submit"
-                disabled={!input.trim()}
-                className="flex h-8 w-8 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:bg-[#0C2E2C] active:scale-95 disabled:opacity-40"
+                disabled={!input.trim() || !entry.canChat || requestError === 'permission'}
+                className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground transition-all hover:bg-primary-hover active:scale-95 disabled:opacity-40"
                 aria-label="Send"
               >
                 <ArrowUp className="h-4 w-4" />
-              </button>
+              </Button>
             )}
           </div>
           <p className="mt-2 px-1 text-center text-[10px] text-muted-foreground">
-            The assistant can read your hub data and asks before making changes.
+            Access is checked for each request. Supported changes require your confirmation.
           </p>
         </form>
       </SheetContent>
@@ -212,7 +364,7 @@ type AnyPart = {
   input?: unknown;
   output?: unknown;
   errorText?: string;
-  approval?: { id: string };
+  approval?: { id: string; approved?: boolean };
 };
 
 /** A tool can succeed at the SDK level but return a refusal/clarification in its
@@ -222,36 +374,28 @@ function resultMessage(output: unknown): { kind: 'error' | 'clarify'; text: stri
   if (!output || typeof output !== 'object') return null;
   const o = output as Record<string, unknown>;
   if (typeof o.error === 'string') return { kind: 'error', text: o.error };
-  if (typeof o.needsClarification === 'string') return { kind: 'clarify', text: o.needsClarification };
+  if (typeof o.needsClarification === 'string')
+    return { kind: 'clarify', text: o.needsClarification };
+  if (o.kind === 'refusal' || o.kind === 'cannot_answer' || o.kind === 'unavailable') {
+    return {
+      kind: 'error',
+      text: typeof o.message === 'string' ? o.message : 'This request could not be completed.',
+    };
+  }
   return null;
 }
 
 function MessageBubble({
   message,
   onApprove,
+  disabled,
 }: {
   message: { id: string; role: string; parts: unknown[] };
   onApprove: (approvalId: string, approved: boolean) => void;
+  disabled: boolean;
 }) {
   const isUser = message.role === 'user';
   const parts = message.parts as AnyPart[];
-
-  // Once a turn has any successful output, drop the transient tool errors (the
-  // model retried and recovered). Otherwise collapse them to a single chip.
-  const hasSuccess = parts.some(
-    (p) =>
-      (p.type === 'text' && !!p.text) ||
-      (p.type.startsWith('tool-') && p.state === 'output-available')
-  );
-  const firstErrorIndex = parts.findIndex(
-    (p) => p.type.startsWith('tool-') && p.state === 'output-error'
-  );
-  const visible = parts.filter((p, idx) => {
-    const isError = p.type.startsWith('tool-') && p.state === 'output-error';
-    if (!isError) return true;
-    if (hasSuccess) return false;
-    return idx === firstErrorIndex;
-  });
 
   return (
     <div className={cn('flex', isUser ? 'justify-end' : 'justify-start')}>
@@ -261,7 +405,7 @@ function MessageBubble({
           isUser && 'rounded-2xl rounded-br-md bg-primary px-3.5 py-2 text-primary-foreground'
         )}
       >
-        {visible.map((part, i) => {
+        {parts.map((part, i) => {
           if (part.type === 'text' && part.text) {
             return isUser ? (
               <p key={i} className="whitespace-pre-wrap break-words text-current">
@@ -278,6 +422,7 @@ function MessageBubble({
                 toolName={part.type.slice('tool-'.length)}
                 part={part}
                 onApprove={onApprove}
+                disabled={disabled}
               />
             );
           }
@@ -292,15 +437,18 @@ function ToolPart({
   toolName,
   part,
   onApprove,
+  disabled,
 }: {
   toolName: string;
   part: AnyPart;
   onApprove: (approvalId: string, approved: boolean) => void;
+  disabled: boolean;
 }) {
   const label = TOOL_LABELS[toolName] ?? humanizeTool(toolName);
   // Read tools start with a read verb; everything else changes data (and is
   // approval-gated). Keep this in sync with the tool naming convention.
-  const isWrite = !/^(list|find|get|search|global)/.test(toolName);
+  const isWrite =
+    toolName !== 'askPharmacyReports' && !/^(list|find|get|search|global)/.test(toolName);
 
   if (part.state === 'approval-requested' && part.approval) {
     return (
@@ -309,12 +457,24 @@ function ToolPart({
         input={part.input}
         approvalId={part.approval.id}
         onApprove={onApprove}
+        disabled={disabled}
+      />
+    );
+  }
+  if (part.state === 'approval-responded') {
+    return (
+      <StatusChip
+        icon={<Wrench className="h-3 w-3" />}
+        text={part.approval?.approved ? 'Approved — awaiting result' : 'Cancellation pending'}
       />
     );
   }
   if (part.state === 'input-streaming' || part.state === 'input-available') {
     return (
-      <StatusChip icon={<Loader2 className="h-3 w-3 animate-spin" />} text={`Checking ${label}…`} />
+      <StatusChip
+        icon={<Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" />}
+        text={`Checking ${label}…`}
+      />
     );
   }
   if (part.state === 'output-available') {
@@ -367,7 +527,7 @@ function StatusChip({
       className={cn(
         'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-[11px] font-medium',
         tone === 'muted' && 'border-border bg-muted/50 text-muted-foreground',
-        tone === 'success' && 'border-primary/30 bg-primary/10 text-primary',
+        tone === 'success' && 'border-success/30 bg-success/10 text-success',
         tone === 'error' && 'border-destructive/30 bg-destructive/10 text-destructive'
       )}
     >
@@ -382,11 +542,13 @@ function ApprovalCard({
   input,
   approvalId,
   onApprove,
+  disabled,
 }: {
   toolName: string;
   input: unknown;
   approvalId: string;
   onApprove: (approvalId: string, approved: boolean) => void;
+  disabled: boolean;
 }) {
   const { title, fields } = describeAction(toolName, input);
   return (
@@ -404,18 +566,21 @@ function ApprovalCard({
         ))}
       </dl>
       <div className="mt-2.5 flex gap-2">
-        <button
+        <Button
+          disabled={disabled}
           onClick={() => onApprove(approvalId, true)}
-          className="flex flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-[#0C2E2C]"
+          className="flex min-h-11 flex-1 items-center justify-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover"
         >
           <Check className="h-3.5 w-3.5" /> Confirm &amp; run
-        </button>
-        <button
+        </Button>
+        <Button
+          disabled={disabled}
+          variant="outline"
           onClick={() => onApprove(approvalId, false)}
-          className="flex items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          className="flex min-h-11 items-center justify-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
         >
           Cancel
-        </button>
+        </Button>
       </div>
     </div>
   );
@@ -437,20 +602,54 @@ const ACTION_TITLES: Record<string, string> = {
 
 // Field key → human label. Unmapped keys are title-cased from the key.
 const FIELD_LABELS: Record<string, string> = {
-  name: 'Name', title: 'Title', reason: 'Reason', status: 'Status', priority: 'Priority',
-  dueDate: 'Due', startDate: 'Start', endDate: 'End', startTime: 'Start', endTime: 'End',
-  columnName: 'Column', column: 'Column', description: 'Notes', content: 'Content',
-  message: 'Message', projectName: 'Project', clientName: 'Client', channelName: 'Channel',
-  email: 'Email', role: 'Role', department: 'Department', visibility: 'Visibility',
-  amount: 'Amount', type: 'Type', invoiceNumber: 'Invoice', decision: 'Decision',
-  lastWorkingDay: 'Last day', proposedLastDay: 'Proposed last day', recurrence: 'Repeats',
-  location: 'Location', note: 'Note', person: 'Person', assignee: 'Assignee',
-  assignees: 'Assignees', members: 'Members', skills: 'Skills', category: 'Category',
-  newName: 'New name', text: 'Text', label: 'Label', milestoneName: 'Milestone',
+  name: 'Name',
+  title: 'Title',
+  reason: 'Reason',
+  status: 'Status',
+  priority: 'Priority',
+  dueDate: 'Due',
+  startDate: 'Start',
+  endDate: 'End',
+  startTime: 'Start',
+  endTime: 'End',
+  columnName: 'Column',
+  column: 'Column',
+  description: 'Notes',
+  content: 'Content',
+  message: 'Message',
+  projectName: 'Project',
+  clientName: 'Client',
+  channelName: 'Channel',
+  email: 'Email',
+  role: 'Role',
+  department: 'Department',
+  visibility: 'Visibility',
+  amount: 'Amount',
+  type: 'Type',
+  invoiceNumber: 'Invoice',
+  decision: 'Decision',
+  lastWorkingDay: 'Last day',
+  proposedLastDay: 'Proposed last day',
+  recurrence: 'Repeats',
+  location: 'Location',
+  note: 'Note',
+  person: 'Person',
+  assignee: 'Assignee',
+  assignees: 'Assignees',
+  members: 'Members',
+  skills: 'Skills',
+  category: 'Category',
+  newName: 'New name',
+  text: 'Text',
+  label: 'Label',
+  milestoneName: 'Milestone',
 };
 
 const spaceCamel = (s: string) =>
-  s.replace(/([a-z0-9])([A-Z])/g, '$1 $2').replace(/_/g, ' ').toLowerCase();
+  s
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/_/g, ' ')
+    .toLowerCase();
 const capitalize = (s: string) => (s ? s.charAt(0).toUpperCase() + s.slice(1) : s);
 
 function formatValue(v: unknown): string {
@@ -483,38 +682,48 @@ function describeAction(
 
 function Thinking() {
   return (
-    <div className="flex items-center gap-1.5 px-1 text-muted-foreground">
-      {[0, 1, 2].map((i) => (
-        <span
-          key={i}
-          className="h-1.5 w-1.5 animate-bounce rounded-full bg-current"
-          style={{ animationDelay: `${i * 150}ms` }}
-        />
-      ))}
+    <div role="status" className="flex items-center gap-2 px-1 text-sm text-muted-foreground">
+      <Loader2 className="h-3 w-3 animate-spin motion-reduce:animate-none" />
+      Working on your request…
     </div>
   );
 }
 
-function EmptyState({ onPick }: { onPick: (q: string) => void }) {
+function EmptyState({
+  entry,
+  onPick,
+  disabled,
+}: {
+  entry: ReturnType<typeof assistantEntry>;
+  onPick: (q: string) => void;
+  disabled: boolean;
+}) {
   return (
-    <div className="flex h-full flex-col items-center justify-center px-2 text-center">
+    <div className="flex min-h-full flex-col items-center justify-center px-2 text-center">
       <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-primary/10 text-primary">
         <Sparkles className="h-6 w-6" />
       </div>
-      <h3 className="mt-4 font-display text-base font-semibold">How can I help?</h3>
-      <p className="mt-1.5 max-w-[18rem] text-xs text-muted-foreground">
-        Ask about your projects, tasks, clients, team or finances — or ask me to create something.
-        I&apos;ll confirm before any change.
+      <h3 className="mt-4 font-display text-base font-semibold">{entry.title}</h3>
+      <p role="status" className="mt-1.5 max-w-[18rem] text-xs text-muted-foreground">
+        {entry.description}
       </p>
+      {entry.canChat && entry.suggestions.length === 0 && (
+        <p className="mt-3 text-xs text-muted-foreground">
+          No suggested actions are available for your current access.
+        </p>
+      )}
       <div className="mt-5 grid w-full gap-2">
-        {SUGGESTIONS.map((s) => (
-          <button
+        {entry.suggestions.map((s) => (
+          <Button
             key={s}
+            type="button"
+            variant="outline"
+            disabled={disabled}
             onClick={() => onPick(s)}
-            className="rounded-xl border border-border bg-card px-3 py-2 text-left text-[13px] text-foreground transition-colors hover:border-primary/40 hover:bg-accent/40"
+            className="h-auto min-h-11 justify-start whitespace-normal rounded-xl border border-border bg-card px-3 py-2 text-left text-[13px] text-foreground"
           >
             {s}
-          </button>
+          </Button>
         ))}
       </div>
     </div>
