@@ -31,6 +31,7 @@
  *    the existing terminal failure classifier — purges and reports the discarded
  *    count (M9 amendment §2.2, criterion 4).
  */
+import { browserUuid } from '@/lib/browser-uuid';
 import type { TerminalReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
 
 /**
@@ -178,9 +179,7 @@ export type EnqueueResult =
     };
 
 function defaultId(): string {
-  const webCrypto = (globalThis as { crypto?: Crypto }).crypto;
-  if (webCrypto && typeof webCrypto.randomUUID === 'function') return webCrypto.randomUUID();
-  throw new Error('crypto.randomUUID is unavailable; pass an explicit id factory.');
+  return browserUuid();
 }
 
 /**

@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useState, type FormEvent, type ReactNode } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
@@ -204,7 +206,7 @@ export function OrdersConsole() {
       actor: {
         staffProfileId: text(data, 'staffProfileId'),
         deviceId: text(data, 'deviceId'),
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: browserUuid(),
       },
     });
   };

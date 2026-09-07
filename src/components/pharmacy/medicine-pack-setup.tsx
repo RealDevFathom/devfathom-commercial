@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useState } from 'react';
 import Link from 'next/link';
 
@@ -139,7 +141,7 @@ export function MedicinePackSetup() {
               level,
               unitsPerParent: quantity,
               effectiveFrom,
-              versionGroupId: crypto.randomUUID(),
+              versionGroupId: browserUuid(),
             });
           }}
         >
