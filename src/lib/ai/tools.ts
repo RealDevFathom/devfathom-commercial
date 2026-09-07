@@ -39,6 +39,7 @@ import { buildNotesTools } from '@/lib/ai/tools/notes';
 import { buildMeetingsTools } from '@/lib/ai/tools/meetings';
 import { buildInsightsTools } from '@/lib/ai/tools/insights';
 import { buildPharmacyReportTools } from '@/lib/ai/tools/pharmacy-reports';
+import { buildRestaurantReportTools } from '@/lib/ai/tools/restaurant-reports';
 
 export type { AssistantContext } from '@/lib/ai/context';
 
@@ -53,11 +54,17 @@ type Domain =
   | 'chat'
   | 'notes'
   | 'meetings'
-  | 'pharmacyReports';
+  | 'pharmacyReports'
+  | 'restaurantReports';
 
 // High-frequency READ tools that answer most questions — always offered, so a
 // plain question rarely needs a domain bundle loaded at all.
 const CORE_TOOLS = new Set([
+  // Small, read-only vertical entry points also handle ambiguous follow-ups.
+  // The registry gates below apply before these names can be selected.
+  'askRestaurantReports',
+  'askPharmacyReports',
+  'askPharmacyBusinessInsights',
   'getOverview',
   'globalSearch',
   'getRecentActivity',
@@ -148,6 +155,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
   if (hint && UNSUPPORTED_TOOL_INTENT.test(hint)) return {};
   if (
     hint &&
+    assistantVertical(ctx.vertical) === 'AGENCY' &&
     ctx.role !== 'ADMIN' &&
     FINANCE_INTENT.test(hint) &&
     !PHARMACY_REPORT_INTENT.test(hint)
@@ -178,11 +186,13 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
       assistantVertical(ctx.vertical) === 'PHARMACY' && granted('pharmacy-reports')
         ? buildPharmacyReportTools(h)
         : {},
+    restaurantReports:
+      assistantVertical(ctx.vertical) === 'RESTAURANT' && granted('restaurant-core')
+        ? buildRestaurantReportTools(h)
+        : {},
   };
   // This profile read also returns project/task workload; HR alone is insufficient.
   if (!agency || !granted('projects')) delete perDomain.people.getTeamMember;
-  // Integration seam: add the real Restaurant builder here, behind its catalog
-  // vertical/module gates. It must join this map BEFORE hint/core selection.
 
   const selectAll = hint.length === 0;
   const domains = selectAll ? null : selectDomains(hint);
@@ -207,6 +217,7 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
       try {
         return await orig(...args);
       } catch {
+        console.error('ASSISTANT_TOOL_EXECUTION_FAILED');
         return { error: 'This action is currently unavailable. Please try again.' };
       }
     };

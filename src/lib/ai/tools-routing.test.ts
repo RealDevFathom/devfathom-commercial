@@ -4,6 +4,12 @@ import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { can } from '@/lib/abac';
 import { MODULE_CATALOG } from '@/lib/module-catalog';
 
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  createTenantDb: () => ({
+    organization: { findUnique: vi.fn().mockResolvedValue({ vertical: 'RESTAURANT' }) },
+  }),
+}));
+
 vi.mock('@/lib/abac', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/lib/abac')>()),
   can: vi.fn().mockResolvedValue(false),
@@ -24,6 +30,7 @@ describe('assistant tool routing', () => {
     const employee = buildAssistantTools(ctx, { hint: 'I want to take leave next Monday' });
     expect(employee).toHaveProperty('requestLeave');
     expect(employee.requestLeave.needsApproval).toBe(true);
+    expect(assistantToolChoice('show my leave balance', employee)).toBe('auto');
     expect(assistantToolChoice('I want to take leave next Monday', employee)).toEqual({
       type: 'tool',
       toolName: 'requestLeave',
@@ -53,6 +60,8 @@ describe('assistant tool routing', () => {
       expect(tools).toHaveProperty('requestLeave');
       expect(tools).toHaveProperty('listChannels');
       expect('askPharmacyReports' in tools).toBe(vertical === 'PHARMACY');
+      expect('askPharmacyBusinessInsights' in tools).toBe(vertical === 'PHARMACY');
+      expect('askRestaurantReports' in tools).toBe(vertical === 'RESTAURANT');
     }
   );
 
@@ -63,6 +72,9 @@ describe('assistant tool routing', () => {
       expect(tools).not.toHaveProperty('listProjects');
       expect(tools).not.toHaveProperty('getFinanceSummary');
       expect(tools).not.toHaveProperty('askPharmacyReports');
+      expect(tools).not.toHaveProperty('askPharmacyBusinessInsights');
+      expect(tools).not.toHaveProperty('askRestaurantReports');
+      expect(tools).toHaveProperty('listChannels');
     }
   );
 
@@ -92,8 +104,10 @@ describe('assistant tool routing', () => {
   });
 
   it('sanitizes thrown execute errors without logging sensitive payloads', async () => {
-    vi.mocked(can).mockRejectedValueOnce(new Error('secret patient payload'));
-    const log = vi.spyOn(console, 'error');
+    vi.mocked(can).mockRejectedValueOnce(
+      Object.assign(new Error('secret patient payload'), { name: 'secret user@example.invalid' })
+    );
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
     const tools = buildAssistantTools({
       ...ctx,
       vertical: 'PHARMACY',
@@ -104,8 +118,108 @@ describe('assistant tool routing', () => {
       { toolCallId: 'test', messages: [] }
     );
     expect(result).toEqual({ error: 'This action is currently unavailable. Please try again.' });
-    expect(log).not.toHaveBeenCalled();
+    expect(log.mock.calls).toEqual([['ASSISTANT_TOOL_EXECUTION_FAILED']]);
     log.mockRestore();
+  });
+
+  it.each([
+    'show pharmacy sales and margin',
+    'gross margin comparison',
+    'compare this month with last month',
+    'repeat purchases',
+    'retention cohort',
+    'what about that?',
+    '',
+  ])('keeps real Pharmacy reports discoverable for %j', (hint) => {
+    const tools = buildAssistantTools(
+      { ...adminCtx, vertical: 'PHARMACY', enabledModules: ['pharmacy-reports'] },
+      { hint }
+    );
+    expect(Object.keys(tools).sort()).toEqual([
+      'askPharmacyBusinessInsights',
+      'askPharmacyReports',
+    ]);
+    expect(buildAssistantTools(adminCtx, { hint })).not.toHaveProperty(
+      'askPharmacyBusinessInsights'
+    );
+  });
+
+  it.each([
+    'settled sales and refunds',
+    'upcoming Catering events',
+    'POS backlog',
+    'what about that?',
+    '',
+  ])('discovers Restaurant reports with core entitlement for %j', (hint) => {
+    const scope: AssistantContext = {
+      ...ctx,
+      vertical: 'RESTAURANT',
+      enabledModules: ['restaurant-core'],
+    };
+    expect(Object.keys(buildAssistantTools(scope, { hint }))).toEqual(['askRestaurantReports']);
+    expect(
+      buildAssistantTools(
+        { ...scope, enabledModules: ['restaurant-pos', 'restaurant-catering'] },
+        { hint }
+      )
+    ).toEqual({});
+  });
+
+  it.each(['margin', 'retention', 'Catering', 'do it', ''])(
+    'cannot restore disabled vertical reports through hint or full continuation %j',
+    (hint) => {
+      for (const vertical of ['AGENCY', 'RESTAURANT', 'PHARMACY'] as const) {
+        const tools = buildAssistantTools(
+          { ...adminCtx, vertical, enabledModules: ['chat'] },
+          { hint }
+        );
+        expect(tools).toHaveProperty('listChannels');
+        expect(tools).not.toHaveProperty('askRestaurantReports');
+        expect(tools).not.toHaveProperty('askPharmacyReports');
+        expect(tools).not.toHaveProperty('askPharmacyBusinessInsights');
+        expect(tools).not.toHaveProperty('getFinanceSummary');
+      }
+    }
+  );
+
+  it('retains role and permission denials in both real report executions', async () => {
+    const options = { toolCallId: 'test', messages: [] };
+    const pharmacy = buildAssistantTools(
+      { ...ctx, vertical: 'PHARMACY', enabledModules: ['pharmacy-reports'] },
+      { hint: 'margin retention' }
+    );
+    expect(
+      await pharmacy.askPharmacyBusinessInsights.execute!(
+        { report: 'margin_comparison', branch: 'forged', from: '2026-09-01', to: '2026-09-02' },
+        options
+      )
+    ).toMatchObject({ kind: 'refusal' });
+    const restaurant = buildAssistantTools(
+      { ...ctx, vertical: 'RESTAURANT', enabledModules: ['restaurant-core', 'restaurant-pos'] },
+      { hint: 'revenue' }
+    );
+    expect(
+      await restaurant.askRestaurantReports.execute!(
+        { report: 'settled_sales', branch: 'forged', from: '2026-09-01', to: '2026-09-02' },
+        options
+      )
+    ).toMatchObject({ kind: 'refusal' });
+  });
+
+  it('guides only exposed real reports and preserves reporting limits', () => {
+    const prompt = assistantSystemPrompt({ vertical: 'PHARMACY' }, [
+      'askPharmacyReports',
+      'askPharmacyBusinessInsights',
+    ]);
+    expect(prompt).toContain('direct aggregate metric');
+    expect(prompt).toContain('cohort numerator/denominator');
+    expect(prompt).toContain('not zero');
+    expect(prompt).toContain('Never claim confirmed customer churn');
+    expect(prompt).toContain('Give no clinical advice');
+    const restaurant = assistantSystemPrompt({ vertical: 'RESTAURANT' }, ['askRestaurantReports']);
+    expect(restaurant).toContain('business-date period');
+    expect(restaurant).toContain('unknown is not zero');
+    expect(restaurant).not.toContain('Use askPharmacy');
   });
 
   it('describes actual type and only exposed capabilities without broad role promises', () => {

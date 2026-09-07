@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   actor: vi.fn(),
@@ -49,6 +49,7 @@ function approval(toolName: string) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.spyOn(console, 'error').mockImplementation(() => {});
   mocks.actor.mockResolvedValue(actor());
   mocks.entitlements.mockResolvedValue({ vertical: 'RESTAURANT', enabledModules: ['chat'] });
   mocks.db.mockReturnValue({});
@@ -57,6 +58,8 @@ beforeEach(() => {
     toUIMessageStreamResponse: () => new Response('synthetic stream'),
   });
 });
+
+afterEach(() => vi.restoreAllMocks());
 
 describe('assistant API scope', () => {
   it('ignores forged client organization, role, vertical, modules and branch', async () => {
@@ -146,6 +149,7 @@ describe('assistant API scope', () => {
     expect(await response.text()).toBe(
       'Ask Fathom is currently unavailable. No cached answer was used.'
     );
+    expect(vi.mocked(console.error).mock.calls).toEqual([['ASSISTANT_STREAM_FAILED']]);
   });
 
   it('returns 401 without actor', async () => {
@@ -167,7 +171,51 @@ describe('assistant API scope', () => {
     const failed = await POST(request({ messages: [user] }));
     expect(failed.status).toBe(503);
     expect(await failed.text()).not.toContain('private payload');
+    expect(vi.mocked(console.error).mock.calls).toEqual([
+      ['ASSISTANT_PROVIDER_UNAVAILABLE'],
+      ['ASSISTANT_REQUEST_FAILED'],
+    ]);
   });
+
+  it.each([
+    ['AGENCY', ['restaurant-core', 'pharmacy-reports'], 'askRestaurantReports'],
+    ['RESTAURANT', ['pharmacy-reports'], 'askPharmacyBusinessInsights'],
+    ['PHARMACY', ['restaurant-core'], 'askRestaurantReports'],
+    ['PHARMACY', [], 'askPharmacyBusinessInsights'],
+    ['PHARMACY', [], 'askPharmacyReports'],
+    ['RESTAURANT', [], 'askRestaurantReports'],
+  ])('fences report continuation for %s / %j / %s', async (vertical, enabledModules, toolName) => {
+    mocks.entitlements.mockResolvedValue({ vertical, enabledModules });
+    const response = await POST(request({ messages: [user, approval(toolName as string)] }));
+    expect(response.status).toBe(403);
+    expect(mocks.model).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['RESTAURANT', ['restaurant-core'], 'askRestaurantReports'],
+    ['PHARMACY', ['pharmacy-reports'], 'askPharmacyBusinessInsights'],
+  ])(
+    'uses server report scope despite forged body for %s',
+    async (vertical, enabledModules, toolName) => {
+      mocks.entitlements.mockResolvedValue({ vertical, enabledModules });
+      const response = await POST(
+        request({
+          messages: [{ ...user, parts: [{ type: 'text', text: 'compare revenue and retention' }] }],
+          organizationId: 'forged',
+          role: 'ADMIN',
+          vertical: 'AGENCY',
+          enabledModules: ['finance'],
+          branch: 'forged',
+        })
+      );
+      expect(response.status).toBe(200);
+      const args = mocks.stream.mock.calls[0][0];
+      expect(args.tools).toHaveProperty(toolName as string);
+      expect(args.tools).not.toHaveProperty('getFinanceSummary');
+      expect(args.system).toContain('EMPLOYEE');
+      expect(args.system).not.toContain('forged');
+    }
+  );
 
   it('isolates simultaneous server scopes', async () => {
     mocks.actor.mockResolvedValueOnce(actor('AGENCY')).mockResolvedValueOnce(actor('PHARMACY'));
