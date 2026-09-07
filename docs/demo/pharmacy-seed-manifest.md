@@ -2,6 +2,37 @@
 
 ## September 7 approved PO fixture pass
 
+**Result: partial; original replay failed.** Tested immutable source
+`30433fc073075ab3ac2c9cfd33c1242c2f7d8463`, tree
+`48280c60b3de555ee8b9e15419c9dbacb5f55130`, package digest
+`848018282b14ecc01043ac24c764b9a30ce9795c5a909684481ae84a78523daf`.
+The single fresh command
+`bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts --integrated`
+exited **1**. Overall **3 PASS / 1 FAIL**, including all 106 unchanged migrations;
+integrated **8 selected / 3 executed / 2 PASS / 1 FAIL / 5 pending / 0 skipped**.
+
+Both default read-only preservation and actual goods receipt/cash/report cases
+passed as `wha1388_runtime`, NOSUPERUSER/NOBYPASSRLS/FORCE RLS. The latter
+reported 30 writes, 25 generated records, 31 retained rows, sale 100, change 50,
+remaining stock 1, two balanced journals/six legs, margin 80, and one anonymous
+completed receipt. Retention horizons remain ineligible with null rates.
+These are synthetic disposable results, not live onboarding or clinical proof.
+
+Original dry-run/apply replay failed with `PharmacyDemoRefusal: CHANGED_REFERENCE`
+at `scripts/seed-pharmacy-demo.ts:1386`. Replay, concurrent execution, late rollback,
+changed/removed-row and foreign-history acceptance are not established by this run.
+No further correction or execution was attempted. The root runner is outside
+this fixture-only pass; active Desktop/Saad must decide and route the next
+bounded correction before work can resume.
+
+New database `wha1388_26313b3a023922e0b06c1d26`, directory
+`/private/tmp/wha1388-pg-Xm9Z5K`, stopped by verifier; independent `pg_ctl status`
+returned no server running (exit 3). `evidence.json`, `failure.txt`, migration and
+PostgreSQL logs are retained there. Old clusters remain untouched. Scoped
+TypeScript, ESLint, Prettier and diff checks completed without errors. Only the
+verifier fixture and this manifest changed; acceptance and live seeding remain
+separate gates. This result is an evidence-only addition after the tested commit.
+
 Saad's approval in comment `5f3f3cdf-c2dd-4e45-99a6-16f9e462ff96`
 permits one additional correction and one fresh disposable verification cluster.
 Base: `054f48effef98d7669029b57fe15bbc4954dd01d`, clean assigned branch.
@@ -14,7 +45,7 @@ contact a supplier. No runtime, helper, schema or permission changes.
 Preflight checked the existing transition function, send procedure, supplier
 backstop and receiving trigger. Prior failed evidence below remains retained.
 Corrected source is committed before the single integrated verification attempt.
-Acceptance results will be recorded separately; no new pass is yet claimed.
+Acceptance results are recorded above; this approval's single pass is exhausted.
 
 ## Approved additional fixture-repair pass
 
