@@ -1,4 +1,13 @@
-import { streamText, convertToModelMessages, stepCountIs, type UIMessage } from 'ai';
+import {
+  streamText,
+  validateUIMessages,
+  isToolUIPart,
+  getToolName,
+  convertToModelMessages,
+  stepCountIs,
+  type UIMessage,
+} from 'ai';
+import { assistantVertical } from '@/lib/ai/context';
 import { createAIModel } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
@@ -28,14 +37,40 @@ function recentUserText(messages: UIMessage[]): string {
   return texts.reverse().join(' \n ');
 }
 
+const UNAVAILABLE = 'Ask Fathom is currently unavailable. No cached answer was used.';
+
 export async function POST(req: Request) {
+  try {
+    return await respond(req);
+  } catch {
+    return Response.json({ error: UNAVAILABLE }, { status: 503 });
+  }
+}
+
+async function respond(req: Request) {
   const actor = await resolveTenantActor({ request: req });
   if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
   const session = actor.session;
 
-  const { messages }: { messages: UIMessage[] } = await req.json();
+  let messages: UIMessage[];
+  try {
+    const body = await req.json();
+    messages = await validateUIMessages({ messages: body?.messages });
+    if (
+      !messages.length ||
+      messages.some(
+        (message) =>
+          message.role === 'system' ||
+          (message.role === 'user' && message.parts.some((part) => part.type !== 'text')) ||
+          message.parts.some((part) => part.type === 'file')
+      )
+    )
+      throw new Error('Invalid messages');
+  } catch {
+    return Response.json({ error: 'Invalid assistant messages.' }, { status: 400 });
+  }
   const organization = actor.organization;
   const entitlements = await resolveOrganizationEntitlements(
     organization.id,
@@ -44,6 +79,7 @@ export async function POST(req: Request) {
 
   const ctx = {
     organizationId: organization.id,
+    vertical: assistantVertical(entitlements.vertical),
     userId: session.user.id,
     role: session.user.role ?? 'EMPLOYEE',
     name: session.user.name,
@@ -52,8 +88,6 @@ export async function POST(req: Request) {
     status: session.user.status,
     enabledModules: entitlements.enabledModules,
   };
-
-  const modelMessages = await convertToModelMessages(messages);
 
   // SECURITY INVARIANT (AI-04): the approval gate is a UX confirmation, NOT the
   // security boundary. The client supplies the full message history including the
@@ -65,7 +99,7 @@ export async function POST(req: Request) {
   //
   // An approval-continuation carries a just-approved tool part. The approved
   // tool MUST be in the toolset for the SDK to execute it — so on these requests
-  // we load the full set (one call) rather than risk hint-routing dropping it.
+  // we load the full currently entitled set (one call) rather than risk hint-routing dropping it.
   const isApprovalContinuation = messages.some((m) =>
     (m.parts ?? []).some(
       (p) =>
@@ -75,6 +109,26 @@ export async function POST(req: Request) {
   );
 
   const hint = recentUserText(messages);
+  const tools = buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint });
+  // Client approval history cannot resurrect a disabled or wrong-vertical tool.
+  if (
+    messages.some((message) =>
+      message.parts.some(
+        (part) =>
+          isToolUIPart(part) &&
+          part.state === 'approval-responded' &&
+          !Object.hasOwn(tools, getToolName(part))
+      )
+    )
+  ) {
+    return Response.json({ error: 'This action is no longer available.' }, { status: 403 });
+  }
+  let modelMessages;
+  try {
+    modelMessages = await convertToModelMessages(messages);
+  } catch {
+    return Response.json({ error: 'Invalid assistant messages.' }, { status: 400 });
+  }
   let ai: ReturnType<typeof createAIModel>;
   try {
     ai = createAIModel();
@@ -86,32 +140,20 @@ export async function POST(req: Request) {
   }
   const result = streamText({
     model: ai.model,
-    system: assistantSystemPrompt(ctx),
+    system: assistantSystemPrompt(ctx, Object.keys(tools)),
     messages: modelMessages,
     // Cost control: send only the tools relevant to what the user is asking
     // about (a core read set + the matched domain), not all ~96 every request.
     // The hint is the recent user text. See buildAssistantTools / tools.ts.
-    tools: buildAssistantTools(ctx, isApprovalContinuation ? {} : { hint }),
-    toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint),
+    tools,
+    toolChoice: isApprovalContinuation ? 'auto' : assistantToolChoice(hint, tools),
     // Operator actions chain resolve → act → confirm; 6 steps covers that while
     // capping the worst-case number of (token-heavy) model round-trips per turn.
     stopWhen: stepCountIs(6),
     providerOptions: ai.providerOptions,
-    onError: ({ error }) => {
-      console.error(
-        '[assistant] stream unavailable',
-        error instanceof Error ? error.name : 'Error'
-      );
-    },
   });
 
   return result.toUIMessageStreamResponse({
-    onError: (error) => {
-      console.error(
-        '[assistant] response unavailable',
-        error instanceof Error ? error.name : 'Error'
-      );
-      return 'Ask Fathom is currently unavailable. No cached answer was used.';
-    },
+    onError: () => UNAVAILABLE,
   });
 }
