@@ -14,6 +14,7 @@ import type { ZodError } from 'zod';
 
 import {
   AGENCY_DEPARTMENTS,
+  HOSPITALITY_DEPARTMENTS,
   PHARMACY_ROLE_TEMPLATES,
   RESTAURANT_DEPARTMENTS,
   RESTAURANT_MODULES,
@@ -38,6 +39,10 @@ const mocks = vi.hoisted(() => ({
   // WHA-1206 — the pharmacy branch aggregate, a different table from the
   // restaurant branch above, so a test can tell which one provisioning wrote.
   pharmacyBranchCreate: vi.fn(),
+  // H1-01 — the hospitality branch aggregate: in that vertical the property row
+  // IS the branch, so a third create tells the three paths apart.
+  hotelPropertyCreate: vi.fn(),
+  hotelPropertyFindFirst: vi.fn(),
   acknowledgementFindMany: vi.fn(),
   // WHA-1181 — restaurant onboarding and activation now also link each
   // organization administrator to a staff profile. Default implementations
@@ -121,6 +126,10 @@ const platformDb = {
     count: mocks.branchCount,
   },
   pharmacyBranch: { create: mocks.pharmacyBranchCreate },
+  hotelProperty: {
+    create: mocks.hotelPropertyCreate,
+    findFirst: mocks.hotelPropertyFindFirst,
+  },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
   restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
@@ -181,6 +190,18 @@ function pharmacyCreatePayload(overrides: Record<string, unknown> = {}) {
     firstBranchAddress: '21 Khayaban-e-Shamsheer',
     firstBranchCity: 'Karachi',
     firstBranchProvinceCode: 'PK-SD',
+    ...overrides,
+  });
+}
+
+function hospitalityCreatePayload(overrides: Record<string, unknown> = {}) {
+  return createPayload({
+    vertical: 'HOSPITALITY',
+    packageId: 'pkg_h',
+    timezone: 'Asia/Karachi',
+    firstBranchName: 'Serena Gulberg',
+    firstBranchAddress: '12 Main Boulevard',
+    firstBranchCity: 'Lahore',
     ...overrides,
   });
 }
@@ -427,6 +448,112 @@ describe('organization.create vertical + package compatibility', () => {
     );
     expect(mocks.orgCreate).not.toHaveBeenCalled();
     expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
+  });
+
+  // -------------------------------------------------------------------------
+  // H1-01 — a HOSPITALITY organization is provisioned the same way. Its branch
+  // is `hotel_properties`: an organization without that row has no branch at
+  // all, so the checklist, the settings page and every later hotel table would
+  // have nothing to hang off.
+  // -------------------------------------------------------------------------
+  it('provisions a HOSPITALITY organization: its property row and its role templates', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_h',
+      active: true,
+      vertical: 'HOSPITALITY',
+      moduleLinks: [{ moduleId: 'hotel-core', enabled: true }],
+    });
+
+    await run('organization.create', hospitalityCreatePayload());
+
+    expect(mocks.orgCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ vertical: 'HOSPITALITY' }) })
+    );
+    expect(mocks.hotelPropertyCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.hotelPropertyCreate).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_new',
+        name: 'Serena Gulberg',
+        addressLine: '12 Main Boulevard',
+        city: 'Lahore',
+        timezone: 'Asia/Karachi',
+        // Deterministic from the workspace slug the operator already chose, so
+        // provisioning never has to ask for a public booking address.
+        bookingEngineSlug: 'acme-serena-gulberg',
+      },
+    });
+    // No mode, tax profile or business-date policy is pre-seeded: the checklist
+    // has to have something real to refuse, and the column defaults carry the
+    // rest (H-D14 HOTEL, PKR, en/ur).
+    const written = mocks.hotelPropertyCreate.mock.calls[0]![0] as {
+      data: Record<string, unknown>;
+    };
+    for (const field of ['mode', 'taxProfileId', 'businessDatePolicy', 'currency']) {
+      expect(written.data).not.toHaveProperty(field);
+    }
+    // Neither of the other verticals' branch aggregates was touched.
+    expect(mocks.branchCreate).not.toHaveBeenCalled();
+    expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
+    expect(mocks.assignmentCreate).not.toHaveBeenCalled();
+
+    const createdRoleKeys = mocks.roleCreate.mock.calls.map(
+      (call) => (call[0] as { data: { key: string } }).data.key
+    );
+    expect(mocks.roleCreate).toHaveBeenCalledTimes(
+      1 + roleTemplatesForVertical('HOSPITALITY').length
+    );
+    for (const template of roleTemplatesForVertical('HOSPITALITY')) {
+      expect(createdRoleKeys).toContain(template.key);
+    }
+    // The hospitality departments, not another vertical's.
+    expect(mocks.departmentCreateMany).toHaveBeenCalledWith({
+      data: HOSPITALITY_DEPARTMENTS.map((department, index) => ({
+        organizationId: 'org_new',
+        key: department.key,
+        name: department.name,
+        sortOrder: index,
+      })),
+    });
+  });
+
+  it('refuses a HOSPITALITY create that names no premises for its first property', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_h',
+      active: true,
+      vertical: 'HOSPITALITY',
+      moduleLinks: [],
+    });
+
+    const error = await caught(
+      run(
+        'organization.create',
+        createPayload({ vertical: 'HOSPITALITY', packageId: 'pkg_h', timezone: 'Asia/Karachi' })
+      )
+    );
+
+    const paths = ((error as ZodError).issues ?? []).map((issue) => issue.path.join('.'));
+    expect(paths).toEqual(
+      expect.arrayContaining(['firstBranchName', 'firstBranchAddress', 'firstBranchCity'])
+    );
+    // A property is not licensed per jurisdiction, so no province is demanded.
+    expect(paths).not.toContain('firstBranchProvinceCode');
+    expect(mocks.orgCreate).not.toHaveBeenCalled();
+    expect(mocks.hotelPropertyCreate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a crafted HOSPITALITY create carrying a pharmacy package', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_p',
+      active: true,
+      vertical: 'PHARMACY',
+      moduleLinks: [],
+    });
+
+    await expect(
+      run('organization.create', hospitalityCreatePayload({ packageId: 'pkg_p' }))
+    ).rejects.toBeInstanceOf(PlatformSecurityError);
+    expect(mocks.orgCreate).not.toHaveBeenCalled();
+    expect(mocks.hotelPropertyCreate).not.toHaveBeenCalled();
   });
 
   it('refuses a province no pharmacy surface can name', async () => {
@@ -1157,5 +1284,102 @@ describe('pharmacy activation preflight', () => {
       })
     ).resolves.toBeDefined();
     expect(mocks.orgUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// H1-01 / PROP-01 — "no go-live without tax profile, mode and business date",
+// enforced at the same command boundary pharmacy uses. Readiness is recomputed
+// from the property row on every attempt, so activation cannot be reached by
+// writing rows.
+// ---------------------------------------------------------------------------
+
+/** A hospitality organization that already clears the vertical-agnostic preflight. */
+function hospitalityOrg() {
+  return {
+    id: 'org_h',
+    vertical: 'HOSPITALITY',
+    status: 'ONBOARDING',
+    activatedAt: null,
+    packageId: 'pkg_h',
+    package: { vertical: 'HOSPITALITY', moduleLinks: [{ moduleId: 'mod_hotel_core' }] },
+    modules: [],
+    users: [{ id: 'admin_1' }],
+    deployments: [{ id: 'dep_1' }],
+  };
+}
+
+/** A fully recorded property — every step H1-01 can answer is satisfied. */
+const COMPLETE_PROPERTY = {
+  mode: 'HOTEL',
+  name: 'Serena Gulberg',
+  addressLine: '12 Main Boulevard',
+  city: 'Lahore',
+  timezone: 'Asia/Karachi',
+  checkInTime: '14:00',
+  checkOutTime: '12:00',
+  auditTime: '03:00',
+  taxProfileId: 'tax_profile_1',
+  businessDatePolicy: { roll: 'AUDIT' },
+};
+
+describe('hospitality activation preflight', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.orgFindUnique.mockResolvedValue(hospitalityOrg());
+    mocks.orgUpdate.mockResolvedValue({ id: 'org_h', status: 'ACTIVE' });
+    mocks.roleCount.mockResolvedValue(roleTemplatesForVertical('HOSPITALITY').length);
+    mocks.hotelPropertyFindFirst.mockResolvedValue(COMPLETE_PROPERTY);
+  });
+
+  const activate = () =>
+    run('organization.transition', {
+      id: 'org_h',
+      status: 'ACTIVE',
+      reason: 'Attempt hospitality activation',
+    });
+
+  it('fails closed when the organization has no property at all', async () => {
+    mocks.hotelPropertyFindFirst.mockResolvedValue(null);
+
+    await expect(activate()).rejects.toThrow(/PROPERTY_FACTS/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses go-live while the tax profile is unattached', async () => {
+    mocks.hotelPropertyFindFirst.mockResolvedValue({
+      ...COMPLETE_PROPERTY,
+      taxProfileId: null,
+    });
+
+    await expect(activate()).rejects.toThrow(/TAX_PROFILE/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses go-live while the business date is undecided', async () => {
+    // The column default is `{}` — a property that was created and never
+    // configured, which is exactly the state this gate exists to catch.
+    mocks.hotelPropertyFindFirst.mockResolvedValue({
+      ...COMPLETE_PROPERTY,
+      businessDatePolicy: {},
+    });
+
+    await expect(activate()).rejects.toThrow(/BUSINESS_DATE_AND_AUDIT/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('refuses go-live when the role templates are not all present', async () => {
+    mocks.roleCount.mockResolvedValue(roleTemplatesForVertical('HOSPITALITY').length - 1);
+
+    await expect(activate()).rejects.toThrow(/ROLES_ASSIGNED/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('still refuses on room types alone, which H1-03 owns', async () => {
+    // Everything this lane can answer is satisfied, and activation is still
+    // refused — the room-type step has no resolver yet and reports pending
+    // rather than being quietly assumed complete.
+    await expect(activate()).rejects.toThrow(/ROOM_TYPES/);
+    expect(mocks.orgUpdate).not.toHaveBeenCalled();
   });
 });

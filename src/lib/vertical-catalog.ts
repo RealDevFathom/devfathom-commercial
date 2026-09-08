@@ -24,6 +24,7 @@ export type { OrganizationVertical };
 export const AGENCY: OrganizationVertical = 'AGENCY';
 export const RESTAURANT: OrganizationVertical = 'RESTAURANT';
 export const PHARMACY: OrganizationVertical = 'PHARMACY';
+export const HOSPITALITY: OrganizationVertical = 'HOSPITALITY';
 
 // ---------------------------------------------------------------------------
 // §2 / §2.1 — Vertical definitions
@@ -217,9 +218,26 @@ export const VERTICALS: Record<OrganizationVertical, VerticalDefinition> = {
     description: 'Counters, dispensing, inventory, procurement, safety, and reporting.',
     firstRunChecklist: PHARMACY_FIRST_RUN_CHECKLIST,
   },
+  // H1-01 — the hospitality vertical's own first-run walk is the property
+  // onboarding checklist (`src/lib/hotel/onboarding-checklist.ts`), which is
+  // evaluated against hotel records rather than the shared restaurant/pharmacy
+  // evidence keys. It is therefore deliberately absent from
+  // `FIRST_RUN_VERTICALS` and carries an empty shared checklist here, so the
+  // dashboard's first-run card never renders half-answered rows for a hotel.
+  HOSPITALITY: {
+    vertical: 'HOSPITALITY',
+    label: 'Hospitality',
+    description: 'Properties, reservations, front desk, folio, night audit, and reporting.',
+    firstRunChecklist: [],
+  },
 };
 
-export const ALL_VERTICALS: readonly OrganizationVertical[] = ['AGENCY', 'RESTAURANT', 'PHARMACY'];
+export const ALL_VERTICALS: readonly OrganizationVertical[] = [
+  'AGENCY',
+  'RESTAURANT',
+  'PHARMACY',
+  'HOSPITALITY',
+];
 
 export type DepartmentDefinition = {
   key: string;
@@ -249,9 +267,20 @@ export const PHARMACY_DEPARTMENTS: readonly DepartmentDefinition[] = [
   { key: 'COMPLIANCE', name: 'Compliance' },
 ];
 
+/** 06 §2 — the departments the hospitality role templates are filed under. */
+export const HOSPITALITY_DEPARTMENTS: readonly DepartmentDefinition[] = [
+  { key: 'FRONT_OFFICE', name: 'Front Office' },
+  { key: 'HOUSEKEEPING', name: 'Housekeeping' },
+  { key: 'MAINTENANCE', name: 'Maintenance' },
+  { key: 'FOOD_AND_BEVERAGE', name: 'Food and Beverage' },
+  { key: 'SALES_AND_EVENTS', name: 'Sales and Events' },
+  { key: 'FINANCE', name: 'Finance' },
+];
+
 export function departmentsForVertical(
   vertical: OrganizationVertical
 ): readonly DepartmentDefinition[] {
+  if (vertical === HOSPITALITY) return HOSPITALITY_DEPARTMENTS;
   if (vertical === PHARMACY) return PHARMACY_DEPARTMENTS;
   return vertical === RESTAURANT ? RESTAURANT_DEPARTMENTS : AGENCY_DEPARTMENTS;
 }
@@ -279,6 +308,7 @@ export function defaultDepartmentRowsForVertical(
  * rather than in the kitchen. Always a key present in `departmentsForVertical`.
  */
 export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  if (vertical === HOSPITALITY) return 'FRONT_OFFICE';
   if (vertical === PHARMACY) return 'COUNTER';
   return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'LEADERSHIP';
 }
@@ -292,6 +322,7 @@ export function adminDepartmentKeyForVertical(vertical: OrganizationVertical): s
  * kitchen. Always a key present in `departmentsForVertical`.
  */
 export function memberDepartmentKeyForVertical(vertical: OrganizationVertical): string {
+  if (vertical === HOSPITALITY) return 'FRONT_OFFICE';
   if (vertical === PHARMACY) return 'COUNTER';
   return vertical === RESTAURANT ? 'FRONT_OF_HOUSE' : 'ENGINEERING';
 }
@@ -451,6 +482,44 @@ export const PHARMACY_MODULES: readonly CommercialModule[] = [
   mandatory: index === 0,
 }));
 
+/**
+ * H1-01 / GTM-01 — the hospitality commercial modules the four packages are
+ * composed from. Only `hotel-core` is mandatory: it owns the property registry,
+ * the onboarding checklist and the settings surface, which every hospitality
+ * organization needs whatever it sells.
+ *
+ * The keys are chosen so a package can be described exactly as PRD §5.23 words
+ * it — Essentials names six operating surfaces, Pro adds six, Chain adds the
+ * multi-property CRS, and Venue omits the room modules entirely.
+ */
+export const HOSPITALITY_MODULES: readonly CommercialModule[] = [
+  ['hotel-core', 'Hotel Core', 'Core', '/hotel', true],
+  ['hotel-reservations', 'Reservations', 'Operations', '/hotel/reservations', false],
+  ['hotel-front-desk', 'Front Desk', 'Operations', '/hotel/front-desk', false],
+  ['hotel-folio', 'Folio and Billing', 'Money', '/hotel/folio', false],
+  ['hotel-payments', 'Payments', 'Money', '/hotel/payments', false],
+  ['hotel-night-audit', 'Night Audit', 'Money', '/hotel/night-audit', false],
+  ['hotel-reports', 'Hotel Reports', 'Reports', '/hotel/reports', false],
+  ['hotel-channels', 'Channels and Booking Engine', 'Distribution', '/hotel/channels', false],
+  ['hotel-upsell', 'Guest Journey and Upsell', 'Guest', '/hotel/upsell', false],
+  ['hotel-marketing', 'Hotel Marketing', 'Customers', '/hotel/marketing', false],
+  ['hotel-agents', 'Travel Agents', 'Distribution', '/hotel/agents', false],
+  ['hotel-maintenance', 'Maintenance', 'Operations', '/hotel/maintenance', false],
+  ['hotel-api', 'Partner API and GL', 'Developer', '/hotel/api', false],
+  // Chain: cross-property availability and pickup (RPT-02 `central-reservations`).
+  ['hotel-crs', 'Central Reservations', 'Chain', '/hotel/central-reservations', false],
+  // Venue: banquets carries the catering seam (BQT-04) — the seam is part of this
+  // module, not a module of its own, because it has no surface without an event.
+  ['hotel-banquets', 'Banquets and Events', 'Events', '/hotel/banquets', false],
+].map(([key, name, category, routePrefix, mandatory]) => ({
+  key: key as string,
+  name: name as string,
+  category: category as string,
+  routePrefix: routePrefix as string,
+  vertical: 'HOSPITALITY' as const,
+  mandatory: mandatory as boolean,
+}));
+
 // ---------------------------------------------------------------------------
 // §7 — Limits and usage (keys + counting contracts)
 // ---------------------------------------------------------------------------
@@ -518,6 +587,23 @@ export const PHARMACY_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
   { key: 'pharmacy.branches.max', countedUnit: 'Active pharmacy branches' },
   { key: 'pharmacy.counters.max', countedUnit: 'Active dispensing and sales counters' },
   { key: 'pharmacy.users.max', countedUnit: 'Active pharmacy users' },
+];
+
+/**
+ * GTM-01 — hospitality limits. A property is a branch (PROP-04), so the branch
+ * ceiling is what separates a single hotel from a chain; rooms and users meter
+ * the size of each one.
+ */
+export const HOSPITALITY_LIMIT_KEYS: readonly LimitKeyDefinition[] = [
+  {
+    key: 'hotel.properties.max',
+    countedUnit: 'Active properties (branches) inside the organization',
+  },
+  {
+    key: 'hotel.rooms.max',
+    countedUnit: 'Sellable units across every property: rooms, beds and apartments',
+  },
+  { key: 'hotel.users.max', countedUnit: 'Active hospitality users' },
 ];
 
 export const RESTAURANT_LIMIT_KEY_NAMES: readonly string[] = RESTAURANT_LIMIT_KEYS.map(
@@ -687,6 +773,188 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy.inventory'] },
   { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['pharmacy.finance'] },
   { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['pharmacy.audit'] },
+];
+
+/**
+ * H1-01 — the nineteen hospitality capabilities of `06-roles-reports` §1, in the
+ * pack's order. Every one is registered in the ABAC catalogue
+ * (`src/lib/abac/policies.ts`) with an empty static policy, so it is default-deny
+ * until an organization role grants it.
+ */
+export const HOSPITALITY_CAPABILITIES: readonly string[] = [
+  'hotel:reservations',
+  'hotel:front-desk',
+  'hotel:folio',
+  'hotel:folio-adjust',
+  'hotel:payments',
+  'hotel:refunds',
+  'hotel:rates',
+  'hotel:availability-override',
+  'hotel:housekeeping',
+  'hotel:night-audit',
+  'hotel:guest-identity',
+  'hotel:reports-financial',
+  'hotel:channels',
+  'hotel:property-admin',
+  'hotel:marketing',
+  'hotel:agents',
+  'hotel:banquets',
+  'hotel:maintenance',
+  'hotel:api-admin',
+];
+
+/** Every hospitality capability lives in one namespace (the `hotel:` prefix). */
+export const HOSPITALITY_CAPABILITY_NAMESPACES: readonly string[] = ['hotel'];
+
+/**
+ * 06 §2 — the fifteen role templates, one per row of the pack's matrix.
+ *
+ * **How the matrix is read into capabilities.** The pack marks each cell ● full,
+ * ◐ limited, r read-only or ○ none, but the nineteen capabilities are coarse:
+ * there is no read-only variant of any of them. So the mapping rule is:
+ *
+ * - ● grants the capability;
+ * - ◐ grants it only where the limitation is enforced by the *procedure*, not by
+ *   a narrower capability — identity capture, housekeeping status/tasks, a
+ *   technician's own work orders, and housekeeping's folio postings. Each of
+ *   those is called out on the template below;
+ * - ◐ that is a strict subset of a wider capability (Accounts' AR-only
+ *   adjustments, Reservations Agent's payment *links*, Sales' event folios, the
+ *   "view" cells on agents) grants **nothing**. Handing over the whole capability
+ *   to express a fraction of it is exactly the over-grant the pack warns about;
+ * - r and ○ grant nothing.
+ *
+ * That leaves Read-only Auditor and Partner API key — the two rows the pack names
+ * as most likely to be over-granted — holding no capability at all in phase 1.
+ * That is deliberate and is pinned by a test: read-only and key-scoped access
+ * arrive with their own mechanisms (RPT read models, API-01 key scopes), and
+ * until then default-deny is the honest answer rather than a full grant.
+ */
+export const HOSPITALITY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
+  { key: 'owner', name: 'Owner', isSystem: true, capabilities: ['*'] },
+  {
+    key: 'general-manager',
+    name: 'General Manager',
+    isSystem: true,
+    capabilities: [...HOSPITALITY_CAPABILITIES],
+  },
+  {
+    key: 'front-office-manager',
+    name: 'Front Office Manager',
+    isSystem: true,
+    capabilities: [
+      'hotel:reservations',
+      'hotel:front-desk',
+      'hotel:folio',
+      'hotel:folio-adjust',
+      'hotel:payments',
+      'hotel:refunds',
+      'hotel:rates',
+      'hotel:availability-override',
+      'hotel:night-audit',
+      'hotel:guest-identity',
+      'hotel:channels',
+    ],
+  },
+  {
+    key: 'front-desk-agent',
+    name: 'Front Desk Agent',
+    isSystem: true,
+    // ◐ identity: the capability's own definition is "read identity numbers /
+    // images; capture; run verification", and every read it permits is audited,
+    // which is the limitation the pack states.
+    capabilities: [
+      'hotel:reservations',
+      'hotel:front-desk',
+      'hotel:folio',
+      'hotel:payments',
+      'hotel:guest-identity',
+    ],
+  },
+  {
+    key: 'reservations-agent',
+    name: 'Reservations Agent',
+    isSystem: true,
+    capabilities: ['hotel:reservations'],
+  },
+  {
+    key: 'night-auditor',
+    name: 'Night Auditor',
+    isSystem: true,
+    capabilities: [
+      'hotel:front-desk',
+      'hotel:folio',
+      'hotel:folio-adjust',
+      'hotel:payments',
+      'hotel:night-audit',
+      'hotel:reports-financial',
+    ],
+  },
+  {
+    key: 'housekeeping-supervisor',
+    name: 'Housekeeping Supervisor',
+    isSystem: true,
+    // ◐ folio (postings): `hotel:folio` grants catalog charges, which is what a
+    // minibar or laundry posting is. Creating a work order from a discrepancy is
+    // a housekeeping procedure (05 §3), so no maintenance grant is needed.
+    capabilities: ['hotel:folio', 'hotel:housekeeping'],
+  },
+  {
+    key: 'housekeeper',
+    name: 'Housekeeper',
+    isSystem: true,
+    // ◐ status/tasks: the board and task surfaces gate on this one capability;
+    // the narrower split lands when the housekeeping lane ships.
+    capabilities: ['hotel:housekeeping'],
+  },
+  {
+    key: 'maintenance-technician',
+    name: 'Maintenance Technician',
+    isSystem: true,
+    // ◐ own work orders: assignment scoping is a resolver predicate, not a
+    // capability, so the technician holds the capability and sees only their own.
+    capabilities: ['hotel:maintenance'],
+  },
+  {
+    key: 'maintenance-manager',
+    name: 'Maintenance Manager',
+    isSystem: true,
+    capabilities: ['hotel:maintenance'],
+  },
+  {
+    key: 'accounts-ar',
+    name: 'Accounts / AR',
+    isSystem: true,
+    capabilities: ['hotel:folio', 'hotel:payments', 'hotel:refunds', 'hotel:reports-financial'],
+  },
+  {
+    key: 'sales-events',
+    name: 'Sales / Events',
+    isSystem: true,
+    capabilities: ['hotel:reservations', 'hotel:banquets'],
+  },
+  {
+    key: 'revenue-marketing-manager',
+    name: 'Revenue / Marketing Manager',
+    isSystem: true,
+    capabilities: ['hotel:rates', 'hotel:channels', 'hotel:marketing', 'hotel:agents'],
+  },
+  {
+    key: 'read-only-auditor',
+    name: 'Read-only Auditor',
+    isSystem: true,
+    // Every cell on this row is r or ○, and no read-only capability variant
+    // exists yet. Holding nothing is the faithful reading.
+    capabilities: [],
+  },
+  {
+    key: 'partner-api-key',
+    name: 'Partner API key',
+    isSystem: true,
+    // API-01 scopes a key explicitly (key id + branch set + capability list), so
+    // the organization-role template grants nothing; the key carries its own scope.
+    capabilities: [],
+  },
 ];
 
 export const RESTAURANT_ROLE_TEMPLATES: readonly RoleTemplate[] = [
@@ -1182,12 +1450,105 @@ export const PHARMACY_PACKAGES: readonly PackageDefinition[] = [
   },
 ];
 
+// GTM-01 — the four hospitality packages, expressed through the module/limit
+// model and nothing else. Essentials names the six operating surfaces of PRD
+// §5.23 on top of mandatory Hotel Core; Pro adds the six growth surfaces; Chain
+// adds multi-property central reservations; Venue is the odd one out and is a
+// *different* set rather than a wider one — it sells banquets and the catering
+// seam and deliberately carries no room modules (MODE-05).
+const HOSPITALITY_ESSENTIALS_MODULES = [
+  'hotel-core',
+  'hotel-reservations',
+  'hotel-front-desk',
+  'hotel-folio',
+  'hotel-payments',
+  'hotel-night-audit',
+  'hotel-reports',
+] as const;
+
+const HOSPITALITY_PRO_MODULES = [
+  ...HOSPITALITY_ESSENTIALS_MODULES,
+  'hotel-channels',
+  'hotel-upsell',
+  'hotel-marketing',
+  'hotel-agents',
+  'hotel-maintenance',
+  'hotel-api',
+] as const;
+
+const HOSPITALITY_CHAIN_MODULES = [...HOSPITALITY_PRO_MODULES, 'hotel-crs'] as const;
+
+/**
+ * MODE-05: "a VENUE property has no availability days". The package therefore
+ * omits reservations, front desk, channels, upsell and the CRS, and keeps only
+ * what an events business bills and closes with.
+ */
+const HOSPITALITY_VENUE_MODULES = [
+  'hotel-core',
+  'hotel-banquets',
+  'hotel-folio',
+  'hotel-payments',
+  'hotel-night-audit',
+  'hotel-reports',
+] as const;
+
+export const HOSPITALITY_PACKAGES: readonly PackageDefinition[] = [
+  {
+    key: 'hotel-essentials',
+    name: 'Hotel Essentials',
+    vertical: 'HOSPITALITY',
+    moduleKeys: HOSPITALITY_ESSENTIALS_MODULES,
+    defaultLimits: {
+      'hotel.properties.max': 1,
+      'hotel.rooms.max': 50,
+      'hotel.users.max': 15,
+    },
+  },
+  {
+    key: 'hotel-pro',
+    name: 'Hotel Pro',
+    vertical: 'HOSPITALITY',
+    moduleKeys: HOSPITALITY_PRO_MODULES,
+    defaultLimits: {
+      'hotel.properties.max': 3,
+      'hotel.rooms.max': 250,
+      'hotel.users.max': 75,
+    },
+  },
+  {
+    key: 'hotel-chain',
+    name: 'Hotel Chain',
+    vertical: 'HOSPITALITY',
+    moduleKeys: HOSPITALITY_CHAIN_MODULES,
+    defaultLimits: {
+      'hotel.properties.max': 100,
+      'hotel.rooms.max': 10000,
+      'hotel.users.max': 2500,
+    },
+  },
+  {
+    key: 'hotel-venue',
+    name: 'Hotel Venue',
+    vertical: 'HOSPITALITY',
+    moduleKeys: HOSPITALITY_VENUE_MODULES,
+    defaultLimits: {
+      // A venue sells function space, not room-nights; the room ceiling is zero
+      // rather than absent, so an accidental room purchase is refused by the
+      // limit rather than by a mode conditional in application code.
+      'hotel.properties.max': 1,
+      'hotel.rooms.max': 0,
+      'hotel.users.max': 25,
+    },
+  },
+];
+
 // ---------------------------------------------------------------------------
 // Pure helpers — the compatibility surface consumers must call
 // ---------------------------------------------------------------------------
 
 /** Commercial modules owned by a vertical. */
 export function modulesForVertical(vertical: OrganizationVertical): readonly CommercialModule[] {
+  if (vertical === 'HOSPITALITY') return HOSPITALITY_MODULES;
   if (vertical === 'PHARMACY') return PHARMACY_MODULES;
   return vertical === 'RESTAURANT' ? RESTAURANT_MODULES : AGENCY_MODULES;
 }
@@ -1210,14 +1571,19 @@ export function isRestaurantModuleKey(key: string): boolean {
 /** Commercial packages offered for a vertical (§2.3 onboarding filter). Agency
  * packages are not modeled here; only their compatibility rule is. */
 export function packagesForVertical(vertical: OrganizationVertical): readonly PackageDefinition[] {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].filter((pkg) => pkg.vertical === vertical);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].filter(
+    (pkg) => pkg.vertical === vertical
+  );
 }
 
 export function packageByKey(key: string): PackageDefinition | undefined {
-  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].find((pkg) => pkg.key === key);
+  return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find(
+    (pkg) => pkg.key === key
+  );
 }
 
 export function roleTemplatesForVertical(vertical: OrganizationVertical): readonly RoleTemplate[] {
+  if (vertical === 'HOSPITALITY') return HOSPITALITY_ROLE_TEMPLATES;
   if (vertical === 'PHARMACY') return PHARMACY_ROLE_TEMPLATES;
   return vertical === 'RESTAURANT' ? RESTAURANT_ROLE_TEMPLATES : AGENCY_ROLE_TEMPLATES;
 }
@@ -1236,6 +1602,7 @@ export function jobRoleTemplatesForVertical(
 export function limitKeysForVertical(
   vertical: OrganizationVertical
 ): readonly LimitKeyDefinition[] {
+  if (vertical === 'HOSPITALITY') return HOSPITALITY_LIMIT_KEYS;
   if (vertical === 'PHARMACY') return PHARMACY_LIMIT_KEYS;
   return vertical === 'RESTAURANT' ? RESTAURANT_LIMIT_KEYS : AGENCY_LIMIT_KEYS;
 }

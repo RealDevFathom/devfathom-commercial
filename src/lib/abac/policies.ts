@@ -73,6 +73,29 @@ export const ALL_ACTIONS = [
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
+  // H1-01 — the nineteen hospitality capabilities of `06-roles-reports` §1, in
+  // the pack's order. Each is org-role-driven through the DB `customDecision`
+  // path with no static agency-role policy, so an agency ADMIN never inherits a
+  // hotel capability and a subject without an explicit grant is denied.
+  'hotel:reservations', // reservations, holds, groups, non-identity guest profiles, upsell sends
+  'hotel:front-desk', // arrivals/departures/in-house, check-in/out, moves, keys, shift log
+  'hotel:folio', // view folios, catalog charges, tenders, invoices
+  'hotel:folio-adjust', // manual charges, reversals, AR transfer, same-date reopen, credit override
+  'hotel:payments', // intents, links, Raast requests, tenders, settlements, card tokens
+  'hotel:refunds', // refund a tender
+  'hotel:rates', // rate/meal plans, seasons, overrides, restrictions, FX, recommendations, parity
+  'hotel:availability-override', // overbook allowance, out-of-rule assignment, force-confirm
+  'hotel:housekeeping', // board, tasks, inspections, blocks, minibar/laundry postings, lost & found
+  'hotel:night-audit', // run/resume audit, dated adjustments, reopen after audit
+  'hotel:guest-identity', // read identity numbers/images; capture; run verification
+  'hotel:reports-financial', // money reports, AR, cashier, tax, month-end pack, GL export
+  'hotel:channels', // channel connections, sync, exceptions
+  'hotel:property-admin', // property, modes, inventory, slots, extras, spaces, tax profile, retention
+  'hotel:marketing', // segments, campaigns, moments, promo codes, review responses
+  'hotel:agents', // travel agents, allotments, commission statements
+  'hotel:banquets', // function diary, events, functions, deposits, vendors, BEO, catering link
+  'hotel:maintenance', // assets, PM schedules, work orders, OOO release
+  'hotel:api-admin', // API keys, webhooks, GL mappings, imports, trial provisioning
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -209,4 +232,29 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],
+
+  // H1-01 hospitality (06 §1). Every one is default-deny with no static policy:
+  // the nineteen are granted only through an organization role or override
+  // carrying the capability (or `*`, e.g. the hotel Owner template), evaluated by
+  // the DB `customDecision` path in `can()`. Property scoping (`branch_ids`)
+  // narrows them further inside the procedures, per 06 §2.
+  'hotel:reservations': [],
+  'hotel:front-desk': [],
+  'hotel:folio': [],
+  'hotel:folio-adjust': [],
+  'hotel:payments': [],
+  'hotel:refunds': [],
+  'hotel:rates': [],
+  'hotel:availability-override': [],
+  'hotel:housekeeping': [],
+  'hotel:night-audit': [],
+  'hotel:guest-identity': [],
+  'hotel:reports-financial': [],
+  'hotel:channels': [],
+  'hotel:property-admin': [],
+  'hotel:marketing': [],
+  'hotel:agents': [],
+  'hotel:banquets': [],
+  'hotel:maintenance': [],
+  'hotel:api-admin': [],
 };

@@ -8,6 +8,8 @@ import {
   evaluateEntitlementRequirement,
   evaluateSopDepth,
   hasSopDepth,
+  isModuleGranted,
+  moduleDefinitionForKey,
   moduleForApiScope,
   moduleForPath,
   moduleForProcedure,
@@ -17,6 +19,7 @@ import {
   type SopDepthCapability,
 } from './module-catalog';
 import {
+  HOSPITALITY_MODULES,
   RESTAURANT_LIMIT_KEY_NAMES,
   RESTAURANT_MODULES,
   packageByKey,
@@ -199,6 +202,36 @@ describe('module vertical ownership', () => {
     'does not assign shared or unknown module %s to a vertical',
     (key) => expect(verticalForModuleKey(key)).toBeNull()
   );
+
+  // H1-01 — the hospitality registry composes into the same single catalog, so
+  // the vertical filter that hides another vertical's nav and rejects its routes
+  // works for hotels without a `HOSPITALITY` conditional anywhere.
+  it('registers every hospitality module against HOSPITALITY with the right band', () => {
+    for (const entry of HOSPITALITY_MODULES) {
+      expect(verticalForModuleKey(entry.key)).toBe('HOSPITALITY');
+      expect(moduleDefinitionForKey(entry.key)?.band).toBe(
+        entry.mandatory ? 'VERTICAL_CORE' : 'VERTICAL_OPTIONAL'
+      );
+    }
+    const catalogHotelKeys = MODULE_CATALOG.filter(
+      (module) => module.vertical === 'HOSPITALITY'
+    ).map((module) => module.key);
+    expect(catalogHotelKeys).toEqual(HOSPITALITY_MODULES.map((module) => module.key));
+  });
+
+  it('owns the hospitality settings route and procedure through Hotel Core', () => {
+    expect(moduleForProcedure('hotelProperty.get')).toBe('hotel-core');
+    expect(moduleForProcedure('hotelProperty.modes.set')).toBe('hotel-core');
+    expect(moduleForPath('/hotel/settings/property')).toBe('hotel-core');
+    // No `/hotel` catch-all: the other hotel surfaces are licensed separately and
+    // a catch-all would gate them all on Hotel Core.
+    expect(moduleForPath('/hotel/reservations')).toBeNull();
+  });
+
+  it('leaves Hotel Core off an organization that was never granted it', () => {
+    expect(isModuleGranted('hotel-core', [])).toBe(false);
+    expect(isModuleGranted('hotel-core', ['hotel-core'])).toBe(true);
+  });
 });
 
 // ---------------------------------------------------------------------------

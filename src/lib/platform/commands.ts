@@ -37,6 +37,8 @@ import {
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
+import { defaultBookingEngineSlug } from '@/lib/hotel/property';
 import {
   ensureAdministratorStaffProfile,
   type AdministratorStaffProfileResult,
@@ -416,6 +418,24 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     return;
   }
 
+  // H1-01 / PROP-01 — hospitality runs through the same gate as pharmacy: the
+  // onboarding checklist is recomputed here from the property record and the
+  // organization's roles, never read off a stored claim, so activation cannot be
+  // reached by writing rows. "No go-live without tax profile, mode and business
+  // date" is the acceptance criterion this enforces.
+  if (organization.vertical === 'HOSPITALITY') {
+    const readiness = await evaluateHotelReadiness(db, organizationId);
+    if (!readiness.ready) {
+      throw new PlatformSecurityError(
+        `Activation preflight failed: hotel onboarding steps not done (${readiness.blocking
+          .map((item) => item.key)
+          .join(', ')}).`,
+        400
+      );
+    }
+    return;
+  }
+
   // §9 Step 7 — restaurant activation preflight (the implementable subset). The
   // agency path is complete above and returns here with byte-identical behavior;
   // the checks below only run for restaurant organizations. Operator credential
@@ -610,6 +630,11 @@ const organizationInput = z
         'firstBranchCity',
         'firstBranchProvinceCode',
       ],
+      // H1-01 — a hospitality organization is branch-first too, and its branch
+      // IS its property (`hotel_properties`). The premises columns it needs are
+      // the pharmacy three minus the province: a property is not licensed per
+      // jurisdiction, so asking for one would be a field with no consequence.
+      HOSPITALITY: ['firstBranchName', 'firstBranchAddress', 'firstBranchCity'],
     };
     const required = branchFields[input.vertical];
     if (required.length === 0) return;
@@ -796,6 +821,30 @@ async function bootstrapOrganization(
         addressLine: input.firstBranchAddress!,
         city: input.firstBranchCity!,
         provinceCode: input.firstBranchProvinceCode!,
+      },
+    });
+  }
+  // H1-01 — the hospitality first branch. `hotel_properties` is the branch: a
+  // hospitality organization with no property row has no branch at all, so
+  // nothing downstream — the checklist, the settings page, any later hotel table
+  // — has anything to hang off.
+  //
+  // Created with the mode default (H-D14 HOTEL) and no tax profile on purpose.
+  // The tax-profile and business-date steps stay outstanding until an operator
+  // fills them in on the property settings page; pre-seeding them here would be
+  // exactly the "seed data fakes readiness" move the checklist exists to refuse.
+  if (input.vertical === 'HOSPITALITY') {
+    await db.hotelProperty.create({
+      data: {
+        organizationId: organization.id,
+        name: input.firstBranchName!,
+        addressLine: input.firstBranchAddress!,
+        city: input.firstBranchCity!,
+        timezone: input.timezone,
+        // Currency is left to the column default (PKR): hospitality posts in PKR
+        // minor units, and the organization's own currency is a billing fact
+        // about DevFathom's contract, not about what a guest is charged.
+        bookingEngineSlug: defaultBookingEngineSlug(input.slug, input.firstBranchName!),
       },
     });
   }

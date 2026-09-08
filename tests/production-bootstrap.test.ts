@@ -4,13 +4,14 @@ import { AGENCY_SUITE_MODULES, bootstrapProduction } from '../prisma/production-
 import { MODULE_CATALOG } from '../src/lib/module-catalog';
 import {
   AGENCY_DEPARTMENTS,
+  HOSPITALITY_PACKAGES,
   PHARMACY_PACKAGES,
   RESTAURANT_MODULES,
   RESTAURANT_PACKAGES,
 } from '../src/lib/vertical-catalog';
 
 /** Every vertical package bootstrap registers, in registry order. */
-const VERTICAL_PACKAGES = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES];
+const VERTICAL_PACKAGES = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES];
 
 const INPUT = {
   organizationId: 'org_devfathom',

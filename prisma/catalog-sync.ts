@@ -1,6 +1,18 @@
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { MODULE_CATALOG } from '../src/lib/module-catalog.js';
-import { PHARMACY_PACKAGES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
+import {
+  HOSPITALITY_PACKAGES,
+  PHARMACY_PACKAGES,
+  RESTAURANT_PACKAGES,
+} from '../src/lib/vertical-catalog.js';
+
+/**
+ * Every commercial package the product sells, across the shipped verticals. A
+ * package missing from this list is a vertical that cannot be onboarded at all —
+ * the operator console lists only *published* packages, and provisioning refuses
+ * an organization whose vertical has none.
+ */
+const VERTICAL_PACKAGES = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES];
 
 /**
  * Agency modules, as `[key, name, category, routePrefix]`. The restaurant half
@@ -88,11 +100,7 @@ export async function syncPlatformCatalog(
   const existingPackageKeys = new Set(
     (
       await tx.platformPackage.findMany({
-        where: {
-          key: {
-            in: [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].map((definition) => definition.key),
-          },
-        },
+        where: { key: { in: VERTICAL_PACKAGES.map((definition) => definition.key) } },
         select: { key: true },
       })
     ).map((row) => row.key)
@@ -100,7 +108,7 @@ export async function syncPlatformCatalog(
 
   let packagesCreated = 0;
   let linksCreated = 0;
-  for (const definition of [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES]) {
+  for (const definition of VERTICAL_PACKAGES) {
     if (existingPackageKeys.has(definition.key)) continue;
 
     const platformPackage = await tx.platformPackage.upsert({

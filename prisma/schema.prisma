@@ -4716,6 +4716,7 @@ enum OrganizationVertical {
   AGENCY
   RESTAURANT
   PHARMACY
+  HOSPITALITY
 }
 
 enum PlatformModuleBand {
@@ -13703,4 +13704,79 @@ model PharmacyPackAuthenticationEvent {
   @@unique([organizationId, id], map: "pharmacy_pack_authentication_events_org_id_key")
   @@index([organizationId, branchId, scanId, createdAt], map: "pharmacy_pack_authentication_events_org_scan_idx")
   @@map("pharmacy_pack_authentication_events")
+}
+
+// ============================================
+// HOSPITALITY — PROP-01 property registry
+// ============================================
+
+/// HSP-MODE (PRD §5.16 / MODE-01). The mode selects DEFAULTS — inventory kinds,
+/// billing cycles, day-use, function spaces, booking-engine layout, report set.
+/// It is configuration: no code path outside the defaults/packaging layer may
+/// branch on it, and any mode can enable any feature it is licensed for.
+enum HotelPropertyMode {
+  HOTEL
+  HOSTEL
+  APARTMENT
+  RESORT
+  VENUE
+}
+
+/// PROP-01 (`05-data-model` §1.1). In hospitality the **branch IS the property**,
+/// so this row is both: `branchId` is the property's own identity and every other
+/// hotel table hangs off it, exactly as `pharmacy_branches` anchors the pharmacy
+/// vertical. There is deliberately no separate `hotel_branches` table — a second
+/// row per property would let the branch registry and the property facts disagree.
+///
+/// `name`, `addressLine`, `city` and `timezone` are not in the pack's column list
+/// because the pack assumes a branch row already carries them; since this table is
+/// that row, it carries them. Everything else is the pack's §1.1 list verbatim.
+///
+/// Money is PKR minor units across the vertical, so `currency` defaults to PKR and
+/// is recorded here rather than inferred from the organization.
+model HotelProperty {
+  /// The property's identity. Named `branchId` because every branch-scoped hotel
+  /// table references it as its branch, and no id is generated twice.
+  branchId       String            @id @default(cuid())
+  organizationId String            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name           String
+  addressLine    String
+  city           String
+  /// IANA zone. A property dates its own business days, audits and cut-offs.
+  timezone       String
+  mode           HotelPropertyMode @default(HOTEL)
+  /// 1–7 where the property publishes one; null while it is unrated (H-D14).
+  starCategory   Int?
+  /// 24-hour local times, as `HH:MM`, in this property's timezone.
+  checkInTime    String            @default("14:00")
+  checkOutTime   String            @default("12:00")
+  /// When the night audit rolls the business date (HSP-NA).
+  auditTime      String            @default("03:00")
+  currency       String            @default("PKR")
+  /// The platform tax profile the property posts against. Nullable because a
+  /// property is created before it is attached — and the onboarding checklist
+  /// refuses go-live while it is null.
+  taxProfileId   String?
+  languages      String[]          @default(["en", "ur"])
+  /// RATE-03 overbook allowance policy. `{}` until a rates lane writes it.
+  overbookPolicy Json              @default("{}")
+  /// The public booking-engine path segment. Unique per organization so two
+  /// properties of one chain can never publish the same direct-booking URL.
+  bookingEngineSlug String
+  /// UPS-04 journey template settings (quiet hours, consent, per-language copy).
+  journeySettings      Json @default("{}")
+  /// MEAL-01 reporting allocation between room and F&B revenue. Reporting only —
+  /// postings never change (metric contract §5).
+  mealAllocationPolicy Json @default("{}")
+  /// HSP-NA business-date policy (roll rule, late-arrival handling).
+  businessDatePolicy   Json @default("{}")
+  active               Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
+  @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
+  @@index([organizationId, active], map: "hotel_properties_org_active_idx")
+  @@map("hotel_properties")
 }

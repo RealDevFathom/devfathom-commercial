@@ -277,7 +277,11 @@ export default async function NewOrganizationPage({
                 label: 'Timezone',
                 type: 'searchable-select',
                 required: true,
-                defaultValue: vertical === 'RESTAURANT' ? 'Asia/Karachi' : 'UTC',
+                // A hospitality property dates its business days, audit and
+                // cut-offs in this zone, so it starts on the launch market's
+                // rather than on UTC.
+                defaultValue:
+                  vertical === 'RESTAURANT' || vertical === 'HOSPITALITY' ? 'Asia/Karachi' : 'UTC',
                 help: 'Search by city or IANA name. Timezones are grouped by region.',
                 options: timezoneOptions,
               },
@@ -337,6 +341,29 @@ export default async function NewOrganizationPage({
                         value,
                       })),
                     },
+                  ]
+                : []),
+              // H1-01 — a hospitality organization is provisioned with its first
+              // property, and the property row IS its branch. It needs the same
+              // premises facts as a pharmacy minus the province: a property is
+              // not licensed per jurisdiction, so there is nothing for a province
+              // to select here.
+              ...(vertical === 'HOSPITALITY'
+                ? [
+                    {
+                      name: 'firstBranchName',
+                      label: 'First property name',
+                      required: true,
+                      placeholder: 'Serena Gulberg',
+                      help: '2–120 characters. Also names the property’s direct booking page.',
+                    },
+                    {
+                      name: 'firstBranchAddress',
+                      label: 'First property address',
+                      required: true,
+                      placeholder: 'Street and building',
+                    },
+                    { name: 'firstBranchCity', label: 'First property city', required: true },
                   ]
                 : []),
               { name: 'locale', label: 'Locale', required: true, defaultValue: 'en' },

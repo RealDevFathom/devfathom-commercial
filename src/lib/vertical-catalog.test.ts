@@ -5,6 +5,13 @@ import {
   AGENCY_MODULES,
   AGENCY_ROLE_TEMPLATES,
   AGENCY_DEPARTMENTS,
+  HOSPITALITY_CAPABILITIES,
+  HOSPITALITY_CAPABILITY_NAMESPACES,
+  HOSPITALITY_DEPARTMENTS,
+  HOSPITALITY_LIMIT_KEYS,
+  HOSPITALITY_MODULES,
+  HOSPITALITY_PACKAGES,
+  HOSPITALITY_ROLE_TEMPLATES,
   PHARMACY_CAPABILITIES,
   PHARMACY_DEPARTMENTS,
   PHARMACY_LIMIT_KEYS,
@@ -40,10 +47,11 @@ import {
 
 describe('vertical definitions (§2)', () => {
   it('defines the registered verticals with UI labels', () => {
-    expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT', 'PHARMACY']);
+    expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT', 'PHARMACY', 'HOSPITALITY']);
     expect(VERTICALS.AGENCY.label).toBe('Agency');
     expect(VERTICALS.RESTAURANT.label).toBe('Restaurant');
     expect(VERTICALS.PHARMACY.label).toBe('Pharmacy');
+    expect(VERTICALS.HOSPITALITY.label).toBe('Hospitality');
   });
 });
 
@@ -152,6 +160,229 @@ describe('pharmacy registry (PLAT-01)', () => {
       'pharmacy-crm',
     ]);
     expect(PHARMACY_PACKAGES[2]?.moduleKeys).toEqual(PHARMACY_MODULES.map((module) => module.key));
+  });
+});
+
+describe('hospitality registry (H1-01)', () => {
+  it('registers the core module, the optional set, limits, departments and role keys', () => {
+    expect(HOSPITALITY_MODULES).toHaveLength(15);
+    expect(
+      HOSPITALITY_MODULES.filter((module) => module.mandatory).map((module) => module.key)
+    ).toEqual(['hotel-core']);
+    for (const entry of HOSPITALITY_MODULES) {
+      expect(entry.vertical).toBe('HOSPITALITY');
+      expect(entry.routePrefix.startsWith('/hotel')).toBe(true);
+      expect(entry.name.length).toBeGreaterThan(0);
+      expect(entry.category.length).toBeGreaterThan(0);
+    }
+    const keys = HOSPITALITY_MODULES.map((module) => module.key);
+    expect(new Set(keys).size).toBe(keys.length);
+
+    expect(HOSPITALITY_LIMIT_KEYS.map((limit) => limit.key)).toEqual([
+      'hotel.properties.max',
+      'hotel.rooms.max',
+      'hotel.users.max',
+    ]);
+    expect(HOSPITALITY_DEPARTMENTS.map((department) => department.key)).toEqual([
+      'FRONT_OFFICE',
+      'HOUSEKEEPING',
+      'MAINTENANCE',
+      'FOOD_AND_BEVERAGE',
+      'SALES_AND_EVENTS',
+      'FINANCE',
+    ]);
+    expect(modulesForVertical('HOSPITALITY')).toEqual(HOSPITALITY_MODULES);
+    expect(limitKeysForVertical('HOSPITALITY')).toEqual(HOSPITALITY_LIMIT_KEYS);
+    expect(departmentsForVertical('HOSPITALITY')).toEqual(HOSPITALITY_DEPARTMENTS);
+    expect(mandatoryModulesForVertical('HOSPITALITY').map((module) => module.key)).toEqual([
+      'hotel-core',
+    ]);
+  });
+
+  it('declares exactly the nineteen capabilities of 06 §1, in one namespace', () => {
+    expect(HOSPITALITY_CAPABILITIES).toEqual([
+      'hotel:reservations',
+      'hotel:front-desk',
+      'hotel:folio',
+      'hotel:folio-adjust',
+      'hotel:payments',
+      'hotel:refunds',
+      'hotel:rates',
+      'hotel:availability-override',
+      'hotel:housekeeping',
+      'hotel:night-audit',
+      'hotel:guest-identity',
+      'hotel:reports-financial',
+      'hotel:channels',
+      'hotel:property-admin',
+      'hotel:marketing',
+      'hotel:agents',
+      'hotel:banquets',
+      'hotel:maintenance',
+      'hotel:api-admin',
+    ]);
+    expect(new Set(HOSPITALITY_CAPABILITIES).size).toBe(19);
+    for (const capability of HOSPITALITY_CAPABILITIES) {
+      expect(HOSPITALITY_CAPABILITY_NAMESPACES).toContain(capability.split(':')[0]);
+    }
+  });
+
+  it('defines the fifteen role templates of 06 §2 and draws every grant from the catalog', () => {
+    expect(HOSPITALITY_ROLE_TEMPLATES).toHaveLength(15);
+    expect(HOSPITALITY_ROLE_TEMPLATES.map((role) => role.key)).toEqual([
+      'owner',
+      'general-manager',
+      'front-office-manager',
+      'front-desk-agent',
+      'reservations-agent',
+      'night-auditor',
+      'housekeeping-supervisor',
+      'housekeeper',
+      'maintenance-technician',
+      'maintenance-manager',
+      'accounts-ar',
+      'sales-events',
+      'revenue-marketing-manager',
+      'read-only-auditor',
+      'partner-api-key',
+    ]);
+    expect(roleTemplatesForVertical('HOSPITALITY')).toEqual(HOSPITALITY_ROLE_TEMPLATES);
+    for (const role of HOSPITALITY_ROLE_TEMPLATES) {
+      for (const capability of role.capabilities) {
+        if (capability === '*') continue;
+        expect(HOSPITALITY_CAPABILITIES).toContain(capability);
+      }
+      // A template never repeats a grant; a duplicate would hide a merge slip.
+      expect(new Set(role.capabilities).size).toBe(role.capabilities.length);
+    }
+  });
+
+  it('gives only Owner and General Manager the whole surface', () => {
+    const roleFor = (key: string) => HOSPITALITY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+    expect(roleFor('owner').capabilities).toEqual(['*']);
+    expect(roleFor('general-manager').capabilities).toEqual([...HOSPITALITY_CAPABILITIES]);
+    for (const role of HOSPITALITY_ROLE_TEMPLATES.filter(
+      (candidate) => !['owner', 'general-manager'].includes(candidate.key)
+    )) {
+      expect(role.capabilities).not.toContain('*');
+      expect(role.capabilities.length).toBeLessThan(HOSPITALITY_CAPABILITIES.length);
+    }
+  });
+
+  it('withholds every capability from the two rows 06 §2 flags as over-grantable', () => {
+    const roleFor = (key: string) => HOSPITALITY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+    expect(roleFor('read-only-auditor').capabilities).toEqual([]);
+    expect(roleFor('partner-api-key').capabilities).toEqual([]);
+  });
+
+  it('separates reservations from folio adjustment across the matrix', () => {
+    const roleFor = (key: string) => HOSPITALITY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+    // The desk takes reservations and posts to a folio, but never adjusts one.
+    expect(roleFor('front-desk-agent').capabilities).toContain('hotel:reservations');
+    expect(roleFor('front-desk-agent').capabilities).toContain('hotel:folio');
+    expect(roleFor('front-desk-agent').capabilities).not.toContain('hotel:folio-adjust');
+    // The auditor adjusts and never sells.
+    expect(roleFor('night-auditor').capabilities).toContain('hotel:folio-adjust');
+    expect(roleFor('night-auditor').capabilities).not.toContain('hotel:reservations');
+
+    const adjusters = HOSPITALITY_ROLE_TEMPLATES.filter(
+      (role) => role.capabilities.includes('*') || role.capabilities.includes('hotel:folio-adjust')
+    ).map((role) => role.key);
+    expect(adjusters).toEqual([
+      'owner',
+      'general-manager',
+      'front-office-manager',
+      'night-auditor',
+    ]);
+  });
+
+  it('never grants property administration outside the two management roles', () => {
+    const holders = HOSPITALITY_ROLE_TEMPLATES.filter(
+      (role) =>
+        role.capabilities.includes('*') || role.capabilities.includes('hotel:property-admin')
+    ).map((role) => role.key);
+    expect(holders).toEqual(['owner', 'general-manager']);
+  });
+
+  it('composes Essentials, Pro, Chain and Venue through the module model (GTM-01)', () => {
+    expect(HOSPITALITY_PACKAGES.map((pkg) => pkg.key)).toEqual([
+      'hotel-essentials',
+      'hotel-pro',
+      'hotel-chain',
+      'hotel-venue',
+    ]);
+    for (const pkg of HOSPITALITY_PACKAGES) {
+      expect(pkg.vertical).toBe('HOSPITALITY');
+      // Mandatory Hotel Core is in every package, and no package names a module
+      // key that is not in the registry.
+      expect(pkg.moduleKeys).toContain('hotel-core');
+      for (const key of pkg.moduleKeys) {
+        expect(HOSPITALITY_MODULES.map((module) => module.key)).toContain(key);
+      }
+      const limitKeys = HOSPITALITY_LIMIT_KEYS.map((limit) => limit.key);
+      for (const key of Object.keys(pkg.defaultLimits)) {
+        expect(limitKeys).toContain(key);
+      }
+    }
+    expect(packagesForVertical('HOSPITALITY')).toEqual(HOSPITALITY_PACKAGES);
+    expect(packageByKey('hotel-venue')?.name).toBe('Hotel Venue');
+  });
+
+  it('widens Essentials ⊆ Pro ⊆ Chain and keeps Venue free of room modules', () => {
+    const [essentials, pro, chain, venue] = HOSPITALITY_PACKAGES;
+    expect(essentials.moduleKeys).toEqual([
+      'hotel-core',
+      'hotel-reservations',
+      'hotel-front-desk',
+      'hotel-folio',
+      'hotel-payments',
+      'hotel-night-audit',
+      'hotel-reports',
+    ]);
+    for (const key of essentials.moduleKeys) expect(pro.moduleKeys).toContain(key);
+    for (const key of pro.moduleKeys) expect(chain.moduleKeys).toContain(key);
+    expect(pro.moduleKeys).toContain('hotel-channels');
+    expect(pro.moduleKeys).toContain('hotel-upsell');
+    expect(pro.moduleKeys).toContain('hotel-marketing');
+    expect(pro.moduleKeys).toContain('hotel-agents');
+    expect(pro.moduleKeys).toContain('hotel-maintenance');
+    expect(pro.moduleKeys).toContain('hotel-api');
+    expect(chain.moduleKeys).toContain('hotel-crs');
+    expect(pro.moduleKeys).not.toContain('hotel-crs');
+
+    // MODE-05: a VENUE property has no availability days, so the package sells
+    // banquets and carries none of the room surfaces.
+    expect(venue.moduleKeys).toContain('hotel-banquets');
+    for (const roomModule of [
+      'hotel-reservations',
+      'hotel-front-desk',
+      'hotel-channels',
+      'hotel-upsell',
+      'hotel-crs',
+    ]) {
+      expect(venue.moduleKeys).not.toContain(roomModule);
+    }
+    expect(venue.defaultLimits['hotel.rooms.max']).toBe(0);
+    // Only Chain licenses more than a handful of properties.
+    expect(essentials.defaultLimits['hotel.properties.max']).toBe(1);
+    expect(chain.defaultLimits['hotel.properties.max']).toBeGreaterThan(
+      pro.defaultLimits['hotel.properties.max']!
+    );
+    // Banquets is a Venue module; the room-first packages do not carry it.
+    for (const pkg of [essentials, pro, chain]) {
+      expect(pkg.moduleKeys).not.toContain('hotel-banquets');
+    }
+  });
+
+  it('keeps hospitality packages incompatible with every other vertical', () => {
+    expect(isPackageCompatibleWithVertical('HOSPITALITY', 'HOSPITALITY')).toBe(true);
+    for (const other of ['AGENCY', 'RESTAURANT', 'PHARMACY'] as const) {
+      expect(isPackageCompatibleWithVertical('HOSPITALITY', other)).toBe(false);
+      expect(isPackageCompatibleWithVertical(other, 'HOSPITALITY')).toBe(false);
+    }
+    expect(() => assertPackageCompatibleWithVertical('HOSPITALITY', 'PHARMACY')).toThrow(
+      /not compatible/
+    );
   });
 });
 

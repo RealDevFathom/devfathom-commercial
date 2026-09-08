@@ -1,5 +1,6 @@
 import {
   AGENCY_MODULES,
+  HOSPITALITY_MODULES,
   PHARMACY_MODULES,
   RESTAURANT_MODULES,
   type OrganizationVertical,
@@ -59,6 +60,10 @@ export const MODULE_CATALOG: readonly ModuleDefinition[] = [
     band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
   })),
   ...PHARMACY_MODULES.map((module) => ({
+    ...module,
+    band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
+  })),
+  ...HOSPITALITY_MODULES.map((module) => ({
     ...module,
     band: module.mandatory ? ('VERTICAL_CORE' as const) : ('VERTICAL_OPTIONAL' as const),
   })),
@@ -227,6 +232,10 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacySafety: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
   pharmacyOrdering: 'pharmacy-counter',
+  // H1-01 (PROP-01/COMP-01): the property record, its modes and the onboarding
+  // checklist are the hospitality workspace's front door — mandatory Hotel Core,
+  // not a separately licensed console.
+  hotelProperty: 'hotel-core',
 };
 
 export function moduleForProcedure(path: string): string | null {
@@ -304,6 +313,11 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/purchasing', 'pharmacy-procurement'],
   ['/pharmacy/medicines', 'pharmacy-core'],
   ['/pharmacy/orders', 'pharmacy-counter'],
+  // H1-01: the hospitality settings surface. Listed explicitly rather than as a
+  // `/hotel` catch-all, for the same reason pharmacy has none — the other hotel
+  // surfaces are licensed separately and a catch-all would gate them all on
+  // `hotel-core`.
+  ['/hotel/settings', 'hotel-core'],
   ['/restaurant/staff/roster', 'restaurant-core'],
   ['/restaurant/staff', 'restaurant-core'],
   ['/restaurant/devices', 'restaurant-core'],

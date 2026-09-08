@@ -57,7 +57,7 @@ import type { TenantBrand } from '@/lib/tenant-brand';
 import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
 
-type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Firm';
+type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Hospitality' | 'Firm';
 
 interface NavItem {
   label: string;
@@ -314,6 +314,19 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
+  // H1-01 — the hospitality rail. Settings is the only entry for now: every
+  // other hotel surface arrives with its own lane, and a nav entry pointing at a
+  // route that does not exist is a dead end (UX rule 12). Gated on mandatory
+  // Hotel Core through explicit module ownership, so the vertical filter hides
+  // it from restaurant and pharmacy workspaces without a `/hotel` catch-all.
+  {
+    label: 'Settings',
+    href: '/hotel/settings/property',
+    icon: Settings,
+    adminOnly: true,
+    group: 'Hospitality',
+    module: 'hotel-core',
+  },
   {
     label: 'Reviews',
     href: '/reviews',
@@ -351,7 +364,7 @@ export const navigation: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
 ];
 
-const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Firm'];
+const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospitality', 'Firm'];
 
 export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,

@@ -37,6 +37,8 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  HOSPITALITY_MODULES,
+  HOSPITALITY_PACKAGES,
   PHARMACY_MODULES,
   PHARMACY_PACKAGES,
   RESTAURANT_MODULES,
@@ -127,9 +129,11 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
       // runs `test:rls` against the same database. Clear them first so the pass
       // under test really does create them, and do it only where no organization
       // is on the package, so a shared database is never left dangling.
-      const verticalPackageKeys = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].map(
-        (definition) => definition.key
-      );
+      const verticalPackageKeys = [
+        ...RESTAURANT_PACKAGES,
+        ...PHARMACY_PACKAGES,
+        ...HOSPITALITY_PACKAGES,
+      ].map((definition) => definition.key);
       const clearable = await db.platformPackage.findMany({
         where: { key: { in: verticalPackageKeys }, organizations: { none: {} } },
         select: { id: true },
@@ -256,7 +260,11 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     const missingModules = MODULE_CATALOG.filter(
       (definition) => !registeredModules.has(definition.key)
     );
-    const verticalPackages = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES];
+    const verticalPackages = [
+      ...RESTAURANT_PACKAGES,
+      ...PHARMACY_PACKAGES,
+      ...HOSPITALITY_PACKAGES,
+    ];
     const missingPackages = verticalPackages.filter(
       (definition) => !registeredPackages.has(definition.key)
     );
@@ -319,6 +327,15 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     }
     for (const definition of PHARMACY_PACKAGES) {
       expectVerticalPackage(definition, 'PHARMACY', 'pharmacy-core');
+    }
+    // H1-01 — the hospitality registry reaches the database through the same
+    // pass; without it no hospitality package is published and no hospitality
+    // organization could be onboarded at all.
+    for (const definition of HOSPITALITY_MODULES) {
+      expect(after.modules.map((row) => row.key)).toContain(definition.key);
+    }
+    for (const definition of HOSPITALITY_PACKAGES) {
+      expectVerticalPackage(definition, 'HOSPITALITY', 'hotel-core');
     }
 
     // The pre-existing package is untouched: same links, same version.
