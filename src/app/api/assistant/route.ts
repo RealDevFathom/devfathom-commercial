@@ -43,6 +43,7 @@ export async function POST(req: Request) {
   try {
     return await respond(req);
   } catch {
+    console.error('ASSISTANT_REQUEST_FAILED');
     return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
 }
@@ -136,6 +137,7 @@ async function respond(req: Request) {
   try {
     ai = createAIModel();
   } catch {
+    console.error('ASSISTANT_PROVIDER_UNAVAILABLE');
     return Response.json(
       { error: 'Ask Fathom is currently unavailable. No cached answer was used.' },
       { status: 503 }
@@ -157,6 +159,9 @@ async function respond(req: Request) {
   });
 
   return result.toUIMessageStreamResponse({
-    onError: () => UNAVAILABLE,
+    onError: () => {
+      console.error('ASSISTANT_STREAM_FAILED');
+      return UNAVAILABLE;
+    },
   });
 }
