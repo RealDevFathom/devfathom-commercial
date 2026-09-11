@@ -785,46 +785,62 @@ describe('OrderPad transport', () => {
     expect(JSON.parse(String(openCall?.[1]?.body))).not.toHaveProperty('serverStaffProfileId');
   });
 
-  it('reuses an uncertain retry key, creates a fresh later key, and pins the active menu', async () => {
-    const fetch = transport({ failedOpenAttempts: 1 });
-    vi.spyOn(globalThis.crypto, 'randomUUID')
-      .mockReturnValueOnce('00000000-0000-4000-8000-000000000046')
-      .mockReturnValueOnce('00000000-0000-4000-8000-000000000047');
-    await unlock(fetch);
+  it.each(['native', 'HTTP fallback'])(
+    'reuses an uncertain retry key, creates a fresh later key, and pins the active menu (%s)',
+    async (mode) => {
+      const fetch = transport({ failedOpenAttempts: 1 });
+      if (mode === 'native') {
+        vi.spyOn(globalThis.crypto, 'randomUUID')
+          .mockReturnValueOnce('00000000-0000-4000-8000-000000000046')
+          .mockReturnValueOnce('00000000-0000-4000-8000-000000000047');
+      } else {
+        let next = 0x46;
+        vi.stubGlobal('crypto', {
+          getRandomValues(bytes: Uint8Array) {
+            bytes.fill(0);
+            bytes[15] = next++;
+            return bytes;
+          },
+        });
+      }
+      await unlock(fetch);
 
-    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
-    await screen.findByText('Network request failed. Retry this action.');
-    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
-    await screen.findByText('Order 42');
-    expect(screen.getByRole('button', { name: /Pinned coffee/ })).toBeEnabled();
-    expect(screen.queryByRole('button', { name: /^Coffee/ })).not.toBeInTheDocument();
-    expect(
-      fetch.mock.calls.some(([input]) =>
-        String(input).includes('/orders/effective-menu?channel=DINE_IN&publicationId=publication-1')
-      )
-    ).toBe(true);
-
-    const channel = screen.getByLabelText('Channel');
-    expect(channel).toHaveValue('DINE_IN');
-    expect(screen.getByRole('option', { name: 'Delivery' })).toBeEnabled();
-    expect(screen.getByRole('option', { name: 'Takeaway' })).toBeInTheDocument();
-
-    await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
-    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
-    await waitFor(() =>
+      fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+      await screen.findByText('Network request failed. Retry this action.');
+      fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+      await screen.findByText('Order 42');
+      expect(screen.getByRole('button', { name: /Pinned coffee/ })).toBeEnabled();
+      expect(screen.queryByRole('button', { name: /^Coffee/ })).not.toBeInTheDocument();
       expect(
-        fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'))
-      ).toHaveLength(3)
-    );
+        fetch.mock.calls.some(([input]) =>
+          String(input).includes(
+            '/orders/effective-menu?channel=DINE_IN&publicationId=publication-1'
+          )
+        )
+      ).toBe(true);
 
-    const opens = fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'));
-    expect(opens.map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
-      '00000000-0000-4000-8000-000000000046',
-      '00000000-0000-4000-8000-000000000046',
-      '00000000-0000-4000-8000-000000000047',
-    ]);
-    expect(new Headers(opens[0]?.[1]?.headers).get('X-Terminal-Session')).toBe('session-token');
-  });
+      const channel = screen.getByLabelText('Channel');
+      expect(channel).toHaveValue('DINE_IN');
+      expect(screen.getByRole('option', { name: 'Delivery' })).toBeEnabled();
+      expect(screen.getByRole('option', { name: 'Takeaway' })).toBeInTheDocument();
+
+      await waitFor(() => expect(screen.getByRole('button', { name: 'Open order' })).toBeEnabled());
+      fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+      await waitFor(() =>
+        expect(
+          fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'))
+        ).toHaveLength(3)
+      );
+
+      const opens = fetch.mock.calls.filter(([input]) => String(input).endsWith('/orders/open'));
+      expect(opens.map(([, init]) => new Headers(init?.headers).get('Idempotency-Key'))).toEqual([
+        '00000000-0000-4000-8000-000000000046',
+        '00000000-0000-4000-8000-000000000046',
+        '00000000-0000-4000-8000-000000000047',
+      ]);
+      expect(new Headers(opens[0]?.[1]?.headers).get('X-Terminal-Session')).toBe('session-token');
+    }
+  );
 
   it('omits stale tables when opening a non-dine-in order', async () => {
     const fetch = transport();

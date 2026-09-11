@@ -33,6 +33,7 @@
  * issued to the customer offline and replay records it, never reassigns it), and
  * STOCK is drawn from this counter's own OFF-03 quota.
  */
+import { browserUuid } from '@/lib/browser-uuid';
 import type { TerminalReplayOutcome } from '@/lib/retail-terminal/replay-outcome';
 
 import { decideOfflineAction } from './offline-action-matrix';
@@ -215,9 +216,7 @@ export type CounterEnqueueResult =
     };
 
 function defaultId(): string {
-  const webCrypto = (globalThis as { crypto?: Crypto }).crypto;
-  if (webCrypto && typeof webCrypto.randomUUID === 'function') return webCrypto.randomUUID();
-  throw new Error('crypto.randomUUID is unavailable; pass an explicit id factory.');
+  return browserUuid();
 }
 
 /**

@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import type { inferRouterOutputs } from '@trpc/server';
 import { Download, Search, ShieldAlert } from 'lucide-react';
 import { useState, type FormEvent, type ReactNode } from 'react';
@@ -351,7 +353,7 @@ export function LoyaltyConsole() {
       granted: data.get('granted') === 'true',
       source: String(data.get('source') ?? '').trim(),
       policyVersion: String(data.get('policyVersion') ?? '').trim(),
-      idempotencyKey: crypto.randomUUID(),
+      idempotencyKey: browserUuid(),
     });
   };
   const submitInteraction = (event: FormEvent<HTMLFormElement>) => {
@@ -364,7 +366,7 @@ export function LoyaltyConsole() {
       branchId: String(data.get('branchId') ?? '').trim(),
       type: String(data.get('type') ?? '').trim(),
       ...(orderId ? { orderId } : {}),
-      idempotencyKey: crypto.randomUUID(),
+      idempotencyKey: browserUuid(),
     });
   };
   const submitProgram = (event: FormEvent<HTMLFormElement>) => {
@@ -387,7 +389,7 @@ export function LoyaltyConsole() {
       accountId,
       points: Number(data.get('points')),
       reason: String(data.get('reason') ?? '').trim(),
-      idempotencyKey: crypto.randomUUID(),
+      idempotencyKey: browserUuid(),
     });
   };
 

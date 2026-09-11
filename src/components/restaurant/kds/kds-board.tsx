@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { type FormEvent, type ReactNode, useCallback, useEffect, useRef, useState } from 'react';
 
 import { FathomMark } from '@/components/brand/logo';
@@ -323,7 +325,7 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
   function keyFor(intent: string) {
     const existing = idempotencyKeys.current.get(intent);
     if (existing) return existing;
-    const key = crypto.randomUUID();
+    const key = browserUuid();
     idempotencyKeys.current.set(intent, key);
     return key;
   }

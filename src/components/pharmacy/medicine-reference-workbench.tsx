@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
@@ -207,7 +209,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
       if (!next.headers.length || !next.rows.length) throw new Error('The file has no data rows.');
       setParsed(next);
       setMapping(guessedMapping(next.headers));
-      setBatchId(crypto.randomUUID());
+      setBatchId(browserUuid());
       setPreview([]);
     } catch (error) {
       setParsed(null);

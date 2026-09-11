@@ -1,5 +1,7 @@
 'use client';
 
+import { browserUuid } from '@/lib/browser-uuid';
+
 import { useMemo, useRef, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
 
@@ -63,7 +65,7 @@ export function RestaurantTaxConsole() {
   const [previewAmount, setPreviewAmount] = useState('1000.00');
   const [previewRate, setPreviewRate] = useState('');
   const [rateErrors, setRateErrors] = useState<RateErrors>({});
-  const idempotencyKey = useRef(crypto.randomUUID());
+  const idempotencyKey = useRef(browserUuid());
   const selected = useMemo(
     () => configuration.data?.profiles.find((profile) => profile.id === selectedId),
     [configuration.data, selectedId]
@@ -75,7 +77,7 @@ export function RestaurantTaxConsole() {
   const activation = trpc.restaurantTax.activate.useMutation({
     onSuccess: () => {
       toast.success('Tax profile activated.');
-      idempotencyKey.current = crypto.randomUUID();
+      idempotencyKey.current = browserUuid();
       void utils.restaurantTax.configuration.invalidate();
     },
     onError: (error) => toast.error(error.message),
@@ -83,7 +85,7 @@ export function RestaurantTaxConsole() {
   const customPublication = trpc.restaurantTax.publishCustom.useMutation({
     onSuccess: () => {
       toast.success('Customer-supplied tax profile published.');
-      idempotencyKey.current = crypto.randomUUID();
+      idempotencyKey.current = browserUuid();
       void utils.restaurantTax.configuration.invalidate();
     },
     onError: (error) => toast.error(error.message),
