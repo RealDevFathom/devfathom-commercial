@@ -240,6 +240,10 @@ describe('listFloors (occupancy read model)', () => {
 
     const where = mocks.floorFindMany.mock.calls[0][0].where;
     expect(where).toEqual({ branchId: 'branch_1', active: true });
+    expect(mocks.floorFindMany.mock.calls[0][0].select.tables.select.orderLinks.where).toEqual({
+      active: true,
+      order: { status: { notIn: ['CLOSED', 'CANCELLED'] } },
+    });
     expect(floors[0].tables).toEqual([
       { id: 't1', code: 'A1', capacity: 4, active: true, occupied: true, activeOrderIds: ['o1'] },
       { id: 't2', code: 'A2', capacity: 2, active: true, occupied: false, activeOrderIds: [] },

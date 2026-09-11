@@ -69,6 +69,18 @@ describe('platform host routing', () => {
     expect(response.headers.get('location')).toBeNull();
   });
 
+  it('allows demo entry and APIs publicly while marking them noindex', async () => {
+    for (const path of ['/demo/restaurants', '/demo/restaurants/seats']) {
+      const response = await proxy(tenantRequest(path));
+      expect(response.status).toBe(200);
+      expect(response.headers.get('x-middleware-next')).toBe('1');
+      expect(response.headers.get('x-robots-tag')).toBe('noindex, nofollow');
+      expect(response.headers.get('location')).toBeNull();
+    }
+    const unrelated = await proxy(tenantRequest('/demolition'));
+    expect(unrelated.status).toBe(307);
+  });
+
   it('allows public occurrence links without exposing authenticated meetings pages', async () => {
     const publicMeeting = await proxy(tenantRequest('/meet/occurrence-public-id'));
     expect(publicMeeting.status).toBe(200);

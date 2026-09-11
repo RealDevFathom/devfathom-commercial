@@ -112,6 +112,7 @@ describe('notification request outbox', () => {
         db: {} as ScopedDb,
         job: {
           id: 'job_1',
+          organizationId: 'org_1',
           type: NOTIFICATION_FANOUT_JOB,
           payload: invalidPayload,
           attempts: 1,

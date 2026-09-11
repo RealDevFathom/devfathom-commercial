@@ -24,4 +24,13 @@ describe('camera stream proxy threat controls', () => {
     expect(availabilityCheck).toBeLessThan(source.indexOf('searchParams.get'));
     expect(source).toContain("response('Camera gateway unavailable', 503)");
   });
+  test('blocks demo tenants before entitlement, grant, or gateway access', () => {
+    const demoGuard = source.indexOf('if (actor.organization.isDemo)');
+    expect(demoGuard).toBeGreaterThan(-1);
+    expect(source).toContain("response('Not available in demo.', 403)");
+    expect(demoGuard).toBeLessThan(source.indexOf('resolveOrganizationEntitlements', demoGuard));
+    expect(demoGuard).toBeLessThan(
+      source.indexOf('restaurantCameraStreamGrant.findUnique', demoGuard)
+    );
+  });
 });

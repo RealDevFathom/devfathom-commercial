@@ -15,7 +15,10 @@ import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertPlatformCapability } from '@/lib/platform/auth';
 import { ActivationPreflightError, PlatformSecurityError } from '@/lib/platform/security';
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
-import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
+import type { DemoSeatIdentity } from '@/lib/demo/seed-data';
+import { demoApproverEmail } from '@/lib/demo/approval';
+import { demoSharedDeploymentOrigin } from '@/lib/demo/deployment-origin';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
@@ -26,6 +29,8 @@ import {
   isPackageCompatibleWithVertical,
   mandatoryModulesForVertical,
   modulesForVertical,
+  RESTAURANT_CAPABILITIES,
+  RESTAURANT_MODULES,
   roleTemplatesForVertical,
   VERTICALS,
 } from '@/lib/vertical-catalog';
@@ -349,6 +354,49 @@ function lifecycleAction(from: OrganizationStatus, to: OrganizationStatus): Life
   return 'CREATED';
 }
 
+async function recordSharedDeploymentReady(
+  db: PrismaClient,
+  organization: { id: string; slug: string; deploymentMode: string },
+  now = new Date(),
+  healthSource = 'shared-platform-default',
+  fallbackUrl?: string | null
+) {
+  const url = sharedDeploymentUrl(organization) ?? fallbackUrl;
+  if (!url) {
+    throw new PlatformSecurityError(
+      organization.deploymentMode === 'SHARED'
+        ? 'No shared platform host is configured for this environment. Register the production deployment at /platform/deployments.'
+        : 'This organization runs on a dedicated deployment and custom domain. Register its production deployment at /platform/deployments.',
+      400
+    );
+  }
+  return db.organizationDeployment.upsert({
+    where: {
+      organizationId_environment: {
+        organizationId: organization.id,
+        environment: 'production',
+      },
+    },
+    update: {
+      mode: 'SHARED',
+      status: 'READY',
+      url,
+      lastHealthyAt: now,
+      health: { source: healthSource },
+    },
+    create: {
+      organizationId: organization.id,
+      environment: 'production',
+      mode: 'SHARED',
+      provider: 'VERCEL',
+      status: 'READY',
+      url,
+      lastHealthyAt: now,
+      health: { source: healthSource },
+    },
+  });
+}
+
 async function assertActivationReady(db: PrismaClient, organizationId: string) {
   const organization = await db.organization.findUnique({
     where: { id: organizationId },
@@ -491,16 +539,18 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
       restaurantMissing.push('a valid default branch business-day cutoff');
   }
 
-  const acknowledgements = await db.restaurantActivationAcknowledgement.findMany({
-    where: { organizationId },
-    select: { kind: true, policyReference: true },
-  });
-  const acknowledgedKinds = new Set(
-    acknowledgements.filter((row) => row.policyReference.trim()).map((row) => row.kind)
-  );
-  for (const kind of ['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const) {
-    if (!acknowledgedKinds.has(kind))
-      restaurantMissing.push(`${kind.toLowerCase()} policy acknowledgement`);
+  if (!organization.isDemo) {
+    const acknowledgements = await db.restaurantActivationAcknowledgement.findMany({
+      where: { organizationId },
+      select: { kind: true, policyReference: true },
+    });
+    const acknowledgedKinds = new Set(
+      acknowledgements.filter((row) => row.policyReference.trim()).map((row) => row.kind)
+    );
+    for (const kind of ['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const) {
+      if (!acknowledgedKinds.has(kind))
+        restaurantMissing.push(`${kind.toLowerCase()} policy acknowledgement`);
+    }
   }
 
   if (restaurantMissing.length) {
@@ -648,10 +698,23 @@ const organizationInput = z
       });
   });
 
+type DemoOrganizationBootstrap = {
+  identity: DemoSeatIdentity;
+  now: Date;
+};
+
+export const DEMO_APPROVER_ORGANIZATION_ROLE_KEY = 'demo-approver';
+
+export function demoRestaurantApproverUserId(seatNumber: number): string {
+  demoApproverEmail(seatNumber);
+  return `user_demo_restaurant_seat_${seatNumber}_approver`;
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
-  actor: PlatformIdentity,
-  input: z.infer<typeof organizationInput>
+  actor: PlatformIdentity | null,
+  input: z.infer<typeof organizationInput>,
+  demo?: DemoOrganizationBootstrap
 ) {
   if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
     throw new PlatformSecurityError(
@@ -676,9 +739,10 @@ async function bootstrapOrganization(
       400
     );
   }
-  const password = await hash(input.adminPassword, 12);
+  const password = demo ? null : await hash(input.adminPassword, 12);
   const organization = await db.organization.create({
     data: {
+      ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
       slug: input.slug,
       legalName: input.legalName,
       displayName: input.displayName,
@@ -700,15 +764,39 @@ async function bootstrapOrganization(
   const adminRole = await db.organizationRole.create({
     data: {
       organizationId: organization.id,
-      key: 'admin',
-      name: 'Organization administrator',
+      key: demo ? 'owner' : 'admin',
+      name: demo ? 'Owner / Administrator' : 'Organization administrator',
       description: 'Full organization administration',
       isSystem: true,
       permissions: {
-        create: [{ organizationId: organization.id, capability: '*', effect: 'ALLOW' }],
+        create: (demo ? RESTAURANT_CAPABILITIES : ['*']).map((capability) => ({
+          organizationId: organization.id,
+          capability,
+          effect: 'ALLOW' as const,
+        })),
       },
     },
   });
+  const approverRole = demo
+    ? await db.organizationRole.create({
+        data: {
+          organizationId: organization.id,
+          key: DEMO_APPROVER_ORGANIZATION_ROLE_KEY,
+          name: 'Demo approving manager',
+          description: 'Bounded demo co-authorization authority',
+          isSystem: true,
+          permissions: {
+            create: [
+              {
+                organizationId: organization.id,
+                capability: 'coauth:approve',
+                effect: 'ALLOW',
+              },
+            ],
+          },
+        },
+      })
+    : null;
   // WHA-278 — seed the tenant's department catalog from the vertical catalog
   // before any user exists. `User.department` is a composite foreign key onto
   // `organization_departments`, so the administrator below cannot be created
@@ -732,6 +820,7 @@ async function bootstrapOrganization(
   }
   const admin = await db.user.create({
     data: {
+      ...(demo ? { id: demo.identity.managerUserId } : {}),
       organizationId: organization.id,
       organizationRoleId: adminRole.id,
       name: input.adminName,
@@ -743,10 +832,26 @@ async function bootstrapOrganization(
       status: 'ACTIVE',
     },
   });
+  if (demo) {
+    await db.user.create({
+      data: {
+        id: demoRestaurantApproverUserId(demo.identity.seatNumber),
+        organizationId: organization.id,
+        organizationRoleId: approverRole!.id,
+        name: 'Demo approving manager',
+        email: demoApproverEmail(demo.identity.seatNumber),
+        password: null,
+        role: 'EMPLOYEE',
+        department: adminDepartmentKeyForVertical(input.vertical),
+        title: 'Demo approving manager',
+        status: 'ACTIVE',
+      },
+    });
+  }
   // §9 Steps 3/5/6 — restaurant onboarding is branch-first. Create the single
   // default branch (organization timezone, conservative name) and assign the
   // bootstrap administrator to it. Guarded so the AGENCY path is byte-identical.
-  if (input.vertical === 'RESTAURANT') {
+  if (input.vertical === 'RESTAURANT' && !demo) {
     const defaultBranch = await db.restaurantBranch.create({
       data: {
         organizationId: organization.id,
@@ -814,6 +919,7 @@ async function bootstrapOrganization(
   // not part of this fix.
   if (input.vertical !== 'AGENCY') {
     for (const template of roleTemplatesForVertical(input.vertical)) {
+      if (demo && template.key === 'owner') continue;
       await db.organizationRole.create({
         data: {
           organizationId: organization.id,
@@ -838,33 +944,46 @@ async function bootstrapOrganization(
   // only operator/contract deviations write OrganizationModule rows.
   await db.organizationBrand.create({ data: { organizationId: organization.id } });
   await db.organizationEmailSettings.create({ data: { organizationId: organization.id } });
-  await db.organizationDeployment.create({
-    data: {
-      organizationId: organization.id,
-      environment: 'production',
-      mode: input.deploymentMode,
-      status: 'PENDING',
-    },
-  });
-  await db.platformJob.create({
-    data: {
-      organizationId: organization.id,
-      type: input.deploymentMode === 'DEDICATED' ? 'PROVISION_DEDICATED' : 'PROVISION_SHARED',
-      requestedById: actor.id,
-      payload: { environment: 'production' },
-      idempotencyKey: `provision:${organization.id}:production`,
-    },
-  });
+  if (!demo) {
+    await db.organizationDeployment.create({
+      data: {
+        organizationId: organization.id,
+        environment: 'production',
+        mode: input.deploymentMode,
+        status: 'PENDING',
+      },
+    });
+    await db.platformJob.create({
+      data: {
+        organizationId: organization.id,
+        type: input.deploymentMode === 'DEDICATED' ? 'PROVISION_DEDICATED' : 'PROVISION_SHARED',
+        requestedById: actor!.id,
+        payload: { environment: 'production' },
+        idempotencyKey: `provision:${organization.id}:production`,
+      },
+    });
+  } else {
+    await recordSharedDeploymentReady(
+      db,
+      organization,
+      demo.now,
+      'shared-platform-demo',
+      demoSharedDeploymentOrigin(organization)
+    );
+  }
   await db.organizationLifecycleEvent.create({
     data: {
       organizationId: organization.id,
       action: 'CREATED',
       toStatus: 'ONBOARDING',
-      reason: 'Organization created by platform operator',
-      actorId: actor.id,
+      reason: demo
+        ? 'Bounded restaurant demo seat created by system bootstrap'
+        : 'Organization created by platform operator',
+      actorId: actor?.id ?? null,
+      ...(demo ? { createdAt: demo.now } : {}),
     },
   });
-  if (input.opportunityId) {
+  if (input.opportunityId && actor) {
     const opportunity = await db.platformOpportunity.findUnique({
       where: { id: input.opportunityId },
       select: { id: true, accountId: true, stage: true },
@@ -894,6 +1013,287 @@ async function bootstrapOrganization(
     }
   }
   return organization;
+}
+
+const DEMO_RESTAURANT_PACKAGE_KEY = 'restaurant-enterprise';
+
+export async function bootstrapDemoRestaurantOrganizationInTransaction(
+  db: ScopedDb,
+  identity: DemoSeatIdentity,
+  now: Date
+): Promise<void> {
+  const packageRecord = await db.platformPackage.findUnique({
+    where: { key: DEMO_RESTAURANT_PACKAGE_KEY },
+    include: {
+      moduleLinks: {
+        where: { enabled: true },
+        include: { module: { select: { key: true, active: true } } },
+      },
+    },
+  });
+  if (
+    !packageRecord?.active ||
+    !isPackageCompatibleWithVertical(packageRecord.vertical ?? 'AGENCY', 'RESTAURANT')
+  ) {
+    throw new PlatformSecurityError('An active Restaurant Enterprise package is required.', 400);
+  }
+  const enabledModuleKeys = new Set(
+    packageRecord.moduleLinks.filter((link) => link.module.active).map((link) => link.module.key)
+  );
+  const missingModule = RESTAURANT_MODULES.find((module) => !enabledModuleKeys.has(module.key));
+  if (missingModule) {
+    throw new PlatformSecurityError(
+      `Restaurant Enterprise is missing the active ${missingModule.key} module.`,
+      400
+    );
+  }
+
+  const approverUserId = demoRestaurantApproverUserId(identity.seatNumber);
+  const approverEmail = demoApproverEmail(identity.seatNumber);
+
+  const [organization, slugOwner, manager, emailOwner, approver, approverEmailOwner] =
+    await Promise.all([
+      db.organization.findUnique({
+        where: { id: identity.organizationId },
+        select: {
+          id: true,
+          slug: true,
+          legalName: true,
+          displayName: true,
+          vertical: true,
+          status: true,
+          deploymentMode: true,
+          packageId: true,
+          isDemo: true,
+        },
+      }),
+      db.organization.findUnique({
+        where: { slug: identity.slug },
+        select: { id: true, isDemo: true },
+      }),
+      db.user.findUnique({
+        where: { id: identity.managerUserId },
+        select: {
+          id: true,
+          organizationId: true,
+          organizationRoleId: true,
+          email: true,
+          password: true,
+          role: true,
+          status: true,
+        },
+      }),
+      db.user.findFirst({
+        where: { email: identity.managerEmail },
+        select: { id: true, organizationId: true },
+      }),
+      db.user.findUnique({
+        where: { id: approverUserId },
+        select: {
+          id: true,
+          organizationId: true,
+          organizationRoleId: true,
+          name: true,
+          email: true,
+          password: true,
+          role: true,
+          status: true,
+        },
+      }),
+      db.user.findFirst({
+        where: { email: approverEmail },
+        select: { id: true, organizationId: true },
+      }),
+    ]);
+
+  if (slugOwner && slugOwner.id !== identity.organizationId) {
+    throw new PlatformSecurityError('The canonical demo seat slug is already in use.', 409);
+  }
+  if (manager && manager.organizationId !== identity.organizationId) {
+    throw new PlatformSecurityError('The canonical demo manager ID belongs to another seat.', 409);
+  }
+  if (emailOwner && emailOwner.id !== identity.managerUserId) {
+    throw new PlatformSecurityError('The canonical demo manager email is already in use.', 409);
+  }
+  if (approver && approver.organizationId !== identity.organizationId) {
+    throw new PlatformSecurityError('The canonical demo approver ID belongs to another seat.', 409);
+  }
+  if (approverEmailOwner && approverEmailOwner.id !== approverUserId) {
+    throw new PlatformSecurityError('The canonical demo approver email is already in use.', 409);
+  }
+
+  if (!organization) {
+    if (manager || emailOwner || approver || approverEmailOwner) {
+      throw new PlatformSecurityError('Demo user identity exists without its demo seat.', 409);
+    }
+    await bootstrapOrganization(
+      db,
+      null,
+      {
+        vertical: 'RESTAURANT',
+        slug: identity.slug,
+        legalName: identity.displayName,
+        displayName: identity.displayName,
+        deploymentMode: 'SHARED',
+        packageId: packageRecord.id,
+        timezone: 'Asia/Karachi',
+        locale: 'en-PK',
+        currency: 'PKR',
+        seatLimit: 1,
+        gracePeriodDays: 0,
+        dataResidency: null,
+        primaryContactName: identity.displayName,
+        primaryContactEmail: identity.managerEmail,
+        notes: 'Bounded restaurant sales demo seat.',
+        adminName: 'Demo Restaurant Manager',
+        adminEmail: identity.managerEmail,
+        adminPassword: 'unused-demo-bootstrap-password',
+        opportunityId: null,
+      },
+      { identity, now }
+    );
+    return;
+  }
+
+  if (
+    !organization.isDemo ||
+    organization.slug !== identity.slug ||
+    organization.legalName !== identity.displayName ||
+    organization.displayName !== identity.displayName ||
+    organization.vertical !== 'RESTAURANT' ||
+    organization.deploymentMode !== 'SHARED' ||
+    organization.packageId !== packageRecord.id ||
+    !['ONBOARDING', 'ACTIVE', 'GRACE'].includes(organization.status)
+  ) {
+    throw new PlatformSecurityError('The canonical demo seat identity is occupied.', 409);
+  }
+  if (
+    !manager ||
+    manager.organizationId !== identity.organizationId ||
+    manager.email !== identity.managerEmail ||
+    manager.password !== null ||
+    manager.role !== 'ADMIN' ||
+    manager.status !== 'ACTIVE'
+  ) {
+    throw new PlatformSecurityError('The canonical demo manager identity is invalid.', 409);
+  }
+  if (
+    !approver ||
+    approver.organizationId !== identity.organizationId ||
+    approver.name !== 'Demo approving manager' ||
+    approver.email !== approverEmail ||
+    approver.password !== null ||
+    approver.role !== 'EMPLOYEE' ||
+    approver.status !== 'ACTIVE'
+  ) {
+    throw new PlatformSecurityError('The canonical demo approver identity is invalid.', 409);
+  }
+
+  const roles = await db.organizationRole.findMany({
+    where: { organizationId: identity.organizationId },
+    select: {
+      id: true,
+      key: true,
+      permissions: { select: { capability: true, effect: true } },
+    },
+  });
+  const requiredRoleKeys = roleTemplatesForVertical('RESTAURANT').map((role) => role.key);
+  if (requiredRoleKeys.some((key) => !roles.some((role) => role.key === key))) {
+    throw new PlatformSecurityError('The demo seat is missing a required restaurant role.', 409);
+  }
+  const ownerRole = roles.find((role) => role.key === 'owner');
+  const approverRole = roles.find((role) => role.key === DEMO_APPROVER_ORGANIZATION_ROLE_KEY);
+  const allowed = new Set(
+    ownerRole?.permissions
+      .filter((permission) => permission.effect === 'ALLOW')
+      .map((permission) => permission.capability)
+  );
+  if (
+    !ownerRole ||
+    manager.organizationRoleId !== ownerRole.id ||
+    allowed.size !== RESTAURANT_CAPABILITIES.length ||
+    RESTAURANT_CAPABILITIES.some((capability) => !allowed.has(capability))
+  ) {
+    throw new PlatformSecurityError('The demo manager restaurant authority is invalid.', 409);
+  }
+  if (
+    !approverRole ||
+    approver.organizationRoleId !== approverRole.id ||
+    approverRole.permissions.length !== 1 ||
+    approverRole.permissions[0]?.capability !== 'coauth:approve' ||
+    approverRole.permissions[0]?.effect !== 'ALLOW'
+  ) {
+    throw new PlatformSecurityError('The demo approver authority is invalid.', 409);
+  }
+}
+
+export async function activateDemoRestaurantOrganizationInTransaction(
+  db: ScopedDb,
+  identity: DemoSeatIdentity,
+  now: Date
+): Promise<void> {
+  if (!(now instanceof Date) || Number.isNaN(now.valueOf())) {
+    throw new PlatformSecurityError('A valid demo activation timestamp is required.', 400);
+  }
+  const organization = await db.organization.findUnique({
+    where: { id: identity.organizationId },
+    select: {
+      id: true,
+      slug: true,
+      displayName: true,
+      legalName: true,
+      vertical: true,
+      status: true,
+      deploymentMode: true,
+      isDemo: true,
+      activatedAt: true,
+    },
+  });
+  if (
+    !organization?.isDemo ||
+    organization.slug !== identity.slug ||
+    organization.displayName !== identity.displayName ||
+    organization.legalName !== identity.displayName ||
+    organization.vertical !== 'RESTAURANT' ||
+    organization.deploymentMode !== 'SHARED'
+  ) {
+    throw new PlatformSecurityError('Canonical demo restaurant organization not found.', 409);
+  }
+
+  await recordSharedDeploymentReady(
+    db,
+    organization,
+    now,
+    'shared-platform-demo',
+    demoSharedDeploymentOrigin(organization)
+  );
+  await assertActivationReady(db, identity.organizationId);
+  if (organization.status === 'ACTIVE') return;
+  if (!TRANSITIONS[organization.status].includes('ACTIVE')) {
+    throw new PlatformSecurityError(
+      `A ${organization.status} demo organization cannot move directly to ACTIVE.`,
+      400
+    );
+  }
+  await db.organization.update({
+    where: { id: identity.organizationId },
+    data: {
+      status: 'ACTIVE',
+      activatedAt: organization.activatedAt ?? now,
+      suspendedAt: null,
+    },
+  });
+  await db.organizationLifecycleEvent.create({
+    data: {
+      organizationId: identity.organizationId,
+      action: lifecycleAction(organization.status, 'ACTIVE'),
+      fromStatus: organization.status,
+      toStatus: 'ACTIVE',
+      reason: 'Bounded restaurant demo seed completed activation preflight',
+      actorId: null,
+      createdAt: now,
+    },
+  });
 }
 
 async function runCommand(
@@ -2758,43 +3158,10 @@ async function runCommand(
         select: { id: true, slug: true, deploymentMode: true },
       });
       if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
-      const url = sharedDeploymentUrl(organization);
-      if (!url) {
-        throw new PlatformSecurityError(
-          organization.deploymentMode === 'SHARED'
-            ? 'No shared platform host is configured for this environment. Register the production deployment at /platform/deployments.'
-            : 'This organization runs on a dedicated deployment and custom domain. Register its production deployment at /platform/deployments.',
-          400
-        );
-      }
       // Idempotent on the (organizationId, environment) unique key: a second
       // click re-asserts the same shared position instead of failing or
       // creating a duplicate. Mirrors the `sharedProvision` worker upsert.
-      const saved = await db.organizationDeployment.upsert({
-        where: {
-          organizationId_environment: {
-            organizationId: input.organizationId,
-            environment: 'production',
-          },
-        },
-        update: {
-          mode: 'SHARED',
-          status: 'READY',
-          url,
-          lastHealthyAt: new Date(),
-          health: { source: 'shared-platform-default' },
-        },
-        create: {
-          organizationId: input.organizationId,
-          environment: 'production',
-          mode: 'SHARED',
-          provider: 'VERCEL',
-          status: 'READY',
-          url,
-          lastHealthyAt: new Date(),
-          health: { source: 'shared-platform-default' },
-        },
-      });
+      const saved = await recordSharedDeploymentReady(db, organization);
       return {
         targetType: 'OrganizationDeployment',
         targetId: saved.id,

@@ -26,6 +26,7 @@ async function boundedFetch(url: URL, maximum: number) {
 export async function GET(request: Request, context: { params: Promise<{ cameraId: string }> }) {
   const actor = await resolveTenantActor({ request });
   if (!actor?.session.user?.id) return response('Unauthorized', 401);
+  if (actor.organization.isDemo) return response('Not available in demo.', 403);
   const organizationId = actor.organization.id;
   const entitlements = await withTenantDb(organizationId, (db) =>
     resolveOrganizationEntitlements(organizationId, db)

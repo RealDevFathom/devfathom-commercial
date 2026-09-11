@@ -52,6 +52,15 @@ export function TenderPad({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [result, setResult] = useState<TenderResult | null>(null);
+  const [previousAmountDue, setPreviousAmountDue] = useState(amountDue);
+
+  if (amountDue !== previousAmountDue) {
+    setPreviousAmountDue(amountDue);
+    setAmount(amountDue ?? '');
+    setCashReceived(amountDue ?? '');
+    if (amountDue !== undefined) setError(null);
+    if (result?.remainingDue !== amountDue) setResult(null);
+  }
 
   async function submit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();

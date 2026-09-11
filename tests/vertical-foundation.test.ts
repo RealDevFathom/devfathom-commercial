@@ -643,7 +643,9 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // Platform commands — the one server enforcement point
     /src\/lib\/platform\/commands(\.vertical\.test)?\.(ts|tsx)$/,
     // Entitlements resolution order (M0 §2.3 correction — sacred)
-    /src\/lib\/entitlements\.(ts|tsx)$/,
+    /src\/lib\/entitlements(\.test)?\.(ts|tsx)$/,
+    // Purpose-built restaurant demo implementation and focused tests
+    /src\/lib\/demo\//,
     // Module catalog — owns module→vertical mapping
     /src\/lib\/module-catalog(\.test)?\.(ts|tsx)$/,
     // Sidebar navigation — vertical-aware nav is approved
@@ -668,6 +670,7 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
     // Naming both verticals is the assertion; the production code it covers is
     // the already-approved consumer, not a new one.
     /src\/lib\/platform\/commands\.administrator-staff-profile\.test\.ts$/,
+    /src\/lib\/platform\/commands\.demo-bootstrap\.test\.ts$/,
     // Generated Prisma client — read-only, not authored here
     /src\/generated\//,
   ];

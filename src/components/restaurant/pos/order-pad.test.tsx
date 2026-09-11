@@ -1,4 +1,5 @@
 import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
@@ -284,6 +285,186 @@ afterEach(() => {
 });
 
 describe('OrderPad transport', () => {
+  it('bootstraps an unlocked demo runtime without asking for enrollment or a PIN', async () => {
+    const ordinary = transport();
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith('/demo/restaurants/device-session')) {
+        return json({
+          ready: true,
+          branchId: 'branch-1',
+          sessionToken: 'session-token',
+          session: {
+            id: 'session-1',
+            state: 'UNLOCKED',
+            activeStaffProfileId: 'staff-1',
+            establishedAt: '2026-08-19T00:00:00Z',
+          },
+          device: {
+            id: 'device-1',
+            organizationId: 'org_demo_restaurant_seat_1',
+            branchId: 'branch-1',
+            name: 'Demo register',
+            branchName: 'Clifton Flagship',
+          },
+          operator: {
+            staffProfileId: 'staff-1',
+            displayName: 'Demo Manager',
+            role: 'Manager',
+          },
+        });
+      }
+      return ordinary(input, init);
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    render(
+      <StrictMode>
+        <OrderPad demo />
+      </StrictMode>
+    );
+
+    expect(await screen.findByRole('heading', { name: 'Order pad' })).toBeVisible();
+    await waitFor(() => {
+      expect(
+        fetch.mock.calls.some(([input]) => String(input).includes('/orders/effective-menu'))
+      ).toBe(true);
+      expect(
+        fetch.mock.calls.some(([input]) => String(input).endsWith('/orders/open-orders'))
+      ).toBe(true);
+      expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/terminal/layout'))).toBe(
+        true
+      );
+    });
+    expect(screen.getByRole('button', { name: /Coffee4\.00/ })).toBeVisible();
+    expect(screen.queryByRole('heading', { name: 'Terminal locked' })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText('Operator PIN')).not.toBeInTheDocument();
+    const bootstraps = fetch.mock.calls.filter(([input]) =>
+      String(input).endsWith('/demo/restaurants/device-session')
+    );
+    expect(bootstraps).toHaveLength(1);
+    expect(bootstraps[0]?.[1]).toMatchObject({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'POS' }),
+    });
+    expect(fetch.mock.calls.some(([input]) => String(input).endsWith('/terminal/establish'))).toBe(
+      false
+    );
+  });
+
+  it('clears an open demo runtime when the server reports that demo access expired', async () => {
+    const ordinary = transport();
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith('/demo/restaurants/device-session')) {
+        return json({
+          ready: true,
+          branchId: 'branch-1',
+          sessionToken: 'session-token',
+          session: {
+            id: 'session-1',
+            state: 'UNLOCKED',
+            activeStaffProfileId: 'staff-1',
+            establishedAt: '2026-08-19T00:00:00Z',
+          },
+          device: {
+            id: 'device-1',
+            organizationId: 'org_demo_restaurant_seat_1',
+            branchId: 'branch-1',
+            name: 'Demo register',
+            branchName: 'Clifton Flagship',
+          },
+          operator: {
+            staffProfileId: 'staff-1',
+            displayName: 'Demo Manager',
+            role: 'Manager',
+          },
+        });
+      }
+      if (path.endsWith('/checkout/refund')) {
+        return json({ error: 'Demo access has expired; reopen the restaurant demo.' }, 401);
+      }
+      return ordinary(input, init);
+    });
+    vi.stubGlobal('fetch', fetch);
+    render(<OrderPad demo />);
+    await screen.findByRole('heading', { name: 'Order pad' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
+
+    expect(await screen.findByRole('heading', { name: 'Demo entry required' })).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Reopen restaurant demo' })).toHaveAttribute(
+      'href',
+      '/demo/restaurants'
+    );
+  });
+
+  it('keeps a normal terminal open after a rejected approving PIN', async () => {
+    const ordinary = transport();
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input, init) => {
+      const path = String(input);
+      if (path.endsWith('/terminal/operators')) {
+        return json({
+          operators: [
+            {
+              staffProfileId: 'staff-1',
+              displayName: 'Amina Rahman',
+              role: 'Shift lead',
+              canApprove: true,
+            },
+            {
+              staffProfileId: 'staff-2',
+              displayName: 'Bilal Khan',
+              role: 'Manager',
+              canApprove: true,
+            },
+          ],
+        });
+      }
+      if (path.endsWith('/checkout/refund')) {
+        if (init?.method === 'POST') {
+          return json({ error: 'Invalid approving credential.' }, 401);
+        }
+        return json({
+          tenders: [
+            {
+              tenderId: 'tender-1',
+              orderNumber: 42,
+              receiptNumber: 'R-0042',
+              type: 'CARD',
+              paidAmount: '20.00',
+              refundedAmount: '0.00',
+              remainingAmount: '20.00',
+              tipPaidAmount: '0.00',
+              tipRefundedAmount: '0.00',
+              tipRemainingAmount: '0.00',
+              paidAt: '2026-09-04T12:00:00.000Z',
+            },
+          ],
+        });
+      }
+      return ordinary(input, init);
+    });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Refund' }));
+    await screen.findByRole('option', { name: /R-0042/ });
+    fireEvent.change(screen.getByLabelText('Settled receipt'), {
+      target: { value: 'tender-1' },
+    });
+    fireEvent.change(screen.getByLabelText('Reason'), { target: { value: 'Guest request' } });
+    fireEvent.change(screen.getByLabelText('Approving manager'), {
+      target: { value: 'staff-2' },
+    });
+    fireEvent.change(screen.getByLabelText('Manager PIN'), { target: { value: '0000' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Review refund' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+
+    expect(await screen.findByRole('alert')).toHaveTextContent('Invalid approving credential.');
+    fireEvent.click(screen.getByRole('button', { name: 'Close' }));
+    expect(screen.getByRole('heading', { name: 'Order pad' })).toBeVisible();
+  });
+
   it('clears delivery instructions when the terminal locks before another operator can unlock', async () => {
     const fetch = transport();
     await unlock(fetch);

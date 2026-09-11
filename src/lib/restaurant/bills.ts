@@ -1602,6 +1602,8 @@ export type OrderSettlement = {
     deliveryFeeTotal: Prisma.Decimal;
     compTotal: Prisma.Decimal;
     discountTotal: Prisma.Decimal;
+    /** Recorded balance; comps/discounts are already included in grandTotal. */
+    remainingDue: Prisma.Decimal;
     receiptNumber: number | null;
   }[];
   unbilledItemIds: string[];
@@ -1647,6 +1649,7 @@ export async function evaluateOrderSettlement(
       discountTotal: true,
       receiptNumber: true,
       lines: { select: { orderItemId: true } },
+      tenders: { select: { amount: true } },
     },
   });
   const liveBills = allBills.filter((b) => b.status !== 'VOID');
@@ -1671,6 +1674,8 @@ export async function evaluateOrderSettlement(
     deliveryFeeTotal: b.deliveryFeeTotal,
     compTotal: b.compTotal,
     discountTotal: b.discountTotal,
+    remainingDue:
+      b.status === 'SETTLED' ? ZERO : sub(b.grandTotal, sum(b.tenders.map((t) => t.amount))),
     receiptNumber: b.receiptNumber,
   }));
 

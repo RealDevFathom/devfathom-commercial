@@ -153,7 +153,10 @@ export default async function PurchasingPage({
       }),
     ]);
     const selectedSummary =
-      orderPage.orders.find((order) => order.id === query.selected) ?? orderPage.orders[0] ?? null;
+      orderPage.orders.find((order) => order.id === query.selected) ??
+      orderPage.orders.find((order) => order.receiptCount > 0) ??
+      orderPage.orders[0] ??
+      null;
     const selectedOrder = selectedSummary
       ? await caller.getPurchaseOrder({ purchaseOrderId: selectedSummary.id })
       : null;
@@ -628,7 +631,7 @@ export default async function PurchasingPage({
           </div>
         </SectionCard>
 
-        <SectionCard>
+        <SectionCard data-tour={loaded.selectedOrder ? 'purchase-receipt' : undefined}>
           {loaded.selectedOrder ? (
             <>
               <div className="flex flex-wrap items-start justify-between gap-4">

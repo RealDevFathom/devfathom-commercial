@@ -41,6 +41,7 @@ type CheckoutSummary = {
     status: string;
     splitKind: string;
     grandTotal: string;
+    remainingDue: string;
     deliveryFeeTotal: string;
     compTotal: string;
     receiptNumber: number | null;
@@ -466,7 +467,6 @@ export function CheckoutPanel({
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
   const [tenderPending, setTenderPending] = useState(false);
-  const [remainingDueByBill, setRemainingDueByBill] = useState<Record<string, string>>({});
 
   const fetchSummary = useCallback(
     () =>
@@ -545,27 +545,17 @@ export function CheckoutPanel({
     }
   }
 
-  /**
-   * A redemption discounts the bill, so any remaining-due this panel is still holding from an
-   * earlier tender is now too HIGH. Drop the cached override and reload, letting the bill's
-   * freshly-read `grandTotal` price the tender pad — a stale override would ask the guest for
-   * money the redemption has already covered.
-   */
-  async function loyaltyRedeemed(billId: string) {
-    setRemainingDueByBill((current) => {
-      if (!(billId in current)) return current;
-      const rest = { ...current };
-      delete rest[billId];
-      return rest;
-    });
-    await loadSummary();
-  }
-
   async function tenderApplied(result: TenderResult) {
-    setRemainingDueByBill((current) => ({
-      ...current,
-      [result.billId]: result.remainingDue,
-    }));
+    setSummary((current) =>
+      current
+        ? {
+            ...current,
+            bills: current.bills.map((bill) =>
+              bill.id === result.billId ? { ...bill, remainingDue: result.remainingDue } : bill
+            ),
+          }
+        : current
+    );
     if (result.settled) await loadSummary();
   }
 
@@ -638,7 +628,7 @@ export function CheckoutPanel({
         ) : null}
 
         {connected && !loading && summary ? (
-          <div className="space-y-4">
+          <div className="space-y-4" data-tour="bill-settlement">
             <SectionCard
               eyebrow="Settlement"
               title="Order balance"
@@ -755,7 +745,7 @@ export function CheckoutPanel({
                   <>
                     <TenderPad
                       billId={bill.id}
-                      amountDue={remainingDueByBill[bill.id]}
+                      amountDue={bill.remainingDue}
                       request={request}
                       disabled={busy}
                       onApplied={tenderApplied}
@@ -767,7 +757,7 @@ export function CheckoutPanel({
                         billId={bill.id}
                         request={request}
                         disabled={busy || tenderPending}
-                        onRedeemed={() => loyaltyRedeemed(bill.id)}
+                        onRedeemed={loadSummary}
                       />
                     ) : null}
                   </>

@@ -117,11 +117,19 @@ async function deliver(db: PrismaClient, userIds: string[], args: NotifyArgs): P
     email: string;
     status: string;
     notificationPrefs: unknown;
+    organization?: { isDemo: boolean };
   }> = [];
   try {
     users = await db.user.findMany({
       where: { id: { in: userIds } },
-      select: { id: true, name: true, email: true, status: true, notificationPrefs: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        status: true,
+        notificationPrefs: true,
+        organization: { select: { isDemo: true } },
+      },
     });
   } catch (err) {
     console.error('[notify] prefs lookup failed', args.type, err);
@@ -155,6 +163,7 @@ async function deliver(db: PrismaClient, userIds: string[], args: NotifyArgs): P
   await Promise.all(
     users.map(async (u) => {
       if (u.status === 'INACTIVE') return;
+      if (u.organization?.isDemo) return;
       if (!isChannelAllowed(u.notificationPrefs, category, 'email')) return;
       const content = args.email?.(u);
       if (!content) return;

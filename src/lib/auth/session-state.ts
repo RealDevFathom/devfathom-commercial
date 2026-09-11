@@ -28,7 +28,7 @@ export const ACTIVE_STATUSES = new Set(['ACTIVE', 'ON_LEAVE']);
 
 /** Why a session is no longer usable. Never a `UserStatus` value. */
 export type SessionInvalidReason =
-  'REVOKED' | 'DELETED' | 'ORGANIZATION_SUSPENDED' | 'REVALIDATION_FAILED';
+  'REVOKED' | 'DELETED' | 'ORGANIZATION_SUSPENDED' | 'REVALIDATION_FAILED' | 'DEMO_ACCESS_EXPIRED';
 
 export const SESSION_ENDED_MESSAGE = 'Your session has ended. Please sign in again.';
 export const ACCOUNT_INACTIVE_MESSAGE =
@@ -50,6 +50,10 @@ export type SessionDenialKind = 'session-ended' | 'account-inactive' | 'workspac
 
 export type SessionVerdict =
   { ok: true } | { ok: false; kind: SessionDenialKind; message: string; reason: string };
+
+export function liveDemoAccessExpiry(value: unknown, now = Date.now()): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > now ? value : null;
+}
 
 const DENIAL_MESSAGES: Record<SessionDenialKind, string> = {
   'session-ended': SESSION_ENDED_MESSAGE,

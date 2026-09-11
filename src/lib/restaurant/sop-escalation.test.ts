@@ -154,6 +154,7 @@ function makeCtx(
     db,
     job: {
       id: 'job_1',
+      organizationId: 'org_1',
       type: 'sop.runEscalation',
       payload: { occurrenceId: 'occ_1', policyId: 'policy_1', now: NOW_ISO, ...payloadOverride },
       attempts: 1,

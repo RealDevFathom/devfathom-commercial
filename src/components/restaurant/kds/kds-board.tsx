@@ -25,6 +25,7 @@ type OperatorOption = { staffProfileId: string; displayName: string; role: strin
 type QueueItem = {
   orderItemId: string;
   name: string;
+  modifierNames: string[];
   course: number;
   seatNumber: number | null;
   quantity: number;
@@ -122,7 +123,7 @@ function formatAge(createdAt: string) {
   return `${Math.floor(minutes / 60)}h ${minutes % 60}m`;
 }
 
-export function KdsBoard() {
+export function KdsBoard({ demo = false }: { demo?: boolean }) {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [operatorStaffProfileId, setOperatorStaffProfileId] = useState('');
   const [operatorPin, setOperatorPin] = useState('');
@@ -138,6 +139,7 @@ export function KdsBoard() {
   const [notice, setNotice] = useState<NoticeState | null>(null);
   const cursor = useRef<number | null>(null);
   const epoch = useRef(0);
+  const establishing = useRef(false);
   const queueFlight = useRef<Promise<boolean> | null>(null);
   const pendingMutation = useRef(false);
   const idempotencyKeys = useRef(new Map<string, string>());
@@ -265,21 +267,39 @@ export function KdsBoard() {
   }
 
   const establish = useCallback(async () => {
+    if (establishing.current) return;
+    establishing.current = true;
     setOperatorsState('loading');
     try {
       const established = await request<{
         sessionToken: string;
+        session: { state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId?: string | null };
         device: { name: string; branchName: string; kind: string };
-      }>('/api/restaurant/terminal/establish', { method: 'POST' });
+        operator?: OperatorOption;
+      }>(demo ? '/demo/restaurants/device-session' : '/api/restaurant/terminal/establish', {
+        method: 'POST',
+        ...(demo
+          ? {
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ kind: 'KDS' }),
+            }
+          : {}),
+      });
       if (established.device.kind !== 'KDS')
         throw new RequestError(403, 'This browser is not enrolled as a KDS.');
       const lockedRuntime: Runtime = {
         sessionToken: established.sessionToken,
-        operatorStaffProfileId: '',
+        operatorStaffProfileId:
+          established.operator?.staffProfileId ?? established.session.activeStaffProfileId ?? '',
         deviceName: established.device.name,
         branchName: established.device.branchName,
       };
       setRuntime(lockedRuntime);
+      if (established.operator) {
+        setOperators([established.operator]);
+        setOperatorsState('ready');
+        return;
+      }
       const data = await request<{ operators: OperatorOption[] }>(
         '/api/restaurant/terminal/operators',
         {
@@ -291,8 +311,10 @@ export function KdsBoard() {
     } catch {
       setOperators([]);
       setOperatorsState('error');
+    } finally {
+      establishing.current = false;
     }
-  }, []);
+  }, [demo]);
 
   useEffect(() => {
     queueMicrotask(() => void establish());
@@ -617,6 +639,7 @@ export function KdsBoard() {
                           <TicketCard
                             key={ticket.ticketId}
                             ticket={ticket}
+                            tourTarget={ticket.ticketId === queue.tickets[0]?.ticketId}
                             pending={pending !== null}
                             onAction={mutate}
                             onReprint={reprint}
@@ -643,18 +666,23 @@ export function KdsBoard() {
 
 function TicketCard({
   ticket,
+  tourTarget,
   pending,
   onAction,
   onReprint,
 }: {
   ticket: QueueTicket;
+  tourTarget: boolean;
   pending: boolean;
   onAction: (item: QueueItem) => void;
   onReprint: (ticket: QueueTicket) => void;
 }) {
   const createdAt = new Date(ticket.createdAt);
   return (
-    <article className="min-w-0 rounded-md border border-border-subtle bg-surface-raised p-3">
+    <article
+      className="min-w-0 rounded-md border border-border-subtle bg-surface-raised p-3"
+      data-tour={tourTarget ? 'kds-ticket' : undefined}
+    >
       <div className="flex items-start justify-between gap-3 border-b border-border-subtle pb-3">
         <div className="min-w-0">
           <h4 className="truncate font-display text-lg font-semibold tracking-tight text-text-strong">
@@ -690,6 +718,11 @@ function TicketCard({
                 </span>
                 <div className="min-w-0 flex-1">
                   <p className="break-words text-sm font-semibold text-text-strong">{item.name}</p>
+                  {item.modifierNames.length > 0 ? (
+                    <p className="font-mono text-[0.6875rem] text-text-muted">
+                      {item.modifierNames.join(' · ')}
+                    </p>
+                  ) : null}
                   <p className="font-mono text-[0.6875rem] text-text-muted">
                     Course {item.course} ·{' '}
                     {item.displayStatus === 'HELD' ? 'HOLD — DO NOT FIRE' : 'FIRE'}

@@ -56,7 +56,12 @@ type OpenOrder = {
 type Notice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };
 type EstablishResponse = {
   sessionToken: string;
-  session: { id: string; state: 'LOCKED'; establishedAt: string };
+  session: {
+    id: string;
+    state: 'LOCKED' | 'UNLOCKED';
+    activeStaffProfileId?: string | null;
+    establishedAt: string;
+  };
   device: {
     id: string;
     organizationId: string;
@@ -64,6 +69,7 @@ type EstablishResponse = {
     name: string;
     branchName: string;
   };
+  operator?: OperatorOption;
 };
 type SessionResponse = {
   session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
@@ -114,6 +120,14 @@ function isDefinitiveMutationFailure(error: unknown) {
     error.status < 500 &&
     error.status !== 408 &&
     error.status !== 429
+  );
+}
+
+function isDemoAccessExpiredError(error: unknown) {
+  return (
+    error instanceof RequestError &&
+    error.status === 401 &&
+    /^Demo access has expired(?:[.;]|$)/i.test(error.message)
   );
 }
 
@@ -174,7 +188,7 @@ function cachedMenu(catalog: PosCatalogSnapshot): EffectiveMenu {
   };
 }
 
-export function OrderPad() {
+export function OrderPad({ demo = false }: { demo?: boolean }) {
   const [runtime, setRuntime] = useState<Runtime | null>(null);
   const [enrollmentState, setEnrollmentState] = useState<
     'checking' | 'ready' | 'missing' | 'unrecoverable'
@@ -209,6 +223,7 @@ export function OrderPad() {
   const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
+  const establishing = useRef(false);
   const idempotencyKeys = useRef(new Map<string, string>());
   const stateEpoch = useRef(0);
   const runtimeBoundary = useRef<Runtime | null>(null);
@@ -416,7 +431,14 @@ export function OrderPad() {
         if (mutation && isDefinitiveMutationFailure(error)) {
           idempotencyKeys.current.delete(intent);
         }
-        if (
+        if (demo && isDemoAccessExpiredError(error)) {
+          clearTerminalState();
+          setEnrollmentState('missing');
+          setNotice({
+            tone: 'danger',
+            message: 'Demo access expired. Reopen the restaurant demo.',
+          });
+        } else if (
           error instanceof RequestError &&
           ((error.status === 403 && /device.+revoked/i.test(error.message)) ||
             (error.status === 401 && /session|device/i.test(error.message)))
@@ -427,12 +449,21 @@ export function OrderPad() {
         throw error;
       }
     },
-    [clearTerminalState, runtime]
+    [clearTerminalState, demo, runtime]
   );
 
   const handleError = useCallback(
     (error: unknown) => {
       if (error instanceof RequestError) {
+        if (demo && isDemoAccessExpiredError(error)) {
+          clearTerminalState();
+          setEnrollmentState('missing');
+          setNotice({
+            tone: 'danger',
+            message: 'Demo access expired. Reopen the restaurant demo.',
+          });
+          return;
+        }
         const revoked = error.status === 403 && /device.+revoked/i.test(error.message);
         if (revoked) clearTerminalState();
         if (error.status === 401 && /session|device/i.test(error.message)) {
@@ -453,54 +484,60 @@ export function OrderPad() {
         message: 'Network request failed. Retry this action.',
       });
     },
-    [clearTerminalState]
+    [clearTerminalState, demo]
   );
 
-  async function loadMenu(nextChannel: Channel, activeRuntime = runtime, standalone = true) {
-    if (!activeRuntime) return;
-    const epoch = stateEpoch.current;
-    if (standalone) setPending('menu');
-    try {
-      const data = await request<EffectiveMenu>(effectiveMenuPath(nextChannel), {
-        headers: authHeaders(activeRuntime),
-      });
-      if (epoch !== stateEpoch.current) return;
-      setDraftMenu(data);
-      await offlineRuntime.current?.cacheCatalog(data, new Date().toISOString());
-      syncQueue();
-      setNotice({ tone: 'success', message: `${data.menu.name} loaded.` });
-    } catch (error) {
-      if (epoch !== stateEpoch.current) return;
-      const catalog = offlineRuntime.current?.snapshot().catalog;
-      if (catalog?.channel === nextChannel) {
-        setDraftMenu(cachedMenu(catalog));
-        setNotice({ tone: 'warning', message: 'Using the cached catalog while offline.' });
-      } else {
-        setDraftMenu(null);
-        handleError(error);
+  const loadMenu = useCallback(
+    async (nextChannel: Channel, activeRuntime = runtime, standalone = true) => {
+      if (!activeRuntime) return;
+      const epoch = stateEpoch.current;
+      if (standalone) setPending('menu');
+      try {
+        const data = await request<EffectiveMenu>(effectiveMenuPath(nextChannel), {
+          headers: authHeaders(activeRuntime),
+        });
+        if (epoch !== stateEpoch.current) return;
+        setDraftMenu(data);
+        await offlineRuntime.current?.cacheCatalog(data, new Date().toISOString());
+        syncQueue();
+        setNotice({ tone: 'success', message: `${data.menu.name} loaded.` });
+      } catch (error) {
+        if (epoch !== stateEpoch.current) return;
+        const catalog = offlineRuntime.current?.snapshot().catalog;
+        if (catalog?.channel === nextChannel) {
+          setDraftMenu(cachedMenu(catalog));
+          setNotice({ tone: 'warning', message: 'Using the cached catalog while offline.' });
+        } else {
+          setDraftMenu(null);
+          handleError(error);
+        }
+      } finally {
+        if (standalone) setPending(null);
       }
-    } finally {
-      if (standalone) setPending(null);
-    }
-  }
+    },
+    [handleError, runtime, syncQueue]
+  );
 
-  async function loadOpenOrders(activeRuntime = runtime, standalone = true) {
-    if (!activeRuntime) return;
-    const epoch = stateEpoch.current;
-    if (standalone) setPending('orders');
-    try {
-      const data = await request<{ orders: OpenOrder[] }>('/api/restaurant/orders/open-orders', {
-        headers: authHeaders(activeRuntime),
-      });
-      if (epoch !== stateEpoch.current) return;
-      setOpenOrders(data.orders);
-    } catch (error) {
-      if (epoch !== stateEpoch.current) return;
-      handleError(error);
-    } finally {
-      if (standalone) setPending(null);
-    }
-  }
+  const loadOpenOrders = useCallback(
+    async (activeRuntime = runtime, standalone = true) => {
+      if (!activeRuntime) return;
+      const epoch = stateEpoch.current;
+      if (standalone) setPending('orders');
+      try {
+        const data = await request<{ orders: OpenOrder[] }>('/api/restaurant/orders/open-orders', {
+          headers: authHeaders(activeRuntime),
+        });
+        if (epoch !== stateEpoch.current) return;
+        setOpenOrders(data.orders);
+      } catch (error) {
+        if (epoch !== stateEpoch.current) return;
+        handleError(error);
+      } finally {
+        if (standalone) setPending(null);
+      }
+    },
+    [handleError, runtime]
+  );
 
   async function loadDetail(orderId: string, activeRuntime = runtime, standalone = true) {
     if (!activeRuntime) return;
@@ -529,14 +566,36 @@ export function OrderPad() {
     }
   }
 
+  const loadUnlockedWorkspace = useCallback(
+    async (activeRuntime: Runtime) => {
+      await Promise.all([
+        loadMenu(channel, activeRuntime, false),
+        loadOpenOrders(activeRuntime, false),
+        loadLayout(activeRuntime),
+      ]);
+      await replayQueue(activeRuntime);
+    },
+    [channel, loadLayout, loadMenu, loadOpenOrders, replayQueue]
+  );
+
   const establish = useCallback(async () => {
-    if (pending) return;
+    if (establishing.current || pending) return;
+    establishing.current = true;
     setPending('establish');
     setNotice(null);
     try {
-      const data = await request<EstablishResponse>('/api/restaurant/terminal/establish', {
-        method: 'POST',
-      });
+      const data = await request<EstablishResponse>(
+        demo ? '/demo/restaurants/device-session' : '/api/restaurant/terminal/establish',
+        {
+          method: 'POST',
+          ...(demo
+            ? {
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ kind: 'POS' }),
+              }
+            : {}),
+        }
+      );
       const established: Runtime = {
         organizationId: data.device.organizationId,
         branchId: data.device.branchId,
@@ -546,7 +605,7 @@ export function OrderPad() {
         sessionId: data.session.id,
         state: data.session.state,
         branchName: data.device.branchName,
-        operator: null,
+        operator: data.operator ?? null,
       };
       offlineRuntime.current?.close();
       const local = new PosOfflineRuntime(
@@ -574,15 +633,22 @@ export function OrderPad() {
       setRuntime(established);
       runtimeBoundary.current = established;
       setEnrollmentState('ready');
-      setNotice({ tone: 'success', message: 'Device session established. Unlock to continue.' });
+      setNotice({
+        tone: 'success',
+        message: data.operator
+          ? `Demo terminal ready as ${data.operator.displayName}.`
+          : 'Device session established. Unlock to continue.',
+      });
       await loadOperators(established);
+      if (established.state === 'UNLOCKED') await loadUnlockedWorkspace(established);
     } catch (error) {
       setEnrollmentState('missing');
       handleError(error);
     } finally {
+      establishing.current = false;
       setPending(null);
     }
-  }, [handleError, loadOperators, pending, syncQueue]);
+  }, [demo, handleError, loadOperators, loadUnlockedWorkspace, pending, syncQueue]);
 
   useEffect(() => {
     if (enrollmentState === 'checking') queueMicrotask(() => void establish());
@@ -616,12 +682,7 @@ export function OrderPad() {
       await offlineRuntime.current?.resume();
       setOperatorPin('');
       setNotice({ tone: 'success', message: 'Terminal unlocked.' });
-      await Promise.all([
-        loadMenu(channel, unlocked, false),
-        loadOpenOrders(unlocked, false),
-        loadLayout(unlocked),
-      ]);
-      await replayQueue(unlocked);
+      await loadUnlockedWorkspace(unlocked);
     } catch (error) {
       setOperatorPin('');
       handleError(error);
@@ -909,7 +970,9 @@ export function OrderPad() {
                 ? 'Checking enrollment'
                 : enrollmentState === 'unrecoverable'
                   ? 'Local POS recovery required'
-                  : 'Enrollment required'
+                  : demo
+                    ? 'Demo entry required'
+                    : 'Enrollment required'
             }
             description={
               <span className="text-text-body">
@@ -917,7 +980,9 @@ export function OrderPad() {
                   ? 'Verifying this browser with the server.'
                   : enrollmentState === 'unrecoverable'
                     ? 'Local POS data could not be safely recovered.'
-                    : 'Ask an administrator to enroll this browser from Restaurant Devices.'}
+                    : demo
+                      ? 'Reopen the restaurant demo to start a fresh terminal session.'
+                      : 'Ask an administrator to enroll this browser from Restaurant Devices.'}
               </span>
             }
           />
@@ -938,14 +1003,16 @@ export function OrderPad() {
                   ? 'Please wait while the terminal credential is revalidated.'
                   : enrollmentState === 'unrecoverable'
                     ? 'The saved offline queue was not opened. Clear site data or re-enroll this browser before continuing.'
-                    : 'No usable browser enrollment was found. It may be missing, expired, or revoked.'}
+                    : demo
+                      ? 'This demo terminal no longer has a usable access session.'
+                      : 'No usable browser enrollment was found. It may be missing, expired, or revoked.'}
               </p>
               {enrollmentState === 'missing' || enrollmentState === 'unrecoverable' ? (
                 <a
-                  href="/login?callbackUrl=%2Frestaurant%2Fdevices"
+                  href={demo ? '/demo/restaurants' : '/login?callbackUrl=%2Frestaurant%2Fdevices'}
                   className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
                 >
-                  Return to admin-assisted enrollment
+                  {demo ? 'Reopen restaurant demo' : 'Return to admin-assisted enrollment'}
                 </a>
               ) : null}
             </div>
@@ -1114,6 +1181,7 @@ export function OrderPad() {
               <RefundPanel
                 request={checkoutRequest}
                 actingOperatorId={runtime.operator?.staffProfileId ?? ''}
+                demo={demo}
                 operators={operators
                   .filter((operator) => operator.canApprove)
                   .map((operator) => ({

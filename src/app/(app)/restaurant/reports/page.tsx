@@ -274,7 +274,7 @@ export default async function RestaurantReportsPage({
   const freshnessDisplay = freshness ? freshnessCopy(freshness.status) : null;
 
   return (
-    <div className="min-w-0 space-y-6">
+    <div className="min-w-0 space-y-6" data-tour="reports-overview">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Reports"

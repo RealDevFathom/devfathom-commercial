@@ -917,7 +917,7 @@ export type EffectiveMenuItem = {
   available: boolean;
 };
 
-async function buildEffectiveMenu(
+export async function buildEffectiveMenu(
   db: ScopedDb,
   publicationId: string,
   channel: OrderChannel,

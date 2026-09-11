@@ -22,6 +22,8 @@ const h = vi.hoisted(() => ({
   // request. Enabled by default so the pre-existing transport cases stay valid;
   // the entitlement cases below flip it off.
   entitlements: { enabled: ['restaurant-pos'] as string[] },
+  resolveTenantActor: vi.fn(),
+  findDemoStaff: vi.fn(),
 }));
 
 function findBy(rows: Row[], where: Record<string, unknown>): Row | null {
@@ -46,8 +48,13 @@ vi.mock('@/lib/rate-limit', () => ({
       : { ok: false, retryAfter: 30, remaining: 0 },
 }));
 
+vi.mock('@/lib/tenancy/tenant-actor', () => ({
+  resolveTenantActor: h.resolveTenantActor,
+}));
+
 vi.mock('@/lib/tenancy/scoped-db', () => {
   const db = {
+    restaurantStaffProfile: { findMany: h.findDemoStaff },
     restaurantRegisteredDevice: {
       findUnique: async ({ where }: { where: Record<string, unknown> }) =>
         findBy(h.store.devices, where),
@@ -86,17 +93,20 @@ import { hashTerminalSessionToken } from './terminal-session';
 import { TERMINAL_DEVICE_COOKIE, withDeviceAuth, withTerminalAuth } from './terminal-auth';
 import { openOrderBody, terminalCommandRoute } from './terminal-orders';
 
-const ORG = 'org_rest';
+const ORG = 'org_restaurant_test';
+const DEMO_ORG = 'org_demo_restaurant_seat_1';
 
 let deviceSecret: string;
 let sessionToken: string;
 
 function seedDevice(overrides: Row = {}): void {
-  h.store.orgs.push({ id: ORG, status: 'ACTIVE' });
+  h.store.orgs.push({ id: ORG, status: 'ACTIVE', isDemo: false });
   const gen = generateDeviceSecret();
   deviceSecret = gen.secret;
   h.store.devices.push({
     id: 'dev_1',
+    name: 'Demo POS S1 Main',
+    kind: 'POS',
     organizationId: ORG,
     branchId: 'branch_1',
     deviceSecretHash: gen.secretHash,
@@ -128,12 +138,15 @@ function req(headers: Record<string, string> = {}): Request {
 }
 
 beforeEach(() => {
+  h.findDemoStaff.mockReset().mockResolvedValue([{ id: 'staff_1' }]);
   h.store.devices = [];
   h.store.sessions = [];
   h.store.orgs = [];
   h.store.branches = [];
   h.rate.ok = true;
   h.entitlements.enabled = ['restaurant-pos'];
+  h.resolveTenantActor.mockReset();
+  h.resolveTenantActor.mockResolvedValue(null);
 });
 
 describe('withDeviceAuth', () => {
@@ -367,6 +380,163 @@ describe('withTerminalAuth', () => {
     expect(res.status).toBe(403);
     expect(inner).not.toHaveBeenCalled();
     expect(h.store.devices[0].lastSeenAt).toBeNull();
+  });
+});
+
+describe('demo terminal actor binding', () => {
+  function markDemo() {
+    h.store.orgs[0].isDemo = true;
+    h.store.orgs[0].id = DEMO_ORG;
+    for (const row of [...h.store.devices, ...h.store.sessions, ...h.store.branches])
+      row.organizationId = DEMO_ORG;
+  }
+
+  function validActor(overrides: Record<string, unknown> = {}) {
+    return {
+      organization: {
+        id: DEMO_ORG,
+        isDemo: true,
+        slug: 'demo-restaurant-seat-1',
+        status: 'ACTIVE',
+        vertical: 'RESTAURANT',
+        deploymentMode: 'SHARED',
+      },
+      support: null,
+      session: {
+        user: {
+          id: 'user_demo_restaurant_seat_1_manager',
+          email: 'manager.seat1@demo.devfathom.invalid',
+          organizationId: DEMO_ORG,
+          demoAccessExpiresAt: Date.now() + 60_000,
+        },
+      },
+      ...overrides,
+    };
+  }
+
+  function deviceHeaders() {
+    return { authorization: `Bearer ${deviceSecret}` };
+  }
+
+  function sessionHeaders() {
+    return {
+      ...deviceHeaders(),
+      'x-terminal-session': sessionToken,
+    };
+  }
+
+  it('admits both device-only and operator-session routes for a matching live demo actor', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    markDemo();
+    h.resolveTenantActor.mockResolvedValue(validActor());
+
+    expect((await withDeviceAuth(() => new Response('ok'))(req(deviceHeaders()))).status).toBe(200);
+    expect((await withTerminalAuth(() => new Response('ok'))(req(sessionHeaders()))).status).toBe(
+      200
+    );
+  });
+
+  it('rejects demo credentials when the organization loses its demo flag', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    markDemo();
+    h.store.orgs[0].isDemo = false;
+    const handler = vi.fn(() => new Response('ok'));
+    expect((await withDeviceAuth(handler)(req(deviceHeaders()))).status).toBe(401);
+    expect((await withTerminalAuth(handler)(req(sessionHeaders()))).status).toBe(401);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('rejects another persona device or staff session even within the same demo seat', async () => {
+    seedDevice({ name: 'Demo cashier POS S1' });
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    markDemo();
+    h.resolveTenantActor.mockResolvedValue(validActor());
+    const handler = vi.fn(() => new Response('ok'));
+    expect((await withTerminalAuth(handler)(req(sessionHeaders()))).status).toBe(403);
+    h.store.devices[0].name = 'Demo POS S1 Main';
+    h.store.sessions[0].activeStaffProfileId = 'cashier_staff';
+    expect((await withTerminalAuth(handler)(req(sessionHeaders()))).status).toBe(403);
+    expect(handler).not.toHaveBeenCalled();
+  });
+
+  it('binds a waiter to its own device and active staff identity', async () => {
+    seedDevice({ name: 'Demo waiter POS S1' });
+    seedSession({ activeStaffProfileId: 'waiter_staff' });
+    markDemo();
+    const actor = validActor();
+    actor.session.user.id = 'user_demo_restaurant_seat_1_waiter';
+    actor.session.user.email = 'waiter.seat1@demo.devfathom.invalid';
+    h.resolveTenantActor.mockResolvedValue(actor);
+    h.findDemoStaff.mockResolvedValue([{ id: 'waiter_staff' }]);
+    expect((await withTerminalAuth(() => new Response('ok'))(req(sessionHeaders()))).status).toBe(
+      200
+    );
+    expect(h.findDemoStaff).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId: actor.session.user.id,
+          primaryBranchId: 'branch_1',
+          user: expect.objectContaining({ role: 'EMPLOYEE', organizationRole: { key: 'server' } }),
+        }),
+      })
+    );
+  });
+
+  it.each([
+    ['missing actor', null],
+    [
+      'missing grant claim',
+      validActor({
+        session: {
+          user: {
+            id: 'user_demo_restaurant_seat_1_manager',
+            email: 'manager.seat1@demo.devfathom.invalid',
+            organizationId: ORG,
+          },
+        },
+      }),
+    ],
+    [
+      'expired grant claim',
+      validActor({
+        session: {
+          user: {
+            id: 'user_demo_restaurant_seat_1_manager',
+            email: 'manager.seat1@demo.devfathom.invalid',
+            organizationId: ORG,
+            demoAccessExpiresAt: Date.now() - 1,
+          },
+        },
+      }),
+    ],
+    [
+      'wrong organization',
+      validActor({ organization: { id: 'org_demo_restaurant_seat_2', isDemo: true } }),
+    ],
+  ])('rejects copied demo credentials for a %s', async (_label, actor) => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+    markDemo();
+    h.resolveTenantActor.mockResolvedValue(actor);
+
+    const device = await withDeviceAuth(() => new Response('ok'))(req(deviceHeaders()));
+    const terminal = await withTerminalAuth(() => new Response('ok'))(req(sessionHeaders()));
+
+    expect(device.status).toBe(401);
+    expect(terminal.status).toBe(401);
+  });
+
+  it('does not require a tenant actor for ordinary device flows', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1' });
+
+    expect((await withDeviceAuth(() => new Response('ok'))(req(deviceHeaders()))).status).toBe(200);
+    expect((await withTerminalAuth(() => new Response('ok'))(req(sessionHeaders()))).status).toBe(
+      200
+    );
+    expect(h.resolveTenantActor).not.toHaveBeenCalled();
   });
 });
 

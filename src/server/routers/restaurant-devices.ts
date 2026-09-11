@@ -1,4 +1,6 @@
 import { TRPCError } from '@trpc/server';
+import { can, subjectFromSession } from '@/lib/abac';
+import { resolveDemoDirectoryScope } from '@/lib/demo/directory-access';
 import { z } from 'zod';
 
 import {
@@ -25,7 +27,7 @@ import {
   resolveCapabilityBranchAuthorization,
 } from '@/lib/restaurant/staff-branch-authorization';
 import { annotateAudit } from '../audit';
-import { capabilityProcedure, router } from '../trpc';
+import { auditedProtectedProcedure, capabilityProcedure, router } from '../trpc';
 
 const manageDevicesProcedure = capabilityProcedure('devices:manage');
 
@@ -44,12 +46,23 @@ const manageDevicesProcedure = capabilityProcedure('devices:manage');
  */
 export const restaurantDevicesRouter = router({
   /** List registered devices with derived operational health (no secret material). */
-  list: manageDevicesProcedure.query(async ({ ctx }) => {
-    const authorization = await resolveCapabilityBranchAuthorization(
-      ctx.db,
-      ctx.session!.user,
-      'devices:manage'
-    );
+  list: auditedProtectedProcedure.query(async ({ ctx }) => {
+    let authorization = await resolveDemoDirectoryScope(ctx, 'devices');
+    if (!authorization) {
+      if (
+        !(await can(subjectFromSession(ctx.session!.user), 'devices:manage', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      )
+        denyStaffBranchAccess();
+      authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
+    }
     const now = new Date();
     const devices = await ctx.db.restaurantRegisteredDevice.findMany({
       where: { branchId: { in: authorization.branchIds } },

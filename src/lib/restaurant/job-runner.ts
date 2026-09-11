@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
+import { DEMO_RESET_JOB_TYPE } from '@/lib/demo/jobs';
 import '@/lib/restaurant/notification-webhook';
 import { runRestaurantJob } from '@/lib/restaurant/job-handlers';
 import {
@@ -36,6 +37,8 @@ import {
  * dispatch then runs INSIDE the target org's RLS context (`withTenantDb`), so the
  * strong M1–M6 tenancy boundary holds even for this privileged worker. A job
  * handler receives a tenant-scoped `db` bound to its own organization.
+ * `demo-reset` is reserved for its dedicated authenticated cron because it needs
+ * a longer transaction and stale-job lease than ordinary restaurant work.
  *
  * Everything time- or tenancy-dependent is injectable (`clock`, `discover
  * Organizations`, `runInOrg`, `outboxClient`, `sleep`), so the unit tests exercise
@@ -113,14 +116,16 @@ function addOutbox(into: OutboxDispatchSummary, from: OutboxDispatchSummary): vo
 }
 
 /** The privileged cross-org discovery scan. Reads only — never mutates a tenant
- * row outside its RLS context (D13 §5). Returns orgs with any pending scheduler or
- * outbox work; per-org due-ness is filtered later by the claim/dispatch queries. */
+ * row outside its RLS context (D13 §5). Returns orgs with ordinary pending
+ * scheduler or outbox work; per-org due-ness is filtered later. */
 async function defaultDiscoverOrganizations(): Promise<string[]> {
   return withPlatformDb(async (db) => {
     const rows = await db.$queryRaw<Array<{ organizationId: string }>>(Prisma.sql`
       SELECT DISTINCT "organizationId"
       FROM (
-        SELECT "organizationId" FROM "restaurant_jobs" WHERE "status" IN ('QUEUED', 'RUNNING')
+        SELECT "organizationId"
+        FROM "restaurant_jobs"
+        WHERE "status" IN ('QUEUED', 'RUNNING') AND "type" <> ${DEMO_RESET_JOB_TYPE}
         UNION
         SELECT "organizationId" FROM "restaurant_event_outbox" WHERE "status" = 'PENDING'
       ) AS pending
@@ -169,7 +174,11 @@ export async function runRestaurantWorkerTick(
 
     // 1. Requeue jobs abandoned by a crashed worker (in this org's RLS scope).
     result.recovered += await runInOrg(organizationId, (db) =>
-      recoverStaleJobs(db, { now, leaseMs: options.leaseMs })
+      recoverStaleJobs(db, {
+        now,
+        leaseMs: options.leaseMs,
+        excludeJobType: DEMO_RESET_JOB_TYPE,
+      })
     );
 
     if (options.signal?.aborted) break;
@@ -179,6 +188,7 @@ export async function runRestaurantWorkerTick(
     const drain = await drainDueJobs({
       runScoped: (work) => runInOrg(organizationId, work),
       workerId,
+      excludeJobType: DEMO_RESET_JOB_TYPE,
       handler: (job) => runInOrg(organizationId, (db) => runRestaurantJob({ db, job })),
       signal: options.signal,
       clock: () => now,

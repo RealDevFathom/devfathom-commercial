@@ -31,12 +31,22 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
     where: { tokenHash: hashInviteToken(token) },
     include: {
       user: {
-        select: { id: true, name: true, email: true, title: true, department: true, role: true },
+        select: {
+          id: true,
+          name: true,
+          email: true,
+          title: true,
+          department: true,
+          role: true,
+          organization: { select: { isDemo: true } },
+        },
       },
     },
   });
 
-  if (!invitation || invitation.acceptedAt) throw invalidInvitation();
+  if (!invitation || invitation.acceptedAt || invitation.user.organization.isDemo) {
+    throw invalidInvitation();
+  }
   if (invitation.expiresAt.getTime() < Date.now()) throw invalidInvitation();
   return invitation;
 }

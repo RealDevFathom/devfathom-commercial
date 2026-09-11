@@ -4,6 +4,8 @@ import {
   moneyMutationRoute,
   refundBody,
   resolveApprover,
+  resolveDemoApproverIdentity,
+  operatorHasCapability,
   serializeRefundResult,
 } from '@/lib/restaurant/checkout-routes';
 import { refundTender } from '@/lib/restaurant/refunds';
@@ -14,6 +16,13 @@ const money = (value: Prisma.Decimal) => value.toString();
 export const GET = moneyReadRoute({
   capability: 'payments:refund',
   run: async (ctx) => {
+    const now = new Date();
+    const candidate = await resolveDemoApproverIdentity(ctx, now);
+    const demoApproval =
+      candidate &&
+      (await operatorHasCapability(ctx.db, candidate.staffProfileId, 'coauth:approve', now))
+        ? candidate
+        : undefined;
     const tenders = await ctx.db.restaurantTender.findMany({
       where: { bill: { branchId: ctx.device.branchId, status: 'SETTLED' } },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -29,6 +38,7 @@ export const GET = moneyReadRoute({
       },
     });
     return Response.json({
+      ...(demoApproval ? { demoApproval } : {}),
       tenders: tenders.map((tender) => {
         const refunded = tender.refunds.reduce(
           (sum, row) => sum.plus(row.amount),

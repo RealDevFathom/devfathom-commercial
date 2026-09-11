@@ -28,25 +28,41 @@ export default async function PlatformOverviewPage() {
       activationQueue,
       renewals,
     ] = await Promise.all([
-      db.organization.groupBy({ by: ['status'], _count: { _all: true } }),
+      db.organization.groupBy({
+        by: ['status'],
+        where: { isDemo: false },
+        _count: { _all: true },
+      }),
       db.platformContract.aggregate({
-        where: { status: 'ACTIVE' },
+        where: { status: 'ACTIVE', organization: { isDemo: false } },
         _sum: { value: true },
         _count: { _all: true },
       }),
       db.platformOpportunity.aggregate({
-        where: { stage: { notIn: ['WON', 'LOST'] } },
+        where: {
+          stage: { notIn: ['WON', 'LOST'] },
+          OR: [{ convertedOrganizationId: null }, { convertedOrganization: { isDemo: false } }],
+        },
         _sum: { estimatedValue: true },
         _count: true,
       }),
       db.platformInvoice.aggregate({
-        where: { status: { in: ['OVERDUE', 'PARTIALLY_PAID'] } },
+        where: {
+          status: { in: ['OVERDUE', 'PARTIALLY_PAID'] },
+          organization: { isDemo: false },
+        },
         _sum: { total: true },
         _count: { _all: true },
       }),
-      db.platformJob.groupBy({ by: ['status'], _count: { _all: true } }),
+      db.platformJob.groupBy({
+        by: ['status'],
+        where: {
+          OR: [{ organizationId: null }, { organization: { isDemo: false } }],
+        },
+        _count: { _all: true },
+      }),
       db.organization.findMany({
-        where: { status: { in: ['PROSPECT', 'ONBOARDING'] } },
+        where: { isDemo: false, status: { in: ['PROSPECT', 'ONBOARDING'] } },
         orderBy: { createdAt: 'asc' },
         take: 6,
         select: {
@@ -59,7 +75,11 @@ export default async function PlatformOverviewPage() {
         },
       }),
       db.platformContract.findMany({
-        where: { status: 'ACTIVE', endDate: { lte: renewalWindow, gte: now } },
+        where: {
+          status: 'ACTIVE',
+          endDate: { lte: renewalWindow, gte: now },
+          organization: { isDemo: false },
+        },
         orderBy: { endDate: 'asc' },
         take: 6,
         select: {

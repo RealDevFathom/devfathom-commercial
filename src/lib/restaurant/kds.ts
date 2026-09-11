@@ -121,6 +121,7 @@ export function requireKdsStation(
 export type StationQueueItemInput = {
   orderItemId: string;
   name: string;
+  modifierNames: string[];
   course: number;
   seatNumber: number | null;
   quantity: number;
@@ -282,7 +283,13 @@ export async function readStationQueue(
           orderItemId: true,
           quantity: true,
           orderItem: {
-            select: { name: true, course: true, seatNumber: true, status: true },
+            select: {
+              name: true,
+              modifiers: { select: { name: true } },
+              course: true,
+              seatNumber: true,
+              status: true,
+            },
           },
         },
       },
@@ -303,6 +310,7 @@ export async function readStationQueue(
       items: ticket.items.map((line) => ({
         orderItemId: line.orderItemId,
         name: line.orderItem.name,
+        modifierNames: line.orderItem.modifiers.map((modifier) => modifier.name),
         course: line.orderItem.course,
         seatNumber: line.orderItem.seatNumber,
         quantity: line.quantity,

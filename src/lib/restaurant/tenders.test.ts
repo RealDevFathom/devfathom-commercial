@@ -221,14 +221,14 @@ async function waitForLockWaiters(
   throw new Error(`Timed out waiting for ${minimum} ${table} lock waiter(s).`);
 }
 
-async function openDrawer(device = deviceId): Promise<string> {
+async function openDrawer(device = deviceId, now = AT): Promise<string> {
   const opened = await deps.drawer.openDrawerSession(deps.createTenantDb(orgId), {
     organizationId: orgId,
     entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
     branchId: ids.branch,
     openingFloat: '100.00',
     actor: actor(device),
-    now: AT,
+    now,
   });
   return opened.drawerSessionId;
 }
@@ -375,6 +375,103 @@ beforeAll(async () => {
 });
 
 describeIfDatabase('cash tenders (real DB)', () => {
+  it('overnight collection: partial balance, posting date, replay, reversal and drawer reconciliation', async () => {
+    const { closePreview } = await import('./daily-close');
+    const { refundTender } = await import('./refunds');
+    const { orderId, billId } = await openBill(1); // Existing 12.50 fixture; D1 bill stays D1.
+    const db = deps.createTenantDb(orgId);
+    const device = await newDevice('POS-overnight');
+    const nextDay = new Date('2026-08-20T18:00:00.000Z');
+    await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'OTHER', amount: '2.50' },
+      actor: actor(device),
+      now: AT,
+    });
+    const before = await deps.bills.evaluateOrderSettlement(db, orderId);
+    expect(before.bills[0]!.remainingDue.toFixed(2)).toBe('10.00');
+    const opened = await deps.drawer.openDrawerSession(db, {
+      organizationId: orgId,
+      entitlementLimits: { 'pos.concurrentRegisters.max': 1000000 },
+      branchId: ids.branch,
+      openingFloat: '100.00',
+      actor: actor(device),
+      now: nextDay,
+    });
+    const dayOneBefore = await closePreview(db, {
+      branchId: ids.branch,
+      businessDate: '2026-08-19',
+    });
+    const dayTwoBefore = await closePreview(db, {
+      branchId: ids.branch,
+      businessDate: '2026-08-20',
+    });
+    const input = {
+      billId,
+      branchId: ids.branch,
+      tender: { type: 'CASH' as const, amount: '10.00', cashReceived: '20.00' },
+      actor: actor(device),
+      now: nextDay,
+    };
+    const collected = await deps.tenders.applyTender(db, input);
+    expect(collected.remainingDue.toFixed(2)).toBe('0.00');
+    expect(collected.changeGiven?.toFixed(2)).toBe('10.00');
+    const persisted = await read((tx) =>
+      tx.restaurantTender.findUniqueOrThrow({
+        where: { id: collected.tenderId },
+        include: { bill: true, drawerSession: true },
+      })
+    );
+    expect(persisted.businessDate.toISOString().slice(0, 10)).toBe('2026-08-20');
+    expect(persisted.drawerSession?.businessDate).toEqual(persisted.businessDate);
+    expect(persisted.bill.businessDate.toISOString().slice(0, 10)).toBe('2026-08-19');
+    const dayOneAfter = await closePreview(db, {
+      branchId: ids.branch,
+      businessDate: '2026-08-19',
+    });
+    const dayTwoAfter = await closePreview(db, {
+      branchId: ids.branch,
+      businessDate: '2026-08-20',
+    });
+    expect(dayOneAfter.tenderTotals).toEqual(dayOneBefore.tenderTotals);
+    const cash = (day: typeof dayTwoAfter) =>
+      day.tenderTotals.find((row) => row.tenderType === 'CASH')?.amount ?? new Prisma.Decimal(0);
+    expect(cash(dayTwoAfter).minus(cash(dayTwoBefore)).toFixed(2)).toBe('10.00');
+    expect(dayTwoAfter.netSales).toEqual(dayTwoBefore.netSales);
+    const reversed = await refundTender(db, {
+      originalTenderId: collected.tenderId,
+      amount: '10.00',
+      kind: 'VOID_REVERSAL',
+      reason: 'Synthetic overnight regression',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(device),
+      branchId: ids.branch,
+      now: nextDay,
+    });
+    expect(reversed.businessDate).toEqual(persisted.businessDate);
+    const closed = await deps.drawer.closeDrawerSession(db, {
+      drawerSessionId: opened.drawerSessionId,
+      countedCash: '100.00',
+      actor: actor(device),
+      now: nextDay,
+    });
+    expect(closed.expectedCash.toFixed(2)).toBe('100.00');
+    expect(closed.variance.toFixed(2)).toBe('0.00');
+    const replay = await deps.tenders.applyTender(db, {
+      ...input,
+      now: new Date('2026-08-21T18:00:00Z'),
+    });
+    expect(replay).toEqual({ ...collected, replayed: true });
+    expect(
+      await read((tx) =>
+        tx.restaurantDrawerMovement.count({ where: { tenderId: collected.tenderId } })
+      )
+    ).toBe(1);
+    expect(
+      (await deps.bills.evaluateOrderSettlement(db, orderId)).bills[0]!.remainingDue.toFixed(2)
+    ).toBe('0.00');
+  });
+
   it('settles a bill with cash: change, a net CASH_SALE movement, and a receipt', async () => {
     const { billId, grandTotal } = await openBill(1); // 12.50
     const drawerId = await openDrawer();
@@ -754,7 +851,7 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     const at = await installMixedRateProfile();
     const { billId } = await openMixedRateBill();
     const cashDevice = await newDevice('POS-mixed-card-cash');
-    await openDrawer(cashDevice);
+    await openDrawer(cashDevice, at);
     const db = deps.createTenantDb(orgId);
 
     const partial = await deps.tenders.applyTender(db, {
@@ -789,7 +886,7 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     const at = new Date('2026-09-15T18:00:00.000Z');
     const { billId } = await openMixedRateBill();
     const cashDevice = await newDevice('POS-mixed-cash-card');
-    await openDrawer(cashDevice);
+    await openDrawer(cashDevice, at);
     const db = deps.createTenantDb(orgId);
     const partial = await deps.tenders.applyTender(db, {
       billId,

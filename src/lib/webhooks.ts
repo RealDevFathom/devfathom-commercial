@@ -39,12 +39,22 @@ export function emitEvent(
   payload: unknown
 ): void {
   if (!hasModule(entitlements, 'webhooks')) return;
-  void dispatch(db, event, payload).catch((err) => {
+  void dispatch(db, entitlements.organizationId, event, payload).catch((err) => {
     console.error('[webhooks] dispatch failed for', event, err);
   });
 }
 
-async function dispatch(db: PrismaClient, event: string, payload: unknown): Promise<void> {
+async function dispatch(
+  db: PrismaClient,
+  organizationId: string,
+  event: string,
+  payload: unknown
+): Promise<void> {
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { isDemo: true },
+  });
+  if (organization?.isDemo) return;
   const hooks = await db.webhook.findMany({
     where: { active: true, events: { has: event } },
     select: { id: true, url: true, secret: true },

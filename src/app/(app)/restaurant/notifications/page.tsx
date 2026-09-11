@@ -16,6 +16,8 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantNotificationsRouter } from '@/server/routers/restaurant-notifications';
 import { createTRPCContext } from '@/server/trpc';
 
+import { retryWebhookNotice } from './retry-webhook-notice';
+
 /**
  * Resolve the tenant actor first, then hand the resolved session and
  * organization to the context factory.
@@ -49,7 +51,6 @@ type Notification = NotificationPage['items'][number];
 type Matrix = RouterOutputs['restaurantNotifications']['getMatrix'];
 type WebhookStatus = RouterOutputs['restaurantNotifications']['webhookStatus'];
 type Channel = (typeof RESTAURANT_NOTIFICATION_CHANNELS)[number];
-type WebhookJobStatus = WebhookStatus['deliveries'][number]['status'];
 type Filter = 'all' | 'unread';
 type Notice = { kind: 'success' | 'error'; text: string };
 
@@ -95,21 +96,6 @@ const CHANNEL_LABEL: Record<Channel, string> = {
   PUSH: 'Push',
   WHATSAPP: 'WhatsApp',
 };
-
-export function retryWebhookNotice(status: WebhookJobStatus): string {
-  switch (status) {
-    case 'QUEUED':
-      return 'Webhook retry is queued.';
-    case 'RUNNING':
-      return 'Webhook retry is currently running.';
-    case 'SUCCEEDED':
-      return 'Webhook retry already succeeded.';
-    case 'FAILED':
-      return 'Webhook retry finished with a permanent failure.';
-    case 'DEAD':
-      return 'Webhook retry is dead-lettered.';
-  }
-}
 
 const field = (form: FormData, name: string) => String(form.get(name) ?? '').trim();
 const optionalField = (form: FormData, name: string) => field(form, name) || undefined;

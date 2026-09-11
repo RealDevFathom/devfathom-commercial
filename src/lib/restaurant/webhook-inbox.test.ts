@@ -93,6 +93,7 @@ function createFakeDb() {
 function claimedJob(payload: unknown): ClaimedJob {
   return {
     id: 'job_1',
+    organizationId: 'org_test',
     type: WEBHOOK_PROCESS_JOB_TYPE,
     payload: payload as Prisma.JsonValue,
     attempts: 1,

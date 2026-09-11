@@ -89,12 +89,12 @@ describe('createTRPCContext request actor resolution', () => {
 
 type SessionUser = Record<string, unknown> & { id: string };
 
-function contextFor(user: SessionUser | null): TRPCContext {
+function contextFor(user: SessionUser | null, isDemo = false): TRPCContext {
   return {
     db: {} as TRPCContext['db'],
     entitlements: { enabledModules: [] } as unknown as TRPCContext['entitlements'],
     session: user ? ({ expires: 'later', user } as unknown as TRPCContext['session']) : null,
-    organization: null,
+    organization: isDemo ? ({ id: 'org_demo', isDemo: true } as never) : null,
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
@@ -118,6 +118,17 @@ const probe = router({
   capabilityWrite: capabilityProcedure('team:view')
     .input(z.object({}).optional())
     .mutation(() => 'ok'),
+});
+
+const demoProbe = router({
+  webhooks: router({
+    list: protectedProcedure.query(() => 'blocked'),
+    create: adminProcedure.mutation(() => 'blocked'),
+  }),
+  restaurantOrders: router({
+    list: protectedProcedure.query(() => 'ok'),
+    open: capabilityProcedure('orders:manage').mutation(() => 'ok'),
+  }),
 });
 
 const CALLS: Array<[string, (caller: ReturnType<typeof probe.createCaller>) => Promise<unknown>]> =
@@ -249,5 +260,37 @@ describe('procedure guards admit a healthy session', () => {
     const caller = probe.createCaller(contextFor({ ...ADMIN, status: 'ACTIVE' }));
     await expect(caller.historyRead()).resolves.toBe('ok');
     expect(mocks.recordTrpcAudit).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('central demo procedure isolation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+  });
+
+  it.each([
+    [
+      'blocked integration read',
+      (caller: ReturnType<typeof demoProbe.createCaller>) => caller.webhooks.list(),
+    ],
+    [
+      'blocked integration mutation',
+      (caller: ReturnType<typeof demoProbe.createCaller>) => caller.webhooks.create(),
+    ],
+  ])('%s returns the friendly demo denial', async (_label, call) => {
+    const caller = demoProbe.createCaller(contextFor({ ...ADMIN, status: 'ACTIVE' }, true));
+    await expect(call(caller)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Not available in demo.',
+    });
+  });
+
+  it('keeps ordinary restaurant reads and mutations available', async () => {
+    const caller = demoProbe.createCaller(contextFor({ ...ADMIN, status: 'ACTIVE' }, true));
+
+    await expect(caller.restaurantOrders.list()).resolves.toBe('ok');
+    await expect(caller.restaurantOrders.open()).resolves.toBe('ok');
   });
 });

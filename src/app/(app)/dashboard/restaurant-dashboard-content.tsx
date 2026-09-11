@@ -63,9 +63,11 @@ export function RestaurantDashboardContent({
 
       {checklist ? <FirstRunChecklist checklist={checklist} /> : null}
 
-      <RestaurantManagementOverview
-        insightsEnabled={enabledModules.includes('restaurant-insights')}
-      />
+      <div data-tour="dashboard-overview">
+        <RestaurantManagementOverview
+          insightsEnabled={enabledModules.includes('restaurant-insights')}
+        />
+      </div>
 
       {visibleLinks.length > 0 ? (
         <SectionCard

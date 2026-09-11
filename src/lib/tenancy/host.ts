@@ -31,6 +31,8 @@ export type TenantOrganization = {
   locale: string;
   currency: string;
   seatLimit: number;
+  isDemo: boolean;
+  vertical?: string;
 };
 
 const ORGANIZATION_SELECT = {
@@ -44,6 +46,8 @@ const ORGANIZATION_SELECT = {
   locale: true,
   currency: true,
   seatLimit: true,
+  isDemo: true,
+  vertical: true,
 } as const;
 
 export function requestHost(request: Request): string {

@@ -12,11 +12,12 @@ import {
 
 type Row = Record<string, unknown>;
 
-function makeDb(settings: Row[] = []) {
+function makeDb(settings: Row[] = [], isDemo = false) {
   const notifications = new Map<string, Row>();
   const deliveries = new Map<string, Row>();
   const db = {
     $transaction: async (work: (tx: unknown) => Promise<unknown>) => work(db),
+    organization: { findFirst: vi.fn(async () => ({ isDemo })) },
     restaurantNotificationChannelSetting: {
       findMany: vi.fn(async () => settings),
     },
@@ -114,5 +115,19 @@ describe('deliverNotificationRequest', () => {
     await deliverNotificationRequest(db, REQUEST);
     expect(notifications.size).toBe(2);
     expect(deliveries.size).toBe(10);
+  });
+
+  it('keeps in-app delivery but sinks every outbound channel for demos', async () => {
+    const { db, notifications, deliveries } = makeDb([], true);
+
+    await expect(deliverNotificationRequest(db, REQUEST)).resolves.toEqual({
+      notificationCount: 2,
+      deliveryCount: 2,
+    });
+    expect(notifications.size).toBe(2);
+    expect([...deliveries.values()].map((row) => [row.channel, row.status])).toEqual([
+      ['IN_APP', 'DELIVERED_IN_APP'],
+      ['IN_APP', 'DELIVERED_IN_APP'],
+    ]);
   });
 });

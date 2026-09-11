@@ -547,6 +547,9 @@ export function FloorConsole() {
                             {floor.tables.map((table) => (
                               <div
                                 key={table.id}
+                                data-tour={
+                                  table.id === allTables[0]?.id ? 'floor-table' : undefined
+                                }
                                 className="rounded-md border border-border-default bg-card p-3"
                               >
                                 <div className="flex items-start justify-between gap-3">

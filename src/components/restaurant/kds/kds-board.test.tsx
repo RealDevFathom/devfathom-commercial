@@ -1,4 +1,5 @@
 import { act, fireEvent, render, screen } from '@testing-library/react';
+import { StrictMode } from 'react';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { KdsBoard } from './kds-board';
@@ -13,10 +14,16 @@ function json(body: unknown, status = 200) {
   });
 }
 
-function ticket(ticketNumber: number, name: string, displayStatus: TicketDisplayStatus) {
+function ticket(
+  ticketNumber: number,
+  name: string,
+  displayStatus: TicketDisplayStatus,
+  modifierNames: string[] = []
+) {
   const items: Array<{
     orderItemId: string;
     name: string;
+    modifierNames: string[];
     course: number;
     seatNumber: number;
     quantity: number;
@@ -26,6 +33,7 @@ function ticket(ticketNumber: number, name: string, displayStatus: TicketDisplay
     {
       orderItemId: `item-${ticketNumber}`,
       name,
+      modifierNames,
       course: 1,
       seatNumber: ticketNumber,
       quantity: 1,
@@ -96,6 +104,7 @@ async function connect(enrolled = true) {
           return Promise.resolve(
             json({
               sessionToken: 'session-token',
+              session: { state: 'LOCKED', activeStaffProfileId: null },
               device: {
                 name: 'Kitchen screen',
                 branchName: 'Clifton Flagship',
@@ -129,6 +138,56 @@ afterEach(() => {
 });
 
 describe('KdsBoard transport', () => {
+  it('bootstraps an unlocked demo KDS without enrollment or operator PIN setup', async () => {
+    const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
+      const path = String(input);
+      if (path.endsWith('/demo/restaurants/device-session')) {
+        return json({
+          ready: true,
+          branchId: 'branch-1',
+          sessionToken: 'session-token',
+          session: {
+            id: 'session-1',
+            state: 'UNLOCKED',
+            activeStaffProfileId: 'staff-1',
+            establishedAt: '2026-08-19T00:00:00Z',
+          },
+          device: {
+            id: 'device-1',
+            name: 'Demo kitchen',
+            branchName: 'Clifton Flagship',
+            kind: 'KDS',
+          },
+          operator: { staffProfileId: 'staff-1', displayName: 'Demo Manager', role: 'Manager' },
+        });
+      }
+      if (path.includes('/kds/queue?'))
+        return json(queue([ticket(1, 'Demo burger', 'NEW', ['Mild'])]));
+      if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+      throw new Error(`Unexpected request: ${path}`);
+    });
+    vi.stubGlobal('fetch', fetch);
+
+    render(
+      <StrictMode>
+        <KdsBoard demo />
+      </StrictMode>
+    );
+
+    expect(await screen.findByText('Demo burger')).toBeVisible();
+    expect(screen.getByText('Mild')).toBeVisible();
+    expect(screen.queryByLabelText('Operator PIN')).not.toBeInTheDocument();
+    const bootstraps = fetch.mock.calls.filter(([input]) =>
+      String(input).endsWith('/demo/restaurants/device-session')
+    );
+    expect(bootstraps).toHaveLength(1);
+    expect(bootstraps[0]?.[1]).toMatchObject({
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ kind: 'KDS' }),
+    });
+  });
+
   it('fully resyncs once after a cursor gap and replaces stale level state', async () => {
     vi.useFakeTimers();
     const payloads = [
@@ -383,6 +442,7 @@ describe('KdsBoard transport', () => {
     mixedTicket.items.push({
       orderItemId: 'served-item',
       name: 'Served salad',
+      modifierNames: [],
       course: 1,
       seatNumber: 4,
       quantity: 1,
@@ -392,6 +452,7 @@ describe('KdsBoard transport', () => {
     mixedTicket.items.push({
       orderItemId: 'held-item',
       name: 'Held dessert',
+      modifierNames: [],
       course: 3,
       seatNumber: 4,
       quantity: 1,

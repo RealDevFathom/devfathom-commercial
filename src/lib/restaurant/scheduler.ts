@@ -152,11 +152,16 @@ export type ClaimOptions = {
   /** Identifies the claimer; recorded on the job and its execution rows. */
   workerId: string;
   now?: Date;
+  /** Restricts claims to one registered job type when supplied. */
+  jobType?: string;
+  /** Excludes one job type when supplied. Mutually exclusive with jobType. */
+  excludeJobType?: string;
 };
 
 /** A job claimed for execution (already moved to RUNNING; `attempts` incremented). */
 export type ClaimedJob = {
   id: string;
+  organizationId: string;
   type: string;
   payload: Prisma.JsonValue;
   attempts: number;
@@ -178,7 +183,29 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
   if (!workerId) {
     throw new SchedulerError('claimNextDue requires a non-empty workerId.', 'INVALID');
   }
+  const jobType = opts.jobType?.trim();
+  const excludeJobType = opts.excludeJobType?.trim();
+  if (opts.jobType !== undefined && !jobType) {
+    throw new SchedulerError('claimNextDue requires a non-empty jobType when supplied.', 'INVALID');
+  }
+  if (opts.excludeJobType !== undefined && !excludeJobType) {
+    throw new SchedulerError(
+      'claimNextDue requires a non-empty excludeJobType when supplied.',
+      'INVALID'
+    );
+  }
+  if (jobType && excludeJobType) {
+    throw new SchedulerError(
+      'claimNextDue accepts either jobType or excludeJobType, not both.',
+      'INVALID'
+    );
+  }
   const now = opts.now ?? new Date();
+  const typeFilter = jobType
+    ? Prisma.sql`AND "type" = ${jobType}`
+    : excludeJobType
+      ? Prisma.sql`AND "type" <> ${excludeJobType}`
+      : Prisma.empty;
 
   return runSchedulerTransaction(db, async (tx) => {
     const candidates = await tx.$queryRaw<Array<{ id: string }>>(Prisma.sql`
@@ -186,6 +213,7 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
       FROM "restaurant_jobs"
       WHERE "status" = 'QUEUED'
         AND "nextAttemptAt" <= ${now}
+        ${typeFilter}
       ORDER BY "nextAttemptAt" ASC, "createdAt" ASC
       FOR UPDATE SKIP LOCKED
       LIMIT 1
@@ -204,6 +232,7 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
       },
       select: {
         id: true,
+        organizationId: true,
         type: true,
         payload: true,
         attempts: true,
@@ -213,6 +242,7 @@ export async function claimNextDue(db: ScopedDb, opts: ClaimOptions): Promise<Cl
     });
     return {
       id: job.id,
+      organizationId: job.organizationId,
       type: job.type,
       payload: job.payload,
       attempts: job.attempts,
@@ -319,13 +349,38 @@ export async function fail(
  */
 export async function recoverStaleJobs(
   db: ScopedDb,
-  opts: { now?: Date; leaseMs?: number } = {}
+  opts: { now?: Date; leaseMs?: number; jobType?: string; excludeJobType?: string } = {}
 ): Promise<number> {
   const now = opts.now ?? new Date();
   const leaseMs = opts.leaseMs ?? DEFAULT_LEASE_MS;
+  const jobType = opts.jobType?.trim();
+  const excludeJobType = opts.excludeJobType?.trim();
+  if (opts.jobType !== undefined && !jobType) {
+    throw new SchedulerError(
+      'recoverStaleJobs requires a non-empty jobType when supplied.',
+      'INVALID'
+    );
+  }
+  if (opts.excludeJobType !== undefined && !excludeJobType) {
+    throw new SchedulerError(
+      'recoverStaleJobs requires a non-empty excludeJobType when supplied.',
+      'INVALID'
+    );
+  }
+  if (jobType && excludeJobType) {
+    throw new SchedulerError(
+      'recoverStaleJobs accepts either jobType or excludeJobType, not both.',
+      'INVALID'
+    );
+  }
   const cutoff = new Date(now.getTime() - leaseMs);
   const result = await db.restaurantJob.updateMany({
-    where: { status: 'RUNNING', claimedAt: { lt: cutoff } },
+    where: {
+      status: 'RUNNING',
+      claimedAt: { lt: cutoff },
+      ...(jobType && { type: jobType }),
+      ...(excludeJobType && { type: { not: excludeJobType } }),
+    },
     data: {
       status: 'QUEUED',
       nextAttemptAt: now,
@@ -368,6 +423,10 @@ export type DrainOptions = {
    */
   runScoped: <T>(work: (db: ScopedDb) => Promise<T>) => Promise<T>;
   workerId: string;
+  /** Restricts claims to one registered job type when supplied. */
+  jobType?: string;
+  /** Excludes one job type when supplied. Mutually exclusive with jobType. */
+  excludeJobType?: string;
   /** Runs one claimed job; a throw settles the job through `fail`. */
   handler: (job: ClaimedJob) => Promise<void>;
   /** Aborting stops claiming and releases any just-claimed job (drain + release). */
@@ -408,7 +467,12 @@ export async function drainDueJobs(options: DrainOptions): Promise<DrainResult> 
   while (result.claimed < maxJobs) {
     if (options.signal?.aborted) break;
     const job = await options.runScoped((db) =>
-      claimNextDue(db, { workerId: options.workerId, now: clock() })
+      claimNextDue(db, {
+        workerId: options.workerId,
+        now: clock(),
+        jobType: options.jobType,
+        excludeJobType: options.excludeJobType,
+      })
     );
     if (!job) break;
     result.claimed += 1;

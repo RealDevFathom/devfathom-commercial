@@ -32,6 +32,7 @@ describe('checkout money serialization', () => {
           status: 'SETTLED',
           splitKind: 'NONE',
           grandTotal: decimal(value),
+          remainingDue: decimal('0'),
           deliveryFeeTotal: decimal(value),
           compTotal: decimal(value),
           discountTotal: decimal(value),
@@ -54,7 +55,14 @@ describe('checkout money serialization', () => {
       derivedOrderTotal: expected,
       accountedTotal: expected,
       deliveryFeeTotal: expected,
-      bills: [{ grandTotal: expected, deliveryFeeTotal: expected, compTotal: expected }],
+      bills: [
+        {
+          grandTotal: expected,
+          remainingDue: '0.00',
+          deliveryFeeTotal: expected,
+          compTotal: expected,
+        },
+      ],
     });
 
     const receiptDb = {

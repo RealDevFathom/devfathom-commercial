@@ -40,7 +40,7 @@ vi.mock('@/lib/trpc', () => ({
 }));
 vi.mock('@/components/entitlements-provider', () => ({ useEntitlements: () => ({}) }));
 
-import { SopAdminView, type SopAdminViewProps } from './page';
+import { SopAdminView, type SopAdminViewProps } from './sop-admin';
 
 type Template = SopAdminViewProps['templates'][number];
 

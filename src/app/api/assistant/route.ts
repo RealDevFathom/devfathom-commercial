@@ -37,6 +37,9 @@ export async function POST(req: Request) {
 
   const { messages }: { messages: UIMessage[] } = await req.json();
   const organization = actor.organization;
+  if (organization.isDemo) {
+    return Response.json({ error: 'Not available in demo.' }, { status: 403 });
+  }
   const entitlements = await resolveOrganizationEntitlements(
     organization.id,
     createTenantDb(organization.id)

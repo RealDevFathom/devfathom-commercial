@@ -26,6 +26,7 @@
     "db:push": "bun -e \"console.error('Disabled: this schema has migration-only RLS and composite constraints. Use prisma migrate deploy/dev.'); process.exit(1)\"",
     "db:migrate": "bunx prisma migrate dev",
     "db:seed": "bunx prisma db seed",
+    "demo:seed": "tsx --tsconfig=scripts/tsconfig.json prisma/seed-demo/restaurant.ts",
     "db:studio": "bunx prisma studio",
     "db:reset": "bunx prisma migrate reset",
     "assistant:eval": "tsx scripts/assistant-eval.ts",

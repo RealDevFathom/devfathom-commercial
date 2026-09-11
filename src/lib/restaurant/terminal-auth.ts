@@ -8,6 +8,16 @@ import type {
   RestaurantTerminalSession,
 } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
+import { liveDemoAccessExpiry } from '@/lib/auth/session-state';
+import { demoSeatFromOrganizationId } from '@/lib/demo/config';
+import {
+  DEMO_PERSONAS,
+  demoPersonaForUser,
+  demoPersonaCanUseDevice,
+  demoPersonaDeviceName,
+  demoPersonaUserRole,
+  isCanonicalDemoOrganization,
+} from '@/lib/demo/personas';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import {
@@ -35,6 +45,7 @@ import {
   type TerminalSessionState,
 } from '@/lib/restaurant/terminal-session';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { resolveTenantActor, type TenantActor } from '@/lib/tenancy/tenant-actor';
 
 /**
  * M2-L3 / §5 / C2 & C5 — device-authenticated terminal transport.
@@ -67,6 +78,8 @@ const DEVICE_LIMIT = 240;
 export type TerminalDeviceContext = {
   organizationId: string;
   device: RestaurantRegisteredDevice;
+  /** Present only for demo devices after the live Auth.js actor is bound. */
+  demoActor: TenantActor | null;
   /** Tenant-scoped transaction for the device's organization. */
   db: ScopedDb;
 };
@@ -218,7 +231,12 @@ async function rejectDisabledTerminalModule(
   return null;
 }
 
-type DeviceDiscovery = { deviceId: string; organizationId: string };
+type DeviceDiscovery = {
+  deviceId: string;
+  organizationId: string;
+  isDemo: boolean;
+  demoActor: TenantActor | null;
+};
 
 /**
  * Resolve a device secret to its organization in the explicit platform scope
@@ -233,13 +251,86 @@ async function discoverDevice(secret: string): Promise<DeviceDiscovery | null> {
     if (!device) return null;
     const organization = await platformDb.organization.findUnique({
       where: { id: device.organizationId },
-      select: { status: true },
+      select: { status: true, isDemo: true },
     });
     if (!organization || !['ONBOARDING', 'ACTIVE', 'GRACE'].includes(organization.status)) {
       return null;
     }
-    return { deviceId: device.id, organizationId: device.organizationId };
+    return {
+      deviceId: device.id,
+      organizationId: device.organizationId,
+      isDemo: organization.isDemo,
+      demoActor: null,
+    };
   });
+}
+
+async function bindDemoActor(
+  request: Request,
+  discovery: DeviceDiscovery
+): Promise<DeviceDiscovery | NextResponse> {
+  if (!discovery.isDemo) {
+    // Reserved demo devices cannot turn into production credentials if the flag changes.
+    return discovery.organizationId.startsWith('org_demo_restaurant_seat_')
+      ? unauthorized('Demo access is unavailable.')
+      : discovery;
+  }
+  const actor = await resolveTenantActor({ request });
+  const seat = demoSeatFromOrganizationId(discovery.organizationId);
+  if (
+    !actor ||
+    actor.support ||
+    !seat ||
+    !actor.organization.isDemo ||
+    actor.organization.id !== discovery.organizationId ||
+    actor.session.user.organizationId !== discovery.organizationId ||
+    !isCanonicalDemoOrganization(actor.organization) ||
+    !demoPersonaForUser(seat, actor.session.user) ||
+    !liveDemoAccessExpiry(actor.session.user.demoAccessExpiresAt)
+  ) {
+    return unauthorized('Demo access has expired; reopen the restaurant demo.');
+  }
+  return { ...discovery, demoActor: actor };
+}
+
+async function demoDeviceActorMatches(
+  db: ScopedDb,
+  actor: TenantActor | null,
+  device: RestaurantRegisteredDevice,
+  activeStaffProfileId?: string | null
+): Promise<boolean> {
+  if (!actor) return true;
+  const seat = demoSeatFromOrganizationId(actor.organization.id);
+  const persona = seat ? demoPersonaForUser(seat, actor.session.user) : null;
+  if (
+    !seat ||
+    !persona ||
+    !demoPersonaCanUseDevice(persona, device.kind) ||
+    (persona === 'manager'
+      ? !device.name.startsWith(`Demo ${device.kind} S${seat} `)
+      : device.name !== demoPersonaDeviceName(seat, persona, device.kind as 'POS' | 'KDS'))
+  )
+    return false;
+  const profiles = await db.restaurantStaffProfile.findMany({
+    where: {
+      userId: actor.session.user.id,
+      status: 'ACTIVE',
+      primaryBranchId: device.branchId,
+      user: {
+        organizationId: actor.organization.id,
+        email: actor.session.user.email!,
+        status: 'ACTIVE',
+        password: null,
+        role: demoPersonaUserRole(persona),
+        organizationRole: { key: DEMO_PERSONAS[persona].roleKey },
+      },
+    },
+    select: { id: true },
+    take: 2,
+  });
+  return (
+    profiles.length === 1 && (!activeStaffProfileId || profiles[0]!.id === activeStaffProfileId)
+  );
 }
 
 /** Run flood controls and resolve the device; returns the discovery or an error response. */
@@ -256,8 +347,11 @@ async function authenticateDevice(request: Request): Promise<DeviceDiscovery | N
     return forbidden('Terminal request origin was not accepted.');
   }
 
-  const discovery = await discoverDevice(credential.secret);
-  if (!discovery) return unauthorized('Unknown or unauthorized device.');
+  const discovered = await discoverDevice(credential.secret);
+  if (!discovered) return unauthorized('Unknown or unauthorized device.');
+
+  const discovery = await bindDemoActor(request, discovered);
+  if (discovery instanceof NextResponse) return discovery;
 
   const deviceGate = rateLimit(
     `terminal:device:${discovery.deviceId}`,
@@ -297,6 +391,9 @@ export function withDeviceAuth<T extends unknown[]>(
         if (!device || !isDeviceUsable(device)) {
           return forbidden('This device has been revoked.');
         }
+        if (!(await demoDeviceActorMatches(db, auth.demoActor, device))) {
+          return forbidden('Demo device does not belong to this persona.');
+        }
         const branch = await db.restaurantBranch.findUnique({
           where: { id: device.branchId },
           select: { active: true },
@@ -307,7 +404,11 @@ export function withDeviceAuth<T extends unknown[]>(
         const entitlementRejection = await rejectDisabledTerminalModule(db, auth.organizationId);
         if (entitlementRejection) return entitlementRejection;
         await touchDeviceLastSeen(db, device.id, now);
-        return handler({ organizationId: auth.organizationId, device, db }, request, ...args);
+        return handler(
+          { organizationId: auth.organizationId, device, demoActor: auth.demoActor, db },
+          request,
+          ...args
+        );
       });
     } catch (err) {
       return respondToEscapedError('Terminal device-auth error:', err, options.mapError);
@@ -355,6 +456,11 @@ export function withTerminalAuth<T extends unknown[]>(
         if (!device) return forbidden('This device has been revoked.');
         if (!session)
           return unauthorized('Terminal session is no longer valid; re-establish the session.');
+        if (
+          !(await demoDeviceActorMatches(db, auth.demoActor, device, session.activeStaffProfileId))
+        ) {
+          return forbidden('Demo terminal session does not belong to this persona.');
+        }
 
         const verdict = evaluateTerminalSession(session, device, now);
         if (!verdict.ok) return sessionRejection(verdict.reason);
@@ -376,7 +482,14 @@ export function withTerminalAuth<T extends unknown[]>(
         ]);
 
         return handler(
-          { organizationId: auth.organizationId, device, db, session, state: verdict.state },
+          {
+            organizationId: auth.organizationId,
+            device,
+            demoActor: auth.demoActor,
+            db,
+            session,
+            state: verdict.state,
+          },
           request,
           ...args
         );

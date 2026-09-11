@@ -5,6 +5,10 @@ import { z } from 'zod';
 
 import type { Prisma } from '@/generated/prisma/client';
 import { readJson } from '@/lib/api-json';
+import { liveDemoAccessExpiry } from '@/lib/auth/session-state';
+import { demoApproverEmail, deriveDemoApproverPin } from '@/lib/demo/approval';
+import { demoSeatFromOrganizationId } from '@/lib/demo/config';
+import { demoPersonaForUser } from '@/lib/demo/personas';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { BillCommandError, evaluateOrderSettlement, type MoneyCommandActor } from './bills';
@@ -101,6 +105,11 @@ const APPROVING = z
   })
   .strict();
 
+const REFUND_APPROVING = z.discriminatedUnion('type', [
+  APPROVING,
+  z.object({ staffProfileId: ID, type: z.literal('DEMO') }).strict(),
+]);
+
 /** How to split an order into bills (mirrors `bills.ts` `SplitSpec`). */
 const SPLIT = z.discriminatedUnion('kind', [
   z.object({ kind: z.literal('NONE') }).strict(),
@@ -157,7 +166,7 @@ export const refundBody = z
     tipRefundAmount: MONEY.optional(),
     kind: z.enum(['REFUND', 'VOID_REVERSAL']).optional(),
     reason: z.string().trim().min(1).max(240),
-    approving: APPROVING,
+    approving: REFUND_APPROVING,
   })
   .strict();
 
@@ -251,6 +260,53 @@ function forbidden(message: string): NextResponse {
   return NextResponse.json({ error: message }, { status: 403 });
 }
 
+export type DemoApproverIdentity = {
+  staffProfileId: string;
+  displayName: string;
+  expiresAt: number;
+};
+
+export async function resolveDemoApproverIdentity(
+  ctx: TerminalContext,
+  now: Date
+): Promise<DemoApproverIdentity | null> {
+  const seat = demoSeatFromOrganizationId(ctx.organizationId);
+  const actor = ctx.demoActor;
+  const persona = seat && actor ? demoPersonaForUser(seat, actor.session.user) : null;
+  const expiresAt = liveDemoAccessExpiry(actor?.session.user.demoAccessExpiresAt, now.getTime());
+  if (
+    !seat ||
+    !actor ||
+    actor.support ||
+    !actor.organization.isDemo ||
+    actor.organization.id !== ctx.organizationId ||
+    actor.session.user.organizationId !== ctx.organizationId ||
+    (persona !== 'manager' && persona !== 'owner') ||
+    !expiresAt
+  ) {
+    return null;
+  }
+  const organization = await ctx.db.organization.findFirst({
+    where: { id: ctx.organizationId, isDemo: true },
+    select: { id: true },
+  });
+  if (!organization) return null;
+
+  const profile = await ctx.db.restaurantStaffProfile.findFirst({
+    where: {
+      organizationId: ctx.organizationId,
+      email: demoApproverEmail(seat),
+      status: 'ACTIVE',
+      primaryBranchId: ctx.device.branchId,
+      user: { status: 'ACTIVE', organizationId: ctx.organizationId },
+    },
+    select: { id: true, displayName: true },
+    orderBy: { id: 'asc' },
+  });
+  if (!profile || profile.id === ctx.session.activeStaffProfileId) return null;
+  return { staffProfileId: profile.id, displayName: profile.displayName, expiresAt };
+}
+
 /** Gate the acting operator on `capability`; returns a 403 response when denied, or
  * null when the operator may proceed. */
 async function requireCapability(
@@ -271,14 +327,32 @@ async function requireCapability(
  */
 async function resolveApprover(
   ctx: TerminalContext,
-  approving: z.infer<typeof APPROVING>,
+  approving: z.infer<typeof REFUND_APPROVING>,
   now: Date
 ): Promise<{ ok: true; staffProfileId: string } | { ok: false; response: NextResponse }> {
+  let credential: z.infer<typeof APPROVING>;
+  if (approving.type === 'DEMO') {
+    const profile = await resolveDemoApproverIdentity(ctx, now);
+    if (!profile || profile.staffProfileId !== approving.staffProfileId) {
+      return {
+        ok: false,
+        response: forbidden('A distinct active demo approver is required.'),
+      };
+    }
+    credential = {
+      staffProfileId: profile.staffProfileId,
+      type: 'PIN',
+      secret: deriveDemoApproverPin(ctx.organizationId),
+    };
+  } else {
+    credential = approving;
+  }
+
   const auth = await authenticateApprover(
     ctx.db,
     ctx.device.id,
     ctx.device.branchId,
-    approving,
+    credential,
     now
   );
   if (!auth.ok) return auth;
@@ -524,6 +598,7 @@ export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string,
       status: b.status,
       splitKind: b.splitKind,
       grandTotal: money(b.grandTotal),
+      remainingDue: money(b.remainingDue),
       deliveryFeeTotal: money(b.deliveryFeeTotal),
       compTotal: money(b.compTotal),
       receiptNumber: b.receiptNumber,

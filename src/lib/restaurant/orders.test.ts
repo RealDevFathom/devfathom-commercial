@@ -82,7 +82,7 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
 }
 
 /** Open a fresh order and add one menu item (HELD). Returns their ids. */
-async function openWithItem(over?: { course?: number }) {
+async function openWithItem(over?: { course?: number; tableIds?: readonly string[] }) {
   const db = deps.createTenantDb(orgId);
   const opened = await deps.orders.openOrder(db, {
     organizationId: orgId,
@@ -90,6 +90,7 @@ async function openWithItem(over?: { course?: number }) {
     branchId: ids.branch,
     channel: 'DINE_IN',
     publicationId: ids.publication,
+    tableIds: over?.tableIds,
     actor: actor(),
     now: AT,
   });
@@ -546,7 +547,7 @@ describeIfDatabase('orders command layer (real DB)', () => {
   });
 
   it('walks the full lifecycle to CLOSED and blocks an early close (terminal invariant)', async () => {
-    const { orderId, itemId, db } = await openWithItem();
+    const { orderId, itemId, db } = await openWithItem({ tableIds: [ids.tableA] });
     await deps.orders.sendOrder(db, { orderId, actor: actor() });
 
     // Not every item is served yet — close must be refused.
@@ -562,9 +563,19 @@ describeIfDatabase('orders command layer (real DB)', () => {
     // tender; it does not close until its bills are settled (settlement guard, C12).
     await deps.orders.closeOrder(db, { orderId, actor: actor() });
     const parked = await read((tx) =>
-      tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+      tx.restaurantOrder.findUnique({
+        where: { id: orderId },
+        select: {
+          status: true,
+          orderTables: {
+            where: { tableId: ids.tableA },
+            select: { active: true, unlinkedAt: true },
+          },
+        },
+      })
     );
     expect(parked?.status).toBe('PAYMENT_PENDING');
+    expect(parked?.orderTables).toEqual([{ active: true, unlinkedAt: null }]);
 
     await settleOrderFully(db, orderId);
     await deps.orders.closeOrder(db, { orderId, actor: actor() });
@@ -572,11 +583,20 @@ describeIfDatabase('orders command layer (real DB)', () => {
     const order = await read((tx) =>
       tx.restaurantOrder.findUnique({
         where: { id: orderId },
-        select: { status: true, closedAt: true, events: { select: { eventType: true } } },
+        select: {
+          status: true,
+          closedAt: true,
+          events: { select: { eventType: true } },
+          orderTables: {
+            where: { tableId: ids.tableA },
+            select: { active: true, unlinkedAt: true },
+          },
+        },
       })
     );
     expect(order?.status).toBe('CLOSED');
     expect(order?.closedAt).not.toBeNull();
+    expect(order?.orderTables).toEqual([{ active: false, unlinkedAt: order?.closedAt }]);
     expect(order?.events.map((e) => e.eventType)).toContain('order.closed');
   });
 
@@ -733,7 +753,7 @@ describeIfDatabase('orders command layer (real DB)', () => {
   });
 
   it('cancels an order with a compensating void of every in-flight item (cancel-compensation)', async () => {
-    const { orderId, db } = await openWithItem();
+    const { orderId, db } = await openWithItem({ tableIds: [ids.tableA] });
     await deps.orders.sendOrder(db, { orderId, actor: actor() }); // item QUEUED (pre-prep)
     await deps.orders.cancelOrder(db, { orderId, reason: 'walkout', actor: actor() });
 
@@ -744,11 +764,16 @@ describeIfDatabase('orders command layer (real DB)', () => {
           status: true,
           cancelledAt: true,
           items: { select: { status: true } },
+          orderTables: {
+            where: { tableId: ids.tableA },
+            select: { active: true, unlinkedAt: true },
+          },
         },
       })
     );
     expect(order?.status).toBe('CANCELLED');
     expect(order?.cancelledAt).not.toBeNull();
+    expect(order?.orderTables).toEqual([{ active: false, unlinkedAt: order?.cancelledAt }]);
     // No item may remain QUEUED/FIRING/PREPARED on a cancelled order.
     expect(order?.items.every((i) => i.status === 'VOIDED')).toBe(true);
   });

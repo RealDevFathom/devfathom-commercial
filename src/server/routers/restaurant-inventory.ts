@@ -7,6 +7,7 @@ import type { TRPCContext } from '../trpc';
 import { resolveRestaurantActor } from '../restaurant-actor';
 import {
   InventoryError,
+  createStockItem,
   createStockCount,
   addStockCountLine,
   submitStockCount,
@@ -140,13 +141,32 @@ async function requireTransferBranches(ctx: TRPCContext, stockTransferId: string
 function mapInventoryError(err: unknown): never {
   if (err instanceof InventoryError || err instanceof StockLedgerError) {
     const code =
-      err instanceof InventoryError && err.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST';
+      err instanceof InventoryError && err.reason === 'NOT_FOUND'
+        ? 'NOT_FOUND'
+        : err instanceof InventoryError && err.reason === 'STOCK_ITEM_EXISTS'
+          ? 'CONFLICT'
+          : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
   }
   throw err;
 }
 
 export const restaurantInventoryRouter = router({
+  createStockItem: adjustProc
+    .input(
+      z
+        .object({
+          ingredientId: ID,
+          canonicalUnitId: ID,
+          trackBatches: z.boolean().optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      await resolveRestaurantActor(ctx, []);
+      return createStockItem(ctx.db, input).catch(mapInventoryError);
+    }),
+
   createStockLocation: adjustProc
     .input(
       z

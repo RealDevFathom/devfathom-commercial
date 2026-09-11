@@ -4745,6 +4745,8 @@ model Organization {
   locale              String                     @default("en")
   currency            String                     @default("USD")
   seatLimit           Int                        @default(1)
+  isDemo              Boolean                    @default(false)
+  lastDemoResetAt     DateTime?
   gracePeriodDays     Int                        @default(0)
   activatedAt         DateTime?
   suspendedAt         DateTime?
@@ -4795,6 +4797,7 @@ model Organization {
   @@index([deploymentMode])
   @@index([packageId])
   @@index([vertical])
+  @@index([isDemo])
   @@map("organizations")
 }
 

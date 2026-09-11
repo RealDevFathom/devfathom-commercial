@@ -3,7 +3,6 @@ import 'server-only';
 import { cache } from 'react';
 import { headers } from 'next/headers';
 import type { Session } from 'next-auth';
-import { auth } from '@/lib/auth';
 import {
   isSharedHost,
   isTenantLifecycleAccessible,
@@ -17,9 +16,12 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { getSupportSession, type SupportIdentity } from '@/lib/tenancy/support-session';
+import { demoSeatFromOrganizationId, isDemoEnabled } from '@/lib/demo/config';
+import { demoPersonaForUser, isCanonicalDemoOrganization } from '@/lib/demo/personas';
 import {
   evaluateSessionUser,
   isSessionUsable,
+  liveDemoAccessExpiry,
   type SessionDenialKind,
 } from '@/lib/auth/session-state';
 
@@ -37,6 +39,11 @@ type ResolveTenantActorOptions = {
    */
   session?: Session | null;
 };
+
+async function requestSession(): Promise<Session | null> {
+  const { auth } = await import('@/lib/auth');
+  return auth();
+}
 
 async function currentRequestHost(): Promise<string | null> {
   const requestHeaders = await headers();
@@ -163,7 +170,7 @@ async function resolveTenantActorUncached(
     };
   }
 
-  const session = 'session' in options ? options.session : await auth();
+  const session = 'session' in options ? options.session : await requestSession();
 
   if (isUsableSession(session)) {
     // #16: a revoked/deleted/unverifiable session is not an actor. Enforcing it
@@ -174,6 +181,17 @@ async function resolveTenantActorUncached(
     if (!isSessionUsable(session.user)) return null;
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
+    if (organization.isDemo || session.user.demoAccessExpiresAt !== undefined) {
+      const seat = demoSeatFromOrganizationId(organization.id);
+      if (
+        !isDemoEnabled() ||
+        !isCanonicalDemoOrganization(organization) ||
+        !seat ||
+        !demoPersonaForUser(seat, session.user) ||
+        !liveDemoAccessExpiry(session.user.demoAccessExpiresAt)
+      )
+        return null;
+    }
     return { session, organization, support: null };
   }
 
@@ -186,7 +204,7 @@ async function resolveTenantActorUncached(
  * nothing for signed-in traffic.
  */
 export const resolveTenantSessionDenial = cache(async (): Promise<SessionDenialKind | null> => {
-  const session = await auth();
+  const session = await requestSession();
   if (!session?.user?.id) return null;
   const verdict = evaluateSessionUser(session.user);
   return verdict.ok ? null : verdict.kind;

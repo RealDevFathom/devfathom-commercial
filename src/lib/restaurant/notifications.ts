@@ -103,8 +103,11 @@ export async function deliverNotificationRequest(
   const channels = [...new Set(request.channels)];
 
   return runNotificationTransaction(db, async (tx) => {
+    const organization = await tx.organization.findFirst({ select: { isDemo: true } });
     const matrix = await resolveNotificationMatrix(tx, request.category, request.branchId);
-    const enabledChannels = channels.filter((channel) => matrix[channel]);
+    const enabledChannels = channels.filter(
+      (channel) => matrix[channel] && (!organization?.isDemo || channel === 'IN_APP')
+    );
 
     const notifications = recipients.map((recipientStaffProfileId) => ({
       id: deterministicId('rnot', request.requestId, recipientStaffProfileId),

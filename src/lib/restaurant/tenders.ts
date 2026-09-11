@@ -6,6 +6,8 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { finalizeBillSettlement, type SettlementTenderTaxAllocation } from './bills';
+import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
+import { assertMoneyDayOpen } from './daily-close';
 import {
   appendMovement,
   beginMoneyIdempotent,
@@ -381,7 +383,24 @@ export async function applyTenderInTransaction(
   }
 
   const isFinal = equals(amount, outstanding);
-  const persisted = await persistTender(tx, bill, input, amount);
+  const device = await tx.restaurantRegisteredDevice.findFirst({
+    where: { id: input.actor.deviceId, branchId: bill.branchId, revokedAt: null },
+    select: { branch: { select: { timezone: true, businessDayCutoff: true } } },
+  });
+  if (!device) {
+    throw new TenderError('The bill is not available to this terminal.', 'BILL_NOT_FOUND');
+  }
+  const postingDate = businessDateToUtcDate(
+    resolveBusinessDate(at, device.branch.timezone, device.branch.businessDayCutoff)
+  );
+  // Settlement changes the bill-day sales snapshot; collection changes the posting
+  // day's tender totals. Lock both in date order and never mutate a closed snapshot.
+  for (const day of [...new Set([bill.businessDate.getTime(), postingDate.getTime()])].sort(
+    (a, b) => a - b
+  )) {
+    await assertMoneyDayOpen(tx, bill.branchId, new Date(day));
+  }
+  const persisted = await persistTender(tx, bill, input, amount, postingDate);
 
   const remainingDue = sub(outstanding, amount);
   let settled = false;
@@ -953,15 +972,16 @@ function persistTender(
   tx: ScopedDb,
   bill: BillForTender,
   input: ApplyTenderInput,
-  amount: Prisma.Decimal
+  amount: Prisma.Decimal,
+  postingDate: Date
 ): Promise<PersistedTender> {
   switch (input.tender.type) {
     case 'CASH':
-      return persistCashTender(tx, bill, input.tender, input.actor, amount);
+      return persistCashTender(tx, bill, input.tender, input.actor, amount, postingDate);
     case 'CARD':
-      return persistCardTender(tx, bill, input.tender, input.actor, amount);
+      return persistCardTender(tx, bill, input.tender, input.actor, amount, postingDate);
     case 'OTHER':
-      return persistOtherTender(tx, bill, input.tender, input.actor, amount);
+      return persistOtherTender(tx, bill, input.tender, input.actor, amount, postingDate);
     default: {
       const exhaustive: never = input.tender;
       throw new TenderError(`Unknown tender type: ${JSON.stringify(exhaustive)}`, 'INVALID');
@@ -974,7 +994,8 @@ async function persistCashTender(
   bill: BillForTender,
   tender: CashTenderSpec,
   actor: MoneyActor,
-  amount: Prisma.Decimal
+  amount: Prisma.Decimal,
+  postingDate: Date
 ): Promise<PersistedTender> {
   const cashReceived = money(tender.cashReceived);
   if (compare(cashReceived, amount) < 0) {
@@ -986,14 +1007,14 @@ async function persistCashTender(
     where: {
       deviceId: actor.deviceId,
       branchId: bill.branchId,
-      businessDate: bill.businessDate,
+      businessDate: postingDate,
       status: 'OPEN',
     },
     select: { id: true },
   });
   if (!drawer) {
     throw new TenderError(
-      'This register has no OPEN drawer; open a drawer before taking cash.',
+      'This register has no OPEN drawer for the current business day; open one before taking cash.',
       'DRAWER_NOT_OPEN'
     );
   }
@@ -1007,7 +1028,7 @@ async function persistCashTender(
       cashReceived,
       changeGiven,
       drawerSessionId: drawer.id,
-      businessDate: bill.businessDate,
+      businessDate: postingDate,
       staffProfileId: actor.staffProfileId,
       deviceId: actor.deviceId,
     },
@@ -1038,7 +1059,8 @@ async function persistCardTender(
   bill: BillForTender,
   tender: CardTenderSpec,
   actor: MoneyActor,
-  amount: Prisma.Decimal
+  amount: Prisma.Decimal,
+  postingDate: Date
 ): Promise<PersistedTender> {
   const tipAmount = tender.tipAmount === undefined ? ZERO : money(tender.tipAmount);
   if (isNegative(tipAmount)) {
@@ -1102,7 +1124,7 @@ async function persistCardTender(
       amount,
       tipAmount,
       paymentId: payment.id,
-      businessDate: bill.businessDate,
+      businessDate: postingDate,
       staffProfileId: actor.staffProfileId,
       deviceId: actor.deviceId,
     },
@@ -1123,7 +1145,8 @@ async function persistOtherTender(
   bill: BillForTender,
   tender: OtherTenderSpec,
   actor: MoneyActor,
-  amount: Prisma.Decimal
+  amount: Prisma.Decimal,
+  postingDate: Date
 ): Promise<PersistedTender> {
   const tipAmount = tender.tipAmount === undefined ? ZERO : money(tender.tipAmount);
   if (isNegative(tipAmount)) {
@@ -1135,7 +1158,7 @@ async function persistOtherTender(
       type: 'OTHER',
       amount,
       tipAmount,
-      businessDate: bill.businessDate,
+      businessDate: postingDate,
       staffProfileId: actor.staffProfileId,
       deviceId: actor.deviceId,
     },

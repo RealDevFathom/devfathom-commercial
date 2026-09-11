@@ -1,3 +1,4 @@
+import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { signInRedirectPath } from '@/lib/auth/session-state';
 import { AppShell } from '@/components/layout/app-shell';
@@ -6,6 +7,14 @@ import { resolveTenantActor, resolveTenantSessionDenial } from '@/lib/tenancy/te
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { assertWorkspaceIdentity } from '@/lib/tenant-brand';
+import { DemoToolbar } from '@/lib/demo/toolbar';
+
+export async function generateMetadata(): Promise<Metadata> {
+  const actor = await resolveTenantActor();
+  return actor?.organization.isDemo
+    ? { robots: { index: false, follow: false, nocache: true } }
+    : {};
+}
 
 export default async function AppLayout({ children }: { children: React.ReactNode }) {
   // SEC-03 / AUTH-02: a single server-side auth guard for every /(app) page. The
@@ -70,7 +79,12 @@ export default async function AppLayout({ children }: { children: React.ReactNod
       entitlements={entitlements}
       realtimeEnabled={Boolean(process.env.ABLY_API_KEY)}
     >
-      <AppShell brand={brand}>{children}</AppShell>
+      <AppShell brand={brand}>
+        {actor.organization.isDemo ? (
+          <DemoToolbar seatName={actor.organization.displayName} />
+        ) : null}
+        {children}
+      </AppShell>
     </TenantSessionBoundary>
   );
 }

@@ -6,13 +6,16 @@ vi.mock('@/lib/secret-crypto', () => ({
 }));
 
 import {
+  NOTIFICATION_WEBHOOK_EVENT_TYPE,
   assertSafeWebhookUrl,
   createNotificationWebhookConsumer,
   createNotificationWebhookJobHandler,
   createPinnedHttpsTransport,
+  registerNotificationWebhookConsumer,
   verifyWebhookSignature,
   webhookSignature,
 } from '@/lib/restaurant/notification-webhook';
+import { OutboxConsumerRegistry } from '@/lib/restaurant/outbox-dispatcher';
 
 const notification = {
   id: 'notification_1',
@@ -25,8 +28,9 @@ const notification = {
   createdAt: new Date('2026-08-30T07:00:00.000Z'),
 };
 
-function db(enabled = true) {
+function db(enabled = true, isDemo = false) {
   const client = {
+    organization: { findFirst: vi.fn().mockResolvedValue({ isDemo }) },
     restaurantNotificationWebhook: {
       findFirst: vi.fn().mockResolvedValue({
         id: 'config_1',
@@ -60,6 +64,7 @@ const record = {
 
 const job = {
   id: 'job_1',
+  organizationId: 'org_1',
   type: 'notification.webhook.deliver.v1',
   payload: {
     eventId: record.id,
@@ -186,6 +191,29 @@ describe('restaurant notification webhook', () => {
       }),
     });
     expect(client.restaurantNotificationWebhook.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('registers the outbox consumer only once', () => {
+    const registry = new OutboxConsumerRegistry();
+
+    registerNotificationWebhookConsumer(registry);
+    expect(() => registerNotificationWebhookConsumer(registry)).not.toThrow();
+    expect(registry.has(NOTIFICATION_WEBHOOK_EVENT_TYPE)).toBe(true);
+  });
+
+  it('sinks both outbox scheduling and delivery for a demo tenant', async () => {
+    const client = db(true, true);
+    const transport = vi.fn();
+
+    await createNotificationWebhookConsumer()(record, client as never);
+    await createNotificationWebhookJobHandler({ transport, lookup: publicLookup })({
+      db: client as never,
+      job,
+    });
+
+    expect(client.restaurantJob.create).not.toHaveBeenCalled();
+    expect(client.restaurantNotificationWebhook.findFirst).not.toHaveBeenCalled();
+    expect(transport).not.toHaveBeenCalled();
   });
 
   it('job sends stable identity headers and records a successful attempt without exposing the secret', async () => {

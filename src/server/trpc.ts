@@ -17,6 +17,7 @@ import {
   isAuditExcludedPath,
   recordTrpcAudit,
 } from '@/server/audit';
+import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls
@@ -27,6 +28,8 @@ export const createTRPCContext = async (opts?: {
   req?: Request;
   session?: Session | null;
   db?: ScopedDb;
+  /** Bind seed audit rows to the transaction that creates their actor. */
+  auditDb?: ScopedDb;
   organization?: TenantOrganization;
   support?: SupportIdentity | null;
 }) => {
@@ -50,6 +53,9 @@ export const createTRPCContext = async (opts?: {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   }
   const scopedDb = opts?.db ?? createTenantDb(organizationId, session?.user?.id);
+  if (opts?.auditDb && opts.auditDb !== scopedDb) {
+    throw new Error('Audit transaction must match the context transaction.');
+  }
   const entitlements = await resolveOrganizationEntitlements(organizationId, scopedDb);
 
   return {
@@ -65,7 +71,7 @@ export const createTRPCContext = async (opts?: {
     // Mutable per-request holder. A mutation can enrich its own audit entry via
     // `annotateAudit(ctx, {...})`; the audit middleware reads this after the
     // resolver runs. Stays a stable reference across middleware `ctx` spreads.
-    audit: { detail: {} as AuditDetail },
+    audit: { detail: {} as AuditDetail, ...(opts?.auditDb ? { db: opts.auditDb } : {}) },
   };
 };
 
@@ -154,7 +160,7 @@ function auditMiddleware(opts: { auditReads: boolean }) {
     // discriminated by `ok`. We record either way, then pass the result through.
     const result = await next();
 
-    recordTrpcAudit({
+    await recordTrpcAudit({
       ctx,
       path,
       type,
@@ -172,7 +178,17 @@ const auditMutations = auditMiddleware({ auditReads: false });
 const auditAll = auditMiddleware({ auditReads: true });
 
 // Auth guard for any logged-in, active account.
-const requireActiveUser = t.middleware(async ({ ctx, next }) => {
+function assertDemoProcedureAllowed(
+  ctx: TRPCContext,
+  path: string,
+  type: 'query' | 'mutation' | 'subscription'
+) {
+  if (ctx.organization?.isDemo && type !== 'subscription' && isDemoProcedureBlocked(path, type)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: DEMO_UNAVAILABLE_MESSAGE });
+  }
+}
+
+const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
   if (!ctx.session?.user) {
     throw new TRPCError({
       code: 'UNAUTHORIZED',
@@ -180,6 +196,7 @@ const requireActiveUser = t.middleware(async ({ ctx, next }) => {
     });
   }
   assertSessionUsable(ctx.session.user);
+  assertDemoProcedureAllowed(ctx, path, type);
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
 
@@ -201,7 +218,7 @@ const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
 // resignation is PENDING and not your own") are checked INSIDE the resolver via
 // a second `can(...)` call with the loaded resource's attributes.
 function requireCapability(action: Action) {
-  return t.middleware(async ({ ctx, next }) => {
+  return t.middleware(async ({ ctx, next, path, type }) => {
     if (!ctx.session?.user) {
       throw new TRPCError({
         code: 'UNAUTHORIZED',
@@ -209,6 +226,7 @@ function requireCapability(action: Action) {
       });
     }
     assertSessionUsable(ctx.session.user);
+    assertDemoProcedureAllowed(ctx, path, type);
     const subject = subjectFromSession(ctx.session.user);
     const allowed = await can(subject, action, undefined, {
       db: ctx.db as Prisma.TransactionClient,
