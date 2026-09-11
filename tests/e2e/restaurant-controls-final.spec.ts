@@ -229,8 +229,8 @@ test('dashboard date and visibility preferences persist and reports render the s
       has: page.getByRole('heading', { name: 'Report filters', exact: true, level: 2 }),
     });
     await reportFilters.getByLabel('Branch').selectOption(fixture.branchId);
-    await reportFilters.getByLabel('From closed day').fill('2026-08-27');
-    await reportFilters.getByLabel('To closed day').fill('2026-08-27');
+    await reportFilters.getByLabel('From date').fill('2026-08-27');
+    await reportFilters.getByLabel('To date').fill('2026-08-27');
     await reportFilters.getByRole('button', { name: 'Apply filters' }).click();
     await expect
       .poll(() => {

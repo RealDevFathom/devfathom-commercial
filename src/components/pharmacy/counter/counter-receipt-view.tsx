@@ -3,8 +3,8 @@
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
+import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
 import {
-  buildCounterReceiptDocument,
   COUNTER_RECEIPT_DIRECTION,
   COUNTER_RECEIPT_STRINGS,
   formatMinor,
@@ -14,32 +14,27 @@ import {
   type CounterReceiptLocale,
 } from '@/lib/pharmacy/counter-receipt';
 
+import {
+  buildCounterReceiptPreview,
+  counterLinePresentation,
+} from '@/lib/pharmacy/counter-receipt-presentation';
+
 export type CounterReceiptViewProps = {
   receipt: CounterReceipt | null;
   state: 'idle' | 'loading' | 'ready' | 'error';
   locale: CounterReceiptLocale;
-  format: 'THERMAL' | 'A4';
+  format: CounterReceiptFormat;
   /** True once this receipt has been rendered at least once in this session. */
   reprint: boolean;
   printing?: boolean;
   error?: string | null;
   onLocaleChange: (locale: CounterReceiptLocale) => void;
-  onFormatChange: (format: 'THERMAL' | 'A4') => void;
+  onFormatChange: (format: CounterReceiptFormat) => void;
   onPrint: () => void;
   onRetry: () => void;
 };
 
-/**
- * POS-08 — the receipt, in both formats and both languages.
- *
- * The thermal preview is the exact `RECEIPT` document that goes to the printing
- * seam, rendered as text. Showing the real document rather than a lookalike is
- * what makes "what printed" and "what was on screen" the same artifact.
- *
- * Reprinting re-renders; it never re-settles. The receipt number is whatever
- * the settling tender issued, and an unsettled bill says so instead of showing
- * a number it does not have.
- */
+/** Receipt browser preview; requesting a print never confirms paper delivery. */
 export function CounterReceiptView({
   receipt,
   state,
@@ -80,13 +75,18 @@ export function CounterReceiptView({
   const direction = COUNTER_RECEIPT_DIRECTION[locale];
   const language = locale === 'ur' ? 'ur-PK' : 'en';
 
-  let document: ReturnType<typeof buildCounterReceiptDocument> | null = null;
+  let document: string | null = null;
   let documentError: string | null = null;
   try {
-    document = buildCounterReceiptDocument(receipt, locale, { reprint });
+    document = buildCounterReceiptPreview(
+      receipt,
+      locale,
+      format === 'THERMAL_58' ? 58 : 80,
+      reprint
+    );
   } catch {
     documentError =
-      'This bill cannot be rendered as a print document. Check that it has at least one line.';
+      'This receipt cannot be previewed. Reload it or ask support to check its source data.';
   }
 
   return (
@@ -97,6 +97,7 @@ export function CounterReceiptView({
           <select
             id="receipt-locale"
             value={locale}
+            disabled={printing}
             onChange={(event) => onLocaleChange(event.target.value as CounterReceiptLocale)}
             className="h-11 rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
@@ -109,20 +110,24 @@ export function CounterReceiptView({
           <select
             id="receipt-format"
             value={format}
-            onChange={(event) => onFormatChange(event.target.value as 'THERMAL' | 'A4')}
+            disabled={printing}
+            onChange={(event) => onFormatChange(event.target.value as CounterReceiptFormat)}
             className="h-11 rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
           >
-            <option value="THERMAL">Thermal</option>
+            <option value="THERMAL">Thermal · 80 mm</option>
+            <option value="THERMAL_58">Thermal · 58 mm</option>
             <option value="A4">A4</option>
           </select>
         </div>
         <Button
           type="button"
           className="h-11"
-          disabled={printing || document === null}
+          disabled={
+            printing || document === null || receipt.receiptNumber === null || !receipt.completedAt
+          }
           onClick={onPrint}
         >
-          {printing ? 'Sending…' : 'Print receipt'}
+          {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
         </Button>
         {receipt.receiptNumber === null ? (
           <StatusPill status="unissued" tone="warning" label={strings.unissued} />
@@ -132,6 +137,12 @@ export function CounterReceiptView({
           <StatusPill status="settled" tone="success" label={`#${receipt.receiptNumber}`} />
         )}
       </div>
+
+      <p className="text-sm text-text-muted">
+        Browser / OS print fallback: allow pop-ups, then select your printer and matching paper size
+        in the print dialog. These paper choices apply to this session; saved designer settings are
+        not connected yet. Printing cannot be confirmed here.
+      </p>
 
       {documentError ? (
         <p className="text-sm text-destructive" role="alert">
@@ -144,7 +155,11 @@ export function CounterReceiptView({
         lang={language}
         dir={direction}
         className={`space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 ${
-          format === 'THERMAL' ? 'max-w-[22rem] font-mono text-xs' : 'text-sm'
+          format === 'THERMAL_58'
+            ? 'max-w-[16rem] font-mono text-xs'
+            : format === 'THERMAL'
+              ? 'max-w-[22rem] font-mono text-xs'
+              : 'text-sm'
         }`}
       >
         <header className="space-y-1 border-b border-border-subtle pb-3">
@@ -167,22 +182,25 @@ export function CounterReceiptView({
           {receipt.lines.map((line) => (
             <li key={line.saleLineId} className="space-y-0.5 py-2">
               <div className="flex justify-between gap-3">
-                <span className="min-w-0 text-text-strong">
-                  {line.medicineName}
-                  {line.strength ? ` ${line.strength}` : ''}
+                <span className="min-w-0 break-words text-text-strong">
+                  {counterLinePresentation(line, locale).identity}
                 </span>
                 <span className="shrink-0 tabular-nums text-text-strong">
                   {formatMinor(line.lineTotalMinor)}
                 </span>
               </div>
               <p className="text-text-muted">
-                {line.presentation} · {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
+                {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
                 {formatMinor(line.unitPriceMinor)}
               </p>
-              <p className="tabular-nums text-text-muted">
-                {strings.batch}: {line.batchNumber} · {strings.expiry}:{' '}
-                {formatReceiptDate(line.expiresAt)}
-              </p>
+              {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
+                <p
+                  key={line.allocations![index]!.allocationId}
+                  className="whitespace-pre-wrap break-words tabular-nums text-text-muted"
+                >
+                  {allocation}
+                </p>
+              ))}
             </li>
           ))}
         </ul>
@@ -222,17 +240,10 @@ export function CounterReceiptView({
       {document ? (
         <details className="rounded-md border border-border-subtle p-3">
           <summary className="cursor-pointer text-sm font-semibold text-text-strong">
-            Print document sent to the seam
+            Shared browser receipt preview (not queued)
           </summary>
-          <pre className="mt-2 overflow-x-auto font-mono text-xs text-text-body">
-            {[
-              `${document.type} ${document.reference}`,
-              document.title,
-              ...document.lines.map((line) => `${line.quantity} × ${line.label}`),
-              document.footer ?? '',
-            ]
-              .filter(Boolean)
-              .join('\n')}
+          <pre className="mt-2 whitespace-pre-wrap break-words font-mono text-xs text-text-body">
+            {document}
           </pre>
         </details>
       ) : null}

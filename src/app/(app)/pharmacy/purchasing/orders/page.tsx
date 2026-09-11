@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
-import { redirect, RedirectType } from 'next/navigation';
+import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -30,7 +31,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   bps,
   dateOnly,
   dateTime,
@@ -146,17 +148,21 @@ export default async function PharmacyOrdersPage({
 
   async function createRequisition(form: FormData) {
     'use server';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = readLineSlots(form);
       if (lines.length === 0) {
-        throw Object.assign(new Error('Add at least one medicine and quantity.'), {
-          field: 'medicineId-0',
-        });
+        throw Object.assign(
+          new PurchasingValidationError('Add at least one medicine and quantity.'),
+          {
+            field: 'medicineId-0',
+          }
+        );
       }
-      const created = await actionCaller.createRequisition({
+      const created = await outcome.write(actionCaller.createRequisition)({
         reference: field(form, 'reference'),
         branchId: optionalField(form, 'branchId'),
         neededBy: optionalDateField(form, 'neededBy', 'Needed by'),
@@ -171,21 +177,22 @@ export default async function PharmacyOrdersPage({
       );
     } catch (error) {
       next = destination(ROUTE, {
-        ...actionFailure(error, 'Could not draft the requisition.'),
+        ...outcome.failure(error, 'Could not draft the requisition.'),
         kind: 'error',
       });
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function submitRequisition(form: FormData) {
     'use server';
     const requisitionId = field(form, 'requisitionId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.submitRequisition({ requisitionId });
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.submitRequisition)({ requisitionId });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -195,20 +202,21 @@ export default async function PharmacyOrdersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not submit the requisition.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not submit the requisition.'), kind: 'error' },
         { req: requisitionId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function recordQuote(form: FormData) {
     'use server';
     const requisitionId = field(form, 'requisitionId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lineIds = form.getAll('requisitionLineId').map(String);
       const lines = lineIds.flatMap((lineId) => {
         const price = field(form, `price:${lineId}`);
@@ -228,9 +236,9 @@ export default async function PharmacyOrdersPage({
         ];
       });
       if (lines.length === 0) {
-        throw new Error('Enter a price for at least one line of this quote.');
+        throw new PurchasingValidationError('Enter a price for at least one line of this quote.');
       }
-      await actionCaller.recordQuote({
+      await outcome.write(actionCaller.recordQuote)({
         requisitionId,
         supplierId: field(form, 'supplierId'),
         reference: optionalField(form, 'quoteReference'),
@@ -248,11 +256,11 @@ export default async function PharmacyOrdersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not record the quote.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not record the quote.'), kind: 'error' },
         { req: requisitionId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   /**
@@ -265,14 +273,17 @@ export default async function PharmacyOrdersPage({
     'use server';
     const requisitionId = field(form, 'requisitionId');
     const quoteId = field(form, 'quoteId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const source = (await actionCaller.requisitions()).find((row) => row.id === requisitionId);
-      if (!source) throw new Error('That requisition no longer exists. Reload the page.');
+      if (!source)
+        throw new PurchasingValidationError('That requisition no longer exists. Reload the page.');
       const quote = source.quotes.find((row) => row.id === quoteId);
-      if (!quote) throw new Error('That quote no longer exists. Reload the page.');
+      if (!quote)
+        throw new PurchasingValidationError('That quote no longer exists. Reload the page.');
 
       const lines = source.lines.flatMap((line) => {
         const quoted = quote.lines.find((row) => row.requisitionLineId === line.id);
@@ -295,9 +306,9 @@ export default async function PharmacyOrdersPage({
         ];
       });
       if (lines.length === 0) {
-        throw new Error('That quote prices none of this requisition’s lines.');
+        throw new PurchasingValidationError('That quote prices none of this requisition’s lines.');
       }
-      const created = await actionCaller.createPurchaseOrder({
+      const created = await outcome.write(actionCaller.createPurchaseOrder)({
         reference: field(form, 'reference'),
         supplierId: quote.supplierId,
         branchId: source.branchId ?? undefined,
@@ -320,26 +331,30 @@ export default async function PharmacyOrdersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not raise the order.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not raise the order.'), kind: 'error' },
         { req: requisitionId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function createDirectOrder(form: FormData) {
     'use server';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = readOrderLineSlots(form);
       if (lines.length === 0) {
-        throw Object.assign(new Error('Add at least one medicine, quantity and price.'), {
-          field: 'orderMedicineId-0',
-        });
+        throw Object.assign(
+          new PurchasingValidationError('Add at least one medicine, quantity and price.'),
+          {
+            field: 'orderMedicineId-0',
+          }
+        );
       }
-      const created = await actionCaller.createPurchaseOrder({
+      const created = await outcome.write(actionCaller.createPurchaseOrder)({
         reference: field(form, 'reference'),
         supplierId: field(form, 'supplierId'),
         branchId: optionalField(form, 'branchId'),
@@ -357,27 +372,28 @@ export default async function PharmacyOrdersPage({
       );
     } catch (error) {
       next = destination(ROUTE, {
-        ...actionFailure(error, 'Could not draft the order.'),
+        ...outcome.failure(error, 'Could not draft the order.'),
         kind: 'error',
       });
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function advanceOrder(form: FormData) {
     'use server';
     const purchaseOrderId = field(form, 'purchaseOrderId');
     const action = field(form, 'action');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       let message: string;
       if (action === 'submit') {
-        await actionCaller.submitPurchaseOrder({ purchaseOrderId });
+        await outcome.write(actionCaller.submitPurchaseOrder)({ purchaseOrderId });
         message = 'Order submitted for approval. Somebody else has to approve it.';
       } else if (action === 'approve' || action === 'reject') {
-        await actionCaller.approvePurchaseOrder({
+        await outcome.write(actionCaller.approvePurchaseOrder)({
           purchaseOrderId,
           decision: action === 'approve' ? 'APPROVED' : 'REJECTED',
           reason: optionalField(form, 'reason'),
@@ -387,34 +403,35 @@ export default async function PharmacyOrdersPage({
             ? 'Order approved. Send it once you are ready.'
             : 'Order rejected and returned to draft. The decision is on the record.';
       } else if (action === 'send') {
-        await actionCaller.sendPurchaseOrder({ purchaseOrderId });
+        await outcome.write(actionCaller.sendPurchaseOrder)({ purchaseOrderId });
         message = 'Order sent. Receive against it on the goods-in bench.';
       } else {
-        throw new Error('Unknown action.');
+        throw new PurchasingValidationError('Unknown action.');
       }
       revalidatePath(ROUTE);
       next = destination(ROUTE, { message, kind: 'success' }, { po: purchaseOrderId });
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not move the order on.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not move the order on.'), kind: 'error' },
         { po: purchaseOrderId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   if (loadError || !workspace) {
     return (
-      <main className="min-w-0 space-y-6">
+      <PurchasingOutcomeScope>
         <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
         <PurchasingTabs active={ROUTE} />
         <NoticeBanner notice={notice} />
+        <PurchasingOutcomes />
         <LoadFailure
-          detail="Requisitions and orders could not be read. Nothing was written."
+          detail="Requisitions and orders could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={ROUTE}
         />
-      </main>
+      </PurchasingOutcomeScope>
     );
   }
 
@@ -422,10 +439,11 @@ export default async function PharmacyOrdersPage({
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
 
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
 
       <div className="grid gap-6 sm:grid-cols-3">
         <Stat
@@ -512,7 +530,11 @@ export default async function PharmacyOrdersPage({
                 steps={[{ label: 'Open the medicine register', href: '/pharmacy' }]}
               />
             ) : (
-              <form action={createRequisition} className="space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: 'requisition:new', action: 'create' }}
+                action={createRequisition}
+                className="space-y-4"
+              >
                 <div className="grid gap-4 sm:grid-cols-3">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
@@ -543,7 +565,7 @@ export default async function PharmacyOrdersPage({
                 </fieldset>
                 <TextAreaField label="Note" name="note" notice={notice} />
                 <SubmitButton>Draft requisition</SubmitButton>
-              </form>
+              </PurchasingActionForm>
             )}
           </SectionCard>
         </div>
@@ -624,7 +646,11 @@ export default async function PharmacyOrdersPage({
                 steps={[{ label: 'Open the medicine register', href: '/pharmacy' }]}
               />
             ) : (
-              <form action={createDirectOrder} className="space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: 'order:new', action: 'create' }}
+                action={createDirectOrder}
+                className="space-y-4"
+              >
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
                   <TextField label="Reference" name="reference" notice={notice} required />
                   <SelectField
@@ -683,12 +709,12 @@ export default async function PharmacyOrdersPage({
                 </div>
                 <TextAreaField label="Note" name="note" notice={notice} />
                 <SubmitButton>Draft order</SubmitButton>
-              </form>
+              </PurchasingActionForm>
             )}
           </SectionCard>
         </div>
       </div>
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -709,9 +735,9 @@ function RequisitionDetailPanel({
   comparisons: LineComparison[];
   workspace: PurchasingWorkspace;
   notice: Notice | null;
-  onSubmit: (form: FormData) => Promise<void>;
-  onRecordQuote: (form: FormData) => Promise<void>;
-  onOrderFromQuote: (form: FormData) => Promise<void>;
+  onSubmit: (form: FormData) => Promise<string>;
+  onRecordQuote: (form: FormData) => Promise<string>;
+  onOrderFromQuote: (form: FormData) => Promise<string>;
 }) {
   return (
     <>
@@ -745,10 +771,14 @@ function RequisitionDetailPanel({
           ))}
         </ul>
         {requisition.status === 'DRAFT' ? (
-          <form action={onSubmit} className="mt-4">
+          <PurchasingActionForm
+            operation={{ resource: `requisition:${requisition.id}`, action: 'submit' }}
+            action={onSubmit}
+            className="mt-4"
+          >
             <input name="requisitionId" type="hidden" value={requisition.id} />
             <SubmitButton>Submit requisition</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
       </SectionCard>
 
@@ -823,7 +853,11 @@ function RequisitionDetailPanel({
               The order is built from this requisition&rsquo;s lines at the chosen quote&rsquo;s
               terms, so what you approve is what the comparison explained.
             </p>
-            <form action={onOrderFromQuote} className="mt-3 grid gap-4 sm:grid-cols-2">
+            <PurchasingActionForm
+              operation={{ resource: `requisition:${requisition.id}`, action: 'award-quote' }}
+              action={onOrderFromQuote}
+              className="mt-3 grid gap-4 sm:grid-cols-2"
+            >
               <input name="requisitionId" type="hidden" value={requisition.id} />
               <SelectField
                 emptyHint="No quotes recorded yet."
@@ -853,13 +887,17 @@ function RequisitionDetailPanel({
               <div className="sm:col-span-2">
                 <SubmitButton>Raise purchase order from this quote</SubmitButton>
               </div>
-            </form>
+            </PurchasingActionForm>
           </div>
         ) : null}
       </SectionCard>
 
       <SectionCard eyebrow="PUR-02" title="Record a quote" titleLevel={2}>
-        <form action={onRecordQuote} className="space-y-4">
+        <PurchasingActionForm
+          operation={{ resource: `requisition:${requisition.id}`, action: 'record-quote' }}
+          action={onRecordQuote}
+          className="space-y-4"
+        >
           <input name="requisitionId" type="hidden" value={requisition.id} />
           <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <SelectField
@@ -954,7 +992,7 @@ function RequisitionDetailPanel({
           </div>
           <TextAreaField label="Quote note" name="quoteNote" notice={notice} />
           <SubmitButton>Record quote</SubmitButton>
-        </form>
+        </PurchasingActionForm>
       </SectionCard>
     </>
   );
@@ -983,7 +1021,7 @@ function OrderDetailPanel({
   } | null;
   actorId: string;
   notice: Notice | null;
-  onAdvance: (form: FormData) => Promise<void>;
+  onAdvance: (form: FormData) => Promise<string>;
 }) {
   // PUR-02 segregation of duties, stated before the button is pressed rather
   // than as a refusal afterwards.
@@ -1094,11 +1132,14 @@ function OrderDetailPanel({
 
       <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
         {order.status === 'DRAFT' ? (
-          <form action={onAdvance}>
+          <PurchasingActionForm
+            operation={{ resource: `order:${order.id}`, action: 'submit' }}
+            action={onAdvance}
+          >
             <input name="purchaseOrderId" type="hidden" value={order.id} />
             <input name="action" type="hidden" value="submit" />
             <SubmitButton>Submit for approval</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
 
         {order.status === 'SUBMITTED' ? (
@@ -1108,7 +1149,11 @@ function OrderDetailPanel({
               duties rule — ask a second person to decide.
             </p>
           ) : (
-            <form action={onAdvance} className="flex flex-wrap items-end gap-3">
+            <PurchasingActionForm
+              operation={{ resource: `order:${order.id}`, action: 'decide' }}
+              action={onAdvance}
+              className="flex flex-wrap items-end gap-3"
+            >
               <input name="purchaseOrderId" type="hidden" value={order.id} />
               <TextField
                 className="min-w-56"
@@ -1123,12 +1168,15 @@ function OrderDetailPanel({
               <SubmitButton name="action" value="reject" variant="destructive">
                 Reject
               </SubmitButton>
-            </form>
+            </PurchasingActionForm>
           )
         ) : null}
 
         {order.status === 'APPROVED' ? (
-          <form action={onAdvance}>
+          <PurchasingActionForm
+            operation={{ resource: `order:${order.id}`, action: 'send' }}
+            action={onAdvance}
+          >
             <input name="purchaseOrderId" type="hidden" value={order.id} />
             <input name="action" type="hidden" value="send" />
             <SubmitButton>Send to supplier</SubmitButton>
@@ -1136,7 +1184,7 @@ function OrderDetailPanel({
               The supplier&rsquo;s authorization and licence are checked again at this moment;
               either can have lapsed since the order was drafted.
             </p>
-          </form>
+          </PurchasingActionForm>
         ) : null}
 
         {order.status === 'SENT' || order.status === 'RECEIVING' ? (
@@ -1272,7 +1320,10 @@ function percentToBps(form: FormData, name: string, label: string): number {
   const raw = field(form, name);
   if (!raw) return 0;
   if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
-    throw Object.assign(new Error(`${label}: enter a percentage like 5 or 12.5.`), { field: name });
+    throw Object.assign(
+      new PurchasingValidationError(`${label}: enter a percentage like 5 or 12.5.`),
+      { field: name }
+    );
   }
   return Math.round(Number(raw) * 100);
 }

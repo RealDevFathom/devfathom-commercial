@@ -426,8 +426,21 @@ export default async function PharmacyInventoryPage({
       <SectionCard title="Lots and FEFO board" eyebrow="INV-01—04">
         {available.length === 0 ? (
           <Empty>
-            No available lots yet. Receive a supplier delivery in Procurement; validated stock will
-            appear here in FEFO order.
+            No available lots yet. Set up a medicine and its pack, then receive a supplier delivery.
+            <span className="mt-3 flex flex-wrap gap-3">
+              <Link href="/pharmacy/medicines" className={buttonVariants({ variant: 'outline' })}>
+                Set up medicines and packs
+              </Link>
+              <Link
+                href="/pharmacy/purchasing/receiving"
+                className={buttonVariants({ variant: 'outline' })}
+              >
+                Receive opening stock
+              </Link>
+              <Link href="/pharmacy" className={buttonVariants({ variant: 'ghost' })}>
+                Pharmacy setup
+              </Link>
+            </span>
           </Empty>
         ) : (
           <div className="overflow-x-auto">

@@ -167,6 +167,12 @@ export function RestaurantDevicesConsole() {
         actions={
           restaurantEnabled && !permissionDenied ? (
             <div className="flex flex-wrap gap-2">
+              <Link
+                className={buttonVariants({ variant: 'secondary', className: 'min-h-11' })}
+                href="/settings"
+              >
+                Printer settings and test print
+              </Link>
               {camerasEnabled ? (
                 <Link
                   className={buttonVariants({ variant: 'secondary' })}

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useState } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
 import { toast } from 'sonner';
@@ -134,6 +134,13 @@ export function SettingsContent() {
       {/* Process-local print bridge simulator (WHA-228). */}
       {isAdmin && <PrintRoutingSection />}
 
+      <Link
+        href="/settings/receipts"
+        className="inline-flex min-h-11 items-center text-sm underline underline-offset-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+      >
+        Receipt designer and layout settings
+      </Link>
+
       {/* Account info */}
       <Card className="border-border/60">
         <CardHeader className="pb-3">
@@ -192,6 +199,11 @@ type PrintingBranch = {
 
 export function PrintRoutingSection() {
   const [branches, setBranches] = useState<PrintingBranch[] | null>(null);
+  const [savedBranches, setSavedBranches] = useState<PrintingBranch[]>([]);
+  const [testing, setTesting] = useState(false);
+  const testBusy = useRef(false);
+  const testRequests = useRef(new Map<string, { key: string; createdAt: string }>());
+  const [testStatus, setTestStatus] = useState('');
   const [branchId, setBranchId] = useState('');
   const [error, setError] = useState('');
   const [saving, setSaving] = useState(false);
@@ -203,6 +215,7 @@ export function PrintRoutingSection() {
       if (!response.ok) throw new Error(body.error || 'Print routing could not be loaded.');
       const next = body.branches ?? [];
       setBranches(next);
+      setSavedBranches(next);
       setBranchId((current) => current || next[0]?.id || '');
     } catch (cause) {
       setError(cause instanceof Error ? cause.message : 'Print routing could not be loaded.');
@@ -221,6 +234,7 @@ export function PrintRoutingSection() {
       .then((next) => {
         if (!active) return;
         setBranches(next);
+        setSavedBranches(next);
         setBranchId(next[0]?.id || '');
       })
       .catch((cause: unknown) => {
@@ -234,6 +248,57 @@ export function PrintRoutingSection() {
   }, []);
 
   const selected = branches?.find((branch) => branch.id === branchId);
+  const saved = savedBranches.find((branch) => branch.id === branchId);
+  const savedReceiptRoute = saved?.config.routes.find(
+    (route) => route.documentType === 'RECEIPT' && route.enabled && route.stationId === null
+  );
+  const unsaved = JSON.stringify(saved?.config) !== JSON.stringify(selected?.config);
+  const testReceipt = async () => {
+    if (testBusy.current || !saved || !savedReceiptRoute || unsaved) return;
+    testBusy.current = true;
+    setTesting(true);
+    setTestStatus('');
+    const destination = `${saved.id}:${savedReceiptRoute.printerId}`;
+    let attempt = testRequests.current.get(destination);
+    if (!attempt) {
+      attempt = { key: `receipt-test:${crypto.randomUUID()}`, createdAt: new Date().toISOString() };
+      testRequests.current.set(destination, attempt);
+    }
+    try {
+      const response = await fetch('/api/restaurant/print-bridge', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          branchId: saved.id,
+          stationId: null,
+          idempotencyKey: attempt.key,
+          document: {
+            type: 'RECEIPT',
+            reference: attempt.key,
+            title: 'RECEIPT PRINTER TEST',
+            createdAt: attempt.createdAt,
+            lines: [{ quantity: 1, label: 'Setup test - not a sale or payment' }],
+            footer: 'Confirm this test at the selected printer. No financial transaction.',
+          },
+        }),
+      });
+      const body = (await response.json()) as {
+        error?: string;
+        result?: { status: string; printerId?: string };
+      };
+      if (!response.ok) throw new Error(body.error ?? 'Receipt test could not be queued.');
+      setTestStatus(
+        `${saved.name} · ${body.result?.printerId ?? savedReceiptRoute.printerId}: ${body.result?.status === 'PRINTED' ? 'Bridge acknowledged delivery' : 'Test request accepted; delivery may still be pending or unavailable'}. Paper output is not confirmed. Repeating this test reuses the same request.`
+      );
+    } catch (cause) {
+      setTestStatus(
+        `${cause instanceof Error ? cause.message : 'Receipt test failed.'} Delivery may be uncertain. Retry uses the same request.`
+      );
+    } finally {
+      testBusy.current = false;
+      setTesting(false);
+    }
+  };
   const routeFor = (type: PrintingBranch['config']['routes'][number]['documentType']) =>
     selected?.config.routes.find((route) => route.documentType === type) ?? {
       documentType: type,
@@ -249,10 +314,13 @@ export function PrintRoutingSection() {
       (current) =>
         current?.map((branch) => {
           if (branch.id !== branchId) return branch;
-          const routes = branch.config.routes.filter((route) => route.documentType !== type);
+          const index = branch.config.routes.findIndex((route) => route.documentType === type);
+          const routes = [...branch.config.routes];
+          if (index === -1) routes.push({ ...routeFor(type), ...patch });
+          else routes[index] = { ...routes[index], ...patch };
           return {
             ...branch,
-            config: { ...branch.config, routes: [...routes, { ...routeFor(type), ...patch }] },
+            config: { ...branch.config, routes },
           };
         }) ?? null
     );
@@ -318,7 +386,11 @@ export function PrintRoutingSection() {
               Branch
               <select
                 value={branchId}
-                onChange={(event) => setBranchId(event.target.value)}
+                onChange={(event) => {
+                  setBranchId(event.target.value);
+                  setTestStatus('');
+                }}
+                disabled={testing || saving}
                 className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               >
                 {branches.map((branch) => (
@@ -380,11 +452,38 @@ export function PrintRoutingSection() {
                 </fieldset>
               );
             })}
-            <div className="flex justify-end">
-              <Button onClick={() => void save()} disabled={saving || !selected}>
+            <p className="text-sm text-text-muted">
+              POS receipts use the enabled Receipts route with Any station for the selected branch.
+              Printer IDs must match an explicitly configured destination on the bridge host. Save
+              changes before testing.
+            </p>
+            <p className="text-xs text-text-muted">
+              Use a supported modern Windows or macOS host. Windows 98, Vista, and 7 cannot run the
+              modern browser/Node stack; use a supported host and a printer driver or connection
+              validated for that host.
+            </p>
+            <div className="flex flex-wrap justify-end gap-2">
+              <Button
+                variant="outline"
+                className="min-h-11"
+                onClick={() => void testReceipt()}
+                disabled={testing || saving || unsaved || !savedReceiptRoute}
+              >
+                {testing ? 'Requesting test…' : 'Test receipt printer'}
+              </Button>
+              <Button
+                className="min-h-11"
+                onClick={() => void save()}
+                disabled={saving || testing || !selected}
+              >
                 {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save print routes
               </Button>
             </div>
+            {testStatus ? (
+              <p role="status" className="break-words text-sm text-text-body">
+                {testStatus}
+              </p>
+            ) : null}
           </>
         )}
       </CardContent>

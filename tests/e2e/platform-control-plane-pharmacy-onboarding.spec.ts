@@ -289,9 +289,9 @@ test('a fresh pharmacy fills its regulatory profile, watches the steps flip, and
     );
     await db.query(
       `INSERT INTO pharmacy_medicine_provenance
-         (id,"organizationId","medicineId",field,source,"retrievedAt",status,"sourceType","assertedValue")
-       VALUES ($1,$2,$3,'productName','DRAP register',now(),'ACCEPTED','REGULATOR','"Paracetamol 500mg"')`,
-      [`assertion_${suffix}`, organizationId, `medicine_${suffix}`]
+         (id,"organizationId","medicineId",field,source,"retrievedAt",status,"sourceType","assertedValue",reviewer)
+       VALUES ($1,$2,$3,'productName','DRAP register',now(),'ACCEPTED','REGULATOR','"Paracetamol 500mg"',$4)`,
+      [`assertion_${suffix}`, organizationId, `medicine_${suffix}`, tenant.email]
     );
     await db.query(
       `INSERT INTO pharmacy_medicine_publication_batches (id,"organizationId",status,"publishedAt")

@@ -10,7 +10,7 @@
  * than for the one procedure that happened to be probed.
  */
 import { TRPCError } from '@trpc/server';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import { z } from 'zod';
 
 const mocks = vi.hoisted(() => ({
@@ -18,12 +18,21 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
   hasModule: vi.fn(() => true),
   resolveTenantActor: vi.fn(),
+  auditCreate: vi.fn<(args: unknown) => Promise<unknown>>().mockResolvedValue({}),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: vi.fn(() => ({})),
+  withTenantDb: vi.fn(async (_id: string, run: (db: unknown) => unknown) =>
+    run({ auditLog: { create: mocks.auditCreate } })
+  ),
+  withPlatformDb: vi.fn(async (run: (db: unknown) => unknown) =>
+    run({ platformAuditLog: { create: mocks.auditCreate } })
+  ),
 }));
+vi.mock('@/lib/restaurant/camera-presets', () => ({ listActiveCameraBrandPresets: vi.fn() }));
+vi.mock('@/lib/restaurant/terminal-auth', () => ({ authenticateOperator: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({
   resolveTenantActor: mocks.resolveTenantActor,
 }));
@@ -292,5 +301,93 @@ describe('central demo procedure isolation', () => {
 
     await expect(caller.restaurantOrders.list()).resolves.toBe('ok');
     await expect(caller.restaurantOrders.open()).resolves.toBe('ok');
+  });
+});
+
+describe('camera renewal audit redaction before resolver suppression (F3-R1)', () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+    const actual = await vi.importActual<typeof import('./audit')>('./audit');
+    // Exercise real recordTrpcAudit/toAuditJson; replace only the database sink.
+    mocks.recordTrpcAudit.mockImplementation(actual.recordTrpcAudit);
+  });
+  afterEach(async () => {
+    const actual = await vi.importActual<typeof import('./audit')>('./audit');
+    await actual.flushAuditWritesForTest();
+    mocks.recordTrpcAudit.mockReset();
+  });
+
+  it.each(['entitlement', 'capability', 'license', 'invalid-input'] as const)(
+    'keeps %s denial audited while removing the prior grant identifier',
+    async (denial) => {
+      const { restaurantCamerasRouter } = await import('./routers/restaurant-cameras');
+      // Camera entitlement is enforced in its resolver. Mount the same procedure
+      // under a licensed fixture prefix as well to exercise the outer license
+      // guard; restaurantCameras currently has no catalog-prefix license mapping.
+      const cameras = router({
+        restaurantCameras: restaurantCamerasRouter,
+        projects: restaurantCamerasRouter,
+      });
+      const ctx = contextFor({ ...ADMIN, status: 'ACTIVE', organizationId: 'org-camera' });
+      ctx.entitlements = {
+        enabledModules: [],
+        modules: [],
+      } as unknown as TRPCContext['entitlements'];
+      ctx.audit.detail.metadata = {
+        reason: 'camera verification',
+        grant: 'ordinary business grant',
+        count: 2,
+      };
+      if (denial === 'capability') mocks.can.mockResolvedValue(false);
+      if (denial === 'entitlement' || denial === 'license') mocks.hasModule.mockReturnValue(false);
+      const input = {
+        cameraId: denial === 'invalid-input' ? '' : 'camera-a',
+        previousGrantId: 'synthetic-camera-prior-grant',
+      };
+      const caller = cameras.createCaller(ctx);
+      const call =
+        denial === 'license'
+          ? caller.projects.issueStreamGrant
+          : caller.restaurantCameras.issueStreamGrant;
+      const code = denial === 'invalid-input' ? 'BAD_REQUEST' : 'FORBIDDEN';
+      await expect(call(input)).rejects.toMatchObject({ code });
+      const actual = await vi.importActual<typeof import('./audit')>('./audit');
+      await actual.flushAuditWritesForTest();
+      expect(ctx.audit.detail.skipInput).toBeUndefined();
+      expect(mocks.auditCreate).toHaveBeenCalledOnce();
+      const row = mocks.auditCreate.mock.calls[0]![0] as { data: Record<string, unknown> };
+      expect(row.data).toMatchObject({
+        organizationId: 'org-camera',
+        actorId: ADMIN.id,
+        outcome: 'FAILURE',
+        errorCode: code,
+        action: `${denial === 'license' ? 'projects' : 'restaurantCameras'}.issueStreamGrant`,
+        input: { cameraId: input.cameraId, previousGrantId: '[REDACTED]' },
+        metadata: { reason: 'camera verification', grant: 'ordinary business grant', count: 2 },
+      });
+      expect(JSON.stringify(row)).not.toContain(input.previousGrantId);
+    }
+  );
+
+  it('redacts exact nested identifier keys without changing unrelated grant metadata', async () => {
+    const { toAuditJson } = await vi.importActual<typeof import('./audit')>('./audit');
+    const value = {
+      previousGrantId: 'synthetic',
+      nested: [{ PREVIOUSGRANTID: 'synthetic' }],
+      grant: 'business',
+      grantId: 'ordinary-id',
+      previousGrantIdentifier: 'label',
+      cameraId: 'camera-a',
+      password: 'synthetic-password',
+    };
+    expect(toAuditJson(value)).toEqual({
+      ...value,
+      previousGrantId: '[REDACTED]',
+      nested: [{ PREVIOUSGRANTID: '[REDACTED]' }],
+      password: '[REDACTED]',
+    });
+    expect(value.previousGrantId).toBe('synthetic');
   });
 });

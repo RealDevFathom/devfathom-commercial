@@ -4,6 +4,8 @@ import { useState } from 'react';
 import { Download, FileSpreadsheet, Loader2, Upload } from 'lucide-react';
 import { toast } from 'sonner';
 
+import { MedicinePackSetup } from './medicine-pack-setup';
+
 import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -481,6 +483,7 @@ export function MedicineReferenceWorkbench({ health }: { health: ConnectorHealth
           })}
         </div>
       </SectionCard>
+      <MedicinePackSetup />
     </div>
   );
 }

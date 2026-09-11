@@ -151,13 +151,23 @@ describeIfDatabase('durable print bridge', () => {
       await tenancy.withTenantDb(orgA, (db) =>
         new PrintBridgeService(db).enqueue(orgA, tcpConfig, tcpJob)
       );
-      const claimed = await tenancy.withTenantDb(orgA, (db) => claimNextPrintJob(db, branchA));
+      const claimed = await tenancy.withTenantDb(orgA, (db) =>
+        claimNextPrintJob(db, branchA, 'bridge-a')
+      );
       expect(claimed).not.toBeNull();
-      await writeToPrinter(claimed!.printerId, Buffer.from(claimed!.bytes, 'base64'));
+      await writeToPrinter(claimed!.printerId, Buffer.from(claimed!.bytes, 'base64'), [
+        tcpConfig.routes[0].printerId,
+      ]);
       expect((await received).includes(Buffer.from('Soda'))).toBe(true);
       await expect(
         tenancy.withTenantDb(orgA, (db) =>
-          acknowledgePrintJob(db, { branchId: branchA, jobId: claimed!.id, status: 'PRINTED' })
+          acknowledgePrintJob(db, {
+            branchId: branchA,
+            deviceId: 'bridge-a',
+            jobId: claimed!.id,
+            claimToken: claimed!.claimToken,
+            status: 'PRINTED',
+          })
         )
       ).resolves.toEqual({ acknowledged: true, replayed: false });
       await expect(

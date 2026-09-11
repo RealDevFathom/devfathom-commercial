@@ -1,5 +1,8 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
+import { grossMarginComparison, marginComparisonPeriods } from '@/lib/pharmacy/finance-reports';
 import {
   closeAccountingPeriod,
   createSettlementBatch,
@@ -46,6 +49,55 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
+  marginComparison: adminProcedure
+    .input(
+      z
+        .object({
+          branchId: id,
+          from: z.iso.datetime({ offset: true }),
+          to: z.iso.datetime({ offset: true }),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      if (ctx.session!.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Owner financial reports access is required.',
+        });
+      }
+      for (const action of ['reports:operational', 'reports:financial'] as const) {
+        if (
+          !(await can(subjectFromSession(ctx.session!.user), action, undefined, {
+            db: ctx.db,
+            source: 'TRPC',
+            ip: ctx.requestMeta.ip,
+          }))
+        ) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Financial report permission is required.',
+          });
+        }
+      }
+      const organizationId = ctx.entitlements.organizationId;
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { organizationId, id: input.branchId, active: true },
+        select: { id: true },
+      });
+      if (!branch)
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+      const period = { from: new Date(input.from), to: new Date(input.to) };
+      try {
+        marginComparisonPeriods(period.from, period.to);
+        return await grossMarginComparison(ctx.db, { organizationId, branchId: branch.id }, period);
+      } catch (error) {
+        if (error instanceof RangeError)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+        throw error;
+      }
+    }),
+
   workspace: adminProcedure.input(z.object({ branchId: id })).query(async ({ ctx, input }) => {
     const organizationId = ctx.entitlements.organizationId;
     const branch = await ctx.db.pharmacyBranch.findFirst({

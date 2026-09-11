@@ -1,0 +1,75 @@
+773a1a8e9b4b85ca8a3ae08aba87055c9726513c fe1e3e383c8b966cdb68669ba5366db00fe2320a feat(camera): add configured private HLS transport
+
+ .../restaurants/cameras/002-configured-mediamtx.md | 199 +++++++++++++++
+ .../cameras/[cameraId]/stream/route.test.ts        |   8 +-
+ .../restaurant/cameras/[cameraId]/stream/route.ts  |  73 +++---
+ src/lib/restaurant/camera-gateway-runtime.ts       |  31 +++
+ src/lib/restaurant/cameras/mediamtx-route.test.mts | 196 +++++++++++++++
+ .../restaurant/cameras/mediamtx-runtime.test.mts   |  39 +++
+ .../restaurant/cameras/mediamtx.protocol.test.mts  | 256 +++++++++++++++++++
+ src/lib/restaurant/cameras/mediamtx.ts             | 280 +++++++++++++++++++++
+ src/server/routers/restaurant-cameras.ts           |  36 +++
+ 9 files changed, 1070 insertions(+), 48 deletions(-)
+977eed1eb3bb2a611ee139bf65592630b420b5d3 773a1a8e9b4b85ca8a3ae08aba87055c9726513c docs(camera): record dependency-backed checks
+
+ .../restaurants/cameras/002-configured-mediamtx.md | 61 ++++++++++++++++++----
+ 1 file changed, 52 insertions(+), 9 deletions(-)
+036debad81072badc79e7331fae20e2a84addf3e 977eed1eb3bb2a611ee139bf65592630b420b5d3 fix(camera): correct live viewing lifecycle
+
+ bun.lock                                           |   2 +
+ .../restaurants/cameras/002-configured-mediamtx.md | 104 +++++++++++-
+ package.json                                       |   1 +
+ .../restaurant/cameras/[cameraId]/stream/route.ts  |   2 +
+ .../restaurant/restaurant-camera-player.test.tsx   | 121 ++++++++++++++
+ .../restaurant/restaurant-camera-player.tsx        | 160 +++++++++++++++++++
+ .../restaurant/restaurant-camera-wizard.test.tsx   |  82 +++++++++-
+ .../restaurant/restaurant-camera-wizard.tsx        |  85 ++++++----
+ .../restaurant/restaurant-cameras-console.test.tsx |  33 +++-
+ .../restaurant/restaurant-cameras-console.tsx      | 174 ++++++++++++++-------
+ src/lib/restaurant/cameras/live-session.test.ts    |  83 ++++++++++
+ src/lib/restaurant/cameras/live-session.ts         |  56 +++++++
+ src/lib/restaurant/cameras/mediamtx-route.test.mts |  14 ++
+ src/lib/restaurant/cameras/stream-grants.test.ts   | 114 ++++++++++++++
+ src/server/routers/restaurant-cameras.ts           |  38 ++++-
+ 15 files changed, 971 insertions(+), 98 deletions(-)
+f81ae0c315c1c96e950dfb2eee1ffb384d7d9947 036debad81072badc79e7331fae20e2a84addf3e fix(audit): redact camera renewal grant IDs
+
+ .../restaurants/cameras/002-configured-mediamtx.md | 66 +++++++++++++++
+ src/server/audit.ts                                |  4 +-
+ src/server/trpc.test.ts                            | 99 +++++++++++++++++++++-
+ 3 files changed, 167 insertions(+), 2 deletions(-)
+8fccc771aeb4fdd07141ada88e8a74e39459a588 fe1e3e383c8b966cdb68669ba5366db00fe2320a fix(pharmacy): isolate browser receipt printing
+
+ .../pharmacy/counter/counter-console.tsx           |  43 ++++++-
+ .../pharmacy/counter/counter-receipt-view.test.tsx |  90 ++++++++++++++
+ .../pharmacy/counter/counter-receipt-view.tsx      |  30 +++--
+ src/lib/pharmacy/COUNTER-PRINTING.md               | 126 +++++++++++++++++++
+ src/lib/pharmacy/counter-browser-print.test.ts     | 136 +++++++++++++++++++++
+ src/lib/pharmacy/counter-browser-print.ts          |  99 +++++++++++++++
+ 6 files changed, 512 insertions(+), 12 deletions(-)
+2cdef75b9f9bb85f9706ec113a13c3a6267d5183 8fccc771aeb4fdd07141ada88e8a74e39459a588 fix(pharmacy): refresh cart after pending read
+
+ .../pharmacy/counter/counter-console.tsx           |  4 +-
+ src/lib/pharmacy/COUNTER-PRINTING.md               | 53 +++++++++++-
+ src/lib/pharmacy/counter-query-refresh.test.ts     | 94 ++++++++++++++++++++++
+ src/lib/pharmacy/counter-query-refresh.ts          | 13 +++
+ 4 files changed, 161 insertions(+), 3 deletions(-)
+c49b1afa252f20905269a044d09bdb0406eb7b60 fe1e3e383c8b966cdb68669ba5366db00fe2320a fix(pharmacy): snapshot issued receipt identity
+
+ src/lib/pharmacy/counter-receipt.ts          |  10 +
+ src/lib/pharmacy/counter.ts                  |  40 ++-
+ src/lib/pharmacy/receipt-identity.db.test.ts | 413 +++++++++++++++++++++++++++
+ src/lib/pharmacy/receipt-identity.test.ts    | 169 +++++++++++
+ src/lib/pharmacy/receipt-identity.ts         | 121 ++++++++
+ src/lib/pharmacy/settlement.test.ts          |  41 ++-
+ src/lib/pharmacy/settlement.ts               |  87 +++++-
+ 7 files changed, 870 insertions(+), 11 deletions(-)
+5a1549376377af8321314d3bbfb2ff3a4e987230 57cb2f0d77b7b4b68214797faf13ee52927599ca fix(pharmacy): render issued receipt allocations
+
+ .../pharmacy/counter/counter-receipt-view.test.tsx | 75 +++++++++++++++++-
+ .../pharmacy/counter/counter-receipt-view.tsx      | 65 ++++++++-------
+ src/lib/pharmacy/COUNTER-PRINTING.md               | 92 ++++++++++++++++++++++
+ src/lib/pharmacy/counter-browser-print.test.ts     | 91 ++++++++++++++++++++-
+ src/lib/pharmacy/counter-browser-print.ts          | 46 +++--------
+ src/lib/pharmacy/counter-receipt-presentation.ts   | 92 ++++++++++++++++++++++
+ 6 files changed, 389 insertions(+), 72 deletions(-)

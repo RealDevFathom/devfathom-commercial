@@ -22,6 +22,16 @@ export type CounterReceiptLocale = 'en' | 'ur';
 
 export type CounterReceiptLine = {
   saleLineId: string;
+  /** Absent only for older callers; receipt reads always set this explicitly. */
+  identityStatus?: 'ISSUED' | 'UNAVAILABLE';
+  /** Descriptive allocation subrows, never additional financial rows. */
+  allocations?: {
+    allocationId: string;
+    inventoryLotId: string;
+    batchNumber: string | null;
+    expiresAt: string | null;
+    canonicalUnits: number;
+  }[];
   medicineName: string;
   /** Rendered strength, for example `500 mg`. Null for an unstrengthed item. */
   strength: string | null;

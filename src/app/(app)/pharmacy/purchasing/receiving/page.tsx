@@ -1,7 +1,8 @@
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
-import { redirect, RedirectType } from 'next/navigation';
+import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -39,7 +40,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   dateOnly,
   dateTime,
   destination,
@@ -146,7 +148,7 @@ export default async function PharmacyReceivingPage({
     return (
       <Frame branch={scope} notice={notice}>
         <LoadFailure
-          detail="Receipts for this branch could not be read. Nothing was written."
+          detail="Receipts for this branch could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={`${ROUTE}?branch=${encodeURIComponent(branchId)}`}
         />
       </Frame>
@@ -187,12 +189,14 @@ export default async function PharmacyReceivingPage({
     'use server';
     const branch = field(form, 'branchId');
     const purchaseOrderId = field(form, 'purchaseOrderId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const order = (await actionCaller.purchaseOrders()).find((row) => row.id === purchaseOrderId);
-      if (!order) throw new Error('That order no longer exists. Reload the page.');
+      if (!order)
+        throw new PurchasingValidationError('That order no longer exists. Reload the page.');
 
       const lines = order.lines.flatMap((line) => {
         // A line with no batch number was not delivered on this consignment.
@@ -210,13 +214,13 @@ export default async function PharmacyReceivingPage({
       });
       if (lines.length === 0) {
         throw Object.assign(
-          new Error(
+          new PurchasingValidationError(
             'Enter a batch number on at least one line — that is what marks it as arrived.'
           ),
           { field: 'batchNumber' }
         );
       }
-      const receipt = await actionCaller.createGoodsReceipt({
+      const receipt = await outcome.write(actionCaller.createGoodsReceipt)({
         branchId: branch,
         reference: field(form, 'reference'),
         supplierId: order.supplierId,
@@ -240,20 +244,21 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not draft the receipt.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not draft the receipt.'), kind: 'error' },
         { branch, order: purchaseOrderId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function receiveDirect(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = DIRECT_SLOTS.flatMap((slot) => {
         const pack = readPack(field(form, `directPack-${slot}`));
         if (!pack) return [];
@@ -267,11 +272,14 @@ export default async function PharmacyReceivingPage({
         ];
       });
       if (lines.length === 0) {
-        throw Object.assign(new Error('Choose a medicine and pack for at least one line.'), {
-          field: 'directPack-0',
-        });
+        throw Object.assign(
+          new PurchasingValidationError('Choose a medicine and pack for at least one line.'),
+          {
+            field: 'directPack-0',
+          }
+        );
       }
-      const receipt = await actionCaller.createGoodsReceipt({
+      const receipt = await outcome.write(actionCaller.createGoodsReceipt)({
         branchId: branch,
         reference: field(form, 'directReference'),
         supplierId: field(form, 'supplierId'),
@@ -298,22 +306,26 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not draft the direct purchase.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not draft the direct purchase.'), kind: 'error' },
         { branch }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function postReceipt(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
     const goodsReceiptId = field(form, 'goodsReceiptId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      const result = await actionCaller.postGoodsReceipt({ branchId: branch, goodsReceiptId });
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      const result = await outcome.write(actionCaller.postGoodsReceipt)({
+        branchId: branch,
+        goodsReceiptId,
+      });
       revalidatePath(ROUTE);
       const raised = result.exceptions?.length ?? 0;
       next = destination(
@@ -330,22 +342,23 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not post the receipt.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not post the receipt.'), kind: 'error' },
         { branch, receipt: goodsReceiptId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function reverseReceipt(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
     const goodsReceiptId = field(form, 'goodsReceiptId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.reverseGoodsReceipt({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.reverseGoodsReceipt)({
         branchId: branch,
         goodsReceiptId,
         reason: field(form, 'reversalReason'),
@@ -363,22 +376,23 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not reverse the receipt.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not reverse the receipt.'), kind: 'error' },
         { branch, receipt: goodsReceiptId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function resolveException(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
     const receivingExceptionId = field(form, 'receivingExceptionId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.resolveReceivingException({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.resolveReceivingException)({
         branchId: branch,
         receivingExceptionId,
         resolutionNote: field(form, 'resolutionNote'),
@@ -395,11 +409,11 @@ export default async function PharmacyReceivingPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not resolve the exception.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not resolve the exception.'), kind: 'error' },
         { branch, receipt: optionalField(form, 'goodsReceiptId') }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   const openExceptionCount = exceptionStatus === 'OPEN' ? exceptions.length : null;
@@ -483,7 +497,14 @@ export default async function PharmacyReceivingPage({
                     Resolved {dateTime(exception.resolvedAt)} · {exception.resolutionNote}
                   </p>
                 ) : (
-                  <form action={resolveException} className="mt-3 flex flex-wrap items-end gap-3">
+                  <PurchasingActionForm
+                    operation={{
+                      resource: `receipt:${exception.goodsReceiptId}`,
+                      action: `resolve-exception:${exception.id}`,
+                    }}
+                    action={resolveException}
+                    className="mt-3 flex flex-wrap items-end gap-3"
+                  >
                     <input name="branchId" type="hidden" value={branchId} />
                     <input name="receivingExceptionId" type="hidden" value={exception.id} />
                     <input name="goodsReceiptId" type="hidden" value={exception.goodsReceiptId} />
@@ -496,7 +517,7 @@ export default async function PharmacyReceivingPage({
                       hint="Recorded with your name. The recorded quantities never change."
                     />
                     <SubmitButton>Resolve</SubmitButton>
-                  </form>
+                  </PurchasingActionForm>
                 )}
               </li>
             ))}
@@ -557,7 +578,11 @@ export default async function PharmacyReceivingPage({
             ) : null}
 
             {selectedOrder ? (
-              <form action={receiveAgainstOrder} className="mt-5 space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: `order:${selectedOrder.id}`, action: `receive:${branchId}` }}
+                action={receiveAgainstOrder}
+                className="mt-5 space-y-4"
+              >
                 <input name="branchId" type="hidden" value={branchId} />
                 <input name="purchaseOrderId" type="hidden" value={selectedOrder.id} />
                 <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
@@ -631,7 +656,7 @@ export default async function PharmacyReceivingPage({
                   A draft receipt is a document. Nothing reaches the ledger, and nothing becomes
                   saleable, until it is posted.
                 </p>
-              </form>
+              </PurchasingActionForm>
             ) : (
               <p className="mt-4 text-sm text-text-muted">
                 Choose an order above to open its lines for capture. Nothing is loaded until you do.
@@ -660,7 +685,11 @@ export default async function PharmacyReceivingPage({
             />
           </div>
         ) : (
-          <form action={receiveDirect} className="mt-4 space-y-4">
+          <PurchasingActionForm
+            operation={{ resource: `direct-receipt:${branchId}`, action: 'create' }}
+            action={receiveDirect}
+            className="mt-4 space-y-4"
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
               <TextField
@@ -750,7 +779,7 @@ export default async function PharmacyReceivingPage({
             </div>
             <TextAreaField label="Direct purchase note" name="directNote" notice={notice} />
             <SubmitButton>File direct purchase (draft)</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         )}
       </SectionCard>
 
@@ -831,7 +860,7 @@ function Frame({
   children: React.ReactNode;
 }) {
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       {branch?.kind === 'resolved' ? (
@@ -845,8 +874,9 @@ function Frame({
         </div>
       ) : null}
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
       {children}
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -1030,8 +1060,8 @@ function ReceiptDetail({
   }[];
   branchId: string;
   notice: Notice | null;
-  onPost: (form: FormData) => Promise<void>;
-  onReverse: (form: FormData) => Promise<void>;
+  onPost: (form: FormData) => Promise<string>;
+  onReverse: (form: FormData) => Promise<string>;
 }) {
   return (
     <SectionCard
@@ -1122,7 +1152,10 @@ function ReceiptDetail({
 
       <div className="mt-5 border-t border-border-subtle pt-5">
         {receipt.status === 'DRAFT' ? (
-          <form action={onPost}>
+          <PurchasingActionForm
+            operation={{ resource: `receipt:${receipt.id}`, action: 'post' }}
+            action={onPost}
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="goodsReceiptId" type="hidden" value={receipt.id} />
             <SubmitButton>Post into stock</SubmitButton>
@@ -1130,9 +1163,13 @@ function ReceiptDetail({
               Posting creates the batch lot, both dispositions and any match exception in one
               transaction: all of it commits, or none of it does.
             </p>
-          </form>
+          </PurchasingActionForm>
         ) : receipt.status === 'POSTED' ? (
-          <form action={onReverse} className="flex flex-wrap items-end gap-3">
+          <PurchasingActionForm
+            operation={{ resource: `receipt:${receipt.id}`, action: 'reverse' }}
+            action={onReverse}
+            className="flex flex-wrap items-end gap-3"
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="goodsReceiptId" type="hidden" value={receipt.id} />
             <TextField
@@ -1147,7 +1184,7 @@ function ReceiptDetail({
               A reversal writes linked compensating movements. If the stock has already moved on,
               the ledger refuses rather than driving a balance negative.
             </p>
-          </form>
+          </PurchasingActionForm>
         ) : (
           <p className="text-sm text-text-muted">
             This receipt is {receipt.status.toLowerCase()} and cannot be posted again.
@@ -1184,7 +1221,10 @@ function percentToBps(form: FormData, name: string, label: string): number {
   const raw = field(form, name);
   if (!raw) return 0;
   if (!/^\d+(\.\d{1,2})?$/.test(raw)) {
-    throw Object.assign(new Error(`${label}: enter a percentage like 5 or 12.5.`), { field: name });
+    throw Object.assign(
+      new PurchasingValidationError(`${label}: enter a percentage like 5 or 12.5.`),
+      { field: name }
+    );
   }
   return Math.round(Number(raw) * 100);
 }

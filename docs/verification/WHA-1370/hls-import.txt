@@ -1,0 +1,2 @@
+Real hls.js ESM import: 1.7.2
+returncode=0

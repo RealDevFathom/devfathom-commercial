@@ -1,9 +1,11 @@
 import { NextResponse } from 'next/server';
+import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
   PrintJobSchema,
+  RawPrintValidationError,
   PrintRoutingConfigSchema,
   type PrintDocumentType,
 } from '@/lib/restaurant/printing/contract';
@@ -14,6 +16,7 @@ import {
 } from '@/lib/restaurant/printing/service';
 import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
+import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 
 const ACTION_FOR_DOCUMENT: Record<PrintDocumentType, Action> = {
   KITCHEN_TICKET: 'orders:read',
@@ -24,6 +27,7 @@ const ACTION_FOR_DOCUMENT: Record<PrintDocumentType, Action> = {
 const bridgeAckBody = z
   .object({
     jobId: z.string().min(1),
+    claimToken: z.string().regex(/^[a-f0-9]{64}$/),
     status: z.enum(['PRINTED', 'OFFLINE']),
     error: z.string().trim().max(500).optional(),
   })
@@ -38,7 +42,7 @@ const bridgeClaim = withDeviceAuth(async (ctx, request) => {
   const waitSeconds = Math.min(20, Math.max(0, Number.parseInt(rawWait ?? '15', 10) || 0));
   const deadline = Date.now() + waitSeconds * 1_000;
   do {
-    const job = await claimNextPrintJob(ctx.db, ctx.device.branchId);
+    const job = await claimNextPrintJob(ctx.db, ctx.device.branchId, ctx.device.id);
     if (job) return NextResponse.json({ job });
     if (Date.now() >= deadline || request.signal.aborted) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -53,7 +57,9 @@ const bridgeAck = withDeviceAuth(async (ctx, request) => {
   }
   const result = await acknowledgePrintJob(ctx.db, {
     branchId: ctx.device.branchId,
+    deviceId: ctx.device.id,
     jobId: parsed.data.jobId,
+    claimToken: parsed.data.claimToken,
     status: parsed.data.status,
   });
   if (!result.acknowledged) {
@@ -88,7 +94,25 @@ async function branchExists(
   ctx: NonNullable<Awaited<ReturnType<typeof context>>>,
   branchId: string
 ) {
+  await requireRestaurantBranchScope(ctx, branchId);
   return ctx.db.restaurantBranch.findUnique({ where: { id: branchId }, select: { id: true } });
+}
+
+async function branchAccessError(
+  ctx: NonNullable<Awaited<ReturnType<typeof context>>>,
+  branchId: string
+) {
+  try {
+    if (!(await branchExists(ctx, branchId))) {
+      return NextResponse.json({ error: 'Branch not found.' }, { status: 404 });
+    }
+    return null;
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'FORBIDDEN') {
+      return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
+    }
+    throw error;
+  }
 }
 
 /**
@@ -150,9 +174,8 @@ export async function PUT(request: Request) {
   const parsed = PrintRoutingConfigSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success)
     return NextResponse.json({ error: 'Invalid print routing configuration.' }, { status: 400 });
-  if (!(await branchExists(ctx, parsed.data.branchId))) {
-    return NextResponse.json({ error: 'Branch not found.' }, { status: 404 });
-  }
+  const branchError = await branchAccessError(ctx, parsed.data.branchId);
+  if (branchError) return branchError;
   const stationIds = new Set(
     (
       await ctx.db.restaurantKitchenStation.findMany({
@@ -196,21 +219,34 @@ export async function POST(request: Request) {
       { status: 403 }
     );
   }
-  if (!(await branchExists(ctx, parsed.data.branchId))) {
-    return NextResponse.json({ error: 'Branch not found.' }, { status: 404 });
-  }
+  const branchError = await branchAccessError(ctx, parsed.data.branchId);
+  if (branchError) return branchError;
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
-  const result = await ctx.db.$transaction(async (db) => {
-    const routes = await db.restaurantPrintRoute.findMany({
-      where: { branchId: parsed.data.branchId },
-      select: { documentType: true, stationId: true, printerId: true, enabled: true },
+  let result;
+  try {
+    result = await ctx.db.$transaction(async (db) => {
+      const routes = await db.restaurantPrintRoute.findMany({
+        where: { branchId: parsed.data.branchId },
+        select: { documentType: true, stationId: true, printerId: true, enabled: true },
+      });
+      return new PrintBridgeService(db).enqueue(
+        organizationId,
+        { branchId: parsed.data.branchId, routes },
+        parsed.data
+      );
     });
-    return new PrintBridgeService(db).enqueue(
-      organizationId,
-      { branchId: parsed.data.branchId, routes },
-      parsed.data
+  } catch (error) {
+    if (!(error instanceof RawPrintValidationError)) throw error;
+    return NextResponse.json(
+      {
+        error: error.message,
+        code: error.code,
+        fallback: error.fallback,
+        retryable: false,
+      },
+      { status: 422 }
     );
-  });
+  }
   return NextResponse.json(
     { mode: 'DEVICE_BRIDGE', result },
     { status: result.status === 'QUEUED' ? 202 : result.status === 'PRINTED' ? 200 : 409 }

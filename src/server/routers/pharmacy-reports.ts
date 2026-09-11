@@ -1,3 +1,4 @@
+import { readRepeatPurchasing, validateRepeatFilters } from '@/lib/pharmacy/repeat-purchasing';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -300,6 +301,25 @@ export const pharmacyReportsRouter = router({
       }),
     },
   })),
+  repeatPurchasing: reports
+    .input(
+      filters
+        .pick({ branchId: true, from: true, to: true })
+        .extend({ asOf: z.iso.datetime({ offset: true }) })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scoped = { ...(await ownerFilters(ctx, input)), asOf: input.asOf };
+      try {
+        validateRepeatFilters(scoped);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid cohort window.',
+        });
+      }
+      return readRepeatPurchasing(ctx.db, ctx.entitlements.organizationId, scoped);
+    }),
   commandCentre: reports.input(filters).query(async ({ ctx, input }) => {
     const available = await scope(ctx);
     const branchIds = input.branchId

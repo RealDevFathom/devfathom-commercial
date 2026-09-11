@@ -64,7 +64,9 @@ test('team and custom roles are visible to the Agency administrator', async ({ p
   await expect(page.getByRole('heading', { name: 'Team' })).toBeVisible();
   await expect(page.getByText('Agency Gate Admin')).toBeVisible();
   await page.getByPlaceholder('Search by name or role...').fill('Agency Administrator');
-  await expect(page.getByText('Agency Administrator')).toBeVisible();
+  await expect(
+    page.getByRole('main').getByText('Agency Administrator', { exact: true })
+  ).toBeVisible();
   await page.goto('/organization');
   await expect(page.getByText('Custom roles', { exact: true })).toBeVisible();
   // The role name also renders as an <option> in the member role selector, so

@@ -1,0 +1,9 @@
+{
+  "command": "bun run build",
+  "returncode": 0,
+  "head": "9070a91cc3782f6838c6b60d7bd4b2cd15283232",
+  "heapMiB": 8192,
+  "authSecret": "ephemeral synthetic",
+  "database": "none",
+  "skipTypecheck": false
+}

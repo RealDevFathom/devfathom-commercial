@@ -1,3 +1,5 @@
+import { Suspense } from 'react';
+import { MarginComparisonSection } from './margin-comparison';
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -48,7 +50,13 @@ async function tenantContext() {
 export default async function PharmacyFinancePage({
   searchParams,
 }: {
-  searchParams: Promise<{ branch?: string; notice?: string; kind?: string }>;
+  searchParams: Promise<{
+    branch?: string;
+    notice?: string;
+    kind?: string;
+    marginFrom?: string;
+    marginTo?: string;
+  }>;
 }) {
   const query = await searchParams;
   const ctx = await tenantContext();
@@ -255,6 +263,20 @@ export default async function PharmacyFinancePage({
         heading="Finance"
         description="Post and allocate money, reconcile the bank, control periods, and publish approved tax versions."
       />
+      <Suspense
+        fallback={
+          <SectionCard title="Gross-margin comparison" titleLevel={2}>
+            <p role="status">Loading posted ledger comparison…</p>
+          </SectionCard>
+        }
+      >
+        <MarginComparisonSection
+          caller={caller}
+          branch={branch}
+          from={query.marginFrom}
+          to={query.marginTo}
+        />
+      </Suspense>
       {query.notice ? (
         <div
           role={query.kind === 'error' ? 'alert' : 'status'}

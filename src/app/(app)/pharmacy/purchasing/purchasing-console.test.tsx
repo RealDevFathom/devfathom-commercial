@@ -1,5 +1,10 @@
+import { PurchasingValidationError } from './_lib/console';
+import { revalidatePath } from 'next/cache';
+import ReturnsPage from './returns/page';
+import { Children, isValidElement, type ReactNode } from 'react';
+import { PurchasingActionForm } from './_components/action-form';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
-import { render, screen, within } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 
 /**
  * WHA-1196 — the PH-PUR consoles, held to the UX rules that are acceptance
@@ -25,7 +30,7 @@ vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolve
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 vi.mock('@/lib/entitlements', () => ({ hasModule: mocks.hasModule }));
 vi.mock('next/cache', () => ({ revalidatePath: vi.fn() }));
-vi.mock('next/navigation', () => ({ redirect: vi.fn() }));
+vi.mock('next/navigation', () => ({ redirect: vi.fn(), useRouter: () => ({ refresh: vi.fn() }) }));
 vi.mock('@/server/routers/pharmacy-purchasing', () => ({
   pharmacyPurchasingRouter: { createCaller: mocks.createCaller },
 }));
@@ -158,6 +163,8 @@ function callerStub(overrides: Record<string, unknown> = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.mocked(revalidatePath).mockReset();
+  vi.unstubAllGlobals();
   mocks.hasModule.mockImplementation((entitlements: { enabledModules: string[] }, module: string) =>
     entitlements.enabledModules.includes(module)
   );
@@ -572,5 +579,176 @@ describe('segregation of duties (PUR-02)', () => {
 
     expect(screen.getByText(/You raised this order, so you cannot approve it/)).toBeDefined();
     expect(screen.queryByRole('button', { name: 'Approve' })).toBeNull();
+  });
+});
+
+function findAction(node: ReactNode, name: string): (form: FormData) => Promise<string> {
+  let found: ((form: FormData) => Promise<string>) | undefined;
+  function visit(children: ReactNode) {
+    Children.forEach(children, (child) => {
+      if (
+        !isValidElement<{ action?: (form: FormData) => Promise<string>; children?: ReactNode }>(
+          child
+        )
+      )
+        return;
+      if (child.type === PurchasingActionForm && child.props.action?.name === name)
+        found = child.props.action;
+      visit(child.props.children);
+    });
+  }
+  visit(node);
+  if (!found) throw new Error(`Missing action ${name}`);
+  return found;
+}
+
+describe('explicit purchasing action outcomes', () => {
+  it('returns a success destination after one authenticated supplier write', async () => {
+    const createSupplier = vi.fn().mockResolvedValue({ id: 'new-supplier', name: 'New supplier' });
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    const form = new FormData();
+    form.set('name', 'New supplier');
+    const result = new URL(await action(form), 'https://workspace.test');
+    expect(result.pathname).toBe('/pharmacy/purchasing/suppliers');
+    expect(result.searchParams.get('kind')).toBe('success');
+    expect(result.searchParams.get('supplier')).toBe('new-supplier');
+    expect(result.searchParams.get('notice')).toContain('New supplier added');
+    expect(createSupplier).toHaveBeenCalledTimes(1);
+  });
+
+  it('returns field validation feedback without writing', async () => {
+    const createSupplier = vi.fn();
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    const form = new FormData();
+    form.set('creditLimit', 'invalid');
+    const result = new URL(await action(form), 'https://workspace.test');
+    expect(result.searchParams.get('kind')).toBe('error');
+    expect(result.searchParams.get('notice')).toContain('Credit limit');
+    expect(createSupplier).not.toHaveBeenCalled();
+  });
+
+  it('re-resolves the session at submission and returns session-loss feedback', async () => {
+    const createSupplier = vi.fn();
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    mocks.resolveTenantActor.mockResolvedValue(null);
+    const result = new URL(await action(new FormData()), 'https://workspace.test');
+    expect(result.searchParams.get('kind')).toBe('error');
+    expect(result.searchParams.get('notice')).toContain('session is no longer active');
+    expect(createSupplier).not.toHaveBeenCalled();
+  });
+
+  it('delivers domain rejection feedback without changing its meaning', async () => {
+    const createSupplier = vi.fn().mockRejectedValue(new Error('CROSS_TENANT_REFERENCE'));
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    const result = new URL(await action(new FormData()), 'https://workspace.test');
+    expect(result.searchParams.get('kind')).toBe('error');
+    expect(result.searchParams.get('notice')).toBe('That record is not part of this workspace.');
+    expect(createSupplier).toHaveBeenCalledTimes(1);
+  });
+});
+
+// Persistent WHA-1349 safety probe from artifact 1bebca46-165f-43a0-9d81-bc3e3b8f8f59.
+// Executes actual inline actions and client form; mocked callers are not DB/idempotency proof.
+describe('WHA-1349 action-boundary retry safety', () => {
+  function mountAction(
+    action: (form: FormData) => Promise<string>,
+    fields: Record<string, string>
+  ) {
+    vi.stubGlobal('window', {
+      document,
+      location: { origin: 'https://workspace.test', replace: vi.fn() },
+    });
+    const view = render(
+      <PurchasingActionForm action={action}>
+        {Object.entries(fields).map(([name, value]) => (
+          <input key={name} name={name} defaultValue={value} aria-label={name} />
+        ))}
+        <button type="submit">Save</button>
+      </PurchasingActionForm>
+    );
+    return view.container.querySelector('form')!;
+  }
+
+  it.each(['supplier', 'supplier credit'])(
+    'post-write revalidation failure cannot repeat the %s mutation',
+    async (path) => {
+      const write = vi.fn().mockResolvedValue({ id: 'new-supplier', name: 'New supplier' });
+      mocks.createCaller.mockReturnValue(
+        callerStub({ createSupplier: write, recordSupplierCredit: write })
+      );
+      const page =
+        path === 'supplier'
+          ? await SuppliersPage({ searchParams: params() })
+          : await ReturnsPage({ searchParams: params() });
+      const action = findAction(page, path === 'supplier' ? 'createSupplier' : 'recordCredit');
+      // Supplier reproduces the original generic cache failure; credit also tests that phase dominates a validation error type.
+      vi.mocked(revalidatePath).mockImplementation(() => {
+        throw path === 'supplier'
+          ? new Error('post-write cache failure')
+          : new PurchasingValidationError('post-write cache failure');
+      });
+      const form = mountAction(action, {
+        name: 'New supplier',
+        branchId: 'branch-1',
+        supplierId: 'sup-ok',
+        creditReference: 'CR-1',
+        amount: '25.00',
+        receivedAt: '2026-09-01',
+      });
+      await act(async () => {
+        fireEvent.click(screen.getByRole('button'));
+      });
+      expect(write).toHaveBeenCalledTimes(1);
+      expect(screen.getByRole('alert')).toHaveTextContent('check the record before retrying');
+      expect(screen.getByRole('button')).toBeDisabled();
+      await act(async () => {
+        fireEvent.submit(form);
+      });
+      expect(write).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it('definitive local validation rejection permits correction before the first write', async () => {
+    const write = vi.fn().mockResolvedValue({ id: 'new-supplier', name: 'New supplier' });
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier: write }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    mountAction(action, { name: 'New supplier', creditLimit: 'invalid' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(write).not.toHaveBeenCalled();
+    expect(screen.getByLabelText('creditLimit')).toHaveFocus();
+    expect(screen.getByRole('button')).not.toBeDisabled();
+    fireEvent.change(screen.getByLabelText('creditLimit'), { target: { value: '25.00' } });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('unknown server mutation failure remains locked even with a familiar domain message', async () => {
+    const write = vi.fn().mockRejectedValue(new Error('CROSS_TENANT_REFERENCE'));
+    mocks.createCaller.mockReturnValue(callerStub({ createSupplier: write }));
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    const form = mountAction(action, { name: 'New supplier' });
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button'));
+    });
+    expect(screen.getByRole('button')).toBeDisabled();
+    await act(async () => {
+      fireEvent.submit(form);
+    });
+    expect(write).toHaveBeenCalledTimes(1);
+  });
+
+  it('generic server setup error is not mislabeled as safe local validation', async () => {
+    const action = findAction(await SuppliersPage({ searchParams: params() }), 'createSupplier');
+    mocks.resolveTenantActor.mockRejectedValue(new Error('backend unavailable'));
+    const result = new URL(await action(new FormData()), 'https://workspace.test');
+    expect(result.searchParams.get('outcome')).toBe('unknown');
   });
 });

@@ -1,6 +1,6 @@
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 
-import { PHARMACY_E2E } from './pharmacy-counter-fixture';
+import { freshPharmacyFirstSale } from './fixtures/pharmacy-first-sale';
 import {
   installSeededTerminalCookie,
   restaurantE2eCredentials as restaurant,
@@ -36,43 +36,6 @@ async function assertNoRawIdInputs(page: Page) {
   await expect(
     page.getByText(/\b(?:org|branch|staff|device|medicine|sale)_[a-z0-9_-]{6,}\b/i)
   ).toHaveCount(0);
-}
-
-async function pharmacyFirstSale(page: Page, metric: { clicks: number }) {
-  await page.goto('/login');
-  await page.getByLabel('Email').fill(process.env.PHARMACY_E2E_ADMIN_EMAIL!);
-  await page
-    .getByRole('textbox', { name: 'Password' })
-    .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
-  await activate(page.getByRole('button', { name: 'Sign in' }), metric);
-  const chooser = page.getByText('Choose a workspace', { exact: true });
-  if (await chooser.isVisible({ timeout: 10_000 }).catch(() => false))
-    await activate(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }), metric);
-
-  await page.goto('/dashboard');
-  const checklist = page.getByTestId('first-run-checklist');
-  await expect(checklist).toBeVisible();
-  await activate(checklist.getByRole('link', { name: /Make a test sale/ }), metric);
-  await expect(page).toHaveURL(/\/pharmacy\/counter/);
-  await assertNoRawIdInputs(page);
-
-  await activate(page.getByRole('button', { name: 'Open drawer' }), metric);
-  const search = page.getByLabel('Scan or search');
-  await search.fill(PHARMACY_E2E.medicines.otc.barcode);
-  await search.press('Enter');
-  const result = page
-    .getByRole('list', { name: 'Search results' })
-    .getByRole('button')
-    .filter({ hasText: PHARMACY_E2E.medicines.otc.name })
-    .first();
-  await activate(result, metric);
-  await page.keyboard.press('F4');
-  await page.keyboard.press('F6');
-  await page.keyboard.press('F9');
-  await page.getByLabel('Amount').fill('25.00');
-  await page.getByLabel('Cash received').fill('25.00');
-  await activate(page.getByRole('button', { name: 'Take payment' }), metric);
-  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
 }
 
 async function restaurantFirstSale(page: Page, browser: Browser, metric: { clicks: number }) {
@@ -144,7 +107,7 @@ test('admin follows the first-run checklist to the first completed sale', async 
   const fourXx = observe4xx(page);
   const vertical = process.env.PHARMACY_E2E === '1' ? 'PHARMACY' : 'RESTAURANT';
 
-  if (vertical === 'PHARMACY') await pharmacyFirstSale(page, metric);
+  if (vertical === 'PHARMACY') await freshPharmacyFirstSale(page, browser, metric, fourXx);
   else await restaurantFirstSale(page, browser, metric);
 
   const wallTimeMs = Date.now() - started;

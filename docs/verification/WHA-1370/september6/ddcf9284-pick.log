@@ -1,0 +1,3 @@
+[codex/WHA-1370-pharmacy-compatibility-8ba9-7e02 8d0eaf7c] fix(purchasing): preserve sibling drafts on success
+ Date: Sun Sep 6 17:07:17 2026 +0500
+ 3 files changed, 120 insertions(+), 12 deletions(-)

@@ -94,8 +94,8 @@ export const PHARMACY_GATE_GUIDANCE: Record<PharmacyOnboardingGate, GateGuidance
   BRANCHES_AND_LOCATIONS: {
     todo: 'Record that every branch and its stock locations exist, naming where the layout is documented.',
     done: 'Branches and stock locations recorded.',
-    href: null,
-    linkLabel: null,
+    href: '/pharmacy/inventory',
+    linkLabel: 'Create or review stock locations',
   },
   COMMERCIAL_PACKAGE: {
     todo: 'This workspace has no pharmacy package. Your DevFathom account manager assigns it; the platform team cannot be replaced by a setting here.',
@@ -110,22 +110,22 @@ export const PHARMACY_GATE_GUIDANCE: Record<PharmacyOnboardingGate, GateGuidance
     linkLabel: 'Open organization',
   },
   MEDICINE_CATALOG_READINESS: {
-    todo: 'Publish at least one medicine batch, so dispensing has a catalog to sell from.',
+    todo: 'Review and publish a medicine, then define its pack for receiving.',
     done: 'A published medicine catalog is available.',
-    href: null,
-    linkLabel: null,
+    href: '/pharmacy/medicines',
+    linkLabel: 'Set up medicines and packs',
   },
   OPENING_STOCK_READINESS: {
     todo: 'Receive opening stock against at least one lot, so the ledger starts from a counted position.',
     done: 'Opening stock has been received into the ledger.',
-    href: null,
-    linkLabel: null,
+    href: '/pharmacy/purchasing/receiving',
+    linkLabel: 'Receive opening stock',
   },
   PARTIES_AND_BALANCES: {
     todo: 'Add at least one authorized, active supplier so purchasing and returns have a counterparty.',
     done: 'An authorized supplier is on file.',
-    href: null,
-    linkLabel: null,
+    href: '/pharmacy/purchasing/suppliers',
+    linkLabel: 'Set up suppliers',
   },
   DEVICES_AND_DOCUMENTS: {
     todo: 'Record the counters, printers and document templates this pharmacy will use, naming where they are listed.',
@@ -136,8 +136,8 @@ export const PHARMACY_GATE_GUIDANCE: Record<PharmacyOnboardingGate, GateGuidance
   READINESS_AND_PARALLEL_RUN: {
     todo: 'Record the parallel-run result that shows the pharmacy is ready to go live.',
     done: 'Parallel run recorded as complete.',
-    href: null,
-    linkLabel: null,
+    href: '/pharmacy/counter',
+    linkLabel: 'Open pharmacy counter',
   },
 };
 

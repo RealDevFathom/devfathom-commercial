@@ -269,6 +269,109 @@ describe('Settings entitlement presentation', () => {
 });
 
 describe('Print routing settings', () => {
+  it('preserves sibling station routes when editing and saving the first route', async () => {
+    const routes = [
+      {
+        documentType: 'KITCHEN_TICKET',
+        stationId: 'hot',
+        printerId: 'queue:///Hot',
+        enabled: true,
+      },
+      {
+        documentType: 'KITCHEN_TICKET',
+        stationId: 'cold',
+        printerId: 'queue:///Cold',
+        enabled: true,
+      },
+      { documentType: 'RECEIPT', stationId: null, printerId: 'queue:///Receipt', enabled: true },
+    ];
+    const fetchMock = vi.fn(
+      async (_path: unknown, options?: RequestInit) =>
+        new Response(
+          JSON.stringify(
+            options?.method === 'PUT'
+              ? {}
+              : {
+                  branches: [
+                    {
+                      id: 'branch-1',
+                      name: 'Main',
+                      kitchenStations: [
+                        { id: 'hot', name: 'Hot' },
+                        { id: 'cold', name: 'Cold' },
+                      ],
+                      config: { branchId: 'branch-1', routes },
+                    },
+                  ],
+                }
+          )
+        )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<PrintRoutingSection />);
+    fireEvent.change(await screen.findByLabelText('Kitchen printer (KOT) printer ID'), {
+      target: { value: 'queue:///NewHot' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save print routes' }));
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    expect(JSON.parse(fetchMock.mock.calls[1][1]!.body as string).routes).toEqual([
+      { ...routes[0], printerId: 'queue:///NewHot' },
+      routes[1],
+      routes[2],
+    ]);
+    vi.unstubAllGlobals();
+  });
+  it('dispatches a synthetic receipt test with stable retry identity and honest delivery status', async () => {
+    const fetchMock = vi.fn(
+      async (_path: unknown, options?: RequestInit) =>
+        new Response(
+          JSON.stringify(
+            options?.method === 'POST'
+              ? { result: { status: 'QUEUED', printerId: 'queue:///Receipt' } }
+              : {
+                  mode: 'DEVICE_BRIDGE',
+                  branches: [
+                    {
+                      id: 'branch-1',
+                      name: 'Main',
+                      kitchenStations: [],
+                      config: {
+                        branchId: 'branch-1',
+                        routes: [
+                          {
+                            documentType: 'RECEIPT',
+                            stationId: null,
+                            printerId: 'queue:///Receipt',
+                            enabled: true,
+                          },
+                        ],
+                      },
+                    },
+                  ],
+                }
+          )
+        )
+    );
+    vi.stubGlobal('fetch', fetchMock);
+    render(<PrintRoutingSection />);
+    const button = await screen.findByRole('button', { name: 'Test receipt printer' });
+    fireEvent.click(button);
+    expect(await screen.findByText(/Paper output is not confirmed/)).toBeVisible();
+    fireEvent.click(button);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(3));
+    const first = JSON.parse(fetchMock.mock.calls[1][1]!.body as string);
+    expect(first).toMatchObject({
+      branchId: 'branch-1',
+      stationId: null,
+      document: { type: 'RECEIPT', title: 'RECEIPT PRINTER TEST' },
+    });
+    expect(fetchMock.mock.calls[2][1]!.body).toBe(fetchMock.mock.calls[1][1]!.body);
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
+      target: { value: 'queue:///Other' },
+    });
+    expect(button).toBeDisabled();
+    vi.unstubAllGlobals();
+  });
   it('renders the KOT/KDS explanation and empty state', async () => {
     vi.stubGlobal(
       'fetch',

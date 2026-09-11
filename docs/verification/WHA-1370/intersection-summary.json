@@ -1,0 +1,188 @@
+[
+  {
+    "file": "tests/print-bridge.test.ts",
+    "counts": {
+      "failed": 60
+    }
+  },
+  {
+    "file": "src/server/trpc.test.ts",
+    "counts": {
+      "passed": 119
+    }
+  },
+  {
+    "file": "src/components/receipts/receipt-designer.test.tsx",
+    "counts": {
+      "passed": 4
+    }
+  },
+  {
+    "file": "src/components/restaurant/restaurant-camera-player.test.tsx",
+    "counts": {
+      "passed": 5
+    }
+  },
+  {
+    "file": "src/components/restaurant/restaurant-camera-wizard.test.tsx",
+    "counts": {
+      "passed": 6
+    }
+  },
+  {
+    "file": "src/components/restaurant/restaurant-cameras-console.test.tsx",
+    "counts": {
+      "passed": 4
+    }
+  },
+  {
+    "file": "src/components/restaurant/restaurant-devices-console.test.tsx",
+    "counts": {
+      "passed": 4
+    }
+  },
+  {
+    "file": "src/server/routers/restaurant-cameras.test.ts",
+    "counts": {
+      "passed": 5
+    }
+  },
+  {
+    "file": "src/lib/receipts/configuration.test.ts",
+    "counts": {
+      "passed": 16
+    }
+  },
+  {
+    "file": "src/lib/receipts/restaurant-settings.test.ts",
+    "counts": {
+      "passed": 5
+    }
+  },
+  {
+    "file": "src/lib/pharmacy/counter-browser-print.test.ts",
+    "counts": {
+      "passed": 16
+    }
+  },
+  {
+    "file": "src/lib/pharmacy/counter-query-refresh.test.ts",
+    "counts": {
+      "passed": 3
+    }
+  },
+  {
+    "file": "src/lib/pharmacy/receipt-identity.test.ts",
+    "counts": {
+      "passed": 19
+    }
+  },
+  {
+    "file": "src/lib/pharmacy/settlement.test.ts",
+    "counts": {
+      "passed": 7
+    }
+  },
+  {
+    "file": "src/lib/restaurant/camera-credentials.test.ts",
+    "counts": {
+      "passed": 2
+    }
+  },
+  {
+    "file": "src/lib/restaurant/camera-gateway-runtime.test.ts",
+    "counts": {
+      "passed": 6
+    }
+  },
+  {
+    "file": "src/lib/restaurant/camera-gateway.test.ts",
+    "counts": {
+      "passed": 2
+    }
+  },
+  {
+    "file": "src/lib/restaurant/cameras.test.ts",
+    "counts": {
+      "passed": 2
+    }
+  },
+  {
+    "file": "src/lib/restaurant/checkout-routes.test.ts",
+    "counts": {
+      "passed": 3
+    }
+  },
+  {
+    "file": "src/app/(app)/settings/settings-entitlements.test.tsx",
+    "counts": {
+      "passed": 12
+    }
+  },
+  {
+    "file": "src/components/pharmacy/counter/counter-receipt-view.test.tsx",
+    "counts": {
+      "passed": 10
+    }
+  },
+  {
+    "file": "src/components/restaurant/pos/receipt-print-controls.test.tsx",
+    "counts": {
+      "passed": 14
+    }
+  },
+  {
+    "file": "src/components/restaurant/pos/receipt-view.test.tsx",
+    "counts": {
+      "passed": 1
+    }
+  },
+  {
+    "file": "src/lib/restaurant/cameras/live-session.test.ts",
+    "counts": {
+      "passed": 6
+    }
+  },
+  {
+    "file": "src/lib/restaurant/cameras/stream-grants.test.ts",
+    "counts": {
+      "passed": 4
+    }
+  },
+  {
+    "file": "src/lib/restaurant/printing/printing.test.ts",
+    "counts": {
+      "passed": 6
+    }
+  },
+  {
+    "file": "src/lib/restaurant/printing/receipt-snapshot.test.ts",
+    "counts": {
+      "passed": 19
+    }
+  },
+  {
+    "file": "src/app/api/restaurant/receipt-layout/route.test.ts",
+    "counts": {
+      "passed": 9
+    }
+  },
+  {
+    "file": "src/app/api/restaurant/print-bridge/route.test.ts",
+    "counts": {
+      "passed": 8
+    }
+  },
+  {
+    "file": "src/app/api/restaurant/checkout/receipt/route.test.ts",
+    "counts": {
+      "passed": 22
+    }
+  },
+  {
+    "file": "src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts",
+    "counts": {
+      "passed": 3
+    }
+  }
+]

@@ -29,6 +29,7 @@ import {
 } from './counter-pricing';
 import { counterReceiptTotals, type CounterReceipt } from './counter-receipt';
 import { normalizeMedicineText } from './medicine';
+import { readReceiptIdentity } from './receipt-identity';
 import type { LedgerScope } from './stock-ledger';
 
 export class PharmacyCounterError extends Error {
@@ -637,17 +638,40 @@ export async function readCounterReceipt(
   const sale = await saleInScope(db, scope, saleId);
   if (sale.lines.length === 0) throw new PharmacyCounterError('NOT_FOUND');
 
+  const events = await db.pharmacySaleEvent.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId,
+      kind: 'COMPLETED',
+    },
+    select: { payload: true },
+  });
+  const snapshot = readReceiptIdentity(events, sale);
   const lines = sale.lines.map((line) => {
-    // The first allocation is the FEFO-recommended batch, and it is the batch
-    // whose number and expiry belong on the dispensing label (POS-08).
-    const allocation = line.allocations[0];
+    const identity = snapshot?.lines.find((row) => row.saleLineId === line.id);
+    const allocations =
+      identity?.allocations ??
+      line.allocations.map((allocation) => ({
+        allocationId: allocation.id,
+        inventoryLotId: allocation.inventoryLotId,
+        batchNumber: null,
+        expiresAt: null,
+        canonicalUnits: allocation.canonicalUnits,
+      }));
     return {
       saleLineId: line.id,
-      medicineName: line.medicine.productName,
-      strength: renderStrength(line.medicine.strengths),
-      presentation: line.presentation.presentation,
-      batchNumber: allocation?.lot.batch.batchNumber ?? '—',
-      expiresAt: allocation?.lot.batch.expiresAt.toISOString() ?? '',
+      identityStatus: identity ? ('ISSUED' as const) : ('UNAVAILABLE' as const),
+      medicineName: identity?.medicineName ?? 'Historical identity unavailable',
+      strength: identity?.strength ?? null,
+      presentation: identity?.presentation ?? 'Historical identity unavailable',
+      allocations,
+      // Compatibility fields never associate the first lot with the entire line.
+      batchNumber:
+        identity?.allocations
+          .map((row) => `${row.batchNumber} (${row.canonicalUnits} units)`)
+          .join('; ') ?? 'Historical batches unavailable',
+      expiresAt: identity?.allocations.length === 1 ? identity.allocations[0]!.expiresAt : '',
       saleUnit: line.saleUnit as SaleUnitKind,
       quantity: line.quantity,
       canonicalUnits: line.canonicalUnits,

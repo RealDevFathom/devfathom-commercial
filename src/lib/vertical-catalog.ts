@@ -168,9 +168,9 @@ const PHARMACY_FIRST_RUN_CHECKLIST = [
     optional: false,
     doneWhy: 'A published medicine and received opening stock are ready to sell.',
     pendingWhy: 'Publish a medicine and receive opening stock before a test sale.',
-    doneActionLabel: 'Review inventory',
-    pendingActionLabel: 'Set up inventory',
-    href: '/pharmacy/inventory',
+    doneActionLabel: 'Review Pharmacy setup',
+    pendingActionLabel: 'Set up medicines and stock',
+    href: '/pharmacy',
   },
   {
     key: 'tax',

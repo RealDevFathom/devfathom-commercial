@@ -241,6 +241,12 @@ export default async function PharmacyReportsPage({
         heading="Reports"
         description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
       />
+      <Link
+        href="/pharmacy/reports/repeat-purchasing"
+        className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        Repeat purchasing and identity coverage
+      </Link>
       <SectionCard eyebrow="RPT-01 / RPT-02" title="Report filters" titleLevel={2}>
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">

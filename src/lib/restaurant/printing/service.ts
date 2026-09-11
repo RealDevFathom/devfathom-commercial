@@ -1,3 +1,4 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import type {
   ClaimedPrintJob,
   PrintBridgeAdapter,
@@ -7,13 +8,23 @@ import type {
   PrintRoutingConfig,
 } from './contract';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { PrintDocumentSchema } from './contract';
+import { PrintDocumentSchema, RawPrintValidationError, validateRawPrintDocument } from './contract';
 import { renderEscPos } from './esc-pos';
 import { resolvePrintRoute } from './routing';
 
 const CLAIM_LEASE_MS = 30_000;
 
 type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob'>;
+
+function renderRawDocument(document: unknown): Uint8Array {
+  try {
+    return renderEscPos(validateRawPrintDocument(document));
+  } catch (error) {
+    if (error instanceof RawPrintValidationError) throw error;
+    // Never expose receipt contents or parser diagnostics to the bridge/logs.
+    throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
+  }
+}
 
 export class PrintBridgeService {
   private readonly adapter: PrintBridgeAdapter | null;
@@ -60,6 +71,9 @@ export class PrintBridgeService {
     if (prior) {
       return { status: 'QUEUED', printerId: prior.printerId ?? route.printerId, replayed: true };
     }
+    // Typed callers are not a runtime validation boundary. Validate before any
+    // new job is persisted, using the same raw renderer as the claim path.
+    renderRawDocument(job.document);
     await this.db.restaurantPrintJob.create({
       data: {
         organizationId,
@@ -155,69 +169,157 @@ export class PrintBridgeService {
   }
 }
 
-/** Atomically lease one queued job for a branch-bound bridge device. */
+// Signed proof binds the authenticated device to the persisted attempt. Keep the
+// attempt timestamp unchanged on ACK so retries can verify the same proof.
+function claimToken(
+  job: {
+    id: string;
+    organizationId: string;
+    branchId: string;
+    attemptCount: number;
+    lastAttemptAt: Date;
+  },
+  deviceId: string
+) {
+  const secret = process.env.AUTH_SECRET;
+  if (!secret) throw new Error('AUTH_SECRET is required for print claims.');
+  return createHmac('sha256', secret)
+    .update(
+      JSON.stringify([
+        'restaurant-print-claim-v1',
+        job.organizationId,
+        job.branchId,
+        job.id,
+        deviceId,
+        job.attemptCount,
+        job.lastAttemptAt.toISOString(),
+      ])
+    )
+    .digest('hex');
+}
+
+/**
+ * Claim fresh work only. A lost response, disconnect or write-before-ACK can
+ * mean bytes reached the printer. Expiry does NOT authorize physical retry;
+ * attempted PENDING/OFFLINE jobs require operator reconciliation.
+ */
 export async function claimNextPrintJob(
   db: ScopedDb,
   branchId: string,
+  deviceId: string,
   now = new Date()
-): Promise<ClaimedPrintJob | null> {
-  const leaseBefore = new Date(now.getTime() - CLAIM_LEASE_MS);
+): Promise<(ClaimedPrintJob & { claimToken: string }) | null> {
   const candidates = await db.restaurantPrintJob.findMany({
     where: {
       branchId,
       printerId: { not: null },
-      status: { in: ['PENDING', 'OFFLINE'] },
-      OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lte: leaseBefore } }],
+      status: 'PENDING',
+      attemptCount: 0,
+      lastAttemptAt: null,
     },
     orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
     take: 10,
   });
   for (const candidate of candidates) {
+    if (!candidate.printerId) continue;
+    let bytes: string;
+    try {
+      bytes = Buffer.from(renderRawDocument(candidate.document)).toString('base64');
+    } catch (error) {
+      if (!(error instanceof RawPrintValidationError)) throw error;
+      // OFFLINE + zero attempts + no timestamp is a pre-dispatch hold. Retain
+      // the original document/route for reconciliation, and continue this batch.
+      // The predicate cannot change a job already claimed by another worker.
+      await db.restaurantPrintJob.updateMany({
+        where: {
+          id: candidate.id,
+          branchId,
+          status: 'PENDING',
+          attemptCount: 0,
+          lastAttemptAt: null,
+        },
+        data: { status: 'OFFLINE' },
+      });
+      continue;
+    }
+    const token = claimToken({ ...candidate, attemptCount: 1, lastAttemptAt: now }, deviceId);
     const claimed = await db.restaurantPrintJob.updateMany({
       where: {
         id: candidate.id,
         branchId,
-        status: { in: ['PENDING', 'OFFLINE'] },
-        OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lte: leaseBefore } }],
+        status: 'PENDING',
+        attemptCount: 0,
+        lastAttemptAt: null,
       },
       data: { lastAttemptAt: now, attemptCount: { increment: 1 } },
     });
-    if (claimed.count !== 1 || !candidate.printerId) continue;
-    const document = PrintDocumentSchema.parse(candidate.document);
+    if (claimed.count !== 1) continue;
     return {
       id: candidate.id,
       printerId: candidate.printerId,
       documentType: candidate.documentType,
-      bytes: Buffer.from(renderEscPos(document)).toString('base64'),
+      bytes,
+      claimToken: token,
     };
   }
   return null;
 }
 
-/** Acknowledge a claimed job without allowing a bridge to cross its bound branch. */
+/** Only a live matching claim may change delivery state. No physical exactly-once guarantee. */
 export async function acknowledgePrintJob(
   db: ScopedDb,
-  input: { branchId: string; jobId: string; status: 'PRINTED' | 'OFFLINE'; now?: Date }
+  input: {
+    branchId: string;
+    deviceId: string;
+    jobId: string;
+    claimToken: string;
+    status: 'PRINTED' | 'OFFLINE';
+    now?: Date;
+  }
 ): Promise<{ acknowledged: boolean; replayed: boolean }> {
+  const rejected = { acknowledged: false, replayed: false };
+  if (!input.deviceId || !/^[a-f0-9]{64}$/.test(input.claimToken ?? '')) return rejected;
   const current = await db.restaurantPrintJob.findFirst({
     where: { id: input.jobId, branchId: input.branchId },
-    select: { status: true, document: true },
   });
-  if (!current) return { acknowledged: false, replayed: false };
-  if (current.status === 'PRINTED') return { acknowledged: true, replayed: true };
+  if (!current?.lastAttemptAt || current.attemptCount < 1) return rejected;
+  const token = claimToken({ ...current, lastAttemptAt: current.lastAttemptAt }, input.deviceId);
+  if (!timingSafeEqual(Buffer.from(token, 'hex'), Buffer.from(input.claimToken, 'hex')))
+    return rejected;
+  if (current.status === input.status) return { acknowledged: true, replayed: true };
   const now = input.now ?? new Date();
+  const age = now.getTime() - current.lastAttemptAt.getTime();
+  if (current.status !== 'PENDING' || age < 0 || age >= CLAIM_LEASE_MS) return rejected;
   const document = PrintDocumentSchema.parse(current.document);
-  await db.restaurantPrintJob.update({
-    where: { id: input.jobId },
+  const updated = await db.restaurantPrintJob.updateMany({
+    where: {
+      id: input.jobId,
+      branchId: input.branchId,
+      status: 'PENDING',
+      attemptCount: current.attemptCount,
+      lastAttemptAt: current.lastAttemptAt,
+    },
     data:
       input.status === 'PRINTED'
         ? {
             status: 'PRINTED',
             byteCount: renderEscPos(document).length,
             printedAt: now,
-            lastAttemptAt: now,
           }
-        : { status: 'OFFLINE', lastAttemptAt: now },
+        : { status: 'OFFLINE' },
   });
+  if (updated.count !== 1) {
+    const replay = await db.restaurantPrintJob.findFirst({
+      where: {
+        id: input.jobId,
+        branchId: input.branchId,
+        status: input.status,
+        attemptCount: current.attemptCount,
+        lastAttemptAt: current.lastAttemptAt,
+      },
+      select: { id: true },
+    });
+    return replay ? { acknowledged: true, replayed: true } : rejected;
+  }
   return { acknowledged: true, replayed: false };
 }

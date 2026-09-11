@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import { revalidatePath } from 'next/cache';
-import { redirect, RedirectType } from 'next/navigation';
+import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -23,7 +24,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   dateField,
   dateInputValue,
   destination,
@@ -97,11 +99,12 @@ export default async function PharmacySuppliersPage({
 
   async function createSupplier(form: FormData) {
     'use server';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      const supplier = await actionCaller.createSupplier({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      const supplier = await outcome.write(actionCaller.createSupplier)({
         name: field(form, 'name'),
         legalName: optionalField(form, 'legalName'),
         serviceArea: optionalField(form, 'serviceArea'),
@@ -123,21 +126,22 @@ export default async function PharmacySuppliersPage({
       );
     } catch (error) {
       next = destination(ROUTE, {
-        ...actionFailure(error, 'Could not add the supplier.'),
+        ...outcome.failure(error, 'Could not add the supplier.'),
         kind: 'error',
       });
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function recordLicence(form: FormData) {
     'use server';
     const supplierId = field(form, 'supplierId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.recordSupplierLicence({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.recordSupplierLicence)({
         supplierId,
         licenceType: field(form, 'licenceType'),
         licenceNumber: field(form, 'licenceNumber'),
@@ -157,22 +161,23 @@ export default async function PharmacySuppliersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not file the licence.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not file the licence.'), kind: 'error' },
         { supplier: supplierId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function setAuthorization(form: FormData) {
     'use server';
     const supplierId = field(form, 'supplierId');
     const authorized = field(form, 'authorized') === 'true';
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.setSupplierAuthorization({ supplierId, authorized });
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.setSupplierAuthorization)({ supplierId, authorized });
       revalidatePath(ROUTE);
       next = destination(
         ROUTE,
@@ -187,22 +192,23 @@ export default async function PharmacySuppliersPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not change authorization.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not change authorization.'), kind: 'error' },
         { supplier: supplierId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
 
       {loadError || !suppliers ? (
         <LoadFailure
-          detail="The supplier register could not be read. This is a read-only page, so nothing was written."
+          detail="The supplier register could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={ROUTE}
         />
       ) : (
@@ -291,7 +297,11 @@ export default async function PharmacySuppliersPage({
             )}
 
             <SectionCard eyebrow="PUR-01" title="Add a supplier" titleLevel={2}>
-              <form action={createSupplier} className="grid gap-4 sm:grid-cols-2">
+              <PurchasingActionForm
+                operation={{ resource: 'supplier:new', action: 'create' }}
+                action={createSupplier}
+                className="grid gap-4 sm:grid-cols-2"
+              >
                 <TextField
                   label="Trading name"
                   name="name"
@@ -327,7 +337,7 @@ export default async function PharmacySuppliersPage({
                 <div className="flex items-end sm:col-span-2">
                   <SubmitButton>Add supplier</SubmitButton>
                 </div>
-              </form>
+              </PurchasingActionForm>
               <p className="mt-3 text-sm text-text-muted">
                 A new supplier starts unauthorized and unlicensed, so it cannot be ordered from
                 until both are recorded. That is the PUR-01 gate, not a missing step.
@@ -336,7 +346,7 @@ export default async function PharmacySuppliersPage({
           </div>
         </div>
       )}
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -348,8 +358,8 @@ function SupplierDetail({
 }: {
   supplier: SupplierSummary;
   notice: ReturnType<typeof noticeFrom>;
-  onRecordLicence: (form: FormData) => Promise<void>;
-  onSetAuthorization: (form: FormData) => Promise<void>;
+  onRecordLicence: (form: FormData) => Promise<string>;
+  onSetAuthorization: (form: FormData) => Promise<string>;
 }) {
   const supersedable = supplier.licences.filter((licence) => !licence.superseded);
   return (
@@ -386,13 +396,20 @@ function SupplierDetail({
           </p>
           {/* UX rule 15: the control is one action and it is never greyed out
               while the operator is clearly acting on it. */}
-          <form action={onSetAuthorization} className="mt-3">
+          <PurchasingActionForm
+            operation={{
+              resource: `supplier:${supplier.id}`,
+              action: supplier.authorized ? 'withdraw' : 'authorize',
+            }}
+            action={onSetAuthorization}
+            className="mt-3"
+          >
             <input name="supplierId" type="hidden" value={supplier.id} />
             <input name="authorized" type="hidden" value={supplier.authorized ? 'false' : 'true'} />
             <SubmitButton variant={supplier.authorized ? 'destructive' : 'primary'}>
               {supplier.authorized ? 'Withdraw authorization' : 'Authorize this supplier'}
             </SubmitButton>
-          </form>
+          </PurchasingActionForm>
         </div>
       </SectionCard>
 
@@ -454,7 +471,11 @@ function SupplierDetail({
           </ul>
         )}
 
-        <form action={onRecordLicence} className="mt-5 grid gap-4 sm:grid-cols-2">
+        <PurchasingActionForm
+          operation={{ resource: `supplier:${supplier.id}`, action: 'record-licence' }}
+          action={onRecordLicence}
+          className="mt-5 grid gap-4 sm:grid-cols-2"
+        >
           <input name="supplierId" type="hidden" value={supplier.id} />
           <TextField label="Licence type" name="licenceType" notice={notice} required />
           <TextField label="Licence number" name="licenceNumber" notice={notice} required />
@@ -523,7 +544,7 @@ function SupplierDetail({
             label="Gate"
             value="Only a verified, unexpired licence makes a supplier orderable."
           />
-        </form>
+        </PurchasingActionForm>
       </SectionCard>
     </>
   );

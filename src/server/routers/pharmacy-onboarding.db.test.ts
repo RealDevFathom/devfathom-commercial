@@ -133,16 +133,12 @@ describe('pharmacy onboarding router against PostgreSQL', () => {
     try {
       await owner.query('BEGIN');
       // The organization first: its cascade clears the gate states, which hold
-      // an ON DELETE RESTRICT reference to the branches. Then the branches,
-      // which the cascade never reaches. Regulatory profiles are append-only
-      // product records, so the owner temporarily disables their user trigger
-      // only inside this rollback-safe fixture teardown transaction.
+      // an ON DELETE RESTRICT reference to the branches. The regulatory-profile
+      // trigger then recognizes that the owning organization is gone, so the
+      // profiles and finally the branches can be removed without disabling it.
       await owner.query('DELETE FROM organizations WHERE id = ANY($1)', [
         [organizationId, otherOrganizationId],
       ]);
-      await owner.query(
-        'ALTER TABLE pharmacy_branch_regulatory_profiles DISABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
-      );
       await owner.query(
         'DELETE FROM pharmacy_branch_regulatory_profiles WHERE "organizationId" = ANY($1)',
         [[organizationId, otherOrganizationId]]
@@ -150,9 +146,6 @@ describe('pharmacy onboarding router against PostgreSQL', () => {
       await owner.query('DELETE FROM pharmacy_branches WHERE "organizationId" = ANY($1)', [
         [organizationId, otherOrganizationId],
       ]);
-      await owner.query(
-        'ALTER TABLE pharmacy_branch_regulatory_profiles ENABLE TRIGGER pharmacy_branch_regulatory_profiles_immutable'
-      );
       await owner.query('COMMIT');
     } catch (error) {
       await owner.query('ROLLBACK');

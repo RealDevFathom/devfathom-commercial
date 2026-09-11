@@ -1,4 +1,6 @@
 import { describe, expect, it } from 'vitest';
+import { readFileSync } from 'node:fs';
+import { VERTICALS } from '@/lib/vertical-catalog';
 
 import {
   PHARMACY_GATE_GUIDANCE,
@@ -159,5 +161,71 @@ describe('pharmacy onboarding checklist', () => {
     // Long lists are truncated so the sentence stays a sentence; the rows
     // beneath it carry the full list.
     expect(summary).toContain('and 9 more');
+  });
+});
+
+describe('fresh Pharmacy setup destinations', () => {
+  it('links stock-location creation without changing branch attestation or readiness', () => {
+    const pending = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items.find(
+      (item) => item.key === 'BRANCHES_AND_LOCATIONS'
+    );
+    expect(pending).toMatchObject({
+      href: '/pharmacy/inventory',
+      linkLabel: 'Create or review stock locations',
+      attestable: true,
+      state: 'NEEDS_YOU',
+      blocksActivation: true,
+    });
+    const recorded = pharmacyOnboardingChecklist(
+      evaluateReadiness('org', [attested('BRANCHES_AND_LOCATIONS')], {})
+    ).items.find((item) => item.key === 'BRANCHES_AND_LOCATIONS');
+    expect(recorded).toMatchObject({
+      href: '/pharmacy/inventory',
+      attestable: true,
+      state: 'DONE',
+      blocksActivation: false,
+    });
+  });
+
+  it('connects derived catalog, stock and supplier gates without turning them into attestations', () => {
+    const items = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items;
+    for (const [key, href] of [
+      ['MEDICINE_CATALOG_READINESS', '/pharmacy/medicines'],
+      ['OPENING_STOCK_READINESS', '/pharmacy/purchasing/receiving'],
+      ['PARTIES_AND_BALANCES', '/pharmacy/purchasing/suppliers'],
+    ]) {
+      expect(items.find((item) => item.key === key)).toMatchObject({
+        href,
+        attestable: false,
+        state: 'NEEDS_YOU',
+      });
+    }
+    expect(VERTICALS.PHARMACY.firstRunChecklist.find((item) => item.key === 'catalog')?.href).toBe(
+      '/pharmacy'
+    );
+  });
+
+  it('offers the existing counter without replacing parallel-run evidence with a click', () => {
+    const item = pharmacyOnboardingChecklist(evaluateReadiness('org', [], {})).items.find(
+      (row) => row.key === 'READINESS_AND_PARALLEL_RUN'
+    );
+    expect(item).toMatchObject({
+      href: '/pharmacy/counter',
+      linkLabel: 'Open pharmacy counter',
+      attestable: true,
+      state: 'NEEDS_YOU',
+      blocksActivation: true,
+    });
+  });
+
+  it('offers catalog, receiving and canonical setup links from empty inventory', () => {
+    const page = readFileSync('src/app/(app)/pharmacy/inventory/page.tsx', 'utf8');
+    const empty = page.slice(
+      page.indexOf('No available lots yet.'),
+      page.indexOf('No available lots yet.') + 1100
+    );
+    for (const href of ['/pharmacy/medicines', '/pharmacy/purchasing/receiving', '/pharmacy']) {
+      expect(empty).toContain(`href="${href}"`);
+    }
   });
 });

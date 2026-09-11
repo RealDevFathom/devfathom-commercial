@@ -7,6 +7,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
 import { firstCloseIsFinal } from './migration/first-close';
+import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import type { LedgerScope } from './stock-ledger';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT';
@@ -120,7 +121,16 @@ export async function applyPharmacyTender(
   );
   const sale = await db.pharmacySale.findFirst({
     where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { lines: true, tenders: true },
+    include: {
+      lines: {
+        include: {
+          medicine: { include: { strengths: { orderBy: { id: 'asc' } } } },
+          presentation: true,
+          allocations: { orderBy: { id: 'asc' }, include: { lot: { include: { batch: true } } } },
+        },
+      },
+      tenders: true,
+    },
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
   const totalMinor = saleTotalMinor(sale.lines);
@@ -199,14 +209,87 @@ export async function applyPharmacyTender(
       DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + 1, "updatedAt" = now()
       RETURNING "nextNumber" - 1 AS receipt_number`);
     receiptNumber = rows[0]!.receipt_number;
+    const issuedAt = new Date();
     await db.pharmacySale.update({
       where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
       data: {
         status: 'COMPLETED',
-        completedAt: new Date(),
+        completedAt: issuedAt,
         receiptNumber,
         receiptDeviceId: input.deviceId,
         businessDate: input.businessDate,
+      },
+    });
+    for (const line of sale.lines) {
+      if (
+        line.organizationId !== scope.organizationId ||
+        line.branchId !== scope.branchId ||
+        line.medicine.organizationId !== scope.organizationId ||
+        line.presentation.organizationId !== scope.organizationId ||
+        line.presentation.medicineId !== line.medicineId ||
+        line.allocations.some(
+          (allocation) =>
+            allocation.organizationId !== scope.organizationId ||
+            allocation.branchId !== scope.branchId ||
+            allocation.lot.organizationId !== scope.organizationId ||
+            allocation.lot.branchId !== scope.branchId ||
+            allocation.lot.batch.organizationId !== scope.organizationId ||
+            allocation.lot.batch.medicineId !== line.medicineId
+        )
+      )
+        throw new PharmacyReceiptIdentityError();
+    }
+    const snapshot = validateReceiptIdentity(
+      {
+        receiptIdentitySnapshotVersion: 1,
+        saleId: sale.id,
+        receiptNumber,
+        deviceId: input.deviceId,
+        businessDate: input.businessDate.toISOString().slice(0, 10),
+        issuedAt: issuedAt.toISOString(),
+        lines: sale.lines.map((line) => ({
+          saleLineId: line.id,
+          medicineId: line.medicineId,
+          presentationId: line.presentationId,
+          medicineName: line.medicine.productName,
+          strength: line.medicine.strengths.length
+            ? line.medicine.strengths
+                .map((component) => {
+                  const raw = String(component.value);
+                  const value = raw.includes('.')
+                    ? raw.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
+                    : raw;
+                  return `${value} ${component.unit}`;
+                })
+                .join(' + ')
+            : null,
+          presentation: line.presentation.presentation,
+          allocations: line.allocations.map((allocation) => ({
+            allocationId: allocation.id,
+            inventoryLotId: allocation.inventoryLotId,
+            batchNumber: allocation.lot.batch.batchNumber,
+            expiresAt: allocation.lot.batch.expiresAt.toISOString(),
+            canonicalUnits: allocation.canonicalUnits,
+          })),
+        })),
+      },
+      {
+        ...sale,
+        receiptNumber,
+        receiptDeviceId: input.deviceId,
+        businessDate: input.businessDate,
+        completedAt: issuedAt,
+      }
+    );
+    await db.pharmacySaleEvent.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: sale.id,
+        kind: 'COMPLETED',
+        actorId: scope.actorId,
+        occurredAt: issuedAt,
+        payload: snapshot,
       },
     });
     if (sale.customerId) await accrueSalePoints(db, scope, sale.id);

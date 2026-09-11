@@ -1,0 +1,4 @@
+Auto-merging src/app/(app)/pharmacy/purchasing/returns/page.tsx
+[codex/WHA-1370-pharmacy-compatibility-8ba9-7e02 2d3c0eff] fix(purchasing): share allocation alias locks
+ Date: Sun Sep 6 18:10:44 2026 +0500
+ 7 files changed, 347 insertions(+), 13 deletions(-)

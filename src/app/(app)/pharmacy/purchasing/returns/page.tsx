@@ -1,7 +1,10 @@
+import { FollowUpQueue } from './follow-up-queue';
+import { supplierCreditFollowUp } from '@/lib/pharmacy/supplier-credit-follow-up';
 import type { Metadata } from 'next';
 import type * as React from 'react';
 import { revalidatePath } from 'next/cache';
-import { redirect, RedirectType } from 'next/navigation';
+import { PurchasingActionForm } from '../_components/action-form';
+import { PurchasingOutcomeScope, PurchasingOutcomes } from '../_components/action-outcomes';
 
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
@@ -30,7 +33,8 @@ import {
   TextField,
 } from '../_components/form-controls';
 import {
-  actionFailure,
+  purchasingOutcome,
+  PurchasingValidationError,
   dateField,
   dateOnly,
   dateTime,
@@ -135,7 +139,7 @@ export default async function PharmacyReturnsPage({
     return (
       <Frame branch={scope} notice={notice}>
         <LoadFailure
-          detail="Returns for this branch could not be read. Nothing was written."
+          detail="Returns for this branch could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying."
           retryHref={`${ROUTE}?branch=${encodeURIComponent(branchId)}`}
         />
       </Frame>
@@ -168,10 +172,11 @@ export default async function PharmacyReturnsPage({
   async function createReturn(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       const lines = RETURN_SLOTS.flatMap((slot) => {
         const picked = field(form, `lot-${slot}`);
         if (!picked) return [];
@@ -197,9 +202,11 @@ export default async function PharmacyReturnsPage({
         ];
       });
       if (lines.length === 0) {
-        throw Object.assign(new Error('Choose at least one lot to return.'), { field: 'lot-0' });
+        throw Object.assign(new PurchasingValidationError('Choose at least one lot to return.'), {
+          field: 'lot-0',
+        });
       }
-      const created = await actionCaller.createPurchaseReturn({
+      const created = await outcome.write(actionCaller.createPurchaseReturn)({
         branchId: branch,
         supplierId: field(form, 'supplierId'),
         kind: field(form, 'kind') === 'EXPIRY_CLAIM' ? 'EXPIRY_CLAIM' : 'PURCHASE_RETURN',
@@ -219,11 +226,11 @@ export default async function PharmacyReturnsPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not draft the return.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not draft the return.'), kind: 'error' },
         { branch }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function advanceReturn(form: FormData) {
@@ -231,16 +238,20 @@ export default async function PharmacyReturnsPage({
     const branch = field(form, 'branchId');
     const purchaseReturnId = field(form, 'purchaseReturnId');
     const action = field(form, 'action');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
       let message: string;
       if (action === 'submit') {
-        await actionCaller.submitPurchaseReturn({ branchId: branch, purchaseReturnId });
+        await outcome.write(actionCaller.submitPurchaseReturn)({
+          branchId: branch,
+          purchaseReturnId,
+        });
         message = 'Return submitted. The quantity is reserved and can no longer be sold.';
       } else if (action === 'dispatch') {
-        await actionCaller.dispatchPurchaseReturn({
+        await outcome.write(actionCaller.dispatchPurchaseReturn)({
           branchId: branch,
           purchaseReturnId,
           // The reservation is already unique per return, so the document's own
@@ -250,35 +261,36 @@ export default async function PharmacyReturnsPage({
         });
         message = 'Return dispatched. The stock has left and the reservation is released.';
       } else if (action === 'debit') {
-        await actionCaller.issueDebitNote({
+        await outcome.write(actionCaller.issueDebitNote)({
           branchId: branch,
           purchaseReturnId,
           reference: field(form, 'debitReference'),
         });
         message = 'Debit note issued. Expected credit is frozen from the return lines.';
       } else {
-        throw new Error('Unknown action.');
+        throw new PurchasingValidationError('Unknown action.');
       }
       revalidatePath(ROUTE);
       next = destination(ROUTE, { message, kind: 'success' }, { branch, return: purchaseReturnId });
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not move the return on.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not move the return on.'), kind: 'error' },
         { branch, return: purchaseReturnId }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function recordCredit(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.recordSupplierCredit({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.recordSupplierCredit)({
         branchId: branch,
         supplierId: field(form, 'supplierId'),
         reference: field(form, 'creditReference'),
@@ -297,21 +309,22 @@ export default async function PharmacyReturnsPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not record the credit.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not record the credit.'), kind: 'error' },
         { branch }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   async function allocateCredit(form: FormData) {
     'use server';
     const branch = field(form, 'branchId');
+    const outcome = purchasingOutcome();
     let next: string;
     try {
       const actionCaller = await purchasingCaller();
-      if (!actionCaller) throw new Error(NO_ACTOR);
-      await actionCaller.allocateSupplierCredit({
+      if (!actionCaller) throw new PurchasingValidationError(NO_ACTOR);
+      await outcome.write(actionCaller.allocateSupplierCredit)({
         branchId: branch,
         supplierCreditId: field(form, 'supplierCreditId'),
         debitNoteId: field(form, 'debitNoteId'),
@@ -326,11 +339,11 @@ export default async function PharmacyReturnsPage({
     } catch (error) {
       next = destination(
         ROUTE,
-        { ...actionFailure(error, 'Could not allocate the credit.'), kind: 'error' },
+        { ...outcome.failure(error, 'Could not allocate the credit.'), kind: 'error' },
         { branch, return: optionalField(form, 'purchaseReturnId') }
       );
     }
-    redirect(next, RedirectType.replace);
+    return next;
   }
 
   return (
@@ -346,6 +359,18 @@ export default async function PharmacyReturnsPage({
         />
         <Stat label="Windows closing" value={closingSoon.length} sub="Within 7 days or past" />
       </div>
+
+      <FollowUpQueue
+        branchId={branchId}
+        queue={supplierCreditFollowUp({
+          scope: { organizationId: ctx.entitlements.organizationId, branchId },
+          returns,
+          credits,
+          asOf: new Date(),
+          // Existing server-side read projections return all rows in the authorized branch.
+          coverage: 'complete',
+        })}
+      />
 
       {/* ── the near-expiry board's return windows ─────────────────────────── */}
       <SectionCard eyebrow="PUR-06" title="Return windows" titleLevel={2}>
@@ -455,7 +480,11 @@ export default async function PharmacyReturnsPage({
                 ]}
               />
             ) : (
-              <form action={createReturn} className="space-y-4">
+              <PurchasingActionForm
+                operation={{ resource: `return:new:${branchId}`, action: 'create' }}
+                action={createReturn}
+                className="space-y-4"
+              >
                 <input name="branchId" type="hidden" value={branchId} />
                 <div className="grid gap-4 sm:grid-cols-3">
                   <TextField label="Reference" name="reference" notice={notice} required />
@@ -539,12 +568,16 @@ export default async function PharmacyReturnsPage({
                   label="Hold"
                   value="A draft reserves nothing. The stock stays saleable until the return is submitted."
                 />
-              </form>
+              </PurchasingActionForm>
             )}
           </SectionCard>
 
           <SectionCard eyebrow="PUR-06" title="Supplier credit" titleLevel={2}>
-            <form action={recordCredit} className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+            <PurchasingActionForm
+              operation={{ resource: `credit:new:${branchId}`, action: 'record' }}
+              action={recordCredit}
+              className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
+            >
               <input name="branchId" type="hidden" value={branchId} />
               <SelectField
                 emptyHint="No suppliers yet."
@@ -581,7 +614,7 @@ export default async function PharmacyReturnsPage({
               <div className="sm:col-span-2 lg:col-span-4">
                 <SubmitButton>Record credit</SubmitButton>
               </div>
-            </form>
+            </PurchasingActionForm>
 
             {credits.length > 0 ? (
               <ul className="mt-5 space-y-2">
@@ -595,6 +628,7 @@ export default async function PharmacyReturnsPage({
                     <li
                       className="rounded-[var(--radius-sm)] border border-border-subtle p-3"
                       key={credit.id}
+                      id={`credit-${encodeURIComponent(credit.id)}`}
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
                         <span className="font-medium text-text-strong">
@@ -609,7 +643,9 @@ export default async function PharmacyReturnsPage({
                         {money(unallocated)} unallocated
                       </p>
                       {unallocated > 0 && openDebitNotes.length > 0 ? (
-                        <form
+                        <PurchasingActionForm
+                          operation={{ resource: `credit:${credit.id}`, action: 'allocate' }}
+                          financialOperation="supplier-credit-allocation"
                           action={allocateCredit}
                           className="mt-3 flex flex-wrap items-end gap-3"
                         >
@@ -635,7 +671,7 @@ export default async function PharmacyReturnsPage({
                             required
                           />
                           <SubmitButton variant="secondary">Allocate</SubmitButton>
-                        </form>
+                        </PurchasingActionForm>
                       ) : null}
                     </li>
                   );
@@ -668,7 +704,7 @@ function Frame({
   children: React.ReactNode;
 }) {
   return (
-    <main className="min-w-0 space-y-6">
+    <PurchasingOutcomeScope>
       <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
       <PurchasingTabs active={ROUTE} />
       {branch?.kind === 'resolved' ? (
@@ -682,8 +718,9 @@ function Frame({
         </div>
       ) : null}
       <NoticeBanner notice={notice} />
+      <PurchasingOutcomes />
       {children}
-    </main>
+    </PurchasingOutcomeScope>
   );
 }
 
@@ -704,8 +741,8 @@ function ReturnDetail({
   }[];
   branchId: string;
   notice: Notice | null;
-  onAdvance: (form: FormData) => Promise<void>;
-  onAllocate: (form: FormData) => Promise<void>;
+  onAdvance: (form: FormData) => Promise<string>;
+  onAllocate: (form: FormData) => Promise<string>;
 }) {
   const blockedByWindow = purchaseReturn.lines.some((line) => line.windowState === 'CLOSED');
   const spendable = credits.filter(
@@ -791,7 +828,12 @@ function ReturnDetail({
                     : ''}
                 </p>
                 {note.position.outstandingMinor > 0 && spendable.length > 0 ? (
-                  <form action={onAllocate} className="mt-3 flex flex-wrap items-end gap-3">
+                  <PurchasingActionForm
+                    operation={{ resource: `debit-note:${note.id}`, action: 'allocate' }}
+                    financialOperation="supplier-credit-allocation"
+                    action={onAllocate}
+                    className="mt-3 flex flex-wrap items-end gap-3"
+                  >
                     <input name="branchId" type="hidden" value={branchId} />
                     <input name="debitNoteId" type="hidden" value={note.id} />
                     <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
@@ -815,7 +857,7 @@ function ReturnDetail({
                       required
                     />
                     <SubmitButton variant="secondary">Allocate</SubmitButton>
-                  </form>
+                  </PurchasingActionForm>
                 ) : null}
               </li>
             ))}
@@ -825,12 +867,15 @@ function ReturnDetail({
 
       <div className="mt-5 flex flex-wrap items-end gap-3 border-t border-border-subtle pt-5">
         {purchaseReturn.status === 'DRAFT' ? (
-          <form action={onAdvance}>
+          <PurchasingActionForm
+            operation={{ resource: `return:${purchaseReturn.id}`, action: 'submit' }}
+            action={onAdvance}
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
             <input name="action" type="hidden" value="submit" />
             <SubmitButton>Submit and reserve the stock</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
 
         {purchaseReturn.status === 'SUBMITTED' ? (
@@ -841,17 +886,24 @@ function ReturnDetail({
               return for the lines whose windows are still open.
             </p>
           ) : (
-            <form action={onAdvance}>
+            <PurchasingActionForm
+              operation={{ resource: `return:${purchaseReturn.id}`, action: 'dispatch' }}
+              action={onAdvance}
+            >
               <input name="branchId" type="hidden" value={branchId} />
               <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
               <input name="action" type="hidden" value="dispatch" />
               <SubmitButton>Dispatch to supplier</SubmitButton>
-            </form>
+            </PurchasingActionForm>
           )
         ) : null}
 
         {purchaseReturn.status === 'DISPATCHED' && purchaseReturn.debitNotes.length === 0 ? (
-          <form action={onAdvance} className="flex flex-wrap items-end gap-3">
+          <PurchasingActionForm
+            operation={{ resource: `return:${purchaseReturn.id}`, action: 'debit' }}
+            action={onAdvance}
+            className="flex flex-wrap items-end gap-3"
+          >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="purchaseReturnId" type="hidden" value={purchaseReturn.id} />
             <input name="action" type="hidden" value="debit" />
@@ -863,7 +915,7 @@ function ReturnDetail({
               required
             />
             <SubmitButton>Issue debit note</SubmitButton>
-          </form>
+          </PurchasingActionForm>
         ) : null}
       </div>
     </SectionCard>
