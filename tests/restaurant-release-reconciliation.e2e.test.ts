@@ -150,7 +150,35 @@ describe('WHA-435 append-only restaurant order events', () => {
         WHERE schemaname = 'public' AND tablename = 'restaurant_order_events'
         ORDER BY policyname`
     );
+    // Ordinary tenants remain append-only; only the exact demo-reset DELETE is admitted.
+    const resetPolicies = await writer.query(
+      `SELECT tablename, policyname, cmd, permissive, roles::text[] AS roles, qual, with_check
+         FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+          AND (policyname = 'restaurant_demo_reset_delete' OR cmd IN ('DELETE', 'ALL'))
+        ORDER BY tablename, policyname`,
+      [['restaurant_order_events']]
+    );
+    expect(
+      resetPolicies.rows.map((row) => ({
+        ...row,
+        // Match the catalog rendering already pinned by the demo-reset guard.
+        qual: row.qual?.replace(/^public\./, ''),
+      }))
+    ).toEqual(
+      [...['restaurant_order_events']].sort().map((tablename) => ({
+        tablename,
+        policyname: 'restaurant_demo_reset_delete',
+        cmd: 'DELETE',
+        permissive: 'PERMISSIVE',
+        roles: ['public'],
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+        with_check: null,
+      }))
+    );
+
     expect(policies.rows).toEqual([
+      { policyname: 'restaurant_demo_reset_delete', cmd: 'DELETE' },
       { policyname: 'tenant_isolation_insert', cmd: 'INSERT' },
       { policyname: 'tenant_isolation_select', cmd: 'SELECT' },
     ]);

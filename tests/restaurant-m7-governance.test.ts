@@ -352,7 +352,7 @@ describeIfDatabase('M7 schema governance (real PostgreSQL)', () => {
     );
   });
 
-  it('pins append-only policies to exactly INSERT and SELECT', async () => {
+  it('pins append-only INSERT/SELECT and the guarded demo-reset DELETE', async () => {
     const result = await client!.query<{ table_name: string; commands: string[] }>(
       `SELECT table_row.relname AS table_name,
               array_agg(CASE policy_row.polcmd
@@ -376,10 +376,37 @@ describeIfDatabase('M7 schema governance (real PostgreSQL)', () => {
         ORDER BY table_row.relname`,
       [[...APPEND_ONLY_TABLES]]
     );
+    // Ordinary tenants remain append-only; only the exact demo-reset DELETE is admitted.
+    const resetPolicies = await client!.query(
+      `SELECT tablename, policyname, cmd, permissive, roles::text[] AS roles, qual, with_check
+         FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+          AND (policyname = 'restaurant_demo_reset_delete' OR cmd IN ('DELETE', 'ALL'))
+        ORDER BY tablename, policyname`,
+      [APPEND_ONLY_TABLES]
+    );
+    expect(
+      resetPolicies.rows.map((row) => ({
+        ...row,
+        // Match the catalog rendering already pinned by the demo-reset guard.
+        qual: row.qual?.replace(/^public\./, ''),
+      }))
+    ).toEqual(
+      [...APPEND_ONLY_TABLES].sort().map((tablename) => ({
+        tablename,
+        policyname: 'restaurant_demo_reset_delete',
+        cmd: 'DELETE',
+        permissive: 'PERMISSIVE',
+        roles: ['public'],
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+        with_check: null,
+      }))
+    );
+
     expect(result.rows).toEqual(
       [...APPEND_ONLY_TABLES].sort().map((table_name) => ({
         table_name,
-        commands: ['INSERT', 'SELECT'],
+        commands: ['DELETE', 'INSERT', 'SELECT'],
       }))
     );
   });

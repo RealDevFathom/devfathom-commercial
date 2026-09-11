@@ -532,13 +532,40 @@ describe('M5 schema governance (real PostgreSQL)', () => {
         ORDER BY table_row.relname`,
       [[...APPEND_ONLY_TABLES]]
     );
+    // Ordinary tenants remain append-only; only the exact demo-reset DELETE is admitted.
+    const resetPolicies = await client!.query(
+      `SELECT tablename, policyname, cmd, permissive, roles::text[] AS roles, qual, with_check
+         FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+          AND (policyname = 'restaurant_demo_reset_delete' OR cmd IN ('DELETE', 'ALL'))
+        ORDER BY tablename, policyname`,
+      [APPEND_ONLY_TABLES]
+    );
+    expect(
+      resetPolicies.rows.map((row) => ({
+        ...row,
+        // Match the catalog rendering already pinned by the demo-reset guard.
+        qual: row.qual?.replace(/^public\./, ''),
+      }))
+    ).toEqual(
+      [...APPEND_ONLY_TABLES].sort().map((tablename) => ({
+        tablename,
+        policyname: 'restaurant_demo_reset_delete',
+        cmd: 'DELETE',
+        permissive: 'PERMISSIVE',
+        roles: ['public'],
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+        with_check: null,
+      }))
+    );
+
     expect(result.rows).toEqual(
       [...APPEND_ONLY_TABLES].sort().map((table_name) => ({
         table_name,
         commands:
           table_name === 'restaurant_refunds'
-            ? ['INSERT', 'SELECT', 'UPDATE']
-            : ['INSERT', 'SELECT'],
+            ? ['DELETE', 'INSERT', 'SELECT', 'UPDATE']
+            : ['DELETE', 'INSERT', 'SELECT'],
       }))
     );
   });
@@ -589,12 +616,39 @@ describe('M5 schema governance (real PostgreSQL)', () => {
         ORDER BY table_row.relname`,
       [M8_TABLES]
     );
+    // Ordinary tenants remain append-only; only the exact demo-reset DELETE is admitted.
+    const resetPolicies = await client!.query(
+      `SELECT tablename, policyname, cmd, permissive, roles::text[] AS roles, qual, with_check
+         FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+          AND (policyname = 'restaurant_demo_reset_delete' OR cmd IN ('DELETE', 'ALL'))
+        ORDER BY tablename, policyname`,
+      [M8_APPEND_ONLY_TABLES]
+    );
+    expect(
+      resetPolicies.rows.map((row) => ({
+        ...row,
+        // Match the catalog rendering already pinned by the demo-reset guard.
+        qual: row.qual?.replace(/^public\./, ''),
+      }))
+    ).toEqual(
+      [...M8_APPEND_ONLY_TABLES].sort().map((tablename) => ({
+        tablename,
+        policyname: 'restaurant_demo_reset_delete',
+        cmd: 'DELETE',
+        permissive: 'PERMISSIVE',
+        roles: ['public'],
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+        with_check: null,
+      }))
+    );
+
     expect(policies.rows).toEqual(
       [
         ...M8_MUTABLE_TABLES.map((table_name) => ({ table_name, commands: ['ALL'] })),
         ...M8_APPEND_ONLY_TABLES.map((table_name) => ({
           table_name,
-          commands: ['INSERT', 'SELECT'],
+          commands: ['DELETE', 'INSERT', 'SELECT'],
         })),
       ].sort((left, right) => left.table_name.localeCompare(right.table_name))
     );

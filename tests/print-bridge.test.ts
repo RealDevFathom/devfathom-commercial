@@ -5,6 +5,7 @@ import { constants } from 'node:fs';
 import { mkdtemp, open, readdir, rm } from 'node:fs/promises';
 import { spawn } from 'node:child_process';
 import { connect, createServer } from 'node:net';
+import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { PassThrough } from 'node:stream';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -35,9 +36,8 @@ const claimToken = 'ab'.repeat(32);
 let stateDir: string;
 
 beforeEach(async () => {
-  const scratch = process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR;
-  if (!scratch)
-    throw new Error('Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.');
+  const scratch =
+    process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? process.env.PAPERCLIP_SCRATCH_DIR ?? tmpdir();
   stateDir = await mkdtemp(join(scratch, 'print-bridge-test-'));
   vi.stubGlobal('fetch', vi.fn());
 });

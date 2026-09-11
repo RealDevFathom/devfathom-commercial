@@ -1,4 +1,4 @@
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { resolve } from 'node:path';
 
 import { beforeEach, describe, expect, it, vi } from 'vitest';
@@ -163,6 +163,55 @@ beforeEach(() => {
 });
 
 describe('resetDemoSeatInTransaction', () => {
+  it('pins exactly 34 named DELETE policies and their approved predicate across all migrations', () => {
+    const migrations = resolve(process.cwd(), 'prisma/migrations');
+    const sql = readdirSync(migrations, { withFileTypes: true })
+      .filter((entry) => entry.isDirectory())
+      .sort((a, b) => a.name.localeCompare(b.name))
+      .map((entry) => readFileSync(resolve(migrations, entry.name, 'migration.sql'), 'utf8'))
+      .join('\n')
+      .replace(/--[^\n]*|\/\*[\s\S]*?\*\//g, '');
+    const tables = [
+      ...REMAINING_DELETE_POLICY_TABLES,
+      'restaurant_customer_interactions',
+      'restaurant_customer_consents',
+      'restaurant_loyalty_points_entries',
+      'restaurant_labour_cost_facts',
+      'restaurant_service_charge_policy_versions',
+      'restaurant_promotion_cap_reservations',
+      'restaurant_promotion_evaluation_snapshots',
+      'restaurant_promotion_candidate_snapshots',
+      'restaurant_promotion_application_snapshots',
+      'restaurant_promotion_unit_allocations',
+      'restaurant_promotion_bill_application_snapshots',
+      'restaurant_promotion_audit_events',
+      'restaurant_staff_job_role_audits',
+      'restaurant_shift_swap_requests',
+      'restaurant_shift_swap_decisions',
+      'restaurant_shift_events',
+      'restaurant_time_adjustments',
+      'restaurant_workforce_commands',
+    ];
+    const policies = [
+      ...sql.matchAll(/CREATE\s+POLICY\s+"?restaurant_demo_reset_delete"?\b[^;]*;/gi),
+    ]
+      .map(([statement]) => statement.replace(/\s+/g, ' ').trim())
+      .sort();
+
+    expect(tables).toHaveLength(34);
+    // Also reject later ALTER/DROP statements or a 35th named policy, even if its
+    // predicate is too loose to match the approved CREATE statement below.
+    expect(sql.match(/\brestaurant_demo_reset_delete\b/gi)).toHaveLength(34);
+    expect(policies).toEqual(
+      tables
+        .map(
+          (table) =>
+            `CREATE POLICY "restaurant_demo_reset_delete" ON "${table}" FOR DELETE USING (public.restaurant_demo_reset_allowed("organizationId"));`
+        )
+        .sort()
+    );
+  });
+
   it('grants demo reset DELETE visibility to every append-only restaurant table', () => {
     const sql = readFileSync(RESET_POLICY_MIGRATION, 'utf8');
     const policyTables = [

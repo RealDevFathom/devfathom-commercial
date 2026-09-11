@@ -221,13 +221,32 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
       (await client!.query(`DELETE FROM "restaurant_shift_events" WHERE "id" = $1`, [ids.eventA]))
         .rowCount
     ).toBe(0);
-    const deletePolicies = await client!.query<{ policyname: string }>(
-      `SELECT policyname FROM pg_catalog.pg_policies
-        WHERE schemaname = 'public'
-          AND tablename = 'restaurant_shift_events'
-          AND cmd IN ('DELETE', 'ALL')`
+    // Ordinary tenants remain append-only; only the exact demo-reset DELETE is admitted.
+    const resetPolicies = await client!.query(
+      `SELECT tablename, policyname, cmd, permissive, roles::text[] AS roles, qual, with_check
+         FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+          AND (policyname = 'restaurant_demo_reset_delete' OR cmd IN ('DELETE', 'ALL'))
+        ORDER BY tablename, policyname`,
+      [['restaurant_shift_events']]
     );
-    expect(deletePolicies.rows).toEqual([]);
+    expect(
+      resetPolicies.rows.map((row) => ({
+        ...row,
+        // Match the catalog rendering already pinned by the demo-reset guard.
+        qual: row.qual?.replace(/^public\./, ''),
+      }))
+    ).toEqual(
+      [...['restaurant_shift_events']].sort().map((tablename) => ({
+        tablename,
+        policyname: 'restaurant_demo_reset_delete',
+        cmd: 'DELETE',
+        permissive: 'PERMISSIVE',
+        roles: ['public'],
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+        with_check: null,
+      }))
+    );
   });
 
   it('makes raw punches single-write and command/decision race winners unique', async () => {

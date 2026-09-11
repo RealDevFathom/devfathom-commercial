@@ -894,7 +894,7 @@ export async function reprintKitchenTicket(
     const enqueued = await enqueueKitchenTicketPrintJobs(tx, {
       organizationId: order.organizationId,
       branchId: order.branchId,
-      orderReference: `Order ${order.orderNumber} · KOT ${ticket.ticketNumber} · REPRINT`,
+      orderReference: `Order ${order.orderNumber} - KOT ${ticket.ticketNumber} - REPRINT`,
       tickets: [reprintTicket],
       labelsByOrderItemId: Object.fromEntries(order.items.map((item) => [item.id, item.name])),
     });

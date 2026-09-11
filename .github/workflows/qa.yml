@@ -183,7 +183,7 @@ jobs:
             -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO receipt_runtime;'
           DATABASE_URL="$COHORT_RUNTIME_URL" TEST_DATABASE_URL="$COHORT_RUNTIME_URL" run vitest-cohort bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-cohort.json
           DATABASE_URL="$RECEIPT_RUNTIME_URL" TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" WHA1364_RECEIPT_TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" run vitest-receipt bunx vitest run src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-receipt.json
-          run vitest bunx vitest run --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 

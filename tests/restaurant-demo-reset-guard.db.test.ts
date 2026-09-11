@@ -12,6 +12,45 @@ if (optedIn && !process.env.RESTAURANT_E2E_DATABASE_URL) {
 
 const describeIfOptedIn = optedIn ? describe : describe.skip;
 
+// These tables have no ordinary DELETE/ALL policy. Mutable restaurant CRUD
+// tables outside this inventory must not be mistaken for append-only ledgers.
+const RESET_POLICY_TABLES = [
+  'restaurant_customer_consents',
+  'restaurant_customer_interactions',
+  'restaurant_daily_close_tender_totals',
+  'restaurant_daily_closes',
+  'restaurant_drawer_movements',
+  'restaurant_job_executions',
+  'restaurant_labour_cost_facts',
+  'restaurant_loyalty_points_entries',
+  'restaurant_notification_deliveries',
+  'restaurant_order_events',
+  'restaurant_payment_events',
+  'restaurant_promotion_application_snapshots',
+  'restaurant_promotion_audit_events',
+  'restaurant_promotion_bill_application_snapshots',
+  'restaurant_promotion_candidate_snapshots',
+  'restaurant_promotion_cap_reservations',
+  'restaurant_promotion_evaluation_snapshots',
+  'restaurant_promotion_unit_allocations',
+  'restaurant_refunds',
+  'restaurant_service_charge_policy_versions',
+  'restaurant_shift_events',
+  'restaurant_shift_swap_decisions',
+  'restaurant_shift_swap_requests',
+  'restaurant_sop_escalation_events',
+  'restaurant_sop_evidence',
+  'restaurant_sop_verifications',
+  'restaurant_staff_capability_audits',
+  'restaurant_staff_job_role_audits',
+  'restaurant_stock_movements',
+  'restaurant_tax_refund_allocations',
+  'restaurant_tenders',
+  'restaurant_terminal_reconciliations',
+  'restaurant_time_adjustments',
+  'restaurant_workforce_commands',
+] as const;
+
 describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', () => {
   let pool: pg.Pool;
 
@@ -31,6 +70,15 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
     const demoAuditId = `demo_audit_${suffix}`;
     const ordinaryAuditId = `ordinary_audit_${suffix}`;
     const taxSourceId = `demo_tax_source_${suffix}`;
+    const tenderId = `demo_tender_${suffix}`;
+    const branchId = `demo_branch_${suffix}`;
+    const staffId = `demo_staff_${suffix}`;
+    const deviceId = `demo_device_${suffix}`;
+    const orderId = `demo_order_${suffix}`;
+    const billId = `demo_bill_${suffix}`;
+
+    const deleteTender = () =>
+      client.query('DELETE FROM restaurant_tenders WHERE id = $1', [tenderId]);
 
     const setTenantScope = async (
       organizationId: string,
@@ -65,13 +113,95 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
       const role = await client.query<{
         rolsuper: boolean;
         rolbypassrls: boolean;
-      }>('SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user');
-      expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
+        rolcreatedb: boolean;
+        rolcreaterole: boolean;
+      }>(
+        'SELECT rolsuper, rolbypassrls, rolcreatedb, rolcreaterole FROM pg_roles WHERE rolname = current_user'
+      );
+      expect(role.rows[0]).toEqual({
+        rolsuper: false,
+        rolbypassrls: false,
+        rolcreatedb: false,
+        rolcreaterole: false,
+      });
+
+      const policies = await client.query(
+        `SELECT p.schemaname, p.tablename, p.policyname, p.cmd, p.permissive,
+                p.roles::text[] AS roles, p.qual, p.with_check,
+                c.relrowsecurity, c.relforcerowsecurity
+         FROM pg_policies p
+         JOIN pg_namespace n ON n.nspname = p.schemaname
+         JOIN pg_class c ON c.relnamespace = n.oid AND c.relname = p.tablename
+         WHERE p.policyname = 'restaurant_demo_reset_delete'
+            OR (p.schemaname = 'public' AND p.tablename = ANY($1::text[])
+                AND p.cmd IN ('DELETE', 'ALL'))
+         ORDER BY p.tablename, p.policyname`,
+        [RESET_POLICY_TABLES]
+      );
+      expect(RESET_POLICY_TABLES).toHaveLength(34);
+      expect(
+        policies.rows.map((row) => ({
+          ...row,
+          // pg_get_expr omits the schema when public is on the search path.
+          qual: row.qual?.replace(/^public\./, ''),
+        }))
+      ).toEqual(
+        RESET_POLICY_TABLES.map((tablename) => ({
+          schemaname: 'public',
+          tablename,
+          policyname: 'restaurant_demo_reset_delete',
+          cmd: 'DELETE',
+          permissive: 'PERMISSIVE',
+          roles: ['public'],
+          qual: 'restaurant_demo_reset_allowed("organizationId")',
+          with_check: null,
+          relrowsecurity: true,
+          relforcerowsecurity: true,
+        }))
+      );
 
       await insertOrganization(demoOrganizationId, true);
       await insertOrganization(ordinaryOrganizationId, false);
 
       await setTenantScope(demoOrganizationId, false);
+      // Minimal synthetic money graph, entirely inside this rolled-back transaction.
+      await client.query(
+        `INSERT INTO restaurant_branches (id, "organizationId", name, "updatedAt")
+         VALUES ($1, $2, 'Reset guard', clock_timestamp())`,
+        [branchId, demoOrganizationId]
+      );
+      await client.query(
+        `INSERT INTO restaurant_staff_profiles
+           (id, "organizationId", "displayName", "primaryBranchId", "updatedAt")
+         VALUES ($1, $2, 'Reset guard', $3, clock_timestamp())`,
+        [staffId, demoOrganizationId, branchId]
+      );
+      await client.query(
+        `INSERT INTO restaurant_registered_devices
+           (id, "organizationId", "branchId", name, "deviceSecretHash", "updatedAt")
+         VALUES ($1, $2, $3, 'Reset guard', $4, clock_timestamp())`,
+        [deviceId, demoOrganizationId, branchId, suffix]
+      );
+      await client.query(
+        `INSERT INTO restaurant_orders
+           (id, "organizationId", "branchId", "orderNumber", "businessDate", channel,
+            "staffProfileId", "deviceId", "updatedAt")
+         VALUES ($1, $2, $3, 1, DATE '2026-09-11', 'DINE_IN', $4, $5, clock_timestamp())`,
+        [orderId, demoOrganizationId, branchId, staffId, deviceId]
+      );
+      await client.query(
+        `INSERT INTO restaurant_bills
+           (id, "organizationId", "orderId", "branchId", "businessDate", subtotal, "grandTotal",
+            "openerStaffProfileId", "deviceId", "updatedAt")
+         VALUES ($1, $2, $3, $4, DATE '2026-09-11', 5.00, 5.00, $5, $6, clock_timestamp())`,
+        [billId, demoOrganizationId, orderId, branchId, staffId, deviceId]
+      );
+      await client.query(
+        `INSERT INTO restaurant_tenders
+           (id, "organizationId", "billId", type, amount, "businessDate", "staffProfileId", "deviceId")
+         VALUES ($1, $2, $3, 'OTHER', 5.00, DATE '2026-09-11', $4, $5)`,
+        [tenderId, demoOrganizationId, billId, staffId, deviceId]
+      );
       await client.query(
         `INSERT INTO restaurant_promotion_audit_events (id, "organizationId", action)
          VALUES ($1, $2, 'EVALUATED')`,
@@ -98,6 +228,7 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
         [demoOrganizationId]
       );
       expect(missingReset.rows[0]).toEqual({ reset_scope: null, allowed: false });
+      expect((await deleteTender()).rowCount).toBe(0);
       expect(
         (
           await client.query(`DELETE FROM restaurant_promotion_audit_events WHERE id = $1`, [
@@ -107,6 +238,7 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
       ).toBe(0);
 
       await setTenantScope(ordinaryOrganizationId, false, ordinaryOrganizationId);
+      expect((await deleteTender()).rowCount).toBe(0);
       expect(
         (
           await client.query(`SELECT public.restaurant_demo_reset_allowed($1) AS allowed`, [
@@ -123,6 +255,7 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
       ).toBe(0);
 
       await setTenantScope(ordinaryOrganizationId, false, demoOrganizationId);
+      expect((await deleteTender()).rowCount).toBe(0);
       expect(
         (
           await client.query(`SELECT public.restaurant_demo_reset_allowed($1) AS allowed`, [
@@ -139,6 +272,7 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
       ).toBe(0);
 
       await setTenantScope(demoOrganizationId, true, demoOrganizationId);
+      expect((await deleteTender()).rowCount).toBe(0);
       expect(
         (
           await client.query(`SELECT public.restaurant_demo_reset_allowed($1) AS allowed`, [
@@ -164,6 +298,10 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
       ).toBe(true);
 
       await client.query('SAVEPOINT guarded_delete');
+      expect((await deleteTender()).rowCount).toBe(1);
+      expect(
+        (await client.query('SELECT id FROM restaurant_tenders WHERE id = $1', [tenderId])).rows
+      ).toEqual([]);
       expect(
         (
           await client.query(`DELETE FROM restaurant_promotion_audit_events WHERE id = $1`, [
@@ -180,6 +318,20 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
         ).rows[0]?.count
       ).toBe(0);
       await client.query('ROLLBACK TO SAVEPOINT guarded_delete');
+      expect(
+        (
+          await client.query('SELECT amount::text FROM restaurant_tenders WHERE id = $1', [
+            tenderId,
+          ])
+        ).rows
+      ).toEqual([{ amount: '5.00' }]);
+      expect(
+        (
+          await client.query('UPDATE restaurant_tenders SET amount = 6.00 WHERE id = $1', [
+            tenderId,
+          ])
+        ).rowCount
+      ).toBe(0);
       expect(
         (
           await client.query(

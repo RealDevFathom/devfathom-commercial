@@ -1,9 +1,5 @@
 {
-  "command": [
-    "bun",
-    "run",
-    "build"
-  ],
+  "command": ["bun", "run", "build"],
   "head": "2d3c0effc3af5d5bdd2351f831f231909b4432c0",
   "envKeys": [
     "AUTH_SECRET",

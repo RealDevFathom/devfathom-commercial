@@ -873,7 +873,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
   });
 
   describe('terminal tender branch and business-date boundary', () => {
-    it('rejects foreign-branch and old-date cash bills with zero tender or drawer writes', async () => {
+    it('rejects foreign-branch cash bills, but collects open prior-day bills in the current drawer', async () => {
       const tokenA = await establishUnlock(ctx.posA.secret, ctx.staffA, ctx.branchA);
       const tokenDay = await establishUnlock(ctx.posDay.secret, ctx.staffA, ctx.branchDay);
 
@@ -914,7 +914,6 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         body: { orderId: oldOrder.orderId, split: { kind: 'NONE' } },
       });
       const oldBillId = (oldCut.json.billIds as string[])[0]!;
-      const beforeOld = await moneyCounts();
       const old = await call(deps.routes.tender, {
         secret: ctx.posA.secret,
         session: tokenA,
@@ -924,15 +923,103 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
           tender: { type: 'CASH', amount: '5.00', cashReceived: '5.00' },
         },
       });
-      expect(old.status).toBe(409);
-      expect(await moneyCounts()).toEqual(beforeOld);
+      expect(old.status, JSON.stringify(old.json)).toBe(200);
+      expect(old.json.settled).toBe(true);
+      expect(old.json.drawerSessionId).toBe(open.json.drawerSessionId);
+      eqMoney(old.json.remainingDue, '0.00');
+      const collected = await deps.withTenantDb(orgA, async (tx) => ({
+        bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: oldBillId } }),
+        tenders: await tx.restaurantTender.findMany({ where: { billId: oldBillId } }),
+        movements: await tx.restaurantDrawerMovement.findMany({
+          where: { drawerSessionId: open.json.drawerSessionId as string, kind: 'CASH_SALE' },
+        }),
+      }));
+      expect(collected.bill.status).toBe('SETTLED');
+      expect(collected.bill.businessDate.toISOString().slice(0, 10)).toBe(oldDate);
+      expect(collected.tenders).toHaveLength(1);
+      const tender = collected.tenders[0]!;
+      expect(tender.id).toBe(old.json.tenderId);
+      expect(tender.businessDate.toISOString().slice(0, 10)).toBe(open.json.businessDate);
+      expect(open.json.businessDate).not.toBe(oldDate);
+      expect(tender.drawerSessionId).toBe(open.json.drawerSessionId);
+      eqMoney(tender.amount, '5.00');
+      eqMoney(tender.cashReceived!.minus(tender.changeGiven!), '5.00');
+      expect(tender.amount.equals(collected.bill.grandTotal)).toBe(true);
+      expect(collected.movements).toHaveLength(1);
+      expect(collected.movements[0]!.tenderId).toBe(tender.id);
+      eqMoney(collected.movements[0]!.amount, '5.00');
 
-      await call(deps.routes.drawerClose, {
+      const close = await call(deps.routes.drawerClose, {
         secret: ctx.posA.secret,
         session: tokenA,
         key: uniqueKey('date-drawer-close'),
-        body: { drawerSessionId: open.json.drawerSessionId, countedCash: '0.00' },
+        body: { drawerSessionId: open.json.drawerSessionId, countedCash: '5.00' },
       });
+      expect(close.status, JSON.stringify(close.json)).toBe(200);
+      eqMoney(close.json.expectedCash, '5.00');
+      eqMoney(close.json.variance, '0.00');
+    });
+
+    it('rejects a cash tender on an actually closed bill day with zero tender or drawer writes', async () => {
+      const token = await establishUnlock(ctx.posA.secret, ctx.staffA, ctx.branchA);
+      const closedDate = '2026-08-17';
+      const order = await seedOrder(ctx.branchA, ctx.posA.deviceId, closedDate, ['5.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('closed-day-cut'),
+        body: { orderId: order.orderId, split: { kind: 'NONE' } },
+      });
+      expect(cut.status, JSON.stringify(cut.json)).toBe(200);
+      const billId = (cut.json.billIds as string[])[0]!;
+      // Persist a closed-day fixture with an outstanding bill (e.g. imported
+      // history). A different date alone must never stand in for a close record.
+      await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantDailyClose.create({
+          data: {
+            branchId: ctx.branchA,
+            businessDate: new Date(`${closedDate}T00:00:00.000Z`),
+            cutByStaffProfileId: ctx.staffA,
+            deviceId: ctx.posA.deviceId,
+          },
+        })
+      );
+      const open = await call(deps.routes.drawerOpen, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('closed-day-drawer'),
+        body: { openingFloat: '0.00' },
+      });
+      expect(open.status).toBe(200);
+      expect(open.json.businessDate).not.toBe(closedDate);
+      const drawerSessionId = open.json.drawerSessionId as string;
+      const before = await moneyCounts();
+      const drawerBefore = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantDrawerSession.findUniqueOrThrow({ where: { id: drawerSessionId } })
+      );
+      const denied = await call(deps.routes.tender, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('closed-day-tender'),
+        body: { billId, tender: { type: 'CASH', amount: '5.00', cashReceived: '5.00' } },
+      });
+      expect(denied.status, JSON.stringify(denied.json)).toBe(409);
+      expect(denied.json.error).toBe('This business day is closed; no money can be posted.');
+      expect(await moneyCounts()).toEqual(before);
+      expect(
+        await deps.withTenantDb(orgA, (tx) =>
+          tx.restaurantDrawerSession.findUniqueOrThrow({ where: { id: drawerSessionId } })
+        )
+      ).toEqual(drawerBefore);
+      const close = await call(deps.routes.drawerClose, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('closed-day-drawer-close'),
+        body: { drawerSessionId, countedCash: '0.00' },
+      });
+      expect(close.status).toBe(200);
+      eqMoney(close.json.expectedCash, '0.00');
+      eqMoney(close.json.variance, '0.00');
     });
   });
 

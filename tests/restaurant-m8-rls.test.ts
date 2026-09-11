@@ -439,12 +439,39 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         ORDER BY table_row.relname`,
       [[...M8_TABLES]]
     );
+    // Ordinary tenants remain append-only; only the exact demo-reset DELETE is admitted.
+    const resetPolicies = await runtimeClient!.query(
+      `SELECT tablename, policyname, cmd, permissive, roles::text[] AS roles, qual, with_check
+         FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+          AND (policyname = 'restaurant_demo_reset_delete' OR cmd IN ('DELETE', 'ALL'))
+        ORDER BY tablename, policyname`,
+      [APPEND_ONLY]
+    );
+    expect(
+      resetPolicies.rows.map((row) => ({
+        ...row,
+        // Match the catalog rendering already pinned by the demo-reset guard.
+        qual: row.qual?.replace(/^public\./, ''),
+      }))
+    ).toEqual(
+      [...APPEND_ONLY].sort().map((tablename) => ({
+        tablename,
+        policyname: 'restaurant_demo_reset_delete',
+        cmd: 'DELETE',
+        permissive: 'PERMISSIVE',
+        roles: ['public'],
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+        with_check: null,
+      }))
+    );
+
     expect(metadata.rows).toEqual(
       [...M8_TABLES].sort().map((table_name) => ({
         table_name,
         enabled: true,
         forced: true,
-        commands: (APPEND_ONLY as readonly string[]).includes(table_name) ? ['a', 'r'] : ['*'],
+        commands: (APPEND_ONLY as readonly string[]).includes(table_name) ? ['a', 'd', 'r'] : ['*'],
       }))
     );
   });

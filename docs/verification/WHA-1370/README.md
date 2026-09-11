@@ -13,16 +13,16 @@ Its successful build and protocol evidence were written to this directory before
 Phase 2 combined source HEAD: `74b80188fa9c66c2761a74794b9aff8113be8a39`; tree: `375d3986c2998959721a8d1abc0bdbd7079a64d4`.
 The subsequent evidence-only commit does not change implementation; the exact tested source is this Phase 2 HEAD.
 
-| Phase | Original source | Original parent | Private cherry-pick |
-| --- | --- | --- | --- |
-| 1 | `773a1a8e9b4b85ca8a3ae08aba87055c9726513c` | `fe1e3e383c8b966cdb68669ba5366db00fe2320a` | `9be72d0cede7f6a9b3ae38d62d677c497e063754` |
-| 1 | `977eed1eb3bb2a611ee139bf65592630b420b5d3` | `773a1a8e9b4b85ca8a3ae08aba87055c9726513c` | `0cc86c095ac3ab6b41ea013755552c85c03474cc` |
-| 1 | `036debad81072badc79e7331fae20e2a84addf3e` | `977eed1eb3bb2a611ee139bf65592630b420b5d3` | `6e6bda1548929d514cd46e4bb5d6c418d1354fd7` |
-| 1 | `f81ae0c315c1c96e950dfb2eee1ffb384d7d9947` | `036debad81072badc79e7331fae20e2a84addf3e` | `9070a91cc3782f6838c6b60d7bd4b2cd15283232` |
-| 2 | `8fccc771aeb4fdd07141ada88e8a74e39459a588` | `fe1e3e383c8b966cdb68669ba5366db00fe2320a` | `9c4d611525706330ac95b2f7bbeac86f3a4df740` |
-| 2 | `2cdef75b9f9bb85f9706ec113a13c3a6267d5183` | `8fccc771aeb4fdd07141ada88e8a74e39459a588` | `e8dca138468350bf7ff0ea0d5a6228c9a3e85d7f` |
-| 2 | `c49b1afa252f20905269a044d09bdb0406eb7b60` | `fe1e3e383c8b966cdb68669ba5366db00fe2320a` | `677dae7e6b058ba4a9e487128bbeb9dfdd69712c` |
-| 2 | `5a1549376377af8321314d3bbfb2ff3a4e987230` | `57cb2f0d77b7b4b68214797faf13ee52927599ca` | `74b80188fa9c66c2761a74794b9aff8113be8a39` |
+| Phase | Original source                            | Original parent                            | Private cherry-pick                        |
+| ----- | ------------------------------------------ | ------------------------------------------ | ------------------------------------------ |
+| 1     | `773a1a8e9b4b85ca8a3ae08aba87055c9726513c` | `fe1e3e383c8b966cdb68669ba5366db00fe2320a` | `9be72d0cede7f6a9b3ae38d62d677c497e063754` |
+| 1     | `977eed1eb3bb2a611ee139bf65592630b420b5d3` | `773a1a8e9b4b85ca8a3ae08aba87055c9726513c` | `0cc86c095ac3ab6b41ea013755552c85c03474cc` |
+| 1     | `036debad81072badc79e7331fae20e2a84addf3e` | `977eed1eb3bb2a611ee139bf65592630b420b5d3` | `6e6bda1548929d514cd46e4bb5d6c418d1354fd7` |
+| 1     | `f81ae0c315c1c96e950dfb2eee1ffb384d7d9947` | `036debad81072badc79e7331fae20e2a84addf3e` | `9070a91cc3782f6838c6b60d7bd4b2cd15283232` |
+| 2     | `8fccc771aeb4fdd07141ada88e8a74e39459a588` | `fe1e3e383c8b966cdb68669ba5366db00fe2320a` | `9c4d611525706330ac95b2f7bbeac86f3a4df740` |
+| 2     | `2cdef75b9f9bb85f9706ec113a13c3a6267d5183` | `8fccc771aeb4fdd07141ada88e8a74e39459a588` | `e8dca138468350bf7ff0ea0d5a6228c9a3e85d7f` |
+| 2     | `c49b1afa252f20905269a044d09bdb0406eb7b60` | `fe1e3e383c8b966cdb68669ba5366db00fe2320a` | `677dae7e6b058ba4a9e487128bbeb9dfdd69712c` |
+| 2     | `5a1549376377af8321314d3bbfb2ff3a4e987230` | `57cb2f0d77b7b4b68214797faf13ee52927599ca` | `74b80188fa9c66c2761a74794b9aff8113be8a39` |
 
 All eight cherry-picks exited 0, without conflicts. Stable `git patch-id` matches original/private for every patch. Source maps include every intermediate private tree. Original parent/scope evidence is in `source-objects.txt`; exact changed paths are in `phase1-files.txt` and `phase2-files.txt`.
 
@@ -30,16 +30,16 @@ The existing receipt source/ancestry map in `docs/receipt-checkout-WHA-1355.md` 
 
 ## Execution evidence
 
-| Check | Result | Exit |
-| --- | --- | --- |
-| Phase 1 initial `bun run build` | Prisma generation and bundle passed; default ~4 GB TypeScript worker exhausted heap | 1 |
-| Phase 1 sized `bun run build` | Bundle, full TypeScript, static generation 163/163, build finalization passed | 0 |
-| Phase 1 native camera protocol tests | 16 passed / 0 failed / 0 skipped | 0 |
-| Phase 2 `bun run build` | Bundle, full TypeScript, static generation 163/163, build finalization passed | 0 |
-| Phase 2 initial 31-file intersection Vitest run | 342 passed / 60 failed / 0 skipped; all failures in runtime scratch setup | 1 |
-| Runtime-only retry with scratch variable restored | 60 passed / 0 failed / 0 skipped | 0 |
-| Actual `hls.js` ESM import/version check | `Real hls.js ESM import: 1.7.2` | 0 |
-| Source/private stable patch identity checks | 8 matches | 0 |
+| Check                                             | Result                                                                              | Exit |
+| ------------------------------------------------- | ----------------------------------------------------------------------------------- | ---- |
+| Phase 1 initial `bun run build`                   | Prisma generation and bundle passed; default ~4 GB TypeScript worker exhausted heap | 1    |
+| Phase 1 sized `bun run build`                     | Bundle, full TypeScript, static generation 163/163, build finalization passed       | 0    |
+| Phase 1 native camera protocol tests              | 16 passed / 0 failed / 0 skipped                                                    | 0    |
+| Phase 2 `bun run build`                           | Bundle, full TypeScript, static generation 163/163, build finalization passed       | 0    |
+| Phase 2 initial 31-file intersection Vitest run   | 342 passed / 60 failed / 0 skipped; all failures in runtime scratch setup           | 1    |
+| Runtime-only retry with scratch variable restored | 60 passed / 0 failed / 0 skipped                                                    | 0    |
+| Actual `hls.js` ESM import/version check          | `Real hls.js ESM import: 1.7.2`                                                     | 0    |
+| Source/private stable patch identity checks       | 8 matches                                                                           | 0    |
 
 Final unique executed coverage: **418 passed / 0 unresolved failures / 0 skipped**. This combines 402 Phase 2 Vitest cases across 31 files with 16 Phase 1 native camera cases. Native camera source and dependencies are unchanged by Phase 2; this evidence was reused, not represented as a second execution. The final 402-case total combines the unchanged 342 passes with the 60-case runtime retry; there was no all-green monolithic rerun.
 

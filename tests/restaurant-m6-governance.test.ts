@@ -303,7 +303,7 @@ describeIfDatabase('M6 schema governance (real PostgreSQL)', () => {
     );
   });
 
-  it('pins stock movement policies to INSERT and SELECT only', async () => {
+  it('pins stock movement INSERT/SELECT and the guarded demo-reset DELETE', async () => {
     const result = await client!.query<{ command: string }>(
       `SELECT CASE policy_row.polcmd
                 WHEN 'r' THEN 'SELECT'
@@ -319,6 +319,33 @@ describeIfDatabase('M6 schema governance (real PostgreSQL)', () => {
           AND table_row.relname = 'restaurant_stock_movements'
         ORDER BY command`
     );
-    expect(result.rows.map((row) => row.command)).toEqual(['INSERT', 'SELECT']);
+    // Ordinary tenants remain append-only; only the exact demo-reset DELETE is admitted.
+    const resetPolicies = await client!.query(
+      `SELECT tablename, policyname, cmd, permissive, roles::text[] AS roles, qual, with_check
+         FROM pg_catalog.pg_policies
+        WHERE schemaname = 'public' AND tablename = ANY($1::text[])
+          AND (policyname = 'restaurant_demo_reset_delete' OR cmd IN ('DELETE', 'ALL'))
+        ORDER BY tablename, policyname`,
+      [['restaurant_stock_movements']]
+    );
+    expect(
+      resetPolicies.rows.map((row) => ({
+        ...row,
+        // Match the catalog rendering already pinned by the demo-reset guard.
+        qual: row.qual?.replace(/^public\./, ''),
+      }))
+    ).toEqual(
+      [...['restaurant_stock_movements']].sort().map((tablename) => ({
+        tablename,
+        policyname: 'restaurant_demo_reset_delete',
+        cmd: 'DELETE',
+        permissive: 'PERMISSIVE',
+        roles: ['public'],
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+        with_check: null,
+      }))
+    );
+
+    expect(result.rows.map((row) => row.command)).toEqual(['DELETE', 'INSERT', 'SELECT']);
   });
 });

@@ -1,1 +1,13 @@
-{"command": ["node", "node_modules/vitest/vitest.mjs", "run", "tests/print-bridge.test.ts", "--maxWorkers=1", "--no-file-parallelism", "--reporter=json", "--outputFile=/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1370-4090c369-5ce-J5A45J/runtime-retry-results.json"], "returncode": 0}
+{
+  "command": [
+    "node",
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "tests/print-bridge.test.ts",
+    "--maxWorkers=1",
+    "--no-file-parallelism",
+    "--reporter=json",
+    "--outputFile=/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1370-4090c369-5ce-J5A45J/runtime-retry-results.json"
+  ],
+  "returncode": 0
+}

@@ -8,8 +8,8 @@ dependency copies solely for private development. Original base remains
 `2cdef75b9f9bb85f9706ec113a13c3a6267d5183`, preserving its parent
 `8fccc771aeb4fdd07141ada88e8a74e39459a588`.
 
-| Source dependency | Local private copy |
-| --- | --- |
+| Source dependency                          | Local private copy                         |
+| ------------------------------------------ | ------------------------------------------ |
 | `c49b1afa252f20905269a044d09bdb0406eb7b60` | `0b7bca3a662f904ce55e7a70a5229a67bbe37c52` |
 | `806f1138395c595ca27e3eb086581b9961fb441e` | `cab383313b1a661e74a5065bb5f599be2b24de9a` |
 | `411306de8d88b8eea574caa93750a972afa028d7` | `120855488ed740aa448d702b9d0b33f5c188ef52` |

@@ -22,19 +22,10 @@
   },
   {
     "file": "src/app/(app)/pharmacy/purchasing/returns/page.tsx",
-    "unchangedServerActions": [
-      "createReturn",
-      "advanceReturn",
-      "recordCredit",
-      "allocateCredit"
-    ]
+    "unchangedServerActions": ["createReturn", "advanceReturn", "recordCredit", "allocateCredit"]
   },
   {
     "file": "src/app/(app)/pharmacy/purchasing/suppliers/page.tsx",
-    "unchangedServerActions": [
-      "createSupplier",
-      "recordLicence",
-      "setAuthorization"
-    ]
+    "unchangedServerActions": ["createSupplier", "recordLicence", "setAuthorization"]
   }
 ]
