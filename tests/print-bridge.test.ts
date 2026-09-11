@@ -33,6 +33,7 @@ vi.mock('node:fs/promises', async (original) => {
 const receipt = Buffer.from([0x1b, 0x40, 0x41, 0x0a, 0x00, 0xff]);
 const queueId = 'queue:///Receipt_Printer';
 const claimToken = 'ab'.repeat(32);
+const hostProcess = process;
 let stateDir: string;
 
 beforeEach(async () => {
@@ -48,7 +49,10 @@ afterEach(async () => {
   vi.unstubAllEnvs();
   vi.restoreAllMocks();
   vi.clearAllMocks();
+  // Clear unconsumed child fixtures even when validation failed before spawn.
+  vi.mocked(spawn).mockReset();
   await rm(stateDir, { recursive: true, force: true });
+  expect(process).toBe(hostProcess);
 });
 
 function fakeChild(code: number | null = 0, error?: Error) {
@@ -136,7 +140,9 @@ describe('explicit transport configuration', () => {
   });
 
   it('rejects unsupported OS queue and direct Windows serial', () => {
+    vi.stubGlobal('process', { ...process, platform: 'linux' });
     expect(() => resolveTransport(queueId, 'linux')).toThrow('requires Windows or macOS');
+    expect(() => printerAllowlist(JSON.stringify([queueId]))).toThrow('requires Windows or macOS');
     expect(() => resolveTransport('serial:///dev/COM1', 'win32')).toThrow(
       'installed queue on Windows'
     );
@@ -151,6 +157,7 @@ describe('explicit transport configuration', () => {
   );
 
   it('dry-run returns a synthetic diagnostic without any device/network/command I/O', () => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
     const result = dryRun(queueId, printerAllowlist(JSON.stringify([queueId])));
     expect(result).toMatchObject({
       dryRun: true,
@@ -168,6 +175,10 @@ describe('explicit transport configuration', () => {
 });
 
 describe('native queue dispatch', () => {
+  beforeEach(() => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+  });
+
   it('pipes exact bytes to local CUPS with fixed arguments and no inherited secrets', async () => {
     vi.stubEnv('NODE_ENV', 'test');
     vi.stubEnv('PRINT_BRIDGE_TOKEN', 'sensitive');
@@ -221,9 +232,10 @@ describe('native queue dispatch', () => {
 
   it('Windows submission pipes binary-safe base64 only to the fixed helper', async () => {
     vi.stubGlobal('process', { ...process, platform: 'win32' });
-    const { chunks } = fakeChild();
+    const { child, chunks } = fakeChild();
     const id = 'queue:///Receipt%20Printer';
     await writeToPrinter(id, receipt, [id]);
+    expect(spawn).toHaveReturnedWith(child);
     expect(Buffer.concat(chunks).toString()).toBe(receipt.toString('base64'));
     expect(vi.mocked(spawn).mock.calls[0][2]).toMatchObject({
       shell: false,
@@ -382,6 +394,10 @@ describe('TCP and POSIX device writes', () => {
 });
 
 describe('durable duplicate prevention and server contract', () => {
+  beforeEach(() => {
+    vi.stubGlobal('process', { ...process, platform: 'darwin' });
+  });
+
   it('persists before dispatch, acknowledges existing status, and sends no receipt data in ack', async () => {
     const controller = new AbortController();
     vi.mocked(fetch)
