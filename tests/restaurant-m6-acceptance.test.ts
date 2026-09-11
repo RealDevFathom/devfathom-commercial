@@ -425,6 +425,121 @@ afterAll(async () => {
 }, 60_000);
 
 describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL + API)', () => {
+  it.each([
+    { exact: false, rollback: false },
+    { exact: true, rollback: false },
+    { exact: false, rollback: true },
+    { exact: true, rollback: true },
+  ])(
+    'consumes uncommitted variant-order recipes (exact=$exact, rollback=$rollback)',
+    async ({ exact, rollback }) => {
+      const { closeOrder } = await import('@/lib/restaurant/orders');
+      const key = `recipe_tx_${exact}_${rollback}_${suffix}`;
+      const transaction = deps.withTenantDb(orgId, async (tx) => {
+        const product = await tx.restaurantProduct.create({ data: { id: key, name: key } });
+        const variant = await tx.restaurantProductVariant.create({
+          data: { productId: product.id, name: 'Regular' },
+        });
+        const ingredient = await tx.restaurantIngredient.create({
+          data: { name: key, baseUnitId: ids.gram },
+        });
+        const stockItem = await tx.restaurantStockItem.create({
+          data: { ingredientId: ingredient.id, canonicalUnitId: ids.gram },
+        });
+        for (const variantId of exact ? [null, variant.id] : [null]) {
+          const recipe = await tx.restaurantRecipe.create({
+            data: { productId: product.id, variantId, name: key },
+          });
+          const version = await tx.restaurantRecipeVersion.create({
+            data: {
+              recipeId: recipe.id,
+              versionNumber: 1,
+              status: 'ACTIVE',
+              yieldQuantity: '4',
+              yieldUnitId: ids.portion,
+            },
+          });
+          await tx.restaurantRecipeLine.create({
+            data: {
+              recipeVersionId: version.id,
+              ingredientId: ingredient.id,
+              quantity: variantId ? '3' : '2',
+              unitId: ids.kilogram,
+            },
+          });
+        }
+        const order = await tx.restaurantOrder.create({
+          data: {
+            id: key,
+            branchId: ids.recipeBranch,
+            orderNumber: 100 + Number(exact) + 2 * Number(rollback),
+            businessDate: new Date('2026-08-19T00:00:00.000Z'),
+            status: 'PAYMENT_PENDING',
+            channel: 'DINE_IN',
+            staffProfileId: ids.staff,
+            deviceId: ids.recipeDevice,
+            items: {
+              create: {
+                productId: product.id,
+                variantId: variant.id,
+                name: key,
+                unitPrice: '0',
+                quantity: 2,
+                status: 'SERVED',
+              },
+            },
+          },
+        });
+        const actor = {
+          staffProfileId: ids.staff,
+          deviceId: ids.recipeDevice,
+          idempotencyKey: key,
+        };
+        const cut = await deps.cutBills(tx, {
+          orderId: order.id,
+          branchId: ids.recipeBranch,
+          split: { kind: 'NONE' },
+          actor: { ...actor, idempotencyKey: `${key}_bill` },
+        });
+        const now = new Date('2026-08-19T13:00:00.000Z');
+        await deps.settleBill(tx, { billId: cut.billIds[0]!, ...actor, at: now });
+        await closeOrder(rollback ? failAfterFirstMovementCreate(tx) : tx, {
+          orderId: order.id,
+          actor,
+          now,
+        });
+        const movements = await tx.restaurantStockMovement.findMany({
+          where: { orderId: order.id },
+          include: { location: true, order: true },
+        });
+        expect(movements).toHaveLength(1);
+        expect(movements[0]).toMatchObject({
+          organizationId: orgId,
+          stockItemId: stockItem.id,
+          locationId: ids.recipeLocation,
+          orderId: order.id,
+          reason: 'RECIPE_CONSUMPTION',
+          occurredAt: now,
+          location: { branchId: ids.recipeBranch },
+          order: { branchId: ids.recipeBranch, status: 'CLOSED', closedAt: now },
+        });
+        expect(movements[0]!.quantity.toString()).toBe(exact ? '-1500' : '-1000');
+      });
+      if (rollback) {
+        await expect(transaction).rejects.toThrow('forced failure after first movement create');
+      } else {
+        await transaction;
+      }
+      await deps.withTenantDb(orgId, async (tx) => {
+        expect(await tx.restaurantStockMovement.count({ where: { orderId: key } })).toBe(
+          rollback ? 0 : 1
+        );
+        expect(await tx.restaurantOrder.count({ where: { id: key } })).toBe(rollback ? 0 : 1);
+        expect(await tx.restaurantProduct.count({ where: { id: key } })).toBe(rollback ? 0 : 1);
+      });
+    }
+  );
+
   it('runs through a LOGIN role that is neither SUPERUSER nor BYPASSRLS', async () => {
     const role = await deps.withTenantDb(
       orgId,

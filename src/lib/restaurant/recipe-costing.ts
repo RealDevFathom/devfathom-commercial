@@ -212,7 +212,7 @@ async function explodeVersion(
   return leaves;
 }
 
-async function explodeRecipeInDb(
+export async function explodeRecipeInDb(
   db: ScopedDb,
   input: ExplodeRecipeInput
 ): Promise<ExplodeRecipeResult> {

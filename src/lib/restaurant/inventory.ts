@@ -3,7 +3,7 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { resolveActiveVersion } from './effective-dating';
-import { explodeRecipe } from './recipe-costing';
+import { explodeRecipeInDb } from './recipe-costing';
 import {
   deriveBalance,
   deriveBalances,
@@ -594,11 +594,17 @@ export async function postOrderRecipeConsumption(
     }
     // For voided+WASTE or any non-voided non-cancelled item, derive recipe BOM.
 
-    // Find the recipe for (product, variant).
-    const recipe = await tx.restaurantRecipe.findFirst({
+    // Prefer the exact variant; use the product recipe only when it is absent.
+    let recipe = await tx.restaurantRecipe.findFirst({
       where: { productId: item.productId, variantId: item.variantId ?? null },
       select: { id: true, organizationId: true },
     });
+    if (!recipe && item.variantId) {
+      recipe = await tx.restaurantRecipe.findFirst({
+        where: { productId: item.productId, variantId: null },
+        select: { id: true, organizationId: true },
+      });
+    }
     if (!recipe) continue;
 
     const versions = await tx.restaurantRecipeVersion.findMany({
@@ -608,7 +614,7 @@ export async function postOrderRecipeConsumption(
     const active = resolveActiveVersion(versions);
     if (!active) continue;
 
-    const explosion = await explodeRecipe({
+    const explosion = await explodeRecipeInDb(tx, {
       organizationId: recipe.organizationId,
       recipeVersionId: active.id,
       portions: dec(item.quantity),
