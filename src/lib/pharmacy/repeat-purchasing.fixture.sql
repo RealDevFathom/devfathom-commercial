@@ -93,3 +93,11 @@ SELECT 'r-'||id,'org_a','semantics','case-'||id,'synthetic','Synthetic',header_a
 INSERT INTO pharmacy_sale_return_lines(id,"organizationId","branchId","returnId","saleLineId","inventoryLotId","stockLocationId","canonicalUnits","integrityDecision","stockMovementId","createdAt")
 SELECT 'rl-'||id,'org_a','semantics','r-'||id,'case-'||id||'-line','semantics','synthetic',returned,'RESTOCK','sm-'||id,return_at FROM repeat_cases WHERE returned>0;
 COMMIT;
+
+-- Plan against the loaded cardinalities immediately, without waiting for autovacuum.
+-- Empty-table estimates choose repeated nested-loop scans for 10,004 history receipts.
+ANALYZE pharmacy_sales;
+ANALYZE pharmacy_sale_lines;
+ANALYZE pharmacy_sale_returns;
+ANALYZE pharmacy_sale_return_lines;
+ANALYZE pharmacy_refunds;
