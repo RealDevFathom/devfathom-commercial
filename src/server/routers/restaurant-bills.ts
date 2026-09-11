@@ -194,9 +194,7 @@ async function getBill(db: ScopedDb, billId: string) {
   const tipTotal = sum(bill.tenders.map((t) => t.tipAmount));
   const refundTotal = sum(bill.refunds.map((r) => r.amount));
   const refundTipTotal = sum(bill.refunds.map((r) => r.tipRefundAmount));
-  const refundedServiceChargeTotal = sum(
-    bill.refunds.map((r) => r.serviceChargeRefundAmount)
-  );
+  const refundedServiceChargeTotal = sum(bill.refunds.map((r) => r.serviceChargeRefundAmount));
   const refundedTaxTotal = sum(bill.refunds.map((r) => r.taxRefundAmount));
 
   return {

@@ -42,6 +42,8 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
     await client.query(`CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS`);
     await client.query(`GRANT "${role}" TO CURRENT_USER`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
+    // The demo-reset policy is SECURITY INVOKER and reads tenant identity.
+    await client.query(`GRANT SELECT ON organizations TO "${role}"`);
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON restaurant_tax_official_sources, restaurant_tax_profile_versions,
        restaurant_tax_rule_versions, restaurant_tax_transaction_snapshots, restaurant_tax_rate_bucket_snapshots,
@@ -364,10 +366,24 @@ describe('tax core real-PostgreSQL RLS and immutability', () => {
         'restaurant_tax_refund_allocation_cap',
       ])
     );
-    const policies = await client.query<{ cmd: string }>(
-      `SELECT cmd FROM pg_policies WHERE tablename='restaurant_tax_refund_allocations' ORDER BY cmd`
+    const policies = await client.query<{ cmd: string; policyname: string; qual: string | null }>(
+      `SELECT cmd, policyname, qual FROM pg_policies WHERE tablename='restaurant_tax_refund_allocations' ORDER BY cmd`
     );
-    expect(policies.rows.map(({ cmd }) => cmd)).toEqual(['INSERT', 'SELECT']);
+    const demoReset = policies.rows.filter(
+      ({ policyname }) => policyname === 'restaurant_demo_reset_delete'
+    );
+    expect(demoReset).toEqual([
+      {
+        cmd: 'DELETE',
+        policyname: 'restaurant_demo_reset_delete',
+        qual: 'restaurant_demo_reset_allowed("organizationId")',
+      },
+    ]);
+    expect(
+      policies.rows
+        .filter(({ policyname }) => policyname !== 'restaurant_demo_reset_delete')
+        .map(({ cmd }) => cmd)
+    ).toEqual(['INSERT', 'SELECT']);
     await expectPgCode('23514', () =>
       client.query(
         `INSERT INTO restaurant_tax_refund_allocations

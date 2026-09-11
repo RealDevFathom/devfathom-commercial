@@ -621,6 +621,20 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
 // ---------------------------------------------------------------------------
 describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit', () => {
   const APPROVED_EXACT_FILES = new Set([
+    // Existing demo identity fixtures prove the Restaurant-only access boundary.
+    'src/lib/auth.demo.test.ts',
+    'src/lib/restaurant/terminal-auth.test.ts',
+    'src/lib/tenancy/tenant-actor.test.ts',
+    // Shared receipt designer selects the persisted layout contract by vertical.
+    'src/components/receipts/receipt-designer.tsx',
+    // Server-derived AI scope and report tools enforce the tenant vertical;
+    // their focused tests prove tool exposure and execution restrictions.
+    'src/lib/ai/context.ts',
+    'src/lib/ai/tools.ts',
+    'src/lib/ai/tools-routing.test.ts',
+    'src/lib/ai/tools/restaurant-reports.ts',
+    'src/lib/ai/tools/restaurant-reports.test.ts',
+    'src/app/api/assistant/route.test.ts',
     // The bell selects vertical-specific routers; their hooks remain isolated
     // in separate child components.
     'src/components/layout/topbar.notifications.test.tsx',
