@@ -36,6 +36,11 @@ jobs:
     env:
       OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       RUNTIME_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      COHORT_OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/pharmacy_cohort_test
+      COHORT_SETUP_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/pharmacy_cohort_test
+      COHORT_RUNTIME_URL: postgresql://cohort_runtime:cohort-runtime-ci-only@127.0.0.1:55432/pharmacy_cohort_test
+      RECEIPT_OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/wha1364_receipt_test
+      RECEIPT_RUNTIME_URL: postgresql://receipt_runtime:receipt-runtime-ci-only@127.0.0.1:55432/wha1364_receipt_test
       SUPERUSER_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
       DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
@@ -139,6 +144,14 @@ jobs:
           GRANT CONNECT, TEMPORARY ON DATABASE devfathom_gate_test TO gate_runtime;
           CREATE DATABASE devfathom_gate_shadow_test OWNER gate_owner;
           REVOKE ALL ON DATABASE devfathom_gate_shadow_test FROM PUBLIC;
+          CREATE ROLE cohort_runtime LOGIN PASSWORD 'cohort-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE ROLE receipt_runtime LOGIN PASSWORD 'receipt-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE DATABASE pharmacy_cohort_test OWNER gate_owner;
+          REVOKE ALL ON DATABASE pharmacy_cohort_test FROM PUBLIC;
+          GRANT CONNECT ON DATABASE pharmacy_cohort_test TO cohort_runtime;
+          CREATE DATABASE wha1364_receipt_test OWNER gate_owner;
+          REVOKE ALL ON DATABASE wha1364_receipt_test FROM PUBLIC;
+          GRANT CONNECT ON DATABASE wha1364_receipt_test TO receipt_runtime;
           SQL
           record database-bootstrap "$?"
 
@@ -152,7 +165,25 @@ jobs:
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
           DATABASE_URL="$OWNER_URL" run seed bunx prisma db seed
-          run vitest bunx vitest run --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          # These suites require isolated fixtures and different runtime privileges.
+          for lane in cohort receipt; do
+            if [ "$lane" = cohort ]; then owner_url="$COHORT_OWNER_URL"; else owner_url="$RECEIPT_OWNER_URL"; fi
+            DATABASE_URL="$owner_url" EXTENSION_ADMIN_DATABASE_URL="$owner_url" run "$lane-prepare-extensions" bun prisma/prepare-extensions.ts
+            DATABASE_URL="$owner_url" run "$lane-migrate-deploy" bunx prisma migrate deploy
+          done
+          # The mixed-tenant fixture needs setup authority; sales RLS has no platform-admin exception.
+          run cohort-fixture psql "$COHORT_SETUP_URL" -v ON_ERROR_STOP=1 \
+            -f src/lib/pharmacy/repeat-purchasing.fixture.sql
+          run cohort-runtime-grants psql "$COHORT_OWNER_URL" -v ON_ERROR_STOP=1 \
+            -c 'GRANT USAGE ON SCHEMA public TO cohort_runtime;' \
+            -c 'GRANT SELECT ON pharmacy_sales, pharmacy_sale_lines, pharmacy_sale_returns, pharmacy_sale_return_lines, pharmacy_refunds TO cohort_runtime;'
+          run receipt-runtime-grants psql "$RECEIPT_OWNER_URL" -v ON_ERROR_STOP=1 \
+            -c 'GRANT USAGE ON SCHEMA public TO receipt_runtime;' \
+            -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO receipt_runtime;' \
+            -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO receipt_runtime;'
+          DATABASE_URL="$COHORT_RUNTIME_URL" TEST_DATABASE_URL="$COHORT_RUNTIME_URL" run vitest-cohort bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-cohort.json
+          DATABASE_URL="$RECEIPT_RUNTIME_URL" TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" WHA1364_RECEIPT_TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" run vitest-receipt bunx vitest run src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-receipt.json
+          run vitest bunx vitest run --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 
@@ -196,16 +227,26 @@ jobs:
             const split = line.lastIndexOf('=');
             if (split < 1 || line.slice(split + 1) !== '0') failures.push(line);
           }
-          try {
-            const report = JSON.parse(fs.readFileSync('gate/vitest.json', 'utf8'));
-            const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites'];
-            for (const field of requiredZero) {
-              if (typeof report[field] !== 'number' || !Number.isFinite(report[field]) || report[field] !== 0)
-                failures.push(`vitest JSON ${field}=${report[field]}; require numeric zero`);
+          const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites', 'numTodoTests'];
+          const requiredPositive = ['numTotalTests', 'numTotalTestSuites', 'numPassedTests', 'numPassedTestSuites'];
+          const totals = Object.fromEntries([...requiredZero, ...requiredPositive].map((field) => [field, 0]));
+          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt']) {
+            try {
+              const report = JSON.parse(fs.readFileSync(`gate/${lane}.json`, 'utf8'));
+              for (const field of [...requiredZero, ...requiredPositive]) {
+                const value = report[field];
+                if (!Number.isInteger(value) || (requiredZero.includes(field) ? value !== 0 : value <= 0))
+                  failures.push(`${lane} JSON ${field}=${value}; require ${requiredZero.includes(field) ? 'numeric zero' : 'positive integer'}`);
+                else totals[field] += value;
+              }
+              if (report.numPassedTests !== report.numTotalTests || report.numPassedTestSuites !== report.numTotalTestSuites)
+                failures.push(`${lane} JSON passed/total mismatch`);
+              console.log(`${lane}: ${JSON.stringify(Object.fromEntries(Object.keys(totals).map((field) => [field, report[field]])))}`);
+            } catch (error) {
+              failures.push(`${lane} JSON unavailable: ${error.message}`);
             }
-          } catch (error) {
-            failures.push(`vitest JSON unavailable: ${error.message}`);
           }
+          console.log(`Vitest aggregate: ${JSON.stringify(totals)}`);
           if (failures.length) {
             console.error(failures.join('\n'));
             process.exit(1);
