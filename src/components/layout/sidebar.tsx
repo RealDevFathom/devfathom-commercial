@@ -279,6 +279,31 @@ export const navigation: NavItem[] = [
     module: 'pharmacy-counter',
   },
   {
+    label: 'Inventory',
+    href: '/pharmacy/inventory',
+    icon: PackageSearch,
+    group: 'Pharmacy',
+  },
+  {
+    label: 'Purchasing',
+    href: '/pharmacy/purchasing',
+    icon: ShoppingCart,
+    group: 'Pharmacy',
+  },
+  {
+    label: 'Finance',
+    href: '/pharmacy/finance',
+    icon: DollarSign,
+    adminOnly: true,
+    group: 'Pharmacy',
+  },
+  {
+    label: 'Reports & Insights',
+    href: '/pharmacy/reports',
+    icon: BarChart3,
+    group: 'Pharmacy',
+  },
+  {
     label: 'Prescriptions',
     href: '/pharmacy/prescriptions',
     icon: FileText,

@@ -302,6 +302,9 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   // `/pharmacy` catch-all is listed: the other pharmacy surfaces are licensed
   // separately and a catch-all would gate them all on `pharmacy-core`.
   ['/pharmacy/purchasing', 'pharmacy-procurement'],
+  ['/pharmacy/inventory', 'pharmacy-inventory'],
+  ['/pharmacy/finance', 'pharmacy-finance'],
+  ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],
   ['/pharmacy/orders', 'pharmacy-counter'],
   ['/restaurant/staff/roster', 'restaurant-core'],

@@ -8,6 +8,7 @@ import {
   evaluateEntitlementRequirement,
   evaluateSopDepth,
   hasSopDepth,
+  isModuleGranted,
   moduleForApiScope,
   moduleForPath,
   moduleForProcedure,
@@ -118,6 +119,57 @@ describe('module catalog routing', () => {
     expect(moduleForPath('/project-settings')).toBeNull();
     expect(moduleForPath('/organization')).toBeNull();
     expect(moduleForPath('/api-docs')).toBeNull();
+  });
+
+  it.each([
+    ['/pharmacy/reports', 'pharmacy-reports'],
+    ['/pharmacy/reports/repeat-purchasing', 'pharmacy-reports'],
+    ['/pharmacy/finance', 'pharmacy-finance'],
+    ['/pharmacy/inventory', 'pharmacy-inventory'],
+    ['/pharmacy/purchasing', 'pharmacy-procurement'],
+    ['/pharmacy/purchasing/receiving', 'pharmacy-procurement'],
+    ['/pharmacy/purchasing/returns', 'pharmacy-procurement'],
+    ['/pharmacy/purchasing/orders', 'pharmacy-procurement'],
+    ['/pharmacy/purchasing/suppliers', 'pharmacy-procurement'],
+    ['/pharmacy/medicines', 'pharmacy-core'],
+    ['/pharmacy/orders', 'pharmacy-counter'],
+  ])('resolves Pharmacy route %s to its existing licensed module %s', (route, module) => {
+    for (const vertical of ['PHARMACY', 'RESTAURANT', 'AGENCY', undefined] as const) {
+      expect(moduleForPath(route, vertical)).toBe(module);
+    }
+    expect(verticalForModuleKey(module)).toBe('PHARMACY');
+  });
+
+  it.each([
+    '/pharmacy',
+    '/pharmacy/insights',
+    '/pharmacy/reports-archive',
+    '/pharmacy/finance-settings',
+    '/pharmacy/inventory-other',
+    '/pharmacy/purchasing-returns',
+  ])('preserves unmapped Pharmacy roots and lookalike siblings: %s', (route) => {
+    expect(moduleForPath(route)).toBeNull();
+  });
+
+  it('keeps purchasing returns under the existing purchasing procedure license', () => {
+    expect(moduleForPath('/pharmacy/purchasing/returns')).toBe(
+      moduleForProcedure('pharmacyPurchasing.workspace')
+    );
+    expect(ROUTE_MODULES.filter(([route]) => route === '/pharmacy/purchasing')).toHaveLength(1);
+  });
+
+  it.each([
+    ['/pharmacy/reports', 'pharmacy-reports'],
+    ['/pharmacy/finance', 'pharmacy-finance'],
+    ['/pharmacy/inventory', 'pharmacy-inventory'],
+    ['/pharmacy/purchasing/returns', 'pharmacy-procurement'],
+  ])('keeps direct-route licensing for %s independent of Chat', (route, module) => {
+    const owner = moduleForPath(route);
+    expect(owner).toBe(module);
+    expect(isModuleGranted(owner!, [module])).toBe(true);
+    expect(isModuleGranted(owner!, [module, 'chat'])).toBe(true);
+    expect(isModuleGranted(owner!, ['pharmacy-core', 'chat'])).toBe(false);
+    expect(isModuleGranted(owner!, [])).toBe(false);
   });
 
   // WHA-138 Lane A / plan §3 — every restaurant surface in the route table.

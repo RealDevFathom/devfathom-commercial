@@ -74,6 +74,92 @@ describe('restaurant navigation', () => {
 
 describe('pharmacy navigation', () => {
   const pharmacyRoutes = ['/pharmacy', '/pharmacy/counter', '/pharmacy/regulatory'];
+  const operations = [
+    ['/pharmacy/inventory', 'pharmacy-inventory'],
+    ['/pharmacy/purchasing', 'pharmacy-procurement'],
+    ['/pharmacy/finance', 'pharmacy-finance'],
+    ['/pharmacy/reports', 'pharmacy-reports'],
+  ] as const;
+
+  it.each(operations)(
+    'shows %s only with its own license, independently of Chat',
+    (route, module) => {
+      const granted = visibleNavigation(
+        { vertical: 'PHARMACY', enabledModules: [module] },
+        'ADMIN'
+      ).map((item) => item.href);
+      expect(granted).toContain(route);
+      expect(granted).not.toContain('/chat');
+      for (const [otherRoute] of operations) {
+        if (otherRoute !== route) expect(granted).not.toContain(otherRoute);
+      }
+
+      const denied = visibleNavigation(
+        {
+          vertical: 'PHARMACY',
+          enabledModules: [
+            'pharmacy-core',
+            'chat',
+            ...operations.map(([, key]) => key).filter((key) => key !== module),
+          ],
+        },
+        'ADMIN'
+      ).map((item) => item.href);
+      expect(denied).not.toContain(route);
+      expect(denied).toContain('/chat');
+    }
+  );
+
+  it.each(['MEMBER', 'HR', undefined])(
+    'keeps operational navigation available without granting admin-only finance to %s',
+    (role) => {
+      const visible = visibleNavigation(
+        {
+          vertical: 'PHARMACY',
+          enabledModules: ['pharmacy-core', ...operations.map(([, module]) => module)],
+        },
+        role
+      ).map((item) => item.href);
+      expect(visible).toEqual(
+        expect.arrayContaining(['/pharmacy/inventory', '/pharmacy/purchasing', '/pharmacy/reports'])
+      );
+      for (const adminRoute of [
+        '/pharmacy',
+        '/pharmacy/medicines',
+        '/pharmacy/regulatory',
+        '/pharmacy/finance',
+      ]) {
+        expect(visible).not.toContain(adminRoute);
+      }
+    }
+  );
+
+  it.each(['RESTAURANT', 'AGENCY'] as const)(
+    'hides every Pharmacy entry from %s even with all Pharmacy modules granted',
+    (vertical) => {
+      const visible = visibleNavigation(
+        {
+          vertical,
+          enabledModules: [
+            'pharmacy-core',
+            'pharmacy-counter',
+            'pharmacy-dispensing',
+            'pharmacy-safety',
+            ...operations.map(([, module]) => module),
+          ],
+        },
+        'ADMIN'
+      );
+      expect(visible.filter((item) => item.group === 'Pharmacy')).toEqual([]);
+    }
+  );
+
+  it('keeps reports on the existing route and does not invent an Insights destination', () => {
+    expect(navigation.find((item) => item.href === '/pharmacy/reports')?.label).toBe(
+      'Reports & Insights'
+    );
+    expect(navigation.some((item) => item.href === '/pharmacy/insights')).toBe(false);
+  });
 
   it('hides pharmacy routes from a Restaurant admin despite mis-provisioned pharmacy modules', () => {
     const visible = visibleNavigation(
