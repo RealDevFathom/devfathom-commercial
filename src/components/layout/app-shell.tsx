@@ -6,7 +6,8 @@ import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
 import { Topbar } from './topbar';
 import { PageTransition } from '@/components/motion/page-transition';
-import { useAssistant } from '@/lib/assistant-store';
+import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
+import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForPath } from '@/lib/module-catalog';
@@ -24,6 +25,51 @@ const AssistantPanel = dynamic(
   () => import('@/components/assistant/assistant-panel').then((m) => m.AssistantPanel),
   { ssr: false }
 );
+
+function AskFathomChat({ organizationId }: { organizationId: string }) {
+  const utils = trpc.useUtils();
+  const settings = trpc.organizationAdmin.askFathomSettings.useQuery(undefined, {
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    trpc: { abortOnUnmount: true },
+  });
+  const available = useAssistant((state) => isAssistantAvailable(state, organizationId));
+  const hasOpened = useAssistant((state) => state.hasOpened);
+  const panelEpoch = useAssistant((state) => state.panelEpoch);
+
+  useEffect(() => {
+    useAssistant.getState().setOrganization(organizationId);
+    return () => {
+      useAssistant.getState().setOrganization(null);
+      void utils.organizationAdmin.askFathomSettings.cancel();
+    };
+  }, [organizationId, utils]);
+
+  useEffect(() => {
+    // The no-input endpoint shares a cache key across sessions. Never accept a
+    // previous mount's cached permissions, or another organization's response.
+    if (!settings.isFetchedAfterMount) return;
+    if (settings.isError || settings.data?.organizationId !== organizationId) {
+      useAssistant
+        .getState()
+        .markUnavailable(organizationId, Math.max(settings.errorUpdatedAt, settings.dataUpdatedAt));
+    } else if (settings.data) {
+      useAssistant.getState().confirmSettings(settings.data, settings.dataUpdatedAt);
+    }
+  }, [
+    organizationId,
+    settings.data,
+    settings.dataUpdatedAt,
+    settings.errorUpdatedAt,
+    settings.isError,
+    settings.isFetchedAfterMount,
+  ]);
+
+  // Unmount discards local chat history. It does not abort an active stream;
+  // the server gate remains authoritative for new turns and approval continuations.
+  return available && hasOpened ? <AssistantPanel key={`${organizationId}:${panelEpoch}`} /> : null;
+}
 
 function EndSupportAccessButton() {
   const [pending, setPending] = useState(false);
@@ -116,17 +162,12 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
   // below (after every hook) degrades to a notice rather than throwing.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
   const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled =
     !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
   const immersive = pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
-  const assistantOpen = useAssistant((s) => s.open);
-  // Mount the panel once it has been opened, then keep it mounted so chat
-  // state survives close/reopen.
-  const [assistantMounted, setAssistantMounted] = useState(false);
-  if (assistantOpen && !assistantMounted) setAssistantMounted(true);
   const brandStyle = tenantBrandTokens(brand) as CSSProperties;
 
   useEffect(() => {
@@ -229,7 +270,12 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
         </main>
       </div>
 
-      {assistantMounted && <AssistantPanel />}
+      {sessionStatus === 'authenticated' && session?.user.organizationId && (
+        <AskFathomChat
+          key={session.user.organizationId}
+          organizationId={session.user.organizationId}
+        />
+      )}
     </div>
   );
 }

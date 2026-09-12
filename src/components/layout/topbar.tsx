@@ -30,7 +30,11 @@ import { useTheme } from '@/components/theme-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { cn } from '@/lib/utils';
-import { useAssistant } from '@/lib/assistant-store';
+import {
+  assistantAvailabilityMessage,
+  isAssistantAvailable,
+  useAssistant,
+} from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
@@ -81,6 +85,12 @@ export function Topbar({
   const { data: session } = useSession();
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
+  const assistantAvailable = useAssistant((state) =>
+    isAssistantAvailable(state, session?.user.organizationId)
+  );
+  const assistantMessage = useAssistant((state) =>
+    assistantAvailabilityMessage(state, session?.user.organizationId)
+  );
   const mounted = useSyncExternalStore(
     subscribeToHydration,
     () => true,
@@ -230,13 +240,22 @@ export function Topbar({
 
           {/* AI assistant */}
           <button
+            type="button"
             onClick={() => openAssistant(true)}
-            className="studio-assistant-button"
+            disabled={!assistantAvailable}
+            title={assistantAvailable ? 'Open Ask Fathom chat' : assistantMessage}
+            aria-describedby={!assistantAvailable ? 'topbar-chat-availability' : undefined}
+            className="studio-assistant-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
             aria-label="Open AI assistant"
           >
             <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
             <span className="hidden text-xs font-semibold lg:inline">Ask Fathom</span>
           </button>
+          {!assistantAvailable && (
+            <span id="topbar-chat-availability" className="sr-only">
+              {assistantMessage}
+            </span>
+          )}
 
           {/* Dark mode toggle */}
           {mounted && (

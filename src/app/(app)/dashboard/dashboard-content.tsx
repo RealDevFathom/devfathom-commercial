@@ -34,7 +34,11 @@ import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
 import { RevenueChart } from './revenue-chart';
 import { moneyListLabel, diffByCurrency } from '@/lib/finance/currency';
-import { useAssistant } from '@/lib/assistant-store';
+import {
+  assistantAvailabilityMessage,
+  isAssistantAvailable,
+  useAssistant,
+} from '@/lib/assistant-store';
 
 /* ============================================
    Next Meeting Countdown — real data
@@ -828,6 +832,12 @@ const DASHBOARD_WIDGETS = [
 export function DashboardContent() {
   const { data: session } = useSession();
   const openAssistant = useAssistant((state) => state.setOpen);
+  const assistantAvailable = useAssistant((state) =>
+    isAssistantAvailable(state, session?.user.organizationId)
+  );
+  const assistantMessage = useAssistant((state) =>
+    assistantAvailabilityMessage(state, session?.user.organizationId)
+  );
   const utils = trpc.useUtils();
   const stats = trpc.dashboard.getStats.useQuery();
   const activity = trpc.dashboard.getRecentActivity.useQuery();
@@ -900,13 +910,17 @@ export function DashboardContent() {
           <button
             type="button"
             onClick={() => openAssistant(true)}
-            className="studio-prompt-button"
+            disabled={!assistantAvailable}
+            title={assistantAvailable ? 'Open Ask Fathom chat' : assistantMessage}
+            className="studio-prompt-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
           >
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-brand text-white">
               <Sparkles className="h-4 w-4" aria-hidden />
             </span>
             <span className="min-w-0 flex-1 text-left">
-              <span className="block text-xs text-muted-foreground">Need a hand?</span>
+              <span className="block text-xs text-muted-foreground">
+                {assistantAvailable ? 'Need a hand?' : assistantMessage}
+              </span>
               <span className="block truncate text-sm font-semibold text-foreground">
                 Ask Fathom anything
               </span>

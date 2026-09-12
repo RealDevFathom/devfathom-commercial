@@ -1,13 +1,16 @@
 'use client';
 
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
+import { useSession } from 'next-auth/react';
 import { Check, Copy, KeyRound, Loader2, RefreshCw, ShieldCheck } from 'lucide-react';
 import { toast } from 'sonner';
 import { Button } from '@/components/ui/button';
+import { Switch as StudioSwitch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
+import { useAssistant } from '@/lib/assistant-store';
 
 const inputClass =
   'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20';
@@ -64,6 +67,146 @@ function SubmitButton({ pending, children }: { pending: boolean; children: React
 
 function formValue(form: FormData, key: string): string {
   return String(form.get(key) ?? '').trim();
+}
+
+export function OrganizationAskFathomSettings() {
+  const { data: session, status } = useSession();
+  if (
+    status !== 'authenticated' ||
+    session?.user.role !== 'ADMIN' ||
+    !session.user.organizationId
+  ) {
+    return null;
+  }
+  return (
+    <AskFathomSettingsForm
+      key={session.user.organizationId}
+      organizationId={session.user.organizationId}
+    />
+  );
+}
+
+function AskFathomSettingsForm({ organizationId }: { organizationId: string }) {
+  const utils = trpc.useUtils();
+  const settings = trpc.organizationAdmin.askFathomSettings.useQuery(undefined, {
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+  });
+  const mutation = trpc.organizationAdmin.setAskFathomEnabled.useMutation();
+  const [draft, setDraft] = useState<boolean | null>(null);
+  const [saving, setSaving] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [saved, setSaved] = useState(false);
+  const active = useRef(true);
+  useEffect(() => {
+    active.current = true;
+    return () => {
+      active.current = false;
+    };
+  }, []);
+  const confirmed =
+    settings.data?.organizationId === organizationId && !settings.isError
+      ? settings.data.askFathomEnabled
+      : null;
+  const selected = draft ?? confirmed;
+
+  const save = async () => {
+    if (selected === null || confirmed === null || saving) return;
+    setSaving(true);
+    setError(null);
+    setSaved(false);
+    try {
+      const result = await mutation.mutateAsync({ askFathomEnabled: selected });
+      if (!active.current) return;
+      if (result.organizationId !== organizationId) {
+        throw new Error('Workspace changed. Reload settings before saving again.');
+      }
+      // A request started before this save must not overwrite the confirmed flag.
+      await utils.organizationAdmin.askFathomSettings.cancel();
+      if (!active.current) return;
+      utils.organizationAdmin.askFathomSettings.setData(undefined, result);
+      const assistant = useAssistant.getState();
+      assistant.confirmSettings(result, Math.max(Date.now(), assistant.settingsUpdatedAt + 1));
+      setDraft(null);
+      setSaved(true);
+      void utils.organizationAdmin.askFathomSettings.invalidate();
+    } catch (cause) {
+      if (active.current) {
+        setError(cause instanceof Error ? cause.message : 'Chat settings could not be saved.');
+      }
+    } finally {
+      if (active.current) setSaving(false);
+    }
+  };
+
+  return (
+    <Card
+      title="Ask Fathom chat"
+      description="Control company access to the Ask Fathom chat assistant."
+    >
+      <p id="ask-fathom-scope" className="text-sm text-text-body">
+        Turning chat off closes Ask Fathom for this company. Reports, Insights, and other enabled
+        module AI remain available under their own permissions.
+      </p>
+      <div className="mt-4 flex min-h-11 flex-wrap items-center gap-4">
+        <label htmlFor="ask-fathom-enabled" className="text-sm font-semibold text-text-strong">
+          Enable Ask Fathom chat
+        </label>
+        <StudioSwitch
+          id="ask-fathom-enabled"
+          checked={selected ?? false}
+          onCheckedChange={(checked) => {
+            setDraft(checked);
+            setSaved(false);
+          }}
+          disabled={confirmed === null || saving}
+          aria-describedby="ask-fathom-scope ask-fathom-status"
+          className="motion-reduce:transition-none [&_[data-slot=switch-thumb]]:motion-reduce:transition-none"
+        />
+        <Button
+          type="button"
+          onClick={() => void save()}
+          disabled={confirmed === null || saving || (draft === null && !error)}
+          className="min-h-11 motion-reduce:transform-none motion-reduce:transition-none"
+        >
+          {saving ? 'Saving…' : error ? 'Retry save' : 'Save chat setting'}
+        </Button>
+      </div>
+      <p id="ask-fathom-status" role="status" className="mt-3 text-sm text-text-muted">
+        {saving
+          ? 'Saving chat setting…'
+          : saved
+            ? 'Chat setting saved.'
+            : confirmed === null
+              ? 'Chat availability has not been confirmed.'
+              : `Saved setting: chat ${confirmed ? 'on' : 'off'}.${draft !== null ? ' Unsaved change.' : ''}`}
+      </p>
+      {error && (
+        <p role="alert" className="mt-2 text-sm text-destructive">
+          {error} Your selection is kept. Retry save.
+        </p>
+      )}
+      {confirmed === null && (
+        <div className="mt-2 flex flex-wrap items-center gap-3">
+          <p className="text-sm text-text-muted">
+            {settings.isFetching
+              ? 'Loading chat settings…'
+              : 'Chat settings could not be loaded for this workspace.'}
+          </p>
+          <Button
+            type="button"
+            variant="outline"
+            disabled={settings.isFetching}
+            onClick={() => void settings.refetch()}
+            className="min-h-11"
+          >
+            Retry settings
+          </Button>
+        </div>
+      )}
+    </Card>
+  );
 }
 
 export function OrganizationAdminContent() {
@@ -240,6 +383,8 @@ export function OrganizationAdminContent() {
           ))}
         </div>
       </Card>
+
+      <OrganizationAskFathomSettings />
 
       <div className="grid gap-6 xl:grid-cols-2">
         <Card title="Workspace profile">
