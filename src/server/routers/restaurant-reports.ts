@@ -3,6 +3,7 @@ import { z } from 'zod';
 import type { Prisma } from '@/generated/prisma/client';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { readFinancialComparison } from '@/lib/restaurant/financial-comparison';
 import {
   exportRestaurantReportCsv,
   readCateringReport,
@@ -167,6 +168,14 @@ export const restaurantReportsRouter = router({
   payments: financial.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-pos');
     return guarded(ctx, input, (resolved) => readPaymentsReport(ctx.db, resolved));
+  }),
+  financialComparison: financial.input(range).query(({ ctx, input }) => {
+    requireModule(ctx, 'restaurant-pos');
+    return guarded(ctx, input, (resolved) =>
+      readFinancialComparison(ctx.db, resolved, {
+        organizationId: ctx.organization?.id ?? ctx.session!.user.organizationId,
+      })
+    );
   }),
   foodCost: financial.input(range).query(({ ctx, input }) => {
     requireModule(ctx, 'restaurant-pos');

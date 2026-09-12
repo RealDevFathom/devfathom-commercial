@@ -384,92 +384,167 @@ describe('restaurant corrected-close backbone', () => {
     expect(report.orderCount).toBe(0);
   });
 
-  it('selects one deterministic latest unsuperseded fork tip for overview and payments', async () => {
-    const date = new Date('2026-01-01T00:00:00Z');
-    const money = (value: number) => new Prisma.Decimal(value);
-    const close = (id: string, createdAt: string, netSales: number) => ({
-      id,
-      branchId: 'b1',
-      businessDate: date,
-      supersedesCloseId: 'original',
-      createdAt: new Date(createdAt),
-      branch: { name: 'One' },
-      tenderTotals: [
-        { tenderType: 'CARD', amount: money(netSales), tipAmount: money(0), count: 1 },
-      ],
-      grossSales: money(netSales),
-      deliveryFeeSales: money(6),
-      deliveryFeeRefunds: money(2),
-      netSales: money(netSales),
-      taxTotal: money(0),
-      serviceChargeTotal: money(0),
-      tipTotal: money(0),
-      compTotal: money(0),
-      discountTotal: money(0),
-      refundTotal: money(0),
-      voidTotal: money(0),
-      cashExpected: money(0),
-      cashCounted: money(0),
-      cashVariance: money(0),
-    });
+  it.each([
+    [null, 0, '0', 'INCOMPLETE', 0, 0],
+    ['0', 0, '0', 'COMPLETE', 0, 0],
+    [null, 100, '-100', 'INCOMPLETE', 0, 0],
+    ['0', 100, '-100', 'COMPLETE', 0, 0],
+    ['0', 0, '0', 'INCOMPLETE', 1, 0],
+    ['0.01', 0, '0', 'INCOMPLETE', 0, 1],
+  ] as const)(
+    'selects one deterministic fork tip and qualifies count %s, expected %s, variance %s, coverage %s, unverified %s, mismatch %s',
+    async (countedCash, cashExpected, cashVariance, coverage, unverified, mismatch) => {
+      const date = new Date('2026-01-01T00:00:00Z');
+      const money = (value: number) => new Prisma.Decimal(value);
+      const close = (id: string, createdAt: string, netSales: number) => ({
+        id,
+        branchId: 'b1',
+        businessDate: date,
+        supersedesCloseId: 'original',
+        createdAt: new Date(createdAt),
+        branch: { name: 'One' },
+        tenderTotals: [
+          { tenderType: 'CARD', amount: money(netSales), tipAmount: money(0), count: 1 },
+        ],
+        grossSales: money(netSales),
+        deliveryFeeSales: money(6),
+        deliveryFeeRefunds: money(2),
+        netSales: money(netSales),
+        taxTotal: money(0),
+        serviceChargeTotal: money(0),
+        tipTotal: money(0),
+        compTotal: money(0),
+        discountTotal: money(0),
+        refundTotal: money(0),
+        voidTotal: money(0),
+        cashExpected: money(cashExpected),
+        cashCounted: money(0),
+        cashVariance: new Prisma.Decimal(cashVariance),
+      });
+      const db = {
+        restaurantDrawerSession: {
+          findMany: vi.fn(async () => [
+            {
+              branchId: 'b1',
+              businessDate: date,
+              createdAt: new Date('2026-01-01T12:00:00Z'),
+              closedAt: new Date(unverified ? '2026-01-03T00:00:01Z' : '2026-01-01T23:00:00Z'),
+              status: 'CLOSED',
+              countedCash: countedCash === null ? null : new Prisma.Decimal(countedCash),
+            },
+          ]),
+        },
+        restaurantDailyClose: {
+          findMany: vi.fn(async () => [
+            close('fork-old', '2026-01-02T00:00:00Z', 10),
+            close('fork-new', '2026-01-03T00:00:00Z', 20),
+          ]),
+        },
+        insightDailyRollup: {
+          findMany: vi.fn(async () => [
+            {
+              id: 'old-rollup',
+              branchId: 'b1',
+              businessDate: date,
+              sourceDailyCloseId: 'fork-old',
+              orderCount: 99,
+              coverCount: 99,
+              computedAt: new Date(),
+            },
+            {
+              id: 'new-rollup',
+              branchId: 'b1',
+              businessDate: date,
+              sourceDailyCloseId: 'fork-new',
+              orderCount: 2,
+              coverCount: 3,
+              computedAt: new Date(),
+            },
+          ]),
+        },
+        $queryRaw: vi.fn(async () => []),
+      } as unknown as ScopedDb;
+      const range = { branchIds: ['b1'], from: '2026-01-01', to: '2026-01-01' };
+      const overview = await readOverviewReport(db, range);
+      const payments = await readPaymentsReport(db, range);
+      expect(overview).toMatchObject({
+        orderCount: 2,
+        coverCount: 3,
+        freshness: { closedDayCount: 1 },
+      });
+      expect(payments).toMatchObject({
+        netSales: '20',
+        averageCheck: '10',
+        deliveryFeeSales: '6',
+        deliveryFeeRefunds: '2',
+        cashExpected: String(cashExpected),
+        cashCounted: '0',
+        cashVariance,
+        cashCountCoverage: {
+          status: coverage,
+          drawerSessionCount: 1,
+          missingCountSessionCount: countedCash === null ? 1 : 0,
+          unverifiedCloseSessionCount: unverified,
+          mismatchedCloseDayCount: mismatch,
+        },
+      });
+      expect(db.restaurantDrawerSession.findMany).toHaveBeenCalledWith({
+        where: { branchId: { in: ['b1'] }, businessDate: { gte: date, lte: date } },
+        select: {
+          branchId: true,
+          businessDate: true,
+          createdAt: true,
+          closedAt: true,
+          status: true,
+          countedCash: true,
+        },
+      });
+      expect(payments.tenders).toEqual([
+        expect.objectContaining({ tenderType: 'CARD', amount: '20', count: 1 }),
+      ]);
+      const overviewCsv = await exportRestaurantReportCsv(db, 'overview', range, {
+        includeLabourCosts: false,
+      });
+      const paymentsCsv = await exportRestaurantReportCsv(db, 'payments', range, {
+        includeLabourCosts: false,
+      });
+      expect(overviewCsv.content).toContain('\n2026-01-01,2026-01-01,CURRENT,2,3,1,1');
+      expect(paymentsCsv).toMatchObject({
+        filename: 'restaurant-payments-2026-01-01-to-2026-01-01.csv',
+        contentType: 'text/csv; charset=utf-8',
+        truncated: false,
+      });
+      const [header, row] = paymentsCsv.content.split('\n');
+      expect(header).toBe(
+        'from,to,grossSales,netSales,averageCheck,deliveryFeeSales,deliveryFeeRefunds,tax,service,tips,discounts,comps,refunds,voids,cashExpected,cashCounted,cashVariance,cashCountCoverage,cashDrawerSessionCount,cashMissingCountSessionCount,cashUnverifiedCloseSessionCount,cashMismatchedCloseDayCount,cashCountDefinition'
+      );
+      // Original monetary columns and their order remain exact; only unsupported
+      // count/variance values become blank. Known negative variance stays escaped.
+      const exportedCash =
+        coverage === 'COMPLETE' ? (cashExpected === 100 ? "0,'-100" : '0,0') : ',';
+      expect(row).toBe(
+        `2026-01-01,2026-01-01,20,20,10,6,2,0,0,0,0,0,0,0,${cashExpected},${exportedCash},${coverage},1,${countedCash === null ? 1 : 0},${unverified},${mismatch},` +
+          '"Blank cashCounted/cashVariance means unavailable count evidence; populated values are source-close amounts with COMPLETE count coverage. ' +
+          payments.cashCountCoverage.definition +
+          '"'
+      );
+    }
+  );
+
+  it('exports unavailable cash with explicit coverage when no days are closed', async () => {
     const db = {
-      restaurantDailyClose: {
-        findMany: vi.fn(async () => [
-          close('fork-old', '2026-01-02T00:00:00Z', 10),
-          close('fork-new', '2026-01-03T00:00:00Z', 20),
-        ]),
-      },
-      insightDailyRollup: {
-        findMany: vi.fn(async () => [
-          {
-            id: 'old-rollup',
-            branchId: 'b1',
-            businessDate: date,
-            sourceDailyCloseId: 'fork-old',
-            orderCount: 99,
-            coverCount: 99,
-            computedAt: new Date(),
-          },
-          {
-            id: 'new-rollup',
-            branchId: 'b1',
-            businessDate: date,
-            sourceDailyCloseId: 'fork-new',
-            orderCount: 2,
-            coverCount: 3,
-            computedAt: new Date(),
-          },
-        ]),
-      },
-      $queryRaw: vi.fn(async () => []),
+      restaurantDailyClose: { findMany: vi.fn(async () => []) },
+      insightDailyRollup: { findMany: vi.fn(async () => []) },
+      restaurantDrawerSession: { findMany: vi.fn() },
     } as unknown as ScopedDb;
-    const range = { branchIds: ['b1'], from: '2026-01-01', to: '2026-01-01' };
-    const overview = await readOverviewReport(db, range);
-    const payments = await readPaymentsReport(db, range);
-    expect(overview).toMatchObject({
-      orderCount: 2,
-      coverCount: 3,
-      freshness: { closedDayCount: 1 },
-    });
-    expect(payments).toMatchObject({
-      netSales: '20',
-      averageCheck: '10',
-      deliveryFeeSales: '6',
-      deliveryFeeRefunds: '2',
-    });
-    expect(payments.tenders).toEqual([
-      expect.objectContaining({ tenderType: 'CARD', amount: '20', count: 1 }),
-    ]);
-    const overviewCsv = await exportRestaurantReportCsv(db, 'overview', range, {
+    const exported = await exportRestaurantReportCsv(db, 'payments', boundedRange, {
       includeLabourCosts: false,
     });
-    const paymentsCsv = await exportRestaurantReportCsv(db, 'payments', range, {
-      includeLabourCosts: false,
-    });
-    expect(overviewCsv.content).toContain('\n2026-01-01,2026-01-01,CURRENT,2,3,1,1');
-    expect(paymentsCsv.content).toContain(
-      '\n2026-01-01,2026-01-01,20,20,10,6,2,0,0,0,0,0,0,0,0,0,0'
+    expect(exported.content).toContain(
+      '\n2026-01-01,2026-01-31,0,0,0,0,0,0,0,0,0,0,0,0,0,,,NO_CLOSED_DAYS,0,0,0,0,'
     );
+    expect(exported.content).toContain('Blank cashCounted/cashVariance means unavailable');
+    expect(db.restaurantDrawerSession.findMany).not.toHaveBeenCalled();
   });
 });
 

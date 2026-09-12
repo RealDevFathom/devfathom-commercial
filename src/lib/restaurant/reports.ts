@@ -250,6 +250,7 @@ export async function readOverviewReport(db: ScopedDb, range: RestaurantReportRa
 
 export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRange) {
   const { closes, rollups, parsed } = await loadReportBackbone(db, range);
+  const cashCountCoverage = await readCashCountCoverage(db, range, parsed, closes);
   const tipByDay = new Map(
     closes.map((close) => [`${close.branchId}:${dateKey(close.businessDate)}`, close.id])
   );
@@ -298,6 +299,7 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
   return {
     range,
     freshness: freshnessFor(range, parsed, closes, rollups),
+    cashCountCoverage,
     grossSales: serializeDecimal(total('grossSales')),
     netSales: serializeDecimal(netSales),
     averageCheck: serializeDecimal(orderCount > 0 ? netSales.dividedBy(orderCount) : ZERO),
@@ -321,6 +323,78 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
         tipAmount: serializeDecimal(row.tips),
         count: row.count,
       })),
+  };
+}
+
+/** Counts are evidence for the existing close amounts, never replacement totals. */
+async function readCashCountCoverage(
+  db: ScopedDb,
+  range: RestaurantReportRange,
+  parsed: ReturnType<typeof validateRestaurantReportRange>,
+  closes: Awaited<ReturnType<typeof loadReportBackbone>>['closes']
+) {
+  const days = new Map(
+    closes.map((close) => [
+      `${close.branchId}:${dateKey(close.businessDate)}`,
+      { close, counted: ZERO, incomplete: false },
+    ])
+  );
+  const drawers = closes.length
+    ? await db.restaurantDrawerSession.findMany({
+        where: {
+          branchId: { in: range.branchIds },
+          businessDate: { gte: parsed.from, lte: parsed.to },
+        },
+        select: {
+          branchId: true,
+          businessDate: true,
+          createdAt: true,
+          closedAt: true,
+          status: true,
+          countedCash: true,
+        },
+      })
+    : [];
+  let drawerSessionCount = 0;
+  let missingCountSessionCount = 0;
+  let unverifiedCloseSessionCount = 0;
+  for (const drawer of drawers) {
+    const day = days.get(`${drawer.branchId}:${dateKey(drawer.businessDate)}`);
+    // Match the source close's drawer business date and creation cutoff. Later
+    // sessions and days without an authoritative close cannot validate its cash.
+    if (!day || drawer.createdAt > day.close.createdAt) continue;
+    drawerSessionCount += 1;
+    if (drawer.countedCash === null) {
+      missingCountSessionCount += 1;
+      day.incomplete = true;
+    } else {
+      day.counted = day.counted.plus(drawer.countedCash);
+    }
+    if (
+      drawer.status !== 'CLOSED' ||
+      drawer.closedAt === null ||
+      drawer.closedAt > day.close.createdAt
+    ) {
+      unverifiedCloseSessionCount += 1;
+      day.incomplete = true;
+    }
+  }
+  const mismatchedCloseDayCount = [...days.values()].filter(
+    (day) => !day.incomplete && !day.counted.equals(day.close.cashCounted)
+  ).length;
+  const status = !closes.length
+    ? ('NO_CLOSED_DAYS' as const)
+    : missingCountSessionCount || unverifiedCloseSessionCount || mismatchedCloseDayCount
+      ? ('INCOMPLETE' as const)
+      : ('COMPLETE' as const);
+  return {
+    status,
+    drawerSessionCount,
+    missingCountSessionCount,
+    unverifiedCloseSessionCount,
+    mismatchedCloseDayCount,
+    definition:
+      'Drawer sessions on authoritative closed branch-days, created by each source close. COMPLETE requires every such session to have a non-null count and CLOSED timestamp by that close, and each daily count sum to match its close. Explicit zero is counted; no sessions with a zero close is complete. Coverage does not fill missing branch-days or establish a historical snapshot. Legacy payment cash totals remain source-close amounts and require this qualification.',
   };
 }
 
@@ -1948,6 +2022,7 @@ export async function exportRestaurantReportCsv(
     ];
   } else if (section === 'payments') {
     const report = await readPaymentsReport(db, range);
+    const countComplete = report.cashCountCoverage.status === 'COMPLETE';
     columns = [
       'from',
       'to',
@@ -1966,6 +2041,12 @@ export async function exportRestaurantReportCsv(
       'cashExpected',
       'cashCounted',
       'cashVariance',
+      'cashCountCoverage',
+      'cashDrawerSessionCount',
+      'cashMissingCountSessionCount',
+      'cashUnverifiedCloseSessionCount',
+      'cashMismatchedCloseDayCount',
+      'cashCountDefinition',
     ];
     rows = [
       {
@@ -1984,8 +2065,16 @@ export async function exportRestaurantReportCsv(
         refunds: report.refundTotal,
         voids: report.voidTotal,
         cashExpected: report.cashExpected,
-        cashCounted: report.cashCounted,
-        cashVariance: report.cashVariance,
+        cashCounted: countComplete ? report.cashCounted : null,
+        cashVariance: countComplete ? report.cashVariance : null,
+        cashCountCoverage: report.cashCountCoverage.status,
+        cashDrawerSessionCount: report.cashCountCoverage.drawerSessionCount,
+        cashMissingCountSessionCount: report.cashCountCoverage.missingCountSessionCount,
+        cashUnverifiedCloseSessionCount: report.cashCountCoverage.unverifiedCloseSessionCount,
+        cashMismatchedCloseDayCount: report.cashCountCoverage.mismatchedCloseDayCount,
+        cashCountDefinition:
+          'Blank cashCounted/cashVariance means unavailable count evidence; populated values are source-close amounts with COMPLETE count coverage. ' +
+          report.cashCountCoverage.definition,
       },
     ];
   } else if (section === 'food-cost') {

@@ -6,6 +6,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(),
   overview: vi.fn(),
   payments: vi.fn(),
+  financialComparison: vi.fn(),
   foodCost: vi.fn(),
   dishProfitability: vi.fn(),
   catering: vi.fn(),
@@ -17,6 +18,9 @@ const mocks = vi.hoisted(() => ({
   recordTrpcAudit: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
+vi.mock('@/lib/restaurant/financial-comparison', () => ({
+  readFinancialComparison: mocks.financialComparison,
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
@@ -57,7 +61,7 @@ const db = {
   restaurantStockLocation: { findFirst: vi.fn(), findMany: vi.fn() },
 };
 const input = { branchId: 'b1', from: '2026-01-01', to: '2026-01-02' };
-function caller() {
+function caller(organizationId = 'org1') {
   return restaurantReportsRouter.createCaller({
     db: db as unknown as ScopedDb,
     entitlements: {
@@ -68,7 +72,7 @@ function caller() {
     },
     session: {
       expires: 'later',
-      user: { id: 'u1', role: 'ADMIN', status: 'ACTIVE', organizationId: 'org1' },
+      user: { id: 'u1', role: 'ADMIN', status: 'ACTIVE', organizationId },
     },
     organization: null,
     support: null,
@@ -108,6 +112,7 @@ beforeEach(() => {
   ]);
   mocks.overview.mockResolvedValue({ orderCount: 1 });
   mocks.payments.mockResolvedValue({ netSales: '1.00' });
+  mocks.financialComparison.mockResolvedValue({ moneyUnit: 'DECIMAL_MAJOR' });
   mocks.foodCost.mockResolvedValue({ totals: { theoreticalCost: '2.00' } });
   mocks.dishProfitability.mockResolvedValue({ menuEngineering: [] });
   mocks.catering.mockResolvedValue({ totals: { orderCount: 1 } });
@@ -121,6 +126,139 @@ beforeEach(() => {
   });
   mocks.annotateAudit.mockImplementation((ctx, detail) => {
     Object.assign(ctx.audit.detail, detail);
+  });
+});
+
+describe('restaurant financialComparison query authorization', () => {
+  it('passes through unavailable counted cash and the server discount-rate contract', async () => {
+    mocks.grants.add('reports:financial');
+    const report = {
+      moneyUnit: 'DECIMAL_MAJOR',
+      drivers: {
+        cashCounted: {
+          current: null,
+          previous: '100.00',
+          absoluteChange: null,
+          percentageChange: null,
+        },
+      },
+      cashCountCoverage: { current: { status: 'INCOMPLETE', missingCountSessionCount: 1 } },
+      discountRate: {
+        unit: 'PERCENT',
+        current: '10.00',
+        previous: null,
+        percentagePointChange: null,
+        unavailableReason: { previous: 'No observed closed branch-days.' },
+      },
+    };
+    mocks.financialComparison.mockResolvedValueOnce(report);
+    await expect(caller().financialComparison(input)).resolves.toEqual(report);
+  });
+
+  it('registers a financial query for an active primary branch using server tenant scope', async () => {
+    mocks.grants.add('reports:financial');
+    await expect(caller().financialComparison(input)).resolves.toEqual({
+      moneyUnit: 'DECIMAL_MAJOR',
+    });
+    expect(mocks.financialComparison).toHaveBeenCalledWith(
+      db,
+      { branchIds: ['b1'], from: input.from, to: input.to },
+      { organizationId: 'org1' }
+    );
+    expect(db.restaurantBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org1', id: { in: ['b1'] }, active: true },
+      })
+    );
+  });
+
+  it('supports explicit assignments and uses a second server organization', async () => {
+    mocks.grants.add('reports:financial');
+    db.restaurantStaffProfile.findFirst.mockResolvedValue(null);
+    db.restaurantBranchAssignment.findMany.mockResolvedValue([{ branchId: 'b2' }]);
+    db.restaurantBranch.findMany.mockResolvedValue([{ id: 'b2', name: 'Two' }]);
+    await caller('org2').financialComparison({ ...input, branchId: 'b2' });
+    expect(db.restaurantBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: { organizationId: 'org2', id: { in: ['b2'] }, active: true },
+      })
+    );
+    expect(mocks.financialComparison).toHaveBeenCalledWith(
+      db,
+      { branchIds: ['b2'], from: input.from, to: input.to },
+      { organizationId: 'org2' }
+    );
+  });
+
+  it('denies operational-only access before any branch or report read', async () => {
+    mocks.grants.add('reports:operational');
+    await expect(caller().financialComparison(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantBranch.findMany).not.toHaveBeenCalled();
+    expect(mocks.financialComparison).not.toHaveBeenCalled();
+  });
+
+  it('denies when Restaurant POS is unavailable', async () => {
+    mocks.grants.add('reports:financial');
+    mocks.modules.delete('restaurant-pos');
+    await expect(caller().financialComparison(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.financialComparison).not.toHaveBeenCalled();
+  });
+
+  it('denies all-branch access without configure permission', async () => {
+    mocks.grants.add('reports:financial');
+    await expect(
+      caller().financialComparison({ from: input.from, to: input.to })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.financialComparison).not.toHaveBeenCalled();
+  });
+
+  it('allows configurators only the returned active branches', async () => {
+    mocks.grants.add('reports:financial');
+    mocks.grants.add('restaurant:configure');
+    db.restaurantBranch.findMany.mockResolvedValue([
+      { id: 'b1', name: 'One' },
+      { id: 'b2', name: 'Two' },
+    ]);
+    await caller().financialComparison({ from: input.from, to: input.to });
+    expect(mocks.financialComparison).toHaveBeenCalledWith(
+      db,
+      { branchIds: ['b1', 'b2'], from: input.from, to: input.to },
+      { organizationId: 'org1' }
+    );
+    expect(db.restaurantBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org1', active: true } })
+    );
+  });
+
+  it.each(['other-org-branch', 'inactive', 'unassigned'])(
+    'denies unavailable branch %s without report data',
+    async (branchId) => {
+      mocks.grants.add('reports:financial');
+      await expect(caller().financialComparison({ ...input, branchId })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.financialComparison).not.toHaveBeenCalled();
+    }
+  );
+
+  it('rejects client organizationId instead of trusting it', async () => {
+    mocks.grants.add('reports:financial');
+    await expect(
+      caller().financialComparison({ ...input, organizationId: 'org2' } as typeof input)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.financialComparison).not.toHaveBeenCalled();
+  });
+
+  it('maps service range errors to BAD_REQUEST', async () => {
+    mocks.grants.add('reports:financial');
+    const { RestaurantReportError } = await import('@/lib/restaurant/reports');
+    mocks.financialComparison.mockRejectedValueOnce(
+      new RestaurantReportError('Combined range exceeds 90 days.')
+    );
+    await expect(caller().financialComparison(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Combined range exceeds 90 days.',
+    });
   });
 });
 
