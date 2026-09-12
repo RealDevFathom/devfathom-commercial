@@ -1,5 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
 import {
   listReceivingExceptions,
   postGoodsReceipt,
@@ -24,8 +26,13 @@ import {
   listSuppliers,
   lotsFromReceipt,
   purchasingWorkspace,
+  purchasingReadBoundsSchema,
   receivedAgainstOrder,
   resolveScan,
+  type PurchasingReadBounds,
+  type PurchasingReadPage,
+  type PurchaseReturnDetail,
+  type SupplierCreditDetail,
 } from '@/lib/pharmacy/purchasing-console';
 import {
   assertApprovalAllowed,
@@ -211,7 +218,33 @@ function assertOrderableSupplier(
 
 const WITH_LICENCES = { licences: true } as const;
 
-export const pharmacyPurchasingRouter = router({
+const supplierFollowUpInput = purchasingReadBoundsSchema.safeExtend({ branchId });
+
+/** Both bounded and legacy financial readers enforce access before reading their source rows. */
+async function supplierFollowUpScope(ctx: TRPCContext, branch: string) {
+  const scope = receivingScope(ctx, branch);
+  // Direct subrouter callers have no pharmacyPurchasing path prefix for the shared module lookup.
+  if (!hasModule(ctx.entitlements, 'pharmacy-procurement')) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy procurement access required.' });
+  }
+  if (
+    !(await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Financial report access required.' });
+  const available = await ctx.db.pharmacyBranch.findFirst({
+    where: { organizationId: scope.organizationId, id: scope.branchId, active: true },
+    select: { id: true },
+  });
+  if (!available)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  return scope;
+}
+
+const purchasingRouter = router({
   // ----- PUR-01 licensed suppliers -----
 
   createSupplier: protectedProcedure
@@ -1270,8 +1303,10 @@ export const pharmacyPurchasingRouter = router({
 
   /** PUR-06 — returns and claims with their window state and credit position. */
   purchaseReturns: protectedProcedure
-    .input(z.object({ branchId }).strict())
-    .query(({ ctx, input }) => listPurchaseReturns(ctx.db, receivingScope(ctx, input.branchId))),
+    .input(supplierFollowUpInput)
+    .query(async ({ ctx, input: { branchId: branch, ...bounds } }) =>
+      listPurchaseReturns(ctx.db, await supplierFollowUpScope(ctx, branch), bounds)
+    ),
 
   /** PUR-06 — the available lots a return may be raised against. */
   returnableLots: protectedProcedure
@@ -1302,8 +1337,10 @@ export const pharmacyPurchasingRouter = router({
 
   /** PUR-06 — supplier credits recorded at this branch and what they cover. */
   supplierCredits: protectedProcedure
-    .input(z.object({ branchId }).strict())
-    .query(({ ctx, input }) => listSupplierCredits(ctx.db, receivingScope(ctx, input.branchId))),
+    .input(supplierFollowUpInput)
+    .query(async ({ ctx, input: { branchId: branch, ...bounds } }) =>
+      listSupplierCredits(ctx.db, await supplierFollowUpScope(ctx, branch), bounds)
+    ),
 
   /** INV-10 — exact PUR-07 demand. Branch grants see only their own rows. */
   centralDemand: auditedProtectedProcedure
@@ -1399,4 +1436,32 @@ export const pharmacyPurchasingRouter = router({
         domainError(error);
       }
     }),
+});
+
+type FollowUpReadInput = PurchasingReadBounds & { branchId: string };
+type FollowUpReadCaller<T> = {
+  (
+    input: FollowUpReadInput & { page: NonNullable<PurchasingReadBounds['page']> }
+  ): Promise<PurchasingReadPage<T>>;
+  (
+    input: FollowUpReadInput & { page: PurchasingReadBounds['page'] }
+  ): Promise<T[] | PurchasingReadPage<T>>;
+  (input: FollowUpReadInput & { page?: undefined }): Promise<T[]>;
+};
+type PurchasingCaller = Omit<
+  ReturnType<typeof purchasingRouter.createCaller>,
+  'purchaseReturns' | 'supplierCredits'
+> & {
+  purchaseReturns: FollowUpReadCaller<PurchaseReturnDetail>;
+  supplierCredits: FollowUpReadCaller<SupplierCreditDetail>;
+};
+// tRPC 11 widens input-dependent output to a union. These server-caller overloads preserve
+// existing array callers; transport output remains the honest union. The runtime procedures
+// above choose the envelope only for `page`, covered by router + serialization tests.
+export const pharmacyPurchasingRouter: Omit<typeof purchasingRouter, 'createCaller'> & {
+  createCaller: (...args: Parameters<typeof purchasingRouter.createCaller>) => PurchasingCaller;
+} = Object.assign(purchasingRouter, {
+  createCaller: purchasingRouter.createCaller as (
+    ...args: Parameters<typeof purchasingRouter.createCaller>
+  ) => PurchasingCaller,
 });

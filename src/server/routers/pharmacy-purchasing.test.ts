@@ -1,10 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import superjson from 'superjson';
 
 const mocks = vi.hoisted(() => {
   const hasModule = vi.fn<(view: { enabledModules: string[] }, key: string) => boolean>();
   hasModule.mockReturnValue(true);
-  return { hasModule };
+  return { hasModule, can: vi.fn() };
 });
+vi.mock('@/lib/abac', () => ({ can: mocks.can, subjectFromSession: (user: unknown) => user }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -57,6 +59,7 @@ function makeDb() {
     pharmacyPurchaseReturn: model(),
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
+    pharmacyBranch: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -108,8 +111,123 @@ const ORDER_LINE = {
 
 beforeEach(() => {
   db = makeDb();
+  mocks.can.mockReset().mockResolvedValue(true);
+  db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
+
+describe.each(['purchaseReturns', 'supplierCredits'] as const)(
+  '%s live read contract',
+  (endpoint) => {
+    const source = () =>
+      endpoint === 'purchaseReturns' ? db.pharmacyPurchaseReturn : db.pharmacySupplierCredit;
+    const dateBasis = endpoint === 'purchaseReturns' ? 'createdAt' : 'receivedAt';
+    const from = new Date('2026-09-01T00:00:00.000Z');
+    const to = new Date('2026-09-03T23:59:59.999Z');
+
+    it('returns the real bounded envelope with serializable metadata and source predicates', async () => {
+      source().findMany.mockResolvedValue(
+        ['b', 'a'].map((id) => ({
+          id,
+          createdAt: from,
+          receivedAt: from,
+          lines: [],
+          debitNotes: [],
+          allocations: [],
+        }))
+      );
+      const result = await caller()[endpoint]({
+        branchId: 'branch_a',
+        from,
+        to,
+        page: { limit: 1 },
+      });
+      expect(source().findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: {
+            organizationId: 'org_a',
+            branchId: 'branch_a',
+            [dateBasis]: { gte: from, lte: to },
+          },
+          orderBy: [{ [dateBasis]: 'desc' }, { id: 'desc' }],
+          take: 2,
+        })
+      );
+      expect(result).toMatchObject({
+        rows: [{ id: 'b' }],
+        coverage: 'partial',
+        truncated: true,
+        nextCursor: { at: from, id: 'b' },
+        cap: { limit: 1, max: 100 },
+        snapshot: 'live',
+      });
+      expect(
+        superjson.deserialize(JSON.parse(JSON.stringify(superjson.serialize(result))))
+      ).toEqual(result);
+      expect(db.pharmacyBranch.findFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org_a', id: 'branch_a', active: true },
+        select: { id: true },
+      });
+      expect(mocks.can).toHaveBeenCalledWith(
+        expect.objectContaining({ id: 'user_a' }),
+        'reports:financial',
+        undefined,
+        expect.objectContaining({ db, source: 'TRPC' })
+      );
+      expect(mocks.can.mock.invocationCallOrder[0]).toBeLessThan(
+        db.pharmacyBranch.findFirst.mock.invocationCallOrder[0]!
+      );
+      expect(db.pharmacyBranch.findFirst.mock.invocationCallOrder[0]).toBeLessThan(
+        source().findMany.mock.invocationCallOrder[0]!
+      );
+    });
+
+    it('preserves legacy unpaginated array calls', async () => {
+      const result = await caller()[endpoint]({ branchId: 'branch_a' });
+      expect(result).toEqual([]);
+      expect(result.map((row) => row.id)).toEqual([]);
+      expect(source().findMany.mock.lastCall![0]).not.toHaveProperty('take');
+    });
+
+    it.each(['permission', 'branch', 'module', 'actor'])(
+      'denies %s before source reads for both modes',
+      async (reason) => {
+        if (reason === 'permission') mocks.can.mockResolvedValue(false);
+        if (reason === 'branch') db.pharmacyBranch.findFirst.mockResolvedValue(null);
+        const reader = caller(
+          reason === 'actor' ? '' : 'user_a',
+          reason === 'module' ? [] : ['pharmacy-procurement']
+        );
+        for (const page of [undefined, { limit: 5 }]) {
+          await expect(reader[endpoint]({ branchId: 'branch_a', page })).rejects.toMatchObject({
+            code: reason === 'actor' ? 'UNAUTHORIZED' : 'FORBIDDEN',
+          });
+        }
+        expect(source().findMany).not.toHaveBeenCalled();
+        if (reason !== 'branch') expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each([
+      { organizationId: 'org_other' },
+      { branchId: '' },
+      { from: to, to: from },
+      { from: new Date('invalid') },
+      { page: { limit: 101 } },
+      { page: { after: { at: from, id: '' } } },
+      { asOf: from },
+    ])(
+      'rejects malformed, injected or historical inputs before financial reads: %j',
+      async (input) => {
+        await expect(
+          caller()[endpoint]({ branchId: 'branch_a', ...input } as never)
+        ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+        expect(source().findMany).not.toHaveBeenCalled();
+        expect(db.pharmacyBranch.findFirst).not.toHaveBeenCalled();
+      }
+    );
+  }
+);
 
 describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => {
   it('refuses an order for an unauthorized supplier', async () => {

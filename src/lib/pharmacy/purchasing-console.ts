@@ -19,6 +19,7 @@
  *   rather than typing either.
  */
 
+import { z } from 'zod';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
 import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
@@ -571,14 +572,87 @@ export function returnWindowState(returnWindowEndsAt: Date, at: Date): ReturnWin
   return days <= 7 ? 'CLOSING' : 'OPEN';
 }
 
-export async function listPurchaseReturns(
-  db: ScopedDb,
-  scope: BranchScope,
-  options: { at?: Date } = {}
-) {
-  const at = options.at ?? new Date();
+/** Inclusive source dates; page omission preserves the existing array contract. */
+export const purchasingReadBoundsSchema = z
+  .object({
+    from: z.date().optional(),
+    to: z.date().optional(),
+    page: z
+      .object({
+        limit: z.number().int().min(1).max(100).default(50),
+        after: z
+          .object({ at: z.date(), id: z.string().trim().min(1).max(128) })
+          .strict()
+          .optional(),
+      })
+      .strict()
+      .optional(),
+  })
+  .strict()
+  .refine(({ from, to }) => !from || !to || from <= to, {
+    message: 'From must be on or before To.',
+    path: ['to'],
+  });
+
+export type PurchasingReadBounds = z.input<typeof purchasingReadBoundsSchema>;
+export type PurchasingReadCursor = { at: Date; id: string };
+export type PurchasingReadPage<T> = {
+  rows: T[];
+  /** Observation time only: dates filter documents, never reconstruct allocation history. */
+  observedAt: Date;
+  coverage: 'complete' | 'partial';
+  cap: { limit: number; max: 100 };
+  truncated: boolean;
+  nextCursor: PurchasingReadCursor | null;
+  bounds: { from: Date | null; to: Date | null };
+  dateBasis: 'createdAt' | 'receivedAt';
+  snapshot: 'live';
+};
+type ReadBounds = z.output<typeof purchasingReadBoundsSchema>;
+type PagedBounds = PurchasingReadBounds & { page: NonNullable<PurchasingReadBounds['page']> };
+type LegacyBounds = PurchasingReadBounds & { page?: undefined };
+
+function readDateBounds(options: ReadBounds) {
+  return options.from || options.to ? { gte: options.from, lte: options.to } : undefined;
+}
+
+function readPage<T>(
+  rows: T[],
+  options: ReadBounds,
+  dateBasis: PurchasingReadPage<T>['dateBasis'],
+  cursor: (row: T) => PurchasingReadCursor
+): T[] | PurchasingReadPage<T> {
+  if (!options.page) return rows;
+  const { limit, after } = options.page;
+  const truncated = rows.length > limit;
+  const selected = rows.slice(0, limit);
+  return {
+    rows: selected,
+    observedAt: new Date(),
+    // A terminal later page does not include the earlier pages. No total/count query is implied.
+    coverage: !after && !truncated ? 'complete' : 'partial',
+    cap: { limit, max: 100 },
+    truncated,
+    nextCursor: truncated ? cursor(selected[selected.length - 1]!) : null,
+    bounds: { from: options.from ?? null, to: options.to ?? null },
+    dateBasis,
+    snapshot: 'live',
+  };
+}
+
+async function purchaseReturnRows(db: ScopedDb, scope: BranchScope, options: ReadBounds, at: Date) {
+  const after = options.page?.after;
   const returns = await db.pharmacyPurchaseReturn.findMany({
-    where: { organizationId: scope.organizationId, branchId: scope.branchId },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      createdAt: readDateBounds(options),
+      // Keyset predicates need no cursor lookup, including for foreign/deleted cursor IDs.
+      ...(after
+        ? { OR: [{ createdAt: { lt: after.at } }, { createdAt: after.at, id: { lt: after.id } }] }
+        : {}),
+    },
+    ...(options.page ? { take: options.page.limit + 1 } : {}),
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     include: {
       supplier: { select: { id: true, name: true } },
@@ -633,7 +707,33 @@ export async function listPurchaseReturns(
   }));
 }
 
-export type PurchaseReturnDetail = Awaited<ReturnType<typeof listPurchaseReturns>>[number];
+export type PurchaseReturnDetail = Awaited<ReturnType<typeof purchaseReturnRows>>[number];
+
+export function listPurchaseReturns(
+  db: ScopedDb,
+  scope: BranchScope,
+  options: PagedBounds & { at?: Date }
+): Promise<PurchasingReadPage<PurchaseReturnDetail>>;
+export function listPurchaseReturns(
+  db: ScopedDb,
+  scope: BranchScope,
+  options?: LegacyBounds & { at?: Date }
+): Promise<PurchaseReturnDetail[]>;
+export function listPurchaseReturns(
+  db: ScopedDb,
+  scope: BranchScope,
+  options: PurchasingReadBounds & { at?: Date }
+): Promise<PurchaseReturnDetail[] | PurchasingReadPage<PurchaseReturnDetail>>;
+export async function listPurchaseReturns(
+  db: ScopedDb,
+  scope: BranchScope,
+  options: PurchasingReadBounds & { at?: Date } = {}
+) {
+  const { at, ...bounds } = options;
+  const parsed = purchasingReadBoundsSchema.parse(bounds);
+  const rows = await purchaseReturnRows(db, scope, parsed, at ?? new Date());
+  return readPage(rows, parsed, 'createdAt', (row) => ({ at: row.createdAt, id: row.id }));
+}
 
 /**
  * PUR-06 — the lots a return can actually be raised against: on hand, in this
@@ -732,13 +832,48 @@ export async function resolveScan(
   return { kind: 'unresolved', label: term };
 }
 
-export async function listSupplierCredits(db: ScopedDb, scope: BranchScope) {
+async function supplierCreditRows(db: ScopedDb, scope: BranchScope, options: ReadBounds) {
+  const after = options.page?.after;
   return db.pharmacySupplierCredit.findMany({
-    where: { organizationId: scope.organizationId, branchId: scope.branchId },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      receivedAt: readDateBounds(options),
+      ...(after
+        ? { OR: [{ receivedAt: { lt: after.at } }, { receivedAt: after.at, id: { lt: after.id } }] }
+        : {}),
+    },
+    ...(options.page ? { take: options.page.limit + 1 } : {}),
     orderBy: [{ receivedAt: 'desc' }, { id: 'desc' }],
     include: {
       supplier: { select: { id: true, name: true } },
       allocations: true,
     },
   });
+}
+
+export type SupplierCreditDetail = Awaited<ReturnType<typeof supplierCreditRows>>[number];
+export function listSupplierCredits(
+  db: ScopedDb,
+  scope: BranchScope,
+  options: PagedBounds
+): Promise<PurchasingReadPage<SupplierCreditDetail>>;
+export function listSupplierCredits(
+  db: ScopedDb,
+  scope: BranchScope,
+  options?: LegacyBounds
+): Promise<SupplierCreditDetail[]>;
+export function listSupplierCredits(
+  db: ScopedDb,
+  scope: BranchScope,
+  options: PurchasingReadBounds
+): Promise<SupplierCreditDetail[] | PurchasingReadPage<SupplierCreditDetail>>;
+export async function listSupplierCredits(
+  db: ScopedDb,
+  scope: BranchScope,
+  options: PurchasingReadBounds = {}
+) {
+  const parsed = purchasingReadBoundsSchema.parse(options);
+  const rows = await supplierCreditRows(db, scope, parsed);
+  return readPage(rows, parsed, 'receivedAt', (row) => ({ at: row.receivedAt, id: row.id }));
 }
