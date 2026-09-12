@@ -9,12 +9,18 @@ const mocks = vi.hoisted(() => ({
   settingUpsert: vi.fn(),
   transaction: vi.fn(),
   comparison: vi.fn(),
+  valuation: vi.fn(),
+  margin: vi.fn(),
+  leakage: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/finance-reports', async () => ({
   ...(await vi.importActual<typeof import('@/lib/pharmacy/finance-reports')>(
     '@/lib/pharmacy/finance-reports'
   )),
   grossMarginComparison: mocks.comparison,
+  perpetualValuation: mocks.valuation,
+  grossMargin: mocks.margin,
+  leakageReport: mocks.leakage,
 }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -36,7 +42,7 @@ vi.mock('@/server/audit', () => ({
 import type { TRPCContext } from '../trpc';
 import { pharmacyFinanceRouter } from './pharmacy-finance';
 
-function caller(role = 'ADMIN') {
+function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
   return pharmacyFinanceRouter.createCaller({
     db: {
       $transaction: mocks.transaction,
@@ -61,6 +67,7 @@ function caller(role = 'ADMIN') {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
+    ...context,
   } as unknown as TRPCContext);
 }
 
@@ -73,6 +80,245 @@ beforeEach(() => {
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
   mocks.transaction.mockImplementation(async (callback) => callback({ ledger: true }));
   mocks.comparison.mockResolvedValue({ differenceMinor: 42 });
+  mocks.valuation.mockResolvedValue([
+    {
+      branchId: 'branch_1',
+      lotId: 'lot_1',
+      locationId: null,
+      medicineId: null,
+      manufacturingBatchId: null,
+      unitCostMinor: null,
+      valueMinor: 12345,
+    },
+  ]);
+  mocks.margin.mockResolvedValue([
+    { key: null, revenueMinor: -100, discountMinor: -10, cogsMinor: -60, grossMarginMinor: -30 },
+  ]);
+  mocks.leakage.mockResolvedValue([
+    {
+      branchId: 'branch_1',
+      medicineId: null,
+      discountMinor: 10,
+      writeOffMinor: 20,
+      shrinkageMinor: -40,
+      totalMinor: -10,
+    },
+  ]);
+});
+
+type FinanceCaller = ReturnType<typeof caller>;
+const ledgerCases = [
+  {
+    name: 'perpetualValuation',
+    reader: mocks.valuation,
+    input: { branchId: input.branchId, at: input.to },
+    expectedReaderInput: new Date(input.to),
+    invoke: (api: FinanceCaller, value: unknown) =>
+      api.perpetualValuation(value as Parameters<FinanceCaller['perpetualValuation']>[0]),
+    invalid: [
+      { at: '2026-09-03' },
+      { at: '2026-02-30T00:00:00Z' },
+      { at: '2026-09-03T00:00:00' },
+      { at: '9999-01-01T00:00:00Z' },
+      { at: null },
+    ],
+  },
+  {
+    name: 'grossMargin',
+    reader: mocks.margin,
+    input: { ...input, by: 'branch' },
+    expectedReaderInput: { from: new Date(input.from), to: new Date(input.to), by: 'branch' },
+    invoke: (api: FinanceCaller, value: unknown) =>
+      api.grossMargin(value as Parameters<FinanceCaller['grossMargin']>[0]),
+    invalid: [
+      { from: '2026-09-01' },
+      { to: input.from },
+      { to: '2026-08-31T00:00:00Z' },
+      { to: '2026-12-02T00:00:00.001Z' },
+      { by: 'arbitrary_sql' },
+      { by: undefined },
+    ],
+  },
+  {
+    name: 'leakageReport',
+    reader: mocks.leakage,
+    input,
+    expectedReaderInput: { from: new Date(input.from), to: new Date(input.to) },
+    invoke: (api: FinanceCaller, value: unknown) =>
+      api.leakageReport(value as Parameters<FinanceCaller['leakageReport']>[0]),
+    invalid: [
+      { from: '2026-09-01' },
+      { to: input.from },
+      { to: '2026-08-31T00:00:00Z' },
+      { to: '2026-12-02T00:00:00.001Z' },
+      { to: '2026-02-30T00:00:00Z' },
+    ],
+  },
+];
+
+describe.each(ledgerCases)(
+  '$name ledger boundary',
+  ({ reader, input: valid, invoke, invalid, expectedReaderInput }) => {
+    it('delegates once with server organization, active branch and exact dates; preserves raw rows', async () => {
+      const result = await invoke(caller(), valid);
+      expect(reader).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({ pharmacyBranch: expect.any(Object) }),
+        { organizationId: 'org_1', branchId: 'branch_1' },
+        expectedReaderInput
+      );
+      expect(mocks.branchFindFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org_1', id: 'branch_1', active: true },
+        select: { id: true },
+      });
+      expect(result.rows).toBe(await reader.mock.results[0].value);
+      expect(result).toMatchObject({
+        scope: { organizationId: 'org_1', branchId: 'branch_1' },
+        timezone: 'UTC',
+        moneyUnit: 'integer_minor',
+        currency: null,
+        currencyStatus: 'not_recorded_by_ledger_reader',
+        definition: expect.any(String),
+        source: 'finance_journal_lines',
+        coverage: {
+          completeness: 'unknown',
+          costCoverage: 'unknown',
+          refunds: 'included_only_when_posted_as_reversals',
+        },
+        freshness: { retrievedAt: expect.any(Date), latestPostingAt: null },
+        period:
+          'at' in valid && typeof valid.at === 'string'
+            ? { at: new Date(valid.at), bounds: 'through_inclusive' }
+            : { from: new Date(input.from), to: new Date(input.to), bounds: '[from,to)' },
+      });
+      expect(mocks.can.mock.calls.map((call) => call[1])).toEqual([
+        'admin:access',
+        'reports:operational',
+        'reports:financial',
+      ]);
+    });
+
+    it.each(['admin:access', 'reports:operational', 'reports:financial'])(
+      'denies missing %s before scope reads',
+      async (action) => {
+        mocks.can.mockImplementation(async (_subject, requested) => requested !== action);
+        await expect(invoke(caller(), valid)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+        expect(reader).not.toHaveBeenCalled();
+      }
+    );
+
+    it.each(['EMPLOYEE', 'HR', 'MANAGER'])(
+      'denies %s even with allowed capabilities',
+      async (role) => {
+        await expect(invoke(caller(role), valid)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+        expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+        expect(reader).not.toHaveBeenCalled();
+      }
+    );
+
+    it('denies unauthenticated requests', async () => {
+      await expect(invoke(caller('ADMIN', { session: null }), valid)).rejects.toMatchObject({
+        code: 'UNAUTHORIZED',
+      });
+      expect(reader).not.toHaveBeenCalled();
+    });
+
+    it('denies missing licensed reports', async () => {
+      vi.mocked(hasModule).mockReturnValue(false);
+      await expect(invoke(caller(), valid)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+      expect(reader).not.toHaveBeenCalled();
+    });
+
+    it('denies mismatched organization context', async () => {
+      await expect(
+        invoke(
+          caller('ADMIN', { organization: { id: 'foreign_org' } as TRPCContext['organization'] }),
+          valid
+        )
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.branchFindFirst).not.toHaveBeenCalled();
+      expect(reader).not.toHaveBeenCalled();
+    });
+
+    it('denies foreign, inactive or absent branch', async () => {
+      mocks.branchFindFirst.mockResolvedValue(null);
+      await expect(invoke(caller(), valid)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(reader).not.toHaveBeenCalled();
+    });
+
+    it.each([
+      ...invalid,
+      { branchId: '' },
+      { branchId: 'x'.repeat(129) },
+      { organizationId: 'foreign_org' },
+    ])('refuses invalid input %j before ledger access', async (change) => {
+      await expect(invoke(caller(), { ...valid, ...change })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(reader).not.toHaveBeenCalled();
+    });
+
+    it('keeps empty coverage unknown', async () => {
+      reader.mockResolvedValue([]);
+      const result = await invoke(caller(), valid);
+      expect(result.rows).toEqual([]);
+      expect(result.coverage).toMatchObject({
+        completeness: 'unknown',
+        emptyRows: 'no_matching_postings_not_proof_of_zero_activity',
+      });
+    });
+
+    it('propagates reader failures without fallback results or writes', async () => {
+      reader.mockRejectedValue(new Error('ledger unavailable'));
+      await expect(invoke(caller(), valid)).rejects.toThrow('ledger unavailable');
+      expect(mocks.transaction).not.toHaveBeenCalled();
+    });
+  }
+);
+
+describe('ledger date and dimension delegation', () => {
+  it.each(['line', 'batch', 'product', 'branch'] as const)(
+    'accepts margin dimension %s and exact 92-day boundary',
+    async (by) => {
+      const result = await caller().grossMargin({ ...input, to: '2026-12-02T00:00:00Z', by });
+      expect(result.by).toBe(by);
+      expect(mocks.margin.mock.calls[0][2]).toEqual({
+        from: new Date(input.from),
+        to: new Date('2026-12-02T00:00:00Z'),
+        by,
+      });
+    }
+  );
+
+  it('normalizes offset instants without changing elapsed period bounds', async () => {
+    await caller().leakageReport({
+      ...input,
+      from: '2026-09-01T05:00:00+05:00',
+      to: '2026-12-02T05:00:00+05:00',
+    });
+    expect(mocks.leakage.mock.calls[0][2]).toEqual({
+      from: new Date(input.from),
+      to: new Date('2026-12-02T00:00:00Z'),
+    });
+  });
+
+  it('preserves historic valuation instead of substituting current time', async () => {
+    await caller().perpetualValuation({ branchId: 'branch_1', at: '2020-01-01T05:00:00+05:00' });
+    expect(mocks.valuation.mock.calls[0][2]).toEqual(new Date('2020-01-01T00:00:00Z'));
+  });
+
+  it('keeps simultaneous branch requests isolated', async () => {
+    mocks.branchFindFirst.mockImplementation(async ({ where }) => ({ id: where.id }));
+    await Promise.all([
+      caller().grossMargin({ ...input, by: 'branch' }),
+      caller().grossMargin({ ...input, branchId: 'branch_2', by: 'product' }),
+    ]);
+    expect(mocks.margin.mock.calls.map((call) => [call[1], call[2].by])).toEqual([
+      [{ organizationId: 'org_1', branchId: 'branch_1' }, 'branch'],
+      [{ organizationId: 'org_1', branchId: 'branch_2' }, 'product'],
+    ]);
+  });
 });
 describe('finance comparison boundary', () => {
   it('requires ADMIN plus operational and financial capability', async () => {

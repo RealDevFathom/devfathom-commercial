@@ -2,7 +2,13 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
-import { grossMarginComparison, marginComparisonPeriods } from '@/lib/pharmacy/finance-reports';
+import {
+  grossMargin,
+  grossMarginComparison,
+  leakageReport,
+  marginComparisonPeriods,
+  perpetualValuation,
+} from '@/lib/pharmacy/finance-reports';
 import {
   closeAccountingPeriod,
   createSettlementBatch,
@@ -19,6 +25,80 @@ import { adminProcedure, router, type TRPCContext } from '../trpc';
 const id = z.string().trim().min(1).max(128);
 const moneyMinor = z.number().int().positive().max(999_999_999);
 const at = z.coerce.date();
+
+const reportInstant = z.iso.datetime({ offset: true });
+const reportPeriod = z
+  .object({ branchId: id, from: reportInstant, to: reportInstant })
+  .strict()
+  .refine(
+    ({ from, to }) => {
+      const duration = new Date(to).getTime() - new Date(from).getTime();
+      return duration > 0 && duration <= 92 * 86_400_000;
+    },
+    { message: 'Choose a valid period of at most 92 days.' }
+  );
+
+const ledgerReportProcedure = adminProcedure
+  .input(z.object({ branchId: id }))
+  .use(async ({ ctx, input, next }) => {
+    if (ctx.session.user.role !== 'ADMIN' || !hasModule(ctx.entitlements, 'pharmacy-reports')) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Owner financial reports access is required.',
+      });
+    }
+    for (const action of ['reports:operational', 'reports:financial'] as const) {
+      if (
+        !(await can(subjectFromSession(ctx.session.user), action, undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }))
+      ) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'Financial report permission is required.',
+        });
+      }
+    }
+    const organizationId = ctx.entitlements.organizationId;
+    if (!organizationId || organizationId !== ctx.organization?.id) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Organization is outside your report scope.',
+      });
+    }
+    const branch = await ctx.db.pharmacyBranch.findFirst({
+      where: { organizationId, id: input.branchId, active: true },
+      select: { id: true },
+    });
+    if (!branch)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+    return next({ ctx: { ...ctx, reportScope: { organizationId, branchId: branch.id } } });
+  });
+
+function ledgerMetadata(
+  reportScope: { organizationId: string; branchId: string },
+  definition: string
+) {
+  return {
+    scope: reportScope,
+    timezone: 'UTC' as const,
+    moneyUnit: 'integer_minor' as const,
+    currency: null,
+    currencyStatus: 'not_recorded_by_ledger_reader' as const,
+    definition,
+    source: 'finance_journal_lines' as const,
+    coverage: {
+      basis: 'posted_entries_only' as const,
+      completeness: 'unknown' as const,
+      costCoverage: 'unknown' as const,
+      refunds: 'included_only_when_posted_as_reversals' as const,
+      emptyRows: 'no_matching_postings_not_proof_of_zero_activity' as const,
+    },
+    freshness: { retrievedAt: new Date(), latestPostingAt: null },
+  };
+}
 
 function txDb(tx: unknown) {
   return tx as ScopedDb;
@@ -49,6 +129,57 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
+  perpetualValuation: ledgerReportProcedure
+    .input(
+      z
+        .object({ branchId: id, at: reportInstant })
+        .strict()
+        .refine(({ at }) => new Date(at).getTime() <= Date.now(), {
+          message: 'Choose a valuation instant no later than now.',
+        })
+    )
+    .query(async ({ ctx, input }) => {
+      const at = new Date(input.at);
+      const rows = await perpetualValuation(ctx.db, ctx.reportScope, at);
+      return {
+        ...ledgerMetadata(
+          ctx.reportScope,
+          'Net posted inventory and inventory-in-transit value by lot/location through the inclusive instant; zero-net lots omitted. Missing unit cost remains unknown.'
+        ),
+        period: { at, bounds: 'through_inclusive' as const },
+        rows,
+      };
+    }),
+
+  grossMargin: ledgerReportProcedure
+    .input(reportPeriod.safeExtend({ by: z.enum(['line', 'batch', 'product', 'branch']) }))
+    .query(async ({ ctx, input }) => {
+      const period = { from: new Date(input.from), to: new Date(input.to) };
+      const rows = await grossMargin(ctx.db, ctx.reportScope, { ...period, by: input.by });
+      return {
+        ...ledgerMetadata(
+          ctx.reportScope,
+          'Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.'
+        ),
+        period: { ...period, bounds: '[from,to)' as const },
+        by: input.by,
+        rows,
+      };
+    }),
+
+  leakageReport: ledgerReportProcedure.input(reportPeriod).query(async ({ ctx, input }) => {
+    const period = { from: new Date(input.from), to: new Date(input.to) };
+    const rows = await leakageReport(ctx.db, ctx.reportScope, period);
+    return {
+      ...ledgerMetadata(
+        ctx.reportScope,
+        'Posted discounts plus write-offs plus signed shrinkage by branch/product; stock found offsets stock lost. This is recorded ledger leakage, not expiry exposure or inferred causation.'
+      ),
+      period: { ...period, bounds: '[from,to)' as const },
+      rows,
+    };
+  }),
+
   marginComparison: adminProcedure
     .input(
       z

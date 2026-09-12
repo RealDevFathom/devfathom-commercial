@@ -92,7 +92,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'expiryValueMinor30',
     'Expiry value · 30 days',
-    'Available on-hand units multiplied by frozen unit cost for lots expiring within 30 days.',
+    'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 30 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory',
@@ -101,7 +101,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'expiryValueMinor60',
     'Expiry value · 60 days',
-    'Available on-hand units multiplied by frozen unit cost for lots expiring within 60 days.',
+    'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 60 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory',
@@ -110,7 +110,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'expiryValueMinor90',
     'Expiry value · 90 days',
-    'Available on-hand units multiplied by frozen unit cost for lots expiring within 90 days.',
+    'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 90 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory',
@@ -119,7 +119,7 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'expiryValueMinor180',
     'Expiry value · 180 days',
-    'Available on-hand units multiplied by frozen unit cost for lots expiring within 180 days.',
+    'On-hand units in AVAILABLE disposition and ACTIVE batches, expiring after read time and before 180 days, multiplied by frozen unit cost.',
     'pharmacy_stock_balances + pharmacy_inventory_lots + pharmacy_manufacturing_batches',
     'selected branches at read time',
     '/pharmacy/inventory',
@@ -247,8 +247,14 @@ export function validatePharmacyReportFilters(filters: PharmacyReportFilters) {
     throw new Error('Report dates must be YYYY-MM-DD.');
   const from = new Date(`${filters.from}T00:00:00.000Z`);
   const to = new Date(`${filters.to}T00:00:00.000Z`);
-  if (Number.isNaN(from.getTime()) || Number.isNaN(to.getTime()) || from > to)
-    throw new Error('The report start date must not be after the end date.');
+  if (
+    Number.isNaN(from.getTime()) ||
+    Number.isNaN(to.getTime()) ||
+    from.toISOString().slice(0, 10) !== filters.from ||
+    to.toISOString().slice(0, 10) !== filters.to
+  )
+    throw new Error('Report dates must be valid calendar dates.');
+  if (from > to) throw new Error('The report start date must not be after the end date.');
   const days = Math.floor((to.getTime() - from.getTime()) / 86_400_000) + 1;
   if (days > MAX_PHARMACY_REPORT_DAYS)
     throw new Error(
@@ -274,12 +280,12 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
         Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor" - l."unitCostMinor" * l."canonicalUnits") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to}),0)::int AS "cashVarianceMinor"`
       ),
       db.$queryRaw<Array<{ open: number; recommended: number }>>(
-        Prisma.sql`SELECT COUNT(*) FILTER (WHERE s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED'))::int AS "open", COUNT(*) FILTER (WHERE a."id" IS NOT NULL)::int AS "recommended" FROM "pharmacy_stock_signals" s LEFT JOIN "pharmacy_stock_signal_actions" a ON a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" WHERE s."branchId" IN (${branches})`
+        Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED')`
       ),
       db.$queryRaw<
         Array<{ d30: number; d60: number; d90: number; d180: number; quarantine: number }>
       >(
-        Prisma.sql`SELECT COALESCE(SUM(CASE WHEN b."expiresAt"<CURRENT_TIMESTAMP+interval '30 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d30", COALESCE(SUM(CASE WHEN b."expiresAt"<CURRENT_TIMESTAMP+interval '60 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d60", COALESCE(SUM(CASE WHEN b."expiresAt"<CURRENT_TIMESTAMP+interval '90 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d90", COALESCE(SUM(CASE WHEN b."expiresAt"<CURRENT_TIMESTAMP+interval '180 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d180", COALESCE(SUM(CASE WHEN bal."disposition"='QUARANTINE' OR b."state"='QUARANTINED' THEN bal."onHandUnits" ELSE 0 END),0)::int AS "quarantine" FROM "pharmacy_stock_balances" bal JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=bal."organizationId" AND lot."branchId"=bal."branchId" AND lot."id"=bal."inventoryLotId" JOIN "pharmacy_manufacturing_batches" b ON b."organizationId"=lot."organizationId" AND b."id"=lot."manufacturingBatchId" WHERE bal."branchId" IN (${branches}) AND bal."onHandUnits">0 AND (bal."disposition"='AVAILABLE' OR bal."disposition"='QUARANTINE')`
+        Prisma.sql`SELECT COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '30 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d30", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '60 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d60", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '90 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d90", COALESCE(SUM(CASE WHEN bal."disposition"='AVAILABLE' AND b."state"='ACTIVE' AND b."expiresAt">CURRENT_TIMESTAMP AND b."expiresAt"<CURRENT_TIMESTAMP+interval '180 days' THEN bal."onHandUnits"*lot."unitCostMinor" ELSE 0 END),0)::int AS "d180", COALESCE(SUM(CASE WHEN bal."disposition"='QUARANTINE' OR b."state"='QUARANTINED' THEN bal."onHandUnits" ELSE 0 END),0)::int AS "quarantine" FROM "pharmacy_stock_balances" bal JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=bal."organizationId" AND lot."branchId"=bal."branchId" AND lot."id"=bal."inventoryLotId" JOIN "pharmacy_manufacturing_batches" b ON b."organizationId"=lot."organizationId" AND b."id"=lot."manufacturingBatchId" WHERE bal."branchId" IN (${branches}) AND bal."onHandUnits">0 AND (bal."disposition"='AVAILABLE' OR bal."disposition"='QUARANTINE')`
       ),
       db.pharmacyRecallNotice.count({ where: { status: 'OPEN' } }),
       db.pharmacySupplierClaim.count({
@@ -313,6 +319,9 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
   const e = expiry[0] ?? { d30: 0, d60: 0, d90: 0, d180: 0, quarantine: 0 };
   return {
     filters,
+    metricScopes: {
+      safetyQueue: 'organization' as const,
+    },
     freshness: {
       status: 'CURRENT' as const,
       asOf: new Date().toISOString(),
