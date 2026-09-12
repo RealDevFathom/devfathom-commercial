@@ -1,6 +1,8 @@
 import { describe, expect, it, vi } from 'vitest';
 
 import type { AuthzDb } from '@/lib/authz';
+import { isAdmin } from '@/lib/authz';
+import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
 import { can, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
@@ -32,6 +34,72 @@ const employee = {
   department: 'ENGINEERING',
   status: 'ACTIVE',
 };
+
+describe('opt-in pharmacy Owner / Operator access', () => {
+  const grantedActions = [
+    'reports:operational',
+    'reports:financial',
+    'pharmacy:orders',
+    'pharmacy:dispense',
+    'pharmacy:catalogue-review',
+    'pharmacy:safety',
+  ] as const satisfies readonly Action[];
+  const proprietor = { ...employee, role: 'ADMIN' };
+  const permissionsFor = (key: string): Permission[] =>
+    roleTemplatesForVertical('PHARMACY')
+      .find((role) => role.key === key)!
+      .capabilities.map((capability) => ({ capability, effect: 'ALLOW' }));
+
+  it.each(grantedActions)('grants %s to the explicitly assigned proprietor', async (action) => {
+    await expect(
+      can(proprietor, action, undefined, {
+        db: authorizationDb({ rolePermissions: permissionsFor('owner-operator') }),
+      })
+    ).resolves.toBe(true);
+  });
+
+  it.each(['admin:access', 'finance:read', 'team:setRole'] as const)(
+    'requires tenant ADMIN alongside the template for %s',
+    async (action) => {
+      const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
+      expect(isAdmin(proprietor.role)).toBe(true);
+      expect(isAdmin(employee.role)).toBe(false);
+      await expect(can(proprietor, action, undefined, { db })).resolves.toBe(true);
+      await expect(can(employee, action, undefined, { db })).resolves.toBe(false);
+    }
+  );
+
+  it.each(grantedActions)('keeps user DENY effective for %s', async (action) => {
+    await expect(
+      can(proprietor, action, undefined, {
+        db: authorizationDb({
+          rolePermissions: permissionsFor('owner-operator'),
+          overrides: [{ capability: action, effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+
+  it('leaves existing owners without new clinical or report grants', async () => {
+    const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
+    for (const action of grantedActions) {
+      await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
+        action === 'pharmacy:orders'
+      );
+    }
+  });
+
+  it('does not grant unrelated capabilities through wildcard or platform authority', async () => {
+    const db = authorizationDb({ rolePermissions: permissionsFor('owner-operator') });
+    expect(proprietor.role).toBe('ADMIN');
+    expect(permissionsFor('owner-operator').some((rule) => rule.capability.includes('*'))).toBe(
+      false
+    );
+    for (const action of ['restaurant:configure', 'devices:manage', 'workforce:rates'] as const) {
+      await expect(can(proprietor, action, undefined, { db })).resolves.toBe(false);
+    }
+  });
+});
 
 describe('custom ABAC decisions', () => {
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {

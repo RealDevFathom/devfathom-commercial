@@ -356,6 +356,9 @@ describe('organization.create vertical + package compatibility', () => {
   // PREMISES_AND_LICENCES gates could never pass without a manual database write.
   // -------------------------------------------------------------------------
   it('provisions a PHARMACY organization: its own branch aggregate and role templates', async () => {
+    mocks.roleCreate.mockImplementation(async ({ data }: { data: { key: string } }) => ({
+      id: `role_${data.key}`,
+    }));
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_p',
       active: true,
@@ -383,8 +386,7 @@ describe('organization.create vertical + package compatibility', () => {
     });
     expect(mocks.branchCreate).not.toHaveBeenCalled();
     expect(mocks.assignmentCreate).not.toHaveBeenCalled();
-    // Bootstrap admin role + every pharmacy role template the readiness gate
-    // requires, asserted against the catalog rather than a copied list.
+    // Bootstrap admin role + every pharmacy template, including the optional one.
     const createdRoleKeys = mocks.roleCreate.mock.calls.map(
       (call) => (call[0] as { data: { key: string } }).data.key
     );
@@ -392,6 +394,29 @@ describe('organization.create vertical + package compatibility', () => {
     for (const template of roleTemplatesForVertical('PHARMACY')) {
       expect(createdRoleKeys).toContain(template.key);
     }
+    // Provisioning makes the opt-in role available; it never assigns it by default.
+    expect(mocks.userCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.userCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        role: 'ADMIN',
+        organizationRoleId: 'role_admin',
+      }),
+    });
+    expect(mocks.roleCreate).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        key: 'owner-operator',
+        permissions: {
+          create: [
+            'reports:operational',
+            'reports:financial',
+            'pharmacy:orders',
+            'pharmacy:dispense',
+            'pharmacy:catalogue-review',
+            'pharmacy:safety',
+          ].map((capability) => ({ organizationId: 'org_new', capability, effect: 'ALLOW' })),
+        },
+      }),
+    });
     // No restaurant template leaked into a pharmacy tenant.
     for (const template of RESTAURANT_ROLE_TEMPLATES) {
       if (roleTemplatesForVertical('PHARMACY').some((one) => one.key === template.key)) continue;
@@ -1054,7 +1079,8 @@ function noReadinessEvidence() {
 
 /** Backing data present for all six evidence-backed gates. */
 function allReadinessEvidence() {
-  mocks.roleCount.mockResolvedValue(roleTemplatesForVertical('PHARMACY').length);
+  // Standard organizations need only the original eight pharmacy roles.
+  mocks.roleCount.mockResolvedValue(8);
   mocks.publicationEntryCount.mockResolvedValue(1);
   mocks.inventoryLotCount.mockResolvedValue(1);
   mocks.supplierCount.mockResolvedValue(1);

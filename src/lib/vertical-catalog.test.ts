@@ -116,6 +116,7 @@ describe('pharmacy registry (PLAT-01)', () => {
     ]);
     expect(PHARMACY_ROLE_TEMPLATES.map((role) => role.key)).toEqual([
       'owner',
+      'owner-operator',
       'pharmacist',
       'manager',
       'cashier',
@@ -438,6 +439,56 @@ describe('M4-L1 capability reconciliation (additive-only)', () => {
     // A cashier takes orders but does not operate the kitchen; kitchen staff the reverse.
     expect(roleFor('cashier').capabilities).not.toContain('kitchen:operate');
     expect(roleFor('kitchen').capabilities).not.toContain('orders:take');
+  });
+});
+
+describe('optional pharmacy Owner / Operator', () => {
+  it('offers exactly six explicit grants accepted by the pharmacy capability catalog', () => {
+    const templates = roleTemplatesForVertical('PHARMACY').filter(
+      (role) => role.key === 'owner-operator'
+    );
+    expect(templates).toEqual([
+      {
+        key: 'owner-operator',
+        name: 'Owner / Operator',
+        isSystem: true,
+        capabilities: [
+          'reports:operational',
+          'reports:financial',
+          'pharmacy:orders',
+          'pharmacy:dispense',
+          'pharmacy:catalogue-review',
+          'pharmacy:safety',
+        ],
+      },
+    ]);
+    for (const capability of templates[0]!.capabilities) {
+      expect(PHARMACY_CAPABILITIES).toContain(capability);
+      expect(capability).toMatch(/^(reports|pharmacy):[a-z-]+$/);
+    }
+    for (const vertical of ['AGENCY', 'RESTAURANT'] as const) {
+      expect(roleTemplatesForVertical(vertical).map((role) => role.key)).not.toContain(
+        'owner-operator'
+      );
+    }
+  });
+
+  it('preserves all eight standard roles and their existing grants', () => {
+    expect(
+      PHARMACY_ROLE_TEMPLATES.filter((role) => role.key !== 'owner-operator').map((role) => ({
+        key: role.key,
+        capabilities: role.capabilities,
+      }))
+    ).toEqual([
+      { key: 'owner', capabilities: ['pharmacy.*', 'pharmacy:orders'] },
+      { key: 'pharmacist', capabilities: ['pharmacy.dispense', 'pharmacy:catalogue-review'] },
+      { key: 'manager', capabilities: ['pharmacy.manage', 'pharmacy:orders'] },
+      { key: 'cashier', capabilities: ['pharmacy.counter', 'pharmacy:orders'] },
+      { key: 'procurement', capabilities: ['pharmacy.procurement'] },
+      { key: 'inventory', capabilities: ['pharmacy.inventory'] },
+      { key: 'finance', capabilities: ['pharmacy.finance'] },
+      { key: 'auditor', capabilities: ['pharmacy.audit'] },
+    ]);
   });
 });
 

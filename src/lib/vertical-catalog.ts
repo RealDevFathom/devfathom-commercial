@@ -651,6 +651,10 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy.finance',
   'pharmacy.audit',
   'pharmacy:orders',
+  'reports:operational',
+  'reports:financial',
+  'pharmacy:dispense',
+  'pharmacy:safety',
 ];
 
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
@@ -659,6 +663,23 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     name: 'Owner',
     isSystem: true,
     capabilities: ['pharmacy.*', 'pharmacy:orders'],
+  },
+  {
+    // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
+    // for business/cashier guards that require literal ADMIN; EMPLOYEE plus this
+    // template is not equivalent. Provisioning does not assign it to existing owners.
+    // These grants neither verify clinical qualifications nor permit self-review/signing.
+    key: 'owner-operator',
+    name: 'Owner / Operator',
+    isSystem: true,
+    capabilities: [
+      'reports:operational',
+      'reports:financial',
+      'pharmacy:orders',
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+      'pharmacy:safety',
+    ],
   },
   {
     key: 'pharmacist',

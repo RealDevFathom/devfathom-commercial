@@ -240,7 +240,10 @@ export async function evaluatePharmacyReadiness(
   organizationId: string,
   at: Date = new Date()
 ): Promise<PharmacyReadiness> {
-  const requiredRoleKeys = roleTemplatesForVertical('PHARMACY').map((template) => template.key);
+  // Owner / Operator is opt-in, never an additional activation prerequisite.
+  const requiredRoleKeys = roleTemplatesForVertical('PHARMACY')
+    .filter((template) => template.key !== 'owner-operator')
+    .map((template) => template.key);
 
   const [
     organization,
