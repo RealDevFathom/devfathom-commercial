@@ -1,4 +1,5 @@
-import { describe, expect, it, vi } from 'vitest';
+import { createHash } from 'node:crypto';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
 
@@ -8,6 +9,7 @@ import {
   computePharmacyClose,
   foldExpectedCash,
   PharmacySettlementError,
+  readPharmacyTenderOutcome,
   requireReleaseSafeAdapter,
   saleTotalMinor,
 } from './settlement';
@@ -191,5 +193,272 @@ describe('pharmacy settlement invariants', () => {
     expect(tenderCreate).toHaveBeenCalledTimes(1);
     expect(saleUpdate).toHaveBeenCalledTimes(1);
     expect(db.pharmacySaleEvent.create).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('readPharmacyTenderOutcome', () => {
+  const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };
+  const original = {
+    branchId: 'branch-1',
+    saleId: 'sale-1',
+    deviceId: 'device-1',
+    businessDate: new Date('2026-09-12T14:15:16.123Z'),
+    type: 'CASH' as const,
+    amountMinor: 100,
+    cashReceivedMinor: 150,
+    idempotencyKey: 'attempt-1',
+  };
+  const partial = {
+    tenderId: 'tender-1',
+    settled: false,
+    receiptNumber: null,
+    remainingMinor: 200,
+  };
+  const full = { tenderId: 'tender-1', settled: true, receiptNumber: 41, remainingMinor: 0 };
+  let unexpected: ReturnType<typeof vi.fn>;
+  beforeEach(() => {
+    unexpected = vi.fn(() => {
+      throw new Error('Unexpected database operation');
+    });
+  });
+  afterEach(() => expect(unexpected).not.toHaveBeenCalled());
+
+  function fixture(input: Parameters<typeof readPharmacyTenderOutcome>[2] = original) {
+    const sale = { id: 'sale-1', organizationId: 'org-1', branchId: 'branch-1' };
+    const prior = {
+      organizationId: 'org-1',
+      deviceId: 'device-1',
+      key: 'attempt-1',
+      commandType: 'tender',
+      payloadHash: createHash('sha256').update(JSON.stringify(input)).digest('hex'),
+      resultPayload: partial,
+    };
+    const cash = input.type === 'CASH' ? (input.cashReceivedMinor ?? input.amountMinor) : null;
+    const tender = {
+      id: 'tender-1',
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      saleId: 'sale-1',
+      deviceId: 'device-1',
+      type: input.type,
+      amountMinor: input.amountMinor,
+      businessDate: new Date('2026-09-12T00:00:00.000Z'),
+      cashReceivedMinor: cash,
+      changeGivenMinor: cash === null ? null : cash - input.amountMinor,
+    };
+    const saleRead = vi.fn().mockResolvedValue(sale);
+    const keyRead = vi.fn().mockResolvedValue(prior);
+    const tenderRead = vi.fn().mockResolvedValue(tender);
+    // Any additional model operation, raw SQL, or transaction is observable even if caught.
+    const only = (entries: Record<string, unknown>) =>
+      new Proxy(entries, { get: (target, key) => target[String(key)] ?? unexpected });
+    const db = only({
+      pharmacySale: only({ findFirst: saleRead }),
+      pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
+      pharmacyTender: only({ findFirst: tenderRead }),
+    });
+    return { db, input, sale, prior, tender, saleRead, keyRead, tenderRead };
+  }
+
+  it.each([partial, full])('returns the stored operation result: %j', async (result) => {
+    const f = fixture();
+    f.keyRead.mockResolvedValue({ ...f.prior, resultPayload: result });
+    // The sale may have completed or changed since this attempt; never use its aggregates.
+    f.saleRead.mockResolvedValue({
+      ...f.sale,
+      status: 'COMPLETED',
+      receiptNumber: 99,
+      tenders: [],
+    });
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+      status: 'ACCEPTED',
+      replayUnsafe: true,
+      result,
+    });
+    expect(f.saleRead).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'sale-1', organizationId: 'org-1', branchId: 'branch-1' },
+      select: { id: true, organizationId: true, branchId: true },
+    });
+    expect(f.keyRead.mock.calls[0][0].where).toEqual({
+      organizationId_deviceId_key: {
+        organizationId: 'org-1',
+        deviceId: 'device-1',
+        key: 'attempt-1',
+      },
+    });
+    expect(f.tenderRead.mock.calls[0][0].where).toEqual({
+      id: 'tender-1',
+      organizationId: 'org-1',
+      branchId: 'branch-1',
+      saleId: 'sale-1',
+    });
+    expect(f.saleRead.mock.invocationCallOrder[0]).toBeLessThan(
+      f.keyRead.mock.invocationCallOrder[0]
+    );
+  });
+
+  it.each([
+    { ...original, cashReceivedMinor: undefined },
+    { ...original, type: 'BANK_TRANSFER' as const },
+    { ...original, type: 'CREDIT' as const, cashReceivedMinor: undefined },
+    { ...original, type: 'CARD' as const },
+    { ...original, type: 'WALLET' as const },
+  ])('matches persisted cash semantics for $type / $cashReceivedMinor', async (input) => {
+    const f = fixture(input);
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, input)).toEqual({
+      status: 'ACCEPTED',
+      replayUnsafe: true,
+      result: partial,
+    });
+  });
+
+  it.each([
+    null,
+    { id: 'foreign-sale', organizationId: 'org-1', branchId: 'branch-1' },
+    { id: 'sale-1', organizationId: 'foreign-org', branchId: 'branch-1' },
+    { id: 'sale-1', organizationId: 'org-1', branchId: 'foreign-branch' },
+  ])('does not look up a key for an unavailable or foreign sale: %j', async (sale) => {
+    const f = fixture();
+    f.saleRead.mockResolvedValue(sale);
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+      status: 'UNKNOWN',
+      replayUnsafe: true,
+    });
+    expect(f.keyRead).not.toHaveBeenCalled();
+    expect(f.tenderRead).not.toHaveBeenCalled();
+  });
+
+  it.each(['organizationId', 'branchId'] as const)('binds the authorized %s', async (field) => {
+    const f = fixture();
+    expect(
+      await readPharmacyTenderOutcome(f.db as never, { ...scope, [field]: 'foreign' }, f.input)
+    ).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
+    expect(f.keyRead).not.toHaveBeenCalled();
+  });
+
+  it.each(['organizationId', 'deviceId', 'key', 'commandType', 'payloadHash'] as const)(
+    'never accepts a mismatched key record %s',
+    async (field) => {
+      const f = fixture();
+      f.prior[field] = 'mismatch';
+      expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+        status: 'UNKNOWN',
+        replayUnsafe: true,
+      });
+      expect(f.tenderRead).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { deviceId: 'other-device' },
+    { idempotencyKey: 'other-key' },
+    { type: 'CREDIT' as const },
+    { amountMinor: 101 },
+    { cashReceivedMinor: 151 },
+    { cashReceivedMinor: undefined },
+    { businessDate: new Date('2026-09-12T14:15:16.124Z') },
+    { businessDate: new Date('2026-09-13T00:00:00.000Z') },
+  ])('never accepts a changed original envelope: %j', async (change) => {
+    const f = fixture();
+    expect(
+      await readPharmacyTenderOutcome(f.db as never, scope, { ...f.input, ...change })
+    ).toEqual({ status: 'UNKNOWN', replayUnsafe: true });
+    expect(f.tenderRead).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    undefined,
+    null,
+    {},
+    [],
+    '',
+    0,
+    false,
+    { ...partial, tenderId: '' },
+    { ...partial, tenderId: 1 },
+    { ...partial, settled: 'false' },
+    { ...partial, receiptNumber: 41 },
+    { ...partial, remainingMinor: 0 },
+    { ...partial, remainingMinor: -1 },
+    { ...partial, remainingMinor: 0.5 },
+    { ...partial, remainingMinor: Number.MAX_SAFE_INTEGER + 1 },
+    { ...partial, remainingMinor: null },
+    { ...full, receiptNumber: null },
+    { ...full, receiptNumber: 0 },
+    { ...full, receiptNumber: 1.5 },
+    { ...full, remainingMinor: 1 },
+    { ...partial, providerRef: 'sensitive-unexpected-field' },
+  ])('keeps empty or malformed stored results unknown: %j', async (resultPayload) => {
+    const f = fixture();
+    f.keyRead.mockResolvedValue({ ...f.prior, resultPayload });
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+      status: 'UNKNOWN',
+      replayUnsafe: true,
+    });
+    expect(f.tenderRead).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    null,
+    { id: 'other' },
+    { organizationId: 'other' },
+    { branchId: 'other' },
+    { saleId: 'other' },
+    { deviceId: 'other' },
+    { type: 'CREDIT' },
+    { amountMinor: 99 },
+    { cashReceivedMinor: 149 },
+    { changeGivenMinor: 49 },
+    { businessDate: new Date('2026-09-13T00:00:00.000Z') },
+    { businessDate: new Date('invalid') },
+  ])('requires a matching immutable tender: %j', async (change) => {
+    const f = fixture();
+    f.tenderRead.mockResolvedValue(change === null ? null : { ...f.tender, ...change });
+    expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+      status: 'UNKNOWN',
+      replayUnsafe: true,
+    });
+  });
+
+  it.each(['saleRead', 'keyRead', 'tenderRead'] as const)(
+    'contains %s failures without exposure',
+    async (stage) => {
+      const f = fixture();
+      f[stage].mockRejectedValue(new Error('sensitive database details'));
+      expect(await readPharmacyTenderOutcome(f.db as never, scope, f.input)).toEqual({
+        status: 'UNKNOWN',
+        replayUnsafe: true,
+      });
+    }
+  );
+
+  it.each([{}, { deviceId: 'unknown-device' }, { idempotencyKey: 'unknown-key' }])(
+    'reports absent keys without replay permission: %j',
+    async (change) => {
+      const f = fixture();
+      f.keyRead.mockResolvedValue(null);
+      expect(
+        await readPharmacyTenderOutcome(f.db as never, scope, { ...f.input, ...change })
+      ).toEqual({ status: 'NOT_FOUND', replayUnsafe: true });
+      expect(f.tenderRead).not.toHaveBeenCalled();
+    }
+  );
+
+  it('keeps an invisible attempt unsafe while a concurrent lookup observes its commit', async () => {
+    const f = fixture();
+    let finishInvisibleRead!: (value: null) => void;
+    f.keyRead.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          finishInvisibleRead = resolve;
+        })
+    );
+    const invisible = readPharmacyTenderOutcome(f.db as never, scope, f.input);
+    await Promise.resolve();
+    const committed = await readPharmacyTenderOutcome(f.db as never, scope, f.input);
+    finishInvisibleRead(null);
+    expect(await invisible).toEqual({ status: 'NOT_FOUND', replayUnsafe: true });
+    expect(committed).toEqual({ status: 'ACCEPTED', replayUnsafe: true, result: partial });
+    expect(f.tenderRead).toHaveBeenCalledTimes(1);
   });
 });

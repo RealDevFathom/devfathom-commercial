@@ -48,6 +48,7 @@ import {
   cutPharmacyDailyClose,
   openPharmacyDrawer,
   PharmacySettlementError,
+  readPharmacyTenderOutcome,
   recordPharmacyCashMovement,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
@@ -56,6 +57,19 @@ import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
+// Preserve field order and parsing: settlement hashes JSON.stringify(parsed input).
+const tenderInput = z
+  .object({
+    branchId,
+    saleId: z.string().min(1),
+    deviceId: z.string().min(1),
+    businessDate: z.date(),
+    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT']),
+    amountMinor: z.number().int().positive(),
+    cashReceivedMinor: z.number().int().nonnegative().optional(),
+    idempotencyKey: z.string().trim().min(1).max(160),
+  })
+  .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
 const demandReason = z.enum([
   'STOCKOUT',
@@ -249,30 +263,20 @@ export const pharmacySalesRouter = router({
         cutPharmacyDailyClose(txDb(tx), scopeFor(ctx, input.branchId), input)
       )
     ),
-  tender: protectedProcedure
-    .input(
-      z
-        .object({
-          branchId,
-          saleId: z.string().min(1),
-          deviceId: z.string().min(1),
-          businessDate: z.date(),
-          type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT']),
-          amountMinor: z.number().int().positive(),
-          cashReceivedMinor: z.number().int().nonnegative().optional(),
-          idempotencyKey: z.string().trim().min(1).max(160),
-        })
-        .strict()
-    )
-    .mutation(async ({ ctx, input }) => {
-      try {
-        return await ctx.db.$transaction((tx) =>
-          applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
-        );
-      } catch (error) {
-        fail(error);
-      }
-    }),
+  tenderOutcome: protectedProcedure
+    .input(tenderInput)
+    .query(({ ctx, input }) =>
+      readPharmacyTenderOutcome(ctx.db, scopeFor(ctx, input.branchId), input)
+    ),
+  tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
+    try {
+      return await ctx.db.$transaction((tx) =>
+        applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
+      );
+    } catch (error) {
+      fail(error);
+    }
+  }),
   refundTender: protectedProcedure
     .input(
       z

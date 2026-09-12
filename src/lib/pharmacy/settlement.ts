@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { createHash, randomUUID } from 'node:crypto';
+import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -67,6 +68,123 @@ export function assertPositiveMinor(value: number) {
 
 function hash(value: unknown) {
   return createHash('sha256').update(JSON.stringify(value)).digest('hex');
+}
+
+const tenderResultSchema = z
+  .object({
+    tenderId: z.string().min(1),
+    settled: z.boolean(),
+    receiptNumber: z.number().int().positive().nullable(),
+    remainingMinor: z.number().int().nonnegative(),
+  })
+  .strict()
+  .refine((result) =>
+    result.settled
+      ? result.receiptNumber !== null && result.remainingMinor === 0
+      : result.receiptNumber === null && result.remainingMinor > 0
+  );
+
+export type PharmacyTenderOutcome =
+  | { status: 'ACCEPTED'; replayUnsafe: true; result: z.infer<typeof tenderResultSchema> }
+  | { status: 'NOT_FOUND' | 'UNKNOWN'; replayUnsafe: true };
+
+/** Reads evidence of this exact attempt; absence never authorizes another tender. */
+export async function readPharmacyTenderOutcome(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: Omit<Parameters<typeof applyPharmacyTender>[2], 'adapter'>
+): Promise<PharmacyTenderOutcome> {
+  const unknown = { status: 'UNKNOWN', replayUnsafe: true } as const;
+  try {
+    // Check sale access before even looking up a device/key, including completed sales.
+    const sale = await db.pharmacySale.findFirst({
+      where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+      select: { id: true, organizationId: true, branchId: true },
+    });
+    if (
+      !sale ||
+      sale.id !== input.saleId ||
+      sale.organizationId !== scope.organizationId ||
+      sale.branchId !== scope.branchId
+    )
+      return unknown;
+
+    const prior = await db.pharmacyMoneyIdempotencyKey.findUnique({
+      where: {
+        organizationId_deviceId_key: {
+          organizationId: scope.organizationId,
+          deviceId: input.deviceId,
+          key: input.idempotencyKey,
+        },
+      },
+      select: {
+        organizationId: true,
+        deviceId: true,
+        key: true,
+        commandType: true,
+        payloadHash: true,
+        resultPayload: true,
+      },
+    });
+    // Rolled-back and in-flight attempts can both be invisible here.
+    if (!prior) return { status: 'NOT_FOUND', replayUnsafe: true };
+    if (
+      prior.organizationId !== scope.organizationId ||
+      prior.deviceId !== input.deviceId ||
+      prior.key !== input.idempotencyKey ||
+      prior.commandType !== 'tender' ||
+      prior.payloadHash !== hash(input)
+    )
+      return unknown;
+
+    const parsed = tenderResultSchema.safeParse(prior.resultPayload);
+    if (!parsed.success) return unknown;
+    const result = parsed.data;
+    const tender = await db.pharmacyTender.findFirst({
+      where: {
+        id: result.tenderId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        saleId: input.saleId,
+      },
+      select: {
+        id: true,
+        organizationId: true,
+        branchId: true,
+        saleId: true,
+        deviceId: true,
+        type: true,
+        amountMinor: true,
+        businessDate: true,
+        cashReceivedMinor: true,
+        changeGivenMinor: true,
+      },
+    });
+    const cashReceivedMinor =
+      input.type === 'CASH' ? (input.cashReceivedMinor ?? input.amountMinor) : null;
+    if (
+      !tender ||
+      tender.id !== result.tenderId ||
+      tender.organizationId !== scope.organizationId ||
+      tender.branchId !== scope.branchId ||
+      tender.saleId !== input.saleId ||
+      tender.deviceId !== input.deviceId ||
+      tender.type !== input.type ||
+      tender.amountMinor !== input.amountMinor ||
+      // businessDate is @db.Date; the hash above still binds the original timestamp.
+      tender.businessDate.toISOString().slice(0, 10) !==
+        input.businessDate.toISOString().slice(0, 10) ||
+      tender.cashReceivedMinor !== cashReceivedMinor ||
+      tender.changeGivenMinor !==
+        (cashReceivedMinor === null ? null : cashReceivedMinor - input.amountMinor)
+    )
+      return unknown;
+
+    return { status: 'ACCEPTED', replayUnsafe: true, result };
+  } catch {
+    // This path only reads. A failed read is uncertainty, never proof of rejection.
+    return unknown;
+  }
 }
 
 async function bindIdempotency(

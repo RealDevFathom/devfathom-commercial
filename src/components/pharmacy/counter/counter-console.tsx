@@ -4,6 +4,20 @@ import { browserUuid } from '@/lib/browser-uuid';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
+import { useEntitlements } from '@/components/entitlements-provider';
+import { evaluateSessionUser } from '@/lib/auth/session-state';
+import { isModuleGranted } from '@/lib/module-catalog';
+import {
+  clearTenderAttempt,
+  persistTenderAttempt,
+  readTenderAttempt,
+  tenderAttemptStorageKey,
+  TENDER_STORAGE_MESSAGE,
+  type TenderAttempt,
+  type TenderAttemptScope,
+  type TenderDraft,
+} from './tender-attempt-storage';
 
 import { CounterCartPanel } from './counter-cart';
 import { CounterKeymapLegend } from './counter-keymap-legend';
@@ -11,7 +25,12 @@ import { CounterReceiptView } from './counter-receipt-view';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
-import { CounterTenderPanel, type CounterTenderType } from './counter-tender-panel';
+import {
+  CounterTenderPanel,
+  type CounterTenderType,
+  type CounterTenderResult,
+  type CounterTenderBillState,
+} from './counter-tender-panel';
 import { CounterUnitToggle } from './counter-unit-toggle';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -19,7 +38,7 @@ import { Label } from '@/components/ui/label';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
-import type { CounterSearchRow } from '@/lib/pharmacy/counter';
+import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
 import {
   counterAlertsFor,
   hasBlockingAlert,
@@ -80,6 +99,102 @@ function businessDate(): Date {
  */
 const messageFrom = counterErrorMessage;
 
+function hasValidBill(
+  cart: CounterCart | null | undefined,
+  saleId: string | null
+): cart is CounterCart {
+  return Boolean(
+    saleId &&
+    cart?.saleId === saleId &&
+    Number.isSafeInteger(cart.totals.netMinor) &&
+    cart.totals.netMinor >= 0 &&
+    Number.isSafeInteger(cart.totals.tenderedMinor) &&
+    cart.totals.tenderedMinor >= 0 &&
+    cart.totals.tenderedMinor <= cart.totals.netMinor
+  );
+}
+
+function tenderAcknowledgement(value: unknown): value is {
+  tenderId: string;
+  settled: boolean;
+  remainingMinor: number;
+  receiptNumber: number | null;
+} {
+  if (!value || typeof value !== 'object') return false;
+  return (
+    'tenderId' in value &&
+    typeof value.tenderId === 'string' &&
+    value.tenderId.length > 0 &&
+    'remainingMinor' in value &&
+    typeof value.remainingMinor === 'number' &&
+    Number.isSafeInteger(value.remainingMinor) &&
+    value.remainingMinor >= 0 &&
+    'settled' in value &&
+    typeof value.settled === 'boolean' &&
+    value.settled === (value.remainingMinor === 0) &&
+    'receiptNumber' in value &&
+    (value.settled
+      ? typeof value.receiptNumber === 'number' &&
+        Number.isSafeInteger(value.receiptNumber) &&
+        value.receiptNumber > 0
+      : value.receiptNumber === null)
+  );
+}
+
+function tenderRejected(error: unknown): boolean {
+  // These server refusals roll back the transaction. Transport, timeout and
+  // internal failures cannot prove that no money moved.
+  if (!(error instanceof Error) || !('data' in error)) return false;
+  const data = error.data;
+  return Boolean(
+    data &&
+    typeof data === 'object' &&
+    'code' in data &&
+    ['BAD_REQUEST', 'FORBIDDEN', 'UNAUTHORIZED', 'NOT_FOUND', 'CONFLICT'].includes(
+      String(data.code)
+    )
+  );
+}
+
+const UNKNOWN_TENDER_MESSAGE =
+  'Payment outcome is unknown. The original attempt is saved in this browser. Check payment outcome before taking more money. Refreshing the bill will not retry the payment.';
+
+type ConsoleProps = { initialSaleId?: string | null; initialBranchId?: string };
+
+export function PharmacyCounterConsole(props: ConsoleProps = {}) {
+  const { data: session, status } = useSession();
+  const entitlements = useEntitlements();
+  const user = session?.user;
+  // Remount on account/tenant changes so neither drafts nor an in-flight read's
+  // response can become another operator's recovery UI. Server remains authority.
+  if (
+    status !== 'authenticated' ||
+    !evaluateSessionUser(user).ok ||
+    !user?.id ||
+    !user.organizationId ||
+    user.organizationId !== entitlements.organizationId ||
+    !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
+  ) {
+    return (
+      <SectionCard title="Counter unavailable">
+        <p role="status" className="text-sm text-text-body">
+          {status === 'loading'
+            ? 'Checking counter access…'
+            : 'Sign in with an authorized pharmacy account to open this counter.'}
+        </p>
+      </SectionCard>
+    );
+  }
+  return (
+    <ScopedPharmacyCounterConsole
+      {...props}
+      key={JSON.stringify([user.organizationId, user.id])}
+      organizationId={user.organizationId}
+      accountId={user.id}
+    />
+  );
+}
+
 /**
  * PH-POS counter — POS-01, POS-02, POS-08 and POS-09 in one keyboard-first
  * surface.
@@ -89,13 +204,12 @@ const messageFrom = counterErrorMessage;
  * prescription panel sits beside the cart so an authorization check never
  * navigates away from a half-composed sale.
  */
-export function PharmacyCounterConsole({
+function ScopedPharmacyCounterConsole({
   initialSaleId = null,
   initialBranchId = '',
-}: {
-  initialSaleId?: string | null;
-  initialBranchId?: string;
-} = {}) {
+  organizationId,
+  accountId,
+}: ConsoleProps & { organizationId: string; accountId: string }) {
   const utils = trpc.useUtils();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
@@ -116,6 +230,17 @@ export function PharmacyCounterConsole({
   const [receiptRenders, setReceiptRenders] = useState(0);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
+  const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
+  const [tenderReadRequired, setTenderReadRequired] = useState(false);
+  const [refreshingTenderBill, setRefreshingTenderBill] = useState(false);
+  const tenderInFlight = useRef(false);
+  const [recoveryBranch, setRecoveryBranch] = useState('');
+  const [storageError, setStorageError] = useState(false);
+  const [attempt, setAttempt] = useState<TenderAttempt | null>(null);
+  const attemptRef = useRef<TenderAttempt | null>(null);
+  const [restoredAttempt, setRestoredAttempt] = useState<TenderAttempt | null>(null);
+  const [checkingOutcome, setCheckingOutcome] = useState(false);
+  const outcomeInFlight = useRef(false);
 
   const searchRef = useRef<HTMLInputElement>(null);
   const rxPanelRef = useRef<HTMLDivElement>(null);
@@ -131,6 +256,62 @@ export function PharmacyCounterConsole({
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
   const branchId = selectedBranchId || (branches[0]?.id ?? '');
+  const recoveryScope = useMemo<TenderAttemptScope>(
+    () => ({ organizationId, accountId, branchId }),
+    [organizationId, accountId, branchId]
+  );
+  const branchAuthorized =
+    branchesQuery.isSuccess &&
+    !branchesQuery.isError &&
+    branches.some((branch) => branch.id === branchId);
+
+  useEffect(() => {
+    if (!branchAuthorized) return;
+    const discover = () => {
+      let saved = readTenderAttempt(recoveryScope);
+      // A normal reload has no sale/branch URL. Inspect only keys for branches
+      // returned by this account's authorized query; never enumerate storage.
+      if (
+        saved.status === 'empty' &&
+        !attemptRef.current &&
+        !initialBranchId &&
+        !selectedBranchId
+      ) {
+        for (const branch of branches) {
+          if (branch.id === branchId) continue;
+          const candidate = readTenderAttempt({ ...recoveryScope, branchId: branch.id });
+          if (candidate.status !== 'empty') {
+            saved = candidate;
+            break;
+          }
+        }
+      }
+      setRecoveryBranch(branchId);
+      if (saved.status === 'blocked') {
+        setStorageError(true);
+        return;
+      }
+      // An external deletion never resolves a mounted uncertain payment.
+      if (saved.status === 'empty' && attemptRef.current) return;
+      setStorageError(false);
+      if (saved.status === 'pending') {
+        if (attemptRef.current) return;
+        attemptRef.current = saved.attempt;
+        setAttempt(saved.attempt);
+        setRestoredAttempt(saved.attempt);
+        setSelectedBranchId(saved.attempt.input.branchId);
+        setSaleId(saved.attempt.input.saleId);
+        setTenderOutcome({ status: 'unknown', message: UNKNOWN_TENDER_MESSAGE });
+        setTenderReadRequired(true);
+      }
+    };
+    discover();
+    const onStorage = (event: StorageEvent) => {
+      if (event.key === null || event.key === tenderAttemptStorageKey(recoveryScope)) discover();
+    };
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [branchAuthorized, branchId, branches, initialBranchId, recoveryScope, selectedBranchId]);
 
   const keymapQuery = trpc.pharmacySales.counterKeymap.useQuery(undefined, { staleTime: 300_000 });
   const keymap = keymapQuery.data ?? resolveCounterKeymap({ preset: 'devfathom' });
@@ -149,7 +330,7 @@ export function PharmacyCounterConsole({
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
     { branchId, saleId: saleId ?? '' },
-    { enabled: Boolean(branchId && saleId) }
+    { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
   );
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
@@ -176,7 +357,7 @@ export function PharmacyCounterConsole({
   const createSale = trpc.pharmacySales.create.useMutation();
   const addLine = trpc.pharmacySales.addLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
-  const tender = trpc.pharmacySales.tender.useMutation();
+  const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
   const captureDemand = trpc.pharmacySales.captureDemand.useMutation();
   const declineSubstitute = trpc.pharmacySales.declineSubstitute.useMutation();
@@ -193,6 +374,9 @@ export function PharmacyCounterConsole({
     setReceiptRenders(0);
     setCustomerId(null);
     setRedeemPoints(0);
+    setTenderOutcome(null);
+    setTenderReadRequired(false);
+    setRestoredAttempt(null);
   }, []);
 
   // ── Derived state ─────────────────────────────────────────────────────────
@@ -296,9 +480,120 @@ export function PharmacyCounterConsole({
   }, [cart, patient]);
 
   const blocked = hasBlockingAlert(alerts);
-  const balanceMinor = cart ? cart.totals.netMinor - cart.totals.tenderedMinor : 0;
-  const busy = pending !== null;
+  const currentBill = hasValidBill(cart, saleId);
+  const balanceMinor = currentBill ? cart.totals.netMinor - cart.totals.tenderedMinor : null;
+  const unknownTender = tenderOutcome?.status === 'unknown';
+  const recoveryReady = branchAuthorized && recoveryBranch === branchId && !storageError;
+  const billState: CounterTenderBillState =
+    !saleId || !branchId
+      ? 'idle'
+      : storageError
+        ? 'error'
+        : !recoveryReady || cartQuery.isFetching || cartQuery.isLoading || refreshingTenderBill
+          ? 'loading'
+          : cartQuery.isError || unknownTender
+            ? 'error'
+            : tenderReadRequired || cartQuery.isStale || cartQuery.isPlaceholderData
+              ? 'stale'
+              : !cartQuery.isSuccess || !currentBill || cart.lines.length === 0
+                ? 'unavailable'
+                : cart.status === 'COMPLETED' &&
+                    balanceMinor === 0 &&
+                    Number.isSafeInteger(cart.receiptNumber) &&
+                    (cart.receiptNumber ?? 0) > 0
+                  ? 'settled'
+                  : cart.status === 'OPEN' && balanceMinor !== null && balanceMinor > 0
+                    ? 'ready'
+                    : 'unavailable';
+  const busy =
+    pending !== null ||
+    tenderReadRequired ||
+    unknownTender ||
+    refreshingTenderBill ||
+    !recoveryReady ||
+    attempt !== null ||
+    checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+
+  const refreshTenderBill = useCallback(
+    async (resolution = tenderOutcome?.status) => {
+      if (
+        !branchAuthorized ||
+        !saleId ||
+        tenderInFlight.current ||
+        refreshingTenderBill ||
+        (outcomeInFlight.current && resolution !== 'accepted')
+      )
+        return false;
+      setRefreshingTenderBill(true);
+      try {
+        if (!attemptRef.current) {
+          const saved = readTenderAttempt(recoveryScope);
+          if (saved.status === 'blocked') {
+            setStorageError(true);
+            return false;
+          }
+          if (saved.status === 'pending') {
+            attemptRef.current = saved.attempt;
+            setAttempt(saved.attempt);
+            setRestoredAttempt(saved.attempt);
+            setSaleId(saved.attempt.input.saleId);
+            setTenderOutcome({ status: 'unknown', message: UNKNOWN_TENDER_MESSAGE });
+            setTenderReadRequired(true);
+            return false;
+          }
+          setStorageError(false);
+        }
+        await utils.pharmacySales.counterCart.cancel();
+        // invalidate() alone can resolve after a failed read. Inspect an explicit
+        // refetch before permitting another money movement.
+        const read = await cartQuery.refetch({ throwOnError: true });
+        if (!read.isSuccess || !hasValidBill(read.data, saleId)) {
+          setTenderReadRequired(true);
+          return false;
+        }
+        await utils.pharmacySales.counterReceipt.invalidate();
+        if (read.data.status === 'COMPLETED') {
+          const receipt = await receiptQuery.refetch({ throwOnError: true });
+          if (
+            !receipt.isSuccess ||
+            receipt.data?.saleId !== saleId ||
+            receipt.data.receiptNumber !== read.data.receiptNumber
+          )
+            throw new Error('Receipt unavailable');
+        }
+        if (attemptRef.current && (resolution === 'accepted' || resolution === 'rejected')) {
+          try {
+            clearTenderAttempt(attemptRef.current);
+            attemptRef.current = null;
+            setAttempt(null);
+            setStorageError(false);
+          } catch {
+            setStorageError(true);
+            setTenderReadRequired(true);
+            return false;
+          }
+        }
+        setTenderReadRequired(false);
+        return true;
+      } catch {
+        setTenderReadRequired(true);
+        return false;
+      } finally {
+        setRefreshingTenderBill(false);
+      }
+    },
+    [
+      branchAuthorized,
+      cartQuery,
+      receiptQuery,
+      recoveryScope,
+      refreshingTenderBill,
+      saleId,
+      tenderOutcome?.status,
+      utils,
+    ]
+  );
 
   // ── Actions ───────────────────────────────────────────────────────────────
 
@@ -436,12 +731,40 @@ export function PharmacyCounterConsole({
   );
 
   const takePayment = useCallback(
-    async (input: { type: CounterTenderType; amountMinor: number; cashReceivedMinor?: number }) => {
-      if (!saleId || busy) return;
+    async (
+      input: {
+        type: CounterTenderType;
+        amountMinor: number;
+        cashReceivedMinor?: number;
+      },
+      draft: TenderDraft
+    ): Promise<CounterTenderResult> => {
+      if (
+        !saleId ||
+        busy ||
+        blocked ||
+        billState !== 'ready' ||
+        tenderInFlight.current ||
+        attemptRef.current
+      ) {
+        return {
+          status: 'rejected',
+          message: 'Payment was not sent. Load a valid bill and resolve any safety block first.',
+        };
+      }
+      tenderInFlight.current = true;
       setPending('tender');
-      setNotice(null);
+      setTenderOutcome(null);
+      setTenderReadRequired(true);
+      let dispatched = false;
+      let outcome: CounterTenderResult;
       try {
-        const result = await tender.mutateAsync({
+        const saved = readTenderAttempt(recoveryScope);
+        if (saved.status !== 'empty') {
+          setStorageError(true);
+          throw new Error(TENDER_STORAGE_MESSAGE);
+        }
+        const payload: TenderAttempt['input'] = {
           branchId,
           saleId,
           deviceId: counterDeviceId(),
@@ -452,29 +775,93 @@ export function PharmacyCounterConsole({
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
           idempotencyKey: `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
-        });
-        await refreshCart();
-        // A replayed idempotent tender returns the stored payload, which the
-        // router types loosely. Narrow rather than assert: a replay that cannot
-        // report its outcome should say so instead of claiming a settlement.
-        setNotice(
-          result && 'settled' in result
-            ? {
-                tone: 'success',
-                message: result.settled
-                  ? `Settled. Receipt ${result.receiptNumber ?? '—'}.`
-                  : `Payment recorded. ${formatMinor(result.remainingMinor)} remaining.`,
-              }
-            : { tone: 'success', message: 'Payment already recorded for this key.' }
-        );
+        };
+        const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
+        // Persistence and read-back must succeed before any money write starts.
+        persistTenderAttempt(original);
+        attemptRef.current = original;
+        setAttempt(original);
+        dispatched = true;
+        const result = await tender.mutateAsync(payload);
+        outcome = tenderAcknowledgement(result)
+          ? { status: 'accepted', message: 'Payment recorded.' }
+          : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
       } catch (error) {
-        setNotice({ tone: 'danger', message: messageFrom(error) });
-      } finally {
-        setPending(null);
+        if (!dispatched) setStorageError(true);
+        outcome =
+          !dispatched || tenderRejected(error)
+            ? { status: 'rejected', message: `Payment was not accepted. ${messageFrom(error)}` }
+            : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
       }
+      setTenderOutcome(outcome);
+      tenderInFlight.current = false;
+      if (outcome.status === 'rejected' && dispatched && attemptRef.current) {
+        try {
+          clearTenderAttempt(attemptRef.current);
+          attemptRef.current = null;
+          setAttempt(null);
+        } catch {
+          setStorageError(true);
+        }
+      }
+      // An acknowledged write stays accepted even if the follow-up read fails.
+      // Unknown writes are never replayed or inferred from aggregate balances.
+      if (outcome.status === 'accepted') await refreshTenderBill('accepted');
+      setPending(null);
+      return outcome;
     },
-    [branchId, busy, refreshCart, saleId, tender]
+    [billState, blocked, branchId, busy, recoveryScope, refreshTenderBill, saleId, tender]
   );
+
+  const checkPaymentOutcome = useCallback(async (): Promise<CounterTenderResult> => {
+    const original = attemptRef.current;
+    if (
+      !original ||
+      !branchAuthorized ||
+      original.input.saleId !== saleId ||
+      tenderInFlight.current ||
+      outcomeInFlight.current
+    ) {
+      return tenderOutcome ?? { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
+    }
+    outcomeInFlight.current = true;
+    setCheckingOutcome(true);
+    let outcome: CounterTenderResult = { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
+    try {
+      // Use the actual typed read procedure, bypassing query-cache replay. The
+      // original device, full Date, optional cash and key are never regenerated.
+      const result = await utils.client.pharmacySales.tenderOutcome.query(original.input);
+      if (
+        result.status === 'ACCEPTED' &&
+        result.replayUnsafe === true &&
+        tenderAcknowledgement(result.result)
+      ) {
+        outcome = { status: 'accepted', message: 'Payment recorded.' };
+        setTenderOutcome(outcome);
+        setTenderReadRequired(true);
+        // This acknowledgement is historical; only fresh bill/receipt reads
+        // may establish today's balance and unlock the next payment.
+        await refreshTenderBill('accepted');
+      } else {
+        outcome = {
+          status: 'unknown',
+          message:
+            'Payment is still unconfirmed. Keep the saved attempt and ask a supervisor to investigate before taking more money. Checking again will not send a payment.',
+        };
+      }
+    } catch {
+      outcome = {
+        status: 'unknown',
+        message:
+          'Payment outcome could not be checked. Check your connection and account access, then check again. The saved attempt is still locked; no payment was sent by this check.',
+      };
+    } finally {
+      setTenderOutcome(outcome);
+      outcomeInFlight.current = false;
+      setCheckingOutcome(false);
+    }
+    return outcome;
+  }, [branchAuthorized, refreshTenderBill, saleId, tenderOutcome, utils]);
 
   const attachCustomer = useCallback(async () => {
     if (!patient || busy) return;
@@ -607,7 +994,7 @@ export function PharmacyCounterConsole({
     if (
       !receipt ||
       receipt.saleId !== saleId ||
-      cart?.status !== 'COMPLETED' ||
+      billState !== 'settled' ||
       receiptQuery.isFetching ||
       receiptQuery.isError
     ) {
@@ -626,7 +1013,7 @@ export function PharmacyCounterConsole({
       setNotice({ tone: 'danger', message: messageFrom(error) });
     }
   }, [
-    cart?.status,
+    billState,
     receiptFormat,
     receiptLocale,
     receiptQuery.data,
@@ -690,6 +1077,14 @@ export function PharmacyCounterConsole({
 
   useEffect(() => {
     const onKeyDown = (event: KeyboardEvent) => {
+      // Native tender controls own Enter/Space; the counter's Enter shortcut
+      // must not also add a staged medicine when payment is activated.
+      if (
+        (event.key === 'Enter' || event.key === ' ') &&
+        event.target instanceof Node &&
+        tenderRef.current?.contains(event.target)
+      )
+        return;
       if (!shouldHandleCounterKey(event)) return;
       const action = matchCounterAction(keymap.bindings, event);
       if (!action) return;
@@ -819,6 +1214,17 @@ export function PharmacyCounterConsole({
           </div>
         </SectionCard>
       </div>
+    );
+  }
+
+  if (!branchAuthorized) {
+    return (
+      <SectionCard title="Counter unavailable">
+        <p role="alert" className="text-sm text-text-body">
+          This branch could not be verified for your account. Restore branch access before opening a
+          saved payment.
+        </p>
+      </SectionCard>
     );
   }
 
@@ -1082,27 +1488,57 @@ export function PharmacyCounterConsole({
                       : 'ready'
               }
               error={cartQuery.error ? messageFrom(cartQuery.error) : null}
-              onRetry={() => void cartQuery.refetch()}
+              onRetry={() => void refreshTenderBill()}
             />
           </SectionCard>
 
           <SectionCard eyebrow="POS-05" title="Tender">
             <CounterTenderPanel
+              key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
               ref={tenderRef}
               balanceMinor={balanceMinor}
+              state={billState}
               blocked={blocked}
               pending={pending === 'tender'}
               disabled={busy || !saleId}
-              error={tender.error ? messageFrom(tender.error) : null}
-              onTender={(input) => void takePayment(input)}
+              initialDraft={
+                restoredAttempt
+                  ? { ...restoredAttempt.draft, type: restoredAttempt.input.type }
+                  : undefined
+              }
+              recoveryOutcome={tenderOutcome}
+              checkingOutcome={checkingOutcome}
+              onCheckOutcome={
+                attempt && tenderOutcome?.status === 'unknown' ? checkPaymentOutcome : undefined
+              }
+              error={
+                storageError
+                  ? TENDER_STORAGE_MESSAGE
+                  : cartQuery.isError
+                    ? 'This bill could not be read. Check your access and refresh this bill before taking payment.'
+                    : tenderReadRequired && pending !== 'tender'
+                      ? tenderOutcome?.status === 'accepted'
+                        ? 'Payment recorded, but the bill refresh is incomplete. Refresh this bill before taking another payment.'
+                        : 'Refresh this bill to verify its current state.'
+                      : null
+              }
+              onRetry={() => void refreshTenderBill()}
+              onTender={takePayment}
             />
           </SectionCard>
 
           <SectionCard eyebrow="POS-08" title="Receipt">
             <CounterReceiptView
-              receipt={receiptQuery.data ?? null}
+              receipt={
+                billState === 'settled' &&
+                !receiptQuery.isError &&
+                !receiptQuery.isFetching &&
+                receiptQuery.data?.saleId === saleId
+                  ? receiptQuery.data
+                  : null
+              }
               state={
-                !saleId || cart?.status !== 'COMPLETED'
+                billState !== 'settled'
                   ? 'idle'
                   : receiptQuery.isLoading
                     ? 'loading'
@@ -1164,7 +1600,7 @@ export function PharmacyCounterConsole({
                     min={1}
                     step={1}
                     value={redeemPoints || ''}
-                    disabled={busy || balanceMinor <= 0}
+                    disabled={busy || balanceMinor === null || balanceMinor <= 0}
                     onChange={(event) => setRedeemPoints(Number(event.target.value))}
                     placeholder="Points"
                     className="h-11"
@@ -1172,7 +1608,9 @@ export function PharmacyCounterConsole({
                   <Button
                     type="button"
                     className="h-11"
-                    disabled={busy || redeemPoints <= 0 || balanceMinor <= 0}
+                    disabled={
+                      busy || redeemPoints <= 0 || balanceMinor === null || balanceMinor <= 0
+                    }
                     onClick={() => void redeemCustomerPoints()}
                   >
                     Redeem

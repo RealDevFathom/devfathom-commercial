@@ -1,12 +1,13 @@
 'use client';
 
-import { forwardRef, useState } from 'react';
+import { forwardRef, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import type { TenderDraft } from './tender-attempt-storage';
 
 /** The tenders POS-05 recognises. Card and wallet need a certified adapter. */
 const TENDER_TYPES = [
@@ -19,18 +20,35 @@ const TENDER_TYPES = [
 
 export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
 
+export type CounterTenderResult = {
+  status: 'accepted' | 'rejected' | 'unknown';
+  message: string;
+};
+
+export type CounterTenderBillState =
+  'idle' | 'loading' | 'error' | 'stale' | 'unavailable' | 'ready' | 'settled';
+
 export type CounterTenderPanelProps = {
-  /** Outstanding balance in minor units. Zero means the bill is settled. */
-  balanceMinor: number;
+  /** Only a known, current bill has a balance; zero alone is not settlement. */
+  balanceMinor: number | null;
+  state: CounterTenderBillState;
   blocked: boolean;
   pending?: boolean;
   disabled?: boolean;
   error?: string | null;
-  onTender: (input: {
-    type: CounterTenderType;
-    amountMinor: number;
-    cashReceivedMinor?: number;
-  }) => void;
+  initialDraft?: TenderDraft & { type: CounterTenderType };
+  recoveryOutcome?: CounterTenderResult | null;
+  checkingOutcome?: boolean;
+  onCheckOutcome?: () => Promise<CounterTenderResult>;
+  onRetry: () => void;
+  onTender: (
+    input: {
+      type: CounterTenderType;
+      amountMinor: number;
+      cashReceivedMinor?: number;
+    },
+    draft: TenderDraft
+  ) => Promise<CounterTenderResult>;
 };
 
 function parseAmountMinor(value: string): number | null {
@@ -56,17 +74,42 @@ function parseAmountMinor(value: string): number | null {
  */
 export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelProps>(
   function CounterTenderPanel(
-    { balanceMinor, blocked, pending = false, disabled = false, error, onTender },
+    {
+      balanceMinor,
+      state,
+      blocked,
+      pending = false,
+      disabled = false,
+      error,
+      onRetry,
+      onTender,
+      initialDraft,
+      recoveryOutcome,
+      checkingOutcome = false,
+      onCheckOutcome,
+    },
     ref
   ) {
-    const [type, setType] = useState<CounterTenderType>('CASH');
-    const [amount, setAmount] = useState('');
-    const [cashReceived, setCashReceived] = useState('');
+    const [type, setType] = useState<CounterTenderType>(initialDraft?.type ?? 'CASH');
+    const [amount, setAmount] = useState(initialDraft?.amount ?? '');
+    const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
+    const [submitting, setSubmitting] = useState(false);
+    const [outcome, setOutcome] = useState<CounterTenderResult | null>(null);
+    const submissionRef = useRef(false);
+    const checkRef = useRef(false);
+    const statusRef = useRef<HTMLParagraphElement>(null);
+    const takingPayment = pending || submitting;
+    const displayedOutcome = recoveryOutcome ?? outcome;
+    const unknown = displayedOutcome?.status === 'unknown';
+    const balanceKnown =
+      balanceMinor !== null && Number.isSafeInteger(balanceMinor) && balanceMinor >= 0;
+    const editable = state === 'ready' && balanceKnown && !disabled && !takingPayment && !unknown;
 
     const amountMinor = amount.trim() === '' ? balanceMinor : parseAmountMinor(amount);
     const cashReceivedMinor = cashReceived.trim() === '' ? null : parseAmountMinor(cashReceived);
     const amountValid =
-      amountMinor !== null && amountMinor > 0 && amountMinor <= Math.max(balanceMinor, 0);
+      balanceKnown && amountMinor !== null && amountMinor > 0 && amountMinor <= balanceMinor;
+    const cashInvalid = type === 'CASH' && cashReceived.trim() !== '' && cashReceivedMinor === null;
     const cashShort =
       type === 'CASH' &&
       cashReceivedMinor !== null &&
@@ -77,7 +120,60 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         ? cashReceivedMinor - amountMinor
         : null;
     const selected = TENDER_TYPES.find((entry) => entry.value === type)!;
-    const submittable = !disabled && !pending && !blocked && amountValid && !cashShort;
+    const submittable = editable && !blocked && amountValid && !cashShort && !cashInvalid;
+
+    async function submitTender() {
+      if (!submittable || amountMinor === null || submissionRef.current) return;
+      submissionRef.current = true;
+      setSubmitting(true);
+      setOutcome(null);
+      try {
+        const result = await onTender(
+          {
+            type,
+            amountMinor,
+            ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
+          },
+          { amount, cashReceived: type === 'CASH' ? cashReceived : '' }
+        );
+        setOutcome(result);
+        if (result.status === 'accepted') {
+          setAmount('');
+          setCashReceived('');
+        }
+      } catch {
+        setOutcome({
+          status: 'unknown',
+          message:
+            'Payment outcome is unknown. Keep this bill open and ask a supervisor to check the payment before taking more money.',
+        });
+      } finally {
+        submissionRef.current = false;
+        setSubmitting(false);
+      }
+    }
+
+    async function checkOutcome() {
+      if (!onCheckOutcome || checkRef.current || checkingOutcome || takingPayment) return;
+      checkRef.current = true;
+      try {
+        const result = await onCheckOutcome();
+        setOutcome(result);
+        if (result.status === 'accepted') {
+          setAmount('');
+          setCashReceived('');
+          statusRef.current?.focus();
+        }
+      } catch {
+        setOutcome({
+          status: 'unknown',
+          message:
+            'Payment outcome could not be checked. Keep this bill open and check again before taking more money.',
+        });
+      } finally {
+        checkRef.current = false;
+      }
+    }
 
     return (
       <div ref={ref} tabIndex={-1} className="space-y-4 focus-visible:outline-none">
@@ -85,13 +181,58 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           <p className="text-sm text-text-body">
             Balance due{' '}
             <span className="font-mono tabular-nums text-text-strong">
-              {formatMinor(Math.max(balanceMinor, 0))}
+              {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
+                ? formatMinor(balanceMinor)
+                : 'Unavailable'}
             </span>
           </p>
-          {balanceMinor <= 0 ? (
+          {state === 'settled' && balanceMinor === 0 && !unknown && !takingPayment ? (
             <StatusPill status="settled" tone="success" label="Settled" />
           ) : null}
         </div>
+
+        <p
+          ref={statusRef}
+          tabIndex={-1}
+          id="tender-status"
+          role="status"
+          aria-live="polite"
+          className="text-sm text-text-body focus-visible:outline-ring"
+        >
+          {takingPayment
+            ? 'Taking payment… Keep this bill open.'
+            : checkingOutcome
+              ? 'Checking payment outcome… No payment is being sent.'
+              : (displayedOutcome?.message ??
+                (state === 'idle'
+                  ? 'Open a bill before taking payment.'
+                  : state === 'loading'
+                    ? 'Checking the bill balance…'
+                    : state === 'stale'
+                      ? 'Refresh this bill to verify the balance before taking payment.'
+                      : state === 'error'
+                        ? 'The bill balance could not be verified. Retry the bill read before taking payment.'
+                        : state === 'unavailable'
+                          ? 'This bill is not available for payment.'
+                          : ''))}
+        </p>
+        {onCheckOutcome ? (
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11"
+            disabled={checkingOutcome || takingPayment}
+            aria-describedby="tender-status tender-error"
+            onClick={() => void checkOutcome()}
+          >
+            {checkingOutcome ? 'Checking payment outcome…' : 'Check payment outcome'}
+          </Button>
+        ) : null}
+        {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
+          <Button type="button" variant="outline" className="h-11" onClick={onRetry}>
+            Refresh bill
+          </Button>
+        ) : null}
 
         {blocked ? (
           <p role="alert" className="rounded-md bg-destructive/10 p-3 text-sm text-text-body">
@@ -105,7 +246,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           <select
             id="tender-type"
             value={type}
-            disabled={disabled || pending || balanceMinor <= 0}
+            disabled={!editable}
             onChange={(event) => setType(event.target.value as CounterTenderType)}
             className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
@@ -129,15 +270,16 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             id="tender-amount"
             inputMode="decimal"
             autoComplete="off"
-            placeholder={formatMinor(Math.max(balanceMinor, 0))}
+            placeholder={balanceKnown ? formatMinor(balanceMinor) : undefined}
             value={amount}
-            disabled={disabled || pending || balanceMinor <= 0}
-            aria-invalid={amount.trim() !== '' && !amountValid}
+            disabled={!editable}
+            aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
+            aria-describedby="tender-status tender-error tender-amount-error"
             onChange={(event) => setAmount(event.target.value)}
             className="h-11"
           />
-          {amount.trim() !== '' && !amountValid ? (
-            <p className="text-sm text-destructive" role="alert">
+          {state === 'ready' && amount.trim() !== '' && !amountValid ? (
+            <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
               Enter an amount between 0.01 and the balance due.
             </p>
           ) : null}
@@ -151,13 +293,18 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               inputMode="decimal"
               autoComplete="off"
               value={cashReceived}
-              disabled={disabled || pending || balanceMinor <= 0}
-              aria-invalid={cashShort || undefined}
+              disabled={!editable}
+              aria-invalid={cashShort || cashInvalid || undefined}
+              aria-describedby="tender-status tender-error tender-cash-error"
               onChange={(event) => setCashReceived(event.target.value)}
               className="h-11"
             />
-            {cashShort ? (
-              <p className="text-sm text-destructive" role="alert">
+            {cashInvalid ? (
+              <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
+                Enter a valid cash amount with at most two decimal places.
+              </p>
+            ) : cashShort ? (
+              <p id="tender-cash-error" className="text-sm text-destructive" role="alert">
                 Cash received is less than the amount tendered.
               </p>
             ) : changeMinor !== null ? (
@@ -171,28 +318,22 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           </div>
         ) : null}
 
-        {error ? (
-          <p className="text-sm text-destructive" role="alert">
-            {error}
-          </p>
-        ) : null}
+        <p
+          id="tender-error"
+          className="text-sm text-destructive"
+          role={error ? 'alert' : undefined}
+        >
+          {error}
+        </p>
 
         <Button
           type="button"
           className="h-11 w-full"
           disabled={!submittable}
-          onClick={() => {
-            if (!submittable || amountMinor === null) return;
-            onTender({
-              type,
-              amountMinor,
-              ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
-            });
-            setAmount('');
-            setCashReceived('');
-          }}
+          aria-describedby="tender-status tender-error"
+          onClick={() => void submitTender()}
         >
-          {pending ? 'Taking payment…' : 'Take payment'}
+          {takingPayment ? 'Taking payment…' : 'Take payment'}
         </Button>
       </div>
     );
