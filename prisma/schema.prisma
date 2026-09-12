@@ -4748,6 +4748,7 @@ model Organization {
   currency            String                     @default("USD")
   seatLimit           Int                        @default(1)
   isDemo              Boolean                    @default(false)
+  askFathomEnabled    Boolean                    @default(true)
   lastDemoResetAt     DateTime?
   gracePeriodDays     Int                        @default(0)
   activatedAt         DateTime?

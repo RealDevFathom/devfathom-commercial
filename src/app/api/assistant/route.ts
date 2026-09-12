@@ -8,6 +8,7 @@ import {
   type UIMessage,
 } from 'ai';
 import { assistantVertical } from '@/lib/ai/context';
+import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { createAIModel } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
@@ -54,6 +55,20 @@ async function respond(req: Request) {
     return new Response('Unauthorized', { status: 401 });
   }
   const session = actor.session;
+  const organization = actor.organization;
+  const tenantDb = createTenantDb(organization.id);
+  // Every POST (including approval continuations) rechecks current company chat policy.
+  // Requests already past this gate are not cancelled when an administrator disables chat.
+  const settings = await readAskFathomSettings(tenantDb, organization.id);
+  if (!settings) {
+    return Response.json({ error: UNAVAILABLE }, { status: 503 });
+  }
+  if (!settings.askFathomEnabled) {
+    return Response.json(
+      { error: 'Ask Fathom chat is disabled for your company.' },
+      { status: 403 }
+    );
+  }
 
   let messages: UIMessage[];
   try {
@@ -72,14 +87,10 @@ async function respond(req: Request) {
   } catch {
     return Response.json({ error: 'Invalid assistant messages.' }, { status: 400 });
   }
-  const organization = actor.organization;
   if (organization.isDemo) {
     return Response.json({ error: 'Not available in demo.' }, { status: 403 });
   }
-  const entitlements = await resolveOrganizationEntitlements(
-    organization.id,
-    createTenantDb(organization.id)
-  );
+  const entitlements = await resolveOrganizationEntitlements(organization.id, tenantDb);
 
   const ctx = {
     organizationId: organization.id,

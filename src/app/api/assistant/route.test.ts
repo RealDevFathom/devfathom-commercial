@@ -6,11 +6,18 @@ const mocks = vi.hoisted(() => ({
   model: vi.fn(),
   stream: vi.fn(),
   db: vi.fn(),
+  findOrganization: vi.fn(),
+  tools: vi.fn(),
 }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.db }));
 vi.mock('@/lib/entitlements', () => ({ resolveOrganizationEntitlements: mocks.entitlements }));
 vi.mock('@/lib/ai/provider', () => ({ createAIModel: mocks.model }));
+vi.mock('@/lib/ai/tools', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/lib/ai/tools')>();
+  mocks.tools.mockImplementation(actual.buildAssistantTools);
+  return { ...actual, buildAssistantTools: mocks.tools };
+});
 vi.mock('ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('ai')>()),
   streamText: mocks.stream,
@@ -52,7 +59,8 @@ beforeEach(() => {
   vi.spyOn(console, 'error').mockImplementation(() => {});
   mocks.actor.mockResolvedValue(actor());
   mocks.entitlements.mockResolvedValue({ vertical: 'RESTAURANT', enabledModules: ['chat'] });
-  mocks.db.mockReturnValue({});
+  mocks.findOrganization.mockResolvedValue({ id: 'server-org', askFathomEnabled: true });
+  mocks.db.mockReturnValue({ organization: { findUnique: mocks.findOrganization } });
   mocks.model.mockReturnValue({ model: {}, providerOptions: {} });
   mocks.stream.mockReturnValue({
     toUIMessageStreamResponse: () => new Response('synthetic stream'),
@@ -74,7 +82,9 @@ describe('assistant API scope', () => {
       })
     );
     expect(response.status).toBe(200);
-    expect(mocks.entitlements).toHaveBeenCalledWith('server-org', {});
+    expect(mocks.entitlements).toHaveBeenCalledWith('server-org', {
+      organization: { findUnique: mocks.findOrganization },
+    });
     const args = mocks.stream.mock.calls[0][0];
     expect(args.system).toContain('RESTAURANT');
     expect(args.system).toContain('EMPLOYEE');
@@ -155,6 +165,9 @@ describe('assistant API scope', () => {
   it('returns 401 without actor', async () => {
     mocks.actor.mockResolvedValue(null);
     expect((await POST(request({ messages: [user] }))).status).toBe(401);
+    expect(mocks.findOrganization).not.toHaveBeenCalled();
+    expect(mocks.tools).not.toHaveBeenCalled();
+    expect(mocks.model).not.toHaveBeenCalled();
   });
 
   it('sanitizes provider-unavailable and synchronous stream failures', async () => {
@@ -233,5 +246,121 @@ describe('assistant API scope', () => {
         expect.stringContaining('PHARMACY'),
       ])
     );
+  });
+});
+
+describe('company AskFathom chat gate', () => {
+  function expectNoToolsOrProvider() {
+    expect(mocks.entitlements).not.toHaveBeenCalled();
+    expect(mocks.tools).not.toHaveBeenCalled();
+    expect(mocks.model).not.toHaveBeenCalled();
+    expect(mocks.stream).not.toHaveBeenCalled();
+  }
+
+  it.each([false, true])(
+    'blocks disabled chat before tools/provider (continuation: %s)',
+    async (continuation) => {
+      mocks.findOrganization.mockResolvedValue({ id: 'server-org', askFathomEnabled: false });
+      mocks.actor.mockResolvedValue({
+        ...actor(),
+        organization: { ...actor().organization, askFathomEnabled: true },
+        session: { user: { ...actor().session.user, askFathomEnabled: true } },
+      });
+      const response = await POST(
+        request({
+          messages: continuation ? [user, approval('requestLeave')] : [user],
+          organizationId: 'enabled-other-org',
+          askFathomEnabled: true,
+        })
+      );
+      expect(response.status).toBe(403);
+      expect(await response.json()).toEqual({
+        error: 'Ask Fathom chat is disabled for your company.',
+      });
+      expect(mocks.db).toHaveBeenCalledExactlyOnceWith('server-org');
+      expect(mocks.findOrganization).toHaveBeenCalledExactlyOnceWith({
+        where: { id: 'server-org' },
+        select: { id: true, askFathomEnabled: true },
+      });
+      expectNoToolsOrProvider();
+    }
+  );
+
+  it.each([null, { id: 'server-org' }, { id: 'other-org', askFathomEnabled: true }])(
+    'fails closed before tools/provider when the scoped row is unavailable: %j',
+    async (row) => {
+      mocks.findOrganization.mockResolvedValue(row);
+      const response = await POST(request({ messages: [user, approval('requestLeave')] }));
+      expect(response.status).toBe(503);
+      expect(await response.json()).toEqual({
+        error: 'Ask Fathom is currently unavailable. No cached answer was used.',
+      });
+      expectNoToolsOrProvider();
+    }
+  );
+
+  it('sanitizes a setting read failure without reaching tools/provider', async () => {
+    mocks.findOrganization.mockRejectedValueOnce(new Error('private database payload'));
+    const response = await POST(request({ messages: [user, approval('requestLeave')] }));
+    expect(response.status).toBe(503);
+    expect(await response.text()).not.toContain('private database payload');
+    expect(vi.mocked(console.error).mock.calls).toEqual([['ASSISTANT_REQUEST_FAILED']]);
+    expectNoToolsOrProvider();
+  });
+
+  it('rechecks approval continuation after a company disables chat', async () => {
+    mocks.entitlements.mockResolvedValue({ vertical: 'RESTAURANT', enabledModules: ['hr'] });
+    expect((await POST(request({ messages: [user] }))).status).toBe(200);
+    mocks.findOrganization.mockResolvedValue({ id: 'server-org', askFathomEnabled: false });
+    vi.clearAllMocks();
+    expect((await POST(request({ messages: [user, approval('requestLeave')] }))).status).toBe(403);
+    expect(mocks.findOrganization).toHaveBeenCalledOnce();
+    expectNoToolsOrProvider();
+  });
+
+  it('ignores a stale disabled snapshot when the current scoped row enables chat', async () => {
+    mocks.actor.mockResolvedValue({
+      ...actor(),
+      organization: { ...actor().organization, askFathomEnabled: false },
+    });
+    expect((await POST(request({ messages: [user], askFathomEnabled: false }))).status).toBe(200);
+    expect(mocks.tools).toHaveBeenCalledOnce();
+    expect(mocks.model).toHaveBeenCalledOnce();
+  });
+
+  it('preserves the demo restriction when company chat is enabled', async () => {
+    mocks.actor.mockResolvedValue({
+      ...actor(),
+      organization: { ...actor().organization, isDemo: true },
+    });
+    const response = await POST(request({ messages: [user] }));
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({ error: 'Not available in demo.' });
+    expectNoToolsOrProvider();
+  });
+
+  it('isolates simultaneous disabled and enabled companies', async () => {
+    mocks.actor
+      .mockResolvedValueOnce({ ...actor(), organization: { id: 'org_disabled' } })
+      .mockResolvedValueOnce({ ...actor('PHARMACY'), organization: { id: 'org_enabled' } });
+    mocks.db.mockImplementation((id: string) => ({
+      organization: {
+        findUnique: async ({ where }: { where: { id: string } }) => {
+          expect(where.id).toBe(id);
+          return { id, askFathomEnabled: id === 'org_enabled' };
+        },
+      },
+    }));
+    const responses = await Promise.all([
+      POST(request({ messages: [user] })),
+      POST(request({ messages: [user] })),
+    ]);
+    expect(responses.map((response) => response.status)).toEqual([403, 200]);
+    expect(mocks.tools).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({ organizationId: 'org_enabled' }),
+      expect.anything()
+    );
+    expect(mocks.model).toHaveBeenCalledOnce();
+    expect(mocks.stream).toHaveBeenCalledOnce();
   });
 });

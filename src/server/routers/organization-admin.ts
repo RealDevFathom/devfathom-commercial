@@ -3,11 +3,12 @@ import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
+import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { assertSeatAvailable } from '@/lib/entitlements';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
-import { adminProcedure, router } from '@/server/trpc';
+import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -40,6 +41,36 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
+    const settings = await readAskFathomSettings(ctx.db, organizationId(ctx));
+    if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    return settings;
+  }),
+
+  setAskFathomEnabled: adminProcedure
+    .input(z.strictObject({ askFathomEnabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      // A custom capability grant must not broaden this company control beyond ADMIN.
+      if (ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
+      }
+      const id = organizationId(ctx);
+      const settings = await readAskFathomSettings(ctx.db, id);
+      if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+      const saved = await ctx.db.organization.update({
+        where: { id },
+        data: { askFathomEnabled: input.askFathomEnabled },
+        select: { id: true, askFathomEnabled: true },
+      });
+      annotateAudit(ctx, {
+        targetType: 'Organization',
+        targetId: id,
+        operation: 'UPDATE',
+        description: `${saved.askFathomEnabled ? 'Enabled' : 'Disabled'} company Ask Fathom chat`,
+      });
+      return { organizationId: saved.id, askFathomEnabled: saved.askFathomEnabled };
+    }),
+
   departments: adminProcedure.query(async ({ ctx }) => {
     const id = organizationId(ctx);
     return ctx.db.organizationDepartment.findMany({
@@ -64,13 +95,16 @@ export const organizationAdminRouter = router({
       const existing = id
         ? await ctx.db.organizationDepartment.findFirst({ where: { id, organizationId: tenantId } })
         : null;
-      if (id && !existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
+      if (id && !existing)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
       if (existing && existing.key !== values.key) {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Department keys cannot be changed.' });
       }
       const saved = existing
         ? await ctx.db.organizationDepartment.update({ where: { id: existing.id }, data: values })
-        : await ctx.db.organizationDepartment.create({ data: { organizationId: tenantId, ...values } });
+        : await ctx.db.organizationDepartment.create({
+            data: { organizationId: tenantId, ...values },
+          });
       annotateAudit(ctx, {
         targetType: 'OrganizationDepartment',
         targetId: saved.id,
