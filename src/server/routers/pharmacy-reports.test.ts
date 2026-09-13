@@ -9,6 +9,35 @@ const mocks = vi.hoisted(() => ({
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
   reportUpdate: vi.fn(),
+  stockDashboard: vi.fn(),
+  stockDigest: vi.fn(),
+  anomalyRead: vi.fn(),
+  expiryRead: vi.fn(),
+  returnsRead: vi.fn(),
+  creditsRead: vi.fn(),
+  refresh: vi.fn(),
+  createDraft: vi.fn(),
+}));
+
+vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
+  roleDashboard: mocks.stockDashboard,
+  ownerDigest: mocks.stockDigest,
+  refreshStockSignals: mocks.refresh,
+  createDraftAction: mocks.createDraft,
+}));
+vi.mock('@/lib/pharmacy/anomaly-signals-operations', () => ({
+  readPharmacyAnomalySignals: mocks.anomalyRead,
+  refreshPharmacyAnomalySignals: mocks.refresh,
+  acknowledgePharmacyAnomalySignal: vi.fn(),
+  snoozePharmacyAnomalySignal: vi.fn(),
+}));
+vi.mock('@/lib/pharmacy/expiry-advisor-operations', () => ({
+  readExpiryAdvice: mocks.expiryRead,
+  proposeExpiryReturn: mocks.createDraft,
+}));
+vi.mock('@/lib/pharmacy/purchasing-console', () => ({
+  listPurchaseReturns: mocks.returnsRead,
+  listSupplierCredits: mocks.creditsRead,
 }));
 
 vi.mock('@/lib/pharmacy/repeat-purchasing', async () => ({
@@ -70,6 +99,113 @@ function pvCaller() {
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });
   return caller();
 }
+
+describe('normal Reports daily work pack', () => {
+  const input = { from: '2026-09-01', to: '2026-09-10', asOf: '2026-09-11T00:00:00Z' };
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockImplementation(
+      (_entitlements, module) => module === 'pharmacy-reports'
+    );
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.stockDashboard.mockResolvedValue([]);
+    mocks.stockDigest.mockImplementation(async (_db, scope, actorId) => ({
+      branchId: scope.branchId,
+      ownerUserId: actorId,
+      overdue: [],
+      dueSoon: [],
+      stale: [],
+      resuming: [],
+    }));
+    mocks.anomalyRead.mockResolvedValue([]);
+    mocks.expiryRead.mockResolvedValue([]);
+    mocks.returnsRead.mockResolvedValue([]);
+    mocks.creditsRead.mockResolvedValue([]);
+  });
+
+  it('works with Ask Fathom disabled and repeated normal caller reads create zero actions', async () => {
+    const api = caller();
+    const first = await api.dailyWorkPack(input);
+    const second = await api.dailyWorkPack(input);
+    expect(first.sources).toHaveLength(5);
+    expect(second.sources).toHaveLength(5);
+    expect(first.permissions.financial).toBe(true);
+    expect(first.sources.every((source) => source.status === 'available')).toBe(true);
+    expect(mocks.branchFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org_1', active: true } })
+    );
+    expect(mocks.refresh).not.toHaveBeenCalled();
+    expect(mocks.createDraft).not.toHaveBeenCalled();
+    expect(mocks.settingUpsert).not.toHaveBeenCalled();
+    expect(mocks.reportUpdate).not.toHaveBeenCalled();
+    expect(vi.mocked(hasModule).mock.calls.every((call) => call[1] === 'pharmacy-reports')).toBe(
+      true
+    );
+  });
+
+  it('returns only operational sources when financial permission is denied', async () => {
+    mocks.can.mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    const pack = await caller().dailyWorkPack(input);
+    expect(pack.sources.map((source) => source.kind)).toEqual(['stock-dashboard', 'stock-digest']);
+    for (const read of [mocks.anomalyRead, mocks.expiryRead, mocks.returnsRead, mocks.creditsRead])
+      expect(read).not.toHaveBeenCalled();
+    expect(JSON.stringify(pack)).not.toMatch(/Minor|currency|supplier-credit|anomalies/);
+  });
+
+  it('preserves the existing owner gate even when a non-owner has financial capability', async () => {
+    const pack = await caller('EMPLOYEE').dailyWorkPack(input);
+    expect(pack.permissions.financial).toBe(false);
+    expect(mocks.anomalyRead).not.toHaveBeenCalled();
+    expect(mocks.expiryRead).not.toHaveBeenCalled();
+    expect(mocks.returnsRead).not.toHaveBeenCalled();
+  });
+
+  it('denies operational permission before any branch or source reads', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().dailyWorkPack(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.stockDashboard).not.toHaveBeenCalled();
+  });
+
+  it('denies the disabled Reports module before branch or source reads', async () => {
+    vi.mocked(hasModule).mockReturnValue(false);
+    await expect(caller().dailyWorkPack(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.branchFindMany).not.toHaveBeenCalled();
+    expect(mocks.stockDashboard).not.toHaveBeenCalled();
+  });
+
+  it.each(['outside_branch', 'foreign_tenant_branch'])(
+    'denies unauthorized branch %s before source reads',
+    async (branchId) => {
+      await expect(caller().dailyWorkPack({ ...input, branchId })).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(mocks.stockDashboard).not.toHaveBeenCalled();
+      expect(mocks.anomalyRead).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { from: '2026-02-30' },
+    { from: '2026-09-12' },
+    { asOf: '2099-01-01T00:00:00Z' },
+    { organizationId: 'foreign' },
+    { financial: true },
+  ])('rejects invalid or client-controlled server scope: %j', async (overrides) => {
+    await expect(caller().dailyWorkPack({ ...input, ...overrides })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.stockDashboard).not.toHaveBeenCalled();
+  });
+
+  it('returns partial source failure through the normal caller without raw error disclosure', async () => {
+    mocks.anomalyRead.mockRejectedValue(new Error('private_user database password'));
+    const pack = await caller().dailyWorkPack(input);
+    expect(pack.completeness).toMatchObject({ status: 'partial', allClear: false });
+    expect(pack.sources.find((source) => source.kind === 'anomalies')!.status).toBe('unavailable');
+    expect(JSON.stringify(pack)).not.toContain('password');
+  });
+});
 
 beforeEach(() => {
   vi.clearAllMocks();

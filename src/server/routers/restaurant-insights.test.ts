@@ -11,6 +11,7 @@ const mocks = vi.hoisted(() => ({
   readLabourCost: vi.fn(),
   exportLabourCosts: vi.fn(),
   enqueueInsightBackfill: vi.fn(),
+  prepareClosePacket: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -44,6 +45,12 @@ vi.mock('@/lib/restaurant/insights', async () => {
     exportLabourCosts: mocks.exportLabourCosts,
   };
 });
+vi.mock('@/lib/restaurant/close-readiness', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/restaurant/close-readiness')>(
+    '@/lib/restaurant/close-readiness'
+  );
+  return { ...actual, prepareClosePacket: mocks.prepareClosePacket };
+});
 vi.mock('@/lib/restaurant/insight-rollups', async () => {
   const actual = await vi.importActual<typeof import('@/lib/restaurant/insight-rollups')>(
     '@/lib/restaurant/insight-rollups'
@@ -52,6 +59,7 @@ vi.mock('@/lib/restaurant/insight-rollups', async () => {
 });
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { ClosePacketError } from '@/lib/restaurant/close-readiness';
 import type { TRPCContext } from '../trpc';
 import { restaurantInsightsRouter } from './restaurant-insights';
 
@@ -60,7 +68,7 @@ const db = {
   restaurantBranch: { findFirst: vi.fn() },
 };
 
-function caller() {
+function caller(overrides: Partial<TRPCContext> = {}) {
   return restaurantInsightsRouter.createCaller({
     db: db as unknown as ScopedDb,
     entitlements: {
@@ -77,6 +85,7 @@ function caller() {
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
+    ...overrides,
   } as unknown as TRPCContext);
 }
 
@@ -94,6 +103,96 @@ beforeEach(() => {
   mocks.listLabourCosts.mockResolvedValue([]);
   mocks.readLabourCost.mockResolvedValue({ id: 'labour_1', branchId: 'branch_1' });
   mocks.enqueueInsightBackfill.mockResolvedValue({ chunks: [], enqueued: 0, deduplicated: 0 });
+  mocks.prepareClosePacket.mockResolvedValue({ status: 'UNKNOWN', unattendedCloseReady: false });
+});
+
+describe('close packet query boundary', () => {
+  const input = { branchId: 'branch_1', businessDate: '2026-09-11', asOf: '2026-09-12T12:00:00Z' };
+
+  it.each(['reports:financial', 'reports:operational'])(
+    'passes only server-checked access for %s, without AskFathom',
+    async (capability) => {
+      mocks.grants.add(capability);
+      await expect(caller().prepareClosePacket(input)).resolves.toMatchObject({
+        status: 'UNKNOWN',
+      });
+      expect(mocks.prepareClosePacket).toHaveBeenCalledWith(db, input, {
+        organizationId: 'org_1',
+        financial: capability === 'reports:financial',
+        operational: capability === 'reports:operational',
+        allowedRoutes: capability === 'reports:financial' ? ['reports'] : [],
+      });
+    }
+  );
+
+  it('requires authentication and at least one report permission', async () => {
+    await expect(caller({ session: null }).prepareClosePacket(input)).rejects.toMatchObject({
+      code: 'UNAUTHORIZED',
+    });
+    await expect(caller().prepareClosePacket(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.prepareClosePacket).not.toHaveBeenCalled();
+  });
+
+  it('rejects cross-branch and inactive staff before the service', async () => {
+    mocks.grants.add('reports:financial');
+    await expect(
+      caller().prepareClosePacket({ ...input, branchId: 'branch_2' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    db.restaurantStaffProfile.findFirst.mockResolvedValue(null);
+    await expect(caller().prepareClosePacket(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.restaurantStaffProfile.findFirst).toHaveBeenCalledWith({
+      where: { userId: 'user_1', status: 'ACTIVE' },
+      select: { primaryBranchId: true },
+    });
+    expect(mocks.prepareClosePacket).not.toHaveBeenCalled();
+  });
+
+  it('permits configure-scoped branch review and existing route capabilities', async () => {
+    for (const grant of [
+      'reports:financial',
+      'reports:operational',
+      'restaurant:configure',
+      'money:read',
+      'orders:read',
+    ])
+      mocks.grants.add(grant);
+    await caller().prepareClosePacket({ ...input, branchId: 'branch_2' });
+    expect(mocks.prepareClosePacket).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ branchId: 'branch_2' }),
+      expect.objectContaining({
+        financial: true,
+        operational: true,
+        allowedRoutes: ['bills', 'drawers', 'closes', 'orders', 'reports'],
+      })
+    );
+  });
+
+  it.each([
+    { organizationId: 'other_org' },
+    { financial: true },
+    { asOf: 'bad' },
+    { businessDate: '2026-02-30' },
+    { businessDate: '2026-9-1' },
+    { branchId: '' },
+  ])('rejects invalid or forged inputs %j', async (override) => {
+    mocks.grants.add('reports:operational');
+    await expect(
+      caller().prepareClosePacket({ ...input, ...override } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.prepareClosePacket).not.toHaveBeenCalled();
+  });
+
+  it('maps service validation and branch errors without a mutation endpoint', async () => {
+    mocks.grants.add('reports:financial');
+    mocks.prepareClosePacket.mockRejectedValueOnce(
+      new ClosePacketError('Branch not found.', 'NOT_FOUND')
+    );
+    await expect(caller().prepareClosePacket(input)).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mocks.prepareClosePacket.mockRejectedValueOnce(new ClosePacketError('Future date.', 'INVALID'));
+    await expect(caller().prepareClosePacket(input)).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(restaurantInsightsRouter._def.procedures.prepareClosePacket._def.type).toBe('query');
+  });
 });
 
 describe('restaurant insights branch and capability guards', () => {

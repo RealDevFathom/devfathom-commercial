@@ -3,7 +3,14 @@ import { z } from 'zod';
 
 import type { Prisma } from '@/generated/prisma/client';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
+import {
+  CLOSE_PACKET_ROUTES,
+  ClosePacketError,
+  prepareClosePacket,
+  type ClosePacketRoute,
+} from '@/lib/restaurant/close-readiness';
 import {
   exportInsightReports,
   exportLabourCosts,
@@ -15,7 +22,7 @@ import {
   readLabourCost,
 } from '@/lib/restaurant/insights';
 import { enqueueInsightBackfill, RollupError } from '@/lib/restaurant/insight-rollups';
-import { capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const DATE = z
   .string()
@@ -92,6 +99,42 @@ function mapInsightError(error: unknown): never {
 }
 
 export const restaurantInsightsRouter = router({
+  prepareClosePacket: auditedProtectedProcedure
+    .input(READ.extend({ asOf: z.string().datetime({ offset: true }) }).strict())
+    .query(async ({ ctx, input }) => {
+      const allowed = async (action: Action) =>
+        can(subjectFromSession(ctx.session.user), action, undefined, {
+          db: ctx.db as Prisma.TransactionClient,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        });
+      const financial = await allowed('reports:financial');
+      const operational = await allowed('reports:operational');
+      if (!financial && !operational) throw new TRPCError({ code: 'FORBIDDEN' });
+      await requireBranchScope(ctx, input.branchId);
+      const allowedRoutes: ClosePacketRoute[] = [];
+      for (const key of Object.keys(CLOSE_PACKET_ROUTES) as ClosePacketRoute[]) {
+        const route = CLOSE_PACKET_ROUTES[key];
+        if (hasModule(ctx.entitlements, route.module) && (await allowed(route.capability)))
+          allowedRoutes.push(key);
+      }
+      try {
+        return await prepareClosePacket(ctx.db, input, {
+          organizationId: ctx.organization?.id ?? ctx.session.user.organizationId,
+          financial,
+          operational,
+          allowedRoutes,
+        });
+      } catch (error) {
+        if (error instanceof ClosePacketError)
+          throw new TRPCError({
+            code: error.reason === 'INVALID' ? 'BAD_REQUEST' : error.reason,
+            message: error.message,
+          });
+        throw error;
+      }
+    }),
+
   listOperationalReports: operationalProcedure.input(RANGE).query(async ({ ctx, input }) => {
     await requireBranchScope(ctx, input.branchId);
     try {

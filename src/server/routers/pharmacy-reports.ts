@@ -5,6 +5,10 @@ import { z } from 'zod';
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
 import {
+  readPharmacyDailyWorkPack,
+  validateDailyWorkPackInput,
+} from '@/lib/pharmacy/daily-work-pack';
+import {
   PHARMACY_WIDGET_KEYS,
   pharmacyDashboardDefault,
   type PharmacyDashboardPreference,
@@ -291,6 +295,49 @@ export const pharmacyReportsRouter = router({
       };
     }),
   branches: reports.query(({ ctx }) => scope(ctx)),
+  dailyWorkPack: reports
+    .input(
+      filters
+        .pick({ branchId: true, from: true, to: true })
+        .extend({ asOf: z.iso.datetime({ offset: true }) })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const available = await scope(ctx);
+      const branchIds = input.branchId
+        ? [input.branchId]
+        : available.branches.map((branch) => branch.id);
+      if (
+        !branchIds.length ||
+        branchIds.some((id) => !available.branches.some((branch) => branch.id === id))
+      )
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+      // Preserve the existing owner gate on anomaly/expiry financial sources.
+      const financial =
+        ctx.session!.user.role === 'ADMIN' &&
+        (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+          ip: ctx.requestMeta.ip,
+        }));
+      const resolved = {
+        ...input,
+        branchIds,
+        organizationId: available.organizationId,
+        actorId: ctx.session!.user.id,
+        financial,
+      };
+      const readAt = new Date();
+      try {
+        validateDailyWorkPackInput(resolved, readAt);
+      } catch {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Invalid report period or as-of time.',
+        });
+      }
+      return readPharmacyDailyWorkPack(ctx.db, resolved, readAt);
+    }),
   catalog: reports.query(async ({ ctx }) => ({
     reports: pharmacyReportCatalog(),
     metrics: PHARMACY_METRIC_CONTRACT,
