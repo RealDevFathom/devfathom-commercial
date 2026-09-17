@@ -4,7 +4,7 @@ import { compare } from 'bcryptjs';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ipFromHeaders, recordAuthAudit } from '@/server/audit';
-import { rateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 import { verifyTotp, hashRecoveryCode } from '@/lib/totp';
 import {
   isTenantLifecycleAccessible,
@@ -181,8 +181,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // REST-04: throttle login attempts BEFORE the bcrypt compare — per IP
         // (broad) and per account — so an unthrottled flood can neither brute-
         // force a password nor burn CPU on prefix-matching bcrypt compares.
-        const ipGate = rateLimit(`login:ip:${ip ?? 'unknown'}`, 30, 5 * 60_000);
-        const acctGate = rateLimit(`login:acct:${email}`, 10, 5 * 60_000);
+        const ipRateLimitKey = `login:ip:${ip ?? 'unknown'}`;
+        const accountRateLimitKey = `login:acct:${email}`;
+        const ipGate = rateLimit(ipRateLimitKey, 30, 5 * 60_000);
+        const acctGate = rateLimit(accountRateLimitKey, 10, 5 * 60_000);
         if (!ipGate.ok || !acctGate.ok) {
           recordAuthAudit({
             type: 'LOGIN_FAILED',
@@ -326,6 +328,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             ip,
             userAgent,
           });
+
+          // Successful authentication must not consume the failure budget.
+          // Otherwise normal serial workflows lock out the same authorized user
+          // — the same reasoning, and the same remedy, as the control-plane
+          // transport in src/lib/platform/auth.ts.
+          //
+          // Cleared only HERE, once both the password and the second factor are
+          // proven. Clearing on a correct password alone would hand an attacker
+          // who already holds that password an unlimited budget for grinding
+          // TOTP codes. Every failing path above returns or throws before this
+          // line, so a failure still consumes its unit, the limits are unchanged
+          // and a throttled response stays byte-identical to a wrong password.
+          clearRateLimit(ipRateLimitKey);
+          clearRateLimit(accountRateLimitKey);
 
           // Update last active
           await tenantDb.user.update({

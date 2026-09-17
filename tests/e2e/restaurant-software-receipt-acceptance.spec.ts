@@ -824,8 +824,9 @@ test('the queued receipt bytes carry exactly the operator-visible preview', asyn
     `/api/restaurant/checkout/receipt?billId=${encodeURIComponent(asciiBillId)}`,
     { headers: asciiPos.headers }
   );
+  // `receiptNumber` is an Int in the schema, so it arrives as a JSON number.
   const receipt = (await receiptRead.json()) as {
-    receiptNumber: string;
+    receiptNumber: number;
     printing: { preview: { text: string } };
   };
 
@@ -840,7 +841,7 @@ test('the queued receipt bytes carry exactly the operator-visible preview', asyn
   expect(rendered.endsWith(ESC_POS_CUT)).toBe(true);
   // The transport must ship the SAME text the register showed, not a re-derivation.
   expect(rendered).toContain(receipt.printing.preview.text);
-  expect(rendered).toContain(receipt.receiptNumber);
+  expect(rendered).toContain(String(receipt.receiptNumber));
 
   const acknowledged = await acknowledgeBridgeJob(request, asciiBridge, {
     jobId: claimed!.id,

@@ -1,0 +1,239 @@
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+/**
+ * WHA-1542 — the tenant login transport must not spend its own failure budget
+ * on successful sign-ins.
+ *
+ * `src/lib/platform/auth.ts` already clears its bucket after a verified
+ * credential; this pins the same contract for the tenant provider, and pins the
+ * three properties that must NOT move with it: a failure still consumes a unit,
+ * the limits are unchanged, and a throttled result stays indistinguishable from
+ * a wrong password.
+ *
+ * The rate limiter itself is deliberately NOT mocked — the assertions below are
+ * about real counter state across a sequence of attempts, which a stubbed
+ * `rateLimit` could not prove.
+ */
+
+const IP = '203.0.113.7';
+const EMAIL = 'alex@company.com';
+const PASSWORD = 'correct-horse-battery-staple';
+const IP_KEY = `login:ip:${IP}`;
+const ACCOUNT_KEY = `login:acct:${EMAIL}`;
+/** Mirrors the production limits in auth.ts — not a knob for the test to relax. */
+const ACCOUNT_LIMIT = 10;
+const IP_LIMIT = 30;
+
+const mocks = vi.hoisted(() => ({
+  config: null as Record<string, unknown> | null,
+  compare: vi.fn(),
+  recordAuthAudit: vi.fn(),
+  verifyTotp: vi.fn(),
+  resolveForRequest: vi.fn(),
+  withTenantDb: vi.fn(),
+  findFirstUser: vi.fn(),
+  updateUser: vi.fn(),
+  findRecoveryCode: vi.fn(),
+}));
+
+vi.mock('next-auth', () => {
+  class CredentialsSignin extends Error {
+    code = 'credentials';
+  }
+  return {
+    CredentialsSignin,
+    default: (config: Record<string, unknown>) => {
+      mocks.config = config;
+      return { handlers: {}, auth: vi.fn(), signIn: vi.fn(), signOut: vi.fn() };
+    },
+  };
+});
+vi.mock('next-auth/providers/credentials', () => ({
+  default: (options: Record<string, unknown>) => options,
+}));
+vi.mock('bcryptjs', () => ({ compare: mocks.compare }));
+vi.mock('@/server/audit', () => ({
+  ipFromHeaders: () => IP,
+  recordAuthAudit: mocks.recordAuthAudit,
+}));
+vi.mock('@/lib/totp', () => ({
+  hashRecoveryCode: () => 'recovery-hash',
+  verifyTotp: mocks.verifyTotp,
+}));
+vi.mock('@/lib/tenancy/host', () => ({
+  isTenantLifecycleAccessible: () => true,
+  requestHost: (request: Request) => new URL(request.url).hostname,
+  resolveOrganizationById: vi.fn(),
+  resolveOrganizationForRequest: mocks.resolveForRequest,
+}));
+vi.mock('@/lib/tenancy/host-routing', () => ({ isSharedHost: () => false }));
+vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: mocks.withTenantDb }));
+vi.mock('@/lib/platform/security', () => ({ parseCookie: () => null }));
+vi.mock('@/lib/sso', () => ({ SSO_TICKET_COOKIE: 'df_sso_ticket' }));
+vi.mock('@/lib/auth/login-intent', () => ({
+  LOGIN_INTENT_COOKIE: 'df_login_intent',
+  consumeLoginIntent: vi.fn(),
+  peekLoginIntent: vi.fn(),
+}));
+
+import { clearRateLimit } from '@/lib/rate-limit';
+
+await import('./auth');
+
+type Provider = {
+  authorize: (credentials: Record<string, unknown>, request: Request) => Promise<unknown>;
+};
+
+function credentialsProvider(): Provider {
+  return (mocks.config as unknown as { providers: Provider[] }).providers[0]!;
+}
+
+const organization = {
+  id: 'org_chai_chowk',
+  slug: 'chai-chowk',
+  status: 'ACTIVE',
+  isDemo: false,
+  vertical: 'RESTAURANT',
+  deploymentMode: 'DEDICATED',
+};
+
+function tenantUser(overrides: Record<string, unknown> = {}) {
+  return {
+    id: 'user_alex',
+    organizationId: organization.id,
+    name: 'Alex',
+    email: EMAIL,
+    password: 'stored-hash',
+    role: 'ADMIN',
+    department: null,
+    title: 'Owner',
+    avatar: null,
+    status: 'ACTIVE',
+    tokenVersion: 0,
+    twoFactorEnabledAt: null,
+    twoFactorSecret: null,
+    ...overrides,
+  };
+}
+
+function useUser(user: Record<string, unknown>) {
+  mocks.findFirstUser.mockResolvedValue(user);
+  mocks.updateUser.mockResolvedValue(user);
+}
+
+function request() {
+  return new Request('https://chai-chowk.localhost/api/auth/callback/credentials');
+}
+
+/** One sign-in attempt. Returns the resolved value, or the thrown error. */
+async function attempt(password: string, totp?: string) {
+  try {
+    return await credentialsProvider().authorize({ email: EMAIL, password, totp }, request());
+  } catch (error) {
+    return error;
+  }
+}
+
+/** The reason recorded for the most recent attempt — the only way to tell a
+ * throttled attempt from a wrong password, since both return a uniform null. */
+function lastAuditReason(): string | undefined {
+  const calls = mocks.recordAuthAudit.mock.calls;
+  if (calls.length === 0) return undefined;
+  return (calls[calls.length - 1]![0] as { reason?: string }).reason;
+}
+
+function auditReasons(): string[] {
+  return mocks.recordAuthAudit.mock.calls
+    .map((call) => (call[0] as { reason?: string }).reason)
+    .filter((reason): reason is string => typeof reason === 'string');
+}
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  // The limiter is real and module-scoped: reset only the two keys under test.
+  clearRateLimit(IP_KEY);
+  clearRateLimit(ACCOUNT_KEY);
+
+  mocks.compare.mockImplementation(async (plain: string) => plain === PASSWORD);
+  mocks.verifyTotp.mockReturnValue(false);
+  mocks.resolveForRequest.mockResolvedValue(organization);
+  mocks.findRecoveryCode.mockResolvedValue(null);
+  useUser(tenantUser());
+  mocks.withTenantDb.mockImplementation(
+    async (_organizationId: string, run: (db: unknown) => unknown) =>
+      run({
+        user: { findFirst: mocks.findFirstUser, update: mocks.updateUser },
+        organizationIdentityConnection: { findFirst: vi.fn().mockResolvedValue(null) },
+        twoFactorRecoveryCode: {
+          findFirst: mocks.findRecoveryCode,
+          updateMany: vi.fn().mockResolvedValue({ count: 0 }),
+        },
+      })
+  );
+});
+
+describe('tenant login rate limiting', () => {
+  it('clears both failure budgets once a sign-in is fully verified', async () => {
+    // One unit short of the account limit, then a success that must reset it.
+    for (let i = 0; i < ACCOUNT_LIMIT - 1; i += 1) {
+      expect(await attempt('wrong-password')).toBeNull();
+      expect(lastAuditReason()).toBe('Incorrect password');
+    }
+    expect(await attempt(PASSWORD)).toMatchObject({ id: 'user_alex', email: EMAIL });
+
+    // Without the reset this run would be throttled from its 2nd attempt on.
+    for (let i = 0; i < ACCOUNT_LIMIT - 1; i += 1) {
+      expect(await attempt('wrong-password')).toBeNull();
+      expect(lastAuditReason()).toBe('Incorrect password');
+    }
+    expect(await attempt(PASSWORD)).toMatchObject({ id: 'user_alex' });
+
+    expect(auditReasons()).not.toContain('Rate limited');
+  });
+
+  it('never locks out a run of successful sign-ins', async () => {
+    // More attempts than EITHER limit allows, so an uncleared ip or account
+    // bucket would trip. This is the corpus failure: ~18 serial sign-ins as the
+    // same admin inside one 5-minute window.
+    for (let i = 0; i < IP_LIMIT + 5; i += 1) {
+      expect(await attempt(PASSWORD)).toMatchObject({ id: 'user_alex' });
+    }
+
+    expect(auditReasons()).not.toContain('Rate limited');
+    expect(mocks.compare).toHaveBeenCalledTimes(IP_LIMIT + 5);
+  });
+
+  it('still spends the account budget on every failure, and throttles at the limit', async () => {
+    for (let i = 0; i < ACCOUNT_LIMIT; i += 1) {
+      expect(await attempt('wrong-password')).toBeNull();
+      expect(lastAuditReason()).toBe('Incorrect password');
+    }
+
+    const comparesBefore = mocks.compare.mock.calls.length;
+    const throttled = await attempt('wrong-password');
+
+    expect(lastAuditReason()).toBe('Rate limited');
+    // Throttling happens ahead of the bcrypt compare, as REST-04 requires.
+    expect(mocks.compare).toHaveBeenCalledTimes(comparesBefore);
+    // A throttled attempt is byte-identical to a wrong password at the boundary.
+    expect(throttled).toBeNull();
+    // And the correct password is refused too while the window is open, so the
+    // limiter is not a bypass in either direction.
+    expect(await attempt(PASSWORD)).toBeNull();
+    expect(lastAuditReason()).toBe('Rate limited');
+  });
+
+  it('does not clear the budget when the password is right but the second factor is wrong', async () => {
+    useUser(tenantUser({ twoFactorEnabledAt: new Date(), twoFactorSecret: 'totp-secret' }));
+
+    // A correct password alone must not refund the attempt: otherwise whoever
+    // already holds the password gets an unlimited budget for grinding codes.
+    for (let i = 0; i < ACCOUNT_LIMIT; i += 1) {
+      expect(await attempt(PASSWORD, '000000')).toBeInstanceOf(Error);
+      expect(lastAuditReason()).toBe('Invalid 2FA code');
+    }
+
+    expect(await attempt(PASSWORD, '000000')).toBeNull();
+    expect(lastAuditReason()).toBe('Rate limited');
+  });
+});
