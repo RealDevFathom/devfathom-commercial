@@ -18,6 +18,9 @@ vi.mock('next/navigation', () => ({ usePathname: () => '/dashboard' }));
 vi.mock('next-auth/react', () => ({
   useSession: useSessionMock,
 }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: { hotelProperty: { extras: { properties: { useQuery: () => ({ data: undefined }) } } } },
+}));
 vi.mock('motion/react', () => ({
   m: {
     span: ({ children, ...props }: React.ComponentProps<'span'>) => (

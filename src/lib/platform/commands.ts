@@ -40,6 +40,13 @@ import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 import { defaultBookingEngineSlug } from '@/lib/hotel/property';
 import {
+  assignBootstrapHotelPropertyManager,
+  deactivateHotelProperty,
+  HOSPITALITY_OWNER_ROLE_KEY,
+  reactivateHotelProperty,
+  recoverHotelPropertyManager,
+} from '@/lib/platform/hotel-property-maintenance';
+import {
   ensureAdministratorStaffProfile,
   type AdministratorStaffProfileResult,
 } from '@/lib/restaurant/administrator-staff-profile';
@@ -768,6 +775,50 @@ async function bootstrapOrganization(
       status: 'ACTIVE',
     },
   });
+  // §9 Step 6 — instantiate the vertical's role templates from the catalog.
+  //
+  // WHA-1206: this ran inside the restaurant block, so a pharmacy was created
+  // holding only the bootstrap `admin` role while its own OWNER_AND_ROLE_TEMPLATES
+  // gate requires every key in `roleTemplatesForVertical('PHARMACY')` — an
+  // organization that could never be activated without a manual database write.
+  //
+  // AGENCY is deliberately still excluded rather than folded in. Its template set
+  // repeats the `admin` role created above (which would collide on the
+  // (organizationId, key) unique index) and adds `member`, which no agency gate
+  // requires. Seeding it would change every agency onboarding to close a gap
+  // agencies do not have; that is a product decision about a shipped vertical,
+  // not part of this fix.
+  //
+  // PROP-04: this loop used to run AFTER the vertical branch blocks below. It was
+  // moved above them so the hospitality block can name a role that actually
+  // exists — the bootstrap property assignment needs the Owner role's real id,
+  // and reading it back would mean querying for a row this function just wrote.
+  // The loop depends on nothing but `organization.id`, so for RESTAURANT,
+  // PHARMACY and AGENCY this changes the insertion order of the role rows
+  // relative to the branch rows and nothing else: no template is added or
+  // removed, the (organizationId, key) unique index is untouched, and the AGENCY
+  // exclusion is unchanged.
+  const verticalRoleIdsByKey = new Map<string, string>();
+  if (input.vertical !== 'AGENCY') {
+    for (const template of roleTemplatesForVertical(input.vertical)) {
+      const role = await db.organizationRole.create({
+        data: {
+          organizationId: organization.id,
+          key: template.key,
+          name: template.name,
+          isSystem: template.isSystem,
+          permissions: {
+            create: template.capabilities.map((capability) => ({
+              organizationId: organization.id,
+              capability,
+              effect: 'ALLOW',
+            })),
+          },
+        },
+      });
+      verticalRoleIdsByKey.set(template.key, role.id);
+    }
+  }
   // §9 Steps 3/5/6 — restaurant onboarding is branch-first. Create the single
   // default branch (organization timezone, conservative name) and assign the
   // bootstrap administrator to it. Guarded so the AGENCY path is byte-identical.
@@ -834,7 +885,7 @@ async function bootstrapOrganization(
   // fills them in on the property settings page; pre-seeding them here would be
   // exactly the "seed data fakes readiness" move the checklist exists to refuse.
   if (input.vertical === 'HOSPITALITY') {
-    await db.hotelProperty.create({
+    const property = await db.hotelProperty.create({
       data: {
         organizationId: organization.id,
         name: input.firstBranchName!,
@@ -847,38 +898,54 @@ async function bootstrapOrganization(
         bookingEngineSlug: defaultBookingEngineSlug(input.slug, input.firstBranchName!),
       },
     });
-  }
-  // §9 Step 6 — instantiate the vertical's role templates from the catalog.
-  //
-  // WHA-1206: this ran inside the restaurant block, so a pharmacy was created
-  // holding only the bootstrap `admin` role while its own OWNER_AND_ROLE_TEMPLATES
-  // gate requires every key in `roleTemplatesForVertical('PHARMACY')` — an
-  // organization that could never be activated without a manual database write.
-  //
-  // AGENCY is deliberately still excluded rather than folded in. Its template set
-  // repeats the `admin` role created above (which would collide on the
-  // (organizationId, key) unique index) and adds `member`, which no agency gate
-  // requires. Seeding it would change every agency onboarding to close a gap
-  // agencies do not have; that is a product decision about a shipped vertical,
-  // not part of this fix.
-  if (input.vertical !== 'AGENCY') {
-    for (const template of roleTemplatesForVertical(input.vertical)) {
-      await db.organizationRole.create({
-        data: {
-          organizationId: organization.id,
-          key: template.key,
-          name: template.name,
-          isSystem: template.isSystem,
-          permissions: {
-            create: template.capabilities.map((capability) => ({
-              organizationId: organization.id,
-              capability,
-              effect: 'ALLOW',
-            })),
-          },
-        },
-      });
+    // PROP-04 G1 — the property is unreachable until someone is explicitly
+    // assigned to it: the restrictive policy completed in
+    // `20260915010000_hotel_property_maintenance` denies `hotel_properties` to a
+    // tenant connection with no active assignment. Nothing else in the product
+    // writes the first one, and the tenant write policy cannot — it requires the
+    // actor to already hold an assignment at that branch — so a hospitality
+    // organization provisioned without this line opens on a property no one in it
+    // can see.
+    //
+    // Written here, inside the same platform transaction that created both rows,
+    // against the exact tuple provisioning has in hand: this organization, the
+    // property returned immediately above, the operator-named administrator
+    // created from `adminName`/`adminEmail`, and this organization's own
+    // Hospitality Owner role. No search, so no "oldest admin" or "first
+    // employee" can be picked instead, and no automatic all-property grant:
+    // exactly one property exists
+    // and exactly one assignment is written for it.
+    //
+    // This is an extension of named-admin provisioning, not implicit Owner scope.
+    // The recipient is still the operator-named administrator created from
+    // `adminName`/`adminEmail` — nobody else, and no all-property grant.
+    //
+    // The ROLE is this organization's own hospitality Owner role, instantiated by
+    // the template loop above. The bootstrap `admin` role cannot be used: it is
+    // not one of the keys `requireHotelPropertyScope` filters on, so an
+    // assignment carrying it would make the property visible in SQL and still
+    // resolve to no tRPC scope — every new hospitality tenant would open on a
+    // property nobody in it could operate. Owner carries the identical `'*'`
+    // capability the bootstrap `admin` role already carries, so this widens no
+    // privilege: the recipient's ceiling is the organization's own ABAC, which
+    // `requireHotelPropertyScope` evaluates before it reads any assignment.
+    const ownerRoleId = verticalRoleIdsByKey.get(HOSPITALITY_OWNER_ROLE_KEY);
+    if (!ownerRoleId) {
+      // Structurally unreachable — the Owner template is the first entry of
+      // HOSPITALITY_ROLE_TEMPLATES and the loop above just ran. Fail closed
+      // rather than fall back to a role that resolves nothing: a silently
+      // downgraded assignment is the exact defect this replaces.
+      throw new PlatformSecurityError(
+        'The hospitality Owner role was not provisioned for this organization.',
+        500
+      );
     }
+    await assignBootstrapHotelPropertyManager(db, {
+      organizationId: organization.id,
+      branchId: property.branchId,
+      userId: admin.id,
+      organizationRoleId: ownerRoleId,
+    });
   }
   // §2.3: onboarding no longer copies the package's enabled modules into
   // OrganizationModule. Those rows behave as permanent OVERRIDEs in the resolver
@@ -1955,6 +2022,105 @@ async function runCommand(
         organizationId: saved.organizationId,
         data: { id: saved.id, passwordReset: true },
         audit: { id: saved.id, passwordReset: true },
+      };
+    }
+    // PROP-04 G2 — break-glass property recovery. The tenant write policy on
+    // `hotel_property_assignments` requires the actor to already hold an
+    // assignment at that branch, which is correct for ordinary delegation and
+    // leaves exactly one hole: when the only assigned manager leaves, nobody
+    // inside the tenant can restore access to the property. This is the native,
+    // audited way out of that hole, and it deliberately does not read an existing
+    // manager — it cannot depend on the thing that is missing.
+    //
+    // It is not impersonation: no tenant session exists here, the work runs in
+    // the platform transaction under `organizations:write`, and the ledger
+    // records the operator who did it. It is not a blanket grant: one property,
+    // one named person, one role the organization already has.
+    case 'organization.hotelproperty.recover': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          userId: id,
+          organizationRoleId: id,
+          // Break-glass access is recorded with a reason an auditor can read.
+          // Longer than the ordinary override reason on purpose: this command's
+          // whole justification is the circumstance, so 'fix' is not an answer.
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const { reason, ...tuple } = input;
+      const recovered = await recoverHotelPropertyManager(db, tuple);
+      return {
+        targetType: 'HotelPropertyAssignment',
+        targetId: `${input.branchId}:${input.userId}`,
+        organizationId: input.organizationId,
+        // `reason` rides in the projection because the audit row's own `reason`
+        // column is written only by the failure path; the ledger's `after` is
+        // where a successful command states why it ran.
+        auditBefore: recovered.auditBefore ?? undefined,
+        data: {
+          ...recovered.audit,
+          propertyName: recovered.propertyName,
+          userName: recovered.userName,
+          roleName: recovered.roleName,
+        },
+        audit: { ...recovered.audit, reason, roleName: recovered.roleName },
+      };
+    }
+    // PROP-04 G3 — take one named property out of service. The restrictive policy
+    // denies an inactive property to every tenant connection, so this is a real
+    // access decision and not a display flag, and it is one-way from the tenant's
+    // side: once down, no tenant can see the row to raise it again.
+    case 'organization.hotelproperty.deactivate': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const property = await deactivateHotelProperty(db, input.organizationId, input.branchId);
+      return {
+        targetType: 'HotelProperty',
+        targetId: property.branchId,
+        organizationId: input.organizationId,
+        auditBefore: { branchId: property.branchId, active: true },
+        data: property,
+        audit: {
+          branchId: property.branchId,
+          name: property.name,
+          active: false,
+          reason: input.reason,
+        },
+      };
+    }
+    // PROP-04 G3 — return one named property to service, through the same audited
+    // path. Refused unless the organization may operate, the property's own
+    // onboarding evidence still stands, and an eligible explicit manager holds it;
+    // see `reactivateHotelProperty` for why each condition is checked rather than
+    // assumed.
+    case 'organization.hotelproperty.reactivate': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const property = await reactivateHotelProperty(db, input.organizationId, input.branchId);
+      return {
+        targetType: 'HotelProperty',
+        targetId: property.branchId,
+        organizationId: input.organizationId,
+        auditBefore: { branchId: property.branchId, active: false },
+        data: property,
+        audit: {
+          branchId: property.branchId,
+          name: property.name,
+          active: true,
+          reason: input.reason,
+        },
       };
     }
     case 'organization.usage': {

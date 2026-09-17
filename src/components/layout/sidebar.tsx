@@ -45,6 +45,7 @@ import {
   Replace,
   BookLock,
   Pill,
+  Tags,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -53,6 +54,8 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { trpc } from '@/lib/trpc';
+import { evaluateSessionUser } from '@/lib/auth/session-state';
 import type { TenantBrand } from '@/lib/tenant-brand';
 import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -314,9 +317,9 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
-  // H1-01 — the hospitality rail. Settings is the only entry for now: every
-  // other hotel surface arrives with its own lane, and a nav entry pointing at a
-  // route that does not exist is a dead end (UX rule 12). Gated on mandatory
+  // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
+  // every operating surface arrives with its own lane, and a nav entry pointing
+  // at a route that does not exist is a dead end (UX rule 12). Gated on mandatory
   // Hotel Core through explicit module ownership, so the vertical filter hides
   // it from restaurant and pharmacy workspaces without a `/hotel` catch-all.
   {
@@ -324,6 +327,14 @@ export const navigation: NavItem[] = [
     href: '/hotel/settings/property',
     icon: Settings,
     adminOnly: true,
+    group: 'Hospitality',
+    module: 'hotel-core',
+  },
+  // H1-06 (PROP-05) — the extras catalog every folio charge will name.
+  {
+    label: 'Extras',
+    href: '/hotel/settings/extras',
+    icon: Tags,
     group: 'Hospitality',
     module: 'hotel-core',
   },
@@ -368,7 +379,8 @@ const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospita
 
 export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
-  role?: string
+  role?: string,
+  hotelExtrasAccess = false
 ) {
   const isAdmin = role === 'ADMIN';
   const isHr = role === 'HR';
@@ -382,6 +394,7 @@ export function visibleNavigation(
       if (moduleVertical && entitlements.vertical && moduleVertical !== entitlements.vertical)
         return false;
       if (moduleKey && !isModuleGranted(moduleKey, entitlements.enabledModules)) return false;
+      if (item.href === '/hotel/settings/extras') return hotelExtrasAccess;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;
       return true;
@@ -393,7 +406,29 @@ function useVisibleNavigation() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const entitlements = useEntitlements();
-  const filteredNav = visibleNavigation(entitlements, session?.user?.role);
+  const extrasEnabled = Boolean(
+    session?.user.id &&
+    session.user.organizationId === entitlements.organizationId &&
+    evaluateSessionUser(session.user).ok &&
+    entitlements.vertical === 'HOSPITALITY' &&
+    isModuleGranted('hotel-core', entitlements.enabledModules)
+  );
+  const extras = trpc.hotelProperty.extras.properties.useQuery(undefined, {
+    enabled: extrasEnabled,
+    retry: false,
+    staleTime: 0,
+    refetchOnMount: 'always',
+  });
+  // A cached response for another signed-in identity cannot expose this entry.
+  const hotelExtrasAccess = Boolean(
+    extrasEnabled &&
+    !extras.isError &&
+    !extras.isFetching &&
+    extras.data?.userId === session?.user.id &&
+    extras.data?.organizationId === session?.user.organizationId &&
+    extras.data?.properties.length
+  );
+  const filteredNav = visibleNavigation(entitlements, session?.user?.role, hotelExtrasAccess);
 
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
   const matchingHrefs = filteredNav

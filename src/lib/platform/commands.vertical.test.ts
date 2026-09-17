@@ -43,6 +43,9 @@ const mocks = vi.hoisted(() => ({
   // IS the branch, so a third create tells the three paths apart.
   hotelPropertyCreate: vi.fn(),
   hotelPropertyFindFirst: vi.fn(),
+  // PROP-04 G1 — provisioning now also writes the bootstrap administrator's
+  // assignment to the property it just created, in the same transaction.
+  hotelAssignmentCreate: vi.fn(),
   acknowledgementFindMany: vi.fn(),
   // WHA-1181 — restaurant onboarding and activation now also link each
   // organization administrator to a staff profile. Default implementations
@@ -130,6 +133,7 @@ const platformDb = {
     create: mocks.hotelPropertyCreate,
     findFirst: mocks.hotelPropertyFindFirst,
   },
+  hotelPropertyAssignment: { create: mocks.hotelAssignmentCreate },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
   restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
@@ -239,9 +243,20 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.userFindFirst.mockResolvedValue(null);
     mocks.userCreate.mockResolvedValue({ id: 'user_admin' });
     mocks.orgCreate.mockResolvedValue({ id: 'org_new', slug: 'acme' });
-    mocks.roleCreate.mockResolvedValue({ id: 'role_x' });
+    // PROP-04 F-B — role ids have to be distinguishable now: provisioning assigns
+    // the hospitality property to the Owner role it created from the catalog, not
+    // to the bootstrap `admin` role, so a single shared id would let the two pass
+    // for each other. `admin` keeps `role_x` because the administrator user is
+    // created against it.
+    mocks.roleCreate.mockImplementation(async (args: { data: { key: string } }) => ({
+      id: args.data.key === 'admin' ? 'role_x' : `role_${args.data.key}`,
+    }));
     mocks.branchCreate.mockResolvedValue({ id: 'branch_1' });
     mocks.assignmentCreate.mockResolvedValue({ id: 'assign_1' });
+    // The property's own id is `branchId`, and G1 assigns against exactly the row
+    // this create returned — so the fixture has to return one.
+    mocks.hotelPropertyCreate.mockResolvedValue({ branchId: 'prop_1' });
+    mocks.hotelAssignmentCreate.mockResolvedValue({ id: 'hpa_1' });
     mocks.departmentCreateMany.mockResolvedValue({ count: 0 });
   });
 
@@ -491,6 +506,23 @@ describe('organization.create vertical + package compatibility', () => {
     for (const field of ['mode', 'taxProfileId', 'businessDatePolicy', 'currency']) {
       expect(written.data).not.toHaveProperty(field);
     }
+    // PROP-04 G1 — and the property is assigned to the operator-named
+    // administrator in the same transaction. Exactly one assignment, naming the
+    // exact tuple provisioning created: the property row returned above, the user
+    // created from `adminName`/`adminEmail`, and this organization's own Owner
+    // role. Not an all-property grant and not an inferred one — the values are the
+    // ids the creates above returned, so nothing was searched for.
+    expect(mocks.hotelAssignmentCreate).toHaveBeenCalledTimes(1);
+    expect(mocks.hotelAssignmentCreate).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_new',
+        branchId: 'prop_1',
+        userId: 'user_admin',
+        organizationRoleId: 'role_owner',
+        active: true,
+      },
+    });
+
     // Neither of the other verticals' branch aggregates was touched.
     expect(mocks.branchCreate).not.toHaveBeenCalled();
     expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
@@ -514,6 +546,61 @@ describe('organization.create vertical + package compatibility', () => {
         sortOrder: index,
       })),
     });
+  });
+
+  // PROP-04 F-B — the regression the first G1 delivery missed. Provisioning wrote
+  // the assignment against the bootstrap `admin` role, which
+  // `requireHotelPropertyScope` does not filter on, so the tRPC `findFirst`
+  // returned null and every newly provisioned hospitality organization opened on
+  // a property nobody in it could operate. Asserted against the catalog rather
+  // than a copied literal, so renaming the Owner template fails here.
+  it('assigns the property to a role the tenant resolver actually resolves on', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_h',
+      active: true,
+      vertical: 'HOSPITALITY',
+      moduleLinks: [],
+    });
+
+    await run('organization.create', hospitalityCreatePayload());
+
+    const assigned = (
+      mocks.hotelAssignmentCreate.mock.calls[0]![0] as {
+        data: { organizationRoleId: string; userId: string };
+      }
+    ).data;
+    // The id belongs to a role this very provisioning created — not a searched-for
+    // one and not a pre-existing one.
+    const createdKeys = mocks.roleCreate.mock.calls.map(
+      (call) => (call[0] as { data: { key: string } }).data.key
+    );
+    const assignedKey = createdKeys.find((key) => `role_${key}` === assigned.organizationRoleId);
+    expect(assignedKey).toBeDefined();
+    // And it is one of the keys `requireHotelPropertyScope` filters assignments
+    // by, which is the predicate the old `admin` role failed.
+    expect(roleTemplatesForVertical('HOSPITALITY').map((template) => template.key)).toContain(
+      assignedKey
+    );
+    expect(assigned.organizationRoleId).not.toBe('role_x');
+    // The recipient is unchanged: still the operator-named administrator.
+    expect(assigned.userId).toBe('user_admin');
+  });
+
+  // The role templates now have to exist before the hospitality block runs, since
+  // that block names one of them. Pinned so a later reordering fails here rather
+  // than by assigning a role id that does not exist yet.
+  it('creates the hospitality role templates before it writes the property assignment', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      id: 'pkg_h',
+      active: true,
+      vertical: 'HOSPITALITY',
+      moduleLinks: [],
+    });
+
+    await run('organization.create', hospitalityCreatePayload());
+
+    expect(mocks.roleCreate).toHaveBeenCalledBefore(mocks.hotelAssignmentCreate);
+    expect(mocks.roleCreate).toHaveBeenCalledBefore(mocks.hotelPropertyCreate);
   });
 
   it('refuses a HOSPITALITY create that names no premises for its first property', async () => {

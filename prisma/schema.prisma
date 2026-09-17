@@ -2765,6 +2765,7 @@ model User {
   pharmacyOrdersPlaced        PharmacyCustomerOrder[]        @relation("PharmacyOrderPlacedBy")
   pharmacyOrdersRun           PharmacyCustomerOrder[]        @relation("PharmacyOrderRunner")
   pharmacyOrderEvents         PharmacyCustomerOrderEvent[]   @relation("PharmacyOrderEventActor")
+  hotelPropertyAssignments    HotelPropertyAssignment[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])
@@ -10676,8 +10677,10 @@ model OrganizationRole {
   organization Organization                 @relation(fields: [organizationId], references: [id], onDelete: Cascade)
   permissions  OrganizationRolePermission[]
   users        User[]
+  hotelPropertyAssignments HotelPropertyAssignment[]
 
   @@unique([organizationId, key])
+  @@unique([organizationId, id], map: "organization_roles_org_id_key")
   @@index([organizationId])
   @@map("organization_roles")
 }
@@ -13745,6 +13748,8 @@ model HotelProperty {
   /// IANA zone. A property dates its own business days, audits and cut-offs.
   timezone       String
   mode           HotelPropertyMode @default(HOTEL)
+  /// Explicit configuration only; null keeps the selected mode's defaults.
+  modeOverrides  Json?
   /// 1–7 where the property publishes one; null while it is unrated (H-D14).
   starCategory   Int?
   /// 24-hour local times, as `HH:MM`, in this property's timezone.
@@ -13775,8 +13780,125 @@ model HotelProperty {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  extras HotelExtra[]
+  assignments HotelPropertyAssignment[]
+
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
   @@index([organizationId, active], map: "hotel_properties_org_active_idx")
   @@map("hotel_properties")
+}
+
+/// PROP-04: an explicit, revocable role at one property. No implied Owner scope.
+model HotelPropertyAssignment {
+  id                 String   @id @default(cuid())
+  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId           String
+  userId             String
+  organizationRoleId String
+  active             Boolean  @default(true)
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  property HotelProperty    @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Cascade, map: "hotel_property_assignments_property_fkey")
+  user     User             @relation(fields: [organizationId, userId], references: [organizationId, id], onDelete: Cascade, map: "hotel_property_assignments_user_fkey")
+  role     OrganizationRole @relation(fields: [organizationId, organizationRoleId], references: [organizationId, id], onDelete: Restrict, map: "hotel_property_assignments_role_fkey")
+
+  @@unique([organizationId, branchId, userId], map: "hotel_property_assignments_org_branch_user_key")
+  @@index([organizationId, userId, active])
+  @@map("hotel_property_assignments")
+}
+
+// ============================================
+// HOSPITALITY — PROP-05 extras and services catalog
+// ============================================
+
+/// The posting department a hospitality charge belongs to. One closed vocabulary
+/// for the whole vertical, because three contracts group by it: "revenue by
+/// department" on the owner dashboard, the month-end pack's revenue split, and
+/// the API-03 GL mapping (`department/tax_class/tender_kind → gl_account`). A
+/// free-text department would let one typo split a report line in two.
+///
+/// The names come from the pack rather than from a generic ledger: `DAY_USE` is
+/// its own department and never enters ADR/RevPAR (metric contract §5), `NO_SHOW`
+/// and `CANCELLATION` are their own revenue departments, and `UTILITIES` is what
+/// RSV-09's recurring long-stay charges post to.
+enum HotelDepartment {
+  ROOMS
+  DAY_USE
+  FOOD_BEVERAGE
+  MINIBAR
+  LAUNDRY
+  SPA
+  TRANSPORT
+  TELEPHONE
+  BUSINESS_CENTRE
+  BANQUET
+  UTILITIES
+  NO_SHOW
+  CANCELLATION
+  MISCELLANEOUS
+}
+
+/// PROP-05 ★ — how often a catalog item posts against a stay. `NONE` is a one-off
+/// charge an operator posts by hand; the rest are the shapes RSV-09's periodic
+/// posting understands. `PER_PERIOD` follows the rate plan's billing cycle
+/// (weekly/monthly), which is why it is meaningless against a nightly one.
+enum HotelExtraRecurrence {
+  NONE
+  PER_NIGHT
+  PER_STAY
+  PER_PERSON
+  PER_PERIOD
+}
+
+/// PROP-05 (`05-data-model` §1.1). The catalog every folio charge references —
+/// "every folio charge references a catalog item or a manual reason" is PROP-05's
+/// acceptance criterion, so this table is the named half of that rule.
+///
+/// Scoped to a property (`branchId`) rather than to the organization: a chain's
+/// two properties price their laundry differently and post it to their own
+/// departments, and `code` is unique per property for exactly that reason.
+///
+/// Money is PKR minor units. `upsellPriceMinor` is the pre-arrival offer price of
+/// UPS-01 and is null when the offer is made at the shelf price; the database
+/// refuses it on an item that is not `upsellable` at all, so a catalog cannot
+/// carry an offer price nothing can ever offer.
+model HotelExtra {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  /// The property this catalog belongs to — `hotel_properties.branchId`.
+  branchId       String
+  /// The operator-visible short code, unique within the property.
+  code           String
+  name           String
+  /// Urdu name, where the property publishes one (the vertical is bilingual).
+  nameUr         String?
+  /// Shelf price in PKR minor units.
+  priceMinor     Int
+  /// The tax class the property's tax profile prices this charge at. A free code
+  /// rather than an enum because the classes belong to the tax profile, which is
+  /// per-jurisdiction and effective-dated; the catalog only names one.
+  taxClass       String
+  department     HotelDepartment
+  /// FOL-01 posting instructions (folio target, when the charge lands, whether
+  /// the price includes tax). Shape owned by the folio lane; `{}` until then.
+  postingRule    Json    @default("{}")
+  /// UPS-01: may this item be offered before arrival?
+  upsellable     Boolean @default(false)
+  /// The offer price, when it differs from the shelf price. Requires `upsellable`.
+  upsellPriceMinor Int?
+  recurring        HotelExtraRecurrence @default(NONE)
+  active           Boolean              @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Cascade)
+
+  @@unique([organizationId, id], map: "hotel_extras_org_id_key")
+  @@unique([organizationId, branchId, code], map: "hotel_extras_org_branch_code_key")
+  @@index([organizationId, branchId, active], map: "hotel_extras_org_branch_active_idx")
+  @@index([organizationId, branchId, department], map: "hotel_extras_org_branch_department_idx")
+  @@map("hotel_extras")
 }

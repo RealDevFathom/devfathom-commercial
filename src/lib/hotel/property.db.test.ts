@@ -24,6 +24,7 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { DEFAULT_HOTEL_PROPERTY_MODE } from '@/lib/hotel/property';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL =
   process.env.HOTEL_PROPERTY_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
@@ -39,16 +40,56 @@ const suffix = randomBytes(6).toString('hex');
 const ORG_A = `org_hotel_a_${suffix}`;
 const ORG_B = `org_hotel_b_${suffix}`;
 
-type Deps = { withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'] };
+type Deps = {
+  withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
+  withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
+};
 let deps: Deps;
 
+/**
+ * PROP-04 — each tenant now acts as a named user, because the restrictive
+ * property policy resolves `app.current_user_id` against
+ * `hotel_property_assignments`. An organization GUC on its own reaches nothing.
+ */
+const ACTOR: Record<string, string> = {
+  [ORG_A]: `user_hotel_a_${suffix}`,
+  [ORG_B]: `user_hotel_b_${suffix}`,
+};
+const ROLE: Record<string, string> = {
+  [ORG_A]: `role_hotel_a_${suffix}`,
+  [ORG_B]: `role_hotel_b_${suffix}`,
+};
+
 function inOrg<T>(organizationId: string, work: (db: ScopedDb) => Promise<T>): Promise<T> {
-  return deps.withTenantDb(organizationId, work);
+  return deps.withTenantDb(organizationId, work, { userId: ACTOR[organizationId] });
 }
 
-/** One property per tenant, created as that tenant so every policy applies. */
+/** As the control plane — `app.is_platform_admin = 'true'`, no tenant, no user. */
+function asPlatform<T>(work: (db: ScopedDb) => Promise<T>): Promise<T> {
+  return deps.withPlatformDb(work);
+}
+
+/**
+ * One property per tenant, **arranged** through the control plane and then
+ * explicitly assigned to that tenant's actor.
+ *
+ * This used to create the property as the tenant. After PROP-04 no tenant
+ * connection can create the first property of its own organization — the
+ * restrictive `FOR ALL USING` doubles as the write check, no assignment can exist
+ * before the row does, and there is no tenant self-bootstrap policy. That is the
+ * policy working, and the denial is asserted explicitly below rather than being
+ * left implicit in a fixture that fails.
+ *
+ * The assignment row is what keeps the isolation assertions honest. Without it
+ * every read in this file would return nothing, and "ORG_A cannot see ORG_B's
+ * property" would be true only because ORG_A can see nothing at all — a denial
+ * that fires for everybody proves nothing about tenancy. Written with raw SQL
+ * because the `HotelPropertyAssignment` delegate is not in the generated client
+ * yet (G4); `id` and `updatedAt` are supplied because neither column has a
+ * database default.
+ */
 async function propertyFixture(organizationId: string, label: string) {
-  return inOrg(organizationId, (db) =>
+  const property = await asPlatform((db) =>
     db.hotelProperty.create({
       data: {
         organizationId,
@@ -60,6 +101,19 @@ async function propertyFixture(organizationId: string, label: string) {
       },
     })
   );
+  await asPlatform((db) =>
+    db.$executeRawUnsafe(
+      `INSERT INTO "hotel_property_assignments"
+         ("id", "organizationId", "branchId", "userId", "organizationRoleId", "active", "updatedAt")
+       VALUES ($1, $2, $3, $4, $5, true, CURRENT_TIMESTAMP)`,
+      `hpa_${label}`,
+      organizationId,
+      property.branchId,
+      ACTOR[organizationId]!,
+      ROLE[organizationId]!
+    )
+  );
+  return property;
 }
 
 let one: { branchId: string } | undefined;
@@ -67,7 +121,62 @@ let other: { branchId: string } | undefined;
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  deps = { withTenantDb: (await import('@/lib/tenancy/scoped-db')).withTenantDb };
+  const scoped = await import('@/lib/tenancy/scoped-db');
+  deps = { withTenantDb: scoped.withTenantDb, withPlatformDb: scoped.withPlatformDb };
+
+  // The assignment's composite foreign keys reach `users` and
+  // `organization_roles`, so both tenants need a real organization, a real
+  // hospitality role and a real ACTIVE user. `general-manager` is a hospitality
+  // template key, which is what `requireHotelPropertyScope` filters on — a role
+  // outside that set would be a row that grants SQL visibility and no tRPC scope.
+  await asPlatform(async (db) => {
+    for (const organizationId of [ORG_A, ORG_B]) {
+      const slug = organizationId.replaceAll('_', '-');
+      await db.organization.create({
+        data: {
+          id: organizationId,
+          slug,
+          legalName: `Hotel ${slug}`,
+          displayName: `Hotel ${slug}`,
+          vertical: 'HOSPITALITY',
+          status: 'ACTIVE',
+          primaryContactName: 'Ops',
+          primaryContactEmail: `ops@${slug}.test`,
+        },
+      });
+      // WHA-278: `User.department` is half a composite foreign key onto
+      // `organization_departments(organizationId, key)`, so the actor below
+      // cannot be written until this organization's catalog holds the key it is
+      // filed under. Provisioning seeds the whole vertical catalog; a fixture
+      // seeds only the key it uses. `FRONT_OFFICE` is a real HOSPITALITY key,
+      // not an invented one, so this is the same row shape production writes.
+      await seedDepartments(db, [organizationId], ['FRONT_OFFICE']);
+      await db.organizationRole.create({
+        data: {
+          id: ROLE[organizationId]!,
+          organizationId,
+          key: 'general-manager',
+          name: 'General Manager',
+          isSystem: true,
+        },
+      });
+      await db.user.create({
+        data: {
+          id: ACTOR[organizationId]!,
+          organizationId,
+          organizationRoleId: ROLE[organizationId]!,
+          name: ACTOR[organizationId]!,
+          email: `${ACTOR[organizationId]}@example.test`,
+          password: 'x',
+          department: 'FRONT_OFFICE',
+          title: 'General Manager',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+        },
+      });
+    }
+  });
+
   one = await propertyFixture(ORG_A, `a-${suffix}`);
   other = await propertyFixture(ORG_B, `b-${suffix}`);
 });
@@ -144,9 +253,42 @@ describeIfDatabase('hotel_properties tenant isolation', () => {
     expect(theirs.map((row) => row.branchId)).toEqual([other!.branchId]);
   });
 
-  it('keeps one booking-engine address per organization', async () => {
+  // PROP-04 — the capability this file's fixture used to exercise implicitly, now
+  // asserted explicitly as a denial rather than silently dropped. A tenant cannot
+  // create the first property of its own organization: the restrictive policy's
+  // `FOR ALL USING` doubles as the write check, the new row has no assignment, and
+  // there is no tenant self-bootstrap policy. Provisioning and the audited
+  // platform commands are the only writers.
+  it('refuses a tenant creating a property of its own organization', async () => {
     await expect(
       inOrg(ORG_A, (db) =>
+        db.hotelProperty.create({
+          data: {
+            organizationId: ORG_A,
+            name: 'Self-bootstrapped',
+            addressLine: '2 Nowhere',
+            city: 'Lahore',
+            timezone: 'Asia/Karachi',
+            bookingEngineSlug: `self-${suffix}`,
+          },
+        })
+      )
+    ).rejects.toThrow();
+
+    // And nothing landed: the tenant still sees exactly its one assigned property.
+    const mine = await inOrg(ORG_A, (db) => db.hotelProperty.findMany({}));
+    expect(mine.map((row) => row.branchId)).toEqual([one!.branchId]);
+  });
+
+  // The two cases below assert database CONSTRAINTS, so they are issued on the
+  // control-plane connection — the one connection the restrictive policy admits.
+  // On a tenant connection they would now be refused by RLS before PostgreSQL
+  // ever consulted the index or the CHECK, and `rejects.toThrow()` would pass
+  // while proving nothing about either. The claim is preserved by moving the
+  // connection; re-scoping a tenant SECURITY assertion would not be.
+  it('keeps one booking-engine address per organization', async () => {
+    await expect(
+      asPlatform((db) =>
         db.hotelProperty.create({
           data: {
             organizationId: ORG_A,
@@ -159,6 +301,27 @@ describeIfDatabase('hotel_properties tenant isolation', () => {
         })
       )
     ).rejects.toThrow();
+
+    // A different address under the same organization is accepted, so the refusal
+    // above is the unique index and not the connection.
+    const second = await asPlatform((db) =>
+      db.hotelProperty.create({
+        data: {
+          organizationId: ORG_A,
+          name: 'Second property, its own public address',
+          addressLine: '13 Main Boulevard',
+          city: 'Lahore',
+          timezone: 'Asia/Karachi',
+          bookingEngineSlug: `property-a2-${suffix}`,
+        },
+      })
+    );
+    expect(second.branchId).toBeTruthy();
+    // Unassigned, so the tenant still reaches only the property it holds — the
+    // positive control that this file's reads are assignment-scoped and not
+    // merely organization-scoped.
+    const mine = await inOrg(ORG_A, (db) => db.hotelProperty.findMany({}));
+    expect(mine.map((row) => row.branchId)).toEqual([one!.branchId]);
   });
 
   it('refuses times and money the rest of the vertical could not read', async () => {
@@ -170,7 +333,7 @@ describeIfDatabase('hotel_properties tenant isolation', () => {
       { starCategory: 9 },
     ]) {
       await expect(
-        inOrg(ORG_A, (db) =>
+        asPlatform((db) =>
           db.hotelProperty.create({
             data: {
               organizationId: ORG_A,
@@ -229,11 +392,25 @@ describeIfOwner('hotel_properties forced row-level security', () => {
     );
     expect(unscoped.rows[0]!.count).toBe('0');
 
+    // PROP-04 — and the organization GUC alone is no longer enough, for the owning
+    // role or anyone else. This used to return the property here; the restrictive
+    // policy resolves `app.current_user_id` against the assignment table, and an
+    // unset user GUC matches no row.
     await owner.query(`SELECT set_config('app.current_organization_id', $1, false)`, [ORG_A]);
+    const withoutUser = await owner.query<{ count: string }>(
+      `SELECT count(*)::text AS count FROM "hotel_properties"`
+    );
+    expect(withoutUser.rows[0]!.count).toBe('0');
+
+    // With the assigned user named, the owning role sees exactly what that tenant
+    // user sees — one property, not the table.
+    await owner.query(`SELECT set_config('app.current_user_id', $1, false)`, [ACTOR[ORG_A]!]);
     const scoped = await owner.query<{ branchId: string }>(
       `SELECT "branchId" FROM "hotel_properties"`
     );
     expect(scoped.rows.map((row) => row.branchId)).toEqual([one!.branchId]);
+
     await owner.query(`SELECT set_config('app.current_organization_id', '', false)`);
+    await owner.query(`SELECT set_config('app.current_user_id', '', false)`);
   });
 });

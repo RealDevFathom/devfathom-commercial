@@ -44,6 +44,7 @@ jobs:
       AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       APP_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       CAMERA_TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
+      HOTEL_EXTRAS_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       HOTEL_PROPERTY_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       INVENTORY_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       M8_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
@@ -60,6 +61,7 @@ jobs:
       WHA1339_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       DELIVERY_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       EXTENSION_ADMIN_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      HOTEL_EXTRAS_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       HOTEL_PROPERTY_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       M8_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test

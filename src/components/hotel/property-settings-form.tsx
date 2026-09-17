@@ -19,10 +19,11 @@
  * The mode is saved by its own mutation, because MODE-01 makes it a decision
  * about how the property operates rather than one field of a settings save.
  */
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
+import { useSession } from 'next-auth/react';
 
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -75,40 +76,139 @@ function validationErrors(error: unknown): Record<string, string> {
   );
 }
 
-export function HotelPropertySettingsForm({ initial }: { initial: PropertyView }) {
+type PropertySelection = { branchId: string; organizationId: string; userId: string };
+
+function ReloadPropertySettings() {
+  return (
+    <SectionCard title="Choose a property again" titleLevel={2}>
+      <p className="text-sm text-text-muted">
+        Your session or property access changed. Choose a property you can manage to continue.
+      </p>
+      <a
+        href="/hotel/settings/property"
+        className={buttonVariants({ variant: 'outline', className: 'mt-3 min-h-11' })}
+      >
+        Choose a property
+      </a>
+    </SectionCard>
+  );
+}
+
+function matchesSelection(view: PropertyView, selection: PropertySelection) {
+  return (
+    view.property?.branchId === selection.branchId &&
+    view.property.organizationId === selection.organizationId
+  );
+}
+
+export function HotelPropertySettingsForm({
+  initial,
+  selection,
+}: {
+  initial: PropertyView;
+  selection: PropertySelection;
+}) {
+  const { data: session } = useSession();
+  if (
+    session?.user.id !== selection.userId ||
+    session.user.organizationId !== selection.organizationId ||
+    !matchesSelection(initial, selection)
+  ) {
+    return <ReloadPropertySettings />;
+  }
+  return (
+    <SelectedPropertySettings
+      key={JSON.stringify([selection.organizationId, selection.userId, selection.branchId])}
+      initial={initial}
+      selection={selection}
+    />
+  );
+}
+
+function SelectedPropertySettings({
+  initial,
+  selection,
+}: {
+  initial: PropertyView;
+  selection: PropertySelection;
+}) {
+  const { branchId } = selection;
   const [view, setView] = useState<PropertyView>(initial);
   const [errors, setErrors] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState<string | null>(null);
+  const [unavailable, setUnavailable] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
+  const [refreshFailed, setRefreshFailed] = useState(false);
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => {
+      mounted.current = false;
+    };
+  }, []);
+
+  const accessDenied = (error: unknown) => {
+    const code = (error as { data?: { code?: string } } | null)?.data?.code;
+    return code === 'FORBIDDEN' || code === 'UNAUTHORIZED' || code === 'NOT_FOUND';
+  };
 
   const utils = trpc.useUtils();
-  const refresh = () => {
-    void utils.hotelProperty.get
-      .fetch()
-      .then(setView)
-      .catch(() => undefined);
+  const refresh = async () => {
+    if (!mounted.current) return;
+    setRefreshing(true);
+    setRefreshFailed(false);
+    try {
+      const next = await utils.hotelProperty.get.fetch({ branchId }, { staleTime: 0 });
+      if (!mounted.current) return;
+      if (!matchesSelection(next, selection)) {
+        setUnavailable(true);
+        return;
+      }
+      setView(next);
+    } catch (error) {
+      if (!mounted.current) return;
+      if (accessDenied(error)) setUnavailable(true);
+      else setRefreshFailed(true);
+      setSaved(null);
+    } finally {
+      if (mounted.current) setRefreshing(false);
+    }
+  };
+
+  const onError = (error: unknown, field: 'form' | 'mode') => {
+    if (!mounted.current) return;
+    if (accessDenied(error)) setUnavailable(true);
+    const fields = validationErrors(error);
+    setSaved(null);
+    setErrors(
+      Object.keys(fields).length
+        ? fields
+        : { [field]: 'Could not save this change. Review your values and try again.' }
+    );
   };
 
   const update = trpc.hotelProperty.update.useMutation({
     onSuccess: (result) => {
+      if (!mounted.current) return;
       setErrors({});
       setSaved(result.activationSummary);
-      refresh();
+      void refresh();
     },
-    onError: (error) => {
-      const fields = validationErrors(error);
-      setSaved(null);
-      setErrors(Object.keys(fields).length ? fields : { form: error.message });
-    },
+    onError: (error) => onError(error, 'form'),
   });
 
   const setMode = trpc.hotelProperty.modes.set.useMutation({
     onSuccess: () => {
+      if (!mounted.current) return;
       setErrors({});
-      refresh();
+      setSaved(null);
+      void refresh();
     },
-    onError: (error) => setErrors({ mode: error.message }),
+    onError: (error) => onError(error, 'mode'),
   });
 
+  const busy = update.isPending || setMode.isPending || refreshing;
+  if (unavailable) return <ReloadPropertySettings />;
   const property = view.property;
   if (!property) {
     return (
@@ -123,11 +223,13 @@ export function HotelPropertySettingsForm({ initial }: { initial: PropertyView }
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (busy) return;
     const form = new FormData(event.currentTarget);
     const text = (name: string) => String(form.get(name) ?? '').trim();
     const star = text('starCategory');
     const taxProfileId = text('taxProfileId');
     update.mutate({
+      branchId,
       name: text('name'),
       addressLine: text('addressLine'),
       city: text('city'),
@@ -148,6 +250,28 @@ export function HotelPropertySettingsForm({ initial }: { initial: PropertyView }
 
   return (
     <div className="space-y-6">
+      <SectionCard title={property.name} titleLevel={2}>
+        <a
+          href="/hotel/settings/property"
+          className={buttonVariants({ variant: 'outline', className: 'min-h-11' })}
+        >
+          Change property
+        </a>
+        {refreshing ? (
+          <p className="mt-3 text-sm text-text-muted" role="status">
+            Refreshing property settings…
+          </p>
+        ) : refreshFailed ? (
+          <div className="mt-3 space-y-2">
+            <p className="text-sm text-destructive" role="alert">
+              Could not refresh property settings. Retry to confirm the latest saved values.
+            </p>
+            <Button variant="outline" onClick={() => void refresh()} disabled={busy}>
+              Refresh property settings
+            </Button>
+          </div>
+        ) : null}
+      </SectionCard>
       <SectionCard title="Setup steps" titleLevel={2}>
         <p className="text-sm text-text-body">{view.activationSummary}</p>
         <ul className="mt-3 space-y-2">
@@ -165,7 +289,7 @@ export function HotelPropertySettingsForm({ initial }: { initial: PropertyView }
       </SectionCard>
 
       <SectionCard title="How this property operates" titleLevel={2}>
-        <fieldset className="space-y-2" disabled={setMode.isPending}>
+        <fieldset className="space-y-2" disabled={busy}>
           <legend className="sr-only">Property mode</legend>
           {view.modeOptions.map((option) => (
             <label key={option.value} className="flex gap-3 text-sm text-text-body">
@@ -174,7 +298,9 @@ export function HotelPropertySettingsForm({ initial }: { initial: PropertyView }
                 name="mode"
                 value={option.value}
                 checked={property.mode === option.value}
-                onChange={() => setMode.mutate({ mode: option.value })}
+                onChange={() => {
+                  if (!busy) setMode.mutate({ branchId, mode: option.value });
+                }}
                 className="mt-1"
               />
               <span>
@@ -197,138 +323,141 @@ export function HotelPropertySettingsForm({ initial }: { initial: PropertyView }
       </SectionCard>
 
       <SectionCard title="Property facts" titleLevel={2}>
-        <form className="grid gap-4 sm:grid-cols-2" onSubmit={onSubmit}>
-          <Field htmlFor="name" label="Property name" error={errors.name}>
-            <Input id="name" name="name" defaultValue={property.name} required />
-          </Field>
-          <Field htmlFor="addressLine" label="Address" error={errors.addressLine}>
-            <Input
-              id="addressLine"
-              name="addressLine"
-              defaultValue={property.addressLine}
-              required
-            />
-          </Field>
-          <Field htmlFor="city" label="City" error={errors.city}>
-            <Input id="city" name="city" defaultValue={property.city} required />
-          </Field>
-          <Field
-            htmlFor="timezone"
-            label="Timezone"
-            error={errors.timezone}
-            hint="The zone this property dates its business days and audits in."
-          >
-            <Input id="timezone" name="timezone" defaultValue={property.timezone} required />
-          </Field>
-          <Field
-            htmlFor="starCategory"
-            label="Star category"
-            error={errors.starCategory}
-            hint="Leave empty while the property is unrated."
-          >
-            <Input
-              id="starCategory"
-              name="starCategory"
-              type="number"
-              min={1}
-              max={7}
-              defaultValue={property.starCategory ?? ''}
-            />
-          </Field>
-          <Field
-            htmlFor="currency"
-            label="Currency"
-            error={errors.currency}
-            hint="Three-letter code. Settlement is PKR."
-          >
-            <Input id="currency" name="currency" defaultValue={property.currency} required />
-          </Field>
-          <Field
-            htmlFor="checkInTime"
-            label="Check-in time"
-            error={errors.checkInTime}
-            hint="Use 24-hour time, e.g. 14:00."
-          >
-            <Input
-              id="checkInTime"
-              name="checkInTime"
-              defaultValue={property.checkInTime}
-              required
-            />
-          </Field>
-          <Field
-            htmlFor="checkOutTime"
-            label="Check-out time"
-            error={errors.checkOutTime}
-            hint="Use 24-hour time, e.g. 12:00."
-          >
-            <Input
-              id="checkOutTime"
-              name="checkOutTime"
-              defaultValue={property.checkOutTime}
-              required
-            />
-          </Field>
-          <Field
-            htmlFor="auditTime"
-            label="Night audit time"
-            error={errors.auditTime}
-            hint="When the audit rolls the business date."
-          >
-            <Input id="auditTime" name="auditTime" defaultValue={property.auditTime} required />
-          </Field>
-          <Field
-            htmlFor="taxProfileId"
-            label="Tax profile"
-            error={errors.taxProfileId}
-            hint="Every folio charge is taxed from this profile. No property goes live without one."
-          >
-            <Input
-              id="taxProfileId"
-              name="taxProfileId"
-              defaultValue={property.taxProfileId ?? ''}
-            />
-          </Field>
-          <Field
-            htmlFor="languages"
-            label="Languages"
-            error={errors.languages}
-            hint="Comma separated, e.g. en, ur."
-          >
-            <Input
-              id="languages"
-              name="languages"
-              defaultValue={property.languages.join(', ')}
-              required
-            />
-          </Field>
-          <Field
-            htmlFor="bookingEngineSlug"
-            label="Booking page address"
-            error={errors.bookingEngineSlug}
-            hint="Lowercase letters, numbers and hyphens. Guests see this in the direct booking link."
-          >
-            <Input
-              id="bookingEngineSlug"
-              name="bookingEngineSlug"
-              defaultValue={property.bookingEngineSlug}
-              required
-            />
-          </Field>
-          <div className="sm:col-span-2">
-            {errors.form ? (
-              <p className="mb-2 text-sm text-destructive" role="alert">
-                {errors.form}
-              </p>
-            ) : saved ? (
-              <p className="mb-2 text-sm text-text-muted" role="status">
-                {saved}
-              </p>
-            ) : null}
-            <Button type="submit" disabled={update.isPending}>
-              {update.isPending ? 'Saving…' : 'Save property'}
-            </Button>
-          </div>
+        <form onSubmit={onSubmit}>
+          <fieldset className="grid gap-4 sm:grid-cols-2" disabled={busy}>
+            <legend className="sr-only">Property facts</legend>
+            <Field htmlFor="name" label="Property name" error={errors.name}>
+              <Input id="name" name="name" defaultValue={property.name} required />
+            </Field>
+            <Field htmlFor="addressLine" label="Address" error={errors.addressLine}>
+              <Input
+                id="addressLine"
+                name="addressLine"
+                defaultValue={property.addressLine}
+                required
+              />
+            </Field>
+            <Field htmlFor="city" label="City" error={errors.city}>
+              <Input id="city" name="city" defaultValue={property.city} required />
+            </Field>
+            <Field
+              htmlFor="timezone"
+              label="Timezone"
+              error={errors.timezone}
+              hint="The zone this property dates its business days and audits in."
+            >
+              <Input id="timezone" name="timezone" defaultValue={property.timezone} required />
+            </Field>
+            <Field
+              htmlFor="starCategory"
+              label="Star category"
+              error={errors.starCategory}
+              hint="Leave empty while the property is unrated."
+            >
+              <Input
+                id="starCategory"
+                name="starCategory"
+                type="number"
+                min={1}
+                max={7}
+                defaultValue={property.starCategory ?? ''}
+              />
+            </Field>
+            <Field
+              htmlFor="currency"
+              label="Currency"
+              error={errors.currency}
+              hint="Three-letter code. Settlement is PKR."
+            >
+              <Input id="currency" name="currency" defaultValue={property.currency} required />
+            </Field>
+            <Field
+              htmlFor="checkInTime"
+              label="Check-in time"
+              error={errors.checkInTime}
+              hint="Use 24-hour time, e.g. 14:00."
+            >
+              <Input
+                id="checkInTime"
+                name="checkInTime"
+                defaultValue={property.checkInTime}
+                required
+              />
+            </Field>
+            <Field
+              htmlFor="checkOutTime"
+              label="Check-out time"
+              error={errors.checkOutTime}
+              hint="Use 24-hour time, e.g. 12:00."
+            >
+              <Input
+                id="checkOutTime"
+                name="checkOutTime"
+                defaultValue={property.checkOutTime}
+                required
+              />
+            </Field>
+            <Field
+              htmlFor="auditTime"
+              label="Night audit time"
+              error={errors.auditTime}
+              hint="When the audit rolls the business date."
+            >
+              <Input id="auditTime" name="auditTime" defaultValue={property.auditTime} required />
+            </Field>
+            <Field
+              htmlFor="taxProfileId"
+              label="Tax profile"
+              error={errors.taxProfileId}
+              hint="Every folio charge is taxed from this profile. No property goes live without one."
+            >
+              <Input
+                id="taxProfileId"
+                name="taxProfileId"
+                defaultValue={property.taxProfileId ?? ''}
+              />
+            </Field>
+            <Field
+              htmlFor="languages"
+              label="Languages"
+              error={errors.languages}
+              hint="Comma separated, e.g. en, ur."
+            >
+              <Input
+                id="languages"
+                name="languages"
+                defaultValue={property.languages.join(', ')}
+                required
+              />
+            </Field>
+            <Field
+              htmlFor="bookingEngineSlug"
+              label="Booking page address"
+              error={errors.bookingEngineSlug}
+              hint="Lowercase letters, numbers and hyphens. Guests see this in the direct booking link."
+            >
+              <Input
+                id="bookingEngineSlug"
+                name="bookingEngineSlug"
+                defaultValue={property.bookingEngineSlug}
+                required
+              />
+            </Field>
+            <div className="sm:col-span-2">
+              {errors.form ? (
+                <p className="mb-2 text-sm text-destructive" role="alert">
+                  {errors.form}
+                </p>
+              ) : saved ? (
+                <p className="mb-2 text-sm text-text-muted" role="status">
+                  {saved}
+                </p>
+              ) : null}
+              <Button type="submit" disabled={busy}>
+                {update.isPending ? 'Saving…' : 'Save property'}
+              </Button>
+            </div>
+          </fieldset>
         </form>
       </SectionCard>
     </div>
