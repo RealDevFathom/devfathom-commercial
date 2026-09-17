@@ -10,6 +10,31 @@ const REQUIRED_INTEGRATED_ENV = [
 const INTEGRATED_CREDENTIALS = new Set<string>(REQUIRED_INTEGRATED_ENV);
 const RESTAURANT_OPERATOR_EMAIL = 'operator@restaurant-e2e.test';
 
+/**
+ * WHA-1567 — the plaintext secret of the REVOKED print-bridge device that
+ * `scripts/seed-restaurant-e2e.ts` registers. It is published here, rather than
+ * left to the caller, because it must hash to exactly the row the seed wrote: a
+ * mismatched value would take the web-session branch of the transport and the
+ * acceptance case would fail for a reason unrelated to revocation.
+ *
+ * Local/CI fixture only. The device it authenticates is REVOKED, so the single
+ * reachable outcome is the 403 refusal the spec asserts — it grants no access.
+ */
+export const RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET =
+  'rdk_restaurant_e2e_print_bridge_revoked_local_ci_only';
+
+/**
+ * WHA-1567 — the plaintext secret of the ASCII receipt branch's POS, which is
+ * also its print bridge (`isBridgeRequest` only requires an `rdk_` bearer, so no
+ * separate bridge enrolment exists). Published here for the same reason as the
+ * revoked secret above: it must hash to exactly the row the seed wrote.
+ *
+ * Local/CI fixture only. It authenticates one synthetic device in the disposable
+ * E2E tenant and is never a production credential.
+ */
+export const RESTAURANT_E2E_ASCII_RECEIPT_DEVICE_SECRET =
+  'rdk_restaurant_e2e_ascii_receipt_pos_local_ci_only';
+
 export function resolveRestaurantE2eDatabaseUrl(
   env: Record<string, string | undefined> = process.env
 ): string {
@@ -71,6 +96,10 @@ export function restaurantE2eEnvironment(
     ...env,
     DATABASE_URL: databaseUrl,
     TEST_DATABASE_URL: databaseUrl,
+    // Set, never merged: the value has to hash to the seeded row, so a caller
+    // override could only ever break the case it is meant to enable.
+    RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET,
+    RESTAURANT_E2E_ASCII_RECEIPT_DEVICE_SECRET,
   };
   for (const name of Object.keys(result)) {
     if (

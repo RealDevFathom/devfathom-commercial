@@ -354,10 +354,19 @@ jobs:
           tests/e2e/restaurant-controls-final.spec.ts
           tests/e2e/restaurant-catering.spec.ts
           tests/e2e/restaurant-integrated.spec.ts
+          tests/e2e/restaurant-insights-completion.spec.ts
           tests/e2e/restaurant-lifecycles-final.spec.ts
           tests/e2e/restaurant-pos-kds.spec.ts
           tests/e2e/restaurant-pos-kds-resilience.spec.ts
           tests/e2e/restaurant-delivery.spec.ts
+          tests/e2e/restaurant-foh-lifecycle-acceptance.spec.ts
+          tests/e2e/restaurant-admin-lifecycle-acceptance.spec.ts
+          tests/e2e/restaurant-backoffice-lifecycle-acceptance.spec.ts
+          tests/e2e/restaurant-input-recovery-acceptance.spec.ts
+          tests/e2e/restaurant-catering-lifecycle-acceptance.spec.ts
+          tests/e2e/restaurant-recipe-profitability-acceptance.spec.ts
+          tests/e2e/restaurant-operations-lifecycle-acceptance.spec.ts
+          tests/e2e/restaurant-software-receipt-acceptance.spec.ts
           --workers=1 --reporter=html,json
       - name: Record 02-run-restaurant
         if: always()
@@ -489,8 +498,14 @@ jobs:
           const platform = totals('platform');
           const agency = totals('agency');
           const pharmacy = totals('pharmacy');
-          if (restaurant.expected !== 17 || restaurant.unexpected !== 0 || restaurant.skipped !== 0 || restaurant.didNotRun !== 0)
-            failures.push(`restaurant totals ${JSON.stringify(restaurant)}; require 17/17, unexpected 0, skipped 0, did-not-run 0`);
+          // 68, counted from the lane's own `--list` output rather than by hand:
+          // 18 legacy cases (controls-final 5, pos-kds-resilience 3, integrated 3,
+          // lifecycles-final 2, catering 2, pos-kds 1, delivery 1,
+          // time-to-first-sale 1) + 7 insights-completion + the 43 WHA-1542
+          // acceptance cases (4+3+5+8+3+7+3+10). Every failure guard is unchanged:
+          // a skip, a did-not-run or an unexpected result still fails.
+          if (restaurant.expected !== 68 || restaurant.unexpected !== 0 || restaurant.skipped !== 0 || restaurant.didNotRun !== 0)
+            failures.push(`restaurant totals ${JSON.stringify(restaurant)}; require 68/68, unexpected 0, skipped 0, did-not-run 0`);
           if (platform.unexpected !== 0 || platform.didNotRun !== 0 || platform.skipped !== 0)
             failures.push(`platform totals ${JSON.stringify(platform)}; require unexpected 0, did-not-run 0, skipped 0`);
           if (agency.expected !== 8 || agency.unexpected !== 0 || agency.skipped !== 0)

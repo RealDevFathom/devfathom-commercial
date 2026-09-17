@@ -10,12 +10,24 @@ import {
   seedRestaurantDemoControlPlane,
   seedRestaurantDemoTenant,
 } from './seed-restaurant-demo.js';
+import { seedRestaurantInsightsCompletionFixtures } from './seed-restaurant-insights-completion-fixtures.js';
+import {
+  BACK_OFFICE_STOCK,
+  BACK_OFFICE_STOCK_OWNED_FIXTURES,
+  RECIPE_PROFITABILITY_OWNED_FIXTURES,
+  seedBackOfficeStockFixture,
+  seedRecipeProfitabilityFixture,
+} from './seed-restaurant-acceptance-fixtures.js';
 import {
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
 import { businessDateToUtcDate, resolveBusinessDate } from '../src/lib/restaurant/business-date.js';
-import { resolveRestaurantE2eDatabaseUrl } from './restaurant-e2e-database.js';
+import {
+  RESTAURANT_E2E_ASCII_RECEIPT_DEVICE_SECRET,
+  RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET,
+  resolveRestaurantE2eDatabaseUrl,
+} from './restaurant-e2e-database.js';
 
 export const RESTAURANT_E2E = {
   organizationId: 'org_chai_chowk',
@@ -39,7 +51,54 @@ export const RESTAURANT_E2E = {
   deliveryKdsDeviceSecret: 'rdk_restaurant_e2e_delivery_kds_local_ci_only',
   deliveryOperatorPin: '737373',
   deliveryDeniedOperatorPin: '515151',
+  /**
+   * WHA-1542 — one enrolled register (and one kitchen display) per acceptance
+   * case that binds an operator.
+   *
+   * `POST /api/restaurant/terminal/unlock` fronts the durable credential lockout
+   * with a burst gate keyed `terminal:cred:<deviceId>:<staffProfileId>`, 10 per
+   * 60 s fixed window (src/app/api/restaurant/terminal/unlock/route.ts). That key
+   * carries NO client address, so presenting a distinct `x-forwarded-for` per
+   * case — which is what the pre-auth gate in `terminal-auth.ts` keys on — cannot
+   * relieve it. A serial lane that unlocks ONE seeded register with ONE operator
+   * spends that bucket inside a minute, and every later case is refused 429 from
+   * `establishTerminal`, which surfaces as an unrelated-looking assertion failure.
+   *
+   * A room of real tablets is a room of separate enrolments, so the fixture
+   * enrols one register per case. The guard itself is untouched — same limit,
+   * window and key — and each enrolment still gets only its own ten attempts.
+   *
+   * Only the REGISTER is pooled. The seeded kitchen display binds an operator
+   * twice across the whole corpus (the two KDS tablet cases), which is inside
+   * one bucket. The count is held below `pos.registeredDevices.max` (25 for this
+   * package) so the fixture cannot put the tenant over its own device licence:
+   * 6 shipped enrolments + 12 here = 18.
+   */
+  caseTerminalCount: 12,
 } as const;
+
+/** The per-case register enrolment for a zero-based case index. */
+export function caseRegisterDevice(index: number) {
+  return {
+    deviceId: `device_restaurant_e2e_pos_case_${index}`,
+    secret: `rdk_restaurant_e2e_pos_case_${index}_local_ci_only`,
+  };
+}
+
+const CASE_TERMINAL_INDEXES = Array.from(
+  { length: RESTAURANT_E2E.caseTerminalCount },
+  (_unused, index) => index
+);
+
+/**
+ * Branches this fixture creates: `branchId`, `branchA2Id` and WHA-1567's
+ * ASCII-receipt branch. The seeded `restaurant.locations.max` is held equal to
+ * it so the tenant is licensed for exactly what it owns and no more.
+ */
+const RESTAURANT_E2E_BRANCH_COUNT = 3;
+
+/** `AUDIT_EVIDENCE_RETENTION_DAYS` in src/lib/module-catalog.ts. */
+const SOP_EVIDENCE_RETENTION_DAYS = 365;
 
 const IDS = {
   alexUser: 'user_chai_chowk_alex',
@@ -50,6 +109,7 @@ const IDS = {
   deliveryOperatorUser: 'user_restaurant_e2e_delivery_operator',
   deliveryDeniedOperatorUser: 'user_restaurant_e2e_delivery_capability_denied',
   locationsLimit: 'limit_restaurant_e2e_locations',
+  sopEvidenceRetentionLimit: 'limit_restaurant_e2e_sop_evidence_retention',
   operatorRole: 'role_restaurant_e2e_operator',
   deniedOperatorRole: 'role_restaurant_e2e_delivery_denied',
   managerRole: 'role_restaurant_e2e_manager',
@@ -108,11 +168,37 @@ const IDS = {
   sopStep: 'sop_step_restaurant_e2e_opening_1',
   sopAssignment: 'sop_assignment_restaurant_e2e_opening',
   sopOccurrence: 'sop_occurrence_restaurant_e2e_opening',
+  sopOccurrenceStep: 'sop_occurrence_step_restaurant_e2e_opening_1',
+  revokedBridgeDevice: 'device_restaurant_e2e_print_bridge_revoked',
+  // WHA-1567 — the isolated ASCII-printable receipt branch. Both shipped E2E
+  // branches are named with an 'é', and `validateRawPrintDocument` rejects any
+  // receipt fact outside [\x20-\x7e\n], so `facts.businessName` (which is
+  // `bill.branch.name`) made EVERY queued receipt a 422 in this tenant. That
+  // validation is correct and is left alone; queued-receipt acceptance gets a
+  // branch whose name is ASCII instead.
+  asciiReceiptBranch: 'branch_restaurant_e2e_ascii_receipt',
+  asciiReceiptStation: 'station_restaurant_e2e_ascii_receipt_main',
+  asciiReceiptPublication: 'menu_publication_restaurant_e2e_ascii_receipt',
+  asciiReceiptAvailability: 'availability_restaurant_e2e_ascii_receipt_always',
+  asciiReceiptDevice: 'device_restaurant_e2e_ascii_receipt_pos',
+  asciiReceiptUser: 'user_restaurant_e2e_ascii_receipt_operator',
+  asciiReceiptStaffProfile: 'staff_restaurant_e2e_ascii_receipt_operator',
+  asciiReceiptCredential: 'credential_restaurant_e2e_ascii_receipt_operator',
+  asciiReceiptTaxProfile: 'tax_profile_restaurant_e2e_ascii_receipt',
+  asciiReceiptTaxRuleCash: 'tax_rule_restaurant_e2e_ascii_receipt_cash',
+  asciiReceiptTaxRuleCard: 'tax_rule_restaurant_e2e_ascii_receipt_card',
+  asciiReceiptTaxRuleOther: 'tax_rule_restaurant_e2e_ascii_receipt_other',
 } as const;
+
+/** ASCII-printable on purpose: the accent is exactly what this branch removes. */
+const ASCII_RECEIPT_BRANCH_NAME = 'Gulberg Cafe Receipt Lab';
+const ASCII_RECEIPT_OPERATOR_NAME = 'E2E ASCII Receipt Operator';
+const ASCII_RECEIPT_OPERATOR_EMAIL = 'ascii-receipt-operator@restaurant-e2e.test';
+const ASCII_RECEIPT_OPERATOR_PIN = '353535';
 
 export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['organizations', [RESTAURANT_E2E.organizationId]],
-  ['organization_limits', [IDS.locationsLimit]],
+  ['organization_limits', [IDS.locationsLimit, IDS.sopEvidenceRetentionLimit]],
   [
     'organization_departments',
     ['department_restaurant_e2e_kitchen', 'department_restaurant_e2e_front_of_house'],
@@ -140,6 +226,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       IDS.managerUser,
       IDS.deliveryOperatorUser,
       IDS.deliveryDeniedOperatorUser,
+      IDS.asciiReceiptUser,
     ],
   ],
   [
@@ -152,6 +239,8 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       `assignment_delivery_${IDS.alexUser}`,
       `assignment_${IDS.deliveryOperatorUser}`,
       `assignment_${IDS.deliveryDeniedOperatorUser}`,
+      `assignment_${IDS.asciiReceiptUser}`,
+      `assignment_ascii_receipt_${IDS.alexUser}`,
     ],
   ],
   [
@@ -163,6 +252,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       RESTAURANT_E2E.managerId,
       RESTAURANT_E2E.deliveryOperatorId,
       RESTAURANT_E2E.deliveryDeniedOperatorId,
+      IDS.asciiReceiptStaffProfile,
     ],
   ],
   [
@@ -174,12 +264,19 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       IDS.managerCredential,
       IDS.deliveryOperatorCredential,
       IDS.deliveryDeniedOperatorCredential,
+      IDS.asciiReceiptCredential,
     ],
   ],
-  ['restaurant_branches', [RESTAURANT_E2E.branchId, RESTAURANT_E2E.branchA2Id]],
+  [
+    'restaurant_branches',
+    [RESTAURANT_E2E.branchId, RESTAURANT_E2E.branchA2Id, IDS.asciiReceiptBranch],
+  ],
   ['restaurant_floors', [IDS.floor]],
   ['restaurant_tables', [IDS.table]],
-  ['restaurant_kitchen_stations', [IDS.grillStation, IDS.expoStation, IDS.deliveryStation]],
+  [
+    'restaurant_kitchen_stations',
+    [IDS.grillStation, IDS.expoStation, IDS.deliveryStation, IDS.asciiReceiptStation],
+  ],
   [
     'restaurant_registered_devices',
     [
@@ -187,6 +284,9 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       RESTAURANT_E2E.kdsDeviceId,
       RESTAURANT_E2E.deliveryPosDeviceId,
       RESTAURANT_E2E.deliveryKdsDeviceId,
+      IDS.revokedBridgeDevice,
+      IDS.asciiReceiptDevice,
+      ...CASE_TERMINAL_INDEXES.map((index) => caseRegisterDevice(index).deviceId),
     ],
   ],
   ['restaurant_drawer_sessions', [IDS.drawer]],
@@ -207,14 +307,23 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['restaurant_menus', [IDS.menu]],
   ['restaurant_menu_sections', [IDS.menuSection]],
   ['restaurant_menu_items', [IDS.menuItem]],
-  ['restaurant_branch_menu_publications', [IDS.publication, IDS.deliveryPublication]],
-  ['restaurant_menu_availability_windows', [IDS.availability, IDS.deliveryAvailability]],
+  [
+    'restaurant_branch_menu_publications',
+    [IDS.publication, IDS.deliveryPublication, IDS.asciiReceiptPublication],
+  ],
+  [
+    'restaurant_menu_availability_windows',
+    [IDS.availability, IDS.deliveryAvailability, IDS.asciiReceiptAvailability],
+  ],
   ['restaurant_station_routing_rules', [IDS.routingRule, IDS.deliveryRoutingRule]],
   ['restaurant_customers', [IDS.customer]],
   ['restaurant_customer_addresses', [IDS.customerAddress]],
   ['restaurant_delivery_zones', [IDS.deliveryZone, IDS.isolatedDeliveryZone]],
   ['restaurant_tax_official_sources', [IDS.deliveryTaxSource]],
-  ['restaurant_tax_profile_versions', [IDS.deliveryTaxProfile, IDS.coreTaxProfile]],
+  [
+    'restaurant_tax_profile_versions',
+    [IDS.deliveryTaxProfile, IDS.coreTaxProfile, IDS.asciiReceiptTaxProfile],
+  ],
   [
     'restaurant_tax_rule_versions',
     [
@@ -224,6 +333,9 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       IDS.coreTaxRuleCash,
       IDS.coreTaxRuleCard,
       IDS.coreTaxRuleOther,
+      IDS.asciiReceiptTaxRuleCash,
+      IDS.asciiReceiptTaxRuleCard,
+      IDS.asciiReceiptTaxRuleOther,
     ],
   ],
   ['restaurant_loyalty_program_versions', [IDS.loyaltyProgram]],
@@ -234,6 +346,11 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   ['restaurant_sop_template_steps', [IDS.sopStep]],
   ['restaurant_sop_assignments', [IDS.sopAssignment]],
   ['restaurant_sop_occurrences', [IDS.sopOccurrence]],
+  ['restaurant_sop_occurrence_steps', [IDS.sopOccurrenceStep]],
+  // WHA-1542: the acceptance fixtures below live in this same tenant, so they are
+  // verified by the same exact-row / no-leak check rather than trusted.
+  ...BACK_OFFICE_STOCK_OWNED_FIXTURES,
+  ...RECIPE_PROFITABILITY_OWNED_FIXTURES,
 ] as const;
 
 export const RESTAURANT_E2E_OWNED_ROW_COUNT = RESTAURANT_E2E_OWNED_FIXTURES.reduce(
@@ -513,6 +630,76 @@ async function seedCoreTaxProfile(tx: Prisma.TransactionClient) {
   });
 }
 
+/**
+ * WHA-1567 — the zero-rate profile for the ASCII receipt branch, a byte-for-byte
+ * peer of the Core POS one above with its own branch and ids. A settled bill
+ * resolves tax by branch, so without it the receipt cases would settle against
+ * no published profile; and because it is the same synthetic zero rate, the
+ * money a receipt renders there stays identical to the accented branches' — the
+ * branch NAME is the only variable this fixture introduces.
+ */
+async function seedAsciiReceiptTaxProfile(tx: Prisma.TransactionClient) {
+  if (
+    await tx.restaurantTaxProfileVersion.findUnique({ where: { id: IDS.asciiReceiptTaxProfile } })
+  )
+    return;
+  const at = FIXED_DELIVERY_TAX_BUSINESS_DATE;
+  const approvalReference = 'TEST_ONLY · SYNTHETIC_ZERO_RATE';
+  const activationIdempotencyKey = `restaurant-e2e-ascii-receipt-tax:${at.toISOString()}`;
+  await tx.restaurantTaxProfileVersion.create({
+    data: {
+      id: IDS.asciiReceiptTaxProfile,
+      branchId: IDS.asciiReceiptBranch,
+      versionNumber: 1,
+      status: 'PUBLISHED',
+      effectiveFrom: at,
+      approvalReference,
+      approvedAt: at,
+      publishedAt: at,
+      presetId: 'TEST-ONLY-ZERO-RATE',
+      activationIdempotencyKey,
+      activationPayloadHash: createHash('sha256').update(activationIdempotencyKey).digest('hex'),
+      eligibilityEvidence: { fixture: true, synthetic: true, productionTaxAdvice: false },
+      profileName: 'Synthetic zero-rate ASCII receipt fixture',
+      priceMode: 'INCLUSIVE',
+      createdAt: at,
+      updatedAt: at,
+      rules: {
+        create: [
+          {
+            id: IDS.asciiReceiptTaxRuleCash,
+            paymentCategory: 'CASH',
+            ruleCode: 'TEST_ZERO_ASCII_RECEIPT_CASH',
+          },
+          {
+            id: IDS.asciiReceiptTaxRuleCard,
+            paymentCategory: 'CARD',
+            ruleCode: 'TEST_ZERO_ASCII_RECEIPT_CARD',
+          },
+          {
+            id: IDS.asciiReceiptTaxRuleOther,
+            paymentCategory: 'OTHER',
+            ruleCode: 'TEST_ZERO_ASCII_RECEIPT_OTHER',
+          },
+        ].map((rule) => ({
+          ...rule,
+          officialSourceId: IDS.deliveryTaxSource,
+          priceMode: 'INCLUSIVE' as const,
+          discountTreatment: 'BEFORE_TAX' as const,
+          rate: '0',
+          status: 'PUBLISHED' as const,
+          effectiveFrom: at,
+          approvalReference,
+          approvedAt: at,
+          publishedAt: at,
+          createdAt: at,
+          updatedAt: at,
+        })),
+      },
+    },
+  });
+}
+
 async function main() {
   const databaseUrl = resolveRestaurantE2eDatabaseUrl();
   const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
@@ -592,6 +779,11 @@ async function main() {
         },
       });
       await seedRestaurantDemoControlPlane(tx);
+      // WHA-1542 — the tenant must be licensed for exactly the branches this
+      // fixture creates. It seeds THREE: `branch_restaurant_e2e`,
+      // `branch_restaurant_e2e_a2` and WHA-1567's ASCII-receipt branch. At 2 the
+      // organization sat over its own location licence, so the branches console
+      // read "3 of 2 active" and refused further branch creation.
       await tx.organizationLimit.upsert({
         where: {
           organizationId_key: {
@@ -600,7 +792,7 @@ async function main() {
           },
         },
         update: {
-          value: 2,
+          value: RESTAURANT_E2E_BRANCH_COUNT,
           period: null,
           source: 'E2E_FIXTURE',
           expiresAt: null,
@@ -611,7 +803,44 @@ async function main() {
           id: IDS.locationsLimit,
           organizationId: RESTAURANT_E2E.organizationId,
           key: 'restaurant.locations.max',
-          value: 2,
+          value: RESTAURANT_E2E_BRANCH_COUNT,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+      });
+      // WHA-1542 — SOP manager verification (`SOP_DEPTH_REQUIREMENTS`
+      // 'sop.verification' in src/lib/module-catalog.ts) requires the BARE limit
+      // key `sop.evidenceRetentionDays` at >= AUDIT_EVIDENCE_RETENTION_DAYS.
+      // `resolveOrganizationEntitlements` namespaces every PACKAGE-granted limit
+      // as `<moduleKey>.<key>`, so the `restaurant-operations` package's own
+      // `sop.evidenceRetentionDays: 365` lands as
+      // `restaurant-core.sop.evidenceRetentionDays` and the requirement — which
+      // reads the bare key only — sees 0 and denies. An explicit organization
+      // limit is the sanctioned grant for that key, so the fixture states it.
+      // The gate is NOT relaxed: it still evaluates, and still denies below 365.
+      await tx.organizationLimit.upsert({
+        where: {
+          organizationId_key: {
+            organizationId: RESTAURANT_E2E.organizationId,
+            key: 'sop.evidenceRetentionDays',
+          },
+        },
+        update: {
+          value: SOP_EVIDENCE_RETENTION_DAYS,
+          period: null,
+          source: 'E2E_FIXTURE',
+          expiresAt: null,
+          createdAt: FIXED_AT,
+          updatedAt: FIXED_AT,
+        },
+        create: {
+          id: IDS.sopEvidenceRetentionLimit,
+          organizationId: RESTAURANT_E2E.organizationId,
+          key: 'sop.evidenceRetentionDays',
+          value: SOP_EVIDENCE_RETENTION_DAYS,
           period: null,
           source: 'E2E_FIXTURE',
           expiresAt: null,
@@ -692,9 +921,38 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        // WHA-1567 — the ASCII-printable receipt branch. `bill.branch.name`
+        // becomes `facts.businessName`, and `validateRawPrintDocument` refuses
+        // any fact outside [\x20-\x7e\n]; both branches above carry an 'é', so a
+        // RECEIPT job could never be queued anywhere in this tenant. The gate is
+        // the product behaving correctly and is NOT relaxed — the accented
+        // branches keep asserting their genuine 422 + BROWSER_OS fallback, and
+        // the queued-receipt half of that acceptance moves here.
+        await tx.restaurantBranch.upsert({
+          where: { id: IDS.asciiReceiptBranch },
+          update: {
+            name: ASCII_RECEIPT_BRANCH_NAME,
+            timezone: 'Asia/Karachi',
+            businessDayCutoff: '00:00',
+            shiftSignInEnforced: false,
+            address: null,
+            active: true,
+            isDefault: false,
+          },
+          create: {
+            id: IDS.asciiReceiptBranch,
+            name: ASCII_RECEIPT_BRANCH_NAME,
+            timezone: 'Asia/Karachi',
+            active: true,
+            isDefault: false,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         await requirePristineDeliveryLane(tx);
         await seedDeliveryTaxProfile(tx);
         await seedCoreTaxProfile(tx);
+        await seedAsciiReceiptTaxProfile(tx);
         await tx.restaurantFloor.upsert({
           where: { id: IDS.floor },
           update: {
@@ -893,6 +1151,20 @@ async function main() {
             password: null,
             branchId: RESTAURANT_E2E.branchA2Id,
           },
+          {
+            // WHA-1567 — the register operator of the ASCII receipt branch. It
+            // reuses `operatorRole` rather than declaring a role of its own: the
+            // fixture contract asks for the SAME capabilities as the seeded
+            // restaurant-e2e-operator, and a second copy of that permission set
+            // could drift away from the one every other terminal case asserts.
+            id: IDS.asciiReceiptUser,
+            roleId: IDS.operatorRole,
+            name: ASCII_RECEIPT_OPERATOR_NAME,
+            email: ASCII_RECEIPT_OPERATOR_EMAIL,
+            title: 'Operator',
+            password: null,
+            branchId: IDS.asciiReceiptBranch,
+          },
         ]) {
           await tx.user.upsert({
             where: { id: user.id },
@@ -958,6 +1230,22 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        // The print-bridge configurator answers for the branches the signed-in
+        // admin is assigned to, and the receipt acceptance case publishes a
+        // RECEIPT route on the ASCII branch through that real endpoint.
+        await tx.restaurantBranchAssignment.upsert({
+          where: {
+            branchId_userId: { branchId: IDS.asciiReceiptBranch, userId: IDS.alexUser },
+          },
+          update: { branchId: IDS.asciiReceiptBranch, userId: IDS.alexUser },
+          create: {
+            id: `assignment_ascii_receipt_${IDS.alexUser}`,
+            branchId: IDS.asciiReceiptBranch,
+            userId: IDS.alexUser,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         for (const staff of [
           {
             id: IDS.alexStaff,
@@ -1006,6 +1294,14 @@ async function main() {
             pin: RESTAURANT_E2E.deliveryDeniedOperatorPin,
             credentialId: IDS.deliveryDeniedOperatorCredential,
             primaryBranchId: RESTAURANT_E2E.branchA2Id,
+          },
+          {
+            id: IDS.asciiReceiptStaffProfile,
+            userId: IDS.asciiReceiptUser,
+            name: ASCII_RECEIPT_OPERATOR_NAME,
+            pin: ASCII_RECEIPT_OPERATOR_PIN,
+            credentialId: IDS.asciiReceiptCredential,
+            primaryBranchId: IDS.asciiReceiptBranch,
           },
         ]) {
           await tx.restaurantStaffProfile.upsert({
@@ -1098,6 +1394,52 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        // An ACTIVE default station on the ASCII branch: `fire` raises
+        // `KitchenTicketError` with no station to route to, and a settled bill is
+        // what the receipt cases dispatch from. No RECEIPT-only branch printer is
+        // published for it by the seed, so its KOTs reach NO_PRINTER and persist
+        // nothing — the queue there holds receipts alone, as the spec asserts.
+        await tx.restaurantKitchenStation.upsert({
+          where: { id: IDS.asciiReceiptStation },
+          update: {
+            branchId: IDS.asciiReceiptBranch,
+            name: 'Receipt lab kitchen',
+            active: true,
+            isDefault: true,
+          },
+          create: {
+            id: IDS.asciiReceiptStation,
+            branchId: IDS.asciiReceiptBranch,
+            name: 'Receipt lab kitchen',
+            isDefault: true,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        // Register and print bridge are one device here: `isBridgeRequest` only
+        // requires an `rdk_` bearer, so no bridge-specific enrolment exists.
+        await tx.restaurantRegisteredDevice.upsert({
+          where: { id: IDS.asciiReceiptDevice },
+          update: {
+            branchId: IDS.asciiReceiptBranch,
+            name: 'E2E ASCII Receipt POS',
+            kind: 'POS',
+            stationId: null,
+            deviceSecretHash: deviceSecretHash(RESTAURANT_E2E_ASCII_RECEIPT_DEVICE_SECRET),
+            status: 'ACTIVE',
+            lastSeenAt: null,
+            revokedAt: null,
+          },
+          create: {
+            id: IDS.asciiReceiptDevice,
+            branchId: IDS.asciiReceiptBranch,
+            name: 'E2E ASCII Receipt POS',
+            kind: 'POS',
+            deviceSecretHash: deviceSecretHash(RESTAURANT_E2E_ASCII_RECEIPT_DEVICE_SECRET),
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         await tx.restaurantRegisteredDevice.upsert({
           where: { id: RESTAURANT_E2E.posDeviceId },
           update: {
@@ -1143,6 +1485,35 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        // One register per acceptance case, so the unlock burst gate's
+        // `<deviceId>:<staffProfileId>` bucket is never shared across cases.
+        // See `RESTAURANT_E2E.caseTerminalCount`.
+        for (const index of CASE_TERMINAL_INDEXES) {
+          const enrolment = caseRegisterDevice(index);
+          const name = `E2E POS Case ${index}`;
+          await tx.restaurantRegisteredDevice.upsert({
+            where: { id: enrolment.deviceId },
+            update: {
+              branchId: RESTAURANT_E2E.branchId,
+              name,
+              kind: 'POS',
+              stationId: null,
+              deviceSecretHash: deviceSecretHash(enrolment.secret),
+              status: 'ACTIVE',
+              lastSeenAt: null,
+              revokedAt: null,
+            },
+            create: {
+              id: enrolment.deviceId,
+              branchId: RESTAURANT_E2E.branchId,
+              name,
+              kind: 'POS',
+              deviceSecretHash: deviceSecretHash(enrolment.secret),
+              createdAt: FIXED_AT,
+              updatedAt: FIXED_AT,
+            },
+          });
+        }
         for (const device of [
           {
             id: RESTAURANT_E2E.deliveryPosDeviceId,
@@ -1183,6 +1554,35 @@ async function main() {
             },
           });
         }
+        // WHA-1567 — a REVOKED branch device. `withDeviceAuth` refuses one with
+        // 403 'This device has been revoked.' before any print-queue read, and the
+        // lane otherwise registers only ACTIVE devices, so that gate had no
+        // executable proof against the running application. Nothing else may use
+        // this row: revoked is its only reachable state.
+        await tx.restaurantRegisteredDevice.upsert({
+          where: { id: IDS.revokedBridgeDevice },
+          update: {
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'E2E Revoked Print Bridge',
+            kind: 'KDS',
+            stationId: null,
+            deviceSecretHash: deviceSecretHash(RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET),
+            status: 'REVOKED',
+            lastSeenAt: null,
+            revokedAt: FIXED_AT,
+          },
+          create: {
+            id: IDS.revokedBridgeDevice,
+            branchId: RESTAURANT_E2E.branchId,
+            name: 'E2E Revoked Print Bridge',
+            kind: 'KDS',
+            deviceSecretHash: deviceSecretHash(RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET),
+            status: 'REVOKED',
+            revokedAt: FIXED_AT,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
         await tx.restaurantDrawerSession.upsert({
           where: { id: IDS.drawer },
           update: {
@@ -1519,6 +1919,53 @@ async function main() {
             status: 'PUBLISHED',
             channels: ['DELIVERY'],
             publishedAt: FIXED_AT,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        // Same menu and price list as the shipped branches: the ASCII branch
+        // differs ONLY by name, which is the whole point of the fixture. A
+        // narrower catalog would make its receipt totals a separate oracle.
+        await tx.restaurantBranchMenuPublication.upsert({
+          where: { id: IDS.asciiReceiptPublication },
+          update: {
+            branchId: IDS.asciiReceiptBranch,
+            menuId: IDS.menu,
+            priceListId: IDS.priceList,
+            status: 'PUBLISHED',
+            channels: ['DINE_IN'],
+            publishedAt: FIXED_AT,
+            retiredAt: null,
+          },
+          create: {
+            id: IDS.asciiReceiptPublication,
+            branchId: IDS.asciiReceiptBranch,
+            menuId: IDS.menu,
+            priceListId: IDS.priceList,
+            status: 'PUBLISHED',
+            channels: ['DINE_IN'],
+            publishedAt: FIXED_AT,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        await tx.restaurantMenuAvailabilityWindow.upsert({
+          where: { id: IDS.asciiReceiptAvailability },
+          update: {
+            publicationId: IDS.asciiReceiptPublication,
+            menuItemId: null,
+            label: 'Receipt lab always available',
+            daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+            startMinutes: 0,
+            endMinutes: 0,
+          },
+          create: {
+            id: IDS.asciiReceiptAvailability,
+            publicationId: IDS.asciiReceiptPublication,
+            label: 'Receipt lab always available',
+            daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+            startMinutes: 0,
+            endMinutes: 0,
             createdAt: FIXED_AT,
             updatedAt: FIXED_AT,
           },
@@ -1929,8 +2376,48 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        // WHA-1566 — the per-step checklist row a REAL occurrence gets from
+        // `generateDueSopOccurrences`, which pins the published version's steps
+        // into `restaurant_sop_occurrence_steps`. The occurrence above is upserted
+        // directly, so that table was never populated and `completeStep` — which
+        // looks the step up by (occurrenceId, templateStepId) — answered every
+        // command with "Step not found on this occurrence.".
+        //
+        // Reset to the unstarted shape on every run, exactly like the occurrence
+        // itself, so the acceptance lane is repeatable rather than single-use.
+        await tx.restaurantSopOccurrenceStep.upsert({
+          where: {
+            occurrenceId_templateStepId: {
+              occurrenceId: IDS.sopOccurrence,
+              templateStepId: IDS.sopStep,
+            },
+          },
+          update: {
+            completed: false,
+            completedAt: null,
+            completedByStaffProfileId: null,
+            note: null,
+          },
+          create: {
+            id: IDS.sopOccurrenceStep,
+            occurrenceId: IDS.sopOccurrence,
+            templateStepId: IDS.sopStep,
+            completed: false,
+            createdAt: FIXED_AT,
+            updatedAt: FIXED_AT,
+          },
+        });
+        // WHA-1238 first: the WHA-1565 stock movements are booked against the
+        // stock location it creates, so ordering here is a dependency, not style.
+        await seedBackOfficeStockFixture(tx, RESTAURANT_E2E.branchId);
+        await seedRecipeProfitabilityFixture(tx, {
+          branchId: RESTAURANT_E2E.branchId,
+          locationId: BACK_OFFICE_STOCK.locationId,
+          staffProfileId: RESTAURANT_E2E.operatorId,
+          deviceId: RESTAURANT_E2E.posDeviceId,
+        });
       },
-      { timeout: 30_000 }
+      { timeout: 60_000 }
     );
 
     const verification = await prisma.$transaction(async (tx) => {
@@ -1986,6 +2473,14 @@ async function main() {
 
     console.log(
       `Seeded and verified Chai Chowk (${RESTAURANT_E2E.organizationId}): Alex belongs to ${[...alexOrganizations].join(', ')}; exact owned fixture rows=${RESTAURANT_E2E_OWNED_ROW_COUNT}; leaked fixture rows=0.`
+    );
+
+    // WHA-1553 — the two isolated Insights completion acceptance tenants. They
+    // own separate organizations and never read or write Chai Chowk's rows, so
+    // they run after the verification above rather than inside it.
+    const insightsCompletion = await seedRestaurantInsightsCompletionFixtures(prisma);
+    console.log(
+      `Seeded restaurant Insights completion fixtures: ${JSON.stringify(insightsCompletion)}`
     );
 
     // Showcase layer (SEED DATA ONLY, WHA-223). Skipped unless asked for, so CI

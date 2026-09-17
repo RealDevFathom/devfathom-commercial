@@ -29,15 +29,27 @@ export default defineConfig({
       RESTAURANT_INTEGRATED_E2E: '1',
     },
   },
+  // An EXACT per-file list, not a glob: a spec that is not named here registers
+  // zero cases in the only lane that sets RESTAURANT_INTEGRATED_E2E=1.
   testMatch: [
     'restaurant-controls-final.spec.ts',
     'restaurant-catering.spec.ts',
     'restaurant-integrated.spec.ts',
+    'restaurant-insights-completion.spec.ts',
     'restaurant-lifecycles-final.spec.ts',
     'restaurant-pos-kds.spec.ts',
     'restaurant-pos-kds-resilience.spec.ts',
     'restaurant-delivery.spec.ts',
     'time-to-first-sale.spec.ts',
+    // WHA-1542 — the eight authored acceptance specs, registered so they collect.
+    'restaurant-foh-lifecycle-acceptance.spec.ts',
+    'restaurant-admin-lifecycle-acceptance.spec.ts',
+    'restaurant-backoffice-lifecycle-acceptance.spec.ts',
+    'restaurant-input-recovery-acceptance.spec.ts',
+    'restaurant-catering-lifecycle-acceptance.spec.ts',
+    'restaurant-recipe-profitability-acceptance.spec.ts',
+    'restaurant-operations-lifecycle-acceptance.spec.ts',
+    'restaurant-software-receipt-acceptance.spec.ts',
   ],
   projects: [
     {

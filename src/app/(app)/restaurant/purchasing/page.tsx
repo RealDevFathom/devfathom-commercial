@@ -534,7 +534,7 @@ export default async function PurchasingPage({
               <Input
                 name="orderedQuantity"
                 inputMode="decimal"
-                pattern="(?:0*[1-9]\\d*(?:\\.\\d+)?|0*\\.\\d*[1-9]\\d*)"
+                pattern="(?:0*[1-9]\d*(?:\.\d+)?|0*\.\d*[1-9]\d*)"
                 required
                 disabled={!creatable}
                 className="mt-1 min-h-11"
@@ -545,7 +545,7 @@ export default async function PurchasingPage({
               <Input
                 name="unitCost"
                 inputMode="decimal"
-                pattern="(?:0|\\d+(?:\\.\\d+)?|\\.\\d+)"
+                pattern="(?:0|\d+(?:\.\d+)?|\.\d+)"
                 required
                 disabled={!creatable}
                 className="mt-1 min-h-11"

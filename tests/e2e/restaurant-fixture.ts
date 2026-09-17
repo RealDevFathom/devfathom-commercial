@@ -21,6 +21,18 @@ export const restaurantE2eCredentials = {
     secret: 'rdk_restaurant_e2e_kds_local_ci_only',
     clientIp: '198.51.100.11',
   },
+  /**
+   * WHA-1542 — the per-case registers `scripts/seed-restaurant-e2e.ts` enrols
+   * (`RESTAURANT_E2E.caseTerminalCount`). The unlock burst gate keys on
+   * `<deviceId>:<staffProfileId>` and carries no client address, so a serial
+   * lane that binds one operator to ONE register runs that bucket out; a case
+   * that takes its own register never shares one. Keep this list and the seed's
+   * `caseRegisterDevice(index)` in step.
+   */
+  caseRegisters: Array.from({ length: 12 }, (_unused, index) => ({
+    deviceId: `device_restaurant_e2e_pos_case_${index}`,
+    secret: `rdk_restaurant_e2e_pos_case_${index}_local_ci_only`,
+  })),
   branchA2Id: 'branch_restaurant_e2e_a2',
   table: { id: 'table_restaurant_e2e_a1_12', name: 'Table 12' },
   customer: { id: 'customer_restaurant_e2e', name: 'E2E Guest' },
@@ -147,6 +159,21 @@ async function establishTerminal(
       'x-forwarded-for': device.clientIp,
     },
   };
+}
+
+/**
+ * Establish a terminal against an explicitly supplied device descriptor. The
+ * named helpers below are the normal entry points; this one exists for specs
+ * that must vary the `clientIp` a seeded device presents, because the terminal
+ * transport throttles pre-auth per IP and a long serial lane otherwise spends
+ * one bucket across every case.
+ */
+export function establishTerminalFixture(
+  request: APIRequestContext,
+  device: { deviceId: string; secret: string; clientIp: string },
+  staff?: { staffProfileId: string; pin: string }
+) {
+  return establishTerminal(request, device, staff);
 }
 
 export function establishPosFixture(request: APIRequestContext) {
