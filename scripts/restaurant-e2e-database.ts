@@ -11,6 +11,18 @@ const INTEGRATED_CREDENTIALS = new Set<string>(REQUIRED_INTEGRATED_ENV);
 const RESTAURANT_OPERATOR_EMAIL = 'operator@restaurant-e2e.test';
 
 /**
+ * WHA-1542 — the ONLY administrator identity the Restaurant E2E fixture has.
+ * `scripts/seed-restaurant-e2e.ts` mirrors org_devfathom's Alex into Chai Chowk
+ * under the `*` manager role and copies his existing password hash rather than
+ * hashing one of its own; it creates no dedicated admin user. Wiring a different
+ * address (or a password other than the `SEED_PASSWORD` that produced that hash)
+ * is therefore unauthenticatable, and NextAuth reports it as `CredentialsSignin`
+ * — indistinguishable from a real credential rejection. Assert it here so the
+ * lane fails closed during setup instead of red-lining every admin-entry case.
+ */
+const RESTAURANT_ADMIN_EMAIL = 'alex@company.com';
+
+/**
  * WHA-1567 — the plaintext secret of the REVOKED print-bridge device that
  * `scripts/seed-restaurant-e2e.ts` registers. It is published here, rather than
  * left to the caller, because it must hash to exactly the row the seed wrote: a
@@ -90,6 +102,12 @@ export function restaurantE2eEnvironment(
   }
   if (env.RESTAURANT_ACTOR_OPERATOR_EMAIL !== RESTAURANT_OPERATOR_EMAIL) {
     throw new Error(`RESTAURANT_ACTOR_OPERATOR_EMAIL must be ${RESTAURANT_OPERATOR_EMAIL}.`);
+  }
+  if (env.RESTAURANT_ACTOR_ADMIN_EMAIL !== RESTAURANT_ADMIN_EMAIL) {
+    throw new Error(`RESTAURANT_ACTOR_ADMIN_EMAIL must be ${RESTAURANT_ADMIN_EMAIL}.`);
+  }
+  if (env.SEED_PASSWORD && env.RESTAURANT_ACTOR_ADMIN_PASSWORD !== env.SEED_PASSWORD) {
+    throw new Error('RESTAURANT_ACTOR_ADMIN_PASSWORD must equal SEED_PASSWORD.');
   }
   const databaseUrl = resolveRestaurantE2eDatabaseUrl(env);
   const result: Record<string, string | undefined> = {
