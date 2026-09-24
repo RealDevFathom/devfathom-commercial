@@ -748,3 +748,63 @@ describe passes against the 106-migration base, not the current pin.
 Re-pinning changes `pharmacySourceDigest()`, which covers the contract, the runner, its tests and
 this manifest. Evidence retained before this re-pin binds the old digest and is not claimed for the
 union line.
+
+## Re-pinned integrated replay on the union line (2026-09-24)
+
+**Result: the schema pin is repaired; the replay defect is unchanged and still red.**
+
+```
+TMPDIR=/tmp bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts --integrated
+```
+
+Exited **1** on one newly created owned cluster `/private/tmp/wha1388-pg-sXOzFp`
+(`stopped: true`). Source SHA `e369609a6b61e2f6b9c81910537bc2fc8e7b73b0`, tree
+`84f67877c9e9f1ecee12ed713ffbae938a849c95`, package digest
+`07851b5b5551edbb5baa81a604a2db0024ac4348afd020c24bf8f3928f188733`. Totals:
+**3 PASS / 1 FAIL; 8 integrated selected, 3 executed, 5 unexecuted, 0 skipped.**
+
+The run's bytes are the committed tree of `e369609a` exactly — the working tree was clean
+when it ran — so `07851b5b…` is recomputable from that commit rather than asserted. Appending
+this record changes the live `pharmacySourceDigest()`, because the digest covers this file;
+that is inherent to the design and is why each run record names its own digest.
+
+What the re-pin bought, and it is the part that was previously unreachable:
+
+- `SCHEMA_SOURCE_MISMATCH` no longer refuses before initdb. The cluster is created, extensions
+  are prepared and **all 110 migrations apply**: evidence `normal unchanged migrations`
+  `{ count: 110, exit: 0 }`. `ACTUAL_MIGRATIONS_MISMATCH` also passes, so the applied
+  `_prisma_migrations` rows match the re-pinned 110-entry checksum manifest.
+- The two new `restaurant_demo_reset_*_rls` migrations **pass the FORCE-RLS assertions under the
+  restricted runtime role.** Both executed integrated cases record
+  `runtimeRole { role: wha1388_runtime, superuser: false, bypassRls: false, forceRls: true }`,
+  which is only reachable through `assertSqlRuntime`'s `FORCED_RLS_REQUIRED` check over every
+  involved table. No product finding here.
+- `integrated default dry-run preserves all rows sequences and operator bytes` — PASS, `writes: 0`.
+- `integrated genuine goods receipt cash stock drawer journals receipt and reports` — PASS,
+  `writes: 30`, `created: 25`, `retained: 31`, stock 1, 2 journal entries / 6 legs, margin 80,
+  change 50, one completed receipt read back through the reports path.
+
+The single FAIL is `integrated original dry-run and apply replay preserve every row sequence and
+operator byte`, refusing **`CHANGED_REFERENCE`** at `scripts/seed-pharmacy-demo.ts:1387`
+(`failure.txt` retained). This is the WHA-1408 defect described above, not a new regression and
+not RLS-related: `receiveLot` fires `pharmacy_inventory_lot_references_pack`, which stamps
+`pharmacy_pack_levels."referencedAt"`, so the receipt retains a pre-write `PackLevel` hash and the
+first replay after the first integrated apply refuses.
+
+**The union cannot carry the accepted fix, by construction.** The approved Option A correction
+(optional `referencesAfter` on `DraftReceipt`, re-observed inside the same transaction, compared via
+`requireUnchangedReferences` against `prior.referencesAfter ?? prior.references`) is **uncommitted
+working-tree bytes** in `codex/pharmacy-demo-runner` over `79008e4b` — 3 files, +166/−2,
+`docs/demo/pharmacy-seed-manifest.md`, `scripts/seed-pharmacy-demo.ts`,
+`scripts/seed-pharmacy-demo.test.ts`. It is therefore in no commit in `37906386..79008e4b`, and
+`grep -rn 'referencesAfter\|requireUnchangedReferences' scripts/` on this union tree returns nothing.
+Cherry-picking the chain ships the known-red baseline. Importing that delta is a separate
+authorization; it is not in this scope.
+
+Counts are the same shape as the September 7 record (3 executed, 2 pass, 1 fail, 5 pending), which
+is the point: re-pinning moved the failure from "refused before any cluster existed" to "the one
+documented replay defect, with 110 migrations and FORCE-RLS proven green on the way there".
+
+Evidence retained outside `/tmp` at
+`_gate-evidence/WHA-1388-pharmacy-union-20260924/replay-cluster-sXOzFp/` (`evidence.json`,
+`failure.txt`, `migrations.log`, `postgres.log`, six operator histories, stopped `data/`).
