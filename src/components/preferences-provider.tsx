@@ -91,7 +91,16 @@ function applyAttribute<K extends keyof Preferences>(key: K, value: Preferences[
 function readFromStorage(): Preferences {
   try {
     const raw = window.localStorage.getItem(PREFERENCES_STORAGE_KEY);
-    return { ...DEFAULT_PREFERENCES, ...sanitize(raw ? JSON.parse(raw) : null) };
+    const stored = { ...DEFAULT_PREFERENCES, ...sanitize(raw ? JSON.parse(raw) : null) };
+    // Stored defaults must resolve to the server snapshot itself. An equal but
+    // new object still reads as a change, so React re-renders this provider right
+    // after hydration and every consumer sees a new context value. A Suspense
+    // boundary still waiting on streamed content is then client-rendered instead
+    // of hydrated, leaving the streamed copy of the page (and its forms) hidden in
+    // the document beside the live one.
+    return PREFERENCE_KEYS.every((key) => stored[key] === DEFAULT_PREFERENCES[key])
+      ? DEFAULT_PREFERENCES
+      : stored;
   } catch {
     return DEFAULT_PREFERENCES;
   }

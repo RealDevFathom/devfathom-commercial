@@ -10,7 +10,15 @@ import { Toaster } from '@/components/ui/sonner';
 
 export function AppProviders({ children }: { children: React.ReactNode }) {
   return (
-    <SessionProvider>
+    // No component reads this provider's session: every useSession() consumer
+    // sits under a nearer provider seeded with the server-validated session
+    // (TenantSessionBoundary, the POS/KDS pages); this one only backs the
+    // signIn/signOut helpers. Left unseeded it starts "loading" and flips to
+    // settled right after hydration. That context change makes React
+    // client-render any Suspense boundary still waiting on streamed content,
+    // leaving the streamed copy of the page (and its forms) hidden in the
+    // document beside the live one. `null` starts it settled, with no fetch.
+    <SessionProvider session={null}>
       <ThemeProvider>
         {/* The five non-theme surface toggles (density/type/accent/layout/icons).
             Lives inside ThemeProvider so theme + prefs coexist on <html>. */}
