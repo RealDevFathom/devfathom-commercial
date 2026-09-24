@@ -8,7 +8,7 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtemp, mkdir, writeFile, readFile, realpath } from 'node:fs/promises';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import type { PharmacyDraftRequest } from './pharmacy-demo-contract';
+import { MIGRATION_COUNT, type PharmacyDraftRequest } from './pharmacy-demo-contract';
 import {
   pharmacyHistoryGenesis,
   pharmacyHistoryPath,
@@ -559,7 +559,7 @@ try {
     await writeFile(join(directory, 'migrations.log'), migrationLog, { mode: 0o600 });
   assert.equal(
     Number(sql('SELECT count(*) FROM _prisma_migrations WHERE finished_at IS NOT NULL;')),
-    106
+    MIGRATION_COUNT
   );
   evidence.push({
     name: 'normal unchanged migrations',

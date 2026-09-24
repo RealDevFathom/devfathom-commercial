@@ -1,8 +1,9 @@
 /** WHA-1388: data-only contract. No connections, accounts, grants or executable entrypoint. */
 export const PHARMACY_DEMO_VERSION = 'pharmacy-demo-v1' as const;
 export const PRODUCT_BASE = '37906386a59700ce4a168e410ca68594baa97c75';
-export const SCHEMA_SHA256 = 'ea8f40a29b95fcba8abfe7a41344402765f1efde5fff9e60f8faccb6a28608a5';
-export const MIGRATIONS_SHA256 = 'c500a70d3ef973afe9a2192421ac0335a1436695f02cc41ab3caab74f28d5024';
+export const SCHEMA_SHA256 = 'a1b54cecbe2a34b292496d13a669ef96382c7ec9bdb677e06e2b5084e595a4c0';
+export const MIGRATIONS_SHA256 = '7d333db5ab4b585e11bb396d5834394d76c9617bd8e58515ba9490cb021fe011';
+export const MIGRATION_COUNT = 110 as const;
 
 /** Real SQL execution is confined to a newly created, private TEST cluster.
  * These identifiers select existing fixtures; they never grant authority. */
@@ -153,7 +154,7 @@ export type PharmacyDemoEvidence = {
     runtimeRole: { superuser: false; bypassRls: false; forceRls: true };
     schemaSha256: string;
     migrationsSha256: string;
-    migrationCount: 106;
+    migrationCount: typeof MIGRATION_COUNT;
     actors: DemoActor[];
     references: DemoReference[];
     modules: { key: string; enabled: boolean }[];

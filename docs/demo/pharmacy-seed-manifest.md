@@ -275,7 +275,7 @@ It binds only an owner-private `wha1388-pg-*` directory under canonical `/tmp`
 directory and its Unix socket. It independently asserts actual database name,
 cluster identity, runtime role, no network address, NOSUPERUSER, NOBYPASSRLS,
 tenant/user settings, row security, forced RLS on all 13 involved tables, and
-the complete applied 106-migration checksum manifest. The schema source is pinned.
+the complete applied 110-migration checksum manifest. The schema source is pinned.
 The verifier creates this identity; no existing database is reused.
 
 Actual tenant, active unique owner, active existing test purchaser, org-wide
@@ -508,7 +508,7 @@ Required evidence:
   financial-report router checks. This does not assert all service capabilities.
 - Observed runtime facts `superuser: false`, `bypassRls: false`, `forceRls: true`.
   These are validated fields, not a runtime role assertion against a database.
-- Schema SHA256 and 106-migration manifest SHA256 pinned in the contract. The
+- Schema SHA256 and 110-migration manifest SHA256 pinned in the contract. The
   migration digest hashes sorted `prisma/migrations/*/migration.sql` paths plus
   newline plus each file's bytes, in sequence. No migrations are run here.
 - Observed effective module facts, existing pre-approved reference IDs/hashes,
@@ -710,3 +710,41 @@ LAN/Azure apply remains disabled; clinical, Rx, controlled, fiscal, provider,
 consent, outreach and mature retention coverage remain UNSEEDED/OWNER-INPUT.
 No live writes, authentication changes, provisioning, push, merge or deployment.
 Source-only recovery needs no database rollback; preserve other workers' files.
+
+## Union re-pin to the restaurant release line (2026-09-24)
+
+The demo package was cherry-picked onto the restaurant release line
+(`codex/restaurant-release-20260911` tip `80cd9eb7`) on branch `WHA-1388-pharmacy-union`.
+The release line carries **110** migrations, four more than the `37906386` merge-base this
+package was pinned against:
+
+```
+20260904133000_restaurant_sales_demo
+20260905090000_restaurant_demo_reset_append_only_rls
+20260905100000_restaurant_demo_reset_delete_rls
+20260912053000_organization_ask_fathom_control
+```
+
+`pharmacyMigrationManifest()` therefore refused `SCHEMA_SOURCE_MISMATCH` before initdb. The
+contract is re-pinned to the union tree, computed with the manifest's own routine:
+
+| pin | was (merge-base `37906386`) | now (union tree) |
+| --- | --- | --- |
+| migration count | 106 | 110 |
+| `MIGRATIONS_SHA256` | `c500a70d3ef973afe9a2192421ac0335a1436695f02cc41ab3caab74f28d5024` | `7d333db5ab4b585e11bb396d5834394d76c9617bd8e58515ba9490cb021fe011` |
+| `SCHEMA_SHA256` | `ea8f40a29b95fcba8abfe7a41344402765f1efde5fff9e60f8faccb6a28608a5` | `a1b54cecbe2a34b292496d13a669ef96382c7ec9bdb677e06e2b5084e595a4c0` |
+
+The count is now the single exported constant `MIGRATION_COUNT` in
+`scripts/pharmacy-demo-contract.ts`; the four sites that previously hard-coded `106`
+(`seed-pharmacy-demo.ts` evidence check and manifest assertion, `seed-pharmacy-demo.test.ts`
+fixture, `verify-pharmacy-demo.ts` applied-migration assertion) read it from the contract, so the
+pin can no longer drift site by site. `PRODUCT_BASE` is left at `37906386…`: it records the
+fork point of this package and is referenced by nothing.
+
+**Every `106` still appearing in the sections above is historical.** Those sections are run
+records bound to their own source SHA and package digest and are retained unchanged; they
+describe passes against the 106-migration base, not the current pin.
+
+Re-pinning changes `pharmacySourceDigest()`, which covers the contract, the runner, its tests and
+this manifest. Evidence retained before this re-pin binds the old digest and is not claimed for the
+union line.

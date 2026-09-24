@@ -7,6 +7,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import type { ScopedDb } from '../src/lib/tenancy/scoped-db';
 import {
   MIGRATIONS_SHA256,
+  MIGRATION_COUNT,
   PHARMACY_DEMO_VERSION,
   SCHEMA_SHA256,
   isPharmacyDemoNamespace,
@@ -198,7 +199,7 @@ export function validateEvidence(input: unknown, now: Date): PharmacyDemoEvidenc
   requireFact(
     o.schemaSha256 === SCHEMA_SHA256 &&
       o.migrationsSha256 === MIGRATIONS_SHA256 &&
-      o.migrationCount === 106,
+      o.migrationCount === MIGRATION_COUNT,
     'SCHEMA_MISMATCH'
   );
   const owners = list(o.owners, 2);
@@ -443,7 +444,7 @@ export async function pharmacyMigrationManifest() {
     migrations.push({ name, checksum: createHash('sha256').update(sql).digest('hex') });
   }
   requireFact(
-    migrations.length === 106 &&
+    migrations.length === MIGRATION_COUNT &&
       digest.digest('hex') === MIGRATIONS_SHA256 &&
       createHash('sha256')
         .update(await readFile(join(root, 'prisma/schema.prisma')))

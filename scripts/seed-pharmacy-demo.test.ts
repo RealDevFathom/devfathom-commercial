@@ -4,6 +4,7 @@ import { mkdtemp, readFile, rm, symlink, writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
 import {
   MIGRATIONS_SHA256,
+  MIGRATION_COUNT,
   PHARMACY_DEMO_VERSION,
   SCHEMA_SHA256,
   isPharmacyDemoNamespace,
@@ -274,7 +275,7 @@ function fixture(): PharmacyDemoEvidence {
       runtimeRole: { superuser: false, bypassRls: false, forceRls: true },
       schemaSha256: SCHEMA_SHA256,
       migrationsSha256: MIGRATIONS_SHA256,
-      migrationCount: 106,
+      migrationCount: MIGRATION_COUNT,
       actors: [],
       references: [],
       modules: [],
