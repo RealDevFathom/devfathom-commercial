@@ -197,6 +197,15 @@ describe('physical count workflow', () => {
     expect(screen.getByRole('option', { name: 'Basmati Rice (Super Kernel)' })).toBeDefined();
     expect(screen.queryByRole('textbox', { name: /location|stock item|count id/i })).toBeNull();
   });
+  it('renders exactly one add-line form for the selected count', async () => {
+    const { page } = await pageWithCount('DRAFT');
+    const { container } = render(page);
+    const addLineForms = Array.from(container.querySelectorAll('form')).filter((form) =>
+      form.querySelector('select[name="stockItemId"]')
+    );
+    expect(addLineForms).toHaveLength(1);
+    expect(addLineForms[0].querySelector('input[name="stockCountId"]')).toHaveValue('count-1');
+  });
   it('sends exact create and add-line payloads', async () => {
     const { page, caller } = await pageWithCount('DRAFT');
     const create = new FormData();

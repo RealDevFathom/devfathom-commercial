@@ -354,6 +354,8 @@ test('an approved purchase order receipt reaches the stock ledger and on-hand po
   const received = uniqueAmount(5);
 
   await page.goto(inventory);
+  await expect(card(page, 'Movement ledger')).toBeVisible();
+  await expect(card(page, 'Stock on hand')).toBeVisible();
   const onHandBefore = (await onHandFor(page, itemName, location.label)) ?? 0;
   // The identification below is only meaningful if nothing already visible
   // carries this amount, so establish that first.
@@ -450,6 +452,8 @@ test('an approved purchase order receipt reaches the stock ledger and on-hand po
   await expect(page.locator('#receipt-history')).toContainText(receiptReference);
 
   await page.goto(inventory);
+  await expect(card(page, 'Movement ledger')).toBeVisible();
+  await expect(card(page, 'Stock on hand')).toBeVisible();
   const receiptQuantities = await movementQuantities(
     page,
     itemName,
