@@ -1,6 +1,7 @@
 import Link from 'next/link';
 import { revalidatePath } from 'next/cache';
 import { redirect } from 'next/navigation';
+import { TRPCError } from '@trpc/server';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -21,6 +22,7 @@ import { hasModule } from '@/lib/entitlements';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { restaurantPurchasingRouter } from '@/server/routers/restaurant-purchasing';
 import { createTRPCContext } from '@/server/trpc';
+import { ReceivingForm, type ReceivingState } from './receiving-form';
 
 const route = '/restaurant/purchasing';
 const inputClass =
@@ -310,40 +312,160 @@ export default async function PurchasingPage({
     redirect(next);
   }
 
-  async function receivePurchaseOrder(form: FormData) {
+  // Capture only receiving identifiers/defaults. The action reauthorizes and
+  // rereads the order; a render's capability result is never authorization.
+  // Binding the location also keeps a lost-response retry from selecting a
+  // different default receiving location.
+  const receivingOrderId = loaded.selectedOrder?.id;
+  const receivingLineIds = loaded.selectedOrder?.lines.map((line) => line.id) ?? [];
+  const receivingLocationId = loaded.locations.find(
+    (location) =>
+      location.branchId === loaded.selectedOrder?.branchId &&
+      (!loaded.selectedOrder?.locationId || location.id === loaded.selectedOrder.locationId)
+  )?.id;
+
+  async function receivePurchaseOrder(
+    previous: ReceivingState,
+    form: FormData
+  ): Promise<ReceivingState> {
     'use server';
-    const purchaseOrderId = field(form, 'purchaseOrderId');
-    let next: string;
+    const names = [
+      'reference',
+      ...receivingLineIds.flatMap((id) =>
+        [
+          'receivedQuantity',
+          'unitCost',
+          'batchCode',
+          'expiryDate',
+          'discrepancyKind',
+          'discrepancyNote',
+        ].map((name) => `${name}:${id}`)
+      ),
+    ];
+    const values = Object.fromEntries(names.map((name) => [name, String(form.get(name) ?? '')]));
+    // Opaque keys are never trimmed, derived from form values, or put in URLs.
+    const idempotencyKey = String(form.get('idempotencyKey') ?? '');
+    const errors: Record<string, string> = {};
+    const failure = (
+      status: ReceivingState['status'],
+      notice: string,
+      retryAllowed = true
+    ): ReceivingState => ({
+      status: previous.status === 'uncertain' ? 'uncertain' : status,
+      values: previous.status === 'uncertain' ? previous.values : values,
+      errors,
+      idempotencyKey:
+        previous.status === 'uncertain'
+          ? previous.idempotencyKey
+          : status === 'rejected'
+            ? crypto.randomUUID()
+            : idempotencyKey,
+      message: notice,
+      retryAllowed,
+    });
+    let mutationStarted = false;
+    let receiptId: string;
     try {
       const actionCtx = await tenantContext();
-      if (!actionCtx) throw new Error(NO_ACTOR);
+      if (!actionCtx?.session?.user) return failure('denied', NO_ACTOR, false);
+      const actionSubject = subjectFromSession(actionCtx.session.user);
+      if (
+        !hasModule(actionCtx.entitlements, 'restaurant-purchasing') ||
+        !(await can(actionSubject, 'purchasing:create', undefined, {
+          db: actionCtx.db,
+          source: 'TRPC',
+        }))
+      ) {
+        return failure(
+          'denied',
+          'Receiving permission is unavailable. Your entries are preserved.',
+          false
+        );
+      }
+      if (!receivingOrderId || field(form, 'purchaseOrderId') !== receivingOrderId) {
+        return failure('denied', 'The receiving form does not match this purchase order.', false);
+      }
+      if (
+        previous.status === 'uncertain' &&
+        (idempotencyKey !== previous.idempotencyKey ||
+          names.some((name) => values[name] !== previous.values[name]))
+      ) {
+        return failure(
+          'uncertain',
+          'The earlier receipt is still unconfirmed. Retry its original entries.'
+        );
+      }
+      if (
+        !/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i.test(
+          idempotencyKey
+        )
+      ) {
+        return failure(
+          'denied',
+          'The receiving form could not be verified. Check receipt history before reopening it.',
+          false
+        );
+      }
       const actionCaller = restaurantPurchasingRouter.createCaller(actionCtx);
-      const order = await actionCaller.getPurchaseOrder({ purchaseOrderId });
+      const order = await actionCaller.getPurchaseOrder({ purchaseOrderId: receivingOrderId });
+      if (!receivingLocationId) {
+        return failure(
+          'rejected',
+          'No active receiving location is available. Your entries are preserved.'
+        );
+      }
       const defaultLocation = await actionCtx.db.restaurantStockLocation.findFirst({
         where: {
+          id: receivingLocationId,
           branchId: order.branchId,
           isActive: true,
-          ...(order.locationId ? { id: order.locationId } : {}),
         },
-        orderBy: { name: 'asc' },
         select: { id: true },
       });
-      if (!defaultLocation) throw new Error('No active receiving location is available.');
+      if (!defaultLocation) {
+        return failure(
+          'rejected',
+          'The receiving location is no longer active. Your entries are preserved.'
+        );
+      }
 
       const lines = order.lines.flatMap((line) => {
         const receivedQuantity = field(form, `receivedQuantity:${line.id}`);
-        if (!receivedQuantity || receivedQuantity === '0') return [];
+        if (!receivedQuantity || /^0+(?:\.0+)?$/.test(receivedQuantity)) return [];
         if (!positiveDecimal.test(receivedQuantity)) {
-          throw new Error('Received quantities must be positive decimal values.');
+          errors[`receivedQuantity:${line.id}`] =
+            'Enter a positive decimal quantity, or 0 to omit this line.';
         }
         const unitCost = optionalField(form, `unitCost:${line.id}`);
         if (unitCost && !nonNegativeDecimal.test(unitCost)) {
-          throw new Error('Unit costs must be non-negative decimal values.');
+          errors[`unitCost:${line.id}`] = 'Enter a non-negative decimal unit cost.';
         }
         const batchCode = optionalField(form, `batchCode:${line.id}`);
         const expiryDate = optionalField(form, `expiryDate:${line.id}`);
         const discrepancyKind = optionalField(form, `discrepancyKind:${line.id}`);
         const discrepancyNote = optionalField(form, `discrepancyNote:${line.id}`);
+        if (expiryDate) {
+          const date = new Date(`${expiryDate}T00:00:00.000Z`);
+          if (
+            !/^\d{4}-\d{2}-\d{2}$/.test(expiryDate) ||
+            !Number.isFinite(date.getTime()) ||
+            date.toISOString().slice(0, 10) !== expiryDate
+          ) {
+            errors[`expiryDate:${line.id}`] = 'Enter a valid expiry date.';
+          }
+          if (!batchCode) errors[`batchCode:${line.id}`] = 'Enter a batch for this expiry date.';
+        }
+        if (
+          discrepancyKind &&
+          !['SHORTAGE', 'OVERAGE', 'DAMAGED', 'EXPIRED', 'REJECTED', 'OTHER'].includes(
+            discrepancyKind
+          )
+        ) {
+          errors[`discrepancyKind:${line.id}`] = 'Choose a listed discrepancy kind.';
+        }
+        if (discrepancyNote && !discrepancyKind) {
+          errors[`discrepancyKind:${line.id}`] = 'Choose a kind for this discrepancy note.';
+        }
         return [
           {
             purchaseOrderLineId: line.id,
@@ -365,24 +487,64 @@ export default async function PurchasingPage({
           },
         ];
       });
-      if (!lines.length) throw new Error('Enter at least one positive received quantity.');
-      await actionCaller.receivePurchaseOrder({
-        purchaseOrderId,
+      if (field(form, 'reference').length > 200)
+        errors.reference = 'Use at most 200 characters for the receipt reference.';
+      if (!lines.length) {
+        for (const id of receivingLineIds)
+          errors[`receivedQuantity:${id}`] = 'Enter a positive quantity on at least one line.';
+      }
+      if (Object.keys(errors).length)
+        return failure('invalid', 'Check the marked fields. Your entries are preserved.');
+      mutationStarted = true;
+      const receipt = await actionCaller.receivePurchaseOrder({
+        purchaseOrderId: receivingOrderId,
         locationId: defaultLocation.id,
         reference: optionalField(form, 'reference'),
-        idempotencyKey: field(form, 'idempotencyKey'),
+        idempotencyKey,
         lines,
       });
-      revalidatePath(route);
-      next = destination('Receipt posted.', 'success', purchaseOrderId);
+      if (!receipt.receiptId || receipt.purchaseOrderId !== receivingOrderId) {
+        return failure(
+          'uncertain',
+          'The receipt result could not be confirmed. Your entries are preserved.'
+        );
+      }
+      receiptId = receipt.receiptId;
     } catch (error) {
-      next = destination(
-        message(error, 'Could not receive purchase order.'),
-        'error',
-        purchaseOrderId
+      if (error instanceof TRPCError && ['FORBIDDEN', 'UNAUTHORIZED'].includes(error.code)) {
+        return failure('denied', 'Receiving access was denied. Your entries are preserved.', false);
+      }
+      // PurchasingError is mapped to BAD_REQUEST/NOT_FOUND by the existing
+      // router. Its transaction rolls back the receipt AND its key. A corrected
+      // draft therefore gets a fresh key; an earlier uncertain intent never does.
+      if (error instanceof TRPCError && ['BAD_REQUEST', 'NOT_FOUND'].includes(error.code)) {
+        return failure(
+          'rejected',
+          `${error.message} Your entries are preserved. Review them before retrying.`
+        );
+      }
+      return failure(
+        mutationStarted ? 'uncertain' : 'rejected',
+        mutationStarted
+          ? 'The receipt result could not be confirmed. Your entries are preserved.'
+          : 'Receiving could not be checked. Your entries are preserved; retry when the service is available.'
       );
     }
-    redirect(next);
+    // Cache refresh failure cannot undo a confirmed posting or permit another
+    // post. The client still clears the draft and navigates to receipt history.
+    try {
+      revalidatePath(route);
+    } catch {
+      // The confirmed receipt remains available through the existing reader.
+    }
+    return {
+      status: 'success',
+      values: {},
+      errors: {},
+      idempotencyKey: '',
+      message: 'Receipt posted.',
+      receiptId,
+    };
   }
 
   const openOrders = loaded.orders.filter((order) =>
@@ -710,88 +872,43 @@ export default async function PurchasingPage({
               </div>
 
               {['APPROVED', 'PARTIALLY_RECEIVED'].includes(loaded.selectedOrder.status) && (
-                <form action={receivePurchaseOrder} className="mt-6 space-y-4">
-                  <input type="hidden" name="purchaseOrderId" value={loaded.selectedOrder.id} />
-                  <input type="hidden" name="idempotencyKey" value={crypto.randomUUID()} />
-                  <div>
-                    <h3 className="font-semibold text-text-strong">Receive stock</h3>
-                    <p className="mt-1 text-sm text-text-muted">
-                      Enter only quantities arriving in this receipt.
-                    </p>
-                  </div>
-                  {loaded.selectedOrder.lines.map((line) => (
-                    <fieldset
-                      className="grid gap-3 rounded-[var(--radius-sm)] border border-border-subtle p-4 sm:grid-cols-2"
-                      disabled={!creatable}
-                      key={line.id}
-                    >
-                      <legend className="px-1 text-sm font-medium text-text-strong">
-                        {stockItemNames.get(line.stockItemId) ?? line.stockItemId}
-                      </legend>
-                      <label className="text-sm text-text-body">
-                        Received quantity
-                        <Input
-                          name={`receivedQuantity:${line.id}`}
-                          inputMode="decimal"
-                          defaultValue="0"
-                          className="mt-1 min-h-11"
-                        />
-                      </label>
-                      <label className="text-sm text-text-body">
-                        Unit cost
-                        <Input
-                          name={`unitCost:${line.id}`}
-                          inputMode="decimal"
-                          defaultValue={line.unitCost}
-                          className="mt-1 min-h-11"
-                        />
-                      </label>
-                      <label className="text-sm text-text-body">
-                        Batch
-                        <Input name={`batchCode:${line.id}`} className="mt-1 min-h-11" />
-                      </label>
-                      <label className="text-sm text-text-body">
-                        Expiry
-                        <Input
-                          name={`expiryDate:${line.id}`}
-                          type="date"
-                          className="mt-1 min-h-11"
-                        />
-                      </label>
-                      <label className="text-sm text-text-body">
-                        Discrepancy kind
-                        <select name={`discrepancyKind:${line.id}`} className={inputClass}>
-                          <option value="">None</option>
-                          <option value="SHORTAGE">Shortage</option>
-                          <option value="OVERAGE">Overage</option>
-                          <option value="DAMAGED">Damaged</option>
-                          <option value="EXPIRED">Expired</option>
-                          <option value="REJECTED">Rejected</option>
-                          <option value="OTHER">Other</option>
-                        </select>
-                      </label>
-                      <label className="text-sm text-text-body">
-                        Discrepancy note
-                        <Input name={`discrepancyNote:${line.id}`} className="mt-1 min-h-11" />
-                      </label>
-                    </fieldset>
-                  ))}
-                  <label className="block text-sm text-text-body">
-                    Receipt reference
-                    <Input name="reference" disabled={!creatable} className="mt-1 min-h-11" />
-                  </label>
-                  <Button type="submit" disabled={!creatable} className="min-h-11">
-                    Receive purchase order
-                  </Button>
-                </form>
+                <ReceivingForm
+                  key={loaded.selectedOrder.id}
+                  purchaseOrderId={loaded.selectedOrder.id}
+                  canReceive={creatable}
+                  action={receivePurchaseOrder}
+                  lines={loaded.selectedOrder.lines.map((line) => ({
+                    id: line.id,
+                    name: stockItemNames.get(line.stockItemId) ?? line.stockItemId,
+                    unitCost: line.unitCost,
+                  }))}
+                  initialState={{
+                    status: 'idle',
+                    message: '',
+                    errors: {},
+                    idempotencyKey: crypto.randomUUID(),
+                    values: Object.fromEntries([
+                      ['reference', ''],
+                      ...loaded.selectedOrder.lines.flatMap((line) => [
+                        [`receivedQuantity:${line.id}`, '0'],
+                        [`unitCost:${line.id}`, line.unitCost],
+                        [`batchCode:${line.id}`, ''],
+                        [`expiryDate:${line.id}`, ''],
+                        [`discrepancyKind:${line.id}`, ''],
+                        [`discrepancyNote:${line.id}`, ''],
+                      ]),
+                    ]),
+                  }}
+                />
               )}
 
-              <div className="mt-6">
+              <div id="receipt-history" className="mt-6">
                 <h3 className="font-semibold text-text-strong">Receipt history</h3>
                 {loaded.receipts.length ? (
                   <div className="mt-3 space-y-4">
                     {loaded.receipts.map((receipt) => (
                       <article
+                        id={`receipt-${receipt.id}`}
                         className="rounded-[var(--radius-sm)] border border-border-subtle p-4"
                         key={receipt.id}
                       >
