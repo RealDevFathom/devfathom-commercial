@@ -39,10 +39,7 @@ export function MedicinePackSetup() {
       setMessage('Pack created. Return to Pharmacy setup to continue with opening stock.');
       setLevel('');
       setUnits('');
-      await Promise.all([
-        utils.pharmacyMedicine.get.invalidate({ id: medicineId }),
-        utils.pharmacyPurchasing.workspace.invalidate(),
-      ]);
+      await utils.pharmacyMedicine.get.invalidate({ id: medicineId });
     },
   });
   const error = create.error ?? medicine.error ?? search.error;
