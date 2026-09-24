@@ -40,6 +40,7 @@ vi.mock('@/server/audit', () => ({
 }));
 vi.mock('@/lib/rate-limit', () => ({
   rateLimit: () => ({ ok: true, retryAfter: 0 }),
+  clearRateLimit: vi.fn(),
 }));
 vi.mock('@/lib/totp', () => ({ hashRecoveryCode: vi.fn(), verifyTotp: vi.fn() }));
 vi.mock('@/lib/tenancy/host', () => ({

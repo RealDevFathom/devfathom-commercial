@@ -512,6 +512,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           const consumed = await consumeLoginIntent(rawIntent, host, organization.id);
           if (!consumed) return null;
 
+          // WHA-1570: the shared-host credential check (/api/login) spends the
+          // same `login:ip` / `login:acct` budgets as the per-host provider above,
+          // so a fully verified shared-host sign-in clears them the same way.
+          // Cleared HERE and not in /api/login: that route proves only the
+          // password, and refunding it there would let whoever holds the password
+          // mint intents without limit and grind second-factor codes through them.
+          // `intent.email` is the same normalized address /api/login keyed on.
+          clearRateLimit(`login:ip:${ip ?? 'unknown'}`);
+          clearRateLimit(`login:acct:${intent.email}`);
+
           await tenantDb.user.update({
             where: { id: user.id },
             data: { lastActiveAt: new Date() },
