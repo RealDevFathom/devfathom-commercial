@@ -11,7 +11,7 @@ import config from '../playwright.restaurant-integrated.config';
 const target = 'postgresql://runner:secret@127.0.0.1:55432/devfathom_restaurant_e2e';
 const credentials = {
   RESTAURANT_INTEGRATED_E2E: '1',
-  RESTAURANT_ACTOR_ADMIN_EMAIL: 'admin@restaurant-e2e.test',
+  RESTAURANT_ACTOR_ADMIN_EMAIL: 'alex@company.com',
   RESTAURANT_ACTOR_ADMIN_PASSWORD: 'test-only',
   RESTAURANT_ACTOR_OPERATOR_EMAIL: 'operator@restaurant-e2e.test',
   RESTAURANT_ACTOR_OPERATOR_PASSWORD: 'operator-test-only',
@@ -107,6 +107,37 @@ describe('Restaurant integrated E2E safety', () => {
         RESTAURANT_ACTOR_OPERATOR_EMAIL: 'different@restaurant-e2e.test',
       })
     ).toThrow('RESTAURANT_ACTOR_OPERATOR_EMAIL must be operator@restaurant-e2e.test');
+  });
+
+  // WHA-1542 — the seed mirrors alex@company.com and copies the hash prisma/seed.ts
+  // wrote under SEED_PASSWORD. Any other address or password authenticates against
+  // no row at all, and NextAuth reports that as an ordinary credential rejection.
+  test('refuses an administrator identity the Restaurant E2E seed never writes', () => {
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        RESTAURANT_ACTOR_ADMIN_EMAIL: 'admin@restaurant-e2e.test',
+      })
+    ).toThrow('RESTAURANT_ACTOR_ADMIN_EMAIL must be alex@company.com');
+  });
+
+  test('refuses an administrator password that cannot match the seeded hash', () => {
+    expect(() =>
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        SEED_PASSWORD: 'a-different-seed-password',
+      })
+    ).toThrow('RESTAURANT_ACTOR_ADMIN_PASSWORD must equal SEED_PASSWORD');
+
+    expect(
+      restaurantE2eEnvironment({
+        RESTAURANT_E2E_DATABASE_URL: target,
+        ...credentials,
+        SEED_PASSWORD: credentials.RESTAURANT_ACTOR_ADMIN_PASSWORD,
+      }).RESTAURANT_ACTOR_ADMIN_PASSWORD
+    ).toBe(credentials.RESTAURANT_ACTOR_ADMIN_PASSWORD);
   });
 
   test('passes only the actor credentials used by the integrated matrix', () => {

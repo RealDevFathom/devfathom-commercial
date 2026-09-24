@@ -77,8 +77,12 @@ jobs:
       WHA874_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       WHA910_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       RESTAURANT_E2E_RESTORATION_DB: '1'
-      RESTAURANT_ACTOR_ADMIN_EMAIL: admin@restaurant-e2e.test
-      RESTAURANT_ACTOR_ADMIN_PASSWORD: gate-admin-ci-only
+      # scripts/seed-restaurant-e2e.ts mirrors alex@company.com into Chai Chowk
+      # under the `*` manager role and COPIES the password hash prisma/seed.ts
+      # wrote for org_devfathom. It creates no admin@restaurant-e2e.test, so the
+      # admin actor must be Alex and its password must equal SEED_PASSWORD below.
+      RESTAURANT_ACTOR_ADMIN_EMAIL: alex@company.com
+      RESTAURANT_ACTOR_ADMIN_PASSWORD: gate-seed-ci-only
       RESTAURANT_ACTOR_OPERATOR_EMAIL: operator@restaurant-e2e.test
       RESTAURANT_ACTOR_OPERATOR_PASSWORD: gate-operator-ci-only
       AUTH_SECRET: gate-auth-secret-ci-only-000000000000000000000000
