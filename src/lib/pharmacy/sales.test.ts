@@ -311,6 +311,9 @@ describe('POS-04 discount guardrails', () => {
 describe('POS-06 linked returns', () => {
   it('refuses cumulative returns above the quantity sold', async () => {
     const db = {
+      $queryRaw: async () => [],
+      pharmacyStockLocation: { findFirst: async () => ({ id: 'quarantine' }) },
+      pharmacySaleEvent: { findFirst: async () => null },
       pharmacySaleLine: {
         findFirst: async () => ({
           id: 'line-a',
@@ -343,6 +346,8 @@ describe('POS-06 linked returns', () => {
       },
     };
     const db = {
+      $queryRaw: async () => [],
+      pharmacyStockLocation: { findFirst: async () => ({ id: 'quarantine' }) },
       pharmacySaleLine: {
         findFirst: async () => ({
           id: 'line-a',
@@ -356,7 +361,7 @@ describe('POS-06 linked returns', () => {
       pharmacySaleReturn: model,
       pharmacyStockMovement: model,
       pharmacySaleReturnLine: model,
-      pharmacySaleEvent: model,
+      pharmacySaleEvent: { ...model, findFirst: async () => null },
     };
     await returnSaleLine(db as never, scope, {
       saleLineId: 'line-a',
