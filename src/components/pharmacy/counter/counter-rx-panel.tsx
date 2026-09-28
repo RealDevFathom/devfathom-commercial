@@ -11,6 +11,15 @@ import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 import { formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
 
 export type CounterRxPanelProps = {
+  controlled?: {
+    prescriptionLineId: string;
+    staffProfileId: string;
+    pin: string;
+    pharmacists: ReadonlyArray<{ id: string; name: string }>;
+    loading: boolean;
+    error: boolean;
+    onChange: (field: 'prescriptionLineId' | 'staffProfileId' | 'pin', value: string) => void;
+  };
   alerts: readonly CounterAlert[];
   patient: CounterPatientPanel | null;
   candidates: ReadonlyArray<{ patientId: string; displayName: string; phone: string | null }>;
@@ -43,6 +52,7 @@ export type CounterRxPanelProps = {
 export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
   function CounterRxPanel(
     {
+      controlled,
       alerts,
       patient,
       candidates,
@@ -63,6 +73,79 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
 
     return (
       <div ref={ref} tabIndex={-1} className="space-y-5 focus-visible:outline-none">
+        {controlled ? (
+          <section
+            aria-label="Controlled medicine authorization"
+            className="space-y-3 rounded-md border border-border-subtle p-3"
+          >
+            <h4 className="font-semibold text-text-strong">Controlled medicine authorization</h4>
+            <p className="text-sm text-text-body">
+              Attach a patient with ID on file, select the prescription, and ask an independent
+              pharmacist to enter their PIN. Online only.
+            </p>
+            <Label htmlFor="controlled-prescription">Prescription line</Label>
+            <select
+              id="controlled-prescription"
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+              disabled={disabled || !patient}
+              value={controlled.prescriptionLineId}
+              onChange={(event) => controlled.onChange('prescriptionLineId', event.target.value)}
+            >
+              <option value="">Select prescription</option>
+              {patient?.prescriptions
+                .filter((rx) => rx.inDate)
+                .flatMap((rx) =>
+                  rx.lines.map((line) => (
+                    <option key={line.prescriptionLineId} value={line.prescriptionLineId}>
+                      {line.medicineName} · {rx.prescriberName} · {line.remainingAuthorizedUnits}{' '}
+                      units
+                    </option>
+                  ))
+                )}
+            </select>
+            <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
+            <select
+              id="controlled-pharmacist"
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+              disabled={disabled || controlled.loading || controlled.error}
+              value={controlled.staffProfileId}
+              onChange={(event) => controlled.onChange('staffProfileId', event.target.value)}
+            >
+              <option value="">Select pharmacist</option>
+              {controlled.pharmacists.map((staff) => (
+                <option key={staff.id} value={staff.id}>
+                  {staff.name}
+                </option>
+              ))}
+            </select>
+            {controlled.loading ? (
+              <p role="status">Loading pharmacists…</p>
+            ) : controlled.error ? (
+              <p role="alert">Pharmacists could not be loaded. Retry by refreshing the counter.</p>
+            ) : controlled.pharmacists.length === 0 ? (
+              <p role="status">
+                No independent pharmacist with an active staff PIN is available. Ask your
+                administrator to configure one.
+              </p>
+            ) : null}
+            <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+            <Input
+              id="controlled-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              className="h-11"
+              disabled={disabled || !controlled.staffProfileId}
+              value={controlled.pin}
+              onChange={(event) => controlled.onChange('pin', event.target.value)}
+            />
+            <p className="text-xs text-text-muted">
+              PIN is cleared after each attempt. Five incorrect attempts lock the credential for 15
+              minutes.
+            </p>
+          </section>
+        ) : null}
         <section aria-label="Safety blocks" className="space-y-2">
           <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
             Safety blocks

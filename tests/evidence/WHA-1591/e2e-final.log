@@ -1,0 +1,73 @@
+[WebServer] $ next dev --port "4391"
+[WebServer] (node:69891) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:69892) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] ⚠ Slow filesystem detected. The benchmark took 1810ms. If /Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/.next/dev is a network drive, consider moving it to a local folder.
+[WebServer] See more: https://nextjs.org/docs/app/guides/local-development
+[WebServer] (node:69992) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 1 test using 1 worker
+
+(node:70332) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] ⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "127.0.0.1".
+[WebServer] Cross-origin access to Next.js dev resources is blocked by default for safety.
+[WebServer] 
+[WebServer] To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+[WebServer] 
+[WebServer] // next.config.js
+[WebServer] module.exports = {
+[WebServer]   allowedDevOrigins: ['127.0.0.1'],
+[WebServer] }
+[WebServer] 
+[WebServer] Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+  ✘  1 [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:367:5 › controlled interlock requires Rx patient ID and pharmacist PIN; register prints (37.6s)
+
+
+  1) [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:367:5 › controlled interlock requires Rx patient ID and pharmacist PIN; register prints 
+
+    Error: expect(page).toHaveURL(expected) failed
+
+    Expected pattern: /\/(dashboard|pharmacy)/
+    Received string:  "http://127.0.0.1:4391/login"
+    Timeout: 30000ms
+
+    Call log:
+      - Expect "toHaveURL" with timeout 30000ms
+        62 × locator resolved to <html lang="en" data-theme="light" data-layout="rail" data-type="default" data-accent="quiet" data-icons="numeric" data-density="default" class="instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full">…</html>
+           - unexpected value "http://127.0.0.1:4391/login"
+
+
+      54 |     await pressControl(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }));
+      55 |   }
+    > 56 |   await expect(page).toHaveURL(/\/(dashboard|pharmacy)/, { timeout: 30_000 });
+         |                      ^
+      57 | }
+      58 |
+      59 | async function openCounter(page: Page) {
+        at signIn (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/tests/e2e/pharmacy-counter.spec.ts:56:22)
+        at openCounter (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/tests/e2e/pharmacy-counter.spec.ts:60:3)
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/tests/e2e/pharmacy-counter.spec.ts:373:3
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:367:5 › controlled interlock requires Rx patient ID and pharmacist PIN; register prints 

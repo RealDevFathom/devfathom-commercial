@@ -1,13 +1,33 @@
+import { can } from '@/lib/abac';
 import { z } from 'zod';
 import { annotateAudit } from '@/server/audit';
 import { createInspectionPack } from '@/lib/pharmacy/inspection-pack';
 import { installPharmacySopLibrary } from '@/lib/pharmacy/sop-library';
 import { activeLegalHoldKeys } from '@/lib/pharmacy/retention';
-import { capabilityProcedure, router } from '../trpc';
+import { protectedProcedure, capabilityProcedure, router } from '../trpc';
 
 const safety = capabilityProcedure('pharmacy:safety');
 
 export const pharmacySafetyRouter = router({
+  controlledPharmacists: protectedProcedure.query(async ({ ctx }) => {
+    const staff = await ctx.db.restaurantStaffProfile.findMany({
+      where: {
+        status: 'ACTIVE',
+        userId: { not: ctx.session!.user.id },
+        credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+      },
+      include: { user: true },
+    });
+    const eligible: Array<{ id: string; name: string }> = [];
+    for (const profile of staff) {
+      if (
+        profile.user?.status === 'ACTIVE' &&
+        (await can(profile.user, 'pharmacy:dispense', undefined, { db: ctx.db }))
+      )
+        eligible.push({ id: profile.id, name: profile.displayName });
+    }
+    return eligible;
+  }),
   controlledRegister: safety.query(async ({ ctx }) => ({
     entries: await ctx.db.pharmacyControlledRegisterEntry.findMany({
       orderBy: [{ branchId: 'asc' }, { serial: 'desc' }],

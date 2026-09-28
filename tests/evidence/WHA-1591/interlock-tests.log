@@ -1,0 +1,9 @@
+
+ RUN  v4.1.10 /Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock
+
+
+ Test Files  2 passed (2)
+      Tests  50 passed (50)
+   Start at  04:54:23
+   Duration  13.30s (transform 17.69s, setup 1.67s, import 19.39s, tests 72ms, environment 4.84s)
+
