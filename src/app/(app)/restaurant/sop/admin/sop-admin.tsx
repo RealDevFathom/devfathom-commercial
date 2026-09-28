@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent } from 'react';
+import { useEffect, useRef, useState, type FormEvent } from 'react';
 import Link from 'next/link';
 import type { inferRouterInputs, inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
@@ -312,12 +312,29 @@ export function SopAdminView({
   const canCreateTemplate = capacity.kind === 'available';
   const notInPlan = moduleSource === 'NONE';
   const anyPending = pendingAction != null;
+  // WCAG 2.4.3: a successful Retry unmounts the error card that held focus, so hand
+  // focus to the page heading instead of letting it fall back to <body>.
+  const headingRef = useRef<HTMLSpanElement>(null);
+  const retryRequestedRef = useRef(false);
+  useEffect(() => {
+    if (state === 'error' || !retryRequestedRef.current) return;
+    retryRequestedRef.current = false;
+    if (state === 'ready') headingRef.current?.focus();
+  }, [state]);
 
   return (
     <div className="min-w-0 space-y-6" aria-busy={state === 'loading'}>
       <PageHeader
         eyebrow="Restaurant operations"
-        heading="SOP administration"
+        heading={
+          <span
+            ref={headingRef}
+            tabIndex={-1}
+            className="rounded-[3px] outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            SOP administration
+          </span>
+        }
         description="Author controlled procedures, publish immutable versions, and schedule branch work."
         actions={
           moduleEnabled ? (
@@ -423,7 +440,15 @@ export function SopAdminView({
             <p className="max-w-2xl text-sm text-text-muted">
               {loadError || 'No data was changed. Retry the authoring contract.'}
             </p>
-            <Button type="button" variant="outline" className="min-h-11" onClick={onRetry}>
+            <Button
+              type="button"
+              variant="outline"
+              className="min-h-11"
+              onClick={() => {
+                retryRequestedRef.current = true;
+                onRetry();
+              }}
+            >
               Retry
             </Button>
           </div>
