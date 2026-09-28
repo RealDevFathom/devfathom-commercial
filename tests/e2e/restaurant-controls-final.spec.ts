@@ -1,4 +1,4 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
 
 import {
   assertTerminalSecretIsBrowserIsolated,
@@ -291,6 +291,366 @@ test('dashboard date and visibility preferences persist and reports render the s
       ).toBeVisible();
     } catch (cleanupError) {
       if (!primaryFailure) throw cleanupError;
+    }
+  }
+});
+
+/**
+ * WHA-1576 — the settlement path walked in a browser: drawer float, a cash and a card
+ * sale through KDS and checkout, the receipt preview, a refund attempt, the day-close
+ * preview, the counted drawer close, the day close, and the Finance record of it.
+ *
+ * Every seeded branch posts money later in this lane on today's business date, and a
+ * closed day refuses money: `restaurant-pos-kds.spec.ts` (Gulberg),
+ * `restaurant-delivery.spec.ts` (DHA) and `restaurant-software-receipt-acceptance.spec.ts`
+ * (the ASCII receipt branch). So the owner moves the ASCII branch's business-day
+ * cutoff to 23:59 — the operating day becomes yesterday — the walk closes THAT day,
+ * and `finally` restores 00:00. The one minute from 23:59 Asia/Karachi cannot shift
+ * the day, so the case fails fast there instead of closing today.
+ *
+ * The branch ships no kitchen display, so the owner enrols this browser as one through
+ * the devices console. That enrolment is residue — revocation on this branch is
+ * refused to the owner (WHA-1576 defect list) — and it touches no other case.
+ *
+ * The branch's only register operator holds no `payments:refund`, and the terminal
+ * directory lists no manager here, so the refund is asserted as refused. The
+ * approved refund is covered in the browser by `restaurant-pos-kds.spec.ts`.
+ */
+const DAY_CLOSE_BRANCH = {
+  branchId: 'branch_restaurant_e2e_ascii_receipt',
+  branchName: 'Gulberg Cafe Receipt Lab',
+  operator: { staffProfileId: 'staff_restaurant_e2e_ascii_receipt_operator', pin: '353535' },
+  pos: {
+    deviceId: 'device_restaurant_e2e_ascii_receipt_pos',
+    secret: process.env.RESTAURANT_E2E_ASCII_RECEIPT_DEVICE_SECRET ?? '',
+    clientIp: '198.51.100.14',
+  },
+  saleTotal: '14.00',
+} as const;
+
+async function setDayCloseBranchCutoff(page: Page, origin: string, cutoff: string) {
+  await page.goto(new URL('/restaurant/settings/branches', origin).href);
+  const row = page
+    .locator('[data-slot="section-card"]', {
+      has: page.getByRole('heading', { name: 'Locations' }),
+    })
+    .getByRole('listitem')
+    .filter({ hasText: DAY_CLOSE_BRANCH.branchName });
+  await row.getByRole('button', { name: 'Edit' }).click();
+  await page.getByLabel('Business day cutoff').fill(cutoff);
+  await page.getByRole('button', { name: 'Save changes' }).click();
+  await expect(row).toContainText(`business day ${cutoff}`);
+}
+
+async function unlockDayCloseRegister(pos: Page) {
+  await expect(pos.getByRole('heading', { name: 'Terminal locked' })).toBeVisible();
+  await pos
+    .getByLabel('Operator', { exact: true })
+    .selectOption(DAY_CLOSE_BRANCH.operator.staffProfileId);
+  await pos.getByLabel('Operator PIN', { exact: true }).fill(DAY_CLOSE_BRANCH.operator.pin);
+  await pos.getByRole('button', { name: 'Unlock terminal' }).click();
+  await expect(pos.getByRole('heading', { name: 'Order pad' })).toBeVisible();
+}
+
+async function sellThroughCheckout(pos: Page, kds: Page, tender: 'CASH' | 'CARD') {
+  // The branch publishes DINE_IN only; a counter check needs no table.
+  await expect(pos.getByLabel('Channel')).toHaveValue('DINE_IN');
+  await pos.getByLabel('Covers').fill('1');
+  await pos.getByRole('button', { name: new RegExp(`^${fixture.menuItem.name}`) }).click();
+  await pos.getByLabel('Quantity').fill('1');
+  await pos.getByLabel(new RegExp(fixture.modifier.name)).check();
+  await pos.getByRole('button', { name: 'Add to order' }).click();
+  const openedResponse = pos.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/orders/open') &&
+      response.request().method() === 'POST'
+  );
+  await pos.getByRole('button', { name: 'Open order' }).click();
+  const opened = await openedResponse;
+  expect(opened.status()).toBe(201);
+  const { orderNumber } = (await opened.json()) as { orderNumber: number };
+  const orderButton = pos.getByRole('button', { name: new RegExp(`^#${orderNumber} ·`) });
+  await orderButton.click();
+  await expect(pos.getByRole('heading', { name: `Order ${orderNumber}` })).toBeVisible();
+  await expect(pos.getByText(`1 × ${fixture.menuItem.name}`)).toBeVisible();
+  await pos.getByRole('button', { name: 'Send whole order' }).click();
+  await expect(pos.getByText('Order sent to kitchen.')).toBeVisible();
+
+  await kds.bringToFront();
+  await expect(kds.getByText(`Order #${orderNumber}`)).toBeVisible();
+  await kds
+    .getByRole('button', {
+      name: new RegExp(`Start ${fixture.menuItem.name} for order ${orderNumber}`),
+    })
+    .click();
+  await expect(kds.getByText('Item started.')).toBeVisible();
+  await kds
+    .getByRole('button', {
+      name: new RegExp(`Mark ready ${fixture.menuItem.name} for order ${orderNumber}`),
+    })
+    .click();
+  await expect(kds.getByText('Item marked ready.')).toBeVisible();
+
+  await pos.bringToFront();
+  await orderButton.click();
+  await expect(pos.getByText('PREPARED')).toBeVisible();
+  await pos.getByRole('button', { name: 'Mark served' }).click();
+  await pos.getByRole('button', { name: 'Close order' }).click();
+  const checkout = pos.getByRole('dialog', { name: 'Collect payment' });
+  await expect(checkout).toBeVisible();
+  await checkout.getByRole('button', { name: 'Cut single bill' }).click();
+  await checkout.getByLabel('Tender type').selectOption(tender);
+  await checkout.getByLabel('Amount').fill(DAY_CLOSE_BRANCH.saleTotal);
+  if (tender === 'CASH') await checkout.getByLabel('Cash received').fill('20.00');
+  const tenderResponse = pos.waitForResponse(
+    (response) =>
+      response.url().endsWith('/api/restaurant/checkout/tender') &&
+      response.request().method() === 'POST'
+  );
+  await checkout.getByRole('button', { name: 'Apply tender' }).click();
+  const tendered = await tenderResponse;
+  expect(tendered.status()).toBe(200);
+  expect(await tendered.json()).toMatchObject({
+    type: tender,
+    amount: DAY_CLOSE_BRANCH.saleTotal,
+    settled: true,
+    remainingDue: '0.00',
+    ...(tender === 'CASH' ? { changeGiven: '6.00' } : { changeGiven: null }),
+  });
+  const receipt = checkout.getByRole('region', { name: /^Receipt \d+$/ });
+  await expect(receipt).toBeVisible();
+  return { orderNumber, receipt, checkout };
+}
+
+test('a cashier walks drawer, cash and card sales, receipt, day close, and Finance records the variance', async ({
+  browser,
+}) => {
+  test.setTimeout(240_000);
+  expect(DAY_CLOSE_BRANCH.pos.secret, 'the ASCII receipt register secret is required').toMatch(
+    /^rdk_/
+  );
+  const terminalOrigin = terminalBrowserBaseUrl();
+  const posContext = await browser.newContext();
+  const kdsContext = await browser.newContext();
+  const financeContext = await browser.newContext();
+  const finance = await financeContext.newPage();
+  const financeOrigin = await signInAs(finance, 'restaurantAdmin');
+  const karachiToday = new Intl.DateTimeFormat('en-CA', { timeZone: 'Asia/Karachi' }).format(
+    new Date()
+  );
+  let cutoffMoved = false;
+  let primaryFailure: unknown;
+  try {
+    await setDayCloseBranchCutoff(finance, financeOrigin, '23:59');
+    cutoffMoved = true;
+
+    // Kitchen display: the owner enrols this browser for the branch, then it unlocks.
+    const kds = await kdsContext.newPage();
+    const ownerOrigin = await signInAs(kds, 'restaurantAdmin');
+    await kds.goto(new URL('/restaurant/devices', ownerOrigin).href);
+    await kds.getByRole('button', { name: 'Enroll device' }).click();
+    const enrol = kds.getByRole('dialog', { name: 'Enroll this browser' });
+    await enrol.getByLabel('Device name').fill('WHA-1576 Day-close KDS');
+    await expect(enrol.getByLabel('Branch')).toBeEnabled();
+    await enrol.getByLabel('Branch').selectOption(DAY_CLOSE_BRANCH.branchId);
+    await enrol.getByLabel('Device kind').selectOption('KDS');
+    await expect(enrol.getByLabel('KDS station')).toBeEnabled();
+    await enrol.getByLabel('KDS station').selectOption({ index: 1 });
+    await enrol.getByRole('checkbox').check();
+    await enrol.getByRole('button', { name: 'Enroll this browser' }).click();
+    await expect(kds).toHaveURL(/\/kds$/);
+    await expect(
+      kds.getByText(`WHA-1576 Day-close KDS · ${DAY_CLOSE_BRANCH.branchName}`)
+    ).toBeVisible();
+    await kds.getByLabel('Acting operator').selectOption(DAY_CLOSE_BRANCH.operator.staffProfileId);
+    await kds.getByLabel('Operator PIN', { exact: true }).fill(DAY_CLOSE_BRANCH.operator.pin);
+    await kds.getByRole('button', { name: 'Verify PIN and unlock' }).click();
+    await expect(kds.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
+
+    // Register: the seeded enrolment establishes a device session and the cashier unlocks.
+    await installSeededTerminalCookie(posContext, DAY_CLOSE_BRANCH.pos, terminalOrigin);
+    const pos = await posContext.newPage();
+    const establishedResponse = pos.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/terminal/establish') &&
+        response.request().method() === 'POST'
+    );
+    await pos.goto(new URL('/pos', terminalOrigin).href);
+    expect((await establishedResponse).status()).toBe(201);
+    await expect(pos.getByRole('heading', { name: 'Terminal locked' })).toBeVisible();
+    await expect(pos.getByText(DAY_CLOSE_BRANCH.branchName)).toBeVisible();
+    await unlockDayCloseRegister(pos);
+    await assertTerminalSecretIsBrowserIsolated(pos, DAY_CLOSE_BRANCH.pos.secret);
+
+    const drawer = pos.getByRole('dialog', { name: 'Cash drawer' });
+    await pos.getByRole('button', { name: 'Cash drawer' }).click();
+    await expect(drawer.getByRole('heading', { name: 'No open drawer' })).toBeVisible();
+    await drawer.getByLabel('Opening float').fill('50.00');
+    const drawerOpenResponse = pos.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/cash/drawer/open') &&
+        response.request().method() === 'POST'
+    );
+    await drawer.getByRole('button', { name: 'Open drawer' }).click();
+    const drawerOpened = await drawerOpenResponse;
+    expect(drawerOpened.status()).toBe(200);
+    const { businessDate } = (await drawerOpened.json()) as { businessDate: string };
+    expect(
+      businessDate < karachiToday,
+      `the 23:59 cutoff must move the operating day off ${karachiToday}`
+    ).toBe(true);
+    await expect(drawer.getByText('Active drawer')).toBeVisible();
+    await pos.getByRole('button', { name: 'Close drawer panel' }).click();
+
+    const cashSale = await sellThroughCheckout(pos, kds, 'CASH');
+    await expect(cashSale.receipt).toContainText(
+      `${DAY_CLOSE_BRANCH.branchName} · Order ${cashSale.orderNumber}`
+    );
+    await expect(cashSale.receipt).toContainText(`1 × ${fixture.menuItem.name}`);
+    await expect(cashSale.receipt).toContainText(/CASH\s*14\.00\s*Change\s*6\.00/);
+    await expect(cashSale.receipt.getByRole('region', { name: 'Receipt printing' })).toBeVisible();
+    await cashSale.checkout.getByRole('button', { name: 'Close checkout' }).click();
+    await expect(cashSale.checkout).toHaveCount(0);
+    // A settled check stays PAYMENT_PENDING and active (WHA-1576 defect list); locking
+    // the register is the operator path that clears it before the next check.
+    await pos.getByRole('button', { name: 'Lock terminal' }).click();
+    await unlockDayCloseRegister(pos);
+
+    const cardSale = await sellThroughCheckout(pos, kds, 'CARD');
+    await expect(cardSale.receipt).toContainText(/CARD\s*14\.00/);
+    await cardSale.checkout.getByRole('button', { name: 'Close checkout' }).click();
+    await expect(cardSale.checkout).toHaveCount(0);
+
+    // Refund is refused to an operator without `payments:refund`; nothing is recorded.
+    const refundRead = pos.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/checkout/refund') &&
+        response.request().method() === 'GET'
+    );
+    await pos.getByRole('button', { name: 'Refund' }).click();
+    expect((await refundRead).status()).toBe(403);
+    const refund = pos.getByRole('dialog', { name: 'Refund settled payment' });
+    await expect(refund.getByRole('alert')).toBeVisible();
+    await refund.getByRole('button', { name: 'Close', exact: true }).click();
+    await expect(refund).toHaveCount(0);
+
+    const dayClose = pos.getByRole('dialog', { name: 'Close business day' });
+    const readiness = async () => {
+      const previewResponse = pos.waitForResponse(
+        (response) =>
+          response.url().includes('/api/restaurant/cash/day/preview') &&
+          response.request().method() === 'GET'
+      );
+      await dayClose.getByRole('button', { name: 'Check readiness' }).click();
+      const preview = await previewResponse;
+      expect(preview.status()).toBe(200);
+      return preview.json();
+    };
+    await pos.getByRole('button', { name: 'Close day' }).click();
+    await expect(dayClose.getByLabel('Business date')).toHaveValue(businessDate);
+    const blocked = await readiness();
+    expect(blocked.readiness).toMatchObject({ openBillCount: 0, openDrawerCount: 1 });
+    expect(blocked.totals).toMatchObject({ grossSales: '28.00', refundTotal: '0.00' });
+    await expect(dayClose.getByRole('heading', { name: 'Close blocked' })).toBeVisible();
+    await expect(dayClose.getByText('Resolve 0 open order(s) and 1 open drawer(s).')).toBeVisible();
+    await expect(dayClose.getByRole('button', { name: 'Close business day' })).toHaveCount(0);
+    await dayClose.getByRole('button', { name: 'Close day panel' }).click();
+
+    // Blind count 0.50 short of float 50.00 + cash sale 14.00.
+    await pos.getByRole('button', { name: 'Cash drawer' }).click();
+    await drawer.getByLabel('Counted cash').fill('63.50');
+    const drawerCloseResponse = pos.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/cash/drawer/close') &&
+        response.request().method() === 'POST'
+    );
+    await drawer.getByRole('button', { name: 'Close drawer', exact: true }).click();
+    const drawerClosed = await drawerCloseResponse;
+    expect(drawerClosed.status()).toBe(200);
+    expect(await drawerClosed.json()).toMatchObject({
+      expectedCash: '64.00',
+      countedCash: '63.50',
+      variance: '-0.50',
+    });
+    await expect(drawer.getByRole('heading', { name: 'Closed drawer' })).toBeVisible();
+    await expect(drawer.locator('dl').first()).toContainText(
+      /Expected\s*64\.00\s*Counted\s*63\.50\s*Variance\s*-0\.50/
+    );
+    await pos.getByRole('button', { name: 'Close drawer panel' }).click();
+
+    await pos.getByRole('button', { name: 'Close day' }).click();
+    const ready = await readiness();
+    expect(ready.readiness).toMatchObject({ openBillCount: 0, openDrawerCount: 0 });
+    expect(ready.existingCloseId).toBeNull();
+    await expect(dayClose.getByRole('heading', { name: 'Ready to close' })).toBeVisible();
+    const closeResponse = pos.waitForResponse(
+      (response) =>
+        response.url().endsWith('/api/restaurant/cash/day/close') &&
+        response.request().method() === 'POST'
+    );
+    await dayClose.getByRole('button', { name: 'Close business day' }).click();
+    const closed = await closeResponse;
+    expect(closed.status()).toBe(200);
+    const close = (await closed.json()) as {
+      dailyCloseId: string;
+      totals: Record<string, string>;
+      tenderTotals: Array<{ tenderType: string; amount: string; count: number }>;
+      replayed: boolean;
+    };
+    expect(close.replayed).toBe(false);
+    expect(close.totals).toMatchObject({
+      grossSales: '28.00',
+      netSales: '28.00',
+      refundTotal: '0.00',
+      cashExpected: '64.00',
+      cashCounted: '63.50',
+      cashVariance: '-0.50',
+    });
+    expect(close.tenderTotals).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({ tenderType: 'CASH', amount: '14.00', count: 1 }),
+        expect.objectContaining({ tenderType: 'CARD', amount: '14.00', count: 1 }),
+      ])
+    );
+    await expect(dayClose.getByRole('heading', { name: 'Closed day' })).toBeVisible();
+    await expect(
+      dayClose.getByRole('link', { name: 'Review in Restaurant Finance' })
+    ).toBeVisible();
+    await dayClose.getByRole('button', { name: 'Close day panel' }).click();
+
+    // Finance: the owner finds the close and its variance for the branch and date.
+    await finance.goto(new URL('/restaurant/money?tab=daily-close', financeOrigin).href);
+    await expect(finance.getByRole('heading', { name: 'Restaurant Finance' })).toBeVisible();
+    const filters = finance.locator('[data-slot="section-card"]', {
+      has: finance.getByRole('heading', { name: 'Filters' }),
+    });
+    await filters
+      .getByLabel('Branch')
+      .filter({ visible: true })
+      .selectOption(DAY_CLOSE_BRANCH.branchId);
+    await filters.getByLabel('Business date').fill(businessDate);
+    const closeRow = finance
+      .getByRole('region', { name: `Daily close chain table for ${businessDate}` })
+      .getByRole('row')
+      .filter({ hasText: close.dailyCloseId });
+    await expect(closeRow).toContainText('Authoritative tip');
+    await expect(closeRow).toContainText('Original close');
+    // Gross, Net, Refunds, Cash variance. Tolerates the un-padded Decimal serialization.
+    await expect(closeRow.getByRole('cell').nth(4)).toHaveText(/^28(\.00)?$/);
+    await expect(closeRow.getByRole('cell').nth(6)).toHaveText(/^0(\.00)?$/);
+    await expect(closeRow.getByRole('cell').nth(7)).toHaveText(/^-0\.50?$/);
+  } catch (error) {
+    primaryFailure = error;
+    throw error;
+  } finally {
+    try {
+      if (cutoffMoved) await setDayCloseBranchCutoff(finance, financeOrigin, '00:00');
+    } catch (cleanupError) {
+      if (!primaryFailure) throw cleanupError;
+    } finally {
+      await financeContext.close();
+      await kdsContext.close();
+      await posContext.close();
     }
   }
 });
