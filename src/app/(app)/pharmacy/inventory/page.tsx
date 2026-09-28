@@ -921,7 +921,18 @@ export default async function PharmacyInventoryPage({
             })}
           </div>
         </SectionCard>
-        <SectionCard title="Near-expiry and return windows" eyebrow="INV-09">
+        <SectionCard
+          title="Near-expiry and return windows"
+          eyebrow="INV-09"
+          actions={
+            <Link
+              className={buttonVariants({ size: 'sm', variant: 'secondary' })}
+              href={`/pharmacy/inventory/expiry?branch=${encodeURIComponent(branch.id)}`}
+            >
+              Act on expiring stock
+            </Link>
+          }
+        >
           <div className="grid gap-3 sm:grid-cols-2">
             {nearExpiry.map((bucket) => (
               <div

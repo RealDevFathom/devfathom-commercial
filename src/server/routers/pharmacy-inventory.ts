@@ -10,6 +10,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { Prisma } from '@/generated/prisma/client';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   confirmPriceChange,
@@ -46,6 +47,8 @@ import {
 } from '@/lib/pharmacy/stock-ledger';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import { PharmacyStockSignalError } from '@/lib/pharmacy/stock-signals';
+import { PharmacySupplierReturnError } from '@/lib/pharmacy/supplier-returns';
+import { createPurchaseReturn } from '@/lib/pharmacy/supplier-returns-operations';
 import {
   acknowledgeSignal,
   createDraftAction,
@@ -144,6 +147,129 @@ function actorFor(ctx: TRPCContext): { organizationId: string; actorId: string }
 function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
   return { ...actorFor(ctx), branchId: branch };
 }
+
+// ── PH-A5 — expiry board actions ────────────────────────────────────────────
+
+const DAY_MS = 86_400_000;
+/** The board's look-ahead choices; the widest one also bounds every action. */
+export const EXPIRY_BOARD_WINDOWS = [30, 60, 90, 180] as const;
+const EXPIRY_ACTION_HORIZON_DAYS = 180;
+const LIVE_SIGNAL_STATUSES = ['OPEN', 'ACKNOWLEDGED', 'SNOOZED', 'STALE'] as const;
+/**
+ * There is no pharmacy price-rule table yet, so a mark-down is recorded as a
+ * DRAFT_ACTION event on the lot's NEAR_EXPIRY signal — append-only, attributed,
+ * and inert: nothing at the counter reads it. This prefix is how the board finds
+ * its own drafts among the other DRAFT_ACTION events.
+ */
+export const MARKDOWN_DRAFT_PREFIX = 'DRAFT mark-down ';
+
+export type ExpiryMarkdownDraft = {
+  inventoryLotId: string;
+  stockLocationId: string;
+  batchNumber: string;
+  markdownPercent: number;
+  printedMrpMinor: number;
+  proposedPackPriceMinor: number;
+  unitsPerPack: number;
+  unitCostMinor: number;
+  onHandUnits: number;
+  expiresAt: string;
+};
+
+export function parseMarkdownDraft(detail: string | null): ExpiryMarkdownDraft | null {
+  if (!detail?.startsWith(MARKDOWN_DRAFT_PREFIX)) return null;
+  try {
+    const parsed = JSON.parse(detail.slice(MARKDOWN_DRAFT_PREFIX.length)) as ExpiryMarkdownDraft;
+    return typeof parsed.inventoryLotId === 'string' &&
+      typeof parsed.stockLocationId === 'string' &&
+      Number.isSafeInteger(parsed.proposedPackPriceMinor)
+      ? parsed
+      : null;
+  } catch {
+    return null;
+  }
+}
+
+/** Pack price after `percent` off the printed MRP, rounded to the nearest minor unit. */
+export function markdownPackPrice(printedMrpMinor: number, percent: number): number {
+  return Math.round((printedMrpMinor * (100 - percent)) / 100);
+}
+
+function expiryError(error: unknown): never {
+  if (error instanceof PharmacySupplierReturnError) {
+    throw new TRPCError({
+      code:
+        error.reason === 'CROSS_TENANT_REFERENCE' || error.reason === 'CROSS_BRANCH_REFERENCE'
+          ? 'FORBIDDEN'
+          : 'BAD_REQUEST',
+      message: error.reason,
+    });
+  }
+  domainError(error);
+}
+
+/** The payload names a branch; only the session's organization may own it. */
+async function assertBranch(db: ScopedDb, scope: LedgerScope) {
+  const branch = await db.pharmacyBranch.findFirst({
+    where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
+    select: { id: true },
+  });
+  if (!branch) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside this workspace.' });
+  }
+}
+
+/**
+ * Lock the lot row so two operators acting on the same lot serialize: the
+ * second one re-reads the first one's draft or movement instead of racing it.
+ */
+async function lockExpiringLot(db: ScopedDb, scope: LedgerScope, inventoryLotId: string) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT "id" FROM "pharmacy_inventory_lots" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND "id"=${inventoryLotId} FOR UPDATE`
+  );
+  const lot = await db.pharmacyInventoryLot.findFirst({
+    where: { id: inventoryLotId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: {
+      batch: { select: { batchNumber: true, expiresAt: true, state: true, medicineId: true } },
+    },
+  });
+  if (!lot) throw new TRPCError({ code: 'FORBIDDEN', message: 'Lot is outside this branch.' });
+  return lot;
+}
+
+function assertOnBoard(expiresAt: Date, at: Date) {
+  if (expiresAt.getTime() > at.getTime() + EXPIRY_ACTION_HORIZON_DAYS * DAY_MS) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: `This lot does not expire within ${EXPIRY_ACTION_HORIZON_DAYS} days.`,
+    });
+  }
+}
+
+async function availableAt(
+  db: ScopedDb,
+  scope: LedgerScope,
+  inventoryLotId: string,
+  stockLocationId: string
+) {
+  const balance = await db.pharmacyStockBalance.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      inventoryLotId,
+      stockLocationId,
+      disposition: 'AVAILABLE',
+    },
+    select: { onHandUnits: true },
+  });
+  return balance?.onHandUnits ?? 0;
+}
+
+const expiryPosition = {
+  branchId,
+  inventoryLotId: z.string().min(1).max(128),
+  stockLocationId: z.string().min(1).max(128),
+};
 
 export const pharmacyInventoryRouter = router({
   ingestDrapManual: regulatory
@@ -1041,5 +1167,476 @@ export const pharmacyInventoryRouter = router({
         input.ownerUserId,
         new Date()
       );
+    }),
+
+  // ── PH-A5 — expiry board actions ──────────────────────────────────────────
+
+  /**
+   * Every saleable lot position expiring inside the window — and every one that
+   * has already expired but is still AVAILABLE on a shelf, which is the stock
+   * most in need of an action — with the drafts already raised against it.
+   */
+  expiryBoardLots: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          withinDays: z
+            .union([z.literal(30), z.literal(60), z.literal(90), z.literal(180)])
+            .default(90),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      await assertBranch(ctx.db, scope);
+      const at = new Date();
+      const { withinDays } = input;
+      const horizon = new Date(at.getTime() + withinDays * DAY_MS);
+      const tenant = { organizationId: scope.organizationId, branchId: scope.branchId };
+
+      const [balances, suppliers] = await Promise.all([
+        ctx.db.pharmacyStockBalance.findMany({
+          where: {
+            ...tenant,
+            disposition: 'AVAILABLE',
+            onHandUnits: { gt: 0 },
+            lot: { batch: { expiresAt: { lte: horizon } } },
+          },
+          select: {
+            inventoryLotId: true,
+            stockLocationId: true,
+            onHandUnits: true,
+            location: { select: { name: true } },
+            lot: {
+              select: {
+                supplierName: true,
+                unitsPerPack: true,
+                unitCostMinor: true,
+                printedMrpMinor: true,
+                batch: {
+                  select: {
+                    batchNumber: true,
+                    expiresAt: true,
+                    state: true,
+                    medicine: { select: { productName: true, brandName: true } },
+                  },
+                },
+                receiptLines: {
+                  where: { goodsReceipt: { status: 'POSTED' } },
+                  select: { goodsReceipt: { select: { supplierId: true } } },
+                  take: 1,
+                },
+              },
+            },
+          },
+        }),
+        ctx.db.pharmacySupplier.findMany({
+          where: { organizationId: scope.organizationId, active: true },
+          orderBy: { name: 'asc' },
+          select: { id: true, name: true },
+        }),
+      ]);
+      const lotIds = [...new Set(balances.map((row) => row.inventoryLotId))];
+      const [held, claims, returnLines, markdownEvents] = lotIds.length
+        ? await Promise.all([
+            ctx.db.pharmacyStockBalance.findMany({
+              where: {
+                ...tenant,
+                inventoryLotId: { in: lotIds },
+                disposition: 'QUARANTINE',
+                onHandUnits: { gt: 0 },
+              },
+              select: { inventoryLotId: true, onHandUnits: true },
+            }),
+            ctx.db.pharmacySupplierClaim.findMany({
+              where: { ...tenant, inventoryLotId: { in: lotIds }, status: 'RESERVED' },
+              select: { inventoryLotId: true, reservedUnits: true },
+            }),
+            ctx.db.pharmacyPurchaseReturnLine.findMany({
+              where: {
+                ...tenant,
+                inventoryLotId: { in: lotIds },
+                purchaseReturn: { status: { in: ['DRAFT', 'SUBMITTED'] } },
+              },
+              orderBy: { createdAt: 'desc' },
+              select: {
+                inventoryLotId: true,
+                purchaseReturn: { select: { id: true, reference: true, status: true } },
+              },
+            }),
+            ctx.db.pharmacyStockSignalEvent.findMany({
+              where: {
+                ...tenant,
+                kind: 'DRAFT_ACTION',
+                detail: { startsWith: MARKDOWN_DRAFT_PREFIX },
+                signal: { kind: 'NEAR_EXPIRY' },
+              },
+              orderBy: { createdAt: 'desc' },
+              take: 500,
+              select: { id: true, reason: true, detail: true, createdAt: true },
+            }),
+          ])
+        : [[], [], [], []];
+
+      const sum = (rows: Array<{ inventoryLotId: string; units: number }>) => {
+        const totals = new Map<string, number>();
+        for (const row of rows)
+          totals.set(row.inventoryLotId, (totals.get(row.inventoryLotId) ?? 0) + row.units);
+        return totals;
+      };
+      const heldByLot = sum(held.map((row) => ({ ...row, units: row.onHandUnits })));
+      const reservedByLot = sum(claims.map((row) => ({ ...row, units: row.reservedUnits })));
+      const returnByLot = new Map<string, (typeof returnLines)[number]['purchaseReturn']>();
+      for (const line of returnLines)
+        if (!returnByLot.has(line.inventoryLotId))
+          returnByLot.set(line.inventoryLotId, line.purchaseReturn);
+      const markdownByPosition = new Map<
+        string,
+        ExpiryMarkdownDraft & { eventId: string; reason: string | null; recordedAt: Date }
+      >();
+      for (const event of markdownEvents) {
+        const draft = parseMarkdownDraft(event.detail);
+        const key = draft ? `${draft.inventoryLotId}:${draft.stockLocationId}` : null;
+        if (draft && key && !markdownByPosition.has(key))
+          markdownByPosition.set(key, {
+            ...draft,
+            eventId: event.id,
+            reason: event.reason,
+            recordedAt: event.createdAt,
+          });
+      }
+      const supplierIds = new Set(suppliers.map((supplier) => supplier.id));
+      const supplierByName = new Map(
+        suppliers.map((supplier) => [supplier.name.trim().toLowerCase(), supplier.id])
+      );
+
+      const rows = balances
+        .map((row) => {
+          const { lot } = row;
+          const expiresAt = lot.batch.expiresAt;
+          const receiptSupplier = lot.receiptLines[0]?.goodsReceipt.supplierId ?? null;
+          return {
+            key: `${row.inventoryLotId}:${row.stockLocationId}`,
+            inventoryLotId: row.inventoryLotId,
+            stockLocationId: row.stockLocationId,
+            locationName: row.location.name,
+            medicineName: lot.batch.medicine.brandName ?? lot.batch.medicine.productName,
+            batchNumber: lot.batch.batchNumber,
+            batchState: lot.batch.state,
+            expiresAt,
+            daysLeft: Math.ceil((expiresAt.getTime() - at.getTime()) / DAY_MS),
+            expired: expiresAt.getTime() <= at.getTime(),
+            onHandUnits: row.onHandUnits,
+            reservedUnits: reservedByLot.get(row.inventoryLotId) ?? 0,
+            quarantinedUnits: heldByLot.get(row.inventoryLotId) ?? 0,
+            unitsPerPack: lot.unitsPerPack,
+            unitCostMinor: lot.unitCostMinor,
+            printedMrpMinor: lot.printedMrpMinor,
+            valueAtRiskMinor: row.onHandUnits * lot.unitCostMinor,
+            supplierName: lot.supplierName,
+            suggestedSupplierId:
+              receiptSupplier && supplierIds.has(receiptSupplier)
+                ? receiptSupplier
+                : (supplierByName.get(lot.supplierName.trim().toLowerCase()) ?? null),
+            markdown:
+              markdownByPosition.get(`${row.inventoryLotId}:${row.stockLocationId}`) ?? null,
+            returnDraft: returnByLot.get(row.inventoryLotId) ?? null,
+          };
+        })
+        .sort(
+          (left, right) =>
+            left.expiresAt.getTime() - right.expiresAt.getTime() ||
+            right.valueAtRiskMinor - left.valueAtRiskMinor ||
+            left.key.localeCompare(right.key)
+        );
+      return { generatedAt: at, withinDays, rows, suppliers };
+    }),
+
+  /**
+   * A mark-down DRAFT: the proposed pack price, recorded against the lot's
+   * NEAR_EXPIRY signal. It changes no price — the counter keeps selling at the
+   * printed MRP until a person applies the mark-down through pricing.
+   */
+  draftExpiryMarkdown: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          ...expiryPosition,
+          markdownPercent: z.number().int().min(1).max(90),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      const at = new Date();
+      try {
+        return await ctx.db.$transaction(async (transaction) => {
+          const tx = txDb(transaction);
+          await assertBranch(tx, scope);
+          const lot = await lockExpiringLot(tx, scope, input.inventoryLotId);
+          if (lot.batch.expiresAt.getTime() <= at.getTime()) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Expired stock cannot be marked down for sale. Quarantine it instead.',
+            });
+          }
+          if (lot.batch.state !== 'ACTIVE') throw new PharmacyInventoryError('BLOCKED_STOCK');
+          assertOnBoard(lot.batch.expiresAt, at);
+          const onHandUnits = await availableAt(
+            tx,
+            scope,
+            input.inventoryLotId,
+            input.stockLocationId
+          );
+          if (onHandUnits <= 0) throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+          const proposedPackPriceMinor = markdownPackPrice(
+            lot.printedMrpMinor,
+            input.markdownPercent
+          );
+          if (proposedPackPriceMinor <= 0 || proposedPackPriceMinor >= lot.printedMrpMinor) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'A mark-down must price the pack above zero and below its printed MRP.',
+            });
+          }
+
+          const findSignal = () =>
+            tx.pharmacyStockSignal.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                kind: 'NEAR_EXPIRY',
+                medicineId: lot.batch.medicineId,
+                stockLocationId: input.stockLocationId,
+                status: { in: [...LIVE_SIGNAL_STATUSES] },
+              },
+              orderBy: { createdAt: 'desc' },
+              select: { id: true },
+            });
+          let signal = await findSignal();
+          if (!signal) {
+            // The evaluator raises NEAR_EXPIRY from the same ledger facts; a
+            // lot on this board without one only means nobody refreshed yet.
+            await refreshStockSignals(tx, scope, at);
+            signal = await findSignal();
+          }
+          if (!signal) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message:
+                'No near-expiry signal covers this lot yet — it is outside the near-expiry policy window.',
+            });
+          }
+
+          const draft: ExpiryMarkdownDraft = {
+            inventoryLotId: input.inventoryLotId,
+            stockLocationId: input.stockLocationId,
+            batchNumber: lot.batch.batchNumber,
+            markdownPercent: input.markdownPercent,
+            printedMrpMinor: lot.printedMrpMinor,
+            proposedPackPriceMinor,
+            unitsPerPack: lot.unitsPerPack,
+            unitCostMinor: lot.unitCostMinor,
+            onHandUnits,
+            expiresAt: lot.batch.expiresAt.toISOString(),
+          };
+          const earlier = await tx.pharmacyStockSignalEvent.findMany({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              signalId: signal.id,
+              kind: 'DRAFT_ACTION',
+              detail: { startsWith: MARKDOWN_DRAFT_PREFIX },
+            },
+            orderBy: { createdAt: 'desc' },
+            take: 50,
+            select: { id: true, detail: true },
+          });
+          // The latest draft for this exact position wins; re-submitting the
+          // same mark-down replays it rather than stacking a duplicate.
+          const latest = earlier
+            .map((event) => ({ id: event.id, draft: parseMarkdownDraft(event.detail) }))
+            .find(
+              (event) =>
+                event.draft?.inventoryLotId === input.inventoryLotId &&
+                event.draft.stockLocationId === input.stockLocationId
+            );
+          if (
+            latest?.draft &&
+            latest.draft.markdownPercent === input.markdownPercent &&
+            latest.draft.proposedPackPriceMinor === proposedPackPriceMinor
+          ) {
+            return { created: false, signalId: signal.id, eventId: latest.id, draft: latest.draft };
+          }
+          const event = await tx.pharmacyStockSignalEvent.create({
+            data: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              signalId: signal.id,
+              kind: 'DRAFT_ACTION',
+              actorId: scope.actorId,
+              reason: input.reason,
+              detail: `${MARKDOWN_DRAFT_PREFIX}${JSON.stringify(draft)}`,
+            },
+            select: { id: true },
+          });
+          return { created: true, signalId: signal.id, eventId: event.id, draft };
+        });
+      } catch (error) {
+        expiryError(error);
+      }
+    }),
+
+  /**
+   * A supplier return DRAFT (EXPIRY_CLAIM) for one near-expiry lot position. It
+   * reserves nothing; submitting it in Purchasing → Returns is what holds stock.
+   */
+  draftExpiryReturn: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          ...expiryPosition,
+          supplierId: z.string().min(1).max(128),
+          units: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(500),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      const at = new Date();
+      try {
+        return await ctx.db.$transaction(async (transaction) => {
+          const tx = txDb(transaction);
+          await assertBranch(tx, scope);
+          const lot = await lockExpiringLot(tx, scope, input.inventoryLotId);
+          assertOnBoard(lot.batch.expiresAt, at);
+          const open = await tx.pharmacyPurchaseReturnLine.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              inventoryLotId: input.inventoryLotId,
+              purchaseReturn: { status: { in: ['DRAFT', 'SUBMITTED'] } },
+            },
+            orderBy: { createdAt: 'desc' },
+            select: { purchaseReturn: { select: { id: true, reference: true, status: true } } },
+          });
+          if (open) return { created: false, purchaseReturn: open.purchaseReturn };
+
+          const supplier = await tx.pharmacySupplier.findFirst({
+            where: { id: input.supplierId, organizationId: scope.organizationId, active: true },
+            select: { id: true },
+          });
+          if (!supplier) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'Supplier is outside this workspace.',
+            });
+          }
+          const [onHandUnits, reserved] = await Promise.all([
+            availableAt(tx, scope, input.inventoryLotId, input.stockLocationId),
+            tx.pharmacySupplierClaim.aggregate({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                inventoryLotId: input.inventoryLotId,
+                status: 'RESERVED',
+              },
+              _sum: { reservedUnits: true },
+            }),
+          ]);
+          if (input.units > onHandUnits - (reserved._sum.reservedUnits ?? 0)) {
+            throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+          }
+          const stamp = at.toISOString().slice(0, 10).replaceAll('-', '');
+          const created = await createPurchaseReturn(tx, scope, {
+            supplierId: supplier.id,
+            kind: 'EXPIRY_CLAIM',
+            reference: `EXP-${stamp}-${lot.batch.batchNumber.slice(0, 24)}-${at.getTime().toString(36).toUpperCase()}`,
+            note: 'Drafted from the near-expiry board. A draft reserves nothing; submit it to hold the stock for the supplier.',
+            lines: [
+              {
+                inventoryLotId: input.inventoryLotId,
+                stockLocationId: input.stockLocationId,
+                quantityUnits: input.units,
+                reason: input.reason,
+                returnWindowEndsAt: lot.batch.expiresAt,
+                expectedCreditMinor: input.units * lot.unitCostMinor,
+              },
+            ],
+          });
+          return {
+            created: true,
+            purchaseReturn: {
+              id: created.id,
+              reference: created.reference,
+              status: created.status,
+            },
+          };
+        });
+      } catch (error) {
+        expiryError(error);
+      }
+    }),
+
+  /**
+   * Quarantine near-expiry or expired units: the existing INV-08 movement pair
+   * (AVAILABLE out, QUARANTINE in). `requestKey` is minted when the board is
+   * rendered, so a double-submitted form replays instead of moving stock twice.
+   */
+  quarantineExpiring: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          ...expiryPosition,
+          units: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(500),
+          requestKey: z.string().trim().min(8).max(100),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      const at = new Date();
+      const idempotencyKeyPrefix = `expiry-quarantine:${input.requestKey}`;
+      try {
+        return await ctx.db.$transaction(async (transaction) => {
+          const tx = txDb(transaction);
+          await assertBranch(tx, scope);
+          const lot = await lockExpiringLot(tx, scope, input.inventoryLotId);
+          const replay = await tx.pharmacyStockMovement.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              idempotencyKey: `${idempotencyKeyPrefix}:in`,
+            },
+          });
+          if (replay) {
+            if (
+              replay.inventoryLotId !== input.inventoryLotId ||
+              replay.stockLocationId !== input.stockLocationId ||
+              replay.quantityUnits !== input.units
+            ) {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'This request key was already used for a different quarantine.',
+              });
+            }
+            return { replayed: true, held: replay };
+          }
+          assertOnBoard(lot.batch.expiresAt, at);
+          const moved = await quarantinePart(tx, scope, {
+            inventoryLotId: input.inventoryLotId,
+            stockLocationId: input.stockLocationId,
+            units: input.units,
+            reason: input.reason,
+            idempotencyKeyPrefix,
+          });
+          return { replayed: false, held: moved.held };
+        });
+      } catch (error) {
+        expiryError(error);
+      }
     }),
 });
