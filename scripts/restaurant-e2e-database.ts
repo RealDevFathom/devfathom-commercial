@@ -1,3 +1,10 @@
+/**
+ * Branches this fixture creates: `branchId`, `branchA2Id` and WHA-1567's
+ * ASCII-receipt branch. The seeded `restaurant.locations.max` is held equal to
+ * it so the tenant is licensed for exactly what it owns and no more.
+ */
+export const RESTAURANT_E2E_BRANCH_COUNT = 3;
+
 const DISPOSABLE_NAME = /(?:^|[_-])(test|e2e|tmp|disposable)(?:[_-]|$)/i;
 const FORBIDDEN_HOST = /(?:^|[.-])(prod|production|preview|staging)(?:[.-]|$)/i;
 const COMMON_POSTGRES_PORTS = new Set(['5432', '6432']);

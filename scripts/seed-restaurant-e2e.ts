@@ -24,6 +24,7 @@ import {
 } from '../src/lib/vertical-catalog.js';
 import { businessDateToUtcDate, resolveBusinessDate } from '../src/lib/restaurant/business-date.js';
 import {
+  RESTAURANT_E2E_BRANCH_COUNT,
   RESTAURANT_E2E_ASCII_RECEIPT_DEVICE_SECRET,
   RESTAURANT_E2E_REVOKED_BRIDGE_DEVICE_SECRET,
   resolveRestaurantE2eDatabaseUrl,
@@ -89,13 +90,6 @@ const CASE_TERMINAL_INDEXES = Array.from(
   { length: RESTAURANT_E2E.caseTerminalCount },
   (_unused, index) => index
 );
-
-/**
- * Branches this fixture creates: `branchId`, `branchA2Id` and WHA-1567's
- * ASCII-receipt branch. The seeded `restaurant.locations.max` is held equal to
- * it so the tenant is licensed for exactly what it owns and no more.
- */
-const RESTAURANT_E2E_BRANCH_COUNT = 3;
 
 /** `AUDIT_EVIDENCE_RETENTION_DAYS` in src/lib/module-catalog.ts. */
 const SOP_EVIDENCE_RETENTION_DAYS = 365;
