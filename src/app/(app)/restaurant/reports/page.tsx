@@ -1,5 +1,6 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { Suspense } from 'react';
 
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,14 +9,22 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
-import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
-import { MAX_EXPORT_ROWS, MAX_INTERACTIVE_ROWS } from '@/lib/restaurant/reports';
+import {
+  MAX_EXPORT_ROWS,
+  MAX_INTERACTIVE_ROWS,
+  validateRestaurantReportRange,
+} from '@/lib/restaurant/reports';
 import { hasModule } from '@/lib/entitlements';
+import { restaurantComparisonWindows } from '@/lib/restaurant/financial-comparison';
 import { restaurantReportsRouter } from '@/server/routers/restaurant-reports';
 import { createTRPCContext } from '@/server/trpc';
 
 import { ExportLink } from './export-link';
-import { ProfitabilityReportTabs } from './profitability-report-tabs';
+import { FinancialComparison } from './financial-comparison';
+import {
+  ProfitabilityReportTabs,
+  type ProfitabilityDiagnostics,
+} from './profitability-report-tabs';
 import { StockReportTabs } from './stock-report-tabs';
 
 export const metadata: Metadata = { title: 'Restaurant reports' };
@@ -33,16 +42,6 @@ function queryValue(value: string | string[] | undefined): string | undefined {
 
 function isoDate(date: Date): string {
   return date.toISOString().slice(0, 10);
-}
-
-function validDate(value: string | undefined, fallback: string): string {
-  if (!value) return fallback;
-  try {
-    businessDateToUtcDate(value);
-    return value;
-  } catch {
-    return fallback;
-  }
 }
 
 function displayNumber(value: string | number): string {
@@ -129,11 +128,23 @@ async function settled<T>(work: () => Promise<T>): Promise<{ data: T | null; fai
   }
 }
 
-export default async function RestaurantReportsPage({
-  searchParams,
-}: {
-  searchParams: SearchParams;
-}) {
+export default function RestaurantReportsPage(props: { searchParams: SearchParams }) {
+  return (
+    <Suspense
+      fallback={
+        <SectionCard title="Restaurant reports" titleLevel={2}>
+          <p role="status" className="text-sm text-text-muted">
+            Loading reports and authorized filters…
+          </p>
+        </SectionCard>
+      }
+    >
+      <RestaurantReportsContent {...props} />
+    </Suspense>
+  );
+}
+
+async function RestaurantReportsContent({ searchParams }: { searchParams: SearchParams }) {
   const query = await searchParams;
   const ctx = await createTRPCContext();
   const user = ctx.session?.user;
@@ -191,8 +202,8 @@ export default async function RestaurantReportsPage({
   const today = isoDate(new Date());
   const weekAgo = new Date(`${today}T00:00:00.000Z`);
   weekAgo.setUTCDate(weekAgo.getUTCDate() - 6);
-  const from = validDate(queryValue(query.from), isoDate(weekAgo));
-  const to = validDate(queryValue(query.to), today);
+  const from = queryValue(query.from) ?? isoDate(weekAgo);
+  const to = queryValue(query.to) ?? today;
   const requestedBranch = queryValue(query.branch);
   const canAllBranches = branchResult.data?.canAllBranches ?? false;
   const branch =
@@ -200,7 +211,30 @@ export default async function RestaurantReportsPage({
       ? 'all'
       : (branches.find((item) => item.id === requestedBranch)?.id ?? branches[0]!.id);
   const rangeInput = { ...(branch === 'all' ? {} : { branchId: branch }), from, to };
+  let rangeError: string | undefined;
+  try {
+    validateRestaurantReportRange({
+      branchIds: branch === 'all' ? branches.map((item) => item.id) : [branch],
+      from,
+      to,
+    });
+  } catch (error) {
+    rangeError = error instanceof Error ? error.message : 'Choose a valid report period.';
+  }
   const posEnabled = hasModule(ctx.entitlements, 'restaurant-pos');
+  let comparisonError = rangeError;
+  if (!comparisonError) {
+    try {
+      restaurantComparisonWindows({
+        branchIds: branch === 'all' ? branches.map((item) => item.id) : [branch],
+        from,
+        to,
+      });
+    } catch {
+      comparisonError =
+        'Financial comparison is limited to 45 days per period. Choose a shorter range using the report filters.';
+    }
+  }
   const inventoryEnabled = hasModule(ctx.entitlements, 'restaurant-inventory');
   const menuEnabled = hasModule(ctx.entitlements, 'restaurant-menu');
   const profitabilityEnabled = posEnabled && inventoryEnabled && menuEnabled;
@@ -221,6 +255,7 @@ export default async function RestaurantReportsPage({
   const [
     overview,
     payments,
+    comparison,
     foodCost,
     dishProfitability,
     catering,
@@ -231,47 +266,69 @@ export default async function RestaurantReportsPage({
     workforce,
     sop,
   ] = await Promise.all([
-    canOperational && posEnabled
+    !rangeError && canOperational && posEnabled
       ? settled(() => caller.overview(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canFinancial && posEnabled
+    !rangeError && canFinancial && posEnabled
       ? settled(() => caller.payments(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canFinancial && profitabilityEnabled
+    !comparisonError && canFinancial && posEnabled
+      ? settled(() => caller.financialComparison(rangeInput))
+      : Promise.resolve({ data: null, failed: false }),
+    !rangeError && canFinancial && profitabilityEnabled
       ? settled(() => caller.foodCost(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canFinancial && profitabilityEnabled
+    !rangeError && canFinancial && profitabilityEnabled
       ? settled(() => caller.dishProfitability(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canFinancial && canCateringRead
+    !rangeError && canFinancial && canCateringRead
       ? settled(() => caller.catering(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canOperational && inventoryEnabled
+    !rangeError && canOperational && inventoryEnabled
       ? settled(() => caller.inventory(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canOperational && inventoryEnabled
+    !rangeError && canOperational && inventoryEnabled
       ? settled(() => caller.wastage(stockRangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canOperational && inventoryEnabled
+    !rangeError && canOperational && inventoryEnabled
       ? settled(() => caller.stockMovements(stockRangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canOperational && hasModule(ctx.entitlements, 'restaurant-purchasing')
+    !rangeError && canOperational && hasModule(ctx.entitlements, 'restaurant-purchasing')
       ? settled(() => caller.purchasing(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
-    canOperational && hasModule(ctx.entitlements, 'restaurant-workforce')
+    !rangeError && canOperational && hasModule(ctx.entitlements, 'restaurant-workforce')
       ? settled(() =>
           canFinancial && canWorkforceRates
             ? caller.workforceFinancial(rangeInput)
             : caller.workforce(rangeInput)
         )
       : Promise.resolve({ data: null, failed: false }),
-    canOperational && hasModule(ctx.entitlements, 'restaurant-sop')
+    !rangeError && canOperational && hasModule(ctx.entitlements, 'restaurant-sop')
       ? settled(() => caller.sop(rangeInput))
       : Promise.resolve({ data: null, failed: false }),
   ]);
   const exportBranch = branch;
   const freshness = overview.data?.freshness ?? payments.data?.freshness;
   const freshnessDisplay = freshness ? freshnessCopy(freshness.status) : null;
+  const branchLabel =
+    branch === 'all'
+      ? 'All active authorized branches'
+      : branches.find((item) => item.id === branch)!.name;
+  const diagnostics: ProfitabilityDiagnostics | undefined =
+    !rangeError && canFinancial && profitabilityEnabled && !foodCost.failed && foodCost.data
+      ? {
+          status: 'ready',
+          report: {
+            range: foodCost.data.range,
+            products: foodCost.data.products,
+            uncostedProducts: foodCost.data.uncostedProducts,
+            truncated: foodCost.data.truncated,
+          },
+          currency: comparison.data?.currency ?? null,
+          scopeLabel: branchLabel,
+          recipeCostFreshness: null,
+        }
+      : undefined;
 
   return (
     <div className="min-w-0 space-y-6" data-tour="reports-overview">
@@ -322,16 +379,35 @@ export default async function RestaurantReportsPage({
           ) : null}
           <label className="text-sm text-text-body">
             From date
-            <Input className="mt-1 min-h-11" defaultValue={from} name="from" type="date" />
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={from}
+              name="from"
+              type="date"
+              aria-invalid={Boolean(rangeError)}
+              aria-describedby={rangeError ? 'report-date-error' : undefined}
+            />
           </label>
           <label className="text-sm text-text-body">
             To date
-            <Input className="mt-1 min-h-11" defaultValue={to} name="to" type="date" />
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={to}
+              name="to"
+              type="date"
+              aria-invalid={Boolean(rangeError)}
+              aria-describedby={rangeError ? 'report-date-error' : undefined}
+            />
           </label>
           <Button className="min-h-11 self-end" type="submit">
             Apply filters
           </Button>
         </form>
+        {rangeError ? (
+          <p id="report-date-error" role="alert" className="mt-3 text-sm text-destructive">
+            {rangeError}
+          </p>
+        ) : null}
         {freshness && freshnessDisplay ? (
           <div className="mt-4 flex flex-wrap items-center gap-3 border-t border-border-subtle pt-4 text-sm text-text-muted">
             <StatusPill status={freshnessDisplay.label} tone={freshnessDisplay.tone} />
@@ -348,8 +424,20 @@ export default async function RestaurantReportsPage({
         ) : null}
       </SectionCard>
 
+      <FinancialComparison
+        report={comparison.data}
+        canFinancial={canFinancial}
+        posEnabled={posEnabled}
+        failed={comparison.failed}
+        from={from}
+        to={to}
+        branchLabel={branchLabel}
+        validationError={comparisonError}
+      />
+
       <SectionCard eyebrow="Theoretical recipe costing" title="Profitability" titleLevel={2}>
         <ProfitabilityReportTabs
+          diagnostics={diagnostics}
           foodCost={
             !profitabilityEnabled ? (
               <SectionNotice

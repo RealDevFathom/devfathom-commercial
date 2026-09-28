@@ -50,6 +50,8 @@ export default defineConfig({
     'restaurant-recipe-profitability-acceptance.spec.ts',
     'restaurant-operations-lifecycle-acceptance.spec.ts',
     'restaurant-software-receipt-acceptance.spec.ts',
+    // WHA-1564 — financial comparison + export acceptance.
+    'restaurant-financial-comparison-export.spec.ts',
   ],
   projects: [
     {
