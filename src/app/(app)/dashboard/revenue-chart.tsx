@@ -123,7 +123,7 @@ export function RevenueChart() {
             <span className="text-xs text-muted-foreground ml-1.5">total income</span>
           </div>
           <div>
-            <span className="text-sm font-semibold text-emerald-500">
+            <span className="text-sm font-semibold text-success">
               {moneyLabel(totalProfit, selected)}
             </span>
             <span className="text-xs text-muted-foreground ml-1">net profit</span>
