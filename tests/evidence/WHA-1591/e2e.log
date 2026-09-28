@@ -1,0 +1,54 @@
+[WebServer] $ next dev --port "4391"
+[WebServer] (node:59107) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] (node:59278) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] ⚠ Slow filesystem detected. The benchmark took 2605ms. If /Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/.next/dev is a network drive, consider moving it to a local folder.
+[WebServer] See more: https://nextjs.org/docs/app/guides/local-development
+[WebServer] (node:61475) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+Running 1 test using 1 worker
+
+(node:61939) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✘  1 [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:367:5 › controlled interlock requires Rx patient ID and pharmacist PIN; register prints (2.2s)
+
+
+  1) [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:367:5 › controlled interlock requires Rx patient ID and pharmacist PIN; register prints 
+
+    error: relation "medicines" does not exist
+
+       at pharmacy-controlled-fixture.ts:31
+
+      29 |     await db.query(
+      30 |       `INSERT INTO restaurant_staff_profiles (id,"organizationId","userId","displayName",status,"updatedAt") VALUES ($1,$2,$3,'Independent pharmacist','ACTIVE',now()) ON CONFLICT(id) DO NOTHING`,
+    > 31 |       [staffId, fixture.organizationId, pharmacistId]
+         |     ^
+      32 |     );
+      33 |     await db.query(
+      34 |       `INSERT INTO restaurant_operator_credentials (id,"organizationId","staffProfileId",type,"credentialHash","updatedAt") VALUES ('credential_controlled_e2e',$1,$2,'PIN',$3,now()) ON CONFLICT(id) DO NOTHING`,
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/node_modules/pg/lib/client.js:652:17
+        at prepareControlledFixture (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/tests/e2e/pharmacy-controlled-fixture.ts:31:5)
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock/tests/e2e/pharmacy-counter.spec.ts:372:3
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-counter/pharmacy-counter-controlle-10e42-rmacist-PIN-register-prints-pharmacy-counter-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  1 failed
+    [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:367:5 › controlled interlock requires Rx patient ID and pharmacist PIN; register prints 

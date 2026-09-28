@@ -243,6 +243,12 @@ function ScopedPharmacyCounterConsole({
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
+  const [controlledAuth, setControlledAuth] = useState({
+    prescriptionLineId: '',
+    staffProfileId: '',
+    pin: '',
+  });
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
   const [patientId, setPatientId] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
@@ -542,7 +548,9 @@ function ScopedPharmacyCounterConsole({
               id: prescriptionLine.entry.prescriptionLineId,
               verified: prescriptionLine.entry.verified,
               expiresAt: new Date(prescriptionLine.prescription.validUntil),
-              remainingAuthorizedUnits: prescriptionLine.entry.remainingAuthorizedUnits,
+              remainingAuthorizedUnits:
+                prescriptionLine.entry.remainingAuthorizedUnits +
+                (line.controlled && prescriptionLine.entry.verified ? line.canonicalUnits : 0),
             }
           : null,
         requestedCanonicalUnits: line.canonicalUnits,
@@ -771,7 +779,26 @@ function ScopedPharmacyCounterConsole({
     setNotice(null);
     try {
       const activeSaleId = await ensureSale();
-      await addLine.mutateAsync({
+      const controlled = activeRow.restriction.controlled;
+      if (
+        controlled &&
+        (!patient ||
+          !controlledAuth.prescriptionLineId ||
+          !controlledAuth.staffProfileId ||
+          !/^\d{4,8}$/.test(controlledAuth.pin) ||
+          !navigator.onLine)
+      ) {
+        setNotice({
+          tone: 'warning',
+          message:
+            'Controlled medicine needs a patient with ID, prescription and independent pharmacist PIN. Connect online, then complete the authorization panel.',
+        });
+        rxPanelRef.current?.focus();
+        return;
+      }
+      const added = await addLine.mutateAsync({
+        controlledAuthorization:
+          controlled && patient ? { ...controlledAuth, patientId: patient.patientId } : undefined,
         branchId,
         saleId: activeSaleId,
         medicineId: activeRow.medicineId,
@@ -784,7 +811,13 @@ function ScopedPharmacyCounterConsole({
         // the add chord cannot post the same line twice.
         idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}`,
       });
+      if ('blocked' in added) {
+        setNotice({ tone: 'warning', message: added.blocked });
+        return;
+      }
       await refreshCart();
+      await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
+      await utils.pharmacySafety.controlledRegister.invalidate();
       await utils.pharmacySales.counterSearch.invalidate();
       setNotice({
         tone: 'success',
@@ -802,11 +835,14 @@ function ScopedPharmacyCounterConsole({
           : {}),
       });
     } finally {
+      setControlledAuth((value) => ({ ...value, pin: '' }));
       setPending(null);
     }
   }, [
     activeRow,
     addLine,
+    controlledAuth,
+    patient,
     branchId,
     busy,
     ensureSale,
@@ -1922,6 +1958,14 @@ function ScopedPharmacyCounterConsole({
           >
             <CounterRxPanel
               ref={rxPanelRef}
+              controlled={{
+                ...controlledAuth,
+                pharmacists: pharmacistsQuery.data ?? [],
+                loading: pharmacistsQuery.isLoading,
+                error: pharmacistsQuery.isError,
+                onChange: (field, value) =>
+                  setControlledAuth((current) => ({ ...current, [field]: value })),
+              }}
               alerts={alerts}
               patient={patient}
               candidates={patientsQuery.data?.patients ?? []}
