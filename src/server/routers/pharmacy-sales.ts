@@ -19,6 +19,7 @@ import {
   redeemSalePoints,
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
+import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
   declineSubstitute,
   findSubstituteProposals,
@@ -98,6 +99,14 @@ function fail(error: unknown): never {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'This lot is quarantined or recalled and cannot be dispensed or sold.',
+    });
+  }
+  if (error instanceof PharmacyInventoryError) {
+    // A refused batch override (unknown lot, missing evidence) or an allocation
+    // the branch cannot cover is the operator's to correct, never a 500.
+    throw new TRPCError({
+      code: error.reason === 'NOT_FOUND' ? 'NOT_FOUND' : 'BAD_REQUEST',
+      message: error.reason,
     });
   }
   if (error instanceof PharmacyLoyaltyError) {
@@ -326,8 +335,8 @@ export const pharmacySalesRouter = router({
           override: z
             .object({
               inventoryLotId: z.string().min(1),
-              reason: z.string().trim().min(1),
-              approvalPolicy: z.string().trim().min(1),
+              reason: z.string().trim().min(1).max(500),
+              approvalPolicy: z.string().trim().min(1).max(200),
             })
             .strict()
             .optional(),
@@ -336,10 +345,39 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      // PH-A4: a batch taken out of FEFO order is a safety decision, so its
+      // audit row is labelled as one — refused attempts included, since the
+      // label is set before the domain runs. The override row itself is written
+      // by `allocateForSale` inside the sale transaction.
+      if (input.override) {
+        ctx.audit.detail = {
+          category: 'PHARMACY_SAFETY',
+          action: 'fefo_override',
+          targetType: 'PharmacySale',
+          targetId: input.saleId,
+          description: 'Counter sold a batch out of FEFO order.',
+          metadata: {
+            branchId: input.branchId,
+            medicineId: input.medicineId,
+            selectedLotId: input.override.inventoryLotId,
+            reason: input.override.reason,
+            approvalPolicy: input.override.approvalPolicy,
+          },
+        };
+      }
       try {
-        return await ctx.db.$transaction((tx) =>
+        const result = await ctx.db.$transaction((tx) =>
           addSaleLine(txDb(tx), scopeFor(ctx, input.branchId), input)
         );
+        if (input.override) {
+          ctx.audit.detail.metadata = {
+            ...ctx.audit.detail.metadata,
+            saleLineId: result.line.id,
+            overrideId: result.allocation.overrideId,
+            recommendedLotId: result.allocation.recommendedLotId,
+          };
+        }
+        return result;
       } catch (error) {
         fail(error);
       }
@@ -617,6 +655,53 @@ export const pharmacySalesRouter = router({
         ...scope,
         source: 'DISPENSING',
         payload: input.payload,
+      });
+    }),
+
+  /**
+   * PH-A4: the lots a counter batch override may choose from, in FEFO order.
+   *
+   * Read-only. Lots that cannot be sold stay listed with the reason, so the
+   * operator sees why a batch on the shelf is refused rather than missing.
+   */
+  counterLotOptions: protectedProcedure
+    .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      // `onHand` returns balance buckets already in FEFO order (expiry, then
+      // receipt), so first appearance is the order the allocator would use.
+      const buckets = await onHand(ctx.db, scope, input.medicineId, new Date());
+      const lotIds = [...new Set(buckets.map((bucket) => bucket.inventoryLotId))];
+      if (lotIds.length === 0) return [];
+      const lots = await ctx.db.pharmacyInventoryLot.findMany({
+        where: {
+          id: { in: lotIds },
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+        },
+        select: { id: true, batch: { select: { batchNumber: true, expiresAt: true } } },
+      });
+      const lotById = new Map(lots.map((lot) => [lot.id, lot]));
+      return lotIds.flatMap((inventoryLotId) => {
+        const lot = lotById.get(inventoryLotId);
+        if (!lot) return [];
+        const mine = buckets.filter((bucket) => bucket.inventoryLotId === inventoryLotId);
+        const sellableUnits = mine.reduce(
+          (total, bucket) => (bucket.blockedBy === null ? total + bucket.onHandUnits : total),
+          0
+        );
+        return [
+          {
+            inventoryLotId,
+            batchNumber: lot.batch.batchNumber,
+            expiresAt: lot.batch.expiresAt.toISOString(),
+            sellableUnits,
+            blockedBy:
+              sellableUnits > 0
+                ? null
+                : (mine.find((bucket) => bucket.blockedBy !== null)?.blockedBy ?? null),
+          },
+        ];
       });
     }),
 

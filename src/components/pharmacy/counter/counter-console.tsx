@@ -19,7 +19,12 @@ import {
   type TenderDraft,
 } from './tender-attempt-storage';
 
-import { CounterCartPanel } from './counter-cart';
+import {
+  COUNTER_OVERRIDE_APPROVAL_POLICY,
+  CounterCartPanel,
+  CounterLotOverride,
+  type CounterLotOverrideValue,
+} from './counter-cart';
 import { CounterKeymapLegend } from './counter-keymap-legend';
 import { CounterReceiptView } from './counter-receipt-view';
 import { CounterRxPanel } from './counter-rx-panel';
@@ -218,6 +223,7 @@ function ScopedPharmacyCounterConsole({
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
+  const [lotOverride, setLotOverride] = useState<CounterLotOverrideValue | null>(null);
   const [saleId, setSaleId] = useState<string | null>(initialSaleId);
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
@@ -346,6 +352,10 @@ function ScopedPharmacyCounterConsole({
   const patientPanelQuery = trpc.pharmacyPrescriptions.counterPatientPanel.useQuery(
     { patientId: patientId ?? '' },
     { enabled: patientId !== null }
+  );
+  const lotOptionsQuery = trpc.pharmacySales.counterLotOptions.useQuery(
+    { branchId, medicineId: activeRow?.medicineId ?? '' },
+    { enabled: Boolean(branchId && activeRow) && lotOverride !== null }
   );
   const customerQuery = trpc.pharmacySales.customerSnapshot.useQuery(
     { branchId, customerId: customerId ?? '' },
@@ -637,6 +647,7 @@ function ScopedPharmacyCounterConsole({
     setActiveRow(row);
     setQuantity(1);
     setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    setLotOverride(null);
   }, []);
 
   const ensureSale = useCallback(async () => {
@@ -655,6 +666,11 @@ function ScopedPharmacyCounterConsole({
       });
       return;
     }
+    const overrideLotId = lotOverride?.inventoryLotId ?? null;
+    if (overrideLotId && !lotOverride?.reason.trim()) {
+      setNotice({ tone: 'warning', message: 'Enter a reason before selling a non-FEFO batch.' });
+      return;
+    }
     setPending('addToCart');
     setNotice(null);
     try {
@@ -670,13 +686,23 @@ function ScopedPharmacyCounterConsole({
         canonicalUnitsPerSaleUnit: selectedOption.canonicalUnitsPerSaleUnit,
         // A stable key per (sale, medicine, unit, quantity) so a double-press of
         // the add chord cannot post the same line twice.
-        idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}`,
+        idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}${overrideLotId ? `:${overrideLotId}` : ''}`,
+        ...(overrideLotId && lotOverride
+          ? {
+              override: {
+                inventoryLotId: overrideLotId,
+                reason: lotOverride.reason.trim(),
+                approvalPolicy: COUNTER_OVERRIDE_APPROVAL_POLICY,
+              },
+            }
+          : {}),
       });
       await refreshCart();
       await utils.pharmacySales.counterSearch.invalidate();
+      setLotOverride(null);
       setNotice({
         tone: 'success',
-        message: `${quantity} × ${activeRow.displayName} added.`,
+        message: `${quantity} × ${activeRow.displayName} added${overrideLotId ? ' with a recorded batch override' : ''}.`,
       });
       setQuery('');
       focusSearch();
@@ -692,6 +718,7 @@ function ScopedPharmacyCounterConsole({
     busy,
     ensureSale,
     focusSearch,
+    lotOverride,
     preview,
     quantity,
     refreshCart,
@@ -1420,16 +1447,33 @@ function ScopedPharmacyCounterConsole({
             }
           >
             {activeRow ? (
-              <CounterUnitToggle
-                options={activeRow.saleUnits}
-                selected={saleUnit}
-                quantity={quantity}
-                preview={preview}
-                disabled={busy}
-                onSelect={setSaleUnit}
-                onQuantityChange={setQuantity}
-                chordFor={chordFor}
-              />
+              <div className="space-y-4">
+                <CounterUnitToggle
+                  options={activeRow.saleUnits}
+                  selected={saleUnit}
+                  quantity={quantity}
+                  preview={preview}
+                  disabled={busy}
+                  onSelect={setSaleUnit}
+                  onQuantityChange={setQuantity}
+                  chordFor={chordFor}
+                />
+                <CounterLotOverride
+                  value={lotOverride}
+                  lots={lotOptionsQuery.data ?? []}
+                  state={
+                    lotOptionsQuery.isError
+                      ? 'error'
+                      : lotOptionsQuery.isSuccess
+                        ? 'ready'
+                        : 'loading'
+                  }
+                  error={lotOptionsQuery.error ? messageFrom(lotOptionsQuery.error) : null}
+                  disabled={busy}
+                  onChange={setLotOverride}
+                  onRetry={() => void lotOptionsQuery.refetch()}
+                />
+              </div>
             ) : (
               <p className="text-sm text-text-muted">
                 Select a search result to choose its sale unit.

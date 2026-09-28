@@ -351,6 +351,109 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await expect(placeholderNotice).toHaveCount(0);
 });
 
+/**
+ * Call a tRPC mutation as the signed-in operator. `page.request` carries the
+ * browser's session cookie, so the call runs through the same auth, tenancy and
+ * module checks as the UI. It is an HTTP call, not a pointer.
+ */
+async function trpcMutation<T>(
+  page: Page,
+  path: string,
+  json: Record<string, unknown>,
+  dates: string[] = []
+): Promise<T> {
+  const response = await page.request.post(`/api/trpc/${path}`, {
+    data: {
+      json,
+      ...(dates.length
+        ? { meta: { values: Object.fromEntries(dates.map((k) => [k, ['Date']])) } }
+        : {}),
+    },
+  });
+  expect(response.ok(), `${path}: ${await response.text()}`).toBe(true);
+  return ((await response.json()) as { result: { data: { json: T } } }).result.data.json;
+}
+
+test('PH-A4 — two lots on the shelf: the counter sells the earliest-expiring and flags it near expiry', async ({
+  page,
+}) => {
+  const syrup = PHARMACY_E2E.medicines.syrup;
+  await openCounter(page);
+  await openDrawer(page);
+
+  // A second batch arrives AFTER the seeded one but expires far sooner. FEFO
+  // must pick it over the seeded batch (2028-06-30) despite the later receipt.
+  // A per-run batch number keeps a re-run from colliding with an earlier one;
+  // the bill below sells the whole lot, so an old run's lot is never on hand.
+  const batchNumber = `FCF-A4-${Date.now().toString(36).toUpperCase()}`;
+  const soon = new Date(Date.now() + 45 * 86_400_000);
+  const printedExpiry = new Date(
+    Date.UTC(soon.getUTCFullYear(), soon.getUTCMonth(), soon.getUTCDate())
+  );
+  const batch = await trpcMutation<{ id: string }>(
+    page,
+    'pharmacyInventory.registerBatch',
+    {
+      medicineId: syrup.id,
+      batchNumber,
+      printedExpiry: printedExpiry.toISOString(),
+      expiryPrecision: 'DAY',
+    },
+    ['printedExpiry']
+  );
+  await trpcMutation(
+    page,
+    'pharmacyInventory.receiveLot',
+    {
+      branchId: PHARMACY_E2E.branchId,
+      manufacturingBatchId: batch.id,
+      packLevelId: syrup.packLevelIds.bottle,
+      stockLocationId: PHARMACY_E2E.stockLocationId,
+      unitsPerPack: syrup.unitsPerPack,
+      supplierName: 'Fathom Distributors E2E',
+      supplierInvoiceRef: `INV-${batchNumber}`,
+      unitCostMinor: Math.floor(syrup.printedMrpMinor / syrup.unitsPerPack / 2),
+      printedMrpMinor: syrup.printedMrpMinor,
+      printedExpiry: printedExpiry.toISOString(),
+      expiryPrecision: 'DAY',
+      quantityUnits: syrup.unitsPerPack,
+      idempotencyKey: `pharmacy-counter-e2e-ph-a4-${batchNumber}`,
+    },
+    ['printedExpiry']
+  );
+
+  // Before the line is added, the search row already names the FEFO batch.
+  await search(page, 'Fathomcof');
+  await stageFirstResult(page, syrup.name);
+  const row = page
+    .getByRole('list', { name: 'Search results' })
+    .getByRole('button')
+    .filter({ hasText: syrup.name })
+    .first();
+  await expect(row).toContainText(batchNumber);
+
+  // One whole bottle: exactly the new lot's contents.
+  await page.keyboard.press('F3');
+  await expect(page.getByRole('radio', { name: /Pack/ })).toHaveAttribute('aria-checked', 'true');
+  await setQuantity(page, 1);
+  await page.keyboard.press('F6');
+  const cart = page.getByRole('list', { name: 'Cart lines' });
+  await expect(cart).toContainText(syrup.name, { timeout: 15_000 });
+
+  const allocation = page.getByRole('list', { name: `FEFO allocation for ${syrup.name}` });
+  await expect(allocation).toContainText(`Batch ${batchNumber}`);
+  await expect(allocation).not.toContainText(`Batch ${syrup.batchNumber}`);
+  await expect(allocation).toContainText(`${syrup.unitsPerPack} units`);
+  await expect(allocation).toContainText('FEFO');
+  await expect(allocation).not.toContainText('Batch override');
+  await expect(allocation).toContainText(/Near expiry · 4[4-6] d/);
+
+  await tenderCash(page, '180.00');
+  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  await expect(receipt).toBeVisible({ timeout: 15_000 });
+  await expect(receipt).toContainText(batchNumber);
+});
+
 test('this spec drives the counter without a pointer', async () => {
   const source = await readFile(join(process.cwd(), 'tests/e2e/pharmacy-counter.spec.ts'), 'utf8');
   // Strip this assertion's own literals so it cannot match itself.
