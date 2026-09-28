@@ -1,7 +1,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, expect, test } from 'vitest';
 const source = readFileSync('src/app/api/restaurant/cameras/[cameraId]/stream/route.ts', 'utf8');
-const transport = readFileSync('src/lib/restaurant/cameras/mediamtx.ts', 'utf8');
+const transport = readFileSync('src/lib/cameras/mediamtx.ts', 'utf8');
 describe('camera stream proxy threat controls', () => {
   test('freshly validates grant, camera, tenant, branch and gateway on every request', () => {
     for (const evidence of [
