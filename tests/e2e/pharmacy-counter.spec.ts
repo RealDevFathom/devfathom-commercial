@@ -363,3 +363,55 @@ test('this spec drives the counter without a pointer', async () => {
     expect(body, `pointer API used: ${pointerApi}`).not.toContain(pointerApi);
   }
 });
+
+test('controlled interlock requires Rx patient ID and pharmacist PIN; register prints', async ({
+  page,
+}) => {
+  const { prepareControlledFixture, staffId, pharmacistPin, controlledClient } =
+    await import('./pharmacy-controlled-fixture');
+  await prepareControlledFixture();
+  await openCounter(page);
+  const search = page.getByLabel('Scan or search');
+  await search.fill(PHARMACY_E2E.medicines.rx.name);
+  await search.press('Enter');
+  await stageFirstResult(page, PHARMACY_E2E.medicines.rx.name);
+  await pressControl(page.getByRole('radio', { name: /Unit/ }));
+  await setQuantity(page, 1);
+  // Use the same keyboard add action as the other counter acceptance cases.
+  await pressControl(page.getByRole('button', { name: /Add to (cart|bill)/i }));
+  await expect(page.getByText(/Controlled medicine needs a patient with ID/)).toBeVisible();
+  await page.getByLabel('Find patient').fill(PHARMACY_E2E.patientName);
+  await page.getByLabel('Find patient').press('Enter');
+  await pressControl(page.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+  await page
+    .getByLabel('Prescription line', { exact: true })
+    .selectOption(PHARMACY_E2E.medicines.rx.prescriptionLineId);
+  await page.getByLabel('Approving pharmacist').selectOption(staffId);
+  await page.getByLabel('Pharmacist PIN', { exact: true }).fill('111111');
+  await pressControl(page.getByRole('button', { name: /Add to (cart|bill)/i }));
+  await expect(page.getByText(/Controlled medicine requires a valid prescription/)).toBeVisible();
+  await expect(page.getByLabel('Pharmacist PIN', { exact: true })).toHaveValue('');
+  await page.getByLabel('Pharmacist PIN', { exact: true }).fill(pharmacistPin);
+  await pressControl(page.getByRole('button', { name: /Add to (cart|bill)/i }));
+  await expect(page.getByRole('status').filter({ hasText: /added/ })).toBeVisible();
+  const db = await controlledClient();
+  try {
+    const entries = await db.query(
+      `SELECT e."runningBalance", (SELECT sum(b."onHandUnits")::int FROM pharmacy_stock_balances b WHERE b."inventoryLotId"=e."inventoryLotId" AND b."branchId"=e."branchId") AS actual FROM pharmacy_controlled_register_entries e WHERE e."prescriptionLineId"=$1`,
+      [PHARMACY_E2E.medicines.rx.prescriptionLineId]
+    );
+    expect(entries.rows.length).toBeGreaterThan(0);
+    for (const entry of entries.rows) expect(entry.runningBalance).toBe(entry.actual);
+  } finally {
+    await db.end();
+  }
+  await page.goto('/pharmacy/controlled-register');
+  await expect(
+    page.getByRole('heading', { name: 'Controlled register', exact: true })
+  ).toBeVisible();
+  const popupPromise = page.waitForEvent('popup');
+  await pressControl(page.getByRole('button', { name: 'Print register', exact: true }));
+  const popup = await popupPromise;
+  await expect(popup.getByRole('heading', { name: 'Controlled medicine register' })).toBeVisible();
+  await expect(popup.getByRole('table')).toContainText(PHARMACY_E2E.patientName);
+});
