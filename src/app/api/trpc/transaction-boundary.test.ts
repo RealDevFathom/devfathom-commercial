@@ -91,6 +91,12 @@ vi.mock('@/server/routers/_app', async () => {
         throw new Error('event failed');
       }),
       read: t.procedure.query(() => ({ read: true })),
+      // A query that fails after an incidental write — the shape of one broken
+      // widget on a page whose other queries share its GET batch.
+      readThenFail: t.procedure.query(async ({ ctx }) => {
+        await ctx.db.ledger.create({ data: { label: 'cache' } });
+        throw new Error('lookup failed');
+      }),
     }),
   };
 });
@@ -213,8 +219,11 @@ describe('a procedure that fails after writing', () => {
     expect(body[1]).not.toHaveProperty('result');
     expect(response.status).toBe(500);
 
-    // The discarded entry says so, and names its own procedure.
+    // The discarded entry says so, names its own procedure, and carries the
+    // sibling failure that caused the rollback.
     expect(body[0].error.json.message).toMatch(/rolled back/i);
+    expect(body[0].error.json.message).toContain('"writeThenFail"');
+    expect(body[0].error.json.message).toContain('event failed');
     expect(body[0].error.json.data.path).toBe('write');
 
     // The original failure is preserved exactly, not replaced by the rollback.
@@ -248,6 +257,85 @@ describe('a procedure that fails after writing', () => {
  * transaction callback, and the callback would resolve — and COMMIT — while the
  * resolvers were still running.
  */
+/**
+ * A GET batch can only run queries (`allowMethodOverride` is off), and a query's
+ * result is what it read — a rollback does not unread it. One failing query must
+ * therefore never blank its siblings, which is what the whole-batch rewrite did
+ * to the catering Create-order dialog's customer list.
+ */
+describe('a query batch with one failing query', () => {
+  const getBatch = (paths: string[]) => {
+    const input = Object.fromEntries(paths.map((_path, index) => [String(index), { json: null }]));
+    const query = encodeURIComponent(JSON.stringify(input));
+    return GET(new Request(url(paths.join(','), `?batch=1&input=${query}`)));
+  };
+
+  it('keeps every other query a result, and the failure exactly as tRPC made it', async () => {
+    const response = await getBatch(['read', 'readThenFail', 'read']);
+
+    // tRPC's own mixed-outcome status, untouched.
+    expect(response.status).toBe(207);
+    type Entry = {
+      result?: { data: { json: unknown } };
+      error?: { json: { message: string; data: { path: string } } };
+    };
+    const body = (await response.json()) as Entry[];
+    expect(body).toHaveLength(3);
+    expect(body[0].result?.data.json).toEqual({ read: true });
+    expect(body[2].result?.data.json).toEqual({ read: true });
+    expect(body[1].error?.json.message).toBe('lookup failed');
+    expect(body[1].error?.json.data.path).toBe('readThenFail');
+
+    // The failing query's partial write is still rolled back.
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('fulfils the healthy queries in the real client', async () => {
+    const settled = await Promise.allSettled([client.query('read'), client.query('readThenFail')]);
+
+    // One transaction proves the two queries really did share one GET request.
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(settled[0]).toEqual({ status: 'fulfilled', value: { read: true } });
+    expect(settled[1].status).toBe('rejected');
+    expect(reason(settled[1])?.message).toBe('lookup failed');
+  });
+});
+
+describe('a single procedure', () => {
+  it('returns its own failure unchanged when it is not batched', async () => {
+    const response = await POST(
+      new Request(url('writeThenFail'), {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ json: null }),
+      })
+    );
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as {
+      error: { json: { message: string; data: { code: string; path: string } } };
+    };
+    expect(body.error.json.message).toBe('event failed');
+    expect(body.error.json.data).toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+      path: 'writeThenFail',
+    });
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('returns a failing query unchanged', async () => {
+    const response = await GET(new Request(url('readThenFail', '?input=%7B%22json%22%3Anull%7D')));
+
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as { error: { json: { message: string } } };
+    expect(body.error.json.message).toBe('lookup failed');
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(harness.writes).toEqual([]);
+  });
+});
+
 describe('streamed transports', () => {
   it('refuses a trpc-accept: application/jsonl request before any resolver runs', async () => {
     const response = await mutate(['write'], { 'trpc-accept': 'application/jsonl' });

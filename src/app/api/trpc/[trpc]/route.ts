@@ -134,31 +134,52 @@ function procedurePaths(req: Request): string[] {
   return decodeURIComponent(pathname.slice(start + prefix.length)).split(',');
 }
 
+/** What a failed entry of an aborted response says about itself. */
+type Failure = { path?: string; code?: string; message: string };
+
+function describeFailures(failures: Failure[]): string {
+  return failures
+    .map(
+      ({ path, code, message }) =>
+        `${path ? `"${path}"` : 'an operation'} (${code ?? 'ERROR'}: ${message})`
+    )
+    .join('; ');
+}
+
 /**
- * Rewrite an aborted request's response to describe what actually survived.
+ * Rewrite an aborted MUTATION batch's response to describe what actually
+ * survived.
  *
  * tRPC serialized that response from what the procedures *did*; the ROLLBACK
- * then undid it. Every `result` entry in it now names a draft, action or
- * document that no longer exists, and `httpBatchLink` resolves each entry of a
- * batch independently — an HTTP 207 does not reject a sibling whose envelope
- * says `result`. A caller would therefore receive an ID for a row that was
- * discarded, and no refetch can turn that into a truthful success after the
- * fact.
+ * then undid it. Every procedure in the batch ran against the one request-wide
+ * transaction, so a sibling that succeeded really did share the failed
+ * transaction, and every `result` entry now names a draft, action or document
+ * that no longer exists. `httpBatchLink` resolves each entry of a batch
+ * independently — an HTTP 207 does not reject a sibling whose envelope says
+ * `result` — so a caller would receive an ID for a row that was discarded, and
+ * no refetch can turn that into a truthful success after the fact.
  *
  * So each invalidated `result` becomes a real `TRPCError`, serialized through
- * the router's own error formatter and transformer, and the aggregate status is
- * recomputed from the resulting shapes by tRPC's own rule. Entries that already
- * carry an error are left byte-for-byte alone: their message, code, status,
- * procedure path and any authorization detail are the original failure
- * information and survive unchanged.
+ * the router's own error formatter and transformer, naming its own procedure,
+ * and carrying the sibling failure that caused the rollback (procedure, code and
+ * message — all already present in the same response) as its message and
+ * `cause`. The aggregate status is recomputed from the resulting shapes by
+ * tRPC's own rule. Entries that already carry an error are left byte-for-byte
+ * alone: their message, code, status, procedure path and any authorization
+ * detail are the original failure information and survive unchanged.
+ *
+ * Query batches never come here — see `serveInTenantScope`.
  */
 async function withoutDiscardedResults(req: Request, response: Response): Promise<Response> {
   const config = appRouter._def._config;
-  const discarded = new TRPCError({
-    code: 'INTERNAL_SERVER_ERROR',
-    message:
-      'Rolled back: another operation in this request failed, so this one was discarded and nothing it wrote was saved. Retry the request.',
-  });
+  const rolledBack = (failures: Failure[]) => {
+    const reason = failures.length ? describeFailures(failures) : 'another operation';
+    return new TRPCError({
+      code: 'INTERNAL_SERVER_ERROR',
+      message: `Rolled back: ${reason} failed in the same request, so this operation was discarded and nothing it wrote was saved. Retry the request.`,
+      cause: new Error(reason),
+    });
+  };
 
   let body: unknown;
   try {
@@ -166,7 +187,7 @@ async function withoutDiscardedResults(req: Request, response: Response): Promis
   } catch {
     // Not JSON, so no entry in it can be trusted. Fail the request as a whole
     // rather than pass a body we cannot audit back to the caller.
-    return requestFailed(discarded);
+    return requestFailed(rolledBack([]));
   }
 
   const batched = Array.isArray(body);
@@ -174,20 +195,42 @@ async function withoutDiscardedResults(req: Request, response: Response): Promis
   const paths = procedurePaths(req);
   const named = paths.length === entries.length;
 
+  // First pass: decode every original failure, so each discarded sibling can
+  // say which one took it down.
+  const shapes: (TRPCErrorShape | null)[] = [];
+  const failures: Failure[] = [];
+  for (const entry of entries) {
+    if (!isErrorEnvelope(entry)) {
+      shapes.push(null);
+      continue;
+    }
+    let shape: TRPCErrorShape;
+    try {
+      shape = config.transformer.output.deserialize(entry.error) as TRPCErrorShape;
+    } catch {
+      return requestFailed(rolledBack([]));
+    }
+    shapes.push(shape);
+    const data = shape.data as { path?: unknown; code?: unknown } | undefined;
+    failures.push({
+      path: typeof data?.path === 'string' ? data.path : undefined,
+      code: typeof data?.code === 'string' ? data.code : undefined,
+      message: shape.message,
+    });
+  }
+
+  const discarded = rolledBack(failures);
   const rewritten: unknown[] = [];
-  const shapes: TRPCErrorShape[] = [];
+  const finalShapes: TRPCErrorShape[] = [];
   for (const [index, entry] of entries.entries()) {
-    if (isErrorEnvelope(entry)) {
-      try {
-        shapes.push(config.transformer.output.deserialize(entry.error) as TRPCErrorShape);
-      } catch {
-        return requestFailed(discarded);
-      }
+    const original = shapes[index];
+    if (original) {
+      finalShapes.push(original);
       rewritten.push(entry);
       continue;
     }
     const shape = errorShape(discarded, named ? paths[index] : undefined);
-    shapes.push(shape);
+    finalShapes.push(shape);
     rewritten.push(transformTRPCResponse(config, { error: shape }));
   }
 
@@ -195,7 +238,7 @@ async function withoutDiscardedResults(req: Request, response: Response): Promis
   const headers = new Headers(response.headers);
   headers.delete('content-length');
   return new Response(JSON.stringify(batched ? rewritten : rewritten[0]), {
-    status: getHTTPStatusCode(shapes.map((error) => ({ error }))),
+    status: getHTTPStatusCode(finalShapes.map((error) => ({ error }))),
     headers,
   });
 }
@@ -222,13 +265,20 @@ async function withoutDiscardedResults(req: Request, response: Response): Promis
  *
  * The unit of atomicity is the HTTP request, because the transaction is: a
  * batch commits only when every procedure in it succeeded. tRPC binds a batch to
- * a single procedure type — mutations arrive by POST, queries by GET, and
- * `allowMethodOverride` is off — so a rolled-back batch is either read-only,
- * where rollback discards nothing, or entirely mutations, where discarding the
- * siblings of a failed mutation is the conservative direction: a client can
- * refetch and retry, whereas a half-applied batch cannot be repaired. Discarded
- * siblings are then *reported* as discarded, by `withoutDiscardedResults` — a
- * rolled-back write must never come back wearing a `result`.
+ * a single procedure type — with `allowMethodOverride` off, a mutation runs
+ * only on POST and a query only on GET — so the method decides what the
+ * rollback can have discarded:
+ *
+ *   - GET (queries): the response goes back UNTOUCHED. A query's result is what
+ *     it read, and a rollback does not unread it, so a failing query must not
+ *     blank its siblings — one broken widget would empty every list on the page.
+ *     The rollback still discards any partial write the failing query made.
+ *   - POST (mutations): every sibling wrote into the transaction that just
+ *     rolled back, so its `result` is no longer true. Discarding them together
+ *     is the conservative direction — a client can retry, whereas a half-applied
+ *     batch cannot be repaired — and `withoutDiscardedResults` reports each one
+ *     as discarded, naming the failure that caused it. A rolled-back write must
+ *     never come back wearing a `result`.
  */
 async function serveInTenantScope(
   req: Request,
@@ -268,8 +318,8 @@ async function serveInTenantScope(
     },
     { timeout: 60_000 }
   ).catch((error: unknown) => {
-    if (error instanceof TransactionAborted) return withoutDiscardedResults(req, error.response);
-    throw error;
+    if (!(error instanceof TransactionAborted)) throw error;
+    return req.method === 'POST' ? withoutDiscardedResults(req, error.response) : error.response;
   });
 }
 
