@@ -37,18 +37,26 @@ const tenantAdminSurfaces = [
 ] as const;
 
 type BrowserErrors = {
-  console: string[];
+  console: { text: string; url: string }[];
   page: string[];
   request: string[];
+  expectedErrorUrls: Set<string>;
 };
 
 const browserErrors = new WeakMap<Page, BrowserErrors>();
 
 function collectUnexpectedErrors(page: Page) {
-  const errors: BrowserErrors = { console: [], page: [], request: [] };
+  const errors: BrowserErrors = {
+    console: [],
+    page: [],
+    request: [],
+    expectedErrorUrls: new Set(),
+  };
   browserErrors.set(page, errors);
   page.on('console', (message) => {
-    if (message.type() === 'error') errors.console.push(message.text());
+    if (message.type() === 'error') {
+      errors.console.push({ text: message.text(), url: message.location().url });
+    }
   });
   page.on('pageerror', (error) => errors.page.push(error.message));
   page.on('requestfailed', (request) => {
@@ -63,9 +71,24 @@ function collectUnexpectedErrors(page: Page) {
     );
   });
   page.on('response', (response) => {
-    if (response.status() < 400 || response.headers()['x-wha-expected-error'] === 'true') return;
+    if (response.status() < 400) return;
+    if (response.headers()['x-wha-expected-error'] === 'true') {
+      errors.expectedErrorUrls.add(response.url());
+      return;
+    }
     errors.request.push(`${response.status()} ${response.request().method()} ${response.url()}`);
   });
+}
+
+// Chromium logs every deliberately failed (x-wha-expected-error) response as a
+// "Failed to load resource" console error; only those exact URLs are excused.
+function unexpectedConsoleErrors(errors: BrowserErrors | undefined) {
+  return (errors?.console ?? [])
+    .filter(
+      ({ text, url }) =>
+        !(text.startsWith('Failed to load resource:') && errors?.expectedErrorUrls.has(url))
+    )
+    .map(({ text }) => text);
 }
 
 async function useTheme(page: Page, theme: (typeof themes)[number]) {
@@ -90,6 +113,8 @@ async function expectExactHeadingHierarchy(page: Page, h1: RegExp) {
 }
 
 async function accessiblePage(page: Page, heading: RegExp) {
+  // headings.count() does not auto-wait; let the client-rendered page settle first.
+  await expect(page.getByRole('heading', { level: 1, name: heading })).toBeVisible();
   await expectExactHeadingHierarchy(page, heading);
   await expect(page.getByRole('heading', { level: 1 })).toHaveCount(1);
   await page.keyboard.press('Tab');
@@ -125,7 +150,9 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
 
   test.afterEach(async ({ page }, testInfo: TestInfo) => {
     const errors = browserErrors.get(page);
-    expect(errors?.console ?? [], `${testInfo.title}: unexpected console errors`).toEqual([]);
+    expect(unexpectedConsoleErrors(errors), `${testInfo.title}: unexpected console errors`).toEqual(
+      []
+    );
     expect(errors?.page ?? [], `${testInfo.title}: unexpected page errors`).toEqual([]);
     expect(errors?.request ?? [], `${testInfo.title}: unexpected request errors`).toEqual([]);
   });
@@ -279,14 +306,18 @@ test.describe('accepted manifest: final actor and accessibility acceptance', () 
       else await route.continue();
     });
     await page.goto(`${actorOrigin}/restaurant/sop/admin`);
-    await expect(page.getByRole('alert')).toContainText(/could not load|no data was changed/i);
+    // The query client retries a 5xx before settling on the error state; the named
+    // loading status is what an operator sees while those retries run.
+    await expect(page.getByRole('status', { name: /loading sop workspace/i })).toBeVisible();
+    await expect(page.getByRole('heading', { name: /could not load/i })).toBeVisible({
+      timeout: 30_000,
+    });
     const retry = page.getByRole('button', { name: 'Retry' });
-    await expect(retry).toBeVisible();
+    await expect(page.getByRole('alert').filter({ has: retry })).toBeVisible();
     await retry.focus();
     await expect(retry).toBeFocused();
     failed = false;
     await page.keyboard.press('Enter');
-    await expect(page.getByRole('status')).toContainText(/loading sop workspace/i);
     await expect(page.locator('[aria-busy="true"]')).toBeHidden();
     await expect(page.getByRole('heading', { level: 1, name: 'SOP administration' })).toBeVisible();
     await expect(page.locator(':focus')).toBeVisible();
