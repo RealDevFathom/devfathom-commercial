@@ -324,7 +324,7 @@ test('creates, costs, produces, delivers, and closes a catering order', async ({
     { recipe_id: cateringFixture.recipe.id, product_id: null, snapshot: '2.0000' },
   ]);
 
-  await expect(page.getByText('$160.00', { exact: true })).toBeVisible();
+  await expect(page.getByText('PKR 160', { exact: true })).toBeVisible();
   await expect(page.getByText('80.0%', { exact: true })).toBeVisible();
   for (const ingredient of cateringFixture.ingredients) {
     const row = page.getByRole('row').filter({ hasText: ingredient.name });
