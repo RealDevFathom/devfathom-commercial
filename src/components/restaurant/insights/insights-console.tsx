@@ -23,6 +23,8 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from '../restaurant-branch-select';
+import { ContributionScenarios } from './contribution-scenarios';
+import { CloseReadinessPanel } from './close-readiness-panel';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type FinancialRow = RouterOutputs['restaurantInsights']['listFinancialReports'][number];
@@ -35,7 +37,7 @@ type LabourRow = RouterOutputs['restaurantInsights']['listLabourCosts'][number];
 type ExportFile = NonNullable<RouterOutputs['restaurantInsights']['exportFinancialReports']>;
 
 type ReportKind = 'financial' | 'operational';
-type InsightsTab = ReportKind | 'labour';
+type InsightsTab = ReportKind | 'labour' | 'scenarios' | 'close';
 type UiError = { message: string; data?: { code?: string } | null };
 type ReadQuery<T> = {
   data: T | undefined;
@@ -181,12 +183,18 @@ export function InsightsConsole() {
   const [to, setTo] = useState('');
   const [tab, setTab] = useState<InsightsTab>('financial');
   const [selectedDate, setSelectedDate] = useState('');
+  const [closeBusinessDate, setCloseBusinessDate] = useState('');
 
   const normalizedBranchId = branchId.trim();
   const branchReady = insightsEnabled && normalizedBranchId.length > 0;
   const financialActive = branchReady && tab === 'financial';
   const operationalActive = branchReady && tab === 'operational';
   const labourActive = branchReady && tab === 'labour';
+  const closeBranch = branchesQuery.data?.find(
+    (branch) => branch.id === normalizedBranchId && branch.active
+  );
+  const closeBranchAvailable =
+    Boolean(closeBranch) && !branchesQuery.error && !branchesQuery.isLoading;
 
   const rangeInput = {
     branchId: normalizedBranchId,
@@ -246,7 +254,7 @@ export function InsightsConsole() {
               branches={branchesQuery.data ?? []}
               loading={branchesQuery.isLoading}
               error={Boolean(branchesQuery.error)}
-              value={branchId}
+              value={tab === 'close' && !closeBranch ? '' : branchId}
               onChange={updateBranch}
               disabled={!insightsEnabled}
             />
@@ -286,13 +294,18 @@ export function InsightsConsole() {
         </SectionCard>
       ) : (
         <Tabs value={tab} onValueChange={updateTab}>
-          <TabsList aria-label="Insight reports">
+          <TabsList
+            aria-label="Insight reports"
+            className="max-w-full flex-wrap group-data-horizontal/tabs:h-auto"
+          >
             <TabsTrigger value="financial">Financial</TabsTrigger>
             <TabsTrigger value="operational">Operational</TabsTrigger>
             <TabsTrigger value="labour">Labour</TabsTrigger>
+            <TabsTrigger value="scenarios">Scenarios</TabsTrigger>
+            <TabsTrigger value="close">Close readiness</TabsTrigger>
           </TabsList>
 
-          {!branchReady ? (
+          {!branchReady && tab !== 'scenarios' ? (
             <SectionCard title="Branch required">
               <div className="space-y-3" role="status">
                 <StatusPill status="Reads disabled" tone="neutral" />
@@ -337,6 +350,27 @@ export function InsightsConsole() {
               <LabourPanel branchId={normalizedBranchId} from={from} to={to} query={labourList} />
             ) : null}
           </TabsContent>
+          <TabsContent value="scenarios">
+            <ContributionScenarios
+              key={`${normalizedBranchId}:${from}:${to}`}
+              branchId={normalizedBranchId || null}
+              from={from || null}
+              to={to || null}
+            />
+          </TabsContent>
+          <TabsContent value="close">
+            {tab === 'close' ? (
+              <CloseReadinessPanel
+                key={`${entitlements.organizationId}:${normalizedBranchId}:${closeBranchAvailable}`}
+                organizationId={entitlements.organizationId}
+                branchId={normalizedBranchId}
+                branchName={closeBranch?.name ?? normalizedBranchId}
+                branchAvailable={closeBranchAvailable}
+                businessDate={closeBusinessDate}
+                onBusinessDateChange={setCloseBusinessDate}
+              />
+            ) : null}
+          </TabsContent>
         </Tabs>
       )}
     </div>
@@ -349,7 +383,7 @@ function ExportButton({
   from,
   to,
 }: {
-  kind: InsightsTab;
+  kind: ReportKind | 'labour';
   branchId: string;
   from: string;
   to: string;
