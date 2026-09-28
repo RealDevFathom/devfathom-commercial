@@ -7,6 +7,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
+import { returnedLineValue } from './sales';
 import { firstCloseIsFinal } from './migration/first-close';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import type { LedgerScope } from './stock-ledger';
@@ -446,6 +447,8 @@ export async function refundPharmacyTender(
     reason: string;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
+    manualCashFallback?: boolean;
+    requireReturnedValue?: boolean;
   }
 ) {
   if (!input.reason.trim()) throw new PharmacySettlementError('INVALID_AMOUNT');
@@ -476,9 +479,44 @@ export async function refundPharmacyTender(
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
     input.amountMinor
   );
+  if (input.requireReturnedValue) {
+    await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${tender.saleId}
+      AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+    const sale = await db.pharmacySale.findFirst({
+      where: {
+        id: tender.saleId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'COMPLETED',
+      },
+      include: { lines: { include: { returnLines: true } }, refunds: true },
+    });
+    const returnValue =
+      sale?.lines.reduce(
+        (sum, line) =>
+          sum +
+          returnedLineValue(
+            line,
+            line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0)
+          ),
+        0
+      ) ?? 0;
+    if (
+      !sale ||
+      sale.refunds.reduce((sum, row) => sum + row.amountMinor, 0) + input.amountMinor > returnValue
+    )
+      throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+  }
+  const manualReversalRequired =
+    (tender.type === 'CARD' || tender.type === 'WALLET') &&
+    !input.adapter &&
+    input.manualCashFallback === true;
+  const refundReason = manualReversalRequired
+    ? `[CASH; MANUAL REVERSAL REQUIRED] ${input.reason.trim()}`
+    : input.reason.trim();
   let providerRef: string | undefined;
   let drawerSessionId: string | undefined;
-  if (tender.type === 'CARD' || tender.type === 'WALLET') {
+  if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
     if (!input.adapter || !tender.providerRef)
       throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
@@ -490,7 +528,7 @@ export async function refundPharmacyTender(
     });
     if (!result.approved) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     providerRef = result.providerRef;
-  } else if (tender.type === 'CASH') {
+  } else if (tender.type === 'CASH' || manualReversalRequired) {
     const drawer = await db.pharmacyDrawerSession.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -512,7 +550,7 @@ export async function refundPharmacyTender(
       providerRef,
       drawerSessionId,
       businessDate: input.businessDate,
-      reason: input.reason.trim(),
+      reason: refundReason,
       actorId: scope.actorId,
     },
   });
@@ -531,12 +569,13 @@ export async function refundPharmacyTender(
         drawerSessionId,
         kind: 'CASH_REFUND',
         amountMinor: input.amountMinor,
-        reason: input.reason.trim(),
+        reason: refundReason,
         actorId: scope.actorId,
       },
     });
   const result = {
     refundId: refund.id,
+    manualReversalRequired,
     originalTenderId: tender.id,
     amountMinor: refund.amountMinor,
   };

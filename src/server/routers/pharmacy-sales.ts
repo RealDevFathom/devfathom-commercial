@@ -46,6 +46,7 @@ import {
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
+  readReturnHistory,
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -295,6 +296,8 @@ export const pharmacySalesRouter = router({
           businessDate: z.date(),
           amountMinor: z.number().int().positive(),
           reason: z.string().trim().min(1),
+          manualCashFallback: z.boolean().optional(),
+          requireReturnedValue: z.boolean().optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
         })
         .strict()
@@ -565,6 +568,32 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  lookupReceiptByNumber: protectedProcedure
+    .input(z.object({ branchId, receiptNumber: z.number().int().positive() }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      // Receipt sequences are per device/date: never pick an arbitrary matching sale.
+      return ctx.db.pharmacySale.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          receiptNumber: input.receiptNumber,
+          status: 'COMPLETED',
+        },
+        select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
+        orderBy: { completedAt: 'desc' },
+        take: 50,
+      });
+    }),
+  returnHistory: protectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await readReturnHistory(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+      } catch (error) {
+        fail(error);
+      }
+    }),
   returnLine: protectedProcedure
     .input(
       z
@@ -572,7 +601,8 @@ export const pharmacySalesRouter = router({
           branchId,
           saleLineId: z.string().min(1),
           canonicalUnits: z.number().int().positive(),
-          quarantineLocationId: z.string().min(1),
+          quarantineLocationId: z.string().min(1).optional(),
+          disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1),
