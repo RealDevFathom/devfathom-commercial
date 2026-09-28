@@ -14,6 +14,7 @@ const mocks = vi.hoisted(() => ({
   audit: vi.fn(),
   actor: vi.fn(),
   context: vi.fn(),
+  medicines: vi.fn(),
   objects: new Map<string, Buffer>(),
 }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
@@ -48,6 +49,7 @@ function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE')
       pharmacyPatient: { findFirst: mocks.patient },
       pharmacyPrescriber: { findFirst: mocks.prescriber },
       prescription: { findFirst: mocks.find, create: mocks.create },
+      medicine: { findMany: mocks.medicines },
     },
     entitlements: { organizationId, modules: [], enabledModules: ['pharmacy-dispensing'] },
     session: { expires: 'later', user: { id: userId, organizationId, role: 'EMPLOYEE', status } },
@@ -337,5 +339,94 @@ describe('prescription capture and private delivery', () => {
     });
     expect(response.status).toBe(400);
     expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+});
+
+describe('PH-A3 prescription OCR prefill', () => {
+  beforeEach(() => {
+    vi.resetAllMocks();
+    vi.unstubAllEnvs();
+    mocks.objects.clear();
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(true);
+    mocks.patient.mockResolvedValue({ id: 'patient-a' });
+    mocks.find.mockResolvedValue(null);
+    mocks.medicines.mockResolvedValue([
+      { id: 'medicine-rx', productName: 'Fathomcillin E2E', brandName: null },
+    ]);
+    mocks.putUpload.mockImplementation(async (org, name, bytes) => {
+      mocks.objects.set(`${org}/${name}`, bytes);
+    });
+    mocks.getUpload.mockImplementation(async (org, name) => {
+      const bytes = mocks.objects.get(`${org}/${name}`);
+      if (!bytes) throw Object.assign(new Error('missing'), { code: 'ENOENT' });
+      return bytes;
+    });
+  });
+
+  it('is refused unless PHARMACY_RX_OCR_ADAPTER opts in, before reading storage', async () => {
+    const receipt = await upload();
+    mocks.getUpload.mockClear();
+    await expect(caller().extractSource({ sourceFileRef: receipt.url })).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+    });
+    expect(mocks.getUpload).not.toHaveBeenCalled();
+  });
+
+  it('FIXTURE returns a proposal requiring confirmation and writes nothing', async () => {
+    vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'FIXTURE');
+    const receipt = await upload();
+    const ctx = context();
+    const prefill = await caller(ctx).extractSource({ sourceFileRef: receipt.url });
+    expect(prefill).toMatchObject({
+      status: 'PROPOSED',
+      requiresPharmacistConfirmation: true,
+      adapter: 'FIXTURE',
+      lines: [
+        {
+          drugName: { value: 'Fathomcillin' },
+          dose: { value: '1 capsule every 8 hours for 5 days' },
+          medicineCandidates: [{ medicineId: 'medicine-rx', label: 'Fathomcillin E2E' }],
+        },
+      ],
+    });
+    expect(mocks.medicines).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', saleable: true } })
+    );
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.putUpload).toHaveBeenCalledOnce();
+    expect(ctx.audit.detail.skipInput).toBe(true);
+  });
+
+  it('applies the same uploader/tenant/role binding as preview', async () => {
+    vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'FIXTURE');
+    const receipt = await upload();
+    await expect(
+      caller(context('user-b')).extractSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    await expect(
+      caller(context('user-a', 'org-b')).extractSource({ sourceFileRef: receipt.url })
+    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().extractSource({ sourceFileRef: receipt.url })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      caller().extractSource({ sourceFileRef: 'https://foreign.test/rx.png' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.medicines).not.toHaveBeenCalled();
+  });
+
+  it('VISION without a configured provider fails with an operator sentence, not provider detail', async () => {
+    vi.stubEnv('PHARMACY_RX_OCR_ADAPTER', 'VISION');
+    vi.stubEnv('AI_PROVIDER', 'not-a-provider');
+    const receipt = await upload();
+    const failure = caller().extractSource({ sourceFileRef: receipt.url });
+    await expect(failure).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'The prescription could not be read. Enter the details by hand.',
+    });
+    expect(mocks.medicines).not.toHaveBeenCalled();
   });
 });

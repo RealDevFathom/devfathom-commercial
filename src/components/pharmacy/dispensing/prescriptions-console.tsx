@@ -13,6 +13,19 @@ import { MedicationCard } from './medication-card';
 
 const today = () => new Date().toISOString().slice(0, 10);
 
+/** Private, authenticated, no-store evidence thumbnail; next/image would cache it. */
+function EvidenceThumbnail({ url, label }: { url: string; label: string }) {
+  return (
+    // eslint-disable-next-line @next/next/no-img-element
+    <img
+      src={url}
+      alt={label}
+      loading="lazy"
+      className="size-12 shrink-0 rounded-md border border-border-subtle object-cover"
+    />
+  );
+}
+
 // Matches the pharmacy upload contract; its runtime module is server-only.
 const maxPrescriptionBytes = 5 * 1024 * 1024;
 const evidenceTypes: Record<PrescriptionUpload['contentType'], readonly string[]> = {
@@ -21,11 +34,11 @@ const evidenceTypes: Record<PrescriptionUpload['contentType'], readonly string[]
   'image/webp': ['webp'],
 };
 
-function isImageType(value: string): value is PrescriptionUpload['contentType'] {
+export function isImageType(value: string): value is PrescriptionUpload['contentType'] {
   return value === 'image/png' || value === 'image/jpeg' || value === 'image/webp';
 }
 
-function fileError(file: File | null) {
+export function fileError(file: File | null) {
   if (!file || file.size === 0) return 'Choose a non-empty prescription image.';
   if (file.size > maxPrescriptionBytes) return 'Choose a file no larger than 5 MiB.';
   if (
@@ -36,7 +49,7 @@ function fileError(file: File | null) {
   return null;
 }
 
-function attachmentUrl(value: unknown): value is string {
+export function attachmentUrl(value: unknown): value is string {
   return (
     typeof value === 'string' &&
     /^\/api\/pharmacy\/prescription-files\?id=[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(
@@ -45,7 +58,7 @@ function attachmentUrl(value: unknown): value is string {
   );
 }
 
-function imageBase64(file: File): Promise<string> {
+export function imageBase64(file: File): Promise<string> {
   return new Promise((resolve, reject) => {
     const reader = new FileReader();
     reader.onerror = () => reject(new Error('The image could not be read. Select it again.'));
@@ -122,6 +135,7 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
             patientName: prescription.patient.displayName,
             medicineName: line.medicine.productName,
             directions: line.directions,
+            sourceFileRef: prescription.sourceFileRef,
           }))
         )
       ) ?? [],
@@ -540,8 +554,12 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                                   href={rx.sourceFileRef}
                                   target="_blank"
                                   rel="noopener noreferrer"
-                                  className="text-primary underline underline-offset-4 focus-visible:ring-3 focus-visible:ring-ring"
+                                  className="inline-flex items-center gap-2 text-primary underline underline-offset-4 focus-visible:ring-3 focus-visible:ring-ring"
                                 >
+                                  <EvidenceThumbnail
+                                    url={rx.sourceFileRef}
+                                    label={`Prescription photo for ${rx.patient.displayName}`}
+                                  />
                                   View attachment
                                   <span className="sr-only">
                                     {' '}
@@ -610,75 +628,94 @@ export function PrescriptionsConsole({ initialPatientId }: PrescriptionsConsoleP
                     {reminderError}
                   </div>
                 ) : null}
-                {dispensedFills.map(({ fill, patientName, medicineName, directions }) => {
-                  const reminder = workspace.data.reminderCaptures.find(
-                    (capture) => capture.prescriptionFillId === fill.id
-                  );
-                  return reminder ? (
-                    <MedicationCard
-                      key={fill.id}
-                      card={{
-                        ...reminder,
-                        reminderAt: new Date(reminder.reminderAt),
-                        expectedExhaustionAt: new Date(reminder.expectedExhaustionAt),
-                      }}
-                    />
-                  ) : (
-                    <form
-                      key={fill.id}
-                      className="rounded-lg border border-border-subtle bg-surface-sunken p-5"
-                      onSubmit={submitReminder}
-                    >
-                      <input type="hidden" name="fillId" value={fill.id} />
-                      <div className="flex flex-wrap items-start justify-between gap-3">
-                        <div>
-                          <p className="font-medium text-text-strong">
-                            {medicineName} · {patientName}
-                          </p>
-                          <p className="mt-1 font-mono text-xs text-text-muted">
-                            {fill.quantityCanonicalUnits} unit(s) dispensed ·{' '}
-                            {new Date(fill.dispensedAt).toLocaleDateString()}
-                          </p>
-                          <p className="mt-2 text-sm text-text-muted">{directions}</p>
+                {dispensedFills.map(
+                  ({ fill, patientName, medicineName, directions, sourceFileRef }) => {
+                    const reminder = workspace.data.reminderCaptures.find(
+                      (capture) => capture.prescriptionFillId === fill.id
+                    );
+                    return reminder ? (
+                      <MedicationCard
+                        key={fill.id}
+                        card={{
+                          ...reminder,
+                          reminderAt: new Date(reminder.reminderAt),
+                          expectedExhaustionAt: new Date(reminder.expectedExhaustionAt),
+                        }}
+                      />
+                    ) : (
+                      <form
+                        key={fill.id}
+                        className="rounded-lg border border-border-subtle bg-surface-sunken p-5"
+                        onSubmit={submitReminder}
+                      >
+                        <input type="hidden" name="fillId" value={fill.id} />
+                        <div className="flex flex-wrap items-start justify-between gap-3">
+                          {attachmentUrl(sourceFileRef) ? (
+                            <a
+                              href={sourceFileRef}
+                              target="_blank"
+                              rel="noopener noreferrer"
+                              className="rounded-md focus-visible:ring-3 focus-visible:ring-ring"
+                            >
+                              <EvidenceThumbnail
+                                url={sourceFileRef}
+                                label={`Prescription photo for this fill of ${medicineName}`}
+                              />
+                              <span className="sr-only"> (opens in a new tab)</span>
+                            </a>
+                          ) : null}
+                          <div className="mr-auto">
+                            <p className="font-medium text-text-strong">
+                              {medicineName} · {patientName}
+                            </p>
+                            <p className="mt-1 font-mono text-xs text-text-muted">
+                              {fill.quantityCanonicalUnits} unit(s) dispensed ·{' '}
+                              {new Date(fill.dispensedAt).toLocaleDateString()}
+                            </p>
+                            <p className="mt-2 text-sm text-text-muted">{directions}</p>
+                          </div>
+                          <StatusPill status="draft" label="Needs capture" />
                         </div>
-                        <StatusPill status="draft" label="Needs capture" />
-                      </div>
-                      <div className="mt-5 grid gap-4 md:grid-cols-[12rem_minmax(18rem,1fr)_auto] md:items-end">
-                        <Field label="Reminder channel" hint="Consent is checked for this channel.">
-                          <select name="channel" className={fieldClass} defaultValue="WHATSAPP">
-                            <option value="WHATSAPP">WhatsApp</option>
-                            <option value="SMS">SMS</option>
-                            <option value="PHONE">Phone</option>
-                            <option value="EMAIL">Email</option>
-                          </select>
-                        </Field>
-                        <Field
-                          label="Urdu directions"
-                          hint="Enter the pharmacist-reviewed wording printed on the card."
-                        >
-                          <input
-                            required
-                            dir="rtl"
-                            lang="ur"
-                            name="directionsUrdu"
-                            maxLength={500}
-                            className={`${fieldClass} text-right`}
-                            placeholder="مثال: روزانہ ایک گولی لیں"
-                          />
-                        </Field>
-                        <Button
-                          type="submit"
-                          size="lg"
-                          className="h-11"
-                          disabled={captureReminder.isPending || !effectiveBranchId}
-                        >
-                          <CalendarClock aria-hidden />
-                          {captureReminder.isPending ? 'Capturing…' : 'Capture reminder'}
-                        </Button>
-                      </div>
-                    </form>
-                  );
-                })}
+                        <div className="mt-5 grid gap-4 md:grid-cols-[12rem_minmax(18rem,1fr)_auto] md:items-end">
+                          <Field
+                            label="Reminder channel"
+                            hint="Consent is checked for this channel."
+                          >
+                            <select name="channel" className={fieldClass} defaultValue="WHATSAPP">
+                              <option value="WHATSAPP">WhatsApp</option>
+                              <option value="SMS">SMS</option>
+                              <option value="PHONE">Phone</option>
+                              <option value="EMAIL">Email</option>
+                            </select>
+                          </Field>
+                          <Field
+                            label="Urdu directions"
+                            hint="Enter the pharmacist-reviewed wording printed on the card."
+                          >
+                            <input
+                              required
+                              dir="rtl"
+                              lang="ur"
+                              name="directionsUrdu"
+                              maxLength={500}
+                              className={`${fieldClass} text-right`}
+                              placeholder="مثال: روزانہ ایک گولی لیں"
+                            />
+                          </Field>
+                          <Button
+                            type="submit"
+                            size="lg"
+                            className="h-11"
+                            disabled={captureReminder.isPending || !effectiveBranchId}
+                          >
+                            <CalendarClock aria-hidden />
+                            {captureReminder.isPending ? 'Capturing…' : 'Capture reminder'}
+                          </Button>
+                        </div>
+                      </form>
+                    );
+                  }
+                )}
               </div>
             )}
           </SectionCard>
