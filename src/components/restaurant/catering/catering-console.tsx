@@ -83,10 +83,8 @@ function localDateTime(value: Date | string | null | undefined) {
   date.setMinutes(date.getMinutes() - date.getTimezoneOffset());
   return date.toISOString().slice(0, 16);
 }
-function money(value: { toString(): string } | null | undefined) {
-  return value == null
-    ? '—'
-    : new Intl.NumberFormat('en', { style: 'currency', currency: 'USD' }).format(Number(value));
+function eventIdentity(order: Pick<Order, 'eventName' | 'eventDate'>) {
+  return `${order.eventName} · ${localDate(order.eventDate)}`;
 }
 function tone(status: Status): StatusTone {
   return status === 'CANCELLED'
@@ -101,7 +99,90 @@ function denied(error: { data?: { code?: string } | null } | null | undefined) {
   return ['FORBIDDEN', 'UNAUTHORIZED'].includes(error?.data?.code ?? '');
 }
 
-export function CateringConsole() {
+function DeliveryForm({
+  order,
+  staff,
+  disabled,
+  onChange,
+  onSubmit,
+}: {
+  order: Order;
+  staff: Outputs['restaurantStaff']['listDirectory'] | undefined;
+  disabled: boolean;
+  onChange: () => void;
+  onSubmit: (event: FormEvent<HTMLFormElement>) => void;
+}) {
+  // The parent keys this form by order ID. Refetches must not replace its defaults or edits.
+  const [delivery] = useState(order.delivery);
+  return (
+    <form
+      data-order-id={order.id}
+      aria-label={`Delivery for ${eventIdentity(order)}`}
+      onChange={onChange}
+      onSubmit={onSubmit}
+    >
+      <fieldset disabled={disabled} className="grid min-w-0 gap-3 sm:grid-cols-2">
+        <Field label="Scheduled">
+          <Input
+            className="min-h-11"
+            required
+            name="scheduledAt"
+            type="datetime-local"
+            defaultValue={localDateTime(delivery?.scheduledAt)}
+          />
+        </Field>
+        <Field label="Driver">
+          <select
+            name="driverStaffId"
+            aria-label="Driver"
+            className={inputClass}
+            defaultValue={delivery?.driverStaffId ?? ''}
+          >
+            <option value="">Unassigned</option>
+            {staff?.map((person) => (
+              <option key={person.id} value={person.id}>
+                {person.displayName}
+              </option>
+            ))}
+          </select>
+        </Field>
+        <Field label="Dispatched">
+          <Input
+            className="min-h-11"
+            name="dispatchedAt"
+            type="datetime-local"
+            defaultValue={localDateTime(delivery?.dispatchedAt)}
+          />
+        </Field>
+        <Field label="Delivered">
+          <Input
+            className="min-h-11"
+            name="deliveredAt"
+            type="datetime-local"
+            defaultValue={localDateTime(delivery?.deliveredAt)}
+          />
+        </Field>
+        <Field label="Vehicle">
+          <Input className="min-h-11" name="vehicle" defaultValue={delivery?.vehicle ?? ''} />
+        </Field>
+        <Field label="Delivery notes">
+          <Input className="min-h-11" name="deliveryNotes" defaultValue={delivery?.notes ?? ''} />
+        </Field>
+        <p className="text-sm text-text-muted sm:col-span-2">Saving for {eventIdentity(order)}</p>
+        <Button className="min-h-11" disabled={disabled} type="submit">
+          Save delivery
+        </Button>
+      </fieldset>
+    </form>
+  );
+}
+
+export function CateringConsole({ currency }: { currency: string | null }) {
+  const currencyLabel = currency?.trim() || 'Currency unavailable';
+  // Catering returns Decimal major-unit strings, including recipe-cost precision.
+  // Display those exact amounts; do not coerce to Number or infer a currency/scale.
+  const money = (amount: { toString(): string } | null | undefined) =>
+    amount == null ? '—' : `${currencyLabel} ${amount.toString()}`;
   const entitlements = useEntitlements();
   const enabled = entitlements.enabledModules.includes('restaurant-core');
   const utils = trpc.useUtils();
@@ -112,7 +193,11 @@ export function CateringConsole() {
   const [selectedId, setSelectedId] = useState('');
   const [editor, setEditor] = useState<Editor>(null);
   const [orderCustomerId, setOrderCustomerId] = useState('');
-  const [transitionTo, setTransitionTo] = useState<Status | null>(null);
+  const [transitionTarget, setTransitionTarget] = useState<{ order: Order; to: Status } | null>(
+    null
+  );
+  const [dirtyForms, setDirtyForms] = useState<string[]>([]);
+  const [switchTarget, setSwitchTarget] = useState<Order | 'new' | null>(null);
   const [mutationError, setMutationError] = useState('');
 
   const branches = trpc.restaurantStaff.listBranches.useQuery(undefined, { enabled });
@@ -155,7 +240,7 @@ export function CateringConsole() {
   const succeed = (message: string) => {
     setMutationError('');
     setEditor(null);
-    setTransitionTo(null);
+    setTransitionTarget(null);
     refresh();
     toast.success(message);
   };
@@ -209,8 +294,36 @@ export function CateringConsole() {
     transition,
   ].some((item) => item.isPending);
 
+  const markDirty = (name: string) =>
+    setDirtyForms((current) => (current.includes(name) ? current : [...current, name]));
+  const clearDraft = (name: string) =>
+    setDirtyForms((current) => current.filter((item) => item !== name));
+  const switchEvent = (target: Order | 'new') => {
+    setDirtyForms([]);
+    setMutationError('');
+    setSwitchTarget(null);
+    if (target === 'new') {
+      setSelectedId('');
+      setOrderCustomerId('');
+      setEditor({});
+    } else setSelectedId(target.id);
+  };
+  const requestSwitch = (target: Order | 'new') => {
+    if (busy || editor || transitionTarget || (target !== 'new' && target.id === selectedId))
+      return;
+    if (dirtyForms.length) setSwitchTarget(target);
+    else switchEvent(target);
+  };
+  const formOrderId = (form: HTMLFormElement) => {
+    const orderId = form.dataset.orderId;
+    return !busy && !detail.error && orderId === selectedId && detail.data?.id === orderId
+      ? orderId
+      : null;
+  };
+
   const submitOrder = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (busy || !editor) return;
     const data = new FormData(event.currentTarget);
     const order = editor?.order;
     const payload = {
@@ -232,43 +345,79 @@ export function CateringConsole() {
   };
   const submitLine = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!selectedId) return;
-    const data = new FormData(event.currentTarget);
+    const form = event.currentTarget;
+    const orderId = formOrderId(form);
+    if (!orderId) return;
+    const data = new FormData(form);
     const source = value(data, 'source');
     const [kind, id] = source.split(':');
-    addLine.mutate({
-      orderId: selectedId,
-      productId: kind === 'product' ? id : null,
-      recipeId: kind === 'recipe' ? id : null,
-      description: value(data, 'description'),
-      portions: value(data, 'portions'),
-      unitPrice: value(data, 'unitPrice'),
-    });
+    addLine.mutate(
+      {
+        orderId,
+        productId: kind === 'product' ? id : null,
+        recipeId: kind === 'recipe' ? id : null,
+        description: value(data, 'description'),
+        portions: value(data, 'portions'),
+        unitPrice: value(data, 'unitPrice'),
+      },
+      {
+        onSuccess: () => {
+          form.reset();
+          clearDraft('line');
+        },
+      }
+    );
   };
   const submitExtra = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    const data = new FormData(event.currentTarget);
-    addExtra.mutate({
-      orderId: selectedId,
-      kind: value(data, 'kind') as 'LABOUR' | 'TRANSPORT' | 'RENTAL' | 'OTHER',
-      label: value(data, 'label'),
-      amount: value(data, 'amount'),
-    });
+    const form = event.currentTarget;
+    const orderId = formOrderId(form);
+    if (!orderId) return;
+    const data = new FormData(form);
+    addExtra.mutate(
+      {
+        orderId,
+        kind: value(data, 'kind') as 'LABOUR' | 'TRANSPORT' | 'RENTAL' | 'OTHER',
+        label: value(data, 'label'),
+        amount: value(data, 'amount'),
+      },
+      {
+        onSuccess: () => {
+          form.reset();
+          clearDraft('extra');
+        },
+      }
+    );
   };
   const submitDelivery = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    const orderId = formOrderId(event.currentTarget);
+    if (!orderId) return;
     const data = new FormData(event.currentTarget);
-    setDelivery.mutate({
-      orderId: selectedId,
-      scheduledAt: new Date(value(data, 'scheduledAt')),
-      dispatchedAt: value(data, 'dispatchedAt') ? new Date(value(data, 'dispatchedAt')) : null,
-      deliveredAt: value(data, 'deliveredAt') ? new Date(value(data, 'deliveredAt')) : null,
-      driverStaffId: optional(data, 'driverStaffId'),
-      vehicle: optional(data, 'vehicle'),
-      notes: optional(data, 'deliveryNotes'),
-    });
+    setDelivery.mutate(
+      {
+        orderId,
+        scheduledAt: new Date(value(data, 'scheduledAt')),
+        dispatchedAt: value(data, 'dispatchedAt') ? new Date(value(data, 'dispatchedAt')) : null,
+        deliveredAt: value(data, 'deliveredAt') ? new Date(value(data, 'deliveredAt')) : null,
+        driverStaffId: optional(data, 'driverStaffId'),
+        vehicle: optional(data, 'vehicle'),
+        notes: optional(data, 'deliveryNotes'),
+      },
+      { onSuccess: () => clearDraft('delivery') }
+    );
   };
-  const order = detail.data;
+  const order = detail.data?.id === selectedId ? detail.data : undefined;
+  const actionsDisabled = busy || Boolean(detail.error);
+  const canPrint =
+    Boolean(order) &&
+    !detail.error &&
+    !busy &&
+    requirements.isSuccess &&
+    !requirements.isFetching &&
+    !requirements.error &&
+    !requirements.isPlaceholderData &&
+    Array.isArray(requirements.data);
 
   if (!enabled)
     return (
@@ -303,10 +452,9 @@ export function CateringConsole() {
         description="Quote events, prepare production sheets, coordinate delivery, and protect margin."
         actions={
           <Button
-            onClick={() => {
-              setOrderCustomerId('');
-              setEditor({});
-            }}
+            className="min-h-11"
+            disabled={busy || Boolean(editor) || Boolean(transitionTarget)}
+            onClick={() => requestSwitch('new')}
           >
             <Plus />
             New order
@@ -342,6 +490,7 @@ export function CateringConsole() {
           </Field>
           <Field label="Event date from">
             <Input
+              className="min-h-11"
               name="from"
               type="date"
               value={from}
@@ -350,6 +499,7 @@ export function CateringConsole() {
           </Field>
           <Field label="Event date to">
             <Input
+              className="min-h-11"
               name="to"
               type="date"
               value={to}
@@ -365,7 +515,7 @@ export function CateringConsole() {
           <div role="alert">
             <p className="font-medium text-text-strong">Orders could not be loaded</p>
             <p className="text-sm text-text-muted">{list.error.message}</p>
-            <Button className="mt-4" variant="outline" onClick={() => list.refetch()}>
+            <Button className="mt-4 min-h-11" variant="outline" onClick={() => list.refetch()}>
               Try again
             </Button>
           </div>
@@ -389,17 +539,21 @@ export function CateringConsole() {
                 {list.data.map((item) => (
                   <TableRow
                     key={item.id}
-                    className="cursor-pointer"
-                    tabIndex={0}
-                    onClick={() => setSelectedId(item.id)}
-                    onKeyDown={(event) => {
-                      if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        setSelectedId(item.id);
-                      }
-                    }}
+                    data-state={selectedId === item.id ? 'selected' : undefined}
                   >
-                    <TableCell className="font-medium">{item.eventName}</TableCell>
+                    <TableCell className="font-medium">
+                      <Button
+                        className="min-h-11"
+                        variant="ghost"
+                        aria-label={`Select event ${eventIdentity(item)}`}
+                        aria-pressed={selectedId === item.id}
+                        disabled={busy || Boolean(editor) || Boolean(transitionTarget)}
+                        onClick={() => requestSwitch(item)}
+                      >
+                        {item.eventName}
+                        {selectedId === item.id ? ' · Selected' : ''}
+                      </Button>
+                    </TableCell>
                     <TableCell>{localDate(item.eventDate)}</TableCell>
                     <TableCell>{item.headcount}</TableCell>
                     <TableCell>
@@ -421,26 +575,57 @@ export function CateringConsole() {
       </SectionCard>
       {selectedId ? (
         <>
-          {detail.isLoading ? (
+          {detail.isLoading && !order ? (
             <SectionCard title="Loading order detail">
               <Skeleton className="h-48 w-full" />
             </SectionCard>
-          ) : detail.error ? (
+          ) : detail.error && !order ? (
             <SectionCard title="Order unavailable">
               <p role="alert" className="text-sm text-text-muted">
                 {detail.error.message}
               </p>
+              <Button
+                className="min-h-11"
+                variant="outline"
+                disabled={detail.isFetching}
+                onClick={() => detail.refetch()}
+              >
+                Retry order detail
+              </Button>
             </SectionCard>
           ) : order ? (
             <>
+              {detail.error ? (
+                <SectionCard title="Order detail could not be refreshed">
+                  <p role="alert" className="text-sm text-text-muted">
+                    {detail.error.message} Your edits are kept. Retry before saving.
+                  </p>
+                  <Button
+                    className="min-h-11"
+                    variant="outline"
+                    disabled={detail.isFetching}
+                    onClick={() => detail.refetch()}
+                  >
+                    Retry order detail
+                  </Button>
+                </SectionCard>
+              ) : null}
+              {mutationError && !editor && !transitionTarget ? (
+                <p role="alert" className="text-sm text-destructive">
+                  {mutationError} Your edits are kept.
+                </p>
+              ) : null}
               <SectionCard
                 title={order.eventName}
                 eyebrow={`${localDate(order.eventDate)} · ${order.headcount} guests`}
                 actions={
                   <div className="flex flex-wrap gap-2">
                     <Button
+                      className="min-h-11"
                       variant="outline"
+                      disabled={actionsDisabled}
                       onClick={() => {
+                        setMutationError('');
                         setOrderCustomerId(order.customerId ?? '');
                         setEditor({ order });
                       }}
@@ -448,12 +633,27 @@ export function CateringConsole() {
                       Edit order
                     </Button>
                     {nextStatus[order.status] ? (
-                      <Button onClick={() => setTransitionTo(nextStatus[order.status]!)}>
+                      <Button
+                        className="min-h-11"
+                        disabled={actionsDisabled}
+                        onClick={() => {
+                          setMutationError('');
+                          setTransitionTarget({ order, to: nextStatus[order.status]! });
+                        }}
+                      >
                         Move to {nextStatus[order.status]!.replaceAll('_', ' ').toLowerCase()}
                       </Button>
                     ) : null}
                     {!['CLOSED', 'CANCELLED'].includes(order.status) ? (
-                      <Button variant="destructive" onClick={() => setTransitionTo('CANCELLED')}>
+                      <Button
+                        className="min-h-11"
+                        variant="destructive"
+                        disabled={actionsDisabled}
+                        onClick={() => {
+                          setMutationError('');
+                          setTransitionTarget({ order, to: 'CANCELLED' });
+                        }}
+                      >
                         Cancel
                       </Button>
                     ) : null}
@@ -466,49 +666,84 @@ export function CateringConsole() {
                   <Stat label="Quoted" value={money(order.quotedTotal)} />
                   <Stat label="Deposit" value={money(order.depositAmount)} />
                 </div>
+                <p role="status" className="mt-4 text-sm text-text-muted">
+                  {busy
+                    ? `Saving changes for ${eventIdentity(order)}…`
+                    : dirtyForms.length
+                      ? 'Unsaved edits. Switching events will ask you to discard them.'
+                      : currencyLabel}
+                </p>
               </SectionCard>
               <div className="grid gap-6 xl:grid-cols-2">
                 <SectionCard title="Order lines">
-                  <form className="grid gap-3 sm:grid-cols-2" onSubmit={submitLine}>
-                    <Field label="Product or recipe">
-                      <select
-                        required
-                        name="source"
-                        aria-label="Product or recipe"
-                        className={inputClass}
-                      >
-                        <option value="">Select an item</option>
-                        {products.data?.map((item) => (
-                          <option key={item.id} value={`product:${item.id}`}>
-                            {item.name}
-                          </option>
-                        ))}
-                        {recipes.data
-                          ?.filter((item) => item.activeVersionId)
-                          .map((item) => (
-                            <option key={item.id} value={`recipe:${item.id}`}>
-                              {item.name} ·{' '}
-                              {money(
-                                recipeCosts.data?.find((cost) => cost.recipeId === item.id)
-                                  ?.costPerPortion
-                              )}
-                              /portion
+                  <form
+                    key={order.id}
+                    data-order-id={order.id}
+                    aria-label={`Order lines for ${eventIdentity(order)}`}
+                    onChange={() => markDirty('line')}
+                    onSubmit={submitLine}
+                  >
+                    <fieldset
+                      disabled={actionsDisabled}
+                      className="grid min-w-0 gap-3 sm:grid-cols-2"
+                    >
+                      <Field label="Product or recipe">
+                        <select
+                          required
+                          name="source"
+                          aria-label="Product or recipe"
+                          className={inputClass}
+                        >
+                          <option value="">Select an item</option>
+                          {products.data?.map((item) => (
+                            <option key={item.id} value={`product:${item.id}`}>
+                              {item.name}
                             </option>
                           ))}
-                      </select>
-                    </Field>
-                    <Field label="Description">
-                      <Input required name="description" />
-                    </Field>
-                    <Field label="Portions">
-                      <Input required name="portions" type="number" min="0.001" step="0.001" />
-                    </Field>
-                    <Field label="Unit price">
-                      <Input required name="unitPrice" type="number" min="0" step="0.01" />
-                    </Field>
-                    <Button disabled={busy} type="submit">
-                      Add line
-                    </Button>
+                          {recipes.data
+                            ?.filter((item) => item.activeVersionId)
+                            .map((item) => (
+                              <option key={item.id} value={`recipe:${item.id}`}>
+                                {item.name} ·{' '}
+                                {money(
+                                  recipeCosts.data?.find((cost) => cost.recipeId === item.id)
+                                    ?.costPerPortion
+                                )}
+                                /portion
+                              </option>
+                            ))}
+                        </select>
+                      </Field>
+                      <Field label="Description">
+                        <Input className="min-h-11" required name="description" />
+                      </Field>
+                      <Field label="Portions">
+                        <Input
+                          className="min-h-11"
+                          required
+                          name="portions"
+                          type="number"
+                          min="0.001"
+                          step="0.001"
+                        />
+                      </Field>
+                      <Field label="Unit price">
+                        <Input
+                          className="min-h-11"
+                          required
+                          name="unitPrice"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                        />
+                      </Field>
+                      <p className="text-sm text-text-muted sm:col-span-2">
+                        Adding to {eventIdentity(order)}
+                      </p>
+                      <Button className="min-h-11" disabled={actionsDisabled} type="submit">
+                        Add line
+                      </Button>
+                    </fieldset>
                   </form>
                   <div className="mt-5 space-y-2">
                     {order.lines.length ? (
@@ -522,9 +757,11 @@ export function CateringConsole() {
                             {money(line.unitPrice)}
                           </span>
                           <Button
+                            className="min-h-11"
                             variant="ghost"
                             size="sm"
-                            disabled={busy}
+                            disabled={actionsDisabled}
+                            aria-label={`Remove ${line.description} from ${eventIdentity(order)}`}
                             onClick={() =>
                               removeLine.mutate({ orderId: order.id, lineId: line.id })
                             }
@@ -541,23 +778,44 @@ export function CateringConsole() {
                   </div>
                 </SectionCard>
                 <SectionCard title="Extra costs">
-                  <form className="grid gap-3 sm:grid-cols-2" onSubmit={submitExtra}>
-                    <Field label="Cost type">
-                      <select required name="kind" aria-label="Cost type" className={inputClass}>
-                        {['LABOUR', 'TRANSPORT', 'RENTAL', 'OTHER'].map((item) => (
-                          <option key={item}>{item}</option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="Label">
-                      <Input required name="label" />
-                    </Field>
-                    <Field label="Amount">
-                      <Input required name="amount" type="number" min="0" step="0.01" />
-                    </Field>
-                    <Button disabled={busy} type="submit">
-                      Add cost
-                    </Button>
+                  <form
+                    key={order.id}
+                    data-order-id={order.id}
+                    aria-label={`Extra costs for ${eventIdentity(order)}`}
+                    onChange={() => markDirty('extra')}
+                    onSubmit={submitExtra}
+                  >
+                    <fieldset
+                      disabled={actionsDisabled}
+                      className="grid min-w-0 gap-3 sm:grid-cols-2"
+                    >
+                      <Field label="Cost type">
+                        <select required name="kind" aria-label="Cost type" className={inputClass}>
+                          {['LABOUR', 'TRANSPORT', 'RENTAL', 'OTHER'].map((item) => (
+                            <option key={item}>{item}</option>
+                          ))}
+                        </select>
+                      </Field>
+                      <Field label="Label">
+                        <Input className="min-h-11" required name="label" />
+                      </Field>
+                      <Field label="Amount">
+                        <Input
+                          className="min-h-11"
+                          required
+                          name="amount"
+                          type="number"
+                          min="0"
+                          step="0.01"
+                        />
+                      </Field>
+                      <p className="text-sm text-text-muted sm:col-span-2">
+                        Adding to {eventIdentity(order)}
+                      </p>
+                      <Button className="min-h-11" disabled={actionsDisabled} type="submit">
+                        Add cost
+                      </Button>
+                    </fieldset>
                   </form>
                   <div className="mt-5">
                     {order.extraCosts.map((cost) => (
@@ -569,9 +827,11 @@ export function CateringConsole() {
                           {cost.label} · {money(cost.amount)}
                         </span>
                         <Button
+                          className="min-h-11"
                           variant="ghost"
                           size="sm"
-                          disabled={busy}
+                          disabled={actionsDisabled}
+                          aria-label={`Remove ${cost.label} from ${eventIdentity(order)}`}
                           onClick={() =>
                             removeExtra.mutate({ orderId: order.id, extraCostId: cost.id })
                           }
@@ -585,9 +845,17 @@ export function CateringConsole() {
               </div>
               <SectionCard
                 title="Production sheet"
-                eyebrow="Grouped ingredient requirements"
+                eyebrow={`Grouped ingredient requirements · ${eventIdentity(order)}`}
                 actions={
-                  <Button variant="outline" onClick={() => window.print()}>
+                  <Button
+                    className="min-h-11"
+                    variant="outline"
+                    disabled={!canPrint}
+                    aria-label={`Print production sheet for ${eventIdentity(order)}`}
+                    onClick={() => {
+                      if (canPrint) window.print();
+                    }}
+                  >
                     <Printer />
                     Print
                   </Button>
@@ -597,9 +865,20 @@ export function CateringConsole() {
                   {requirements.isLoading ? (
                     <Skeleton className="h-24 w-full" />
                   ) : requirements.error ? (
-                    <p role="alert" className="text-sm text-destructive">
-                      {requirements.error.message}
-                    </p>
+                    <div role="alert">
+                      <p className="text-sm text-destructive">{requirements.error.message}</p>
+                      <p className="text-sm text-text-muted">
+                        Requirements are unconfirmed. Retry before printing.
+                      </p>
+                      <Button
+                        className="min-h-11"
+                        variant="outline"
+                        disabled={requirements.isFetching}
+                        onClick={() => requirements.refetch()}
+                      >
+                        Retry production requirements
+                      </Button>
+                    </div>
                   ) : requirements.data?.length ? (
                     <Table>
                       <TableHeader>
@@ -623,69 +902,44 @@ export function CateringConsole() {
                     </Table>
                   ) : (
                     <p className="text-sm text-text-muted">
-                      No recipe ingredients are required yet.
+                      {requirements.isSuccess && Array.isArray(requirements.data)
+                        ? 'No recipe ingredients are required yet.'
+                        : 'Production requirements are not confirmed yet.'}
                     </p>
                   )}
                 </div>
               </SectionCard>
               <div className="grid gap-6 xl:grid-cols-2">
                 <SectionCard title="Delivery">
-                  <form className="grid gap-3 sm:grid-cols-2" onSubmit={submitDelivery}>
-                    <Field label="Scheduled">
-                      <Input
-                        required
-                        name="scheduledAt"
-                        type="datetime-local"
-                        defaultValue={localDateTime(order.delivery?.scheduledAt)}
-                      />
-                    </Field>
-                    <Field label="Driver">
-                      <select
-                        name="driverStaffId"
-                        aria-label="Driver"
-                        className={inputClass}
-                        defaultValue={order.delivery?.driverStaffId ?? ''}
-                      >
-                        <option value="">Unassigned</option>
-                        {staff.data?.map((person) => (
-                          <option key={person.id} value={person.id}>
-                            {person.displayName}
-                          </option>
-                        ))}
-                      </select>
-                    </Field>
-                    <Field label="Dispatched">
-                      <Input
-                        name="dispatchedAt"
-                        type="datetime-local"
-                        defaultValue={localDateTime(order.delivery?.dispatchedAt)}
-                      />
-                    </Field>
-                    <Field label="Delivered">
-                      <Input
-                        name="deliveredAt"
-                        type="datetime-local"
-                        defaultValue={localDateTime(order.delivery?.deliveredAt)}
-                      />
-                    </Field>
-                    <Field label="Vehicle">
-                      <Input name="vehicle" defaultValue={order.delivery?.vehicle ?? ''} />
-                    </Field>
-                    <Field label="Delivery notes">
-                      <Input name="deliveryNotes" defaultValue={order.delivery?.notes ?? ''} />
-                    </Field>
-                    <Button disabled={busy} type="submit">
-                      Save delivery
-                    </Button>
-                  </form>
+                  <DeliveryForm
+                    key={order.id}
+                    order={order}
+                    staff={staff.data}
+                    disabled={actionsDisabled}
+                    onChange={() => markDirty('delivery')}
+                    onSubmit={submitDelivery}
+                  />
                 </SectionCard>
                 <SectionCard title="Cost summary">
+                  <p className="mb-4 text-sm text-text-muted">
+                    {eventIdentity(order)} · {currencyLabel}. Latest loaded event quote, recipe
+                    costs and extras. Margin is the quoted amount less included costs; it is not
+                    realized profit or cash.
+                  </p>
                   {costs.isLoading ? (
                     <Skeleton className="h-32 w-full" />
                   ) : costs.error ? (
-                    <p role="alert" className="text-sm text-destructive">
-                      {costs.error.message}
-                    </p>
+                    <div role="alert">
+                      <p className="text-sm text-destructive">{costs.error.message}</p>
+                      <Button
+                        className="min-h-11"
+                        variant="outline"
+                        disabled={costs.isFetching}
+                        onClick={() => costs.refetch()}
+                      >
+                        Retry cost summary
+                      </Button>
+                    </div>
                   ) : costs.data ? (
                     <div className="grid grid-cols-2 gap-5">
                       <Stat label="Ingredient cost" value={money(costs.data.recipeCost)} />
@@ -699,10 +953,12 @@ export function CateringConsole() {
                             ? `${Number(costs.data.marginPercent).toFixed(1)}%`
                             : '—'
                         }
-                        deltaDirection={Number(costs.data.margin ?? 0) >= 0 ? 'up' : 'down'}
+                        deltaDirection={costs.data.margin?.startsWith('-') ? 'down' : 'up'}
                       />
                     </div>
-                  ) : null}
+                  ) : (
+                    <p className="text-sm text-text-muted">Cost summary is not available yet.</p>
+                  )}
                 </SectionCard>
               </div>
             </>
@@ -710,120 +966,141 @@ export function CateringConsole() {
         </>
       ) : null}
 
-      <Dialog open={editor !== null} onOpenChange={(open) => !open && setEditor(null)}>
-        <DialogContent className="max-h-[90vh] overflow-y-auto sm:max-w-2xl">
+      <Dialog open={editor !== null} onOpenChange={(open) => !open && !busy && setEditor(null)}>
+        <DialogContent
+          showCloseButton={!busy}
+          className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
+        >
           <DialogHeader>
             <DialogTitle>
               {editor?.order ? 'Edit catering order' : 'Create catering order'}
             </DialogTitle>
             <DialogDescription>
-              Capture the customer, event, venue or saved delivery address, and commercial terms.
+              {editor?.order ? `${eventIdentity(editor.order)}. ` : ''}
+              Capture the customer, event, venue or saved delivery address, and commercial terms.{' '}
+              {currencyLabel}.
             </DialogDescription>
           </DialogHeader>
-          <form
-            id="catering-order-form"
-            className="grid gap-4 sm:grid-cols-2"
-            onSubmit={submitOrder}
-          >
-            <Field label="Branch">
-              <RestaurantBranchSelect
-                name="branchId"
-                defaultValue={editor?.order?.branchId ?? branchId}
-                branches={branches.data ?? []}
-                loading={branches.isLoading}
-                error={Boolean(branches.error)}
-                required
-                disabled={Boolean(editor?.order)}
-                ariaLabel="Order branch"
-              />
-            </Field>
-            <Field label="Customer">
-              <select
-                name="customerId"
-                aria-label="Customer"
-                className={inputClass}
-                value={orderCustomerId}
-                onChange={(event) => setOrderCustomerId(event.target.value)}
-              >
-                <option value="">No linked customer</option>
-                {customers.data?.customers.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.displayName}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Event name">
-              <Input required name="eventName" defaultValue={editor?.order?.eventName ?? ''} />
-            </Field>
-            <Field label="Event date">
-              <Input
-                required
-                name="eventDate"
-                type="date"
-                defaultValue={localDate(editor?.order?.eventDate)}
-              />
-            </Field>
-            <Field label="Service time">
-              <Input
-                name="serviceTime"
-                type="time"
-                defaultValue={
-                  editor?.order?.serviceTime
-                    ? new Date(editor.order.serviceTime).toISOString().slice(11, 16)
-                    : ''
-                }
-              />
-            </Field>
-            <Field label="Headcount">
-              <Input
-                required
-                name="headcount"
-                type="number"
-                min="1"
-                defaultValue={editor?.order?.headcount ?? 1}
-              />
-            </Field>
-            <Field label="Venue address">
-              <Input name="venueAddress" defaultValue={editor?.order?.venueAddress ?? ''} />
-            </Field>
-            <Field label="Saved delivery address">
-              <select
-                name="deliveryAddressId"
-                aria-label="Saved delivery address"
-                className={inputClass}
-                defaultValue={editor?.order?.deliveryAddressId ?? ''}
-                disabled={!orderCustomerId}
-              >
-                <option value="">Use venue / none</option>
-                {addresses.data?.map((item) => (
-                  <option key={item.id} value={item.id}>
-                    {item.label} · {item.addressLine1}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Quoted total">
-              <Input
-                name="quotedTotal"
-                type="number"
-                min="0"
-                step="0.01"
-                defaultValue={editor?.order?.quotedTotal?.toString() ?? ''}
-              />
-            </Field>
-            <Field label="Deposit">
-              <Input
-                name="depositAmount"
-                type="number"
-                min="0"
-                step="0.01"
-                defaultValue={editor?.order?.depositAmount?.toString() ?? ''}
-              />
-            </Field>
-            <Field label="Notes">
-              <Input name="notes" defaultValue={editor?.order?.notes ?? ''} />
-            </Field>
+          <form key={editor?.order?.id ?? 'new'} id="catering-order-form" onSubmit={submitOrder}>
+            <fieldset disabled={busy} className="grid min-w-0 gap-4 sm:grid-cols-2">
+              <Field label="Branch">
+                <RestaurantBranchSelect
+                  name="branchId"
+                  defaultValue={editor?.order?.branchId ?? branchId}
+                  branches={branches.data ?? []}
+                  loading={branches.isLoading}
+                  error={Boolean(branches.error)}
+                  required
+                  disabled={Boolean(editor?.order)}
+                  ariaLabel="Order branch"
+                />
+              </Field>
+              <Field label="Customer">
+                <select
+                  name="customerId"
+                  aria-label="Customer"
+                  className={inputClass}
+                  value={orderCustomerId}
+                  onChange={(event) => setOrderCustomerId(event.target.value)}
+                >
+                  <option value="">No linked customer</option>
+                  {customers.data?.customers.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.displayName}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Event name">
+                <Input
+                  className="min-h-11"
+                  required
+                  name="eventName"
+                  defaultValue={editor?.order?.eventName ?? ''}
+                />
+              </Field>
+              <Field label="Event date">
+                <Input
+                  className="min-h-11"
+                  required
+                  name="eventDate"
+                  type="date"
+                  defaultValue={localDate(editor?.order?.eventDate)}
+                />
+              </Field>
+              <Field label="Service time">
+                <Input
+                  className="min-h-11"
+                  name="serviceTime"
+                  type="time"
+                  defaultValue={
+                    editor?.order?.serviceTime
+                      ? new Date(editor.order.serviceTime).toISOString().slice(11, 16)
+                      : ''
+                  }
+                />
+              </Field>
+              <Field label="Headcount">
+                <Input
+                  className="min-h-11"
+                  required
+                  name="headcount"
+                  type="number"
+                  min="1"
+                  defaultValue={editor?.order?.headcount ?? 1}
+                />
+              </Field>
+              <Field label="Venue address">
+                <Input
+                  className="min-h-11"
+                  name="venueAddress"
+                  defaultValue={editor?.order?.venueAddress ?? ''}
+                />
+              </Field>
+              <Field label="Saved delivery address">
+                <select
+                  name="deliveryAddressId"
+                  aria-label="Saved delivery address"
+                  className={inputClass}
+                  defaultValue={editor?.order?.deliveryAddressId ?? ''}
+                  disabled={!orderCustomerId}
+                >
+                  <option value="">Use venue / none</option>
+                  {addresses.data?.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.label} · {item.addressLine1}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Quoted total">
+                <Input
+                  className="min-h-11"
+                  name="quotedTotal"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  defaultValue={editor?.order?.quotedTotal?.toString() ?? ''}
+                />
+              </Field>
+              <Field label="Deposit">
+                <Input
+                  className="min-h-11"
+                  name="depositAmount"
+                  type="number"
+                  min="0"
+                  step="0.01"
+                  defaultValue={editor?.order?.depositAmount?.toString() ?? ''}
+                />
+              </Field>
+              <Field label="Notes">
+                <Input
+                  className="min-h-11"
+                  name="notes"
+                  defaultValue={editor?.order?.notes ?? ''}
+                />
+              </Field>
+            </fieldset>
           </form>
           {mutationError ? (
             <p role="alert" className="text-sm text-destructive">
@@ -831,23 +1108,32 @@ export function CateringConsole() {
             </p>
           ) : null}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setEditor(null)}>
+            <Button
+              className="min-h-11"
+              variant="outline"
+              disabled={busy}
+              onClick={() => setEditor(null)}
+            >
               Cancel
             </Button>
-            <Button form="catering-order-form" type="submit" disabled={busy}>
+            <Button className="min-h-11" form="catering-order-form" type="submit" disabled={busy}>
               {busy ? 'Saving…' : 'Save order'}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <Dialog open={transitionTo !== null} onOpenChange={(open) => !open && setTransitionTo(null)}>
-        <DialogContent>
+      <Dialog
+        open={transitionTarget !== null}
+        onOpenChange={(open) => !open && !busy && setTransitionTarget(null)}
+      >
+        <DialogContent showCloseButton={!busy}>
           <DialogHeader>
             <DialogTitle>Confirm status change</DialogTitle>
             <DialogDescription>
-              {transitionTo === 'CANCELLED'
+              {transitionTarget ? `${eventIdentity(transitionTarget.order)}. ` : ''}
+              {transitionTarget?.to === 'CANCELLED'
                 ? 'Cancel this order? Ready-order ingredient consumption will be reversed.'
-                : `Move this order to ${transitionTo?.replaceAll('_', ' ').toLowerCase()}? This action is recorded in the order timeline.`}
+                : `Move this order to ${transitionTarget?.to.replaceAll('_', ' ').toLowerCase()}? This action is recorded in the order timeline.`}
             </DialogDescription>
           </DialogHeader>
           {mutationError ? (
@@ -856,17 +1142,55 @@ export function CateringConsole() {
             </p>
           ) : null}
           <DialogFooter>
-            <Button variant="outline" onClick={() => setTransitionTo(null)}>
+            <Button
+              className="min-h-11"
+              variant="outline"
+              disabled={busy}
+              onClick={() => setTransitionTarget(null)}
+            >
               Keep current status
             </Button>
             <Button
-              variant={transitionTo === 'CANCELLED' ? 'destructive' : 'default'}
-              disabled={busy}
+              className="min-h-11"
+              variant={transitionTarget?.to === 'CANCELLED' ? 'destructive' : 'default'}
+              disabled={actionsDisabled}
               onClick={() =>
-                transitionTo && transition.mutate({ orderId: selectedId, to: transitionTo })
+                !actionsDisabled &&
+                transitionTarget?.order.id === selectedId &&
+                transition.mutate({ orderId: transitionTarget.order.id, to: transitionTarget.to })
               }
             >
               Confirm change
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+      <Dialog open={switchTarget !== null} onOpenChange={(open) => !open && setSwitchTarget(null)}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Discard unsaved event edits?</DialogTitle>
+            <DialogDescription>
+              {order ? `Unsaved edits for ${eventIdentity(order)} will be discarded. ` : ''}
+              {switchTarget === 'new'
+                ? 'Create a new order?'
+                : switchTarget
+                  ? `Switch to ${eventIdentity(switchTarget)}?`
+                  : ''}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button className="min-h-11" variant="outline" onClick={() => setSwitchTarget(null)}>
+              Keep editing
+            </Button>
+            <Button
+              className="min-h-11"
+              variant="destructive"
+              disabled={busy}
+              onClick={() => {
+                if (!busy && switchTarget) switchEvent(switchTarget);
+              }}
+            >
+              Discard and {switchTarget === 'new' ? 'create' : 'switch'}
             </Button>
           </DialogFooter>
         </DialogContent>
