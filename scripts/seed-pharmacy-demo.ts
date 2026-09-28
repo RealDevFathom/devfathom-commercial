@@ -1185,6 +1185,24 @@ async function draftReferences(tx: ScopedDb, request: PharmacyDraftRequest) {
       (!pack.effectiveTo || pack.effectiveTo > new Date(request.scenarioAt)),
     'UNSUPPORTED_PACK_CONVERSION'
   );
+  // WHA-1408: receiving a lot stamps pack.referencedAt through the
+  // pharmacy_mark_pack_level_referenced trigger (a one-way usage marker, not
+  // identity). Hashing the whole row therefore made every replay after the
+  // first integrated apply refuse with CHANGED_REFERENCE. Reference only the
+  // immutable identity of the pack level.
+  const packIdentity = {
+    id: pack.id,
+    organizationId: pack.organizationId,
+    presentationId: pack.presentationId,
+    parentPackLevelId: pack.parentPackLevelId,
+    versionGroupId: pack.versionGroupId,
+    version: pack.version,
+    level: pack.level,
+    unitsPerParent: pack.unitsPerParent,
+    effectiveFrom: pack.effectiveFrom,
+    effectiveTo: pack.effectiveTo,
+    supersedesPackLevelId: pack.supersedesPackLevelId,
+  };
   return [
     ['Organization', organization],
     ['Owner', owners[0]],
@@ -1193,7 +1211,7 @@ async function draftReferences(tx: ScopedDb, request: PharmacyDraftRequest) {
     ['PharmacySupplier', supplier],
     ['Medicine', medicine],
     ['Presentation', presentation],
-    ['PackLevel', pack],
+    ['PackLevel', packIdentity],
     ...grants.map((g) => ['PharmacyCentralPurchasingAccess', g] as const),
     ...licences.map((l) => ['PharmacySupplierLicence', l] as const),
   ].map(([model, row]) => ({
