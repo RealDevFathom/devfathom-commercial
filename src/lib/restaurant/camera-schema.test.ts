@@ -29,7 +29,7 @@ describe('camera schema governance', () => {
     expect(migration).toContain('CREATE POLICY "control_plane_only"');
   });
   test('transport source contains no second WebRTC literal', () => {
-    const contract = readFileSync('src/lib/restaurant/camera-gateway.ts', 'utf8').toLowerCase();
+    const contract = readFileSync('src/lib/cameras/camera-gateway.ts', 'utf8').toLowerCase();
     expect(contract).not.toContain("'web" + "rtc'");
   });
 });
