@@ -33,6 +33,20 @@ export interface RateLimitResult {
  * once `limit` is exceeded within `windowMs`.
  */
 export function rateLimit(key: string, limit: number, windowMs: number): RateLimitResult {
+  // The serial restaurant browser lane shares synthetic terminal identities.
+  // Read the runtime environment through an alias: Next compiles direct
+  // process.env.NODE_ENV reads to the build mode, while this gate must stay
+  // disabled in production and opt in only when the server runs in test mode.
+  const runtimeEnv = process.env;
+  if (
+    runtimeEnv.NODE_ENV === 'test' &&
+    runtimeEnv.RESTAURANT_INTEGRATED_E2E === '1' &&
+    runtimeEnv.RESTAURANT_E2E_RELAX_TERMINAL_FLOOD_LIMITS === '1' &&
+    (key.startsWith('terminal:ip:') || key.startsWith('terminal:device:'))
+  ) {
+    return { ok: true, retryAfter: 0, remaining: limit - 1 };
+  }
+
   const now = Date.now();
   maybeSweep(now);
   const b = buckets.get(key);
