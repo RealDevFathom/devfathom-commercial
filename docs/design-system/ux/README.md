@@ -14,6 +14,22 @@ requests a contract change to land with POS-UX-2.
 | [04-pharmacy-counter-principles.md](04-pharmacy-counter-principles.md) | One-page principles and targets for the pharmacy dispensing counter lane                                                                                                                                                                                                                                                                |
 | [05-super-admin-principles.md](05-super-admin-principles.md)           | One-page principles and targets for the platform / super-admin lane                                                                                                                                                                                                                                                                     |
 
+## UX-02 (WHA-1583): counter flows, platform console, offline language
+
+Baseline `13af3d1e`. These build on docs 01–05 and don't change them, except that `08` supersedes
+the offline banner copy in `02` §5 (POS-UX-5 picks it up).
+
+| Doc                                                                    | What it is                                                                                                                                                                                                                                                             |
+| ---------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [06-pharmacy-counter-flows-spec.md](06-pharmacy-counter-flows-spec.md) | Counter return/refund, cash drawer, close drawer, close day, prescription capture (photo) and the controlled-register prompt. Pack-level (box/strip/tablet) quantities, Urdu aliases, FEFO batches, Rx and controlled gating. API gaps P-API-1..15, decisions D-P1..10 |
+| [07-super-admin-console-ia.md](07-super-admin-console-ia.md)           | One console for agencies, pharmacies and restaurants: nav IA, vertical scope, role visibility, and screens for tenants, entitlements, people, billing, audit, health, support sessions, feature flags and announcements. Maps to SA-01..SA-12 (WHA-1578)               |
+| [08-offline-state-language.md](08-offline-state-language.md)           | Shared connection states (online / degraded / offline / syncing / conflict) for POS, KDS and counter: words (English + Urdu drafts), detection timing, what works offline per terminal, and one Pending status vocabulary for held orders and pending tenders          |
+| [09-ux02-acceptance-criteria.md](09-ux02-acceptance-criteria.md)       | Acceptance criteria for PHC-UX-1..6, PHC-API-A..E, SA-UX-1..11, OFF-UX-1..4 and OFF-API-1                                                                                                                                                                              |
+
+Suggested order: OFF-UX-1 → OFF-UX-4a (the counter gets a visible state) → PHC-UX-1 → PHC-UX-2 →
+PHC-UX-4 → PHC-UX-5 → PHC-UX-3 → PHC-UX-6. Platform: SA-04..SA-07 (security, WHA-1578) first,
+then SA-UX-1 → SA-UX-3 → SA-UX-4, then the rest in any order. OFF-UX-4b waits for OFF-API-1.
+
 ## Headline numbers (restaurant POS)
 
 | Metric                               | Today                             | Target                          |
