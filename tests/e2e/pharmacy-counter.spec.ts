@@ -1,4 +1,5 @@
 import { expect, test, type Locator, type Page } from '@playwright/test';
+import AxeBuilder from '@axe-core/playwright';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -38,6 +39,12 @@ async function pressControl(target: Locator) {
 
 async function signIn(page: Page) {
   await page.goto('/login');
+  // A cold dev build exposes server-rendered inputs before React binds the form.
+  // Wait for the input's React props so Enter cannot trigger a native POST /login.
+  await page.waitForFunction(() => {
+    const input = document.querySelector('input');
+    return input && Object.keys(input).some((key) => key.startsWith('__reactProps$'));
+  });
   const email = page.getByLabel('Email');
   await email.focus();
   await email.fill(process.env.PHARMACY_E2E_ADMIN_EMAIL!);
@@ -362,4 +369,96 @@ test('this spec drives the counter without a pointer', async () => {
   for (const pointerApi of ['.click(', '.dblclick(', '.hover(', '.tap(', '.dragTo(']) {
     expect(body, `pointer API used: ${pointerApi}`).not.toContain(pointerApi);
   }
+});
+
+test('sell → return → refund → reprint from the counter', async ({ page }) => {
+  const browserErrors: string[] = [];
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
+  await signIn(page);
+  await page.goto('/pharmacy/counter');
+  await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+  await openDrawer(page);
+  await search(page, PHARMACY_E2E.medicines.otc.barcode);
+  await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 1);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(
+    PHARMACY_E2E.medicines.otc.name
+  );
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
+  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  await expect(receipt).toBeVisible({ timeout: 15_000 });
+  const receiptNumber = (await receipt.getAttribute('aria-label'))!.match(/\d+/)![0];
+  await pressControl(page.getByRole('button', { name: 'Returns & refunds' }));
+  const dialog = page.getByRole('dialog', { name: 'Returns & refunds' });
+  await dialog.getByLabel('Receipt number', { exact: true }).fill(receiptNumber);
+  await pressControl(dialog.getByRole('button', { name: 'Find receipt', exact: true }));
+  const device = await page.evaluate(() =>
+    localStorage.getItem('devfathom.pharmacy.counter.device')
+  );
+  const matches = dialog.getByRole('button', {
+    name: new RegExp('Receipt ' + receiptNumber + ' ·'),
+  });
+  // New browser context has its own device sequence; choose its receipt explicitly.
+  if (device) await pressControl(matches.filter({ hasText: device }));
+  else await pressControl(matches.first());
+  await dialog.getByLabel('Sold line').selectOption({ index: 1 });
+  await dialog.getByLabel('Return quantity (base units)').fill('10');
+  await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
+  await dialog
+    .getByLabel('Inspection and integrity decision')
+    .fill('Intact strip, correct storage verified');
+  const confirm = dialog.getByLabel('I confirm the quantity, inspection and stock disposition.');
+  await confirm.focus();
+  await confirm.press('Space');
+  await pressControl(dialog.getByRole('button', { name: 'Record return', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText('Return recorded.');
+  await dialog.getByLabel('Original tender').selectOption({ index: 1 });
+  await dialog.getByLabel('Refund amount (PKR)').fill(PHARMACY_E2E_EXPECTED.otcStripPrice);
+  await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
+  await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
+    'CASH refund:'
+  );
+  const popupPromise = page.waitForEvent('popup');
+  await pressControl(dialog.getByRole('button', { name: 'Reprint receipt with refunds' }));
+  const popup = await popupPromise;
+  await expect(popup.locator('body')).toContainText('RETURNS & REFUNDS');
+  await expect(popup.locator('body')).toContainText('WRONG_ITEM');
+  await popup.close();
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ['light', 'dark'] as const) {
+      for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+        await page.emulateMedia({ reducedMotion, colorScheme: theme });
+        await page.evaluate(
+          (value) => document.documentElement.setAttribute('data-theme', value),
+          theme
+        );
+        await dialog.evaluate((element) => {
+          element.scrollTop = 0;
+        });
+        await expect(dialog).toBeVisible();
+        expect(await page.evaluate(() => document.documentElement.scrollWidth <= innerWidth)).toBe(
+          true
+        );
+        await page.screenshot({
+          path: `playwright-artifacts/pharmacy-counter/returns-${width}-${theme}-${reducedMotion}.png`,
+        });
+      }
+    }
+  }
+  const accessibility = await new AxeBuilder({ page })
+    .include('[role="dialog"]')
+    .withTags(['wcag2a', 'wcag2aa', 'wcag21aa'])
+    .analyze();
+  expect(accessibility.violations).toEqual([]);
+  expect(browserErrors).toEqual([]);
+  await page.keyboard.press('Escape');
+  await expect(dialog).not.toBeVisible();
+  await expect(page.getByRole('button', { name: 'Returns & refunds' })).toBeFocused();
 });

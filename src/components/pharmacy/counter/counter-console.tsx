@@ -21,6 +21,7 @@ import {
 
 import { CounterCartPanel } from './counter-cart';
 import { CounterKeymapLegend } from './counter-keymap-legend';
+import { CounterReturnPanel } from './counter-return-panel';
 import { CounterReceiptView } from './counter-receipt-view';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
@@ -1236,6 +1237,13 @@ function ScopedPharmacyCounterConsole({
         description="Keyboard-first dispensing: scan, choose a sale unit, allocate by FEFO, tender and print."
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <CounterReturnPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={counterDeviceId}
+              businessDate={businessDate}
+            />
             <Link
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
               href="/pharmacy/orders"
