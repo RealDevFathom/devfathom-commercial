@@ -49,7 +49,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
@@ -261,6 +261,23 @@ beforeAll(async () => {
   await createOrganization(ORG_B, { module: true });
   await createOrganization(ORG_C, { module: true });
 }, 180_000);
+
+/**
+ * `processDueOwnerDigests` scans EVERY organization, so one case's still-due row is
+ * another case's phantom capture. The per-case `retire(...)` calls below only run on
+ * the success path, which means a single failure silently contaminates every later
+ * case's `captured` count and hides its real verdict. Retiring unconditionally here
+ * keeps each case's failure its own.
+ */
+afterEach(async () => {
+  if (!TEST_DATABASE_URL || !deps) return;
+  await deps.withPlatformDb((tx) =>
+    tx.pharmacyOwnerDigestSetting.updateMany({
+      where: { organizationId: { in: [ORG_A, ORG_B, ORG_C] } },
+      data: { enabled: false, nextDueAt: null },
+    })
+  );
+}, 60_000);
 
 describeIfDatabase('WHA-1563 pharmacy owner digest scheduler against real PostgreSQL', () => {
   it('captures a due occurrence exactly once under competing workers and a replay', async () => {
