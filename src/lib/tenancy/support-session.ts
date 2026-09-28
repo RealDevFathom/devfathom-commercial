@@ -2,7 +2,7 @@ import 'server-only';
 
 import { createHash, randomBytes } from 'node:crypto';
 import { cookies } from 'next/headers';
-import type { PlatformIdentity } from '@/lib/platform/auth';
+import { assertPlatformCapability, type PlatformIdentity } from '@/lib/platform/auth';
 import { parseCookie, PlatformSecurityError } from '@/lib/platform/security';
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -50,6 +50,7 @@ export async function createSupportSession(input: {
   reason: string;
   durationMinutes?: number;
 }) {
+  assertPlatformCapability(input.actor, 'support:write');
   const reason = input.reason.trim();
   if (reason.length < 10 || reason.length > 500) {
     throw new PlatformSecurityError('Support access requires a 10–500 character reason.', 400);
@@ -87,7 +88,11 @@ export async function createSupportSession(input: {
           select: { id: true, role: true, status: true },
         })
   );
-  if (!tenantUser || !['ACTIVE', 'ON_LEAVE'].includes(tenantUser.status)) {
+  if (
+    !tenantUser ||
+    tenantUser.role !== 'ADMIN' ||
+    !['ACTIVE', 'ON_LEAVE'].includes(tenantUser.status)
+  ) {
     throw new PlatformSecurityError('No active tenant administrator is available.', 400);
   }
 
@@ -127,6 +132,27 @@ export async function createSupportSession(input: {
         metadata: { durationMinutes: duration },
       },
     });
+    // Notification delivery is part of the session transaction: do not grant
+    // access if the tenant's in-app notification cannot be persisted.
+    const administrators = await platformDb.user.findMany({
+      where: {
+        organizationId: organization.id,
+        role: 'ADMIN',
+        status: { in: ['ACTIVE', 'ON_LEAVE'] },
+      },
+      select: { id: true },
+    });
+    await platformDb.notification.createMany({
+      data: administrators.map(({ id }) => ({
+        organizationId: organization.id,
+        userId: id,
+        type: 'support_session_started',
+        title: 'Support access started',
+        message: `${input.actor.name} opened support access until ${expiresAt.toISOString()}. Reason: ${reason}`,
+        entityType: 'PlatformSupportSession',
+        entityId: created.id,
+      })),
+    });
     return created;
   });
 
@@ -155,6 +181,8 @@ export async function consumeSupportLaunchTicket(input: {
         organizationId: true,
         status: true,
         expiresAt: true,
+        platformUserId: true,
+        tenantUserId: true,
         launchUsedAt: true,
         tokenCiphertext: true,
       },
@@ -186,6 +214,8 @@ export async function consumeSupportLaunchTicket(input: {
     await platformDb.platformAuditLog.create({
       data: {
         organizationId: session.organizationId,
+        actorPlatformUserId: session.platformUserId,
+        actorTenantUserId: session.tenantUserId,
         action: 'support.session.launched',
         targetType: 'PlatformSupportSession',
         targetId: session.id,
@@ -230,7 +260,12 @@ export async function getSupportSession(request?: Request): Promise<SupportIdent
       select: { id: true, role: true, status: true },
     })
   );
-  if (!tenantUser || !['ACTIVE', 'ON_LEAVE'].includes(tenantUser.status)) return null;
+  if (
+    !tenantUser ||
+    tenantUser.role !== 'ADMIN' ||
+    !['ACTIVE', 'ON_LEAVE'].includes(tenantUser.status)
+  )
+    return null;
   return {
     supportSessionId: session.id,
     organizationId: session.organizationId,
@@ -263,6 +298,76 @@ export async function endSupportSession(request?: Request): Promise<void> {
         targetType: 'PlatformSupportSession',
         targetId: session.id,
         reason: session.reason,
+      },
+    });
+  });
+}
+
+/** Global operator view. Never return bearer tokens, hashes, or ciphertext. */
+export async function listActiveSupportSessions(actor: PlatformIdentity) {
+  assertPlatformCapability(actor, 'support:write');
+  return withPlatformDb(async (db) => {
+    const sessions = await db.platformSupportSession.findMany({
+      where: { status: 'ACTIVE', expiresAt: { gt: new Date() } },
+      orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
+      select: {
+        id: true,
+        platformUserId: true,
+        reason: true,
+        expiresAt: true,
+        createdAt: true,
+        launchUsedAt: true,
+        organization: { select: { displayName: true } },
+      },
+    });
+    const operators = await db.platformUser.findMany({
+      where: { id: { in: [...new Set(sessions.map((session) => session.platformUserId))] } },
+      select: { id: true, name: true },
+    });
+    return sessions.map(({ platformUserId, ...session }) => ({
+      ...session,
+      operatorName:
+        operators.find((operator) => operator.id === platformUserId)?.name ?? 'Former operator',
+    }));
+  });
+}
+
+/** Ending by ID is separately authorized; the caller need not own the cookie. */
+export async function forceEndSupportSession(input: {
+  actor: PlatformIdentity;
+  supportSessionId: string;
+  reason: string;
+}): Promise<void> {
+  assertPlatformCapability(input.actor, 'support:write');
+  const reason = input.reason.trim();
+  if (
+    !/^[a-zA-Z0-9_-]{3,128}$/.test(input.supportSessionId) ||
+    reason.length < 10 ||
+    reason.length > 500
+  ) {
+    throw new PlatformSecurityError('A session and 10–500 character reason are required.', 400);
+  }
+  await withPlatformDb(async (db) => {
+    const session = await db.platformSupportSession.findUnique({
+      where: { id: input.supportSessionId },
+      select: { id: true, organizationId: true, platformUserId: true, tenantUserId: true },
+    });
+    if (!session) throw new PlatformSecurityError('Support session was not found.', 400);
+    const ended = await db.platformSupportSession.updateMany({
+      where: { id: session.id, status: 'ACTIVE' },
+      data: { status: 'ENDED', endedAt: new Date(), tokenCiphertext: null, launchTokenHash: null },
+    });
+    if (ended.count === 0) return;
+    await db.platformAuditLog.create({
+      data: {
+        organizationId: session.organizationId,
+        actorPlatformUserId: input.actor.id,
+        actorTenantUserId: session.tenantUserId,
+        action: 'support.session.force_ended',
+        targetType: 'PlatformSupportSession',
+        targetId: session.id,
+        reason,
+        metadata: { sessionPlatformUserId: session.platformUserId },
       },
     });
   });

@@ -12,6 +12,7 @@ import {
 const roles = ['SUPER_ADMIN', 'OPERATIONS', 'SALES', 'FINANCE', 'SUPPORT', 'AUDITOR'] as const;
 const routes = [
   '/platform',
+  '/platform/support',
   '/platform/audit',
   '/platform/operators',
   '/platform/commercial',
@@ -26,6 +27,7 @@ const routes = [
 const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
   SUPER_ADMIN: routes,
   OPERATIONS: [
+    '/platform/support',
     '/platform/organizations',
     '/platform/deployments',
     '/platform/jobs',
@@ -39,6 +41,7 @@ const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
     '/platform/catalog',
   ],
   SUPPORT: [
+    '/platform/support',
     '/platform/organizations',
     '/platform/deployments',
     '/platform/jobs',
