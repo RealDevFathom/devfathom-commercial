@@ -19,6 +19,9 @@ const VIEWPORTS = [
 const THEMES = ['light', 'dark'] as const;
 
 const menu = {
+  version: 'version-publication-1',
+  branchId: 'branch-1',
+  channel: 'DINE_IN',
   publicationId: 'publication-1',
   channelOpen: true,
   menu: { id: 'menu-1', name: 'Dinner service' },
@@ -26,20 +29,31 @@ const menu = {
     {
       id: 'mains',
       name: 'Mains',
+      sortOrder: 1,
       items: [
         {
           id: 'item-1',
+          productId: 'product-1',
+          variantId: null,
           displayName: 'Charred cauliflower',
           product: { name: 'Cauliflower' },
           price: '18.00',
+          priceSource: 'BASE_LIST',
+          sortOrder: 1,
           available: true,
+          modifierGroups: [],
         },
         {
           id: 'item-2',
+          productId: 'product-2',
+          variantId: null,
           displayName: 'Sold out ravioli',
           product: { name: 'Ravioli' },
           price: '22.00',
+          priceSource: 'BASE_LIST',
+          sortOrder: 2,
           available: false,
+          modifierGroups: [],
         },
       ],
     },
@@ -88,6 +102,7 @@ const queue = {
         {
           orderItemId: 'order-item-1',
           name: 'Charred cauliflower',
+          modifierNames: [],
           course: 1,
           seatNumber: 1,
           quantity: 1,
@@ -113,11 +128,18 @@ async function mockPos(page: Page, failure?: { status: number; error: string }) 
         {
           sessionToken: 'session-token',
           session: { id: 'session-1', state: 'LOCKED', establishedAt: '2026-08-28T04:00:00Z' },
-          device: { id: 'device-1', branchId: 'branch-1' },
+          device: {
+            id: 'device-1',
+            organizationId: 'organization-1',
+            branchId: 'branch-1',
+            name: 'Front register',
+            branchName: 'Gulberg Café',
+          },
         },
         201
       );
     }
+    if (pathname.endsWith('/terminal/layout')) return json(route, { floors: [], sections: [] });
     if (pathname.endsWith('/terminal/operators')) {
       return json(route, {
         operators: [
@@ -201,6 +223,9 @@ async function mockKds(page: Page, response: typeof queue | { error: string }, s
         session: { id: 'kds-session-1', state: 'UNLOCKED', activeStaffProfileId: 'operator-1' },
       });
     }
+    if (pathname.endsWith('/kds/delivery/queue')) {
+      return json(route, { serverTime: '2026-08-28T04:00:00.000Z', deliveries: [] });
+    }
     return json(route, {});
   });
   await page.route('**/api/restaurant/kds/queue**', (route) => json(route, response, status));
@@ -257,7 +282,11 @@ async function assertLayoutAndTargets(page: Page) {
       .filter((element) => {
         const style = getComputedStyle(element);
         const box = element.getBoundingClientRect();
+        // Visually clipped (sr-only) controls, e.g. an unfocused skip link, are not pointer targets.
+        const clipped =
+          style.clipPath === 'inset(50%)' || style.clip === 'rect(0px, 0px, 0px, 0px)';
         return (
+          !clipped &&
           style.visibility !== 'hidden' &&
           style.display !== 'none' &&
           box.width > 0 &&
@@ -353,6 +382,7 @@ test('KDS loading, empty, error, permission/revoked, disabled action, and live r
   page,
 }) => {
   let release: (() => void) | undefined;
+  await mockKds(page, queue);
   await page.route('**/api/restaurant/kds/queue**', async (route) => {
     await new Promise<void>((resolve) => {
       release = resolve;

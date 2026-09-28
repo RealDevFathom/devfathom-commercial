@@ -52,6 +52,8 @@ export default defineConfig({
     'restaurant-software-receipt-acceptance.spec.ts',
     // WHA-1564 — financial comparison + export acceptance.
     'restaurant-financial-comparison-export.spec.ts',
+    'restaurant-actor-accessibility.spec.ts',
+    'restaurant-pos-kds-accessibility.spec.ts',
   ],
   ...(process.env.RESTAURANT_E2E_SPEC_FILE
     ? { testMatch: [process.env.RESTAURANT_E2E_SPEC_FILE] }
