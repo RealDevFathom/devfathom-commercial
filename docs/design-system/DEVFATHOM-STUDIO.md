@@ -64,12 +64,39 @@ the token source in `src/app/globals.css`.
 | White     | `#ffffff`   | Cards and raised surfaces              |
 | Ink       | `#111110`   | Primary text and decisive controls     |
 | Body ink  | `#333330`   | Body copy                              |
-| Muted ink | `#767672`   | Supporting text                        |
+| Muted ink | `#6c6c68`   | Supporting text                        |
 | Faint ink | `#a3a39e`   | Low-emphasis metadata                  |
-| Coral     | `#ff684f`   | Brand signal and focus                 |
+| Coral     | `#bd3f2a`   | Brand signal and focus                 |
 
 Dark-theme primitives are already defined under `[data-theme='dark']` in `globals.css`. Do not
 recreate theme logic inside a page or component.
+
+### Contrast-checked text tokens (WCAG 1.4.3 AA, WHA-309)
+
+Text tokens must hold at least 4.5:1 on every surface they sit on, including the 10–20% tint
+that `StatusPill` and the destructive button put behind their own label. Worst case listed; the
+brand logo mark keeps its original `#ff684f` because it is a graphic, not text.
+
+| Token (theme)                                | Value     | Worst measured surface                 | Ratio |
+| -------------------------------------------- | --------- | -------------------------------------- | ----- |
+| `--accent-brand` (light)                     | `#bd3f2a` | sunken `#f1f1ee`                       | 4.75  |
+| `--accent-brand-hover` (light)               | `#a5361f` | sunken `#f1f1ee`                       | 5.90  |
+| `--text-muted`, `--muted-foreground` (light) | `#6c6c68` | sunken `#f1f1ee`                       | 4.66  |
+| `--warning` via `--amber-600` (light)        | `#785217` | `warning/10` over a `warning/10` tint  | 4.68  |
+| `--success` via `--green-600` (light)        | `#42624a` | `success/10` over a `success/10` tint  | 4.61  |
+| `--destructive` via `--red-600` (light)      | `#904039` | `destructive/20` over sunken           | 4.63  |
+| `--success` (dark)                           | `#a3c8a6` | `success/20` over muted `#30302d`      | 4.65  |
+| `--destructive` (dark)                       | `#f0a89f` | `destructive/20` over raised `#2c2c29` | 4.71  |
+
+Do not dim a text token with an opacity modifier (`text-muted-foreground/60`); it drops below AA
+on both themes. Use a semantic token (`text-success`) instead of a raw palette utility
+(`text-emerald-500`) for state figures.
+
+A tenant brand (`tenantBrandTokens` in `src/lib/tenant-brand.ts`) overrides `--primary` and
+`--accent-brand` inline, in both themes, with whatever colour the organization saved. Those values
+are not contrast-checked. Chrome text that must stay readable for every tenant (the account
+avatar initials and the dashboard eyebrow) uses `text-foreground` / `text-text-muted`, not
+`text-primary` / `text-accent-brand`.
 
 ### Semantic color tokens
 

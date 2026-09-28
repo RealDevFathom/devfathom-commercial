@@ -451,7 +451,7 @@ function TimeUnit({
       >
         {pad(value)}
       </span>
-      <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mt-1">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wider mt-1">
         {label}
       </span>
     </div>
@@ -894,7 +894,7 @@ export function DashboardContent() {
 
         <div className="studio-greeting-panel">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent-brand">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-text-muted">
               Your operating view
             </p>
             <h1

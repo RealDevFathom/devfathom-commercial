@@ -281,7 +281,7 @@ export function Topbar({
               <DropdownMenuTrigger aria-label="Open account menu" className="studio-avatar-button">
                 <Avatar className="h-8 w-8">
                   <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
-                  <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
+                  <AvatarFallback className="bg-muted text-foreground text-xs font-medium">
                     {getInitials(session.user.name)}
                   </AvatarFallback>
                 </Avatar>
