@@ -375,15 +375,8 @@ export function RestaurantStaffConsole() {
                       {staff.displayName}
                     </TableCell>
                     <TableCell className="text-text-muted">{staff.email ?? '—'}</TableCell>
-                    <TableCell>
-                      <span className="block text-text-strong">
-                        {staff.primaryBranch?.name ?? 'Unassigned'}
-                      </span>
-                      {staff.primaryBranchId ? (
-                        <span className="block font-mono text-[0.6875rem] text-text-faint">
-                          {staff.primaryBranchId}
-                        </span>
-                      ) : null}
+                    <TableCell className="text-text-strong">
+                      {staff.primaryBranch?.name ?? 'Unassigned'}
                     </TableCell>
                     <TableCell>
                       <select
