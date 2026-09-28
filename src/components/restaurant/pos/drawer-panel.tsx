@@ -34,6 +34,8 @@ type CloseResult = {
   variance: string;
   replayed: boolean;
 };
+type DrawerReadState =
+  { status: 'loading' | 'empty' | 'open' } | { status: 'error' | 'denied'; message: string };
 
 type DrawerPanelProps = {
   request: TerminalRequest;
@@ -44,10 +46,20 @@ function message(error: unknown) {
   return error instanceof Error ? error.message : 'Drawer request failed. Retry this action.';
 }
 
+function isAccessDenied(error: unknown) {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'status' in error &&
+    (error.status === 401 || error.status === 403)
+  );
+}
+
 export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   const [open, setOpen] = useState(false);
   const [openingFloat, setOpeningFloat] = useState('0.00');
   const [drawer, setDrawer] = useState<OpenResult | null>(null);
+  const [readState, setReadState] = useState<DrawerReadState>({ status: 'loading' });
   const [movementKind, setMovementKind] = useState<MovementKind>('PAID_IN');
   const [movementAmount, setMovementAmount] = useState('');
   const [movementReason, setMovementReason] = useState('');
@@ -57,24 +69,36 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   const [error, setError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
 
-  async function setPanelOpen(next: boolean) {
-    if (busy) return;
-    setOpen(next);
-    if (!next) return;
+  async function loadDrawerState() {
+    if (busy || disabled) return;
     setPending('load');
+    setReadState({ status: 'loading' });
     setError(null);
+    setNotice(null);
     try {
-      setDrawer(await request<OpenResult | null>('/api/restaurant/cash/drawer/current'));
+      const current = await request<OpenResult | null>('/api/restaurant/cash/drawer/current');
+      setDrawer(current);
+      setReadState({ status: current ? 'open' : 'empty' });
     } catch (requestError) {
-      setError(message(requestError));
+      setReadState({
+        status: isAccessDenied(requestError) ? 'denied' : 'error',
+        message: message(requestError),
+      });
     } finally {
       setPending(null);
     }
   }
 
+  async function setPanelOpen(next: boolean) {
+    if (busy) return;
+    setOpen(next);
+    if (next) await loadDrawerState();
+  }
+
   async function openDrawer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (pending || !MONEY.test(openingFloat)) {
+    if (writesDisabled || readState.status !== 'empty') return;
+    if (!MONEY.test(openingFloat)) {
       setError('Opening float must be a non-negative decimal with at most two places.');
       return;
     }
@@ -90,6 +114,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
           intent: `drawer-open:${JSON.stringify(body)}`,
         })
       );
+      setReadState({ status: 'open' });
       setClosed(null);
       setNotice('Drawer opened.');
     } catch (requestError) {
@@ -101,7 +126,8 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
 
   async function recordMovement(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!drawer || pending || !MONEY.test(movementAmount) || !movementReason.trim()) {
+    if (writesDisabled || readState.status !== 'open' || !drawer) return;
+    if (!MONEY.test(movementAmount) || !movementReason.trim()) {
       setError('Movement requires an exact decimal amount and a reason.');
       return;
     }
@@ -132,7 +158,8 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
 
   async function closeDrawer(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!drawer || pending || !MONEY.test(countedCash)) {
+    if (writesDisabled || readState.status !== 'open' || !drawer) return;
+    if (!MONEY.test(countedCash)) {
       setError('Counted cash must be a non-negative decimal with at most two places.');
       return;
     }
@@ -148,6 +175,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
       });
       setClosed(result);
       setDrawer(null);
+      setReadState({ status: 'empty' });
       setCountedCash('');
       setNotice('Drawer closed.');
     } catch (requestError) {
@@ -158,6 +186,8 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
   }
 
   const busy = pending !== null;
+  const stateKnown = readState.status === 'empty' || readState.status === 'open';
+  const writesDisabled = disabled || busy || !stateKnown;
 
   return (
     <Dialog open={open} onOpenChange={(next) => void setPanelOpen(next)}>
@@ -178,9 +208,39 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
           </DialogDescription>
         </DialogHeader>
 
-        {pending === 'load' ? (
+        {readState.status === 'loading' ? (
           <p role="status" className="text-sm text-text-muted">
-            Recovering this register’s drawer…
+            Checking this register’s drawer. Cash actions are unavailable until the check succeeds.
+          </p>
+        ) : null}
+        {readState.status === 'error' || readState.status === 'denied' ? (
+          <div className="space-y-3">
+            <p role="alert" className="text-sm text-destructive">
+              {readState.status === 'denied'
+                ? 'Drawer access denied. Unlock an authorized terminal session or ask a manager to check access, then retry.'
+                : 'Could not verify drawer state. Retry before opening, adjusting, or closing the drawer.'}{' '}
+              {readState.message}
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={busy || disabled}
+              onClick={() => void loadDrawerState()}
+              className="min-h-11 whitespace-normal"
+            >
+              Retry drawer state
+            </Button>
+          </div>
+        ) : null}
+        {disabled ? (
+          <p role="status" className="text-sm text-text-muted">
+            Cash actions are unavailable while this register is offline or busy.
+          </p>
+        ) : null}
+        {!stateKnown && (drawer || closed) ? (
+          <p role="status" className="text-sm text-text-muted">
+            Last known drawer details are stale. Refresh must succeed before cash actions are
+            available.
           </p>
         ) : null}
 
@@ -198,11 +258,13 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
         {!drawer ? (
           <SectionCard
             eyebrow="Drawer state"
-            title={closed ? 'Closed drawer' : 'No open drawer'}
+            title={
+              !stateKnown ? 'Drawer state unknown' : closed ? 'Closed drawer' : 'No open drawer'
+            }
             actions={
               <StatusPill
-                status={closed ? 'closed' : 'not open'}
-                tone={closed ? 'success' : 'neutral'}
+                status={!stateKnown ? 'unknown' : closed ? 'closed' : 'not open'}
+                tone={!stateKnown ? 'warning' : closed ? 'success' : 'neutral'}
               />
             }
           >
@@ -228,14 +290,14 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                 <Input
                   id="drawer-opening-float"
                   value={openingFloat}
-                  disabled={busy}
+                  disabled={writesDisabled}
                   onChange={(event) => setOpeningFloat(event.target.value)}
                   inputMode="decimal"
                   autoComplete="off"
                   className="h-11 font-mono tabular-nums"
                 />
               </div>
-              <Button type="submit" disabled={busy} className="h-11 w-full">
+              <Button type="submit" disabled={writesDisabled} className="h-11 w-full">
                 {pending === 'open' ? 'Opening drawer…' : 'Open drawer'}
               </Button>
             </form>
@@ -244,10 +306,15 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
           <div className="space-y-4">
             <div className="flex flex-wrap items-center justify-between gap-2">
               <div>
-                <p className="text-sm font-semibold text-text-strong">Active drawer</p>
+                <p className="text-sm font-semibold text-text-strong">
+                  {stateKnown ? 'Active drawer' : 'Last known drawer'}
+                </p>
                 <p className="font-mono text-xs text-text-muted">{drawer.drawerSessionId}</p>
               </div>
-              <StatusPill status="open" tone="info" />
+              <StatusPill
+                status={stateKnown ? 'open' : 'stale'}
+                tone={stateKnown ? 'info' : 'warning'}
+              />
             </div>
 
             <SectionCard eyebrow="Cash ledger" title="Record movement">
@@ -258,7 +325,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                     <select
                       id="drawer-movement-kind"
                       value={movementKind}
-                      disabled={busy}
+                      disabled={writesDisabled}
                       onChange={(event) => setMovementKind(event.target.value as MovementKind)}
                       className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
                     >
@@ -272,7 +339,7 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                     <Input
                       id="drawer-movement-amount"
                       value={movementAmount}
-                      disabled={busy}
+                      disabled={writesDisabled}
                       onChange={(event) => setMovementAmount(event.target.value)}
                       inputMode="decimal"
                       autoComplete="off"
@@ -285,12 +352,17 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                   <Input
                     id="drawer-movement-reason"
                     value={movementReason}
-                    disabled={busy}
+                    disabled={writesDisabled}
                     onChange={(event) => setMovementReason(event.target.value)}
                     className="h-11"
                   />
                 </div>
-                <Button type="submit" variant="outline" disabled={busy} className="h-11 w-full">
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={writesDisabled}
+                  className="h-11 w-full"
+                >
                   {pending === 'movement' ? 'Recording movement…' : 'Record movement'}
                 </Button>
               </form>
@@ -303,14 +375,19 @@ export function DrawerPanel({ request, disabled = false }: DrawerPanelProps) {
                   <Input
                     id="drawer-counted-cash"
                     value={countedCash}
-                    disabled={busy}
+                    disabled={writesDisabled}
                     onChange={(event) => setCountedCash(event.target.value)}
                     inputMode="decimal"
                     autoComplete="off"
                     className="h-11 font-mono tabular-nums"
                   />
                 </div>
-                <Button type="submit" variant="outline" disabled={busy} className="h-11 w-full">
+                <Button
+                  type="submit"
+                  variant="outline"
+                  disabled={writesDisabled}
+                  className="h-11 w-full"
+                >
                   {pending === 'close' ? 'Closing drawer…' : 'Close drawer'}
                 </Button>
               </form>

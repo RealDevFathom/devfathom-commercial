@@ -1,25 +1,69 @@
 'use client';
 
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { QueueActions, type ReviewKind } from './queue-actions';
 import { WorkspaceState } from './field';
 
 export function PharmacistQueueConsole() {
   const utils = trpc.useUtils();
   const queue = trpc.pharmacyDispensing.reviewQueue.useQuery();
-  const [activeId, setActiveId] = useState<string | null>(null);
-  const decide = trpc.pharmacyDispensing.decideReview.useMutation({
-    onSuccess: async () => {
-      await utils.pharmacyDispensing.reviewQueue.invalidate();
-    },
-  });
-  const active = queue.data?.items.find((item) => item.id === activeId) ?? queue.data?.items[0];
-  async function act(kind: ReviewKind, reason?: string) {
-    if (active) await decide.mutateAsync({ reviewItemId: active.id, kind, reason });
+  type ReviewItem = NonNullable<typeof queue.data>['items'][number];
+  // Keep the selected identity when a refresh removes it; never fall through to another patient.
+  const [selected, setSelected] = useState<ReviewItem | null>(null);
+  const [dirtyId, setDirtyId] = useState<string | null>(null);
+  const [switchTarget, setSwitchTarget] = useState<ReviewItem | null>(null);
+  const [pendingId, setPendingId] = useState<string | null>(null);
+  const pendingRef = useRef<string | null>(null);
+  const activeButtonRef = useRef<HTMLButtonElement | null>(null);
+  const switchButtonRef = useRef<HTMLButtonElement | null>(null);
+  const actionsRef = useRef<HTMLDivElement | null>(null);
+  const stayRef = useRef<HTMLButtonElement | null>(null);
+  const [refreshErrorId, setRefreshErrorId] = useState<string | null>(null);
+  const decide = trpc.pharmacyDispensing.decideReview.useMutation();
+  if (!selected && queue.data?.items[0]) setSelected(queue.data.items[0]);
+  const current = queue.data?.items.find((item) => item.id === selected?.id);
+  const active = current ?? selected;
+
+  function select(item: ReviewItem, button: HTMLButtonElement) {
+    if (pendingRef.current || item.id === active?.id) return;
+    if (dirtyId === active?.id) {
+      switchButtonRef.current = button;
+      setSwitchTarget(item);
+    } else setSelected(item);
+  }
+
+  async function act(reviewItemId: string, kind: ReviewKind, reason?: string) {
+    if (pendingRef.current || !current || current.id !== reviewItemId) {
+      throw new Error('This review is unavailable. Reload the queue before recording a decision.');
+    }
+    pendingRef.current = reviewItemId;
+    setPendingId(reviewItemId);
+    setRefreshErrorId(null);
+    try {
+      await decide.mutateAsync({ reviewItemId, kind, reason });
+      // A refresh failure must not turn a confirmed write into a retryable decision draft.
+      try {
+        await utils.pharmacyDispensing.reviewQueue.invalidate();
+      } catch {
+        setRefreshErrorId(reviewItemId);
+      }
+    } finally {
+      pendingRef.current = null;
+      setPendingId(null);
+    }
   }
 
   return (
@@ -52,8 +96,10 @@ export function PharmacistQueueConsole() {
                 <button
                   key={item.id}
                   type="button"
-                  onClick={() => setActiveId(item.id)}
-                  className="min-h-16 rounded-sm border border-border-subtle p-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40"
+                  ref={item.id === active.id ? activeButtonRef : undefined}
+                  disabled={pendingId !== null}
+                  onClick={(event) => select(item, event.currentTarget)}
+                  className="min-h-16 rounded-sm border border-border-subtle p-3 text-left outline-none focus-visible:ring-3 focus-visible:ring-ring/40 disabled:cursor-not-allowed disabled:opacity-50"
                   aria-current={item.id === active.id}
                 >
                   <span className="font-mono text-xs text-text-muted">#{index + 1}</span>
@@ -103,19 +149,80 @@ export function PharmacistQueueConsole() {
                 ))}
               </ol>
             ) : null}
-            <QueueActions
-              canApprove={active.requestedByUserId !== queue.data.currentUserId}
-              pending={decide.isPending}
-              onAction={act}
-            />
-            {decide.error ? (
-              <p role="alert" className="mt-3 text-sm text-destructive">
-                {decide.error.message}
+            {!current ? (
+              <WorkspaceState title="Selected review is no longer in the queue">
+                {pendingId === active.id
+                  ? 'Waiting for the decision on this item to finish. Selection is locked.'
+                  : 'This item cannot accept another decision. Select a waiting item to continue.'}
+              </WorkspaceState>
+            ) : null}
+            <div ref={actionsRef} tabIndex={-1}>
+              <QueueActions
+                key={active.id}
+                canApprove={active.requestedByUserId !== queue.data.currentUserId}
+                pending={pendingId === active.id}
+                disabled={!current}
+                onDirtyChange={(dirty) =>
+                  setDirtyId((id) => (dirty ? active.id : id === active.id ? null : id))
+                }
+                onAction={(kind, reason) => act(active.id, kind, reason)}
+              />
+            </div>
+            {refreshErrorId === active.id ? (
+              <p role="status" className="mt-3 text-sm text-text-muted">
+                Decision recorded. The queue could not refresh; reload it before the next decision.
               </p>
             ) : null}
           </SectionCard>
         </div>
       ) : null}
+      <Dialog
+        open={switchTarget !== null}
+        onOpenChange={(open) => {
+          if (!open) setSwitchTarget(null);
+        }}
+      >
+        <DialogContent
+          showCloseButton={false}
+          initialFocus={stayRef}
+          finalFocus={() =>
+            switchButtonRef.current?.isConnected
+              ? switchButtonRef.current
+              : (activeButtonRef.current ?? actionsRef.current)
+          }
+        >
+          <DialogHeader>
+            <DialogTitle>Discard this review draft?</DialogTitle>
+            <DialogDescription>
+              Switching items will discard the unsent review for{' '}
+              {active?.line.prescription.patient.displayName} ({active?.line.medicine.productName}),
+              including its reason and counselling checks.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button ref={stayRef} variant="outline" onClick={() => setSwitchTarget(null)}>
+              Stay
+            </Button>
+            <Button
+              variant="destructive"
+              disabled={
+                pendingId !== null ||
+                !queue.data?.items.some((item) => item.id === switchTarget?.id)
+              }
+              onClick={() => {
+                if (pendingRef.current || !switchTarget) return;
+                const target = queue.data?.items.find((item) => item.id === switchTarget.id);
+                if (!target) return;
+                setSelected(target);
+                setDirtyId(null);
+                setSwitchTarget(null);
+              }}
+            >
+              Discard and switch
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }

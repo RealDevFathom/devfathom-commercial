@@ -1,6 +1,11 @@
 import { readRepeatPurchasing, validateRepeatFilters } from '@/lib/pharmacy/repeat-purchasing';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import {
+  pharmacyReplenishmentReportInput,
+  readPharmacyReplenishmentReport,
+  validatePharmacyReplenishmentReportInput,
+} from '@/lib/pharmacy/replenishment-report';
 
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -295,6 +300,42 @@ export const pharmacyReportsRouter = router({
       };
     }),
   branches: reports.query(({ ctx }) => scope(ctx)),
+  replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
+    // Existing capability middleware denies before report reads; scope enforces licensing.
+    const available = await scope(ctx);
+    if (!available.branches.some((branch) => branch.id === input.branchId))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+    const financial =
+      ctx.session!.user.role === 'ADMIN' &&
+      (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      }));
+    const readAt = new Date();
+    try {
+      validatePharmacyReplenishmentReportInput(input, readAt);
+    } catch {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid replenishment report inputs.' });
+    }
+    try {
+      return await readPharmacyReplenishmentReport(
+        ctx.db,
+        {
+          ...input,
+          organizationId: available.organizationId,
+          authorizedBranchIds: available.branches.map((branch) => branch.id),
+          financial,
+        },
+        readAt
+      );
+    } catch {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Replenishment evidence is unavailable for this scope or scenario.',
+      });
+    }
+  }),
   dailyWorkPack: reports
     .input(
       filters

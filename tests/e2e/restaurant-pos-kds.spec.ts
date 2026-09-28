@@ -358,16 +358,16 @@ test.describe('restaurant POS and KDS core flow', () => {
     expect(
       openedOrderTenders.find((tender) => tender.tenderId === refundableTender!.tenderId)
     ).toMatchObject({
-      paidAmount: splitAmount,
-      refundedAmount: '1.00',
-      remainingAmount: (Number(splitAmount) - 1).toFixed(2),
+      paidAmount: Number(splitAmount).toString(),
+      refundedAmount: '1',
+      remainingAmount: (Number(splitAmount) - 1).toString(),
     });
     expect(
       openedOrderTenders.find((tender) => tender.tenderId !== refundableTender!.tenderId)
     ).toMatchObject({
-      paidAmount: splitAmount,
+      paidAmount: Number(splitAmount).toString(),
       refundedAmount: '0',
-      remainingAmount: splitAmount,
+      remainingAmount: Number(splitAmount).toString(),
     });
 
     const overRefund = await request.post('/api/restaurant/checkout/refund', {

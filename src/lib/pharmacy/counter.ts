@@ -89,6 +89,8 @@ export type CounterSearchRow = {
     /** The location kind holding the recommended lot, for the shelf marker. */
     locationKind: string | null;
     locationCode: string | null;
+    /** Actual location name for the recommended FEFO lot; never inferred. */
+    locationName?: string | null;
   };
   /** Why otherwise-present stock cannot be sold, deduplicated (INV-03). */
   blocked: BlockReason[];
@@ -330,7 +332,7 @@ export async function searchCounterCatalog(
   const locations = locationIds.length
     ? await db.pharmacyStockLocation.findMany({
         where: { organizationId: scope.organizationId, id: { in: locationIds } },
-        select: { id: true, kind: true, code: true },
+        select: { id: true, kind: true, code: true, name: true },
       })
     : [];
   const locationById = new Map(locations.map((location) => [location.id, location]));
@@ -470,6 +472,7 @@ export async function searchCounterCatalog(
         coldChain: medicine.coldChain,
         locationKind: location?.kind ?? null,
         locationCode: location?.code ?? null,
+        locationName: location?.name ?? null,
       },
       blocked: [...blocked].sort(),
     });

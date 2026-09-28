@@ -65,6 +65,7 @@ const CORE_TOOLS = new Set([
   'askRestaurantReports',
   'askPharmacyReports',
   'askPharmacyBusinessInsights',
+  'askPharmacyFinanceInsights',
   'getOverview',
   'globalSearch',
   'getRecentActivity',
@@ -91,6 +92,8 @@ const FINANCE_INTENT =
   /invoic|revenue|profit|expense|transaction|p&l|pnl|budget|\bpaid\b|owe|financ|money|billing|\bbill\b|payment|cash|margin/i;
 const PHARMACY_REPORT_INTENT =
   /pharmacy|medicine|stock signal|expiry|quarantine|recall|pharmacist|dispensing|supplier claim/i;
+const PHARMACY_WORK_PACK_INTENT =
+  /\bwork[ -]?packs?\b|\bsupplier[ -]+(?:credit[ -]+)?follow[ -]?up\b|\bfollow[ -]?up\b.{0,40}\bsupplier(?:s|[ -]+credits?)?\b|\b(?:outstanding|unmatched)[ -]+supplier[ -]+credits?\b/i;
 
 export function assistantToolChoice(hint: string, tools?: ToolSet) {
   return SELF_LEAVE_REQUEST.test(hint) && (!tools || Object.hasOwn(tools, 'requestLeave'))
@@ -103,6 +106,7 @@ export function assistantToolChoice(hint: string, tools?: ToolSet) {
 // and CORE still answers reads. Matched against the recent user message(s).
 const ROUTES: Array<[RegExp, Domain[]]> = [
   [PHARMACY_REPORT_INTENT, ['pharmacyReports']],
+  [PHARMACY_WORK_PACK_INTENT, ['pharmacyReports']],
   [FINANCE_INTENT, ['finance']],
   [
     /\btask|to-?do|kanban|checklist|\blabel|assign|comment|ticket|backlog|sprint|\bcard\b|due date|priorit|move .*to|mark .*done/i,
@@ -193,6 +197,13 @@ export function buildAssistantTools(ctx: AssistantContext, opts: { hint?: string
   };
   // This profile read also returns project/task workload; HR alone is insufficient.
   if (!agency || !granted('projects')) delete perDomain.people.getTeamMember;
+  // This owner-only adapter also rechecks report permissions at execution time.
+  if (ctx.role !== 'ADMIN') delete perDomain.pharmacyReports.askPharmacyFinanceInsights;
+  // Read-only preparation needs an explicit relevant hint, even in the full
+  // approval-continuation set. Broad Pharmacy/finance hints keep their existing tools.
+  if (!PHARMACY_WORK_PACK_INTENT.test(hint)) delete perDomain.pharmacyReports.askPharmacyWorkPacks;
+  // WHA-1544 future hook: bind the accepted replenishment-report service here
+  // under pharmacyReports only after its contract is accepted; no handler yet.
 
   const selectAll = hint.length === 0;
   const domains = selectAll ? null : selectDomains(hint);

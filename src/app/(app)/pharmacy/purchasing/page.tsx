@@ -1,6 +1,8 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
+import { TRPCError } from '@trpc/server';
 
+import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -9,13 +11,11 @@ import { resolveBranch } from './_components/branch-scope';
 import {
   AccessState,
   EmptyState,
-  LoadFailure,
   NoticeBanner,
   PurchasingHeader,
   PurchasingTabs,
 } from './_components/console-chrome';
 import {
-  money,
   noticeFrom,
   param,
   purchasingCaller,
@@ -29,6 +29,53 @@ export const metadata: Metadata = { title: 'Purchasing · Pharmacy' };
 const HEADING = 'Purchasing & receiving';
 const DESCRIPTION =
   'Suppliers, requisitions, orders, the goods-in bench and supplier returns. Everything a pharmacy buys passes through here on its way to being saleable stock.';
+
+type ReadState =
+  { kind: 'known'; value: number } | { kind: 'unavailable' | 'denied' | 'unselected' };
+
+function isAccessDenied(error: unknown): boolean {
+  return (
+    error instanceof TRPCError && (error.code === 'FORBIDDEN' || error.code === 'UNAUTHORIZED')
+  );
+}
+
+async function readTotal(read: () => Promise<number>): Promise<ReadState> {
+  try {
+    return { kind: 'known', value: await read() };
+  } catch (error) {
+    return { kind: isAccessDenied(error) ? 'denied' : 'unavailable' };
+  }
+}
+
+function readLabel(state: ReadState) {
+  switch (state.kind) {
+    case 'known':
+      return state.value;
+    case 'unavailable':
+      return 'Unavailable';
+    case 'denied':
+      return 'Access denied';
+    case 'unselected':
+      return 'Unselected';
+  }
+}
+
+function ReadRetry({ branchId }: { branchId?: string }) {
+  // A native GET requests fresh server reads even when the URL is unchanged.
+  return (
+    <form
+      action={PURCHASING_ROUTE}
+      method="get"
+      className="mt-4"
+      aria-label="Retry purchasing reads"
+    >
+      {branchId ? <input type="hidden" name="branch" value={branchId} /> : null}
+      <Button type="submit" variant="outline" className="min-h-11">
+        Retry reads
+      </Button>
+    </form>
+  );
+}
 
 /**
  * The PH-PUR entry point (PRD §6.3).
@@ -45,6 +92,7 @@ export default async function PharmacyPurchasingPage({
   searchParams: Promise<SearchQuery>;
 }) {
   const query = await searchParams;
+  const requestedBranch = param(query, 'branch');
   const notice = noticeFrom(query);
   const ctx = await tenantContext();
   if (!ctx)
@@ -66,40 +114,69 @@ export default async function PharmacyPurchasingPage({
   let orders: Awaited<ReturnType<typeof caller.purchaseOrders>>;
   try {
     [workspace, orders] = await Promise.all([caller.workspace(), caller.purchaseOrders()]);
-  } catch {
+  } catch (error) {
+    if (isAccessDenied(error)) {
+      return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
+    }
     return (
       <main className="min-w-0 space-y-6">
         <PurchasingHeader heading={HEADING} description={DESCRIPTION} />
         <PurchasingTabs active={PURCHASING_ROUTE} />
-        <LoadFailure
-          detail="Purchasing could not read this workspace."
-          retryHref={PURCHASING_ROUTE}
-        />
+        <SectionCard title="This surface could not load" titleLevel={2}>
+          <p className="text-sm text-text-muted" role="status">
+            Purchasing could not read this workspace. Retry only reloads purchasing records.
+          </p>
+          <ReadRetry branchId={requestedBranch} />
+        </SectionCard>
       </main>
     );
   }
 
-  const scope = resolveBranch(workspace.branches, param(query, 'branch'));
-  const branchId = scope.kind === 'resolved' ? scope.branch.id : null;
+  const scope = resolveBranch(workspace.branches, requestedBranch);
+  // Never fall back to a different single branch when an explicit selection is unavailable.
+  const invalidBranch = Boolean(
+    requestedBranch && !workspace.branches.some((branch) => branch.id === requestedBranch)
+  );
+  const branchId = !invalidBranch && scope.kind === 'resolved' ? scope.branch.id : null;
+  const scopeLabel =
+    branchId && scope.kind === 'resolved'
+      ? scope.branch.name
+      : invalidBranch
+        ? 'The requested branch is not available in this workspace.'
+        : 'Choose a branch on the goods-in bench';
 
-  let openExceptions = 0;
-  let creditOutstandingMinor = 0;
+  let openExceptions: ReadState = { kind: invalidBranch ? 'denied' : 'unselected' };
+  let creditOutstanding: ReadState = { kind: invalidBranch ? 'denied' : 'unselected' };
   if (branchId) {
-    try {
-      const [exceptions, returns] = await Promise.all([
-        caller.receivingExceptionQueue({ branchId, status: 'OPEN' }),
-        caller.purchaseReturns({ branchId }),
-      ]);
-      openExceptions = exceptions.length;
-      creditOutstandingMinor = returns
-        .flatMap((row) => row.debitNotes)
-        .reduce((total, note) => total + note.position.outstandingMinor, 0);
-    } catch {
-      // A branch-scoped read that fails does not take the whole overview with
-      // it; the counters that could not be read simply say so below.
-      openExceptions = -1;
-    }
+    // Each read settles independently, retaining the successful sibling's value.
+    [openExceptions, creditOutstanding] = await Promise.all([
+      readTotal(async () => {
+        const exceptions = await caller.receivingExceptionQueue({ branchId, status: 'OPEN' });
+        return exceptions.length;
+      }),
+      readTotal(async () => {
+        const returns = await caller.purchaseReturns({ branchId });
+        return returns
+          .flatMap((row) => row.debitNotes)
+          .reduce((total, note) => total + note.position.outstandingMinor, 0);
+      }),
+    ]);
   }
+
+  const hasUnavailable =
+    openExceptions.kind === 'unavailable' || creditOutstanding.kind === 'unavailable';
+  const currency = ctx.organization?.currency?.trim();
+  const knownCurrency = currency && /^[A-Z]{3}$/.test(currency) ? currency : null;
+  // The shared purchasing money helper fixes PKR; use the resolved tenant currency here.
+  const creditValue =
+    creditOutstanding.kind === 'known'
+      ? knownCurrency
+        ? `${knownCurrency} ${(creditOutstanding.value / 100).toLocaleString('en-PK', {
+            minimumFractionDigits: 2,
+            maximumFractionDigits: 2,
+          })}`
+        : 'Currency unavailable'
+      : readLabel(creditOutstanding);
 
   const orderable = workspace.suppliers.filter((supplier) => supplier.eligibility.orderable);
   const medicinesWithPacks = workspace.medicines.filter((medicine) => medicine.packs.length > 0);
@@ -196,21 +273,49 @@ export default async function PharmacyPurchasingPage({
         />
         <Stat
           label="Open match exceptions"
-          value={branchId === null ? '—' : openExceptions === -1 ? 'unavailable' : openExceptions}
+          value={readLabel(openExceptions)}
+          valueClassName="break-words"
           sub={
-            branchId === null
-              ? 'Choose a branch on the goods-in bench'
-              : scope.kind === 'resolved'
-                ? scope.branch.name
-                : ''
+            <>
+              {scopeLabel}
+              {openExceptions.kind === 'denied'
+                ? ' Ask a workspace administrator to check your branch access and session.'
+                : openExceptions.kind === 'known'
+                  ? ' · Current open receiving exceptions, read on this page load.'
+                  : openExceptions.kind === 'unavailable'
+                    ? ' · Exception count could not be read.'
+                    : ''}
+            </>
           }
         />
         <Stat
           label="Credit outstanding"
-          value={branchId === null ? '—' : money(creditOutstandingMinor)}
-          sub="Expected, not yet received"
+          value={creditValue}
+          valueClassName="break-words"
+          sub={
+            <>
+              {scopeLabel} · Expected, not yet received.
+              {creditOutstanding.kind === 'denied'
+                ? ' Ask a workspace administrator to check your branch access and session.'
+                : creditOutstanding.kind === 'known'
+                  ? ` Current debit-note outstanding positions across all returns for this branch; read on this page load.${knownCurrency ? '' : ' Credit read succeeded; workspace currency is unavailable.'}`
+                  : creditOutstanding.kind === 'unavailable'
+                    ? ' Credit balance could not be read; this is not a confirmed zero.'
+                    : ''}
+            </>
+          }
         />
       </div>
+
+      {hasUnavailable && branchId ? (
+        <SectionCard title="Some branch totals could not load" titleLevel={2}>
+          <p className="text-sm text-text-muted" role="status">
+            Available totals remain visible for {scopeLabel}. Retry keeps this branch selected and
+            reloads purchasing records; it does not submit orders, returns or credits.
+          </p>
+          <ReadRetry branchId={branchId} />
+        </SectionCard>
+      ) : null}
 
       <SectionCard title="Where to go" titleLevel={2}>
         <div className="grid gap-3 md:grid-cols-2">

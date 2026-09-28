@@ -2,6 +2,10 @@ import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
+import type {
+  PrepareClosePacketInput,
+  RestaurantClosePacket,
+} from '@/lib/restaurant/close-readiness';
 
 const mocks = vi.hoisted(() => {
   const query = <T,>(data: T) => ({
@@ -17,6 +21,11 @@ const mocks = vi.hoisted(() => {
     computedAtLocal: '2026-08-20T17:00:00[America/New_York]',
   };
   return {
+    closeFetch: vi.fn(),
+    branches: query([
+      { id: 'branch_1', name: 'Downtown', active: true, isDefault: true },
+      { id: 'branch_2', name: 'Uptown', active: true, isDefault: false },
+    ]),
     financialList: query([
       {
         id: 'rollup_fin_1',
@@ -138,11 +147,7 @@ vi.mock('@/lib/trpc', () => ({
   trpc: {
     restaurantStaff: {
       listBranches: {
-        useQuery: () => ({
-          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
-          error: null,
-          isLoading: false,
-        }),
+        useQuery: () => mocks.branches,
       },
     },
     restaurantInsights: {
@@ -169,6 +174,7 @@ vi.mock('@/lib/trpc', () => ({
     },
     useUtils: () => ({
       restaurantInsights: {
+        prepareClosePacket: { fetch: mocks.closeFetch },
         exportFinancialReports: { fetch: mocks.exportFetch },
         exportOperationalReports: { fetch: mocks.exportFetch },
         exportLabourCosts: { fetch: mocks.exportFetch },
@@ -229,12 +235,132 @@ describe('InsightsConsole', () => {
       query.isLoading = false;
     });
     mocks.exportFetch.mockClear();
+    mocks.branches.error = null;
+    mocks.closeFetch
+      .mockReset()
+      .mockImplementation(
+        async (input: PrepareClosePacketInput): Promise<RestaurantClosePacket> => ({
+          scope: { organizationId: 'org_1', branchId: input.branchId },
+          period: { from: input.businessDate, to: input.businessDate, basis: 'BUSINESS_DATE' },
+          status: 'UNKNOWN',
+          financial: { status: 'UNKNOWN', data: null, blockers: [], missingEvidence: [] },
+          operational: { status: 'UNKNOWN', data: null, blockers: [], missingEvidence: [] },
+          freshness: {
+            status: 'LIVE_OBSERVATION',
+            asOf: input.asOf,
+            startedAt: input.asOf,
+            completedAt: input.asOf,
+            expiresAt: input.asOf,
+            definition: 'Non-atomic live observation.',
+          },
+          unattendedCloseReady: false,
+          execution: { mode: 'READ_ONLY', scheduled: false, definition: 'Read only.' },
+        })
+      );
   });
 
   it('disables every read until the module entitlement is present', () => {
     renderConsole(false);
     expect(mocks.calls.financialList.at(-1)?.enabled).toBe(false);
     expect(screen.getByText('Restaurant Insights module disabled')).toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Scenarios' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('tab', { name: 'Close readiness' })).not.toBeInTheDocument();
+    expect(mocks.closeFetch).not.toHaveBeenCalled();
+  });
+
+  it('prepares close evidence through ordinary navigation with only Insights enabled', async () => {
+    renderConsole();
+    fireEvent.click(screen.getByRole('tab', { name: 'Close readiness' }));
+    expect(screen.getByRole('button', { name: 'Prepare close packet' })).toBeDisabled();
+    setBranch();
+    fireEvent.change(screen.getByLabelText('Close business date'), {
+      target: { value: '2026-09-11' },
+    });
+    expect(mocks.closeFetch).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare close packet' }));
+    await screen.findByRole('button', { name: 'Refresh close packet' });
+    expect(mocks.closeFetch).toHaveBeenCalledWith(
+      { branchId: 'branch_1', businessDate: '2026-09-11', asOf: expect.any(String) },
+      { staleTime: 0, retry: false }
+    );
+    expect(screen.getByText('Not ready for unattended close')).toBeInTheDocument();
+    for (const calls of Object.values(mocks.calls)) expect(calls.at(-1)?.enabled).toBe(false);
+    expect(mocks.exportFetch).not.toHaveBeenCalled();
+  });
+
+  it('preserves close date and existing report range across tabs, invalidates packets on branch change', async () => {
+    renderConsole();
+    setBranch();
+    fireEvent.change(screen.getByLabelText('From date'), { target: { value: '2026-09-01' } });
+    fireEvent.change(screen.getByLabelText('To date'), { target: { value: '2026-09-10' } });
+    fireEvent.click(screen.getByRole('tab', { name: 'Close readiness' }));
+    fireEvent.change(screen.getByLabelText('Close business date'), {
+      target: { value: '2026-09-11' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare close packet' }));
+    await screen.findByRole('button', { name: 'Refresh close packet' });
+    setBranch('branch_2');
+    expect(screen.queryByText('Not ready for unattended close')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Close business date')).toHaveValue('2026-09-11');
+    fireEvent.click(screen.getByRole('tab', { name: 'Scenarios' }));
+    expect(screen.getByRole('button', { name: 'Calculate contribution' })).toBeEnabled();
+    fireEvent.click(screen.getByRole('tab', { name: 'Financial' }));
+    expect(mocks.calls.financialList.at(-1)?.input).toEqual({
+      branchId: 'branch_2',
+      from: '2026-09-01',
+      to: '2026-09-10',
+      limit: 100,
+    });
+    fireEvent.click(screen.getByRole('tab', { name: 'Close readiness' }));
+    expect(screen.getByLabelText('Close business date')).toHaveValue('2026-09-11');
+    expect(mocks.closeFetch).toHaveBeenCalledOnce();
+  });
+
+  it('hides prepared evidence and requires branch recovery after branch-list failure', async () => {
+    const view = renderConsole();
+    setBranch();
+    fireEvent.click(screen.getByRole('tab', { name: 'Close readiness' }));
+    fireEvent.change(screen.getByLabelText('Close business date'), {
+      target: { value: '2026-09-11' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Prepare close packet' }));
+    await screen.findByRole('button', { name: 'Refresh close packet' });
+    mocks.branches.error = new Error('Unavailable');
+    view.rerender(
+      <EntitlementsProvider value={entitlements(true)}>
+        <InsightsConsole />
+      </EntitlementsProvider>
+    );
+    expect(screen.getByRole('alert')).toHaveTextContent('Selected branch is unavailable');
+    expect(screen.queryByText('Not ready for unattended close')).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Prepare close packet' })).toBeDisabled();
+    expect(screen.getByLabelText('Close business date')).toHaveValue('2026-09-11');
+  });
+
+  it('connects manual scenarios with only Insights enabled and no branch or AskFathom prerequisite', () => {
+    renderConsole();
+    fireEvent.click(screen.getByRole('tab', { name: 'Scenarios' }));
+    expect(screen.getByRole('heading', { name: 'Contribution scenarios' })).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Calculate contribution' })).toBeEnabled();
+    expect(screen.queryByText('Branch required')).not.toBeInTheDocument();
+    for (const calls of Object.values(mocks.calls)) expect(calls.at(-1)?.enabled).toBe(false);
+    expect(mocks.exportFetch).not.toHaveBeenCalled();
+  });
+
+  it('resets assumptions on scope changes and restores unchanged report filters', () => {
+    renderConsole();
+    setBranch();
+    fireEvent.click(screen.getByRole('tab', { name: 'Scenarios' }));
+    fireEvent.change(screen.getByLabelText('Assumed currency code'), { target: { value: 'PKR' } });
+    fireEvent.change(screen.getByLabelText('From date'), { target: { value: '2026-09-01' } });
+    expect(screen.getByLabelText('Assumed currency code')).toHaveValue('');
+    expect(screen.getByText(/Planning period: 2026-09-01/)).toBeInTheDocument();
+    fireEvent.click(screen.getByRole('tab', { name: 'Financial' }));
+    expect(mocks.calls.financialList.at(-1)).toEqual({
+      input: { branchId: 'branch_1', from: '2026-09-01', limit: 100 },
+      enabled: true,
+    });
+    expect(screen.getByText('4210.50')).toBeInTheDocument();
   });
 
   it('gates reads by branch and active tab', () => {
