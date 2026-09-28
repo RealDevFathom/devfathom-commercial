@@ -50,6 +50,8 @@ export default defineConfig({
     'restaurant-recipe-profitability-acceptance.spec.ts',
     'restaurant-operations-lifecycle-acceptance.spec.ts',
     'restaurant-software-receipt-acceptance.spec.ts',
+    'restaurant-actor-accessibility.spec.ts',
+    'restaurant-pos-kds-accessibility.spec.ts',
   ],
   projects: [
     {
