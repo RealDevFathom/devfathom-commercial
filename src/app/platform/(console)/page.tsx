@@ -3,7 +3,20 @@ import { ArrowUpRight, Building2, CircleDollarSign, Clock3, ServerCog } from 'lu
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { requirePlatformRead } from '@/lib/platform/page-access';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
+import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
+
+const verticals = ['AGENCY', 'RESTAURANT', 'PHARMACY'] as const;
+const lifecycleStatuses = [
+  'PROSPECT',
+  'ONBOARDING',
+  'ACTIVE',
+  'GRACE',
+  'SUSPENDED',
+  'TERMINATED',
+  'PURGING',
+  'PURGED',
+] as const;
 
 function money(value: number, currency = 'USD') {
   return new Intl.NumberFormat('en-US', {
@@ -29,7 +42,7 @@ export default async function PlatformOverviewPage() {
       renewals,
     ] = await Promise.all([
       db.organization.groupBy({
-        by: ['status'],
+        by: ['vertical', 'status'],
         where: { isDemo: false },
         _count: { _all: true },
       }),
@@ -94,9 +107,11 @@ export default async function PlatformOverviewPage() {
     ]);
 
     return {
-      organizations: Object.fromEntries(
-        organizations.map((entry) => [entry.status, entry._count._all])
-      ),
+      organizationCounts: organizations,
+      organizations: organizations.reduce<Record<string, number>>((counts, entry) => {
+        counts[entry.status] = (counts[entry.status] ?? 0) + entry._count._all;
+        return counts;
+      }, {}),
       activeContractValue: Number(activeContracts._sum.value ?? 0),
       activeContractCount: activeContracts._count._all,
       pipelineValue: Number(pipeline._sum?.estimatedValue ?? 0),
@@ -178,6 +193,58 @@ export default async function PlatformOverviewPage() {
           );
         })}
       </section>
+
+      <SectionCard title="Organizations by vertical" titleLevel={2} className="mt-6">
+        <div
+          className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring"
+          role="region"
+          aria-label="Organization lifecycle counts"
+          tabIndex={0}
+        >
+          <table className="w-full min-w-[960px] text-right text-sm tabular-nums">
+            <caption className="mb-4 text-left text-xs text-text-muted">
+              Organization counts by lifecycle status. Demo organizations are excluded.
+            </caption>
+            <thead className="border-b border-border-default font-mono text-[10px] uppercase tracking-wide text-text-muted">
+              <tr>
+                <th scope="col" className="px-3 py-3 text-left">
+                  Vertical
+                </th>
+                <th scope="col" className="px-3 py-3">
+                  Total
+                </th>
+                {lifecycleStatuses.map((status) => (
+                  <th key={status} scope="col" className="px-3 py-3">
+                    {status}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody className="divide-y divide-border-subtle">
+              {verticals.map((vertical) => {
+                const counts = data.organizationCounts.filter(
+                  (entry) => entry.vertical === vertical
+                );
+                return (
+                  <tr key={vertical}>
+                    <th scope="row" className="px-3 py-4 text-left font-semibold">
+                      {vertical.charAt(0) + vertical.slice(1).toLowerCase()}
+                    </th>
+                    <td className="px-3 py-4 font-semibold">
+                      {counts.reduce((total, entry) => total + entry._count._all, 0)}
+                    </td>
+                    {lifecycleStatuses.map((status) => (
+                      <td key={status} className="px-3 py-4">
+                        {counts.find((entry) => entry.status === status)?._count._all ?? 0}
+                      </td>
+                    ))}
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
+      </SectionCard>
 
       <div className="mt-6 grid gap-6 xl:grid-cols-[minmax(0,1.25fr)_minmax(20rem,0.75fr)]">
         <section className="overflow-hidden rounded-lg border border-border-subtle bg-card shadow-none">
