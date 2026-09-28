@@ -333,6 +333,46 @@ describe('PrescriptionsConsole durable evidence capture', () => {
     expect(screen.getAllByText('Reference only · no uploaded attachment')).toHaveLength(2);
   });
 
+  it('shows the private photo as a thumbnail in the register and on each dispensed fill (PH-A3)', () => {
+    const line = (id: string, fillId: string) => ({
+      id,
+      directions: 'One tablet daily',
+      medicine: { productName: 'Medicine' },
+      presentation: { presentation: 'TABLET' },
+      fills: [{ id: fillId, quantityCanonicalUnits: 10, dispensedAt: new Date('2026-09-20') }],
+      remainingAuthorizedUnits: 2,
+    });
+    const prescription = (sourceFileRef: string, lineId: string, fillId: string) => ({
+      sourceFileRef,
+      patient: { displayName: 'First patient' },
+      prescriber: { name: 'Prescriber' },
+      validFrom: new Date('2026-01-01'),
+      validUntil: new Date('2027-01-01'),
+      custodyState: 'NOT_HELD',
+      lines: [line(lineId, fillId)],
+    });
+    mocks.workspace.mockReturnValue({
+      data: {
+        ...workspace(),
+        branches: [{ id: 'branch-one', name: 'Branch' }],
+        selectedBranchId: 'branch-one',
+        prescriptions: [
+          prescription(privateUrl, 'line-photo', 'fill-photo'),
+          prescription('paper:123', 'line-legacy', 'fill-legacy'),
+        ],
+      },
+    });
+    render(<PrescriptionsConsole />);
+    const register = screen.getByAltText('Prescription photo for First patient');
+    expect(register).toHaveAttribute('src', privateUrl);
+    expect(register).toHaveAttribute('loading', 'lazy');
+    const onFill = screen.getAllByAltText('Prescription photo for this fill of Medicine');
+    expect(onFill).toHaveLength(1);
+    expect(onFill[0]).toHaveAttribute('src', privateUrl);
+    expect(onFill[0].closest('a')).toHaveAttribute('href', privateUrl);
+    expect(onFill[0].closest('a')).toHaveAttribute('rel', 'noopener noreferrer');
+  });
+
   it.each(['loading', 'denied'] as const)(
     'does not expose capture while workspace is %s',
     (state) => {
