@@ -312,14 +312,17 @@ export function SopAdminView({
   const canCreateTemplate = capacity.kind === 'available';
   const notInPlan = moduleSource === 'NONE';
   const anyPending = pendingAction != null;
-  // WCAG 2.4.3: a successful Retry unmounts the error card that held focus, so hand
-  // focus to the page heading instead of letting it fall back to <body>.
+  // WCAG 2.4.3: Retry sends the queries back through 'loading', which unmounts the
+  // error card that held focus. Once they settle, focus the page heading (or the new
+  // Retry button if the retry failed) instead of letting focus fall back to <body>.
   const headingRef = useRef<HTMLSpanElement>(null);
+  const retryButtonRef = useRef<HTMLButtonElement>(null);
   const retryRequestedRef = useRef(false);
   useEffect(() => {
-    if (state === 'error' || !retryRequestedRef.current) return;
+    if (!retryRequestedRef.current || state === 'loading') return;
     retryRequestedRef.current = false;
     if (state === 'ready') headingRef.current?.focus();
+    else if (state === 'error') retryButtonRef.current?.focus();
   }, [state]);
 
   return (
@@ -441,6 +444,7 @@ export function SopAdminView({
               {loadError || 'No data was changed. Retry the authoring contract.'}
             </p>
             <Button
+              ref={retryButtonRef}
               type="button"
               variant="outline"
               className="min-h-11"
