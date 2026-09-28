@@ -4,6 +4,7 @@ import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
+import type { CounterEvidenceView } from '@/lib/pharmacy/counter-evidence';
 import {
   COUNTER_RECEIPT_DIRECTION,
   COUNTER_RECEIPT_STRINGS,
@@ -32,7 +33,65 @@ export type CounterReceiptViewProps = {
   onFormatChange: (format: CounterReceiptFormat) => void;
   onPrint: () => void;
   onRetry: () => void;
+  /** CAM-2 camera stills bound to this sale's tenders and refunds. Never printed. */
+  evidence?: readonly CounterEvidenceView[] | null;
 };
+
+const EVIDENCE_KIND: Record<CounterEvidenceView['kind'], string> = {
+  TENDER: 'Tender',
+  REFUND: 'Refund',
+  DAILY_CLOSE: 'Day close',
+};
+
+const EVIDENCE_STATUS: Record<CounterEvidenceView['status'], string> = {
+  PENDING: 'Still pending capture.',
+  CAPTURED: 'Still no longer in storage.',
+  FAILED: 'No still was captured.',
+  PURGED: 'Still removed under the camera retention period.',
+};
+
+function evidenceTime(value: string | null): string {
+  if (!value) return '—';
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? '—'
+    : `${date.toISOString().slice(0, 10)} ${date.toISOString().slice(11, 16)} UTC`;
+}
+
+/** Operator-only evidence stills; kept outside the receipt document on purpose. */
+function CounterReceiptEvidence({ evidence }: { evidence: readonly CounterEvidenceView[] }) {
+  return (
+    <section
+      aria-label="Camera evidence"
+      className="space-y-2 rounded-md border border-border-subtle p-3"
+    >
+      <p className="text-sm font-semibold text-text-strong">Camera evidence</p>
+      <ul className="grid gap-3 sm:grid-cols-2">
+        {evidence.map((item) => (
+          <li key={item.id} className="space-y-1">
+            <p className="text-sm text-text-strong">{EVIDENCE_KIND[item.kind]}</p>
+            {item.image ? (
+              // A private data: URL from the branch-scoped read; nothing to optimise.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={item.image}
+                alt={`Camera still at ${EVIDENCE_KIND[item.kind].toLowerCase()}, ${evidenceTime(item.capturedAt)}`}
+                className="w-full rounded border border-border-subtle"
+              />
+            ) : (
+              <p className="text-sm text-text-muted">{EVIDENCE_STATUS[item.status]}</p>
+            )}
+            <p className="text-xs text-text-muted">
+              {item.capturedAt
+                ? `Captured ${evidenceTime(item.capturedAt)}`
+                : `Requested ${evidenceTime(item.requestedAt)}`}
+            </p>
+          </li>
+        ))}
+      </ul>
+    </section>
+  );
+}
 
 /** Receipt browser preview; requesting a print never confirms paper delivery. */
 export function CounterReceiptView({
@@ -47,6 +106,7 @@ export function CounterReceiptView({
   onFormatChange,
   onPrint,
   onRetry,
+  evidence,
 }: CounterReceiptViewProps) {
   if (state === 'idle') {
     return <p className="text-sm text-text-muted">Settle the bill to render its receipt.</p>;
@@ -247,6 +307,8 @@ export function CounterReceiptView({
           </pre>
         </details>
       ) : null}
+
+      {evidence && evidence.length > 0 ? <CounterReceiptEvidence evidence={evidence} /> : null}
     </div>
   );
 }

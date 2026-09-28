@@ -73,6 +73,130 @@ model RestaurantCameraStreamGrant {
   @@map("restaurant_camera_stream_grants")
 }
 
+// CAM-2 vertical-neutral camera registry. Added beside the Restaurant* tables,
+// which keep serving restaurant unchanged, so no vertical's live rows move.
+// branchId is not a foreign key: each vertical owns its own branch table.
+model CameraGateway {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  name              String
+  gatewaySecretHash String    @unique
+  status            String    @default("ACTIVE")
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  baseUrl           String
+  /// Days a captured still is kept before the retention job clears it.
+  retentionDays     Int       @default(7)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  cameras           Camera[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId])
+  @@map("camera_gateways")
+}
+
+model CameraCredential {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sealedValue    String
+  version        Int       @default(1)
+  rotatedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  cameras        Camera[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@map("camera_credentials")
+}
+
+model Camera {
+  id              String              @id @default(cuid())
+  organizationId  String              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  gatewayId       String
+  branchId        String
+  credentialId    String
+  name            String
+  /// The gateway-side camera reference passed to the adapter.
+  sourceRef       String
+  enabled         Boolean             @default(true)
+  /// Captures counter evidence stills (tender, refund, day close) for its branch.
+  counterEvidence Boolean             @default(false)
+  lastSeenAt      DateTime?
+  createdAt       DateTime            @default(now())
+  updatedAt       DateTime            @updatedAt
+  gateway         CameraGateway       @relation(fields: [organizationId, gatewayId], references: [organizationId, id], onDelete: Restrict)
+  credential      CameraCredential    @relation(fields: [organizationId, credentialId], references: [organizationId, id], onDelete: Restrict)
+  streamGrants    CameraStreamGrant[]
+  evidence        CameraEvidence[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId])
+  @@index([organizationId, gatewayId])
+  @@map("cameras")
+}
+
+model CameraStreamGrant {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  cameraId       String
+  viewerId       String
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  camera         Camera    @relation(fields: [organizationId, cameraId], references: [organizationId, id], onDelete: Cascade)
+
+  @@index([organizationId, cameraId, viewerId])
+  @@index([expiresAt])
+  @@map("camera_stream_grants")
+}
+
+enum CameraEvidenceSubject {
+  PHARMACY_TENDER
+  PHARMACY_REFUND
+  PHARMACY_DAILY_CLOSE
+}
+
+enum CameraEvidenceStatus {
+  PENDING
+  CAPTURED
+  FAILED
+  PURGED
+}
+
+/// A still bound to one money event. Requested inside the event's own
+/// transaction; captured later by the pharmacy.camera.snapshot.v1 job. The row
+/// outlives its image: retention clears the still and keeps the row as PURGED.
+model CameraEvidence {
+  id             String                @id @default(cuid())
+  organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  subjectKind    CameraEvidenceSubject
+  subjectId      String
+  /// The sale a tender or refund belongs to; null for a daily close.
+  saleId         String?
+  cameraId       String
+  status         CameraEvidenceStatus  @default(PENDING)
+  /// Opaque private-storage key; never a URL.
+  storageKey     String?
+  byteLength     Int?
+  failureReason  String?
+  requestedAt    DateTime              @default(now())
+  capturedAt     DateTime?
+  purgedAt       DateTime?
+  updatedAt      DateTime              @updatedAt
+  camera         Camera                @relation(fields: [organizationId, cameraId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, subjectKind, subjectId])
+  @@index([organizationId, saleId])
+  @@index([organizationId, branchId, subjectKind])
+  @@index([status, requestedAt])
+  @@index([status, capturedAt])
+  @@map("camera_evidence")
+}
+
 model PlatformCameraBrandPreset {
   id                     String   @id @default(cuid())
   key                    String   @unique
@@ -2591,6 +2715,8 @@ enum PlatformJobType {
   PURGE_DATA
   SUSPEND
   RESUME
+  PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
+  CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
 }
 
 enum PlatformJobStatus {

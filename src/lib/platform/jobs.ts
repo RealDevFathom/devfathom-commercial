@@ -10,6 +10,12 @@ import {
 } from '@/generated/prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
+import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, cameraEvidenceDueSql } from '@/lib/cameras/evidence';
+import {
+  PHARMACY_CAMERA_SNAPSHOT_JOB,
+  runCameraEvidenceRetentionJob,
+  runCounterEvidenceSnapshotJob,
+} from '@/lib/pharmacy/counter-evidence';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -746,10 +752,20 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PURGE_DATA: (database, item) => purgeData(database, item),
         SUSPEND: (database, item) => setDeploymentAvailability(database, item, true),
         RESUME: (database, item) => setDeploymentAvailability(database, item, false),
+        PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
+        CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
+          runCameraEvidenceRetentionJob(database, item),
       };
       return handlers[job.type](db, job, payload);
     },
-    { timeout: job.type === 'EXPORT_DATA' || job.type === 'PURGE_DATA' ? 120_000 : 30_000 }
+    {
+      timeout:
+        job.type === 'EXPORT_DATA' ||
+        job.type === 'PURGE_DATA' ||
+        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+          ? 120_000
+          : 30_000,
+    }
   );
 }
 
@@ -802,6 +818,55 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
   return retry ? 'retried' : 'failed';
 }
 
+const CAMERA_EVIDENCE_RELAY_LIMIT = 50;
+const CAMERA_EVIDENCE_RETENTION_JOB = 'camera.evidence.retention.v1';
+
+/**
+ * CAM-2: turn pending counter evidence into snapshot jobs, and give every
+ * organization with due retention work (a still past its gateway period, or a
+ * capture past its window) at most one retention pass per UTC hour. Both are
+ * keyed, so each worker run can repeat them without queueing anything twice.
+ */
+async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
+  await withPlatformDb(async (db) => {
+    const windowStart = new Date(now.getTime() - CAMERA_EVIDENCE_CAPTURE_WINDOW_MS);
+    const pending = await db.$queryRaw<Array<{ id: string; organizationId: string }>>(Prisma.sql`
+      SELECT e."id", e."organizationId"
+      FROM "camera_evidence" e
+      LEFT JOIN "platform_jobs" j
+        ON j."idempotencyKey" = ${`${PHARMACY_CAMERA_SNAPSHOT_JOB}:`} || e."id"
+      WHERE e."status" = 'PENDING' AND e."requestedAt" >= ${windowStart} AND j."id" IS NULL
+      ORDER BY e."requestedAt" ASC, e."id" ASC
+      LIMIT ${CAMERA_EVIDENCE_RELAY_LIMIT}
+    `);
+    const holders = await db.$queryRaw<Array<{ organizationId: string }>>(Prisma.sql`
+      SELECT DISTINCT e."organizationId"
+      FROM "camera_evidence" e
+      JOIN "cameras" c ON c."organizationId" = e."organizationId" AND c."id" = e."cameraId"
+      JOIN "camera_gateways" g ON g."organizationId" = c."organizationId" AND g."id" = c."gatewayId"
+      WHERE (${cameraEvidenceDueSql(now)})
+         OR (e."status" = 'PENDING' AND e."requestedAt" < ${windowStart})
+    `);
+    const hour = now.toISOString().slice(0, 13);
+    await db.platformJob.createMany({
+      data: [
+        ...pending.map((evidence) => ({
+          organizationId: evidence.organizationId,
+          type: 'PHARMACY_CAMERA_SNAPSHOT_V1' as const,
+          payload: { evidenceId: evidence.id },
+          idempotencyKey: `${PHARMACY_CAMERA_SNAPSHOT_JOB}:${evidence.id}`,
+        })),
+        ...holders.map(({ organizationId }) => ({
+          organizationId,
+          type: 'CAMERA_EVIDENCE_RETENTION_V1' as const,
+          idempotencyKey: `${CAMERA_EVIDENCE_RETENTION_JOB}:${organizationId}:${hour}`,
+        })),
+      ],
+      skipDuplicates: true,
+    });
+  });
+}
+
 export type ProcessJobsResult = {
   recovered: number;
   claimed: number;
@@ -812,6 +877,7 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
+  await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,

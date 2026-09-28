@@ -161,3 +161,74 @@ it('disables printing when shared semantic validation rejects the receipt', () =
   expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
   expect(screen.getByRole('alert')).toHaveTextContent('cannot be previewed');
 });
+
+const still = 'data:image/png;base64,iVBORw0KGgo=';
+
+it('shows the refund still beside the receipt, outside the printable document', () => {
+  const { container } = render(
+    <CounterReceiptView
+      {...props({
+        reprint: true,
+        evidence: [
+          {
+            id: 'e-tender',
+            kind: 'TENDER',
+            status: 'PURGED',
+            requestedAt: '2026-09-05T10:00:00.000Z',
+            capturedAt: '2026-09-05T10:00:05.000Z',
+            image: null,
+          },
+          {
+            id: 'e-refund',
+            kind: 'REFUND',
+            status: 'CAPTURED',
+            requestedAt: '2026-09-06T08:30:00.000Z',
+            capturedAt: '2026-09-06T08:31:00.000Z',
+            image: still,
+          },
+        ],
+      })}
+    />
+  );
+  const evidence = within(screen.getByRole('region', { name: 'Camera evidence' }));
+  const image = evidence.getByRole('img', {
+    name: 'Camera still at refund, 2026-09-06 08:31 UTC',
+  });
+  expect(image).toHaveAttribute('src', still);
+  expect(evidence.getByText('Still removed under the camera retention period.')).toBeTruthy();
+  expect(evidence.getByText('Captured 2026-09-06 08:31 UTC')).toBeTruthy();
+  const receipt = screen.getByRole('region', { name: 'Receipt 12' });
+  expect(within(receipt).queryByRole('img')).toBeNull();
+  expect(container.querySelector('pre')?.textContent ?? '').not.toContain('Camera');
+});
+
+it.each([
+  ['PENDING', 'Still pending capture.', 'Requested 2026-09-06 08:30 UTC'],
+  ['FAILED', 'No still was captured.', 'Requested 2026-09-06 08:30 UTC'],
+] as const)('explains %s evidence without an image', (status, message, time) => {
+  render(
+    <CounterReceiptView
+      {...props({
+        evidence: [
+          {
+            id: 'e',
+            kind: 'REFUND',
+            status,
+            requestedAt: '2026-09-06T08:30:00.000Z',
+            capturedAt: null,
+            image: null,
+          },
+        ],
+      })}
+    />
+  );
+  const evidence = within(screen.getByRole('region', { name: 'Camera evidence' }));
+  expect(evidence.getByText(message)).toBeTruthy();
+  expect(evidence.getByText(time)).toBeTruthy();
+  expect(evidence.queryByRole('img')).toBeNull();
+});
+
+it.each([undefined, null, []])('renders no evidence section for %j', (evidence) => {
+  render(<CounterReceiptView {...props({ evidence })} />);
+  expect(screen.queryByRole('region', { name: 'Camera evidence' })).toBeNull();
+});
