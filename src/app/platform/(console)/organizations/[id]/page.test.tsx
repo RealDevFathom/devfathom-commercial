@@ -13,6 +13,11 @@ const mocks = vi.hoisted(() => ({
   branchCount: vi.fn(),
   branchFindMany: vi.fn(),
   jobFindFirst: vi.fn(),
+  pharmacyReadiness: vi.fn(),
+}));
+
+vi.mock('@/lib/pharmacy/onboarding', () => ({
+  evaluatePharmacyReadiness: mocks.pharmacyReadiness,
 }));
 
 vi.mock('@/lib/platform/page-access', () => ({
@@ -99,6 +104,7 @@ function organization(overrides: Record<string, unknown> = {}) {
     identityConnections: [],
     scimTokens: [],
     scimEvents: [],
+    departments: [],
     roles: [],
     permissionOverrides: [],
     deployments: [],
@@ -579,5 +585,79 @@ describe('OrganizationDetailPage activation gate checklist', () => {
 
     expect(screen.queryByText('Unmet activation gates')).toBeNull();
     expect(screen.getByText('This lifecycle is terminal.')).toBeInTheDocument();
+  });
+});
+
+describe('vertical readiness parity', () => {
+  it('offers configured department names and keys instead of agency defaults', async () => {
+    const { container } = await renderDetail({
+      org: organization({
+        departments: [{ key: 'KITCHEN', name: 'Kitchen team' }],
+        users: [
+          {
+            id: 'user_1',
+            name: 'Chef',
+            email: 'chef@example.test',
+            role: 'EMPLOYEE',
+            status: 'ACTIVE',
+            title: 'Chef',
+            department: 'KITCHEN',
+            organizationRoleId: null,
+          },
+        ],
+      }),
+    });
+    const department = container.querySelector('select[name="department"]') as HTMLSelectElement;
+    expect(department.value).toBe('KITCHEN');
+    expect(within(department).getByRole('option', { name: 'Kitchen team' })).toHaveValue('KITCHEN');
+    expect(within(department).queryByRole('option', { name: 'ENGINEERING' })).toBeNull();
+  });
+
+  it('shows agency requirements without querying pharmacy evidence', async () => {
+    await renderDetail({ org: organization({ vertical: 'AGENCY' }) });
+    expect(screen.getByRole('region', { name: 'Agency readiness' })).toHaveTextContent(
+      '3 agency activation requirements remain.'
+    );
+    expect(mocks.pharmacyReadiness).not.toHaveBeenCalled();
+  });
+
+  it('shows evaluated pharmacy evidence, including downgraded claims', async () => {
+    mocks.pharmacyReadiness.mockResolvedValue({
+      ready: false,
+      gates: [
+        {
+          gate: 'OPENING_STOCK_READINESS',
+          step: 9,
+          label: 'Opening stock readiness',
+          status: 'FAILED',
+          downgradeReason: 'EVIDENCE_ABSENT',
+        },
+        {
+          gate: 'LEGAL_BUSINESS',
+          step: 2,
+          label: 'Legal business',
+          status: 'PASSED',
+          downgradeReason: null,
+        },
+      ],
+    });
+    await renderDetail({ org: organization({ vertical: 'PHARMACY' }) });
+    const panel = screen.getByRole('region', { name: 'Pharmacy readiness' });
+    expect(panel).toHaveTextContent('Opening stock readiness');
+    expect(panel).toHaveTextContent('Required evidence is missing.');
+    expect(panel).toHaveTextContent('Legal business');
+    expect(mocks.pharmacyReadiness).toHaveBeenCalledWith(
+      expect.anything(),
+      'org_1',
+      expect.any(Date)
+    );
+    expect(screen.queryByText('Restaurant readiness')).toBeNull();
+  });
+
+  it('keeps restaurant readiness isolated', async () => {
+    await renderDetail();
+    expect(screen.getByText('Restaurant readiness')).toBeInTheDocument();
+    expect(screen.queryByRole('region', { name: 'Agency readiness' })).toBeNull();
+    expect(mocks.pharmacyReadiness).not.toHaveBeenCalled();
   });
 });

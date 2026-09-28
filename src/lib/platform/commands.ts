@@ -2261,14 +2261,25 @@ async function runCommand(
           role: z.enum(['ADMIN', 'EMPLOYEE', 'HR']).optional(),
           status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED']).optional(),
           title: requiredText.optional(),
-          department: z
-            .enum(['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN'])
-            .optional(),
+          department: z.string().trim().min(1).max(100).optional(),
         })
         .parse(payload);
       const { id: userId, ...data } = input;
       const before = await db.user.findUnique({ where: { id: userId } });
       if (!before) throw new PlatformSecurityError('Organization user not found.', 400);
+      if (data.department !== undefined) {
+        const department = await db.organizationDepartment.findFirst({
+          where: {
+            organizationId: before.organizationId,
+            key: data.department,
+            active: true,
+          },
+          select: { id: true },
+        });
+        if (!department) {
+          throw new PlatformSecurityError('Invalid organization department.', 400);
+        }
+      }
       const auditableBefore = omit(before, 'password', 'twoFactorSecret');
       const saved = await db.user.update({
         where: { id: userId },

@@ -57,6 +57,9 @@ const mocks = vi.hoisted(() => ({
   platformModuleFindMany: vi.fn(),
   packageModuleUpsert: vi.fn(),
   departmentCreateMany: vi.fn(),
+  departmentFindFirst: vi.fn(),
+  userFindUnique: vi.fn(),
+  userUpdate: vi.fn(),
   auditCreate: vi.fn(),
   tenantAuditCreate: vi.fn(),
   regulatoryProfileFindFirst: vi.fn(),
@@ -100,8 +103,13 @@ const platformDb = {
   medicinePublicationEntry: { count: mocks.publicationEntryCount },
   pharmacyInventoryLot: { count: mocks.inventoryLotCount },
   pharmacySupplier: { count: mocks.supplierCount },
-  organizationDepartment: { createMany: mocks.departmentCreateMany },
+  organizationDepartment: {
+    createMany: mocks.departmentCreateMany,
+    findFirst: mocks.departmentFindFirst,
+  },
   user: {
+    findUnique: mocks.userFindUnique,
+    update: mocks.userUpdate,
     findFirst: mocks.userFindFirst,
     create: mocks.userCreate,
     findMany: mocks.userFindMany,
@@ -1183,5 +1191,59 @@ describe('pharmacy activation preflight', () => {
       })
     ).resolves.toBeDefined();
     expect(mocks.orgUpdate).toHaveBeenCalledOnce();
+  });
+});
+
+describe('organization.user tenant-configured departments', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindUnique.mockResolvedValue({
+      id: 'user_1',
+      organizationId: 'org_1',
+      department: 'OLD',
+    });
+    mocks.userUpdate.mockImplementation(async ({ data }) => ({
+      id: 'user_1',
+      organizationId: 'org_1',
+      ...data,
+    }));
+  });
+
+  it.each(['DISPENSARY', 'KITCHEN', 'ENGINEERING', 'CUSTOM_TEAM'])(
+    'accepts active configured department %s',
+    async (department) => {
+      mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_1' });
+      await run('organization.user', { id: 'user_1', department });
+      expect(mocks.departmentFindFirst).toHaveBeenCalledWith({
+        where: { organizationId: 'org_1', key: department, active: true },
+        select: { id: true },
+      });
+      expect(mocks.userUpdate).toHaveBeenCalledWith({
+        where: { id: 'user_1' },
+        data: expect.objectContaining({ department }),
+      });
+    }
+  );
+
+  it.each(['FOREIGN_TEAM', 'INACTIVE_TEAM', 'UNKNOWN_TEAM'])(
+    'rejects unavailable department %s before writing',
+    async (department) => {
+      mocks.departmentFindFirst.mockResolvedValue(null);
+      await expect(
+        run('organization.user', { id: 'user_1', department, organizationId: 'foreign_org' })
+      ).rejects.toThrow('Invalid organization department.');
+      expect(mocks.departmentFindFirst).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { organizationId: 'org_1', key: department, active: true },
+        })
+      );
+      expect(mocks.userUpdate).not.toHaveBeenCalled();
+    }
+  );
+
+  it('preserves department when omitted', async () => {
+    await run('organization.user', { id: 'user_1', title: 'Manager' });
+    expect(mocks.departmentFindFirst).not.toHaveBeenCalled();
+    expect(mocks.userUpdate).toHaveBeenCalled();
   });
 });
