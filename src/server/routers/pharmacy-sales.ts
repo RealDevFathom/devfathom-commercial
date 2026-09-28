@@ -1,3 +1,11 @@
+import { can } from '@/lib/abac';
+import { annotateAudit } from '@/server/audit';
+import {
+  isLockedOut,
+  registerFailedAttempt,
+  clearLockout,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -311,6 +319,15 @@ export const pharmacySalesRouter = router({
     .input(
       z
         .object({
+          controlledAuthorization: z
+            .object({
+              prescriptionLineId: z.string().min(1),
+              patientId: z.string().min(1),
+              staffProfileId: z.string().min(1),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
           branchId,
           saleId: z.string().min(1),
           medicineId: z.string().min(1),
@@ -336,10 +353,188 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
       try {
-        return await ctx.db.$transaction((tx) =>
-          addSaleLine(txDb(tx), scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = scopeFor(ctx, input.branchId);
+          const medicine = await db.medicine.findFirst({
+            where: { id: input.medicineId, organizationId: scope.organizationId },
+          });
+          if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          const authorization = input.controlledAuthorization;
+          const blocked = {
+            blocked:
+              'Controlled medicine requires a valid prescription, patient ID and an independent pharmacist PIN.',
+          } as const;
+          if (!authorization) return blocked;
+          // Serialize credential attempts; returning a denial commits durable lockout counters.
+          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+          const credential = await db.restaurantOperatorCredential.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              staffProfileId: authorization.staffProfileId,
+              type: 'PIN',
+              revokedAt: null,
+              deviceId: null,
+            },
+            include: { staffProfile: { include: { user: true } } },
+          });
+          const pharmacist = credential?.staffProfile.user;
+          const now = new Date();
+          if (
+            !credential ||
+            credential.staffProfile.status !== 'ACTIVE' ||
+            !pharmacist ||
+            pharmacist.organizationId !== scope.organizationId ||
+            pharmacist.status !== 'ACTIVE' ||
+            pharmacist.id === scope.actorId ||
+            isLockedOut(credential, now)
+          )
+            return blocked;
+          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
+          if (
+            !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
+          ) {
+            await db.restaurantOperatorCredential.update({
+              where: { id: credential.id },
+              data: registerFailedAttempt(credential, now),
+            });
+            return blocked;
+          }
+          await db.restaurantOperatorCredential.update({
+            where: { id: credential.id },
+            data: clearLockout(),
+          });
+          // Lock prescription and branch before stock allocation, fill numbering and register numbering.
+          await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${authorization.prescriptionLineId} FOR UPDATE`;
+          await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+          const rx = await db.prescriptionLine.findFirst({
+            where: {
+              id: authorization.prescriptionLineId,
+              organizationId: scope.organizationId,
+              medicineId: input.medicineId,
+              presentationId: input.presentationId,
+            },
+            include: {
+              prescription: { include: { patient: true, prescriber: true } },
+              fills: true,
+            },
+          });
+          if (
+            !rx ||
+            rx.prescription.patientId !== authorization.patientId ||
+            !rx.prescription.patient.cnic?.trim() ||
+            !rx.prescription.prescriber.registrationNumber.trim() ||
+            rx.prescription.validFrom > now ||
+            rx.prescription.validUntil <= now
+          )
+            return blocked;
+          const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+          const previous = await db.pharmacySaleLine.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleId: input.saleId,
+              idempotencyKey: input.idempotencyKey,
+            },
+          });
+          if (previous)
+            return {
+              blocked:
+                'This request was already recorded. Refresh the cart before adding another line.',
+            };
+          if (
+            !Number.isSafeInteger(units) ||
+            rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
+              rx.authorizedCanonicalUnits ||
+            rx.fills.length > rx.prescription.authorizedRepeats
+          )
+            return { blocked: 'Prescription quantity or repeat allowance is exhausted.' };
+          const consent = await db.patientConsent.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              patientId: authorization.patientId,
+              purpose: 'DISPENSING',
+            },
+            orderBy: { version: 'desc' },
+          });
+          if (!consent?.granted || consent.revokedAt)
+            return { blocked: 'Patient dispensing consent is required.' };
+          const result = await addSaleLine(db, scope, input);
+          await db.prescriptionFill.create({
+            data: {
+              organizationId: scope.organizationId,
+              prescriptionLineId: rx.id,
+              fillSequence: rx.fills.length + 1,
+              quantityCanonicalUnits: units,
+              dispensedByUserId: pharmacist.id,
+              idempotencyKey: `controlled:${result.line.id}`,
+            },
+          });
+          const review = await db.pharmacyPharmacistReviewItem.create({
+            data: {
+              organizationId: scope.organizationId,
+              prescriptionLineId: rx.id,
+              saleLineId: result.line.id,
+              requestedByUserId: scope.actorId,
+            },
+          });
+          await db.pharmacyPharmacistReviewDecision.create({
+            data: {
+              organizationId: scope.organizationId,
+              reviewItemId: review.id,
+              kind: 'SIGN',
+              actorUserId: pharmacist.id,
+              signedAt: now,
+            },
+          });
+          const latest = await db.pharmacyControlledRegisterEntry.aggregate({
+            where: { organizationId: scope.organizationId, branchId: scope.branchId },
+            _max: { serial: true },
+          });
+          let serial = latest._max.serial ?? 0;
+          for (const movementId of result.allocation.movementIds) {
+            const movement = await db.pharmacyStockMovement.findFirstOrThrow({
+              where: {
+                id: movementId,
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+              },
+            });
+            const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+              where: { id: movement.inventoryLotId, organizationId: scope.organizationId },
+              include: { batch: true },
+            });
+            const balance = await db.pharmacyStockBalance.aggregate({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                inventoryLotId: lot.id,
+              },
+              _sum: { onHandUnits: true },
+            });
+            await db.pharmacyControlledRegisterEntry.create({
+              data: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                serial: ++serial,
+                prescriptionId: rx.prescriptionId,
+                prescriptionLineId: rx.id,
+                patientId: authorization.patientId,
+                prescriberId: rx.prescription.prescriberId,
+                inventoryLotId: lot.id,
+                stockMovementId: movement.id,
+                batchNumber: lot.batch.batchNumber,
+                quantityCanonicalUnits: -movement.quantityUnits,
+                runningBalance: balance._sum.onHandUnits ?? 0,
+                recordedByUserId: scope.actorId,
+                witnessedByUserId: pharmacist.id,
+              },
+            });
+          }
+          return result;
+        });
       } catch (error) {
         fail(error);
       }
