@@ -10,6 +10,7 @@ export type CounterSearchResultsProps = {
   query: string;
   activeMedicineId: string | null;
   error?: string | null;
+  disabled?: boolean;
   onSelect: (row: CounterSearchRow) => void;
   onCaptureDemand: () => void;
   onRetry: () => void;
@@ -51,6 +52,7 @@ export function CounterSearchResults({
   query,
   activeMedicineId,
   error,
+  disabled = false,
   onSelect,
   onCaptureDemand,
   onRetry,
@@ -79,6 +81,7 @@ export function CounterSearchResults({
         <div className="flex flex-wrap gap-2">
           <button
             type="button"
+            disabled={disabled}
             onClick={onRetry}
             className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
@@ -86,6 +89,7 @@ export function CounterSearchResults({
           </button>
           <button
             type="button"
+            disabled={disabled}
             onClick={onCaptureDemand}
             className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
           >
@@ -102,6 +106,7 @@ export function CounterSearchResults({
         <p className="text-sm text-text-muted">Nothing in this catalog matches “{query}”.</p>
         <button
           type="button"
+          disabled={disabled}
           onClick={onCaptureDemand}
           className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
         >
@@ -120,6 +125,7 @@ export function CounterSearchResults({
           <li key={row.medicineId}>
             <button
               type="button"
+              disabled={disabled}
               aria-pressed={active}
               onClick={() => onSelect(row)}
               className={`w-full min-w-0 rounded-md px-3 py-3 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
@@ -148,7 +154,7 @@ export function CounterSearchResults({
               <dl className="mt-2 grid grid-cols-2 gap-x-4 gap-y-1 text-xs sm:grid-cols-4">
                 <div>
                   <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
-                    On hand
+                    Safe available
                   </dt>
                   <dd className="font-mono tabular-nums text-text-strong">
                     {row.onHandUnits} units
@@ -190,6 +196,13 @@ export function CounterSearchResults({
                     .join('  ·  ')}
                 </p>
               ) : null}
+
+              <p className="mt-2 break-words text-xs text-text-body">
+                FEFO location:{' '}
+                {row.storage.locationName || row.storage.locationCode
+                  ? [row.storage.locationName, row.storage.locationCode].filter(Boolean).join(' · ')
+                  : 'Not recorded'}
+              </p>
 
               <div className="mt-2 flex flex-wrap items-center gap-1.5">
                 {row.restriction.controlled ? (

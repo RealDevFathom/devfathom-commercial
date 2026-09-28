@@ -16,14 +16,12 @@ const mocks = vi.hoisted(() => ({
   },
   mutation: { mutate: vi.fn(), reset: vi.fn(), isPending: false, error: null as unknown },
   invalidateMedicine: vi.fn(),
-  invalidatePurchasing: vi.fn(),
   onSuccess: undefined as (() => Promise<void>) | undefined,
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     useUtils: () => ({
       pharmacyMedicine: { get: { invalidate: mocks.invalidateMedicine } },
-      pharmacyPurchasing: { workspace: { invalidate: mocks.invalidatePurchasing } },
     }),
     pharmacyMedicine: {
       search: { useQuery: () => mocks.search },
@@ -137,7 +135,7 @@ describe('medicine pack setup', () => {
     }
   );
 
-  it('disables repeat submission while pending and refreshes receiving options after success', async () => {
+  it('disables repeat submission while pending and refreshes medicine packs after success', async () => {
     const view = render(<MedicinePackSetup />);
     fill();
     mocks.mutation.isPending = true;
@@ -146,8 +144,7 @@ describe('medicine pack setup', () => {
     expect(screen.getByLabelText('Medicine')).toBeDisabled();
     await mocks.onSuccess?.();
     await waitFor(() => expect(screen.getByRole('status')).toHaveTextContent('Pack created'));
-    expect(mocks.invalidateMedicine).toHaveBeenCalledWith({ id: 'medicine-secret' });
-    expect(mocks.invalidatePurchasing).toHaveBeenCalledOnce();
+    expect(mocks.invalidateMedicine).toHaveBeenCalledExactlyOnceWith({ id: 'medicine-secret' });
   });
 
   it('provides loading, no-result and retry states', () => {

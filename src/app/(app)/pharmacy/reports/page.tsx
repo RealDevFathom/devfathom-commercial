@@ -1,6 +1,7 @@
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
+import { Suspense } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -8,8 +9,10 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
 import { pharmacyReportsRouter } from '@/server/routers/pharmacy-reports';
 import { createTRPCContext } from '@/server/trpc';
+import { DailyWorkPack, DailyWorkPackLoading } from './daily-work-pack';
 
 export const metadata: Metadata = { title: 'Pharmacy reports' };
 
@@ -32,13 +35,11 @@ type SearchParams = Promise<
 >;
 const value = (input: string | string[] | undefined) =>
   typeof input === 'string' ? input : undefined;
-const date = (input: string | undefined, fallback: string) =>
-  /^\d{4}-\d{2}-\d{2}$/.test(input ?? '') ? input! : fallback;
-const money = (minor: number | null) =>
-  minor == null
-    ? '—'
-    : `PKR ${(minor / 100).toLocaleString(undefined, { maximumFractionDigits: 0 })}`;
-
+const validDate = (input: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(input)) return false;
+  const parsed = new Date(`${input}T00:00:00.000Z`);
+  return Number.isFinite(parsed.getTime()) && parsed.toISOString().slice(0, 10) === input;
+};
 function ReportNotice({ title, detail }: { title: string; detail: string }) {
   return (
     <SectionCard title={title}>
@@ -74,11 +75,22 @@ export default async function PharmacyReportsPage({
       </main>
     );
   }
+  // Reuse the authenticated tenant context; report rows do not prove historical currency.
+  const organizationCurrency =
+    ctx.organization?.id === ctx.entitlements.organizationId ? ctx.organization?.currency : null;
+  const currency =
+    organizationCurrency && /^[A-Z]{3}$/.test(organizationCurrency) ? organizationCurrency : null;
+  const money = (minor: number | null) => {
+    if (minor == null || !Number.isSafeInteger(minor)) return '—';
+    const amount = formatMinor(minor).replace(/\B(?=(\d{3})+\.)/g, ',');
+    return currency ? `${currency} ${amount}` : `${amount} (currency unknown)`;
+  };
   const today = new Date().toISOString().slice(0, 10);
   const fromDate = new Date(`${today}T00:00:00.000Z`);
   fromDate.setUTCDate(fromDate.getUTCDate() - 6);
-  const from = date(value(query.from), fromDate.toISOString().slice(0, 10));
-  const to = date(value(query.to), today);
+  const from = value(query.from) ?? fromDate.toISOString().slice(0, 10);
+  const to = value(query.to) ?? today;
+  const invalidRange = !validDate(from) || !validDate(to) || from > to;
   const branch = value(query.branch);
   const supplier = value(query.supplier);
   const ingredient = value(query.ingredient);
@@ -97,20 +109,23 @@ export default async function PharmacyReportsPage({
     from,
     to,
   };
-  const [reportResult, digestResult, anomalyResult, expiryResult, authenticationResult] =
-    await Promise.allSettled([
-      caller.commandCentre(reportFilters),
-      caller.digestOverview(),
-      caller.anomalySignals(reportFilters),
-      caller.expiryAdvice(reportFilters),
-      caller.packAuthenticationFlags(reportFilters),
-    ]);
-  if (reportResult.status === 'fulfilled') result = reportResult.value;
-  else reportError = true;
-  if (digestResult.status === 'fulfilled') digest = digestResult.value;
-  if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
-  if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
-  if (authenticationResult.status === 'fulfilled') authenticationFlags = authenticationResult.value;
+  if (!invalidRange && branchResult.branches.length > 0) {
+    const [reportResult, digestResult, anomalyResult, expiryResult, authenticationResult] =
+      await Promise.allSettled([
+        caller.commandCentre(reportFilters),
+        caller.digestOverview(),
+        caller.anomalySignals(reportFilters),
+        caller.expiryAdvice(reportFilters),
+        caller.packAuthenticationFlags(reportFilters),
+      ]);
+    if (reportResult.status === 'fulfilled') result = reportResult.value;
+    else reportError = true;
+    if (digestResult.status === 'fulfilled') digest = digestResult.value;
+    if (anomalyResult.status === 'fulfilled') anomalies = anomalyResult.value;
+    if (expiryResult.status === 'fulfilled') expiryAdvice = expiryResult.value;
+    if (authenticationResult.status === 'fulfilled')
+      authenticationFlags = authenticationResult.value;
+  }
   const digestMessage = value(query.digest);
   const anomalyMessage = value(query.anomaly);
   const advisorMessage = value(query.advisor);
@@ -120,6 +135,13 @@ export default async function PharmacyReportsPage({
       (entry): entry is [string, string] => typeof entry[1] === 'string'
     )
   );
+  const followUpQuery = new URLSearchParams(returnQuery);
+  for (const filter of ['supplier', 'ingredient', 'batch']) followUpQuery.delete(filter);
+  const workPackScopeValid =
+    !invalidRange &&
+    ![query.branch, query.from, query.to].some(Array.isArray) &&
+    branchResult.branches.length > 0 &&
+    (!branch || branchResult.branches.some((item) => item.id === branch));
   const anomalyRedirect = (state: 'saved' | 'error') => {
     const copy = new URLSearchParams(returnQuery);
     copy.set('anomaly', state);
@@ -242,17 +264,32 @@ export default async function PharmacyReportsPage({
         description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
       />
       <Link
+        href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
+        className="inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
+      >
+        Replenishment observations and planning
+      </Link>
+      <Link
         href="/pharmacy/reports/repeat-purchasing"
         className="text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
       >
         Repeat purchasing and identity coverage
       </Link>
+      {catalog.permissions.financial ? (
+        <Link
+          href={`/pharmacy/reports/supplier-credit-follow-up?${followUpQuery}`}
+          prefetch={false}
+          className="inline-flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
+        >
+          Supplier-credit follow-up
+        </Link>
+      ) : null}
       <SectionCard eyebrow="RPT-01 / RPT-02" title="Report filters" titleLevel={2}>
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">
             Branch
             <select
-              className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm"
+              className="mt-1 min-h-11 w-full rounded-md border border-input bg-surface-raised px-2.5 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
               defaultValue={branch ?? ''}
               name="branch"
             >
@@ -278,21 +315,53 @@ export default async function PharmacyReportsPage({
           </label>
           <label className="text-sm text-text-body">
             From
-            <Input className="mt-1 min-h-11" defaultValue={from} name="from" type="date" />
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={from}
+              name="from"
+              type="date"
+              required
+              aria-invalid={invalidRange}
+              aria-describedby={invalidRange ? 'report-date-error' : undefined}
+            />
           </label>
           <label className="text-sm text-text-body">
             To
-            <Input className="mt-1 min-h-11" defaultValue={to} name="to" type="date" />
+            <Input
+              className="mt-1 min-h-11"
+              defaultValue={to}
+              name="to"
+              type="date"
+              required
+              aria-invalid={invalidRange}
+              aria-describedby={invalidRange ? 'report-date-error' : undefined}
+            />
           </label>
-          <button
-            className="min-h-11 self-end rounded-md bg-primary px-4 text-sm font-medium text-primary-foreground"
-            type="submit"
-          >
+          <Button className="min-h-11 self-end" type="submit">
             Apply filters
-          </button>
+          </Button>
         </form>
       </SectionCard>
-      {reportError ? (
+      {workPackScopeValid ? (
+        <Suspense key={returnQuery.toString()} fallback={<DailyWorkPackLoading />}>
+          <DailyWorkPack
+            read={caller.dailyWorkPack}
+            filters={{ ...(branch ? { branchId: branch } : {}), from, to }}
+            branches={branchResult.branches}
+            refreshFields={Object.fromEntries(returnQuery)}
+          />
+        </Suspense>
+      ) : (
+        <ReportNotice
+          title="Daily work pack unavailable"
+          detail="Select an available branch scope and a valid, unambiguous date range. No work-pack sources were queried."
+        />
+      )}
+      {invalidRange ? (
+        <p id="report-date-error" role="alert" className="text-sm text-destructive">
+          Enter valid dates with From on or before To. No report was loaded.
+        </p>
+      ) : reportError ? (
         <ReportNotice
           title="Report could not load"
           detail="Check the date range and branch scope, then apply the filters again. No data was changed."
@@ -300,19 +369,60 @@ export default async function PharmacyReportsPage({
       ) : result ? (
         <>
           <div className="flex flex-wrap items-center gap-3 text-sm text-text-muted">
-            <StatusPill status="Current" tone="success" />
+            <StatusPill
+              status={result.freshness.status === 'CURRENT' ? 'Current' : result.freshness.status}
+              tone={result.freshness.status === 'CURRENT' ? 'success' : 'warning'}
+            />
             <span>As of {new Date(result.freshness.asOf).toLocaleString()}</span>
+            <span>Source: {result.freshness.source}</span>
           </div>
-          <SectionCard eyebrow="Owner command centre" title="Today at a glance" titleLevel={2}>
+          <SectionCard
+            eyebrow="Owner command centre"
+            title="Selected period at a glance"
+            titleLevel={2}
+          >
+            <p className="mb-4 text-sm text-text-muted">
+              Report period: {from} to {to} (inclusive business dates). Branch scope:{' '}
+              {branch
+                ? (branchResult.branches.find((item) => item.id === branch)?.name ?? branch)
+                : 'All available branches'}
+              .{' '}
+              {currency
+                ? `Currency basis: current organization setting (${currency}); historical transaction currency is not verified.`
+                : 'Currency unknown: an authoritative currency for this organization is unavailable; historical transaction currency is not verified.'}{' '}
+              Amounts use the pharmacy minor-unit scale, shown to two decimal places. — means
+              unavailable, not zero. Sales, gross margin, cash, cash variance and refunds cover the
+              selected period. Stock signals, recommended orders and expiry exposure are current
+              snapshots; expiry exposure is not realized loss. Gross margin is not cash flow.
+            </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
               {cards.map(([label, figure]) => (
                 <Stat
                   key={label}
                   label={label}
                   value={figure}
-                  sub="Selected branch · ledger source"
+                  className="min-w-0"
+                  valueClassName="break-words"
+                  sub={
+                    branch
+                      ? 'Selected branch · ledger source'
+                      : 'All available branches · ledger source'
+                  }
                 />
               ))}
+            </div>
+            <div className="mt-6">
+              <Stat
+                label="Organization-wide safety queue"
+                value={metrics?.safetyQueue ?? '—'}
+                sub="Current snapshot · organization-wide"
+              />
+              <p className="mt-2 text-sm text-text-muted">
+                The selected branch does not apply to this queue. Date, supplier, ingredient and
+                batch filters do not apply either. Unsigned pharmacist review items plus open
+                controlled-register incidents, from pharmacist review and controlled-register
+                records at read time.
+              </p>
             </div>
           </SectionCard>
           {expiryAdvice ? (
@@ -693,7 +803,9 @@ export default async function PharmacyReportsPage({
                           key={metricKey}
                         >
                           <h4 className="text-sm font-semibold text-text-strong">
-                            {contract.label}
+                            {metricKey === 'safetyQueue'
+                              ? 'Organization-wide safety queue'
+                              : contract.label.replace(/^Today's /, 'Selected-period ')}
                           </h4>
                           <p className="mt-1 text-xs leading-5 text-text-muted">
                             {contract.definition}
@@ -705,7 +817,11 @@ export default async function PharmacyReportsPage({
                             </div>
                             <div>
                               <dt className="inline font-semibold">Scope: </dt>
-                              <dd className="inline">{contract.scope}</dd>
+                              <dd className="inline">
+                                {metricKey === 'safetyQueue'
+                                  ? 'Organization-wide at read time; selected branch does not apply'
+                                  : contract.scope}
+                              </dd>
                             </div>
                             <div>
                               <dt className="inline font-semibold">Permission: </dt>

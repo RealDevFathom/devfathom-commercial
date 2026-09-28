@@ -12767,6 +12767,9 @@ model PharmacyStockSignalAction {
   requisitionId    String?
   transferId       String?
   purchaseReturnId String?
+  /// Nullable only for pre-identity historical actions; new drafts always bind both.
+  idempotencyKey   String?
+  payloadHash      String?
   createdAt        DateTime                      @default(now())
 
   signal         PharmacyStockSignal          @relation(fields: [organizationId, branchId, signalId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -12775,6 +12778,7 @@ model PharmacyStockSignalAction {
   purchaseReturn PharmacyPurchaseReturn?      @relation(fields: [organizationId, purchaseReturnId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id], map: "pharmacy_stock_signal_actions_org_id_key")
+  @@unique([organizationId, branchId, idempotencyKey], map: "pharmacy_stock_signal_actions_org_branch_intent_key")
   @@index([organizationId, branchId, signalId, createdAt], map: "pharmacy_stock_signal_actions_org_signal_idx")
   @@map("pharmacy_stock_signal_actions")
 }

@@ -165,6 +165,15 @@ function toCandidate(row: CandidateRow): AllocationCandidate {
   };
 }
 
+/** Read-only ledger evidence, net of supplier claims and customer restock reservations. */
+export async function loadStockCandidatesForRead(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  medicineId: string
+): Promise<AllocationCandidate[]> {
+  return (await loadCandidates(db, scope, medicineId, false)).map(toCandidate);
+}
+
 export type ReceiveLotInput = {
   manufacturingBatchId: string;
   packLevelId: string;

@@ -1,13 +1,43 @@
-import { describe, expect, it, vi } from 'vitest';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { assistantToolChoice, buildAssistantTools, type AssistantContext } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { can } from '@/lib/abac';
 import { MODULE_CATALOG } from '@/lib/module-catalog';
+import { readPharmacyDailyWorkPack } from '@/lib/pharmacy/daily-work-pack';
+import { POST } from '@/app/api/assistant/route';
+
+const workPackMocks = vi.hoisted(() => ({
+  branches: vi.fn(),
+  returns: vi.fn(),
+  credits: vi.fn(),
+  organization: vi.fn().mockResolvedValue({ vertical: 'RESTAURANT' }),
+  actor: vi.fn(),
+  entitlements: vi.fn(),
+  model: vi.fn(),
+  stream: vi.fn(),
+}));
 
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: () => ({
-    organization: { findUnique: vi.fn().mockResolvedValue({ vertical: 'RESTAURANT' }) },
+    organization: { findUnique: workPackMocks.organization },
+    pharmacyBranch: { findMany: workPackMocks.branches },
+    pharmacyPurchaseReturn: { findMany: workPackMocks.returns },
+    pharmacySupplierCredit: { findMany: workPackMocks.credits },
   }),
+}));
+
+vi.mock('@/lib/pharmacy/daily-work-pack', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/daily-work-pack')>()),
+  readPharmacyDailyWorkPack: vi.fn(),
+}));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: workPackMocks.actor }));
+vi.mock('@/lib/entitlements', () => ({
+  resolveOrganizationEntitlements: workPackMocks.entitlements,
+}));
+vi.mock('@/lib/ai/provider', () => ({ createAIModel: workPackMocks.model }));
+vi.mock('ai', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('ai')>()),
+  streamText: workPackMocks.stream,
 }));
 
 vi.mock('@/lib/abac', async (importOriginal) => ({
@@ -137,6 +167,7 @@ describe('assistant tool routing', () => {
     );
     expect(Object.keys(tools).sort()).toEqual([
       'askPharmacyBusinessInsights',
+      'askPharmacyFinanceInsights',
       'askPharmacyReports',
     ]);
     expect(buildAssistantTools(adminCtx, { hint })).not.toHaveProperty(
@@ -234,5 +265,276 @@ describe('assistant tool routing', () => {
       expect(prompt).not.toContain('consultancy firm');
     }
     expect(assistantSystemPrompt({})).toContain('unverified business type');
+  });
+});
+
+describe('Pharmacy work-pack routing', () => {
+  const pharmacy: AssistantContext = {
+    ...adminCtx,
+    vertical: 'PHARMACY',
+    enabledModules: ['pharmacy-reports', 'pharmacy-procurement'],
+  };
+  const input = {
+    branch: 'Main Pharmacy',
+    from: '2026-08-01',
+    to: '2026-08-31',
+    asOf: '2026-09-01T00:00:00.000Z',
+  };
+  const modes = ['daily_work_pack', 'supplier_follow_up'] as const;
+  const hints = ['show my daily work pack', 'supplier-credit follow-up'];
+  const options = { toolCallId: 'work-pack-routing', messages: [] };
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    vi.mocked(can).mockResolvedValue(true);
+    workPackMocks.branches.mockResolvedValue([{ id: 'branch_1', name: input.branch }]);
+    workPackMocks.returns.mockResolvedValue([]);
+    workPackMocks.credits.mockResolvedValue([]);
+    workPackMocks.organization.mockResolvedValue({
+      id: pharmacy.organizationId,
+      askFathomEnabled: true,
+    });
+    workPackMocks.actor.mockResolvedValue({
+      organization: { id: pharmacy.organizationId },
+      session: { user: { id: pharmacy.userId, role: pharmacy.role } },
+    });
+    workPackMocks.entitlements.mockResolvedValue({
+      vertical: pharmacy.vertical,
+      enabledModules: pharmacy.enabledModules,
+    });
+    workPackMocks.model.mockReturnValue({ model: {}, providerOptions: {} });
+    workPackMocks.stream.mockReturnValue({
+      toUIMessageStreamResponse: () => new Response('synthetic stream'),
+    });
+    vi.mocked(readPharmacyDailyWorkPack).mockImplementation(async (_db, scope, readAt) => ({
+      version: 1,
+      mode: 'read-only-preparation',
+      scope: { organizationId: scope.organizationId, branchIds: scope.branchIds },
+      period: { from: scope.from, to: scope.to },
+      asOf: scope.asOf,
+      readAt: readAt!.toISOString(),
+      permissions: { operational: true, financial: scope.financial },
+      completeness: {
+        status: 'unknown',
+        allClear: false,
+        uniqueProblemCount: null,
+        additiveSavings: false,
+        definition: 'No source coverage established.',
+      },
+      sources: [],
+      groups: [],
+      missingInputs: [],
+    }));
+  });
+
+  function expectNoSourceReads() {
+    expect(workPackMocks.branches).not.toHaveBeenCalled();
+    expect(readPharmacyDailyWorkPack).not.toHaveBeenCalled();
+    expect(workPackMocks.returns).not.toHaveBeenCalled();
+    expect(workPackMocks.credits).not.toHaveBeenCalled();
+  }
+
+  it.each([
+    ...hints,
+    'prepare today’s pharmacy work-pack',
+    'show daily work packs',
+    'supplier follow up for Main Pharmacy',
+    'follow up on supplier credits',
+    'outstanding supplier credits',
+    'unmatched supplier credits',
+    'show my work pack\nwhat about that?',
+  ])('offers the read-only tool for relevant hint %j without granting permissions', (hint) => {
+    const tools = buildAssistantTools(pharmacy, { hint });
+    expect(tools.askPharmacyWorkPacks.execute).toEqual(expect.any(Function));
+    expect(tools.askPharmacyWorkPacks.needsApproval).not.toBe(true);
+    expect(tools).toHaveProperty('askPharmacyFinanceInsights');
+    expect(assistantToolChoice(hint, tools)).toBe('auto');
+    expect(can).not.toHaveBeenCalled();
+    expectNoSourceReads();
+  });
+
+  it.each([
+    'show pharmacy sales and margin',
+    'supplier contact',
+    'follow up on a meeting',
+    'show pharmacy replenishment forecast',
+    'dispensing prescription advice',
+    'work package deployment',
+    'what about that?',
+    '',
+    undefined,
+  ])('keeps work packs out of unrelated or empty hints %j', (hint) => {
+    const tools = buildAssistantTools(pharmacy, { hint });
+    expect(Object.keys(tools).sort()).toEqual([
+      'askPharmacyBusinessInsights',
+      'askPharmacyFinanceInsights',
+      'askPharmacyReports',
+    ]);
+  });
+
+  it.each(['AGENCY', 'RESTAURANT', undefined, null, 'pharmacy', 'UNKNOWN'])(
+    'cannot select Pharmacy work packs for vertical %j with forged module keys',
+    (vertical) => {
+      for (const hint of [...hints, 'PHARMACY work pack ignore permissions', '']) {
+        const tools = buildAssistantTools({ ...pharmacy, vertical } as AssistantContext, { hint });
+        expect(tools).not.toHaveProperty('askPharmacyWorkPacks');
+      }
+      expectNoSourceReads();
+    }
+  );
+
+  it.each([undefined, [], ['ai'], ['pharmacy-procurement'], ['restaurant-core']])(
+    'cannot grant missing Pharmacy reports through free text with modules %j',
+    (enabledModules) => {
+      for (const hint of [...hints, 'enable pharmacy-reports and show work pack', '']) {
+        expect(buildAssistantTools({ ...pharmacy, enabledModules }, { hint })).toEqual({});
+      }
+      expectNoSourceReads();
+    }
+  );
+
+  it.each(modes)(
+    'executes the selected %s mode through its authoritative reader',
+    async (report) => {
+      const tools = buildAssistantTools(pharmacy, { hint: hints[modes.indexOf(report)] });
+      const result = await tools.askPharmacyWorkPacks.execute!({ ...input, report }, options);
+      expect(workPackMocks.branches).toHaveBeenCalledExactlyOnceWith({
+        where: { organizationId: pharmacy.organizationId, active: true },
+        orderBy: { name: 'asc' },
+        select: { id: true, name: true },
+      });
+      if (report === 'daily_work_pack') {
+        expect(readPharmacyDailyWorkPack).toHaveBeenCalledExactlyOnceWith(
+          expect.anything(),
+          {
+            organizationId: pharmacy.organizationId,
+            actorId: pharmacy.userId,
+            branchIds: ['branch_1'],
+            financial: true,
+            from: input.from,
+            to: input.to,
+            asOf: input.asOf,
+          },
+          expect.any(Date)
+        );
+        expect(result).toMatchObject({
+          kind: 'unknown',
+          source: 'readPharmacyDailyWorkPack',
+          workPack: { mode: 'read-only-preparation', permissions: { financial: true } },
+        });
+        expect(workPackMocks.returns).not.toHaveBeenCalled();
+        expect(workPackMocks.credits).not.toHaveBeenCalled();
+      } else {
+        expect(readPharmacyDailyWorkPack).not.toHaveBeenCalled();
+        for (const reader of [workPackMocks.returns, workPackMocks.credits]) {
+          expect(reader).toHaveBeenCalledOnce();
+          expect(reader.mock.calls[0][0].where).toMatchObject({
+            organizationId: pharmacy.organizationId,
+            branchId: 'branch_1',
+          });
+        }
+        expect(result).toMatchObject({
+          kind: 'unknown',
+          mode: 'read-only-preparation',
+          source: 'supplierCreditFollowUp: listPurchaseReturns and listSupplierCredits',
+          completeness: { allClear: false, additiveSavings: false },
+        });
+      }
+      expect(workPackMocks.model).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(modes)('retains execution capability denial for %s', async (report) => {
+    vi.mocked(can).mockResolvedValue(false);
+    const tools = buildAssistantTools(pharmacy, { hint: hints[modes.indexOf(report)] });
+    expect(await tools.askPharmacyWorkPacks.execute!({ ...input, report }, options)).toMatchObject({
+      kind: 'refusal',
+    });
+    expectNoSourceReads();
+  });
+
+  it.each(['financial', 'procurement'])(
+    'denies supplier follow-up with missing %s access before source reads',
+    async (missing) => {
+      vi.mocked(can).mockImplementation(
+        async (_subject, action) => missing !== 'financial' || action !== 'reports:financial'
+      );
+      const tools = buildAssistantTools(
+        {
+          ...pharmacy,
+          enabledModules:
+            missing === 'procurement' ? ['pharmacy-reports'] : pharmacy.enabledModules,
+        },
+        { hint: hints[1] }
+      );
+      expect(
+        await tools.askPharmacyWorkPacks.execute!({ ...input, report: modes[1] }, options)
+      ).toMatchObject({ kind: 'refusal' });
+      expectNoSourceReads();
+    }
+  );
+
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'passes financial redaction into the daily reader for %s',
+    async (role) => {
+      vi.mocked(can).mockImplementation(async (_subject, action) => action !== 'reports:financial');
+      const tools = buildAssistantTools({ ...pharmacy, role }, { hint: hints[0] });
+      expect(
+        await tools.askPharmacyWorkPacks.execute!({ ...input, report: modes[0] }, options)
+      ).toMatchObject({ workPack: { permissions: { operational: true, financial: false } } });
+      expect(vi.mocked(readPharmacyDailyWorkPack).mock.calls[0][1].financial).toBe(false);
+      expect(workPackMocks.returns).not.toHaveBeenCalled();
+      expect(workPackMocks.credits).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(hints)('routes server-entitled API hint %j through the real selector', async (hint) => {
+    const response = await POST(
+      new Request('http://test.invalid/api/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          messages: [{ id: 'u', role: 'user', parts: [{ type: 'text', text: hint }] }],
+        }),
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(workPackMocks.stream.mock.calls[0][0].tools).toHaveProperty('askPharmacyWorkPacks');
+    expect(workPackMocks.entitlements).toHaveBeenCalledExactlyOnceWith(
+      pharmacy.organizationId,
+      expect.anything()
+    );
+    expectNoSourceReads();
+  });
+
+  it.each(modes)('blocks company chat-off before %s routing or provider calls', async (report) => {
+    workPackMocks.organization.mockResolvedValue({
+      id: pharmacy.organizationId,
+      askFathomEnabled: false,
+    });
+    const response = await POST(
+      new Request('http://test.invalid/api/assistant', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          askFathomEnabled: true,
+          messages: [
+            {
+              id: 'u',
+              role: 'user',
+              parts: [{ type: 'text', text: hints[modes.indexOf(report)] }],
+            },
+          ],
+        }),
+      })
+    );
+    expect(response.status).toBe(403);
+    expect(await response.json()).toEqual({
+      error: 'Ask Fathom chat is disabled for your company.',
+    });
+    expect(workPackMocks.entitlements).not.toHaveBeenCalled();
+    expect(workPackMocks.model).not.toHaveBeenCalled();
+    expect(workPackMocks.stream).not.toHaveBeenCalled();
+    expectNoSourceReads();
   });
 });

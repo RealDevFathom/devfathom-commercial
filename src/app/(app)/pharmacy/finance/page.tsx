@@ -1,5 +1,6 @@
 import { Suspense } from 'react';
 import { MarginComparisonSection } from './margin-comparison';
+import { LedgerReportsSection, LedgerReportsLoading } from './ledger-reports';
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
 import { Button } from '@/components/ui/button';
@@ -56,6 +57,10 @@ export default async function PharmacyFinancePage({
     kind?: string;
     marginFrom?: string;
     marginTo?: string;
+    ledgerFrom?: string;
+    ledgerTo?: string;
+    ledgerAt?: string;
+    ledgerBy?: string;
   }>;
 }) {
   const query = await searchParams;
@@ -264,6 +269,23 @@ export default async function PharmacyFinancePage({
         description="Post and allocate money, reconcile the bank, control periods, and publish approved tax versions."
       />
       <Suspense
+        key={[branch.id, query.ledgerFrom, query.ledgerTo, query.ledgerAt, query.ledgerBy].join(
+          ':'
+        )}
+        fallback={<LedgerReportsLoading />}
+      >
+        <LedgerReportsSection
+          caller={caller}
+          branch={branch}
+          from={query.ledgerFrom}
+          to={query.ledgerTo}
+          at={query.ledgerAt}
+          by={query.ledgerBy}
+          marginFrom={query.marginFrom}
+          marginTo={query.marginTo}
+        />
+      </Suspense>
+      <Suspense
         fallback={
           <SectionCard title="Gross-margin comparison" titleLevel={2}>
             <p role="status">Loading posted ledger comparison…</p>
@@ -275,6 +297,10 @@ export default async function PharmacyFinancePage({
           branch={branch}
           from={query.marginFrom}
           to={query.marginTo}
+          ledgerFrom={query.ledgerFrom}
+          ledgerTo={query.ledgerTo}
+          ledgerAt={query.ledgerAt}
+          ledgerBy={query.ledgerBy}
         />
       </Suspense>
       {query.notice ? (
@@ -287,6 +313,11 @@ export default async function PharmacyFinancePage({
       ) : null}
       <SectionCard title="Working branch" eyebrow="Organization scope">
         <form method="get" className="flex flex-wrap items-end gap-3">
+          {(
+            ['ledgerFrom', 'ledgerTo', 'ledgerAt', 'ledgerBy', 'marginFrom', 'marginTo'] as const
+          ).map((key) =>
+            query[key] ? <input key={key} type="hidden" name={key} value={query[key]} /> : null
+          )}
           <label className="min-w-64 text-sm text-text-body">
             Branch
             <select className={inputClass} name="branch" defaultValue={branch.id}>
