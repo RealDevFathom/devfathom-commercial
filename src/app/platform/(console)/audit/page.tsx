@@ -89,7 +89,12 @@ export default async function PlatformAuditPage({
           Filter
         </button>
       </form>
-      <div className="mt-6 overflow-x-auto border border-border-default bg-surface-card">
+      <div
+        role="region"
+        aria-label="Audit records"
+        tabIndex={0}
+        className="mt-6 overflow-x-auto border border-border-default bg-surface-card focus-visible:outline-2 focus-visible:outline-ring"
+      >
         <table className="w-full min-w-[1000px] text-left">
           <thead className="bg-surface-sunken/60 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
             <tr>
