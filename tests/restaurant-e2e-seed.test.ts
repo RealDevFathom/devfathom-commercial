@@ -3,6 +3,8 @@ import { resolve } from 'node:path';
 
 import { describe, expect, test } from 'vitest';
 
+import { RESTAURANT_E2E_BRANCH_COUNT } from '../scripts/restaurant-e2e-database';
+
 const seed = readFileSync(resolve(process.cwd(), 'scripts/seed-restaurant-e2e.ts'), 'utf8');
 const runner = readFileSync(resolve(process.cwd(), 'scripts/run-restaurant-e2e.ts'), 'utf8');
 const demoSeed = readFileSync(resolve(process.cwd(), 'scripts/seed-restaurant-demo.ts'), 'utf8');
@@ -127,12 +129,13 @@ describe('Restaurant E2E seed restoration guards', () => {
     expect(demoSeed).toContain("key: 'restaurant-pos'");
   });
 
-  test('keeps the two seeded branches at the restaurant location limit', () => {
+  test('keeps the seeded branches at the shared restaurant location limit', () => {
+    expect(RESTAURANT_E2E_BRANCH_COUNT).toBeGreaterThanOrEqual(2);
     expect(seed).toContain("locationsLimit: 'limit_restaurant_e2e_locations'");
-    expect(seed).toContain("['organization_limits', [IDS.locationsLimit]]");
+    expect(seed).toMatch(/\['organization_limits',\s*\[[^\]]*\bIDS\.locationsLimit\b/);
     expect(seed).toContain("key: 'restaurant.locations.max'");
     expect(seed).toMatch(
-      /tx\.organizationLimit\.upsert\([\s\S]*?update: \{[\s\S]*?value: 2,[\s\S]*?source: 'E2E_FIXTURE',[\s\S]*?createdAt: FIXED_AT,[\s\S]*?updatedAt: FIXED_AT,[\s\S]*?create: \{[\s\S]*?id: IDS\.locationsLimit,[\s\S]*?value: 2,[\s\S]*?source: 'E2E_FIXTURE'/
+      /tx\.organizationLimit\.upsert\([\s\S]*?update: \{[\s\S]*?value: RESTAURANT_E2E_BRANCH_COUNT,[\s\S]*?source: 'E2E_FIXTURE',[\s\S]*?createdAt: FIXED_AT,[\s\S]*?updatedAt: FIXED_AT,[\s\S]*?create: \{[\s\S]*?id: IDS\.locationsLimit,[\s\S]*?value: RESTAURANT_E2E_BRANCH_COUNT,[\s\S]*?source: 'E2E_FIXTURE'/
     );
   });
 });

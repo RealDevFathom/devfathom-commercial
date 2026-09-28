@@ -1,5 +1,7 @@
 import { expect, test } from '@playwright/test';
 
+import { RESTAURANT_E2E_BRANCH_COUNT } from '../../scripts/restaurant-e2e-database';
+
 import {
   assertTerminalSecretIsBrowserIsolated,
   e2eIdempotencyKey,
@@ -166,7 +168,9 @@ test('branch controls use readable codes and enforce duplicate, limit, and deact
   await expect(locations.getByRole('listitem').filter({ hasText: 'DHA Café' })).toContainText(
     /BR-\d+/
   );
-  await expect(page.getByText('2 of 2 active')).toBeVisible();
+  await expect(
+    page.getByText(`${RESTAURANT_E2E_BRANCH_COUNT} of ${RESTAURANT_E2E_BRANCH_COUNT} active`)
+  ).toBeVisible();
   await expect(page.getByRole('button', { name: 'Create branch' })).toBeDisabled();
   await expect(page.getByText(/branch limit has been reached/i)).toBeVisible();
   await expect(page.getByTitle('Choose another primary branch first.')).toBeDisabled();
@@ -177,14 +181,16 @@ test('branch controls use readable codes and enforce duplicate, limit, and deact
   await expect(
     page.getByText(/active terminals, assigned staff, open orders or drawers/i)
   ).toBeVisible();
-  await expect(page.getByText('2 of 2 active')).toBeVisible();
+  await expect(
+    page.getByText(`${RESTAURANT_E2E_BRANCH_COUNT} of ${RESTAURANT_E2E_BRANCH_COUNT} active`)
+  ).toBeVisible();
 
   await dhaRow.getByRole('button', { name: 'Edit' }).click();
   await expect(page.getByLabel('Branch code')).toBeDisabled();
   await page.getByLabel('Name').fill('Gulberg Café');
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.getByText(/branch with this name or code already exists/i)).toBeVisible();
-  await expect(locations.getByRole('listitem')).toHaveCount(2);
+  await expect(locations.getByRole('listitem')).toHaveCount(RESTAURANT_E2E_BRANCH_COUNT);
   await assertNoRawDatabaseIds(page);
 });
 
