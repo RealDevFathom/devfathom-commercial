@@ -20,6 +20,7 @@ import {
   targetNamespace,
   validateObservedMapping,
   pharmacyScalarHash,
+  requireUnchangedReferences,
   runDisposablePharmacyDraft,
 } from './seed-pharmacy-demo';
 
@@ -721,4 +722,78 @@ test('CLI bounded file reads, redaction, symlink refusal and unchanged input', a
   } finally {
     await rm(directory, { recursive: true, force: true });
   }
+});
+
+// Replay reference baseline. Mocked row shapes only: no database, no cluster, no service.
+// The real cluster proof is the integrated verifier case, not this file.
+const packRow = (over: Record<string, unknown> = {}) => ({
+  id: 'test-pack',
+  organizationId: 'test-org',
+  presentationId: 'test-presentation',
+  versionGroupId: 'test-version-group',
+  version: 1,
+  level: 'PACK',
+  unitsPerParent: 1,
+  parentPackLevelId: null,
+  effectiveFrom: new Date('2026-09-01T00:00:00.000Z'),
+  effectiveTo: null,
+  referencedAt: null,
+  ...over,
+});
+const referenceRows = (pack: Record<string, unknown>) => [
+  { model: 'Organization', id: 'test-org', hash: pharmacyScalarHash({ id: 'test-org' }) },
+  { model: 'PackLevel', id: 'test-pack', hash: pharmacyScalarHash(pack) },
+];
+const STAMPED = new Date('2026-09-07T07:00:00.000Z');
+
+test('receiving stamp on PackLevel is visible to the reference hash', () => {
+  // Proves the defect is real: the product trigger changes a hashed reference scalar.
+  assert.notEqual(
+    pharmacyScalarHash(packRow()),
+    pharmacyScalarHash(packRow({ referencedAt: STAMPED }))
+  );
+});
+
+test('replay accepts the retained post-apply reference observation', () => {
+  const prior = {
+    references: referenceRows(packRow()),
+    referencesAfter: referenceRows(packRow({ referencedAt: STAMPED })),
+  };
+  // What a replay actually reads back after the apply committed its own stamp.
+  requireUnchangedReferences(prior, referenceRows(packRow({ referencedAt: STAMPED })));
+  // The stale pre-apply observation is no longer accepted as the replay baseline.
+  assert.throws(
+    () => requireUnchangedReferences(prior, referenceRows(packRow())),
+    (error: unknown) => error instanceof PharmacyDemoRefusal && error.code === 'CHANGED_REFERENCE'
+  );
+});
+
+test('replay still refuses genuine reference drift after the stamp is retained', () => {
+  const prior = {
+    references: referenceRows(packRow()),
+    referencesAfter: referenceRows(packRow({ referencedAt: STAMPED })),
+  };
+  for (const tampered of [
+    // An operator edits a conversion scalar.
+    packRow({ referencedAt: STAMPED, unitsPerParent: 2 }),
+    // An operator unfreezes the pack by clearing the stamp; the database does not
+    // protect this column, so the receipt guard must.
+    packRow({ referencedAt: null }),
+    // An operator re-stamps with a different instant.
+    packRow({ referencedAt: new Date('2026-09-08T07:00:00.000Z') }),
+  ])
+    assert.throws(
+      () => requireUnchangedReferences(prior, referenceRows(tampered)),
+      (error: unknown) => error instanceof PharmacyDemoRefusal && error.code === 'CHANGED_REFERENCE'
+    );
+});
+
+test('draft-only and pre-existing receipts keep their original reference baseline', () => {
+  // No integration ran, so no post-apply observation was retained.
+  const prior = { references: referenceRows(packRow()) };
+  requireUnchangedReferences(prior, referenceRows(packRow()));
+  assert.throws(
+    () => requireUnchangedReferences(prior, referenceRows(packRow({ unitsPerParent: 2 }))),
+    (error: unknown) => error instanceof PharmacyDemoRefusal && error.code === 'CHANGED_REFERENCE'
+  );
 });
