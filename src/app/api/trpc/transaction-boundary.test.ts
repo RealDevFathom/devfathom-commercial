@@ -1,0 +1,357 @@
+/**
+ * The transaction boundary at `/api/trpc`.
+ *
+ * Every tRPC request runs inside one `withTenantDb` transaction, and the fetch
+ * adapter runs *inside* that transaction's callback. `fetchRequestHandler` never
+ * rejects — a resolver that throws comes back as a fulfilled error `Response` —
+ * so the callback used to resolve normally and the transaction COMMITTED the
+ * writes the failed procedure had already made. PostgreSQL aborts a transaction
+ * by itself only for SQL errors, so an application-level failure (a failed event
+ * write, a thrown invariant) was invisible to it.
+ *
+ * These tests exercise the REAL `withTenantDb`/`exposeNestedTransaction` wrapper
+ * and the REAL installed `fetchRequestHandler` against a real router, with only
+ * the Prisma client replaced by a double that records COMMIT on a resolved
+ * callback and ROLLBACK on a rejected one. That is the same composition the
+ * route builds in production, so what is pinned here is the control flow, not a
+ * mock's opinion.
+ *
+ * Not covered here, and still owed to a migrated multi-connection PostgreSQL/RLS
+ * acceptance run: that ROLLBACK actually discards the rows, that RLS holds
+ * across the boundary, and concurrent behaviour.
+ */
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+const harness = vi.hoisted(() => ({
+  /** Rows the current transaction has written, restored on ROLLBACK. */
+  writes: [] as string[],
+  /** One entry per transaction, in order. */
+  outcomes: [] as string[],
+  /** GUC statements the tenant scope issued before handing over the client. */
+  scopeStatements: [] as string[],
+}));
+
+vi.mock('server-only', () => ({}));
+
+vi.mock('@/lib/db', () => {
+  const tx = {
+    $queryRawUnsafe: async (sql: string) => {
+      harness.scopeStatements.push(sql);
+      return [];
+    },
+    ledger: {
+      create: async ({ data }: { data: { label: string } }) => {
+        harness.writes.push(data.label);
+        return data;
+      },
+    },
+  };
+
+  return {
+    db: {
+      async $transaction(run: (client: typeof tx) => Promise<unknown>) {
+        const snapshot = [...harness.writes];
+        try {
+          const result = await run(tx);
+          harness.outcomes.push('COMMIT');
+          return result;
+        } catch (error) {
+          harness.writes.splice(0, harness.writes.length, ...snapshot);
+          harness.outcomes.push('ROLLBACK');
+          throw error;
+        }
+      },
+    },
+  };
+});
+
+// A real router, with the production transformer, so the assertions below read
+// the serialization the client actually receives.
+vi.mock('@/server/routers/_app', async () => {
+  const { initTRPC } = await import('@trpc/server');
+  const superjson = (await import('superjson')).default;
+
+  const t = initTRPC
+    .context<{
+      db: { ledger: { create: (args: { data: { label: string } }) => Promise<unknown> } };
+    }>()
+    .create({ transformer: superjson });
+
+  return {
+    appRouter: t.router({
+      write: t.procedure.mutation(async ({ ctx }) => {
+        await ctx.db.ledger.create({ data: { label: 'requisition' } });
+        return { committed: true };
+      }),
+      // The shape of the reported defect: the draft and its idempotency action
+      // are written, then the event that gives them meaning fails.
+      writeThenFail: t.procedure.mutation(async ({ ctx }) => {
+        await ctx.db.ledger.create({ data: { label: 'draft' } });
+        await ctx.db.ledger.create({ data: { label: 'action' } });
+        throw new Error('event failed');
+      }),
+      read: t.procedure.query(() => ({ read: true })),
+    }),
+  };
+});
+
+vi.mock('@/server/routers/anonymous-fallback', () => ({ anonymousFallbackRouter: {} }));
+
+vi.mock('@/server/trpc', () => ({
+  createTRPCContext: async (opts: { db: unknown }) => ({ db: opts.db }),
+}));
+
+const mocks = vi.hoisted(() => ({
+  resolveTenantActor: vi.fn(),
+  requireOrganizationForRequest: vi.fn(),
+  resolveOrganizationById: vi.fn(),
+  resolveExplicitOrganizationByHost: vi.fn(),
+}));
+
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.resolveTenantActor }));
+vi.mock('@/lib/auth/anonymous-tenant', () => ({
+  organizationForAnonymousToken: vi.fn(async () => null),
+}));
+vi.mock('@/lib/auth/anonymous-rate-limit', () => ({
+  admitAnonymousRequest: () => ({ ok: true }),
+}));
+vi.mock('@/lib/tenancy/host', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/tenancy/host')>('@/lib/tenancy/host');
+  return {
+    ...actual,
+    requireOrganizationForRequest: mocks.requireOrganizationForRequest,
+    resolveOrganizationById: mocks.resolveOrganizationById,
+    resolveExplicitOrganizationByHost: mocks.resolveExplicitOrganizationByHost,
+  };
+});
+
+import { createTRPCUntypedClient, httpBatchLink, TRPCClientError } from '@trpc/client';
+import type { AnyTRPCRouter } from '@trpc/server';
+import superjson from 'superjson';
+import { TenantHostError } from '@/lib/tenancy/host';
+import { GET, POST } from './[trpc]/route';
+
+const ORGANIZATION = { id: 'org_acme', slug: 'acme', status: 'ACTIVE' };
+const SESSION = { expires: 'later', user: { id: 'user_1', organizationId: 'org_acme' } };
+
+const ENDPOINT = 'http://acme.example.com/api/trpc';
+const url = (path: string, query = '') => `${ENDPOINT}/${path}${query}`;
+
+/** A signed-in mutation call, batched exactly as `httpBatchLink` sends them. */
+function mutate(paths: string[], headers: Record<string, string> = {}) {
+  const input = Object.fromEntries(paths.map((_path, index) => [String(index), { json: null }]));
+  return POST(
+    new Request(url(paths.join(','), '?batch=1'), {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', ...headers },
+      body: JSON.stringify(input),
+    })
+  );
+}
+
+/**
+ * The client the app actually configures — real `httpBatchLink`, real superjson,
+ * real result decoding — with its fetch routed straight into the route handler.
+ * Whether a caller sees success or failure is decided by tRPC's own
+ * `transformResult`, not by this test's reading of the body.
+ */
+const client = createTRPCUntypedClient<AnyTRPCRouter>({
+  links: [
+    httpBatchLink({
+      url: ENDPOINT,
+      transformer: superjson,
+      fetch: ((input: RequestInfo | URL, init?: RequestInit) =>
+        POST(new Request(input as string, init))) as typeof fetch,
+    }),
+  ],
+});
+
+type Settled = PromiseSettledResult<unknown>;
+const reason = (settled: Settled) =>
+  settled.status === 'rejected' ? (settled.reason as TRPCClientError<AnyTRPCRouter>) : null;
+
+beforeEach(() => {
+  vi.clearAllMocks();
+  harness.writes.length = 0;
+  harness.outcomes.length = 0;
+  harness.scopeStatements.length = 0;
+  mocks.resolveTenantActor.mockResolvedValue({ session: SESSION, support: null });
+  mocks.requireOrganizationForRequest.mockResolvedValue(ORGANIZATION);
+});
+
+describe('a procedure that fails after writing', () => {
+  it('rolls the owning transaction back instead of committing a partial draft', async () => {
+    const response = await mutate(['writeThenFail']);
+
+    // The error still reaches the caller, with tRPC's own status and shape.
+    expect(response.status).toBe(500);
+    const body = (await response.json()) as [{ error: { json: { message: string } } }];
+    expect(body[0].error.json.message).toBe('event failed');
+
+    // The boundary: one transaction, rolled back, retaining nothing.
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('reports the rolled-back sibling of a batch as an error, never as a result', async () => {
+    const response = await mutate(['write', 'writeThenFail']);
+
+    // One transaction spans the batch, so it cannot half-apply. Discarding the
+    // successful sibling is the conservative direction: a client can retry it,
+    // but a half-applied batch could not be repaired.
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(harness.writes).toEqual([]);
+
+    // Nothing survived, so nothing may be described as a `result`. The 207 that
+    // "mixed outcomes" would produce is itself the bug: `httpBatchLink` reads
+    // each entry independently, so a `result` entry fulfils its caller's promise
+    // whatever the overall status says.
+    type Entry = { error: { json: { message: string; data: { path?: string } } } };
+    const body = (await response.json()) as [Entry, Entry];
+    expect(body).toHaveLength(2);
+    expect(body[0]).not.toHaveProperty('result');
+    expect(body[1]).not.toHaveProperty('result');
+    expect(response.status).toBe(500);
+
+    // The discarded entry says so, and names its own procedure.
+    expect(body[0].error.json.message).toMatch(/rolled back/i);
+    expect(body[0].error.json.data.path).toBe('write');
+
+    // The original failure is preserved exactly, not replaced by the rollback.
+    expect(body[1].error.json.message).toBe('event failed');
+    expect(body[1].error.json.data.path).toBe('writeThenFail');
+  });
+
+  it('rejects both promises in the real client, with no ID for a discarded row', async () => {
+    const settled = await Promise.allSettled([
+      client.mutation('write'),
+      client.mutation('writeThenFail'),
+    ]);
+
+    // One transaction proves the two calls really did share one HTTP request.
+    expect(harness.outcomes).toEqual(['ROLLBACK']);
+    expect(harness.writes).toEqual([]);
+
+    // This is the assertion that matters: the caller is told both calls failed.
+    // Before the fix the first promise fulfilled, handing the caller an ID for a
+    // row the rollback had already discarded — a success no refetch can undo.
+    expect(settled.map((entry) => entry.status)).toEqual(['rejected', 'rejected']);
+    expect(reason(settled[0])?.message).toMatch(/rolled back/i);
+    expect(reason(settled[0])?.data?.code).toBe('INTERNAL_SERVER_ERROR');
+    expect(reason(settled[1])?.message).toBe('event failed');
+  });
+});
+
+/**
+ * `application/jsonl` is answered with a lazy stream, so the adapter's response
+ * exists before its resolvers do. Nothing could be inferred from it inside the
+ * transaction callback, and the callback would resolve — and COMMIT — while the
+ * resolvers were still running.
+ */
+describe('streamed transports', () => {
+  it('refuses a trpc-accept: application/jsonl request before any resolver runs', async () => {
+    const response = await mutate(['write'], { 'trpc-accept': 'application/jsonl' });
+
+    expect(response.status).toBe(415);
+    const body = (await response.json()) as {
+      error: { json: { message: string; data: { code: string } } };
+    };
+    expect(body.error.json.data.code).toBe('UNSUPPORTED_MEDIA_TYPE');
+    expect(body.error.json.message).toMatch(/not supported/i);
+
+    // The point of the guard: no transaction was opened and nothing was written.
+    expect(harness.outcomes).toEqual([]);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('refuses it by the accept header too, which is the other way tRPC reads it', async () => {
+    const response = await mutate(['write'], { accept: 'application/json, application/jsonl' });
+
+    expect(response.status).toBe(415);
+    expect(harness.outcomes).toEqual([]);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('serves an ordinary request whose accept header is not streamed', async () => {
+    const response = await mutate(['write'], { accept: 'application/json' });
+
+    expect(response.status).toBe(200);
+    expect(harness.outcomes).toEqual(['COMMIT']);
+    expect(harness.writes).toEqual(['requisition']);
+  });
+});
+
+describe('requests that succeed', () => {
+  it('commits exactly once and keeps its writes', async () => {
+    const response = await mutate(['write']);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as [{ result: { data: { json: unknown } } }];
+    expect(body[0].result.data.json).toEqual({ committed: true });
+    expect(harness.outcomes).toEqual(['COMMIT']);
+    expect(harness.writes).toEqual(['requisition']);
+  });
+
+  it('keeps every entry of an all-succeeding batch a result', async () => {
+    const response = await mutate(['write', 'write']);
+
+    expect(response.status).toBe(200);
+    const body = (await response.json()) as [{ result: unknown }, { result: unknown }];
+    expect(body[0]).toHaveProperty('result');
+    expect(body[1]).toHaveProperty('result');
+    expect(harness.outcomes).toEqual(['COMMIT']);
+    expect(harness.writes).toEqual(['requisition', 'requisition']);
+  });
+
+  it('fulfils a batch in the real client and keeps its writes', async () => {
+    const settled = await Promise.allSettled([client.mutation('write'), client.query('read')]);
+
+    expect(settled).toEqual([
+      { status: 'fulfilled', value: { committed: true } },
+      { status: 'fulfilled', value: { read: true } },
+    ]);
+    // A query and a mutation cannot share a batch, so this is two requests.
+    expect(harness.outcomes).toEqual(['COMMIT', 'COMMIT']);
+    expect(harness.writes).toEqual(['requisition']);
+  });
+
+  it('still opens the tenant scope before the router runs', async () => {
+    await mutate(['write']);
+
+    expect(harness.scopeStatements).toHaveLength(1);
+    expect(harness.scopeStatements[0]).toContain('app.current_organization_id');
+  });
+
+  it('commits a read-only batch', async () => {
+    const query = encodeURIComponent(JSON.stringify({ '0': { json: null } }));
+    const response = await GET(new Request(url('read', `?batch=1&input=${query}`)));
+
+    expect(response.status).toBe(200);
+    expect(harness.outcomes).toEqual(['COMMIT']);
+  });
+});
+
+describe('paths that never reach a transaction', () => {
+  it('answers 401 for an unauthenticated, non-allowlisted procedure', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(null);
+
+    const response = await mutate(['write']);
+
+    expect(response.status).toBe(401);
+    await expect(response.json()).resolves.toEqual({ error: 'Unauthorized' });
+    expect(harness.outcomes).toEqual([]);
+    expect(harness.writes).toEqual([]);
+  });
+
+  it('still maps a tenant host failure to its own status', async () => {
+    mocks.requireOrganizationForRequest.mockRejectedValue(
+      new TenantHostError('Workspace is suspended.', 423)
+    );
+
+    const response = await mutate(['write']);
+
+    expect(response.status).toBe(423);
+    await expect(response.json()).resolves.toEqual({ error: 'Workspace is suspended.' });
+    expect(harness.outcomes).toEqual([]);
+  });
+});
