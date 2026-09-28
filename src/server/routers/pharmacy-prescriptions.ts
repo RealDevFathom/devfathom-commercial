@@ -17,6 +17,13 @@ import {
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
+  configuredRxOcrAdapterName,
+  proposeRxPrefill,
+  resolveRxOcrAdapter,
+  RxOcrError,
+} from '@/lib/pharmacy/rx-ocr';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
@@ -52,6 +59,35 @@ const fileProcedure = publicProcedure
     }
     return next();
   });
+
+/**
+ * Load a stored Rx image the caller may see. Before capture only the uploader
+ * may preview it; after capture the stored prescription must prove the same
+ * patient/file binding.
+ */
+async function readableSourceFile(
+  ctx: {
+    db: ScopedDb;
+    entitlements: { organizationId: string };
+    session: { user: { id: string } };
+  },
+  sourceFileRef: string
+) {
+  const organizationId = ctx.entitlements.organizationId;
+  const file = await loadPrescriptionFile(organizationId, sourceFileRef);
+  const patient = await ctx.db.pharmacyPatient.findFirst({
+    where: { id: file.patientId, organizationId },
+    select: { id: true },
+  });
+  const prescription = await ctx.db.prescription.findFirst({
+    where: { organizationId, patientId: file.patientId, sourceFileRef },
+    select: { id: true },
+  });
+  if (!patient || (!prescription && file.uploadedByUserId !== ctx.session.user.id)) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
+  }
+  return file;
+}
 
 export const pharmacyPrescriptionsRouter = router({
   workspace: protectedProcedure
@@ -175,22 +211,50 @@ export const pharmacyPrescriptionsRouter = router({
   readSource: fileProcedure
     .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
     .query(async ({ ctx, input }) => {
-      const organizationId = ctx.entitlements.organizationId;
-      const file = await loadPrescriptionFile(organizationId, input.sourceFileRef);
-      const patient = await ctx.db.pharmacyPatient.findFirst({
-        where: { id: file.patientId, organizationId },
-        select: { id: true },
-      });
-      // Before capture only the uploader may preview. After capture the stored
-      // prescription must prove the same patient/file binding.
-      const prescription = await ctx.db.prescription.findFirst({
-        where: { organizationId, patientId: file.patientId, sourceFileRef: input.sourceFileRef },
-        select: { id: true },
-      });
-      if (!patient || (!prescription && file.uploadedByUserId !== ctx.session.user.id)) {
-        throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
-      }
+      const file = await readableSourceFile(ctx, input.sourceFileRef);
       return { dataBase64: file.dataBase64, contentType: file.contentType };
+    }),
+
+  /**
+   * PH-A3: read drug and dose off a stored Rx image as a PROPOSAL. Nothing is
+   * written; the pharmacist confirms each value into the capture form, and
+   * `capture` never reads OCR output. Off unless PHARMACY_RX_OCR_ADAPTER is set.
+   */
+  extractSource: fileProcedure
+    .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const adapterName = configuredRxOcrAdapterName();
+      if (!adapterName) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Prescription reading is not enabled for this workspace.',
+        });
+      }
+      const file = await readableSourceFile(ctx, input.sourceFileRef);
+      let extraction;
+      try {
+        extraction = await resolveRxOcrAdapter(adapterName).extract({
+          content: file.bytes,
+          mimeType: file.contentType,
+          sourceFileRef: input.sourceFileRef,
+        });
+      } catch (error) {
+        if (error instanceof RxOcrError) {
+          // Provider detail stays server-side; the counter gets an operator sentence.
+          throw new TRPCError({
+            code: error.reason === 'ADAPTER_UNAVAILABLE' ? 'PRECONDITION_FAILED' : 'BAD_GATEWAY',
+            message: 'The prescription could not be read. Enter the details by hand.',
+            cause: error,
+          });
+        }
+        throw error;
+      }
+      const medicines = await ctx.db.medicine.findMany({
+        where: { organizationId: ctx.entitlements.organizationId, saleable: true },
+        select: { id: true, productName: true, brandName: true },
+        orderBy: { productName: 'asc' },
+      });
+      return proposeRxPrefill(extraction, medicines);
     }),
 
   capture: fileProcedure
