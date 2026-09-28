@@ -354,7 +354,7 @@ test('creates, costs, produces, delivers, and closes a catering order', async ({
   await page.getByLabel('Scheduled').fill('2026-09-20T16:00');
   await page.getByLabel('Driver').selectOption(fixture.manager.staffProfileId);
   await page.getByLabel('Dispatched').fill('2026-09-20T16:15');
-  await page.getByLabel('Delivered').fill('2026-09-20T16:45');
+  await page.getByLabel('Delivered', { exact: true }).fill('2026-09-20T16:45');
   await page.getByLabel('Vehicle').fill('Catering Van 1');
   await page.getByLabel('Delivery notes').fill('Delivered to event coordinator');
   await waitForMutation(page, 'restaurantCatering.setDelivery', () =>
