@@ -24,7 +24,9 @@ const baseURL = process.env.PHARMACY_PURCHASING_BASE_URL ?? `http://ph-pur-e2e.l
 export default defineConfig({
   ...base,
   testDir: './tests/e2e',
-  testMatch: ['pharmacy-purchasing.spec.ts'],
+  // WHA-1602: the expiry board runs on this lane's tenant after the PH-PUR walk,
+  // seeded by `tests/e2e/pharmacy-inventory-expiry-seed.ts`.
+  testMatch: ['pharmacy-purchasing.spec.ts', 'pharmacy-inventory-expiry.spec.ts'],
   testIgnore: undefined,
   fullyParallel: false,
   workers: 1,
