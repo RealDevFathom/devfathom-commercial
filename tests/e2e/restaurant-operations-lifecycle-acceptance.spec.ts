@@ -2,7 +2,11 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import pg from 'pg';
 
 import { signInAs } from './fixtures/restaurant-actor-accessibility';
-import { restaurantE2eCredentials as fixture } from './restaurant-fixture';
+import {
+  restaurantE2eCredentials as fixture,
+  installSeededTerminalCookie,
+  terminalBrowserBaseUrl,
+} from './restaurant-fixture';
 
 /**
  * WHA-1566 — browser acceptance for the two Restaurant daily-operations surfaces
@@ -762,4 +766,160 @@ test('an operator without staff:manage is refused the manager roster and keeps o
   await expect(
     page.getByRole('button', { name: 'Export attendance CSV', exact: true })
   ).toHaveCount(0);
+});
+
+// WHA-1599: back-office mutations must reach the actual terminal surfaces.
+// Riders and platforms (WHA-219) are outside this demo acceptance scope.
+async function openOperationsPos(page: Page, delivery: boolean) {
+  const origin = terminalBrowserBaseUrl();
+  const device = delivery ? fixture.delivery.pos : fixture.pos;
+  const operator = delivery ? fixture.deliveryOperator : fixture.operator;
+  await installSeededTerminalCookie(page.context(), device, origin);
+  await page.goto(new URL('/pos', origin).href);
+  await page.getByLabel('Operator', { exact: true }).selectOption(operator.staffProfileId);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(operator.pin);
+  await page.getByRole('button', { name: 'Unlock terminal' }).click();
+  await expect(page.getByRole('heading', { name: 'Order pad' })).toBeVisible();
+}
+
+test('WHA-1599 floor table edit reaches the POS table map', async ({ page }, testInfo) => {
+  test.slow();
+  await signInAs(page, 'restaurantAdmin');
+  await page.goto(new URL('/restaurant/floor', page.url()).href);
+  await page.getByLabel('Branch', { exact: true }).selectOption(fixture.branchId);
+  const original = await withTenantPool(
+    async (pool) =>
+      (
+        await tenantQuery<{ code: string }>(
+          pool,
+          'SELECT code FROM restaurant_tables WHERE id = $1',
+          [fixture.table.id]
+        )
+      ).rows[0]
+  );
+  expect(original).toBeTruthy();
+  const card = main(page)
+    .locator('div.rounded-md')
+    .filter({
+      has: page.getByText(`Table ${original.code}`, { exact: true }),
+    })
+    .filter({ has: page.getByRole('button', { name: 'Edit', exact: true }) });
+  await card.getByRole('button', { name: 'Edit', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Table code').fill('QA1599');
+  await dialog.getByLabel('Capacity').fill('7');
+  await dialog.getByRole('button', { name: 'Edit table', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(main(page).getByText('Table QA1599', { exact: true })).toBeVisible();
+  await testInfo.attach('floor-edited', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
+  await withTenantPool(async (pool) => {
+    const result = await tenantQuery(
+      pool,
+      'SELECT code, capacity FROM restaurant_tables WHERE id = $1',
+      [fixture.table.id]
+    );
+    expect(result.rows).toEqual([{ code: 'QA1599', capacity: 7 }]);
+  });
+  await openOperationsPos(page, false);
+  await page.getByLabel('Channel', { exact: true }).selectOption('DINE_IN');
+  const table = page.getByRole('checkbox', { name: /QA1599.*7 seats/ });
+  await expect(table).toBeEnabled();
+  await table.check();
+  await expect(table).toBeChecked();
+  await testInfo.attach('pos-updated-table', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
+});
+
+test('WHA-1599 delivery zone and saved address attach through POS to KDS', async ({
+  page,
+  browser,
+}, testInfo) => {
+  test.slow();
+  await signInAs(page, 'restaurantAdmin');
+  await page.goto(new URL('/restaurant/delivery', page.url()).href);
+  await page
+    .getByRole('combobox', { name: 'Branch', exact: true })
+    .selectOption(fixture.delivery.branchId);
+  await page.getByRole('button', { name: 'Add zone', exact: true }).click();
+  let dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Zone name').fill('QA1599 zone');
+  await dialog.getByLabel('Area or postal label').fill('QA1599 area');
+  await dialog.getByLabel('Fixed fee').fill('4.25');
+  await dialog.getByLabel('Promised minutes').fill('35');
+  await dialog.getByRole('button', { name: 'Add zone', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(main(page).getByText('QA1599 zone', { exact: true })).toBeVisible();
+  await page.getByLabel('Customer', { exact: true }).selectOption(fixture.customer.id);
+  await page.getByRole('button', { name: 'Add address', exact: true }).click();
+  dialog = page.getByRole('dialog');
+  await dialog.getByLabel('Address label').fill('QA1599 home');
+  await dialog.getByLabel('Recipient name').fill('E2E Guest');
+  await dialog.getByLabel('Phone', { exact: true }).fill('+923001599001');
+  await dialog.getByLabel('Country code').fill('PK');
+  await dialog.getByLabel('Address line 1', { exact: true }).fill('1599 Test Street');
+  await dialog.getByLabel('City or locality').fill('Lahore');
+  await dialog.getByRole('button', { name: 'Add address', exact: true }).click();
+  await expect(dialog).toBeHidden();
+  await expect(main(page).getByText('QA1599 home', { exact: true })).toBeVisible();
+  await testInfo.attach('delivery-backoffice', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
+  await openOperationsPos(page, true);
+  await page.getByLabel('Channel', { exact: true }).selectOption('DELIVERY');
+  await page.getByLabel('Customer name').fill(fixture.customer.name);
+  await page.getByRole('button', { name: 'Search', exact: true }).click();
+  await page.getByRole('button', { name: new RegExp(fixture.customer.name) }).click();
+  await page.getByLabel('Saved address').selectOption({ label: 'QA1599 home · E2E Guest' });
+  await page.getByLabel('Delivery zone').selectOption({ label: 'QA1599 zone' });
+  await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
+  await page.getByLabel(new RegExp(fixture.modifier.name)).check();
+  await page.getByRole('button', { name: 'Add to order' }).click();
+  const response = page.waitForResponse(
+    (r) => r.url().endsWith('/api/restaurant/orders/open') && r.request().method() === 'POST'
+  );
+  await page.getByRole('button', { name: 'Open order', exact: true }).click();
+  const openedResponse = await response;
+  expect(openedResponse.ok()).toBeTruthy();
+  const opened = (await openedResponse.json()) as { orderId: string; orderNumber: number };
+  await expect(
+    page.getByText(`Delivery order ${opened.orderNumber} opened and fulfillment attached.`)
+  ).toBeVisible();
+  await page.getByRole('button', { name: 'Send whole order' }).click();
+  await expect(page.getByText('Order sent to kitchen.')).toBeVisible();
+  await withTenantPool(async (pool) => {
+    const result = await tenantQuery(
+      pool,
+      'SELECT "addressLine1Snapshot", "zoneNameSnapshot", "deliveryFeeSnapshot"::text AS fee FROM restaurant_delivery_fulfillments WHERE "orderId" = $1',
+      [opened.orderId]
+    );
+    expect(result.rows).toEqual([
+      { addressLine1Snapshot: '1599 Test Street', zoneNameSnapshot: 'QA1599 zone', fee: '4.25' },
+    ]);
+  });
+  const origin = terminalBrowserBaseUrl();
+  const context = await browser.newContext({ baseURL: origin });
+  try {
+    await installSeededTerminalCookie(context, fixture.delivery.kds, origin);
+    const kds = await context.newPage();
+    await kds.goto('/kds');
+    await kds.getByLabel('Acting operator').selectOption(fixture.deliveryOperator.staffProfileId);
+    await kds.getByLabel('Operator PIN', { exact: true }).fill(fixture.deliveryOperator.pin);
+    await kds.getByRole('button', { name: 'Verify PIN and unlock' }).click();
+    const order = kds.getByRole('article').filter({ hasText: `Order #${opened.orderNumber}` });
+    await expect(order.getByText(fixture.customer.name, { exact: true })).toBeVisible();
+    await expect(order.getByText('4.25', { exact: true })).toBeVisible();
+    await expect(order.getByText(/Lahore/)).toBeVisible();
+    await testInfo.attach('kds-delivery-board', {
+      body: await kds.screenshot({ fullPage: true }),
+      contentType: 'image/png',
+    });
+  } finally {
+    await context.close();
+  }
 });
