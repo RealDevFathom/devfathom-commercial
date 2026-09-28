@@ -8,6 +8,7 @@ import {
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
+import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { verticalForModuleKey } from '@/lib/module-catalog';
 import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -83,6 +84,10 @@ export default async function OrganizationDetailPage({
           identityConnections: { orderBy: { createdAt: 'desc' } },
           scimTokens: { orderBy: { createdAt: 'desc' } },
           scimEvents: { orderBy: { createdAt: 'desc' }, take: 20 },
+          departments: {
+            where: { active: true },
+            orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+          },
           roles: {
             orderBy: { name: 'asc' },
             include: {
@@ -158,7 +163,10 @@ export default async function OrganizationDetailPage({
         },
       }),
     ]);
+    const pharmacyReadiness =
+      organization?.vertical === 'PHARMACY' ? await evaluatePharmacyReadiness(db, id, now) : null;
     return {
+      pharmacyReadiness,
       organization,
       modules,
       packages,
@@ -363,6 +371,55 @@ export default async function OrganizationDetailPage({
 
       <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-7">
+          {vertical !== 'RESTAURANT' &&
+          !['TERMINATED', 'PURGING', 'PURGED'].includes(organization.status) ? (
+            <section
+              className="rounded-2xl border border-border-default bg-surface-card p-5"
+              aria-labelledby="vertical-readiness"
+            >
+              <h2 id="vertical-readiness" className="font-display text-xl font-semibold">
+                {verticalDefinition.label} readiness
+              </h2>
+              <p className="mt-2 text-sm text-text-muted">
+                Activation requires the lifecycle checks below
+                {vertical === 'PHARMACY' ? ' and all pharmacy onboarding gates.' : '.'}
+              </p>
+              <Link
+                href="#lifecycle"
+                className="mt-3 inline-flex min-h-11 items-center text-sm underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Review lifecycle requirements
+              </Link>
+              {data.pharmacyReadiness ? (
+                <ul className="mt-4 divide-y divide-border-subtle">
+                  {data.pharmacyReadiness.gates.map((gate) => (
+                    <li
+                      key={gate.gate}
+                      className="flex flex-wrap items-center justify-between gap-3 py-3"
+                    >
+                      <span className="text-sm text-text-body">
+                        {gate.step}. {gate.label}
+                      </span>
+                      <PlatformStatus value={gate.status} />
+                      {gate.downgradeReason ? (
+                        <p className="w-full text-xs text-text-muted">
+                          {gate.downgradeReason === 'EVIDENCE_ABSENT'
+                            ? 'Required evidence is missing.'
+                            : 'Recorded attestation needs evidence and an accountable operator.'}
+                        </p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-sm text-text-body">
+                  {activationGates.length === 0
+                    ? 'All agency activation requirements are met.'
+                    : `${activationGates.length} agency activation requirements remain.`}
+                </p>
+              )}
+            </section>
+          ) : null}
           {vertical === 'RESTAURANT' &&
           !['TERMINATED', 'PURGING', 'PURGED'].includes(organization.status) ? (
             <section
@@ -985,14 +1042,10 @@ export default async function OrganizationDetailPage({
                           label: 'Department',
                           type: 'select',
                           defaultValue: user.department,
-                          options: [
-                            'LEADERSHIP',
-                            'ENGINEERING',
-                            'PRODUCT',
-                            'QUALITY',
-                            'MARKETING',
-                            'DESIGN',
-                          ].map((value) => ({ label: value, value })),
+                          options: organization.departments.map((department) => ({
+                            label: department.name,
+                            value: department.key,
+                          })),
                         },
                       ]}
                     />
