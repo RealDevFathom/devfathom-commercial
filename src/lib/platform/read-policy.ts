@@ -22,6 +22,12 @@ export const PLATFORM_READ_ROUTES = [
     capability: 'deployments:read',
     group: 'Operations',
   },
+  {
+    label: 'Support sessions',
+    href: '/platform/support',
+    capability: 'support:write',
+    group: 'Operations',
+  },
   { label: 'Jobs', href: '/platform/jobs', capability: 'jobs:read', group: 'Operations' },
   { label: 'Sales CRM', href: '/platform/crm', capability: 'crm:read', group: 'Revenue' },
   {
