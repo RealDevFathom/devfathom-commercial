@@ -16,6 +16,7 @@ export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 
 export class PharmacySettlementError extends Error {
   constructor(
     readonly reason:
+      | 'DAY_CLOSED'
       | 'SALE_NOT_OPEN'
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
@@ -208,6 +209,31 @@ async function bindIdempotency(
   return prior;
 }
 
+/** Shared transaction lock: closing cannot race a new tender or drawer write. */
+export async function lockPharmacyDay(db: ScopedDb, scope: LedgerScope, date: Date) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${date.toISOString().slice(0, 10)}`}))`
+  );
+}
+
+export async function requirePharmacyDayOpen(db: ScopedDb, scope: LedgerScope, date: Date) {
+  await lockPharmacyDay(db, scope, date);
+  const close = await db.pharmacyDailyClose.findFirst({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, businessDate: date },
+    select: { id: true },
+  });
+  if (close) throw new PharmacySettlementError('DAY_CLOSED');
+}
+
+async function lockDrawerDay(db: ScopedDb, scope: LedgerScope, drawerSessionId: string) {
+  const drawer = await db.pharmacyDrawerSession.findFirst({
+    where: { id: drawerSessionId, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { businessDate: true },
+  });
+  if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+  await requirePharmacyDayOpen(db, scope, drawer.businessDate);
+}
+
 export async function applyPharmacyTender(
   db: ScopedDb,
   scope: LedgerScope,
@@ -233,6 +259,7 @@ export async function applyPharmacyTender(
     payloadHash
   );
   if (idem.resultPayload) return { ...(idem.resultPayload as object), replayed: true };
+  await requirePharmacyDayOpen(db, scope, input.businessDate);
 
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_sales WHERE id = ${input.saleId} AND "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId} FOR UPDATE`
@@ -271,6 +298,7 @@ export async function applyPharmacyTender(
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         deviceId: input.deviceId,
+        businessDate: input.businessDate,
         status: 'OPEN',
       },
     });
@@ -459,6 +487,7 @@ export async function refundPharmacyTender(
     payloadHash
   );
   if (idem.resultPayload) return { ...(idem.resultPayload as object), replayed: true };
+  await requirePharmacyDayOpen(db, scope, input.businessDate);
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_tenders WHERE id=${input.originalTenderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`
   );
@@ -496,6 +525,7 @@ export async function refundPharmacyTender(
         organizationId: scope.organizationId,
         branchId: scope.branchId,
         deviceId: input.deviceId,
+        businessDate: input.businessDate,
         status: 'OPEN',
       },
     });
@@ -595,6 +625,7 @@ export async function openPharmacyDrawer(
 ) {
   if (!Number.isSafeInteger(input.openingFloatMinor) || input.openingFloatMinor < 0)
     throw new PharmacySettlementError('INVALID_AMOUNT');
+  await requirePharmacyDayOpen(db, scope, input.businessDate);
   const drawer = await db.pharmacyDrawerSession.create({
     data: {
       organizationId: scope.organizationId,
@@ -630,6 +661,7 @@ export async function recordPharmacyCashMovement(
 ) {
   assertPositiveMinor(input.amountMinor);
   if (!input.reason.trim()) throw new PharmacySettlementError('INVALID_AMOUNT');
+  await lockDrawerDay(db, scope, input.drawerSessionId);
   const drawer = await db.pharmacyDrawerSession.findFirst({
     where: {
       id: input.drawerSessionId,
@@ -658,6 +690,7 @@ export async function closePharmacyDrawer(
 ) {
   if (!Number.isSafeInteger(input.countedCashMinor) || input.countedCashMinor < 0)
     throw new PharmacySettlementError('INVALID_AMOUNT');
+  await lockDrawerDay(db, scope, input.drawerSessionId);
   const drawer = await db.pharmacyDrawerSession.findFirst({
     where: {
       id: input.drawerSessionId,

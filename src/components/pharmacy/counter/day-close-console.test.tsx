@@ -1,0 +1,109 @@
+import { fireEvent, render, screen, cleanup } from '@testing-library/react';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+const mocks = vi.hoisted(() => ({
+  role: 'ADMIN',
+  loading: false,
+  error: null as Error | null,
+  mutate: vi.fn(),
+}));
+vi.mock('next-auth/react', () => ({
+  useSession: () => ({
+    status: 'authenticated',
+    data: {
+      user: {
+        id: 'owner',
+        role: mocks.role,
+        organizationId: 'org',
+        status: 'ACTIVE',
+        sessionRevoked: false,
+      },
+    },
+  }),
+}));
+vi.mock('@/components/entitlements-provider', () => ({
+  useEntitlements: () => ({ organizationId: 'org', enabledModules: ['pharmacy-counter'] }),
+}));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    pharmacySales: {
+      counterBranches: {
+        useQuery: () => ({ data: { branches: [{ id: 'b', name: 'Main' }] }, isSuccess: true }),
+      },
+      closePreview: {
+        useQuery: () => ({
+          isLoading: mocks.loading,
+          error: mocks.error,
+          refetch: vi.fn(),
+          data: {
+            branchName: 'Main',
+            close: null,
+            totals: { cashExpectedMinor: 12500, sourceHash: 'hash' },
+            drawers: [
+              {
+                id: 'd',
+                deviceId: 'counter',
+                status: 'OPEN',
+                expectedMinor: 12500,
+                countedMinor: null,
+              },
+            ],
+          },
+        }),
+      },
+      closeDay: { useMutation: () => ({ mutate: mocks.mutate, reset: vi.fn() }) },
+    },
+  },
+}));
+import { cashMinor, PharmacyDayCloseConsole } from './day-close-console';
+afterEach(cleanup);
+beforeEach(() => {
+  mocks.role = 'ADMIN';
+  mocks.loading = false;
+  mocks.error = null;
+  mocks.mutate.mockReset();
+});
+describe('day-close console', () => {
+  it('parses exact cash minor units without rounding an invalid amount', () => {
+    expect(cashMinor('125.01')).toBe(12501);
+    expect(cashMinor('0')).toBe(0);
+    for (const bad of ['', '-1', '1.001', '1e3', '21474836.48']) expect(cashMinor(bad)).toBeNull();
+  });
+  it('shows permission denial for a non-administrator', () => {
+    mocks.role = 'MEMBER';
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/Sign in as a pharmacy administrator/)).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Close and lock day' })).not.toBeInTheDocument();
+  });
+  it('shows loading and retryable errors', () => {
+    mocks.loading = true;
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText(/Loading cash movements/)).toBeInTheDocument();
+    mocks.loading = false;
+    mocks.error = new Error('Network unavailable');
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('alert')).toHaveTextContent('Network unavailable');
+    expect(screen.getByRole('button', { name: 'Retry preview' })).toBeInTheDocument();
+  });
+  it('requires a count, variance note and explicit confirmation before submitting', () => {
+    render(<PharmacyDayCloseConsole />);
+    const submit = screen.getByRole('button', { name: 'Close and lock day' });
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Counted cash for drawer 1 (PKR)'), {
+      target: { value: '124.00' },
+    });
+    expect(screen.getByTestId('Variance')).toHaveTextContent('-1.00');
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(submit).toBeDisabled();
+    fireEvent.change(screen.getByLabelText(/Variance note/), {
+      target: { value: 'Short by one rupee' },
+    });
+    expect(submit).toBeEnabled();
+    fireEvent.click(submit);
+    expect(mocks.mutate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        counts: [{ drawerSessionId: 'd', countedCashMinor: 12400 }],
+        varianceNote: 'Short by one rupee',
+      })
+    );
+  });
+});

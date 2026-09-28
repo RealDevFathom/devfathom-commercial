@@ -1,3 +1,4 @@
+import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -142,7 +143,60 @@ function fail(error: unknown): never {
   throw error;
 }
 
+const closeDate = z
+  .date()
+  .refine(
+    (date) =>
+      date.getUTCHours() === 0 &&
+      date.getUTCMinutes() === 0 &&
+      date.getUTCSeconds() === 0 &&
+      date.getUTCMilliseconds() === 0,
+    'Choose a date without a time.'
+  );
+function requireCloseAccess(ctx: TRPCContext) {
+  if (ctx.session?.user.role !== 'ADMIN')
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Administrator access is required to reconcile and close a day.',
+    });
+}
+
 export const pharmacySalesRouter = router({
+  closePreview: protectedProcedure
+    .input(z.object({ branchId, businessDate: closeDate }).strict())
+    .query(({ ctx, input }) => {
+      requireCloseAccess(ctx);
+      return ctx.db.$transaction((tx) =>
+        readPharmacyClose(txDb(tx), scopeFor(ctx, input.branchId), input.businessDate)
+      );
+    }),
+  closeDay: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          businessDate: closeDate,
+          sourceHash: z.string().length(64),
+          counts: z
+            .array(
+              z
+                .object({
+                  drawerSessionId: z.string().min(1),
+                  countedCashMinor: z.number().int().min(0).max(2147483647),
+                })
+                .strict()
+            )
+            .max(500),
+          varianceNote: z.string().trim().max(1000),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) => {
+      requireCloseAccess(ctx);
+      return ctx.db.$transaction((tx) =>
+        closePharmacyDay(txDb(tx), scopeFor(ctx, input.branchId), input)
+      );
+    }),
   customerSnapshot: protectedProcedure
     .input(z.object({ branchId, customerId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
@@ -258,11 +312,12 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
+    .mutation(({ ctx, input }) => {
+      requireCloseAccess(ctx);
+      return ctx.db.$transaction((tx) =>
         cutPharmacyDailyClose(txDb(tx), scopeFor(ctx, input.branchId), input)
-      )
-    ),
+      );
+    }),
   tenderOutcome: protectedProcedure
     .input(tenderInput)
     .query(({ ctx, input }) =>

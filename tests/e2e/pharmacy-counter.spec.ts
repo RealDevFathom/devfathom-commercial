@@ -351,6 +351,80 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await expect(placeholderNotice).toHaveCount(0);
 });
 
+test('day close — open sell count lock and print Z-report', async ({ page, context }) => {
+  await openCounter(page);
+  await openDrawer(page);
+  const otc = PHARMACY_E2E.medicines.otc;
+  await search(page, otc.barcode);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 2);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
+  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
+  await page.goto('/pharmacy/counter/close');
+  await expect(page.getByRole('heading', { name: 'Day close', exact: true })).toBeVisible();
+  const inputs = page.getByLabel(/Counted cash for drawer/);
+  await expect(inputs.first()).toBeVisible();
+  for (let i = 0; i < (await inputs.count()); i++) {
+    const field = inputs.nth(i);
+    const row = field.locator('..').locator('..');
+    const text = await row.innerText();
+    const expected = Number(text.match(/Expected: PKR ([\d,.]+)/)![1].replaceAll(',', ''));
+    await field.fill((expected - (i === 0 ? 1 : 0)).toFixed(2));
+  }
+  await expect(page.getByTestId('Variance')).toHaveText('-1.00');
+  await page.getByLabel('Variance note').fill('One rupee short at nightly count');
+  await page.getByRole('checkbox').focus();
+  await page.getByRole('checkbox').press('Space');
+  await pressControl(page.getByRole('button', { name: 'Close and lock day' }));
+  await expect(
+    page.getByText('Day closed. New tenders and drawer changes for this business date are blocked.')
+  ).toBeVisible();
+  await page.reload();
+  await expect(page.getByText('Variance note: One rupee short at nightly count')).toBeVisible();
+  for (const width of [375, 768, 1024, 1440]) {
+    await page.setViewportSize({ width, height: 900 });
+    for (const theme of ['light', 'dark']) {
+      await page.evaluate(
+        (theme) => document.documentElement.setAttribute('data-theme', theme),
+        theme
+      );
+      await page.emulateMedia({ reducedMotion: theme === 'dark' ? 'reduce' : 'no-preference' });
+      expect(
+        await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+      ).toBe(true);
+      await page.screenshot({
+        path: `${process.env.PAPERCLIP_RUN_SCRATCH_DIR}/day-close-${width}-${theme}.png`,
+        fullPage: true,
+      });
+    }
+  }
+  await context.addInitScript(() => {
+    window.print = () => {};
+  });
+  const popupPromise = page.waitForEvent('popup');
+  await pressControl(page.getByRole('button', { name: 'Print Z-report' }));
+  const popup = await popupPromise;
+  await expect(popup.locator('body')).toContainText('Z-report');
+  await expect(popup.locator('body')).toContainText('One rupee short at nightly count');
+  await popup.close();
+  await page.goto('/pharmacy/counter');
+  await pressControl(page.getByRole('button', { name: 'Open drawer' }));
+  await expect(
+    page.getByRole('status').filter({ hasText: /This business day is closed/ })
+  ).toBeVisible();
+  await search(page, otc.barcode);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 1);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name);
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
+  await expect(page.getByText(/This business day is closed/).first()).toBeVisible();
+});
+
 test('this spec drives the counter without a pointer', async () => {
   const source = await readFile(join(process.cwd(), 'tests/e2e/pharmacy-counter.spec.ts'), 'utf8');
   // Strip this assertion's own literals so it cannot match itself.

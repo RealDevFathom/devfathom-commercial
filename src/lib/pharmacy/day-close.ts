@@ -1,0 +1,97 @@
+import { TRPCError } from '@trpc/server';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import type { LedgerScope } from './stock-ledger';
+import {
+  closePharmacyDrawer,
+  computePharmacyClose,
+  cutPharmacyDailyClose,
+  foldExpectedCash,
+  lockPharmacyDay,
+  saleTotalMinor,
+  type DrawerMovement,
+} from './settlement';
+
+export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, businessDate: Date) {
+  await lockPharmacyDay(db, scope, businessDate);
+  const where = { organizationId: scope.organizationId, branchId: scope.branchId, businessDate };
+  const branch = await db.pharmacyBranch.findFirst({
+    where: { id: scope.branchId, organizationId: scope.organizationId, active: true },
+    select: { name: true },
+  });
+  if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pharmacy branch not found.' });
+  const [close, drawers, sales, refunds] = await Promise.all([
+    db.pharmacyDailyClose.findFirst({ where, orderBy: { sequence: 'desc' } }),
+    db.pharmacyDrawerSession.findMany({
+      where,
+      include: { movements: true },
+      orderBy: { id: 'asc' },
+    }),
+    db.pharmacySale.findMany({
+      where: { ...where, status: 'COMPLETED' },
+      include: { lines: true },
+    }),
+    db.pharmacyRefund.findMany({ where }),
+  ]);
+  const rows = drawers.map((d) => ({
+    id: d.id,
+    deviceId: d.deviceId,
+    status: d.status,
+    expectedMinor: foldExpectedCash(
+      d.movements.filter((m) => m.kind !== 'CLOSING_COUNT') as DrawerMovement[]
+    ),
+    countedMinor: d.countedCashMinor,
+  }));
+  const totals = computePharmacyClose({
+    sales: sales.map((s) => ({ id: s.id, totalMinor: saleTotalMinor(s.lines) })),
+    refunds: refunds.map((r) => ({ id: r.id, amountMinor: r.amountMinor })),
+    drawers: rows.map((d) => ({
+      id: d.id,
+      expectedMinor: d.expectedMinor,
+      countedMinor: d.countedMinor ?? 0,
+    })),
+  });
+  return { branchName: branch.name, businessDate, drawers: rows, totals, close };
+}
+
+/** One transaction closes every counted drawer and persists the immutable Z report. */
+export async function closePharmacyDay(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: {
+    businessDate: Date;
+    sourceHash: string;
+    counts: { drawerSessionId: string; countedCashMinor: number }[];
+    varianceNote: string;
+  }
+) {
+  const preview = await readPharmacyClose(db, scope, input.businessDate);
+  // A transport retry returns the recorded close, never cuts a second report.
+  if (preview.close) return preview.close;
+  const open = preview.drawers.filter((d) => d.status === 'OPEN');
+  if (
+    preview.totals.sourceHash !== input.sourceHash ||
+    open.length !== input.counts.length ||
+    new Set(input.counts.map((c) => c.drawerSessionId)).size !== open.length ||
+    open.some((d) => !input.counts.some((c) => c.drawerSessionId === d.id))
+  ) {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'The day changed. Refresh the preview and recount before closing.',
+    });
+  }
+  const hasVariance = preview.drawers.some(
+    (d) =>
+      (input.counts.find((c) => c.drawerSessionId === d.id)?.countedCashMinor ??
+        d.countedMinor ??
+        0) !== d.expectedMinor
+  );
+  if (hasVariance && !input.varianceNote.trim())
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Record a variance note before closing.' });
+  for (const count of input.counts) await closePharmacyDrawer(db, scope, count);
+  const close = await cutPharmacyDailyClose(db, scope, { businessDate: input.businessDate });
+  // Existing reason field preserves the operator explanation without a schema change.
+  return db.pharmacyDailyClose.update({
+    where: { organizationId_id: { organizationId: scope.organizationId, id: close.id } },
+    data: { reason: input.varianceNote.trim() || null },
+  });
+}

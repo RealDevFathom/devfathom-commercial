@@ -81,6 +81,7 @@ describe('pharmacy settlement invariants', () => {
     const tenderCreate = vi.fn().mockResolvedValue({ id: 'tender-1' });
     const saleUpdate = vi.fn().mockResolvedValue({});
     const db = {
+      pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
       $executeRaw: vi.fn().mockImplementation(async () => {
         idempotency ??= {
           id: 'idem-1',
@@ -92,6 +93,7 @@ describe('pharmacy settlement invariants', () => {
       }),
       $queryRaw: vi
         .fn()
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([{ receipt_number: 41 }]),
       pharmacyMoneyIdempotencyKey: {

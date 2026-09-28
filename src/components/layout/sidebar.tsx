@@ -272,6 +272,13 @@ export const navigation: NavItem[] = [
   // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
   // it is a first-class rail entry gated by its explicit module ownership.
   {
+    label: 'Day close',
+    href: '/pharmacy/counter/close',
+    icon: Monitor,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
+  },
+  {
     label: 'Counter',
     href: '/pharmacy/counter',
     icon: Monitor,
