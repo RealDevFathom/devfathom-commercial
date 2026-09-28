@@ -1,0 +1,166 @@
+import { describe, expect, it, vi, afterEach } from 'vitest';
+import { buildDispensingLabels, type DispensingLabelSource } from './dispensing-label';
+import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
+import type { CounterReceipt } from './counter-receipt';
+
+// Synthetic text only: these fixtures are not medical instructions or real licences.
+export const source: DispensingLabelSource = {
+  saleId: 'sale',
+  saleLineId: 'line',
+  licenceNumber: 'TEST-LICENCE',
+  directionsEnglish: 'English directions fixture',
+  directionsUrdu: 'اردو',
+};
+export const receipt: CounterReceipt = {
+  saleId: 'sale',
+  receiptNumber: 42,
+  branchName: 'Test pharmacy',
+  businessDate: '2026-09-29',
+  completedAt: '2026-09-29T10:00:00Z',
+  currency: 'PKR',
+  lines: [
+    {
+      saleLineId: 'line',
+      identityStatus: 'ISSUED',
+      medicineName: 'Test medicine',
+      strength: '500 mg',
+      presentation: 'Tablet',
+      batchNumber: 'STALE',
+      expiresAt: '2099-01-01',
+      saleUnit: 'UNIT',
+      quantity: 2,
+      canonicalUnits: 2,
+      unitPriceMinor: 10,
+      discountMinor: 0,
+      lineTotalMinor: 20,
+      allocations: [
+        {
+          allocationId: 'a',
+          inventoryLotId: 'a',
+          batchNumber: 'A',
+          expiresAt: '2027-01-01',
+          canonicalUnits: 1,
+        },
+        {
+          allocationId: 'b',
+          inventoryLotId: 'b',
+          batchNumber: 'B',
+          expiresAt: '2028-02-02',
+          canonicalUnits: 1,
+        },
+      ],
+    },
+  ],
+  tenders: [],
+  totals: { grossMinor: 20, discountMinor: 0, netMinor: 20, tenderedMinor: 20, changeMinor: 0 },
+};
+afterEach(() => vi.restoreAllMocks());
+describe('50 × 30 mm dispensing labels', () => {
+  it('snapshots both issued batch labels with exact bilingual source text', () => {
+    const before = JSON.stringify(receipt);
+    const html = buildCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, [source]);
+    expect(html).toMatchSnapshot();
+    expect(html).not.toContain('STALE');
+    expect(html).not.toContain('2099');
+    expect(JSON.stringify(receipt)).toBe(before);
+  });
+  it('escapes supplied text and excludes unrelated patient/payment fields', () => {
+    const html = buildDispensingLabels({ ...receipt, patientName: 'PRIVATE' } as CounterReceipt, [
+      { ...source, directionsEnglish: '<script>alert(1)</script>' },
+    ]);
+    const document = new DOMParser().parseFromString(html, 'text/html');
+    expect(document.querySelector('script,img,iframe,link')).toBeNull();
+    expect(document.body.textContent).toContain('<script>alert(1)</script>');
+    expect(html).not.toContain('PRIVATE');
+    expect(document.querySelector('[lang="ur"]')?.getAttribute('dir')).toBe('rtl');
+  });
+  it.each(['licenceNumber', 'directionsEnglish', 'directionsUrdu'] as const)(
+    'rejects missing %s',
+    (field) => {
+      expect(() => buildDispensingLabels(receipt, [{ ...source, [field]: '' }])).toThrow();
+    }
+  );
+  it('rejects missing sources, wrong sale/line, duplicates and unissued identity', () => {
+    for (const sources of [
+      [],
+      [{ ...source, saleId: 'other' }],
+      [{ ...source, saleLineId: 'other' }],
+      [source, source],
+    ]) {
+      expect(() => buildDispensingLabels(receipt, sources)).toThrow();
+    }
+    for (const identityStatus of [undefined, 'UNAVAILABLE'] as const) {
+      expect(() =>
+        buildDispensingLabels({ ...receipt, lines: [{ ...receipt.lines[0]!, identityStatus }] }, [
+          source,
+        ])
+      ).toThrow();
+    }
+    expect(() => buildDispensingLabels({ ...receipt, receiptNumber: null }, [source])).toThrow();
+  });
+  it.each([null, '', 'not-a-date', '2027-02-30'])(
+    'rejects expiry %s without legacy fallback',
+    (expiresAt) => {
+      const line = receipt.lines[0]!;
+      expect(() =>
+        buildDispensingLabels(
+          {
+            ...receipt,
+            lines: [{ ...line, allocations: [{ ...line.allocations![0]!, expiresAt }] }],
+          },
+          [source]
+        )
+      ).toThrow();
+    }
+  );
+  it('rejects absent allocations, batch or control text', () => {
+    const line = receipt.lines[0]!;
+    expect(() =>
+      buildDispensingLabels({ ...receipt, lines: [{ ...line, allocations: [] }] }, [source])
+    ).toThrow();
+    expect(() =>
+      buildDispensingLabels(
+        {
+          ...receipt,
+          lines: [{ ...line, allocations: [{ ...line.allocations![0]!, batchNumber: null }] }],
+        },
+        [source]
+      )
+    ).toThrow();
+    expect(() =>
+      buildDispensingLabels(receipt, [{ ...source, directionsUrdu: '\u202eBAD' }])
+    ).toThrow();
+  });
+  it.each([false, true])('prints only labels fitting physical paper; overflow=%s', (overflow) => {
+    const popup = {
+      opener: window,
+      document: {
+        open: vi.fn(),
+        write: vi.fn(),
+        close: vi.fn(),
+        querySelectorAll: () => [
+          {
+            clientHeight: 113,
+            scrollHeight: overflow ? 150 : 113,
+            clientWidth: 189,
+            scrollWidth: 189,
+          },
+        ],
+      },
+      focus: vi.fn(),
+      print: vi.fn(),
+      close: vi.fn(),
+    };
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const print = () => printCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, [source]);
+    if (overflow) {
+      expect(print).toThrow('exceeds 50 × 30 mm');
+      expect(popup.print).not.toHaveBeenCalled();
+      expect(popup.close).toHaveBeenCalledOnce();
+    } else {
+      print();
+      expect(popup.print).toHaveBeenCalledOnce();
+      expect(popup.opener).toBeNull();
+    }
+  });
+});

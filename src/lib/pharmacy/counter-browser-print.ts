@@ -1,3 +1,4 @@
+import { buildDispensingLabels, type DispensingLabelSource } from './dispensing-label';
 import { buildCounterReceiptPreview } from './counter-receipt-presentation';
 import {
   COUNTER_RECEIPT_DIRECTION,
@@ -7,7 +8,7 @@ import {
 } from './counter-receipt';
 
 // Transient browser paper choice, not a second saved designer/settings schema.
-export type CounterReceiptFormat = 'THERMAL' | 'THERMAL_58' | 'A4';
+export type CounterReceiptFormat = 'THERMAL' | 'THERMAL_58' | 'A4' | 'LABEL_50x30';
 
 function escapeHtml(value: string | number): string {
   return String(value).replace(/[&<>"']/g, (character) => {
@@ -27,14 +28,19 @@ export function buildCounterBrowserReceipt(
   receipt: CounterReceipt,
   locale: CounterReceiptLocale,
   format: CounterReceiptFormat,
-  reprint = false
+  reprint = false,
+  labelSources: readonly DispensingLabelSource[] = []
 ): string {
-  if (!['en', 'ur'].includes(locale) || !['THERMAL', 'THERMAL_58', 'A4'].includes(format)) {
+  if (
+    !['en', 'ur'].includes(locale) ||
+    !['THERMAL', 'THERMAL_58', 'A4', 'LABEL_50x30'].includes(format)
+  ) {
     throw new Error('Choose a supported receipt language and paper size.');
   }
   if (receipt.receiptNumber === null || !receipt.completedAt || receipt.lines.length === 0) {
     throw new Error('Load a settled receipt before printing.');
   }
+  if (format === 'LABEL_50x30') return buildDispensingLabels(receipt, labelSources);
   const width = format === 'THERMAL_58' ? '58mm' : format === 'THERMAL' ? '80mm' : '190mm';
   const preview = buildCounterReceiptPreview(
     receipt,
@@ -56,9 +62,10 @@ export function printCounterBrowserReceipt(
   receipt: CounterReceipt,
   locale: CounterReceiptLocale,
   format: CounterReceiptFormat,
-  reprint = false
+  reprint = false,
+  labelSources: readonly DispensingLabelSource[] = []
 ): void {
-  const html = buildCounterBrowserReceipt(receipt, locale, format, reprint);
+  const html = buildCounterBrowserReceipt(receipt, locale, format, reprint, labelSources);
   const popup = window.open('', '_blank', 'popup,width=480,height=720');
   if (!popup) throw new Error('Allow pop-ups for this site, then retry Print receipt.');
   popup.opener = null;
@@ -66,10 +73,24 @@ export function printCounterBrowserReceipt(
     popup.document.open();
     popup.document.write(html);
     popup.document.close();
+    if (format === 'LABEL_50x30') {
+      const labels = popup.document.querySelectorAll<HTMLElement>('.dispensing-label');
+      if (
+        Array.from(labels).some(
+          (label) =>
+            label.scrollHeight > label.clientHeight || label.scrollWidth > label.clientWidth
+        )
+      ) {
+        throw new Error(
+          'Rx label content exceeds 50 × 30 mm. Review directions or use larger paper.'
+        );
+      }
+    }
     popup.focus();
     popup.print();
-  } catch {
+  } catch (error) {
     popup.close();
+    if (error instanceof Error && error.message.startsWith('Rx label content exceeds')) throw error;
     throw new Error('The browser print dialog could not open. Retry Print receipt.');
   }
 }

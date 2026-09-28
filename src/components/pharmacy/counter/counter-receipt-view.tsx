@@ -1,5 +1,9 @@
 'use client';
 
+import { useState } from 'react';
+
+import { buildDispensingLabels, type DispensingLabelSource } from '@/lib/pharmacy/dispensing-label';
+import { printCounterBrowserReceipt } from '@/lib/pharmacy/counter-browser-print';
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -27,6 +31,8 @@ export type CounterReceiptViewProps = {
   /** True once this receipt has been rendered at least once in this session. */
   reprint: boolean;
   printing?: boolean;
+  /** Authorized, receipt-bound Rx data; absent until the receipt API supplies it. */
+  dispensingLabelSources?: readonly DispensingLabelSource[];
   error?: string | null;
   onLocaleChange: (locale: CounterReceiptLocale) => void;
   onFormatChange: (format: CounterReceiptFormat) => void;
@@ -42,12 +48,14 @@ export function CounterReceiptView({
   format,
   reprint,
   printing = false,
+  dispensingLabelSources = [],
   error,
   onLocaleChange,
   onFormatChange,
   onPrint,
   onRetry,
 }: CounterReceiptViewProps) {
+  const [labelError, setLabelError] = useState<{ saleId: string; message: string } | null>(null);
   if (state === 'idle') {
     return <p className="text-sm text-text-muted">Settle the bill to render its receipt.</p>;
   }
@@ -87,6 +95,13 @@ export function CounterReceiptView({
   } catch {
     documentError =
       'This receipt cannot be previewed. Reload it or ask support to check its source data.';
+  }
+
+  let labelUnavailable: string | null = null;
+  try {
+    buildDispensingLabels(receipt, dispensingLabelSources);
+  } catch (error) {
+    labelUnavailable = error instanceof Error ? error.message : 'Rx label source unavailable.';
   }
 
   return (
@@ -129,6 +144,32 @@ export function CounterReceiptView({
         >
           {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
         </Button>
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11"
+          disabled={printing || document === null || labelUnavailable !== null}
+          aria-describedby="rx-label-help"
+          onClick={() => {
+            setLabelError(null);
+            try {
+              printCounterBrowserReceipt(
+                receipt,
+                locale,
+                'LABEL_50x30',
+                reprint,
+                dispensingLabelSources
+              );
+            } catch (error) {
+              setLabelError({
+                saleId: receipt.saleId,
+                message: error instanceof Error ? error.message : 'Rx label printing failed.',
+              });
+            }
+          }}
+        >
+          Print Rx labels · 50 × 30 mm
+        </Button>
         {receipt.receiptNumber === null ? (
           <StatusPill status="unissued" tone="warning" label={strings.unissued} />
         ) : reprint ? (
@@ -138,6 +179,15 @@ export function CounterReceiptView({
         )}
       </div>
 
+      <p id="rx-label-help" className="text-sm text-text-muted">
+        {labelUnavailable ??
+          'Prints supplied English and Urdu directions, pharmacy licence and each issued batch expiry. Select 50 × 30 mm paper at 100% scale; disable browser headers and footers.'}
+      </p>
+      {labelError?.saleId === receipt.saleId ? (
+        <p role="alert" className="text-sm text-destructive">
+          {labelError.message}
+        </p>
+      ) : null}
       <p className="text-sm text-text-muted">
         Browser / OS print fallback: allow pop-ups, then select your printer and matching paper size
         in the print dialog. These paper choices apply to this session; saved designer settings are
