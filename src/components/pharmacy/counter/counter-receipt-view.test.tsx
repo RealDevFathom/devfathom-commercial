@@ -1,9 +1,12 @@
-import { cleanup, fireEvent, render, screen, within } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, expect, it, vi } from 'vitest';
 
 import { CounterReceiptView, type CounterReceiptViewProps } from './counter-receipt-view';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.unstubAllGlobals();
+});
 
 function props(overrides: Partial<CounterReceiptViewProps> = {}): CounterReceiptViewProps {
   return {
@@ -160,4 +163,96 @@ it('disables printing when shared semantic validation rejects the receipt', () =
   render(<CounterReceiptView {...input} />);
   expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
   expect(screen.getByRole('alert')).toHaveTextContent('cannot be previewed');
+});
+
+function stubPrintBridge(...responses: Array<{ status: number; body: unknown }>) {
+  const fetch = vi.fn();
+  for (const response of responses) {
+    fetch.mockResolvedValueOnce(
+      new Response(JSON.stringify(response.body), {
+        status: response.status,
+        headers: { 'Content-Type': 'application/json' },
+      })
+    );
+  }
+  vi.stubGlobal('fetch', fetch);
+  return fetch;
+}
+
+const readyJob = (reprint: boolean) => ({
+  status: 200,
+  body: {
+    mode: 'ESC_POS_JOB',
+    status: 'READY',
+    escPos: { encoding: 'base64', data: 'G0AdVgA=', byteCount: 5 },
+    paperWidth: 58,
+    reprint,
+  },
+});
+
+it('keeps browser printing only when no branch is bound to the thermal bridge', () => {
+  render(<CounterReceiptView {...props()} />);
+  expect(screen.getByRole('button', { name: 'Print receipt' })).toBeEnabled();
+  expect(screen.queryByRole('button', { name: /thermal/i })).toBeNull();
+});
+
+it('prints to thermal, then offers a reprint of the same receipt', async () => {
+  const fetch = stubPrintBridge(readyJob(false), readyJob(true));
+  const input = props({ branchId: 'branch-1' });
+  render(<CounterReceiptView {...input} />);
+
+  fireEvent.click(screen.getByRole('button', { name: 'Print to thermal (ESC/POS)' }));
+  const link = await screen.findByRole('link', { name: 'Save ESC/POS job' });
+  expect(fetch.mock.calls[0]![0]).toBe(
+    '/api/pharmacy/print?branchId=branch-1&saleId=sale-1&locale=en&reprint=0'
+  );
+  expect(link).toHaveAttribute('href', 'data:application/octet-stream;base64,G0AdVgA=');
+  expect(link).toHaveAttribute('download', 'receipt-12.bin');
+  expect(screen.getByRole('status')).toHaveTextContent('5 bytes, 58 mm branch format');
+  expect(input.onPrint).not.toHaveBeenCalled();
+
+  fireEvent.click(screen.getByRole('button', { name: 'Reprint to thermal (ESC/POS)' }));
+  await waitFor(() =>
+    expect(screen.getByRole('link', { name: 'Save ESC/POS job' })).toHaveAttribute(
+      'download',
+      'receipt-12-reprint.bin'
+    )
+  );
+  expect(fetch.mock.calls[1]![0]).toContain('reprint=1');
+});
+
+it('reprints a historical receipt directly when the receipt is already a reprint', async () => {
+  const fetch = stubPrintBridge(readyJob(true));
+  render(<CounterReceiptView {...props({ branchId: 'branch-1', reprint: true })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Reprint to thermal (ESC/POS)' }));
+  await screen.findByRole('link', { name: 'Save ESC/POS job' });
+  expect(fetch.mock.calls[0]![0]).toContain('reprint=1');
+  expect(screen.getByRole('status')).toHaveTextContent('marked as a reprint');
+});
+
+it('points Urdu receipts to the unchanged browser/OS fallback', async () => {
+  stubPrintBridge({
+    status: 422,
+    body: { error: 'Unsupported', code: 'UNSUPPORTED_PRINT_TEXT', fallback: 'BROWSER_OS' },
+  });
+  const input = props({ branchId: 'branch-1', locale: 'ur' });
+  render(<CounterReceiptView {...input} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Print to thermal (ESC/POS)' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Use Print receipt');
+  expect(screen.queryByRole('link')).toBeNull();
+  fireEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
+  expect(input.onPrint).toHaveBeenCalledOnce();
+});
+
+it('shows bridge errors and disables thermal printing for unissued receipts', async () => {
+  stubPrintBridge({ status: 403, body: { error: 'Forbidden.' } });
+  render(<CounterReceiptView {...props({ branchId: 'branch-1' })} />);
+  fireEvent.click(screen.getByRole('button', { name: 'Print to thermal (ESC/POS)' }));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Forbidden.');
+  cleanup();
+
+  const input = props({ branchId: 'branch-1' });
+  input.receipt = { ...input.receipt!, receiptNumber: null };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getByRole('button', { name: 'Print to thermal (ESC/POS)' })).toBeDisabled();
 });

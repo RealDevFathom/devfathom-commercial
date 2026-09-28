@@ -20,6 +20,15 @@ import {
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
+  buildPharmacyReceiptEscPosJob,
+  PharmacyReceiptPrintError,
+  readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
+  savePharmacyReceiptFormat,
+} from '@/lib/pharmacy/receipt-print';
+import { SaveReceiptLayoutSchema } from '@/lib/receipts/configuration';
+import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
+import {
   declineSubstitute,
   findSubstituteProposals,
   PharmacySubstituteError,
@@ -53,7 +62,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -140,6 +149,24 @@ function fail(error: unknown): never {
     });
   }
   throw error;
+}
+
+async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: string) {
+  const [branch, organization] = await Promise.all([
+    ctx.db.pharmacyBranch.findFirst({
+      where: { id: scope.branchId, organizationId: scope.organizationId },
+      select: { name: true },
+    }),
+    ctx.db.organization.findUnique({
+      where: { id: scope.organizationId },
+      select: { currency: true },
+    }),
+  ]);
+  if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
+  return readCounterReceipt(ctx.db, scope, saleId, {
+    name: branch.name,
+    currency: organization?.currency ?? 'PKR',
+  });
 }
 
 export const pharmacySalesRouter = router({
@@ -642,25 +669,78 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = scopeFor(ctx, input.branchId);
       try {
-        const [branch, organization] = await Promise.all([
-          ctx.db.pharmacyBranch.findFirst({
-            where: { id: input.branchId, organizationId: scope.organizationId },
-            select: { name: true },
-          }),
-          ctx.db.organization.findUnique({
-            where: { id: scope.organizationId },
-            select: { currency: true },
-          }),
-        ]);
-        if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
-        return await readCounterReceipt(ctx.db, scope, input.saleId, {
-          name: branch.name,
-          currency: organization?.currency ?? 'PKR',
-        });
+        return await loadCounterReceipt(ctx, scope, input.saleId);
       } catch (error) {
         fail(error);
       }
     }),
+
+  /**
+   * PH-A7: the settled receipt as a validated ESC/POS `RECEIPT` job, using the
+   * branch's saved format. A read: printing and reprinting from history
+   * re-read the same sale, so neither can issue or change a receipt number.
+   * Text the raw baseline cannot print returns the browser/OS fallback.
+   */
+  counterReceiptPrintJob: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          locale: z.enum(['en', 'ur']),
+          reprint: z.boolean(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        if (receipt.receiptNumber === null || !receipt.completedAt) {
+          throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+        }
+        const [format, taxIdentity] = await Promise.all([
+          readPharmacyReceiptFormat(ctx.db, scope),
+          readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
+        ]);
+        return {
+          status: 'READY' as const,
+          ...buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+            layout: format.layout,
+            taxIdentity,
+            reprint: input.reprint,
+          }),
+        };
+      } catch (error) {
+        if (error instanceof RawPrintValidationError) {
+          return {
+            status: 'FALLBACK' as const,
+            code: error.code,
+            fallback: error.fallback,
+            message: error.message,
+          };
+        }
+        if (error instanceof PharmacyReceiptPrintError) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This bill is not settled, so it has no receipt to print.',
+          });
+        }
+        fail(error);
+      }
+    }),
+
+  /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */
+  counterReceiptFormat: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => readPharmacyReceiptFormat(ctx.db, scopeFor(ctx, input.branchId))),
+
+  /** PH-A7: save the branch receipt format. Optimistic revision; admins only. */
+  counterSaveReceiptFormat: adminProcedure
+    .input(SaveReceiptLayoutSchema)
+    .mutation(({ ctx, input }) =>
+      savePharmacyReceiptFormat(ctx.db, scopeFor(ctx, input.branchId).organizationId, input)
+    ),
 
   // ── POS-01 configurable shortcuts ─────────────────────────────────────────
 
