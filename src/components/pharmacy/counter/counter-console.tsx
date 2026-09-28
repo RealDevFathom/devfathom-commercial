@@ -1268,10 +1268,14 @@ function ScopedPharmacyCounterConsole({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [keymap.bindings, runAction]);
 
-  /** Persistent scan focus (POS-01): the field regains focus after every action. */
+  /**
+   * Persistent scan focus (POS-01): the field regains focus after every action.
+   * Keyed on `busy`, not `pending`: the field mounts disabled until tender
+   * recovery is ready, so `autoFocus` alone cannot land on it.
+   */
   useEffect(() => {
-    if (pending === null && document.activeElement === document.body) focusSearch();
-  }, [focusSearch, pending]);
+    if (!busy && document.activeElement === document.body) focusSearch();
+  }, [busy, focusSearch]);
 
   const chordFor = useCallback(
     (kind: SaleUnitKind) =>
