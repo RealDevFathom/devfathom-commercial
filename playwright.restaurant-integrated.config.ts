@@ -53,6 +53,9 @@ export default defineConfig({
     // WHA-1564 — financial comparison + export acceptance.
     'restaurant-financial-comparison-export.spec.ts',
   ],
+  ...(process.env.RESTAURANT_E2E_SPEC_FILE
+    ? { testMatch: [process.env.RESTAURANT_E2E_SPEC_FILE] }
+    : {}),
   projects: [
     {
       name: 'restaurant-integrated-serial',
