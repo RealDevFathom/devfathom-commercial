@@ -76,8 +76,13 @@ export const GET = withDeviceAuth(async (ctx, request) => {
       });
     }
   }
+  const stationDetails = await ctx.db.restaurantKitchenStation.findUnique({
+    where: { id: station.stationId },
+    select: { name: true },
+  });
   return NextResponse.json({
     ...queue,
+    stationName: stationDetails?.name ?? null,
     businessDate: queue.businessDate.toISOString().slice(0, 10),
   });
 });

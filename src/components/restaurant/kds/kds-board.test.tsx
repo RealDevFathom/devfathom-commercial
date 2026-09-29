@@ -65,6 +65,7 @@ function queue(
 ) {
   return {
     stationId: 'station-1',
+    stationName: 'Hot Kitchen',
     businessDate: '2026-08-19',
     tickets,
     cursor,
@@ -138,6 +139,30 @@ afterEach(() => {
 });
 
 describe('KdsBoard transport', () => {
+  it.each(['Hot Kitchen', null, undefined, '   '])(
+    'shows a human station label without the raw ID (name: %s)',
+    async (stationName) => {
+      vi.stubGlobal(
+        'fetch',
+        vi.fn<typeof globalThis.fetch>(async (input) => {
+          const path = String(input);
+          if (path.endsWith('/operators')) return json(operatorDirectory());
+          if (path.endsWith('/delivery/queue')) return json(deliveryQueue());
+          return json({ ...queue([]), stationName });
+        })
+      );
+      const { container } = render(<KdsBoard />);
+      await connect();
+
+      expect(
+        screen.getByText(
+          `Kitchen screen · Clifton Flagship · ${stationName?.trim() || 'Kitchen station'} · business date 2026-08-19`
+        )
+      ).toBeVisible();
+      expect(container).not.toHaveTextContent('station-1');
+    }
+  );
+
   it('bootstraps an unlocked demo KDS without enrollment or operator PIN setup', async () => {
     const fetch = vi.fn<typeof globalThis.fetch>(async (input) => {
       const path = String(input);

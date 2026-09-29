@@ -5,8 +5,10 @@ const PREVIOUS_DATE = new Date('2026-09-04T00:00:00.000Z');
 
 const mocks = vi.hoisted(() => {
   const findFirst = vi.fn();
+  const findStation = vi.fn();
   return {
     findFirst,
+    findStation,
     readStationQueue: vi.fn(),
     requireKdsStation: vi.fn(),
     resolveStationBusinessDate: vi.fn(),
@@ -15,7 +17,10 @@ const mocks = vi.hoisted(() => {
         organization: { isDemo: boolean };
       } | null,
       device: { branchId: 'branch-bound' },
-      db: { restaurantKitchenTicket: { findFirst } },
+      db: {
+        restaurantKitchenTicket: { findFirst },
+        restaurantKitchenStation: { findUnique: findStation },
+      },
     },
   };
 });
@@ -56,12 +61,34 @@ beforeEach(() => {
   mocks.requireKdsStation.mockReturnValue({ ok: true, stationId: 'station-bound' });
   mocks.resolveStationBusinessDate.mockResolvedValue(CURRENT_DATE);
   mocks.findFirst.mockResolvedValue(null);
+  mocks.findStation.mockResolvedValue({ name: 'Hot Kitchen' });
   mocks.readStationQueue.mockImplementation(async (_db: unknown, input: { businessDate: Date }) =>
     queue(input.businessDate)
   );
 });
 
 describe('GET KDS queue demo rollover', () => {
+  it.each([{ name: 'Hot Kitchen' }, null])(
+    'includes the bound station name even for an empty queue (%s)',
+    async (station) => {
+      mocks.context.demoActor = null;
+      mocks.findStation.mockResolvedValue(station);
+
+      const response = await GET(request());
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        stationId: 'station-bound',
+        stationName: station?.name ?? null,
+        tickets: [],
+      });
+      expect(mocks.findStation).toHaveBeenCalledExactlyOnceWith({
+        where: { id: 'station-bound' },
+        select: { name: true },
+      });
+    }
+  );
+
   it('returns the bound station earlier open date as a full snapshot on repeated polls', async () => {
     mocks.findFirst.mockResolvedValue({ businessDate: PREVIOUS_DATE });
     mocks.readStationQueue.mockImplementation(async (_db: unknown, input: { businessDate: Date }) =>
