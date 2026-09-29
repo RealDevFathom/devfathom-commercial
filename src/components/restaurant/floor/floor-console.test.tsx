@@ -119,6 +119,8 @@ function renderConsole(enabled = true) {
 describe('FloorConsole', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.floors.data = [];
+    mocks.stations.data = [];
     mocks.floorCalls.length = 0;
     mocks.sectionCalls.length = 0;
     mocks.stationCalls.length = 0;
@@ -148,6 +150,27 @@ describe('FloorConsole', () => {
     expect(mocks.sectionCalls.at(-1)).toEqual({
       input: { branchId: 'branch_1', businessDate: '2026-08-19', includeInactive: false },
       enabled: true,
+    });
+  });
+
+  it('shows the floor label without its raw ID and preserves the mutation ID', () => {
+    const floorId = 'floor_raw_1620';
+    mocks.floors.data = [
+      { id: floorId, name: 'Garden Terrace', sortOrder: 3, active: true, tables: [] },
+    ];
+    const { container } = renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+
+    expect(screen.getByText('Garden Terrace · sort 3')).toBeVisible();
+    expect(container).not.toHaveTextContent(floorId);
+    fireEvent.click(screen.getByRole('button', { name: 'Edit', exact: true }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit floor' });
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Edit floor' }));
+    expect(mocks.mutate).toHaveBeenCalledWith({
+      id: floorId,
+      name: 'Garden Terrace',
+      sortOrder: 3,
+      active: true,
     });
   });
 

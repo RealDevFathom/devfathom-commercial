@@ -45,6 +45,7 @@ type QueueTicket = {
 };
 type QueuePayload = {
   stationId: string;
+  stationName: string | null;
   businessDate: string;
   tickets: QueueTicket[];
   cursor: number;
@@ -525,7 +526,7 @@ export function KdsBoard({ demo = false }: { demo?: boolean }) {
           heading="Kitchen floor"
           description={
             queue
-              ? `${runtime.deviceName} · ${runtime.branchName} · station ${queue.stationId} · business date ${queue.businessDate}`
+              ? `${runtime.deviceName} · ${runtime.branchName} · ${queue.stationName?.trim() || 'Kitchen station'} · business date ${queue.businessDate}`
               : `${runtime.deviceName} · ${runtime.branchName} · loading the station queue.`
           }
           actions={
