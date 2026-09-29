@@ -1093,3 +1093,150 @@ describeIfDatabase('PH-OFF OFF-03 — per-device lot quotas', () => {
     expect(after.rows).toBe(1);
   });
 });
+
+// Real transaction evidence for the additive settlement path (not a mocked cursor).
+describeIfDatabase('leased receipt settlement', () => {
+  async function setup() {
+    const fixture = await scenario(ORG_A, BRANCH_A, 'leased-settlement');
+    const scope = scopeOf(fixture);
+    const lease = await inOrg(ORG_A, (db) =>
+      deps.leases.reserveReceiptNumberBlock(db, scope, { deviceId: fixture.deviceId, size: 2 })
+    );
+    const originalSaleAt = new Date().toISOString();
+    const signed = await inOrg(ORG_A, (db) =>
+      deps.snapshots.issueOfflineSnapshot(db, scope, {
+        deviceId: fixture.deviceId,
+        kind: 'RULES',
+        payload: {},
+        issuedAt: new Date(Date.now() - 1000),
+        expiresAt: new Date(Date.now() + 60_000),
+      })
+    );
+    async function sale() {
+      return inOrg(ORG_A, async (db) => {
+        const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+          where: { id: fixture.lotId },
+          include: { packLevel: true },
+        });
+        const sale = await db.pharmacySale.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            createdByUserId: ACTOR,
+          },
+        });
+        const line = await db.pharmacySaleLine.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            saleId: sale.id,
+            medicineId: fixture.medicineId,
+            presentationId: lot.packLevel.presentationId,
+            packLevelId: lot.packLevelId,
+            saleUnit: 'UNIT',
+            quantity: 1,
+            canonicalUnitsPerSaleUnit: 1,
+            canonicalUnits: 1,
+            unitPriceMinor: 100,
+            proRataCeilingMinor: 100,
+            unitCostMinor: 50,
+            idempotencyKey: tag('line'),
+          },
+        });
+        await db.pharmacySaleLineAllocation.create({
+          data: {
+            organizationId: ORG_A,
+            branchId: BRANCH_A,
+            saleLineId: line.id,
+            inventoryLotId: fixture.lotId,
+            stockLocationId: fixture.locationId,
+            canonicalUnits: 1,
+            stockMovementId: tag('movement'),
+          },
+        });
+        return sale;
+      });
+    }
+    const { applyPharmacyTender } = await import('./settlement');
+    const firstSale = await sale();
+    const input = {
+      saleId: firstSale.id,
+      deviceId: fixture.deviceId,
+      businessDate: new Date(),
+      type: 'BANK_TRANSFER' as const,
+      amountMinor: 100,
+      idempotencyKey: tag('tender'),
+      leasedReceipt: {
+        leaseId: lease.id,
+        receiptNumber: lease.blockStart,
+        originalSaleAt,
+        envelope: signed.envelope,
+        signature: signed.signature,
+      },
+    };
+    return {
+      fixture,
+      lease,
+      input,
+      sale,
+      apply: (command = input) => inOrg(ORG_A, (db) => applyPharmacyTender(db, scope, command)),
+    };
+  }
+
+  it('serializes identical retries into one tender and immutable receipt', async () => {
+    const f = await setup();
+    const results = await Promise.all([f.apply(), f.apply()]);
+    expect(results.filter((r) => r.replayed)).toHaveLength(1);
+    for (const result of results)
+      expect(result).toMatchObject({ receiptNumber: f.lease.blockStart });
+    await inOrg(ORG_A, async (db) => {
+      expect(await db.pharmacyTender.count({ where: { saleId: f.input.saleId } })).toBe(1);
+      expect(
+        await db.pharmacySaleEvent.count({ where: { saleId: f.input.saleId, kind: 'COMPLETED' } })
+      ).toBe(1);
+      const leases = await deps.leases.listReceiptLeases(
+        db,
+        scopeOf(f.fixture),
+        f.fixture.deviceId
+      );
+      expect(leases[0]!.nextNumber).toBe(f.lease.blockStart + 1);
+    });
+  });
+
+  it('allows only one of two concurrent sales claiming the same leased number', async () => {
+    const f = await setup();
+    const second = await f.sale();
+    const results = await Promise.allSettled([
+      f.apply(),
+      f.apply({ ...f.input, saleId: second.id, idempotencyKey: tag('other-tender') }),
+    ]);
+    expect(results.filter((r) => r.status === 'fulfilled')).toHaveLength(1);
+    const rejected = results.find((r) => r.status === 'rejected');
+    expect(rejected?.status === 'rejected' && rejected.reason.message).toBe(
+      'INVALID_RECEIPT_LEASE'
+    );
+    await inOrg(ORG_A, async (db) => {
+      expect(
+        await db.pharmacyTender.count({ where: { saleId: { in: [f.input.saleId, second.id] } } })
+      ).toBe(1);
+    });
+  });
+
+  it('rolls back cursor consumption when tender creation fails', async () => {
+    const f = await setup();
+    const { applyPharmacyTender } = await import('./settlement');
+    await expect(
+      inOrg(ORG_A, (db) =>
+        applyPharmacyTender(db, scopeOf(f.fixture), {
+          ...f.input,
+          type: 'CASH',
+        })
+      )
+    ).rejects.toThrow('DRAWER_NOT_OPEN');
+    const leases = await inOrg(ORG_A, (db) =>
+      deps.leases.listReceiptLeases(db, scopeOf(f.fixture), f.fixture.deviceId)
+    );
+    expect(leases[0]!.nextNumber).toBe(f.lease.blockStart);
+    await expect(f.apply()).resolves.toMatchObject({ receiptNumber: f.lease.blockStart });
+  });
+});

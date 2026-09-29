@@ -2,6 +2,10 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
+import { checkEnvelope } from './offline-snapshot-envelope';
+import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
+import { checkSafetyLease } from './offline-safety-lease';
+import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
 import { allocateForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
@@ -12,9 +16,61 @@ import type { LedgerScope } from './stock-ledger';
  */
 export { priceFromLot };
 
+export const OFFLINE_REPLAY_MAX_AGE_DAYS = 7;
+
+export type PharmacyLeasedReceipt = {
+  leaseId: string;
+  receiptNumber: number;
+  originalSaleAt: string;
+  envelope: OfflineSnapshotEnvelope;
+  signature: string;
+};
+
+/** The signed server window bounds the original client sale instant. The
+ * transport must authenticate the device/command; a snapshot signature does
+ * not authenticate a client-authored sale timestamp. */
+export function validateLeasedReceiptReplay(
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  deviceId: string,
+  input: PharmacyLeasedReceipt,
+  nowMs = Date.now()
+) {
+  const saleMs = Date.parse(input.originalSaleAt);
+  if (!Number.isFinite(saleMs) || saleMs > nowMs)
+    throw new PharmacySaleError('INVALID_REPLAY_TIME');
+  if (nowMs - saleMs > OFFLINE_REPLAY_MAX_AGE_DAYS * 86_400_000)
+    throw new PharmacySaleError('replay_stale');
+  if (!input.leaseId || !Number.isSafeInteger(input.receiptNumber) || input.receiptNumber < 1)
+    throw new PharmacySaleError('INVALID_RECEIPT_LEASE');
+  if (
+    input.envelope.signingKeyId !== SNAPSHOT_SIGNING_KEY_ID ||
+    !verifySnapshotSignature(input.envelope, input.signature) ||
+    !checkEnvelope({
+      envelope: input.envelope,
+      scope: { ...scope, deviceId },
+      nowMs: saleMs,
+      heldVersion: null,
+      payloadHash: input.envelope.payloadHash,
+    }).ok ||
+    !checkSafetyLease(
+      {
+        lease: input.envelope.safetyLease,
+        appliedRecallVersion: input.envelope.safetyLease.recallVersion,
+        recalledBatchIds: [],
+      },
+      saleMs
+    ).ok
+  )
+    throw new PharmacySaleError('INVALID_SAFETY_LEASE');
+}
+
 export class PharmacySaleError extends Error {
   constructor(
     readonly reason:
+      | 'replay_stale'
+      | 'INVALID_REPLAY_TIME'
+      | 'INVALID_RECEIPT_LEASE'
+      | 'INVALID_SAFETY_LEASE'
       | 'NOT_FOUND'
       | 'INVALID_STATE'
       | 'INVALID_QUANTITY'
