@@ -21,6 +21,11 @@ export async function controlledClient() {
 export async function prepareControlledFixture() {
   const db = await controlledClient();
   try {
+    // The counter seed creates the role but does not seed dispensing grants.
+    await db.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ('permission_controlled_e2e_dispense',$1,$2,'pharmacy:dispense','ALLOW') ON CONFLICT ("organizationRoleId",capability) DO UPDATE SET effect='ALLOW'`,
+      [fixture.organizationId, fixture.roleId]
+    );
     await db.query(`UPDATE pharmacy_medicines SET controlled=true WHERE id=$1`, [
       fixture.medicines.rx.id,
     ]);

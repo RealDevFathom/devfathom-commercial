@@ -3,7 +3,7 @@
 Base: `89f39834e7688c7f93dc467b945c980ada708463`.
 Owned worktree: `/Users/Saad/Developer/paperclip-worktrees/devfathom/codex-WHA-1591-controlled-interlock`.
 Branch: `codex-WHA-1591-controlled-interlock`.
-Disposition: incomplete; board decision required for another correction pass.
+Disposition: incomplete; board review after the authorized additional correction pass (see latest evidence below).
 
 ## Change
 
@@ -38,3 +38,22 @@ Next bounded pass needs board authorization under the one-correction-pass contra
 Recovery: local branch only. No shared database changes; disposable database stopped. Do not deploy this incomplete branch.
 
 Final verification: full `NODE_OPTIONS=--max-old-space-size=8192 bunx tsc --noEmit --pretty false` exited 0, zero diagnostics, after all test additions. Final scoped ESLint exited 0, zero diagnostics.
+
+## Authorized correction pass — 2026-09-29
+
+Starting HEAD: `46158ab85af9ca621273db63fbac0226f04e3fd5`; original base remains above.
+Board authorization: comment `7eb32c04-3610-4032-a4c8-64f5814166a5`.
+Only code change: `tests/e2e/pharmacy-controlled-fixture.ts` grants the existing fixture role `pharmacy:dispense` with effect ALLOW. Production authorization is unchanged.
+
+- `df -h /`: exit 0, 51 GiB free both before setup and browser compilation.
+- New run-owned disposable PG initialized with `initdb -D "$PAPERCLIP_RUN_SCRATCH_DIR/pgdata" -A trust --no-locale`: exit 0. Started under `caffeinate -dimsu postgres` on loopback 55691, Unix sockets disabled. Owner LOGIN NOSUPERUSER NOBYPASSRLS CREATEROLE; runtime LOGIN NOSUPERUSER NOBYPASSRLS.
+- `EXTENSION_ADMIN_DATABASE_URL=<disposable admin URL> bunx tsx prisma/prepare-extensions.ts`: exit 0. `DATABASE_URL=<disposable owner URL> bunx prisma migrate deploy`: exit 0. Runtime grants through psql: exit 0. `bunx tsx scripts/seed-pharmacy-e2e.ts` with guarded disposable runtime environment: exit 0.
+- Seed and browser both used the exact counter CI login settings from `.github/workflows/qa.yml:296`, via one run-owned environment file. No secret or login override was added to the repository.
+- `NODE_OPTIONS=--no-experimental-webstorage bunx vitest run tests/pharmacy-controlled-sale.db.test.ts`: exit 0, **1/1 passed**, one test file. See `sale-db-correction.log`. This proves atomic authorized allocation, fill, signature and running balance reconciliation; transaction rolled back.
+- `bunx prettier --check tests/e2e/pharmacy-controlled-fixture.ts`: exit 0, all matched files formatted. `bunx eslint tests/e2e/pharmacy-controlled-fixture.ts`: exit 0, zero diagnostics. `git diff --check` before evidence additions: exit 0.
+- `NODE_OPTIONS=--max-old-space-size=2048 bunx playwright test --config=playwright.pharmacy-counter.config.ts --grep 'controlled interlock'`: exit 1, **0/1 passed**, login remained `/login` after 30000 ms. See `browser-correction.log`. No login timeout change.
+- Trace network extraction (Python zipfile/json): exit 0. See `browser-network-correction.log`: GET /login 200 in 88 ms; POST /login 200 in 37 ms; no /api/login request. This suggests native form submission before JavaScript hydration, not slow authentication; root cause not fully proven. Original failed trace/screenshot remain in `playwright-artifacts/pharmacy-counter/` (ignored artifacts).
+
+No further correction or browser rerun in this bounded pass. Browser success, controlled UI acceptance and printing remain unverified. No production build or repeat full typecheck; previous TypeScript evidence remains applicable to unchanged production code. Prior base-to-HEAD raw-log whitespace diagnostics remain outside this correction's scope. Board review must decide the next action for browser login synchronization. No push, merge or deploy.
+
+Cleanup: `pg_ctl -D "$PAPERCLIP_RUN_SCRATCH_DIR/pgdata" stop -m fast` exit 0; database stopped. Final correction diff check: `git diff --check` exit 0.

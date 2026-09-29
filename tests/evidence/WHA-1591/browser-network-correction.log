@@ -1,0 +1,2 @@
+GET http://127.0.0.1:4391/login status=200 duration_ms=88.39600000000002
+POST http://127.0.0.1:4391/login status=200 duration_ms=36.89
