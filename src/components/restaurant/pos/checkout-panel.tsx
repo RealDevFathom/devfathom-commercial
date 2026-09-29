@@ -54,7 +54,8 @@ type CheckoutPanelProps = {
   request: TerminalRequest;
   /** Checkout is server-authoritative: an already-open panel must also fail closed offline. */
   connected?: boolean;
-  onClose: () => void;
+  /** `settled` reports whether the order was fully settled when the panel closed. */
+  onClose: (result: { settled: boolean }) => void;
 };
 
 function errorDetails(error: unknown) {
@@ -560,10 +561,11 @@ export function CheckoutPanel({
   }
 
   function closePanel() {
+    const settled = summary?.settled ?? false;
     setSummary(null);
     setError(null);
     setLoading(true);
-    onClose();
+    onClose({ settled });
   }
 
   const dismissBlocked = busy || tenderPending;

@@ -891,7 +891,9 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
         ]);
         return;
       }
-      if (draftLines.length === 0 && navigator.onLine) {
+      if (navigator.onLine) {
+        // Online, a composed draft is opened directly and becomes the active order;
+        // only an offline draft goes through the local queue.
         const intent = `open:${JSON.stringify(body)}`;
         const data = await request<{ orderId: string; orderNumber: number }>(
           '/api/restaurant/orders/open',
@@ -904,7 +906,25 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
             body: JSON.stringify(body),
           }
         );
+        for (const line of draftLines) {
+          await request('/api/restaurant/orders/add-item', {
+            method: 'POST',
+            headers: {
+              ...authHeaders(runtime, true),
+              'Idempotency-Key': keyFor(`open-line:${data.orderId}:${line.lineId}`),
+            },
+            body: JSON.stringify({
+              orderId: data.orderId,
+              menuItemId: line.menuItemId,
+              quantity: line.quantity,
+              course: line.course,
+              seatNumber: line.seatNumber,
+              modifierOptionIds: line.modifierOptionIds,
+            }),
+          });
+        }
         idempotencyKeys.current.delete(intent);
+        setDraftLines([]);
         setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
         await Promise.all([
           loadDetail(data.orderId, runtime, false),
@@ -941,6 +961,15 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
     } finally {
       setPending(null);
     }
+  }
+
+  /** A settled check is finished: clear it so the next taps compose a fresh draft. */
+  function startFreshDraft() {
+    stateEpoch.current += 1;
+    setOrder(null);
+    setOrderMenu(null);
+    setDraftLines([]);
+    if (runtime && navigator.onLine) void loadOpenOrders(runtime, false);
   }
 
   async function closeForPayment() {
@@ -1799,7 +1828,10 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
         orderId={checkoutOrderId}
         request={checkoutRequest}
         connected={online}
-        onClose={() => setCheckoutOrderId(null)}
+        onClose={({ settled }) => {
+          setCheckoutOrderId(null);
+          if (settled) startFreshDraft();
+        }}
       />
     </PosShell>
   );
