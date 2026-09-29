@@ -668,6 +668,8 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
   });
 
   it('denies cross-tenant devices and cross-branch actor mappings without mutation', async () => {
+    // A branch-scoped administrator: devices:manage, but not organization-wide.
+    mocks.can.mockImplementation(async (...args: unknown[]) => args[1] !== 'restaurant:configure');
     const api = caller();
     const branchLocal = await deps.withTenantDb(orgId, (tx) =>
       tx.restaurantRegisteredDevice.create({
@@ -698,5 +700,44 @@ describeIfDatabase('restaurantDevices router (real DB)', () => {
       code: 'FORBIDDEN',
     });
     expect(mocks.annotateAudit.mock.calls).toEqual([[expect.anything(), { skipInput: true }]]);
+  });
+
+  it('lets an organization-wide owner list approvers and revoke on a branch they are not linked to', async () => {
+    // The acting owner's staff profile is linked only to Downtown; the device is at Airport.
+    const device = await deps.withTenantDb(orgId, async (tx) => {
+      const managerRole = await tx.restaurantJobRole.findFirstOrThrow({
+        where: { key: `device-manager-${suffix}` },
+        select: { id: true },
+      });
+      await tx.restaurantStaffJobRole.create({
+        data: {
+          staffProfileId: approvingStaffId,
+          jobRoleId: managerRole.id,
+          branchId: otherBranchId,
+        },
+      });
+      return tx.restaurantRegisteredDevice.create({
+        data: {
+          branchId: otherBranchId,
+          name: 'Airport KDS',
+          deviceSecretHash: deps.hashDeviceSecret(`rdk_airport_owner_${suffix}`),
+        },
+      });
+    });
+    const api = caller();
+
+    await expect(api.listApprovers({ deviceId: device.id })).resolves.toEqual({
+      actingStaff: { id: actingStaffId, displayName: 'Acting Admin' },
+      approvers: [{ id: approvingStaffId, displayName: 'Shift Manager' }],
+    });
+    await expect(
+      api.revoke({
+        deviceId: device.id,
+        approvingStaffProfileId: approvingStaffId,
+        approvingType: 'PIN',
+        approvingSecret: APPROVING_PIN,
+        reason: 'owner revokes an unlinked branch device',
+      })
+    ).resolves.toMatchObject({ device: { id: device.id, status: 'REVOKED' } });
   });
 });

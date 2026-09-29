@@ -105,8 +105,21 @@ describe('staff branch authorization', () => {
     );
   });
 
-  it('does not treat organization-wide authority as an unlinked actor branch assignment', async () => {
+  it('makes an organization-wide actor eligible on every branch, including unlinked ones', async () => {
     mocks.can.mockResolvedValue(true);
+    const authorization = await resolveCapabilityBranchAuthorization(
+      database() as never,
+      user,
+      'devices:manage',
+      { requireExactlyOneActiveActor: true }
+    );
+
+    expect(() => assertActorEligibleForBranch(authorization, 'a')).not.toThrow();
+    expect(() => assertActorEligibleForBranch(authorization, 'unlinked')).not.toThrow();
+  });
+
+  it('keeps a branch-scoped actor ineligible on a branch the actor is not linked to', async () => {
+    mocks.resolve.mockImplementation(async () => new Set(['devices:manage']));
     const authorization = await resolveCapabilityBranchAuthorization(
       database() as never,
       user,
