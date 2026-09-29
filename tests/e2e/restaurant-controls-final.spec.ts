@@ -189,7 +189,7 @@ test('branch controls use readable codes and enforce duplicate, limit, and deact
   await page.getByLabel('Name').fill('Gulberg Café');
   await page.getByRole('button', { name: 'Save changes' }).click();
   await expect(page.getByText(/branch with this name or code already exists/i)).toBeVisible();
-  await expect(locations.getByRole('listitem')).toHaveCount(2);
+  await expect(locations.getByRole('listitem')).toHaveCount(RESTAURANT_E2E_BRANCH_COUNT);
   await assertNoRawDatabaseIds(page);
 });
 
