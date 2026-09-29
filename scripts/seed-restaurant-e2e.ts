@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { PrismaPg } from '@prisma/adapter-pg';
 import { hashSync } from 'bcryptjs';
@@ -101,6 +103,9 @@ const RESTAURANT_E2E_BRANCH_COUNT = 3;
 const SOP_EVIDENCE_RETENTION_DAYS = 365;
 
 const IDS = {
+  reportsOperationalUser: 'user_restaurant_e2e_reports_operational',
+  reportsOperationalRole: 'role_restaurant_e2e_reports_operational',
+  reportsOperationalStaff: 'staff_restaurant_e2e_reports_operational',
   alexUser: 'user_chai_chowk_alex',
   alexStaff: 'staff_chai_chowk_alex',
   operatorUser: 'user_restaurant_e2e_operator',
@@ -203,7 +208,10 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
     'organization_departments',
     ['department_restaurant_e2e_kitchen', 'department_restaurant_e2e_front_of_house'],
   ],
-  ['organization_roles', [IDS.operatorRole, IDS.deniedOperatorRole, IDS.managerRole]],
+  [
+    'organization_roles',
+    [IDS.operatorRole, IDS.deniedOperatorRole, IDS.managerRole, IDS.reportsOperationalRole],
+  ],
   [
     'organization_role_permissions',
     [
@@ -215,11 +223,13 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       'permission_restaurant_e2e_operator_5',
       'permission_restaurant_e2e_delivery_denied',
       'permission_restaurant_e2e_manager_all',
+      'permission_restaurant_e2e_reports_operational',
     ],
   ],
   [
     'users',
     [
+      IDS.reportsOperationalUser,
       IDS.alexUser,
       IDS.operatorUser,
       IDS.deniedOperatorUser,
@@ -232,6 +242,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   [
     'restaurant_branch_assignments',
     [
+      `assignment_${IDS.reportsOperationalUser}`,
       `assignment_${IDS.alexUser}`,
       `assignment_${IDS.operatorUser}`,
       `assignment_${IDS.deniedOperatorUser}`,
@@ -246,6 +257,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   [
     'restaurant_staff_profiles',
     [
+      IDS.reportsOperationalStaff,
       IDS.alexStaff,
       RESTAURANT_E2E.operatorId,
       RESTAURANT_E2E.deniedOperatorId,
@@ -700,6 +712,54 @@ async function seedAsciiReceiptTaxProfile(tx: Prisma.TransactionClient) {
   });
 }
 
+/** Cut an empty, genuinely closed prior day through the production money path.
+ * Yesterday is inside the default seven-day comparison window; today stays
+ * open for POS acceptance. No prior-window close is fabricated, so unknown
+ * comparison values remain unknown. The device/date key makes seed replay safe.
+ */
+function seedCurrentWindowClose(databaseUrl: string) {
+  const day = new Date(CURRENT_BUSINESS_DATE);
+  day.setUTCDate(day.getUTCDate() - 1);
+  const businessDate = day.toISOString().slice(0, 10);
+  // The scripts tsconfig supplies the existing server-only shim. A child keeps
+  // that script-only resolution out of the seed's normal application imports.
+  const input = {
+    branchId: RESTAURANT_E2E.branchId,
+    businessDate,
+    actor: {
+      staffProfileId: RESTAURANT_E2E.managerId,
+      deviceId: RESTAURANT_E2E.posDeviceId,
+      idempotencyKey: `e2e-comparison-close-${businessDate}`,
+    },
+  };
+  const result = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url)),
+      `--tsconfig=${fileURLToPath(new URL('./tsconfig.json', import.meta.url))}`,
+      '--eval',
+      `
+      import { cutClose } from './src/lib/restaurant/daily-close';
+      import { withTenantDb } from './src/lib/tenancy/scoped-db';
+      import { db } from './src/lib/db';
+      withTenantDb(${JSON.stringify(RESTAURANT_E2E.organizationId)}, tx =>
+        cutClose(tx, ${JSON.stringify(input)})
+      ).then(result => console.log('Current-window close:', result.dailyCloseId,
+        'date:', ${JSON.stringify(businessDate)}, 'replayed:', result.replayed))
+       .catch(error => { console.error(error); process.exitCode = 1; })
+       .finally(() => db.$disconnect());
+    `,
+    ],
+    {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: { ...process.env, DATABASE_URL: databaseUrl },
+      stdio: 'inherit',
+    }
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error('Current-window daily-close fixture failed.');
+}
+
 async function main() {
   const databaseUrl = resolveRestaurantE2eDatabaseUrl();
   const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
@@ -1096,7 +1156,47 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        // CSV denial case: a real operational reader with branch scope, but
+        // no financial capability and no wildcard administrator grant.
+        await tx.organizationRole.upsert({
+          where: { id: IDS.reportsOperationalRole },
+          update: {
+            permissions: {
+              deleteMany: {},
+              create: [
+                {
+                  id: 'permission_restaurant_e2e_reports_operational',
+                  capability: 'reports:operational',
+                  effect: 'ALLOW',
+                },
+              ],
+            },
+          },
+          create: {
+            id: IDS.reportsOperationalRole,
+            key: 'restaurant-e2e-reports-operational',
+            name: 'Operational reports reader',
+            permissions: {
+              create: [
+                {
+                  id: 'permission_restaurant_e2e_reports_operational',
+                  capability: 'reports:operational',
+                  effect: 'ALLOW',
+                },
+              ],
+            },
+          },
+        });
         for (const user of [
+          {
+            id: IDS.reportsOperationalUser,
+            roleId: IDS.reportsOperationalRole,
+            name: 'Operational Reports Reader',
+            email: 'reports-operational@restaurant-e2e.test',
+            title: 'Reports reader',
+            password: devFathomAlexPassword,
+            branchId: RESTAURANT_E2E.branchId,
+          },
           {
             id: IDS.alexUser,
             roleId: IDS.managerRole,
@@ -1217,6 +1317,20 @@ async function main() {
             },
           });
         }
+        await tx.restaurantStaffProfile.upsert({
+          where: { id: IDS.reportsOperationalStaff },
+          update: {
+            userId: IDS.reportsOperationalUser,
+            primaryBranchId: RESTAURANT_E2E.branchId,
+            status: 'ACTIVE',
+          },
+          create: {
+            id: IDS.reportsOperationalStaff,
+            userId: IDS.reportsOperationalUser,
+            primaryBranchId: RESTAURANT_E2E.branchId,
+            displayName: 'Operational Reports Reader',
+          },
+        });
         await tx.restaurantBranchAssignment.upsert({
           where: {
             branchId_userId: { branchId: RESTAURANT_E2E.branchA2Id, userId: IDS.alexUser },
@@ -2478,6 +2592,8 @@ async function main() {
     // WHA-1553 — the two isolated Insights completion acceptance tenants. They
     // own separate organizations and never read or write Chai Chowk's rows, so
     // they run after the verification above rather than inside it.
+    seedCurrentWindowClose(databaseUrl);
+
     const insightsCompletion = await seedRestaurantInsightsCompletionFixtures(prisma);
     console.log(
       `Seeded restaurant Insights completion fixtures: ${JSON.stringify(insightsCompletion)}`
