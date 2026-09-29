@@ -1957,6 +1957,7 @@ model PharmacyDrapIngest {
   adapter           String
   kind              PharmacyDrapNoticeKind
   payloadHash       String
+  priceNotice       Json?
   matchStatus       PharmacyDrapMatchStatus
   matchDetails      Json
   recallNoticeId    String?
@@ -1978,6 +1979,8 @@ model PharmacyPriceChangeProposal {
   ingestId           String
   medicineId         String
   currentPriceMinor  Int
+  packLevelId        String?
+  previousRegulatoryMrpMinor Int?
   notifiedPriceMinor Int
   effectiveDate      DateTime
   status             PharmacyPriceChangeStatus @default(PROPOSED)
@@ -13712,4 +13715,28 @@ model PharmacyPackAuthenticationEvent {
   @@unique([organizationId, id], map: "pharmacy_pack_authentication_events_org_id_key")
   @@index([organizationId, branchId, scanId, createdAt], map: "pharmacy_pack_authentication_events_org_scan_idx")
   @@map("pharmacy_pack_authentication_events")
+}
+
+/// Effective-dated regulatory and selling policy, never historical batch MRP.
+/// Tenant/pack/branch foreign keys and partial uniqueness are migration enforced.
+model PharmacyPackPrice {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  presentationId String
+  packLevelId String
+  branchId String?
+  isOverride Boolean @default(false)
+  mrpMinor Int
+  sellingPriceMinor Int?
+  effectiveFrom DateTime
+  source String
+  proposalId String?
+  reviewedOrgPriceId String?
+  createdById String
+  createdAt DateTime @default(now())
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, proposalId])
+  @@index([organizationId, packLevelId, effectiveFrom])
+  @@map("pharmacy_pack_prices")
 }

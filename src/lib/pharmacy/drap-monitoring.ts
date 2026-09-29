@@ -5,9 +5,12 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
 import { quarantinePart } from './inventory-operations';
+import { confirmPriceChanges, currentPackPrice, resolveNoticePack } from './pricing';
 
 export type DrapPriceNotice = {
   kind: 'PRICE';
+  presentation?: string;
+  packLevel?: 'BOX' | 'STRIP' | 'UNIT';
   sourceReference: string;
   drapRegistrationNumber: string;
   notifiedPriceMinor: number;
@@ -62,8 +65,22 @@ function parseNotice(value: unknown): DrapNotice {
       throw new PharmacyInventoryError('INVALID_STATE');
     const effectiveDate = new Date(String(notice.effectiveDate));
     if (Number.isNaN(effectiveDate.getTime())) throw new PharmacyInventoryError('INVALID_STATE');
+    if (
+      notice.presentation !== undefined &&
+      (typeof notice.presentation !== 'string' || !notice.presentation.trim())
+    )
+      throw new PharmacyInventoryError('INVALID_STATE');
+    if (
+      notice.packLevel !== undefined &&
+      !['BOX', 'STRIP', 'UNIT'].includes(String(notice.packLevel))
+    )
+      throw new PharmacyInventoryError('INVALID_STATE');
     return {
       kind: 'PRICE',
+      ...(notice.presentation !== undefined ? { presentation: notice.presentation as string } : {}),
+      ...(notice.packLevel !== undefined
+        ? { packLevel: notice.packLevel as 'BOX' | 'STRIP' | 'UNIT' }
+        : {}),
       sourceReference: notice.sourceReference,
       drapRegistrationNumber: notice.drapRegistrationNumber,
       notifiedPriceMinor: Number(notice.notifiedPriceMinor),
@@ -136,6 +153,7 @@ export async function ingestDrapNotice(
         sourceReference: notice.sourceReference,
         adapter,
         kind: notice.kind,
+        ...(notice.kind === 'PRICE' ? { priceNotice: JSON.parse(JSON.stringify(notice)) } : {}),
         payloadHash: payloadHash(notice),
         matchStatus: medicines.length ? 'AMBIGUOUS' : 'NO_MATCH',
         matchDetails: { candidateMedicineIds: medicines.map(({ id }) => id) },
@@ -146,24 +164,33 @@ export async function ingestDrapNotice(
   const medicineId = medicines[0]!.id;
 
   if (notice.kind === 'PRICE') {
-    const current = await db.pharmacyInventoryLot.aggregate({
-      where: { organizationId: scope.organizationId, batch: { medicineId } },
-      _max: { printedMrpMinor: true },
-    });
+    const pack = await resolveNoticePack(
+      db,
+      scope.organizationId,
+      medicineId,
+      notice.presentation,
+      notice.packLevel,
+      notice.effectiveDate
+    );
+    const current = pack ? await currentPackPrice(db, scope.organizationId, pack.id) : null;
     return db.pharmacyDrapIngest.create({
       data: {
         organizationId: scope.organizationId,
         sourceReference: notice.sourceReference,
         adapter,
         kind: 'PRICE',
+        priceNotice: JSON.parse(JSON.stringify(notice)),
         payloadHash: payloadHash(notice),
-        matchStatus: 'MATCHED',
-        matchDetails: { medicineId },
+        matchStatus: pack ? 'MATCHED' : 'NO_MATCH',
+        matchDetails: { medicineId, packLevelId: pack?.id ?? null },
         ingestedById: scope.actorId,
         priceChanges: {
           create: {
             medicineId,
-            currentPriceMinor: current._max.printedMrpMinor ?? 0,
+            // Legacy required column; new consumers use nullable regulatory policy.
+            currentPriceMinor: current?.mrpMinor ?? 0,
+            previousRegulatoryMrpMinor: current?.mrpMinor ?? null,
+            packLevelId: pack?.id ?? null,
             notifiedPriceMinor: notice.notifiedPriceMinor,
             effectiveDate: notice.effectiveDate,
           },
@@ -287,15 +314,7 @@ export async function ingestDrapNotice(
 }
 
 export async function confirmPriceChange(db: ScopedDb, scope: ActorScope, proposalId: string) {
-  const proposal = await db.pharmacyPriceChangeProposal.findFirst({
-    where: { id: proposalId, organizationId: scope.organizationId },
-  });
-  if (!proposal) throw new PharmacyInventoryError('NOT_FOUND');
-  if (proposal.status === 'CONFIRMED') return proposal;
-  return db.pharmacyPriceChangeProposal.update({
-    where: { organizationId_id: { organizationId: scope.organizationId, id: proposal.id } },
-    data: { status: 'CONFIRMED', confirmedById: scope.actorId, confirmedAt: new Date() },
-  });
+  return (await confirmPriceChanges(db, scope, [proposalId]))[0]!;
 }
 
 export async function recallActionList(db: ScopedDb, scope: ActorScope, recallNoticeId: string) {
