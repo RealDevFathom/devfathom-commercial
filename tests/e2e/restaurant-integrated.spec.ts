@@ -151,11 +151,18 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
           name: `Start ${fixture.menuItem.name} for order ${opened.orderNumber}`,
         })
         .click();
+      const kitchenReady = kds.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === '/api/restaurant/kds/bump' &&
+          response.request().method() === 'POST'
+      );
       await kds
         .getByRole('button', {
           name: `Mark ready ${fixture.menuItem.name} for order ${opened.orderNumber}`,
         })
         .click();
+      const readyResponse = await kitchenReady;
+      expect(readyResponse.status(), await readyResponse.text()).toBe(200);
       await page.getByRole('button', { name: new RegExp(`#${opened.orderNumber} ·`) }).click();
       await page.getByRole('button', { name: 'Mark served', exact: true }).click();
       await page.getByRole('button', { name: 'Close order', exact: true }).click();
@@ -201,8 +208,10 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
       await expect(checkout.getByRole('region', { name: /^Receipt \d+$/ })).toHaveCount(1);
       await checkout.getByRole('button', { name: 'Close checkout', exact: true }).click();
 
-      // Settlement does not finalize the order in this UI. Exercise the real
-      // authorized close endpoint: the CLOSED transition owns the loyalty earn.
+      const settledBalance = (await snapshot(attached.billId)).balance;
+      expect(settledBalance).toBe(openingBalance + (sale === 0 ? 14 : 17));
+      // Settlement earns points but does not finalize the order in this UI.
+      // The authorized close must preserve that earn without adding it again.
       const closed = await request.post('/api/restaurant/orders/close', {
         headers: { ...manager.headers, 'Idempotency-Key': `wha1600-close-${opened.orderId}` },
         data: { orderId: opened.orderId },
@@ -223,7 +232,13 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
     await refundDialog
       .getByLabel('Reason', { exact: true })
       .fill('Loyalty earned-points reversal regression');
-    await refundDialog.getByLabel('Approving manager').selectOption(fixture.manager.staffProfileId);
+    const approvers = refundDialog.getByLabel('Approving manager');
+    await expect(
+      approvers.locator(`option[value="${fixture.manager.staffProfileId}"]`)
+    ).toHaveCount(0);
+    // The seed gives Alex the manager role and manager PIN. Refunds require a
+    // distinct approver; the acting E2E Manager must not approve their own refund.
+    await approvers.selectOption('staff_chai_chowk_alex');
     await refundDialog.getByLabel('Manager PIN').fill(fixture.manager.pin);
     await refundDialog.getByRole('button', { name: 'Review refund', exact: true }).click();
     const refund = responseFor('checkout/refund');
@@ -237,6 +252,10 @@ test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points 
     const final = await snapshot(secondBillId);
     expect(final.balance).toBe(openingBalance + 4);
     expect(Number(final.redeemedValue)).toBe(0.1);
+    await test.info().attach('loyalty-refund-proof', {
+      body: await page.screenshot(),
+      contentType: 'image/png',
+    });
     await test.info().attach('loyalty-balances', {
       body: JSON.stringify({
         openingBalance,

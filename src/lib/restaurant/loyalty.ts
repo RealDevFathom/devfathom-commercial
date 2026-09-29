@@ -346,10 +346,10 @@ export async function accrueLoyaltyForSettledBill(
 ) {
   const bill = await tx.restaurantBill.findUnique({
     where: { id: input.billId },
-    select: { order: { select: { customerId: true } } },
+    select: { grandTotal: true, order: { select: { customerId: true } } },
   });
   const customerId = bill?.order.customerId;
-  if (!customerId) return null;
+  if (!bill || !customerId) return null;
 
   const account = await tx.loyaltyAccount.findUnique({
     where: { customerId },
@@ -364,10 +364,14 @@ export async function accrueLoyaltyForSettledBill(
   });
   if (prior) return prior;
 
-  const eligible = money(input.netGrandTotal);
-  if (eligible.isNegative()) {
+  const quotedEligible = money(input.netGrandTotal);
+  if (quotedEligible.isNegative()) {
     throw new LoyaltyError('Settlement loyalty basis cannot be negative.', 'INVALID');
   }
+  // Preserve the caller's eligible basis (which may exclude tax), but never
+  // earn on more than the settled bill's payable total. The tax quote net can
+  // precede after-tax discounts such as loyalty redemption.
+  const eligible = Prisma.Decimal.min(quotedEligible, bill.grandTotal);
   const program = await effectiveProgram(tx, input.at);
   const points = wholePoints(multiply(eligible, program.earnRate));
   if (points === 0) return null;
