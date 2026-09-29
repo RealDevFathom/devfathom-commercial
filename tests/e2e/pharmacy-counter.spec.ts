@@ -1,4 +1,4 @@
-import { expect, test, type Locator, type Page } from '@playwright/test';
+import { expect, test, type Locator, type Page, type Response } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
@@ -23,6 +23,10 @@ import { PHARMACY_E2E, PHARMACY_E2E_EXPECTED } from './pharmacy-counter-fixture'
  * that is visually and semantically distinct from advice and commercial
  * notices, refuses tender, and is cleared only by voiding — never by an
  * acknowledgement.
+ *
+ * A fifth test covers PH-A3: the counter photographs the paper Rx, stores it
+ * privately, offers OCR suggestions that apply only when chosen and confirmed,
+ * and the same POS-09 line becomes tenderable once that Rx is pharmacist-signed.
  */
 
 test.describe.configure({ mode: 'serial' });
@@ -314,6 +318,184 @@ test('POS-09 — a safety block is distinct from advice, refuses tender, and is 
   await expect(page.getByRole('status').filter({ hasText: /Bill voided/i })).toBeVisible({
     timeout: 15_000,
   });
+});
+
+/** A real single-frame 32×32 PNG: the private store decodes every upload with sharp. */
+const RX_PHOTO_PNG = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAIAAAD8GO2jAAAACXBIWXMAAAPoAAAD6AG1e1JrAAAAOklEQVRIie3WuQkAMBADQfdfqOItwVUYHAxcLjj07Kk9vUMgLxoXJWhTFWnTDE4mM1Qx4BV03Nd0fQGlKximLU59EAAAAABJRU5ErkJggg==',
+  'base64'
+);
+
+/**
+ * Every tRPC payload the page received, so the spec can bind the review to the
+ * real sale line and prescription line the server created rather than guessing.
+ */
+function recordTrpcPayloads(page: Page) {
+  const payloads: unknown[] = [];
+  page.on('response', async (response: Response) => {
+    if (!response.url().includes('/api/trpc/') || !response.ok()) return;
+    try {
+      payloads.push(await response.json());
+    } catch {
+      // Streaming or empty bodies carry nothing the spec needs.
+    }
+  });
+  return function find(predicate: (value: Record<string, unknown>) => boolean) {
+    const stack = [...payloads];
+    while (stack.length) {
+      const value = stack.pop();
+      if (Array.isArray(value)) stack.push(...value);
+      else if (value && typeof value === 'object') {
+        if (predicate(value as Record<string, unknown>)) return value as Record<string, unknown>;
+        stack.push(...Object.values(value));
+      }
+    }
+    return null;
+  };
+}
+
+async function trpcMutation(page: Page, path: string, input: Record<string, unknown>) {
+  const response = await page.request.post(`/api/trpc/${path}`, {
+    data: { json: input },
+    headers: { origin: new URL(page.url()).origin },
+  });
+  expect(response.status(), `${path} ${await response.text()}`).toBe(200);
+}
+
+test('PH-A3 — a photographed Rx is stored privately, OCR only suggests, and a signed Rx with the photo makes the POS-09 line tenderable', async ({
+  page,
+  request,
+}) => {
+  expect(process.env.PHARMACY_RX_OCR_ADAPTER, 'run with PHARMACY_RX_OCR_ADAPTER=FIXTURE').toBe(
+    'FIXTURE'
+  );
+  const rx = PHARMACY_E2E.medicines.rx;
+  const find = recordTrpcPayloads(page);
+  await openCounter(page);
+  await openDrawer(page);
+
+  await search(page, 'Fathomcillin');
+  await stageFirstResult(page, rx.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 1);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(rx.name, {
+    timeout: 15_000,
+  });
+
+  // Attach the patient from the panel beside the cart — the bill stays open.
+  await page.keyboard.press('Shift+F2');
+  const patientSearch = page.getByLabel('Find patient');
+  await patientSearch.focus();
+  await patientSearch.fill(PHARMACY_E2E.patientName.slice(0, 6));
+  await patientSearch.press('Enter');
+  await pressControl(page.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+  await expect(page).toHaveURL(/\/pharmacy\/counter$/);
+
+  // Rear-camera capture of the paper Rx.
+  await pressControl(page.getByRole('button', { name: 'Photograph prescription' }));
+  const form = page.getByRole('form', { name: 'Photograph prescription' });
+  const photo = form.getByLabel('Prescription photo');
+  await expect(photo).toHaveAttribute('accept', 'image/*');
+  await expect(photo).toHaveAttribute('capture', 'environment');
+  await photo.setInputFiles({ name: 'rx-photo.png', mimeType: 'image/png', buffer: RX_PHOTO_PNG });
+
+  // OCR proposes; nothing is applied until the pharmacist chooses it.
+  await pressControl(form.getByRole('button', { name: 'Suggest from photo' }));
+  const suggestions = form.getByRole('region', { name: 'Suggestions from photo' });
+  await expect(suggestions).toContainText('Read: Fathomcillin 250 mg', { timeout: 15_000 });
+  await expect(form.getByLabel('Medicine')).toHaveValue('');
+  await expect(form.getByLabel('Directions')).toHaveValue('');
+  await pressControl(suggestions.getByRole('button', { name: `Use medicine ${rx.name}` }));
+  await pressControl(suggestions.getByRole('button', { name: /Use directions/ }));
+  await expect(form.getByLabel('Medicine')).toHaveValue(rx.id);
+  await expect(form.getByLabel('Directions')).toHaveValue('1 capsule every 8 hours for 5 days');
+
+  const prescriber = form.getByLabel('Prescriber');
+  await prescriber.focus();
+  await prescriber.selectOption(PHARMACY_E2E.prescriberId);
+  const presentation = form.getByLabel('Presentation');
+  await presentation.focus();
+  await presentation.selectOption(rx.presentationId);
+  const units = form.getByLabel('Authorized units');
+  await units.focus();
+  await units.fill('20');
+  const save = form.getByRole('button', { name: 'Save prescription' });
+  await expect(save).toBeDisabled();
+  const confirm = form.getByRole('checkbox', { name: /checked the suggested/ });
+  await confirm.focus();
+  await confirm.press('Space');
+  await expect(confirm).toBeChecked();
+  await pressControl(save);
+
+  // Stored privately and shown as a thumbnail the session can actually load.
+  const saved = page.getByRole('img', { name: /^Saved prescription photo for / });
+  await expect(saved).toBeVisible({ timeout: 15_000 });
+  const photoUrl = await saved.getAttribute('src');
+  expect(photoUrl).toMatch(/^\/api\/pharmacy\/prescription-files\?id=[0-9a-f-]{36}$/);
+  await expect.poll(() => saved.evaluate((img: HTMLImageElement) => img.naturalWidth)).toBe(32);
+  // No session, no evidence: the image is not public.
+  expect((await request.get(photoUrl!)).status()).toBe(401);
+  const onPrescription = page.getByRole('img', { name: /^Prescription photo from / }).first();
+  await expect(onPrescription).toHaveAttribute('src', photoUrl!);
+
+  // Captured is not signed: the line is still blocked and tender is refused.
+  const blocks = page.getByRole('region', { name: 'Safety blocks' });
+  await expect(blocks.getByRole('alert').first()).toContainText(
+    /not been verified by a pharmacist/i
+  );
+  await page.keyboard.press('F9');
+  await expect(page.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+
+  // RX-03 review bound to the real sale line and the new Rx line, then signed.
+  // The counter has no enqueue control yet and the E2E seed holds one user, so
+  // the pharmacist queue's segregation-of-duties guard would hide Sign; the
+  // decisions go through the same tRPC procedures the queue calls.
+  const fileId = photoUrl!.split('id=')[1];
+  const saleLine = find(
+    (value) => value.medicineId === rx.id && typeof value.saleLineId === 'string'
+  );
+  const prescriptionLine = find(
+    (value) => value.prescriptionId === `rx-${fileId}` && Array.isArray(value.lines)
+  );
+  expect(saleLine, 'sale line from counterCart').not.toBeNull();
+  expect(prescriptionLine, 'prescription from counterPatientPanel').not.toBeNull();
+  const line = (prescriptionLine!.lines as Array<Record<string, unknown>>).find(
+    (entry) => entry.medicineId === rx.id
+  );
+  await trpcMutation(page, 'pharmacyDispensing.enqueueReview', {
+    prescriptionLineId: line!.prescriptionLineId,
+    saleLineId: saleLine!.saleLineId,
+  });
+  const review = await page.request.get(
+    `/api/trpc/pharmacyDispensing.reviewQueue?input=${encodeURIComponent(JSON.stringify({ json: null }))}`
+  );
+  const queue = (await review.json()) as {
+    result: { data: { json: { items: Array<{ id: string; saleLineId: string }> } } };
+  };
+  const item = queue.result.data.json.items.find(
+    (entry) => entry.saleLineId === saleLine!.saleLineId
+  );
+  await trpcMutation(page, 'pharmacyDispensing.decideReview', {
+    reviewItemId: item!.id,
+    kind: 'SIGN',
+  });
+
+  // Re-read the panel from the keyboard: detach and attach the patient again.
+  await page.keyboard.press('Shift+F2');
+  await pressControl(page.getByRole('button', { name: 'Detach' }));
+  await patientSearch.focus();
+  await patientSearch.fill(PHARMACY_E2E.patientName.slice(0, 6));
+  await patientSearch.press('Enter');
+  await pressControl(page.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+  await expect(page.getByText('Pharmacist signed').first()).toBeVisible({ timeout: 15_000 });
+  await expect(blocks.getByRole('alert')).toHaveCount(0);
+
+  // POS-09: signed Rx with its photo — the same line is now tenderable.
+  await tenderCash(page, '50.00');
+  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  await expect(receipt).toBeVisible({ timeout: 15_000 });
+  await expect(receipt).toContainText(rx.name);
 });
 
 test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an honest placeholder', async ({
