@@ -399,7 +399,14 @@ async function sellThroughCheckout(pos: Page, kds: Page, tender: 'CASH' | 'CARD'
   await pos.getByRole('button', { name: 'Close order' }).click();
   const checkout = pos.getByRole('dialog', { name: 'Collect payment' });
   await expect(checkout).toBeVisible();
+  // The cashier reads (never redeems) loyalty for the bill: no 403 on checkout.
+  const loyaltyRead = pos.waitForResponse(
+    (response) =>
+      response.url().includes('/api/restaurant/checkout/loyalty?') &&
+      response.request().method() === 'GET'
+  );
   await checkout.getByRole('button', { name: 'Cut single bill' }).click();
+  expect((await loyaltyRead).status()).toBe(200);
   await checkout.getByLabel('Tender type').selectOption(tender);
   await checkout.getByLabel('Amount').fill(DAY_CLOSE_BRANCH.saleTotal);
   if (tender === 'CASH') await checkout.getByLabel('Cash received').fill('20.00');

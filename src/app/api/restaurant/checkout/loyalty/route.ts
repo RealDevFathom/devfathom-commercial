@@ -16,14 +16,16 @@ import { invalidBody } from '@/lib/restaurant/terminal-orders';
  *
  * The redemption panel's read model for one bill: the guest's balance, the money-per-point of
  * the program in force now, what is still outstanding on the bill, and the largest point count
- * that fits. Gated on `loyalty:redeem` and scoped to the device's own branch (a bill elsewhere
- * is a 404). Ids only — no guest PII crosses to the pad.
+ * that fits. READ-ONLY, so it is gated on `customers:read` (every cashier who can attach a guest
+ * at checkout can see their balance) rather than `loyalty:redeem`, which only the POST requires.
+ * Scoped to the device's own branch (a bill elsewhere is a 404). Ids only — no guest PII crosses
+ * to the pad.
  *
  * `maxRedeemablePoints` is a DISPLAY affordance, not authorization: the POST re-derives and
  * re-checks every bound under row locks, so a pad that ignores it still cannot over-redeem.
  */
 export const GET = connectedReadRoute({
-  capability: 'loyalty:redeem',
+  capability: 'customers:read',
   mapError: loyaltyErrorResponse,
   run: async (ctx, request) => {
     const params = Object.fromEntries(new URL(request.url).searchParams);
