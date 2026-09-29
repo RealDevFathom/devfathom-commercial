@@ -8,6 +8,7 @@ import {
   allocate,
   compare,
   equals,
+  formatMoney,
   isNegative,
   isZero,
   money,
@@ -67,6 +68,15 @@ describe('roundMoney is ROUND_HALF_UP at 2dp', () => {
   it('rounds halves away from zero (HALF_UP), symmetric for negatives', () => {
     expect(roundMoney('0.005').toFixed(2)).toBe('0.01');
     expect(roundMoney('-0.005').toFixed(2)).toBe('-0.01');
+  });
+});
+
+describe('formatMoney always renders 2dp', () => {
+  it('pads whole and single-decimal amounts, including negatives and zero', () => {
+    expect(formatMoney(new Prisma.Decimal('28'))).toBe('28.00');
+    expect(formatMoney('-0.5')).toBe('-0.50');
+    expect(formatMoney(ZERO)).toBe('0.00');
+    expect(formatMoney('14.25')).toBe('14.25');
   });
 });
 

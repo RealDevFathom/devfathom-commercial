@@ -7,6 +7,7 @@ import { router, capabilityProcedure } from '../trpc';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { foldExpectedCash, type FoldableMovement } from '@/lib/restaurant/drawer-sessions';
 import { resolveChainTip } from '@/lib/restaurant/daily-close';
+import { formatMoney } from '@/lib/restaurant/money';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
 
 /**
@@ -34,9 +35,9 @@ const BUSINESS_DATE = z
 const ID = z.string().min(1);
 const DRAWER_STATUS = z.enum(['OPEN', 'CLOSED']);
 
-const money = (value: Prisma.Decimal): string => value.toString();
+const money = (value: Prisma.Decimal): string => formatMoney(value);
 const moneyOrNull = (value: Prisma.Decimal | null): string | null =>
-  value === null ? null : value.toString();
+  value === null ? null : formatMoney(value);
 const dateOnly = (value: Date): string => value.toISOString().slice(0, 10);
 
 const readProcedure = capabilityProcedure('money:read');

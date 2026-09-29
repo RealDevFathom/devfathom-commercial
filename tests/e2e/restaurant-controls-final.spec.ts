@@ -634,10 +634,10 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
       .filter({ hasText: close.dailyCloseId });
     await expect(closeRow).toContainText('Authoritative tip');
     await expect(closeRow).toContainText('Original close');
-    // Gross, Net, Refunds, Cash variance. Tolerates the un-padded Decimal serialization.
-    await expect(closeRow.getByRole('cell').nth(4)).toHaveText(/^28(\.00)?$/);
-    await expect(closeRow.getByRole('cell').nth(6)).toHaveText(/^0(\.00)?$/);
-    await expect(closeRow.getByRole('cell').nth(7)).toHaveText(/^-0\.50?$/);
+    // Gross, Net, Refunds, Cash variance — money renders at 2dp.
+    await expect(closeRow.getByRole('cell').nth(4)).toHaveText('28.00');
+    await expect(closeRow.getByRole('cell').nth(6)).toHaveText('0.00');
+    await expect(closeRow.getByRole('cell').nth(7)).toHaveText('-0.50');
   } catch (error) {
     primaryFailure = error;
     throw error;

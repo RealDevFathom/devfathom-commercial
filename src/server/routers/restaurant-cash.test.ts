@@ -102,8 +102,8 @@ describe('drawer session reads (C12)', () => {
     mocks.drawerFindMany.mockResolvedValue([row('s1'), row('s2'), row('s3')]);
     const result = await caller().listDrawerSessions({ branchId: 'b1', limit: 2 });
     expect(result.sessions).toHaveLength(2);
-    expect(result.sessions[0].openingFloat).toBe('100');
-    expect(result.sessions[0].variance).toBe('-0.5');
+    expect(result.sessions[0].openingFloat).toBe('100.00');
+    expect(result.sessions[0].variance).toBe('-0.50');
     expect(typeof result.sessions[0].expectedCash).toBe('string');
     expect(result.sessions[0].businessDate).toBe('2026-08-19');
     expect(result.sessions[0].movementCount).toBe(4);
@@ -228,11 +228,11 @@ describe('drawer session reads (C12)', () => {
     });
     const result = await caller().getDrawerSession({ drawerSessionId: 's1' });
     // 100 + 30 - 5 + 10 - 4 - 20 = 111 (CLOSING_COUNT excluded from the fold)
-    expect(result.expectedCash).toBe('111');
-    expect(result.countedCash).toBe('110');
-    expect(result.variance).toBe('-1');
+    expect(result.expectedCash).toBe('111.00');
+    expect(result.countedCash).toBe('110.00');
+    expect(result.variance).toBe('-1.00');
     expect(result.movements).toHaveLength(7);
-    expect(result.movements[1].amount).toBe('30');
+    expect(result.movements[1].amount).toBe('30.00');
     expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 
@@ -277,7 +277,7 @@ describe('daily close reads (C12)', () => {
     expect(chain.tipCloseId).toBe('c2');
     expect(chain.closes.find((c) => c.id === 'c1')!.isTip).toBe(false);
     expect(chain.closes.find((c) => c.id === 'c2')!.isTip).toBe(true);
-    expect(chain.closes[1].refundTotal).toBe('12');
+    expect(chain.closes[1].refundTotal).toBe('12.00');
   });
 
   it('serializes every close total as a string with tender totals and drawer variances', async () => {
@@ -330,15 +330,19 @@ describe('daily close reads (C12)', () => {
       },
     ]);
     const result = await caller().getDailyClose({ dailyCloseId: 'c1' });
-    expect(result.close.totals.grossSales).toBe('500');
-    expect(result.close.totals.tipTotal).toBe('15');
-    expect(result.close.totals.compTotal).toBe('20');
-    expect(result.close.totals.voidTotal).toBe('7.5');
-    expect(result.close.totals.cashVariance).toBe('-1');
+    expect(result.close.totals.grossSales).toBe('500.00');
+    expect(result.close.totals.tipTotal).toBe('15.00');
+    expect(result.close.totals.compTotal).toBe('20.00');
+    expect(result.close.totals.voidTotal).toBe('7.50');
+    expect(result.close.totals.cashVariance).toBe('-1.00');
     expect(result.close.isTip).toBe(true);
     expect(result.tenderTotals).toHaveLength(2);
-    expect(result.tenderTotals[0]).toMatchObject({ tenderType: 'CASH', amount: '200', count: 3 });
-    expect(result.drawerVariances[0]).toMatchObject({ drawerSessionId: 's1', variance: '-1' });
+    expect(result.tenderTotals[0]).toMatchObject({
+      tenderType: 'CASH',
+      amount: '200.00',
+      count: 3,
+    });
+    expect(result.drawerVariances[0]).toMatchObject({ drawerSessionId: 's1', variance: '-1.00' });
     expect(result.chain[0].isTip).toBe(true);
     expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });

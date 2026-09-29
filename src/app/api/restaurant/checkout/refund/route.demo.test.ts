@@ -67,4 +67,34 @@ describe('refund GET demo approval metadata', () => {
     }
     expect(mocks.operatorHasCapability).toHaveBeenCalledTimes(1);
   });
+
+  it('serializes refundable tender money at 2dp for the receipt picker', async () => {
+    const { Prisma } = await import('@/generated/prisma/client');
+    const D = (value: string) => new Prisma.Decimal(value);
+    mocks.resolveDemoApproverIdentity.mockResolvedValueOnce(null);
+    const ctx = context();
+    ctx.db.restaurantTender.findMany.mockResolvedValueOnce([
+      {
+        id: 'tender_1',
+        type: 'CASH',
+        amount: D('14'),
+        tipAmount: D('0'),
+        createdAt: new Date('2026-09-29T10:00:00Z'),
+        bill: { receiptNumber: 1, order: { orderNumber: 7 } },
+        refunds: [{ amount: D('13.5'), tipRefundAmount: D('0') }],
+      },
+    ]);
+
+    const response = await mocks.readOptions!.run(ctx);
+    const body = await response.json();
+
+    expect(body.tenders[0]).toMatchObject({
+      paidAmount: '14.00',
+      refundedAmount: '13.50',
+      remainingAmount: '0.50',
+      tipPaidAmount: '0.00',
+      tipRefundedAmount: '0.00',
+      tipRemainingAmount: '0.00',
+    });
+  });
 });

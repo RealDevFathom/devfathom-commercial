@@ -8,9 +8,8 @@ import {
   operatorHasCapability,
   serializeRefundResult,
 } from '@/lib/restaurant/checkout-routes';
+import { formatMoney as money } from '@/lib/restaurant/money';
 import { refundTender } from '@/lib/restaurant/refunds';
-
-const money = (value: Prisma.Decimal) => value.toString();
 
 /** Bounded refundable tender selector for the authenticated device branch. */
 export const GET = moneyReadRoute({
