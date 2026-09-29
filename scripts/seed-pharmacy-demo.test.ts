@@ -13,6 +13,7 @@ import {
   type DemoObservedRecord,
 } from './pharmacy-demo-contract';
 import {
+  pharmacyDisposableOptions,
   dryRun,
   evidenceDigest,
   main,
@@ -796,4 +797,42 @@ test('draft-only and pre-existing receipts keep their original reference baselin
     () => requireUnchangedReferences(prior, referenceRows(packRow({ unitsPerParent: 2 }))),
     (error: unknown) => error instanceof PharmacyDemoRefusal && error.code === 'CHANGED_REFERENCE'
   );
+});
+
+test('disposable overrides preserve defaults and fence the local lane', () => {
+  assert.deepEqual(pharmacyDisposableOptions({}), {
+    host: undefined,
+    port: undefined,
+    owner: 'wha1388_bootstrap',
+    runtime: 'wha1388_runtime',
+    scratch: '/tmp',
+  });
+  for (const host of ['127.0.0.1', '::1']) {
+    const env = {
+      PGHOST: host,
+      PGPORT: '55618',
+      PHARMACY_DEMO_OWNER_ROLE: 'test_owner',
+      PHARMACY_DEMO_RUNTIME_ROLE: 'test_runtime',
+      PHARMACY_DEMO_SCRATCH_DIR: '/owned/scratch',
+    };
+    assert.deepEqual(pharmacyDisposableOptions(env), {
+      host,
+      port: '55618',
+      owner: 'test_owner',
+      runtime: 'test_runtime',
+      scratch: '/owned/scratch',
+    });
+  }
+  for (const env of [
+    { PGHOST: 'remote.example', PGPORT: '55618' },
+    { PGHOST: '127.0.0.1' },
+    { PGPORT: '55618' },
+    { PGHOST: '127.0.0.1', PGPORT: '5432' },
+    { PGHOST: '127.0.0.1', PGPORT: '55618' },
+    { PHARMACY_DEMO_OWNER_ROLE: 'bad;role' },
+    { PHARMACY_DEMO_RUNTIME_ROLE: 'wha1388_bootstrap' },
+    { PHARMACY_DEMO_OWNER_ROLE: 'same', PHARMACY_DEMO_RUNTIME_ROLE: 'same' },
+    { PHARMACY_DEMO_SCRATCH_DIR: 'relative' },
+  ])
+    assert.throws(() => pharmacyDisposableOptions(env), PharmacyDemoRefusal);
 });

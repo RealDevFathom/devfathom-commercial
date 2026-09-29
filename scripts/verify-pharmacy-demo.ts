@@ -1,4 +1,4 @@
-/** WHA-1388: ONE fresh, owned, socket-only disposable PostgreSQL reproduction.
+/** WHA-1388: ONE fresh, owned, isolated disposable PostgreSQL reproduction.
  * Synthetic prerequisites below are TEST FIXTURES, never live regulatory approvals.
  * Run: bun --no-env-file --conditions=react-server scripts/verify-pharmacy-demo.ts
  */
@@ -10,6 +10,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { MIGRATION_COUNT, type PharmacyDraftRequest } from './pharmacy-demo-contract';
 import {
+  pharmacyDisposableOptions,
   pharmacyHistoryGenesis,
   pharmacyHistoryPath,
   pharmacyMigrationManifest,
@@ -29,8 +30,10 @@ assert.ok(
     (integrated && process.argv.length === 3) ||
     (retry && process.argv.length === 4)
 );
-const directory = await realpath(retry ?? (await mkdtemp('/tmp/wha1388-pg-')));
-assert.equal(dirname(directory), await realpath('/tmp'));
+const options = pharmacyDisposableOptions();
+const scratch = await realpath(options.scratch);
+const directory = await realpath(retry ?? (await mkdtemp(join(scratch, 'wha1388-pg-'))));
+assert.equal(dirname(directory), scratch);
 const database = retry
   ? await readFile(join(directory, 'cluster-id'), 'utf8')
   : `wha1388_${randomBytes(12).toString('hex')}`;
@@ -63,12 +66,19 @@ if (retry) {
 const target = { directory, database };
 const socket = join(directory, 'socket');
 const data = join(directory, 'data');
-const role = 'wha1388_runtime';
+const role = options.runtime;
+const connectionHost = options.host ?? socket;
+const connectionArgs = ['-h', connectionHost, ...(options.port ? ['-p', options.port] : [])];
 const bootstrap = 'wha1388_bootstrap';
 const environment: NodeJS.ProcessEnv = {
   PATH: process.env.PATH,
   HOME: process.env.HOME,
   TMPDIR: process.env.TMPDIR,
+  PGHOST: options.host,
+  PGPORT: options.port,
+  PHARMACY_DEMO_OWNER_ROLE: process.env.PHARMACY_DEMO_OWNER_ROLE,
+  PHARMACY_DEMO_RUNTIME_ROLE: process.env.PHARMACY_DEMO_RUNTIME_ROLE,
+  PHARMACY_DEMO_SCRATCH_DIR: process.env.PHARMACY_DEMO_SCRATCH_DIR,
   NODE_ENV: 'test',
   LANG: 'en_US.UTF-8',
 };
@@ -100,7 +110,7 @@ function basenameForLog(program: string) {
 function sql(query: string, user = bootstrap) {
   return command(
     'psql',
-    ['-X', '-v', 'ON_ERROR_STOP=1', '-h', socket, '-U', user, '-d', database, '-At'],
+    ['-X', '-v', 'ON_ERROR_STOP=1', ...connectionArgs, '-U', user, '-d', database, '-At'],
     query
   );
 }
@@ -483,13 +493,24 @@ try {
       '--no-locale',
       '--encoding=UTF8',
     ]);
+  if (options.host && !retry) {
+    // Trust is confined to this fresh cluster, exact test roles and loopback endpoint.
+    const address = options.host === '::1' ? '::1/128' : '127.0.0.1/32';
+    await writeFile(
+      join(data, 'pg_hba.conf'),
+      `host postgres ${bootstrap} ${address} trust\nhost ${database} ${bootstrap},${options.owner},${role} ${address} trust\n`,
+      { mode: 0o600 }
+    );
+  }
   command('pg_ctl', [
     '-D',
     data,
     '-l',
     join(directory, 'postgres.log'),
     '-o',
-    `-k ${socket} -c listen_addresses='' -c cluster_name=${database} -c unix_socket_permissions=0700`,
+    options.host
+      ? `-c unix_socket_directories='' -c listen_addresses=${options.host} -p ${options.port} -c cluster_name=${database}`
+      : `-k ${socket} -c listen_addresses='' -c cluster_name=${database} -c unix_socket_permissions=0700`,
     '-w',
     'start',
   ]);
@@ -497,8 +518,7 @@ try {
   const databaseExists =
     command('psql', [
       '-X',
-      '-h',
-      socket,
+      ...connectionArgs,
       '-U',
       bootstrap,
       '-d',
@@ -507,8 +527,35 @@ try {
       `SELECT count(*) FROM pg_database WHERE datname='${database}'`,
     ]) === '1';
   assert.ok(!databaseExists || retry, 'Only this initializing run can resume its database');
-  if (!databaseExists) command('createdb', ['-h', socket, '-U', bootstrap, database]);
-  const adminUrl = `postgresql://${bootstrap}@localhost/${database}?host=${encodeURIComponent(socket)}`;
+  if (!databaseExists) {
+    if (options.owner !== bootstrap)
+      command('psql', [
+        '-X',
+        ...connectionArgs,
+        '-U',
+        bootstrap,
+        '-d',
+        'postgres',
+        '-v',
+        'ON_ERROR_STOP=1',
+        '-c',
+        `CREATE ROLE ${options.owner} LOGIN NOSUPERUSER NOBYPASSRLS CREATEROLE;`,
+      ]);
+    command('createdb', [...connectionArgs, '-U', bootstrap, '-O', options.owner, database]);
+  }
+  const connectionUrl = (user: string) =>
+    options.host
+      ? `postgresql://${user}@${options.host === '::1' ? '[::1]' : options.host}:${options.port}/${database}`
+      : `postgresql://${user}@localhost/${database}?host=${encodeURIComponent(socket)}`;
+  const adminUrl = connectionUrl(bootstrap);
+  const ownerUrl = connectionUrl(options.owner);
+  if (options.owner !== bootstrap)
+    assert.equal(
+      sql(
+        `SELECT NOT rolsuper AND NOT rolbypassrls AND rolcreaterole AND rolcanlogin FROM pg_roles WHERE rolname='${options.owner}'`
+      ),
+      't'
+    );
   // Normal repository deployment prerequisite; no migration/ACL guard is weakened.
   command(process.execPath, ['--no-env-file', 'prisma/prepare-extensions.ts'], undefined, {
     ...environment,
@@ -541,7 +588,7 @@ try {
           config,
         ],
         undefined,
-        { ...environment, DATABASE_URL: adminUrl }
+        { ...environment, DATABASE_URL: ownerUrl }
       );
   }
   const migrationLog = integratedRetry
@@ -552,7 +599,7 @@ try {
         undefined,
         {
           ...environment,
-          DATABASE_URL: adminUrl,
+          DATABASE_URL: ownerUrl,
         }
       );
   if (!integratedRetry)

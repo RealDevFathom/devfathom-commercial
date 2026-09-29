@@ -386,7 +386,28 @@ export function dryRun(input: unknown, now = new Date()) {
 const RECEIPT_ACTION = 'pharmacy.demo.draft.receipt.v1';
 const TOMBSTONE_ACTION = 'pharmacy.demo.draft.tombstone.v1';
 const SQL_VERSION = 'pharmacy-demo-draft-sql-v1';
-const RUNTIME_ROLE = 'wha1388_runtime';
+/** Opt-in lane overrides; an empty environment preserves the original socket runner. */
+export function pharmacyDisposableOptions(env: NodeJS.ProcessEnv = process.env) {
+  const host = env.PGHOST;
+  const port = env.PGPORT;
+  requireFact(
+    (host === undefined && port === undefined) ||
+      ((host === '127.0.0.1' || host === '::1') && /^556[0-9]{2}$/.test(port ?? '')),
+    'INVALID_DISPOSABLE_ENDPOINT'
+  );
+  const owner = env.PHARMACY_DEMO_OWNER_ROLE ?? 'wha1388_bootstrap';
+  const runtime = env.PHARMACY_DEMO_RUNTIME_ROLE ?? 'wha1388_runtime';
+  for (const name of [owner, runtime])
+    requireFact(/^[a-z_][a-z0-9_]{0,62}$/.test(name), 'INVALID_DISPOSABLE_ROLE');
+  requireFact(owner !== runtime && runtime !== 'wha1388_bootstrap', 'INVALID_DISPOSABLE_ROLE');
+  requireFact(
+    !host || (env.PHARMACY_DEMO_OWNER_ROLE !== undefined && owner !== 'wha1388_bootstrap'),
+    'DISPOSABLE_OWNER_REQUIRED'
+  );
+  const scratch = env.PHARMACY_DEMO_SCRATCH_DIR ?? '/tmp';
+  requireFact(scratch.startsWith('/') && !scratch.includes('\0'), 'INVALID_DISPOSABLE_SCRATCH');
+  return { host, port, owner, runtime, scratch };
+}
 const SQL_TABLES = [
   'organizations',
   'users',
@@ -461,7 +482,8 @@ async function bindDisposable(target: DisposablePharmacyTarget) {
   object(target, 'directory database');
   requireFact(/^wha1388_[a-f0-9]{24}$/.test(target.database), 'DISPOSABLE_ID_REQUIRED');
   const directory = await realpath(target.directory);
-  const parent = await realpath('/tmp');
+  const options = pharmacyDisposableOptions();
+  const parent = await realpath(options.scratch);
   const info = await stat(directory);
   requireFact(
     directory === target.directory &&
@@ -477,7 +499,7 @@ async function bindDisposable(target: DisposablePharmacyTarget) {
     'DISPOSABLE_ID_MISMATCH'
   );
   const socket = join(directory, 'socket');
-  requireFact((await realpath(socket)) === socket, 'PRIVATE_SOCKET_REQUIRED');
+  if (!options.host) requireFact((await realpath(socket)) === socket, 'PRIVATE_SOCKET_REQUIRED');
   const key = pharmacyScalarHash(target);
   if (boundDisposable) requireFact(boundDisposable === key, 'PROCESS_TARGET_ALREADY_BOUND');
   else {
@@ -485,7 +507,9 @@ async function bindDisposable(target: DisposablePharmacyTarget) {
       !Object.hasOwn(process.env, 'DATABASE_URL') && !(globalThis as { prisma?: unknown }).prisma,
       'CLEAN_PROCESS_REQUIRED'
     );
-    process.env.DATABASE_URL = `postgresql://${RUNTIME_ROLE}@localhost/${target.database}?host=${encodeURIComponent(socket)}`;
+    process.env.DATABASE_URL = options.host
+      ? `postgresql://${options.runtime}@${options.host === '::1' ? '[::1]' : options.host}:${options.port}/${target.database}`
+      : `postgresql://${options.runtime}@localhost/${target.database}?host=${encodeURIComponent(socket)}`;
     boundDisposable = key;
   }
   return import('../src/lib/tenancy/scoped-db');
@@ -1022,6 +1046,7 @@ async function assertSqlRuntime(
       superuser: boolean;
       bypass: boolean;
       address: string | null;
+      port: number | null;
       cluster: string;
       tenant: string;
       actor: string;
@@ -1029,7 +1054,7 @@ async function assertSqlRuntime(
       rowSecurity: string;
     }>
   >(`SELECT current_database() AS database, current_user AS role, r.rolsuper AS superuser,
-      r.rolbypassrls AS bypass, inet_server_addr()::text AS address,
+      r.rolbypassrls AS bypass, host(inet_server_addr()) AS address, inet_server_port() AS port,
       current_setting('cluster_name') AS cluster,
       current_setting('app.current_organization_id') AS tenant,
       current_setting('app.current_user_id') AS actor,
@@ -1040,10 +1065,12 @@ async function assertSqlRuntime(
     runtime &&
       runtime.database === target.database &&
       runtime.cluster === target.database &&
-      runtime.role === RUNTIME_ROLE &&
+      runtime.role === pharmacyDisposableOptions().runtime &&
       !runtime.superuser &&
       !runtime.bypass &&
-      runtime.address === null &&
+      runtime.address === (pharmacyDisposableOptions().host ?? null) &&
+      runtime.port ===
+        (pharmacyDisposableOptions().port ? Number(pharmacyDisposableOptions().port) : null) &&
       runtime.tenant === request.organizationId &&
       runtime.actor === request.actorUserId &&
       runtime.platform === 'false' &&
