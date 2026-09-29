@@ -370,7 +370,8 @@ async function sellThroughCheckout(pos: Page, kds: Page, tender: 'CASH' | 'CARD'
   expect(opened.status()).toBe(201);
   const { orderNumber } = (await opened.json()) as { orderNumber: number };
   const orderButton = pos.getByRole('button', { name: new RegExp(`^#${orderNumber} ·`) });
-  await orderButton.click();
+  // Online, the composed check opens directly and becomes the active order.
+  await expect(pos.getByText(`Order ${orderNumber} opened.`)).toBeVisible();
   await expect(pos.getByRole('heading', { name: `Order ${orderNumber}` })).toBeVisible();
   await expect(pos.getByText(`1 × ${fixture.menuItem.name}`)).toBeVisible();
   await pos.getByRole('button', { name: 'Send whole order' }).click();
@@ -511,10 +512,8 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
     await expect(cashSale.receipt.getByRole('region', { name: 'Receipt printing' })).toBeVisible();
     await cashSale.checkout.getByRole('button', { name: 'Close checkout' }).click();
     await expect(cashSale.checkout).toHaveCount(0);
-    // A settled check stays PAYMENT_PENDING and active (WHA-1576 defect list); locking
-    // the register is the operator path that clears it before the next check.
-    await pos.getByRole('button', { name: 'Lock terminal' }).click();
-    await unlockDayCloseRegister(pos);
+    // Closing a settled checkout starts a fresh draft for the next check.
+    await expect(pos.getByRole('heading', { name: 'No active order' })).toBeVisible();
 
     const cardSale = await sellThroughCheckout(pos, kds, 'CARD');
     await expect(cardSale.receipt).toContainText(/CARD\s*14\.00/);

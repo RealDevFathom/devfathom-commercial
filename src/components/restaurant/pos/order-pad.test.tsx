@@ -78,6 +78,7 @@ function transport({
   checkoutBillErrors = [],
   customerSearchGates = [],
   deliveryZoneGates = [],
+  checkoutSettled = false,
 }: {
   failedOpenAttempts?: number;
   openErrors?: { status: number; error: string }[];
@@ -97,6 +98,7 @@ function transport({
   checkoutBillErrors?: ({ status: number; error: string } | Error)[];
   customerSearchGates?: Promise<void>[];
   deliveryZoneGates?: Promise<void>[];
+  checkoutSettled?: boolean;
 } = {}) {
   let openAttempts = 0;
   let addAttempts = 0;
@@ -230,8 +232,8 @@ function transport({
     if (path.includes('/checkout/summary')) {
       return json({
         orderId: 'order-1',
-        settled: false,
-        blocker: billCut ? 'BILLS_OPEN' : 'ITEMS_UNBILLED',
+        settled: checkoutSettled,
+        blocker: checkoutSettled ? null : billCut ? 'BILLS_OPEN' : 'ITEMS_UNBILLED',
         derivedOrderTotal: '24.00',
         accountedTotal: billCut ? '24.00' : '0.00',
         unbilledItemIds: billCut ? [] : ['item-1'],
@@ -699,6 +701,72 @@ describe('OrderPad transport', () => {
     expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
     expect(screen.getByText('1 × Coffee')).toBeVisible();
     expect(screen.getByText('Coffee added locally. No request was sent.')).toBeVisible();
+  });
+
+  it('opens a composed draft directly while online and makes it the active order', async () => {
+    const fetch = transport();
+    await unlock(fetch);
+
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('checkbox', { name: /Oat milk/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+
+    expect(await screen.findByText('Order 42 opened.')).toBeVisible();
+    expect(await screen.findByText('Order 42')).toBeVisible();
+    expect(screen.queryByText('Order saved to the queue.')).not.toBeInTheDocument();
+    expect(screen.getByText('Queued 0')).toBeVisible();
+    const paths = fetch.mock.calls.map(([input]) => String(input));
+    const openIndex = paths.findIndex((path) => path.endsWith('/orders/open'));
+    const addIndex = paths.findIndex((path) => path.endsWith('/orders/add-item'));
+    expect(openIndex).toBeGreaterThan(-1);
+    expect(addIndex).toBeGreaterThan(openIndex);
+    expect(JSON.parse(String(fetch.mock.calls[addIndex]?.[1]?.body))).toMatchObject({
+      orderId: 'order-1',
+      menuItemId: 'menu-item-1',
+      quantity: 1,
+      modifierOptionIds: ['option-1'],
+    });
+    expect(
+      screen.getByText('Tap menu items to compose. Nothing is sent until Send order.')
+    ).toBeVisible();
+  });
+
+  it('starts a fresh draft once the settled check closes', async () => {
+    const fetch = transport({
+      detailResponse: { ...detail, status: 'PAYMENT_PENDING' },
+      checkoutSettled: true,
+    });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+    fireEvent.click(screen.getByRole('button', { name: 'Collect payment' }));
+    await screen.findByText('settled');
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close checkout' }));
+
+    expect(await screen.findByRole('heading', { name: 'No active order' })).toBeVisible();
+    const callsBeforeTap = fetch.mock.calls.length;
+    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
+    expect(screen.getByText('Coffee added locally. No request was sent.')).toBeVisible();
+    expect(fetch).toHaveBeenCalledTimes(callsBeforeTap);
+  });
+
+  it('keeps an unsettled check active when checkout closes', async () => {
+    const fetch = transport({ detailResponse: { ...detail, status: 'PAYMENT_PENDING' } });
+    await unlock(fetch);
+    fireEvent.click(screen.getByRole('button', { name: 'Open order' }));
+    await screen.findByText('Order 42');
+    fireEvent.click(screen.getByRole('button', { name: 'Collect payment' }));
+    await screen.findByRole('button', { name: 'Cut single bill' });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Close checkout' }));
+
+    await waitFor(() =>
+      expect(screen.queryByRole('heading', { name: 'Collect payment' })).not.toBeInTheDocument()
+    );
+    expect(screen.getByText('Order 42')).toBeVisible();
   });
 
   it('queues a composed new order offline and disables connected-only operations', async () => {
