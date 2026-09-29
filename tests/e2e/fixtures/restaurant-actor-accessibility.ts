@@ -1,6 +1,8 @@
 import { expect, type Page } from '@playwright/test';
 import pg from 'pg';
 
+import { waitForLoginHydrated } from './login-hydration';
+
 export type ActorKey = 'superAdmin' | 'agency' | 'restaurantAdmin' | 'restaurantOperator';
 
 type Actor = {
@@ -157,23 +159,12 @@ async function waitForAuthenticatedApp(page: Page, loginPath: Actor['loginPath']
 export async function signInAs(page: Page, key: ActorKey) {
   const actor = actorFixture[key];
   await page.goto(new URL(actor.loginPath, actorBaseUrl(actor.host)).href);
+  if (actor.loginPath === '/login') await waitForLoginHydrated(page);
   await page.getByLabel(/email/i).fill(actor.email);
   await page.locator('input[name="password"]').fill(actor.password);
   if (actor.loginPath === '/platform/login') {
     await page.getByRole('button', { name: 'Continue to control desk' }).click();
   } else {
-    const password = page.locator('input[name="password"]');
-    await expect(password).toHaveAttribute('type', 'password');
-    await expect
-      .poll(
-        async () => {
-          await page.getByRole('button', { name: 'Show password' }).click();
-          return password.getAttribute('type');
-        },
-        { timeout: 60_000, intervals: [250, 500, 1000] }
-      )
-      .toBe('text');
-    await page.getByRole('button', { name: 'Hide password' }).click();
     await page.getByRole('button', { name: 'Sign in' }).click();
   }
 

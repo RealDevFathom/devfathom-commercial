@@ -7,6 +7,7 @@ import { headers } from 'next/headers';
 import { resolveOrganizationByHost, TENANT_HOST_HEADER } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
 import { safeCallbackUrl } from '@/lib/auth/callback-url';
+import { LOGIN_ERROR_PARAM, loginErrorKey } from './login-errors';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import {
@@ -43,6 +44,8 @@ export default async function LoginPage(props: LoginPageProps) {
   const callbackUrl = safeCallbackUrl(
     typeof searchParams.callbackUrl === 'string' ? searchParams.callbackUrl : null
   );
+  // WHA-1623: a closed set of keys from /login/submit, never free text.
+  const initialError = loginErrorKey(searchParams[LOGIN_ERROR_PARAM]);
   const requestHeaders = await headers();
   const host =
     requestHeaders.get(TENANT_HOST_HEADER) ??
@@ -114,12 +117,13 @@ export default async function LoginPage(props: LoginPageProps) {
             ) : null}
 
             {shared ? (
-              <SharedLoginForm callbackUrl={callbackUrl} />
+              <SharedLoginForm callbackUrl={callbackUrl} initialError={initialError} />
             ) : (
               <LoginForm
                 connections={identity.connections}
                 ssoEnforced={identity.enforced}
                 callbackUrl={callbackUrl}
+                initialError={initialError}
               />
             )}
           </div>
