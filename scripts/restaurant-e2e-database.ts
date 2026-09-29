@@ -1,3 +1,6 @@
+// Shared by the seed and browser assertions; no database side effects on import.
+export const RESTAURANT_E2E_BRANCH_COUNT = 3;
+
 const DISPOSABLE_NAME = /(?:^|[_-])(test|e2e|tmp|disposable)(?:[_-]|$)/i;
 const FORBIDDEN_HOST = /(?:^|[.-])(prod|production|preview|staging)(?:[.-]|$)/i;
 const COMMON_POSTGRES_PORTS = new Set(['5432', '6432']);

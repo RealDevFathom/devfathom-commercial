@@ -127,12 +127,12 @@ describe('Restaurant E2E seed restoration guards', () => {
     expect(demoSeed).toContain("key: 'restaurant-pos'");
   });
 
-  test('keeps the two seeded branches at the restaurant location limit', () => {
+  test('keeps the seeded branches at the restaurant location limit', () => {
     expect(seed).toContain("locationsLimit: 'limit_restaurant_e2e_locations'");
-    expect(seed).toContain("['organization_limits', [IDS.locationsLimit]]");
+    expect(seed).toContain('IDS.locationsLimit, IDS.sopEvidenceRetentionLimit');
     expect(seed).toContain("key: 'restaurant.locations.max'");
     expect(seed).toMatch(
-      /tx\.organizationLimit\.upsert\([\s\S]*?update: \{[\s\S]*?value: 2,[\s\S]*?source: 'E2E_FIXTURE',[\s\S]*?createdAt: FIXED_AT,[\s\S]*?updatedAt: FIXED_AT,[\s\S]*?create: \{[\s\S]*?id: IDS\.locationsLimit,[\s\S]*?value: 2,[\s\S]*?source: 'E2E_FIXTURE'/
+      /tx\.organizationLimit\.upsert\([\s\S]*?update: \{[\s\S]*?value: RESTAURANT_E2E_BRANCH_COUNT,[\s\S]*?source: 'E2E_FIXTURE',[\s\S]*?createdAt: FIXED_AT,[\s\S]*?updatedAt: FIXED_AT,[\s\S]*?create: \{[\s\S]*?id: IDS\.locationsLimit,[\s\S]*?value: RESTAURANT_E2E_BRANCH_COUNT,[\s\S]*?source: 'E2E_FIXTURE'/
     );
   });
 });
