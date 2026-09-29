@@ -1,5 +1,19 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import { applyPharmacyTender } from './settlement';
+import { applyPharmacyTender as settle } from './settlement';
+import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
+import { signPharmacyCommand, authenticatePharmacyCommand } from './sales';
+const deviceSecret = 'pcd_' + 'a'.repeat(43);
+const authenticatedRow = [{ deviceSecretHash: hashDeviceSecret(deviceSecret) }];
+function applyPharmacyTender(
+  db: Parameters<typeof settle>[0],
+  scope: Parameters<typeof settle>[1],
+  input: Parameters<typeof settle>[2]
+) {
+  return settle(db, scope, input, {
+    deviceSecret,
+    signature: signPharmacyCommand(scope, input.deviceId, input.leasedReceipt, deviceSecret),
+  });
+}
 import { validateLeasedReceiptReplay, OFFLINE_REPLAY_MAX_AGE_DAYS } from './sales';
 import { signSnapshotEnvelope, SNAPSHOT_SIGNING_KEY_ID } from './offline-snapshots';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
@@ -48,8 +62,10 @@ function fixture() {
     }),
     $queryRaw: vi
       .fn()
+      .mockResolvedValueOnce(authenticatedRow)
       .mockResolvedValueOnce([])
-      .mockResolvedValueOnce([{ receipt_number: 41 }]),
+      .mockResolvedValueOnce([{ receipt_number: 41 }])
+      .mockResolvedValue(authenticatedRow),
     pharmacyMoneyIdempotencyKey: {
       findUnique: vi.fn().mockImplementation(async () => idempotency),
       update: vi.fn().mockImplementation(async ({ data }) => {
@@ -199,7 +215,11 @@ describe('leased receipt replay', () => {
   });
   it('rejects a duplicate number under another command before writing a tender', async () => {
     const { db, input, tenderCreate } = fixture();
-    db.$queryRaw.mockReset().mockResolvedValueOnce([]).mockResolvedValueOnce([]);
+    db.$queryRaw
+      .mockReset()
+      .mockResolvedValueOnce(authenticatedRow)
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([]);
     await expect(
       applyPharmacyTender(db as never, scope, { ...input, idempotencyKey: 'another-command' })
     ).rejects.toThrow('INVALID_RECEIPT_LEASE');
@@ -211,5 +231,53 @@ describe('leased receipt replay', () => {
       applyPharmacyTender(db as never, scope, { ...input, amountMinor: 50 })
     ).rejects.toThrow('LEASE_REQUIRES_SETTLEMENT');
     expect(tenderCreate).not.toHaveBeenCalled();
+  });
+});
+
+describe('device command authentication', () => {
+  it.each(['originalSaleAt', 'leaseId', 'receiptNumber', 'deviceId', 'branchId'])(
+    'rejects tampered %s',
+    async (field) => {
+      const payload = leasedReceipt();
+      const signature = signPharmacyCommand(scope, 'device-1', payload, deviceSecret);
+      const changed = { ...payload };
+      if (field === 'originalSaleAt') changed.originalSaleAt = '2026-09-02T10:30:00Z';
+      if (field === 'leaseId') changed.leaseId = 'other';
+      if (field === 'receiptNumber') changed.receiptNumber = 42;
+      const db = { $queryRaw: vi.fn().mockResolvedValue(authenticatedRow) };
+      await expect(
+        authenticatePharmacyCommand(
+          db as never,
+          field === 'branchId' ? { ...scope, branchId: 'other' } : scope,
+          field === 'deviceId' ? 'other' : 'device-1',
+          changed,
+          { deviceSecret, signature }
+        )
+      ).rejects.toThrow('INVALID_COMMAND_SIGNATURE');
+    }
+  );
+  it('refuses unsigned replay before any idempotency or tender write', async () => {
+    const { db, input, tenderCreate } = fixture();
+    await expect(settle(db as never, scope, input)).rejects.toThrow('INVALID_COMMAND_SIGNATURE');
+    expect(db.$executeRaw).not.toHaveBeenCalled();
+    expect(tenderCreate).not.toHaveBeenCalled();
+  });
+  it('refuses rotated or revoked device credentials', async () => {
+    const payload = leasedReceipt();
+    const authentication = {
+      deviceSecret,
+      signature: signPharmacyCommand(scope, 'device-1', payload, deviceSecret),
+    };
+    for (const rows of [[], [{ deviceSecretHash: 'rotated' }]]) {
+      await expect(
+        authenticatePharmacyCommand(
+          { $queryRaw: vi.fn().mockResolvedValue(rows) } as never,
+          scope,
+          'device-1',
+          payload,
+          authentication
+        )
+      ).rejects.toThrow('INVALID_COMMAND_SIGNATURE');
+    }
   });
 });

@@ -10,8 +10,8 @@ import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyal
 import { firstCloseIsFinal } from './migration/first-close';
 import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
 import type { LedgerScope } from './stock-ledger';
-import { validateLeasedReceiptReplay } from './sales';
-import type { PharmacyLeasedReceipt } from './sales';
+import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
+import type { PharmacyCommandAuthentication, PharmacyLeasedReceipt } from './sales';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT';
 
@@ -225,10 +225,20 @@ export async function applyPharmacyTender(
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     leasedReceipt?: PharmacyLeasedReceipt;
-  }
+  },
+  authentication?: PharmacyCommandAuthentication
 ) {
   assertPositiveMinor(input.amountMinor);
-  if (input.leasedReceipt) validateLeasedReceiptReplay(scope, input.deviceId, input.leasedReceipt);
+  if (input.leasedReceipt) {
+    await authenticatePharmacyCommand(
+      db,
+      scope,
+      input.deviceId,
+      input.leasedReceipt,
+      authentication
+    );
+    validateLeasedReceiptReplay(scope, input.deviceId, input.leasedReceipt);
+  }
   const payloadHash = hash(input);
   const idem = await bindIdempotency(
     db,

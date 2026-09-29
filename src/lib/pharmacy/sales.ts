@@ -1,7 +1,10 @@
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
+import { hashDeviceSecret } from '@/lib/retail-terminal/device-secret';
+import { canonicalJson } from './offline-snapshot-envelope';
 import { checkEnvelope } from './offline-snapshot-envelope';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { checkSafetyLease } from './offline-safety-lease';
@@ -26,9 +29,63 @@ export type PharmacyLeasedReceipt = {
   signature: string;
 };
 
+export type PharmacyCommandAuthentication = { deviceSecret: string; signature: string };
+
+/** HMAC-SHA256 over UTF-8 domain + canonical JSON; the 256-bit enrollment
+ * secret stays on the device and in the authenticated request, never the log.
+ * This authenticates device origin, not independent proof of wall-clock time. */
+export function signPharmacyCommand(
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  deviceId: string,
+  payload: unknown,
+  deviceSecret: string
+) {
+  return createHmac('sha256', deviceSecret)
+    .update('pharmacy-offline-command:v1\n')
+    .update(
+      canonicalJson({
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        deviceId,
+        payload,
+      })
+    )
+    .digest('hex');
+}
+
+export async function authenticatePharmacyCommand(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  deviceId: string,
+  payload: unknown,
+  authentication?: PharmacyCommandAuthentication
+) {
+  if (
+    !authentication ||
+    !/^pcd_[A-Za-z0-9_-]{43}$/.test(authentication.deviceSecret) ||
+    !/^[0-9a-f]{64}$/.test(authentication.signature)
+  )
+    throw new PharmacySaleError('INVALID_COMMAND_SIGNATURE');
+  const rows = await db.$queryRaw<Array<{ deviceSecretHash: string }>>(Prisma.sql`
+    SELECT "deviceSecretHash" FROM pharmacy_registered_devices
+    WHERE id = ${deviceId} AND "organizationId" = ${scope.organizationId}
+      AND "branchId" = ${scope.branchId} AND status = 'ACTIVE' AND "revokedAt" IS NULL
+    FOR SHARE`);
+  const device = rows[0];
+  if (
+    !device ||
+    device.deviceSecretHash !== hashDeviceSecret(authentication.deviceSecret) ||
+    !timingSafeEqual(
+      Buffer.from(authentication.signature, 'hex'),
+      Buffer.from(signPharmacyCommand(scope, deviceId, payload, authentication.deviceSecret), 'hex')
+    )
+  )
+    throw new PharmacySaleError('INVALID_COMMAND_SIGNATURE');
+}
+
 /** The signed server window bounds the original client sale instant. The
- * transport must authenticate the device/command; a snapshot signature does
- * not authenticate a client-authored sale timestamp. */
+ * settlement authenticates this entire payload with the device command MAC
+ * before using the timestamp; the snapshot signature authenticates the window. */
 export function validateLeasedReceiptReplay(
   scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
   deviceId: string,
@@ -67,6 +124,7 @@ export function validateLeasedReceiptReplay(
 export class PharmacySaleError extends Error {
   constructor(
     readonly reason:
+      | 'INVALID_COMMAND_SIGNATURE'
       | 'replay_stale'
       | 'INVALID_REPLAY_TIME'
       | 'INVALID_RECEIPT_LEASE'

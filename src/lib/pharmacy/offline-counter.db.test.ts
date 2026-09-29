@@ -109,6 +109,7 @@ async function ensureBranch(db: ScopedDb, organizationId: string, branchId: stri
 }
 
 type Scenario = {
+  deviceSecret: string;
   organizationId: string;
   branchId: string;
   deviceId: string;
@@ -131,7 +132,7 @@ async function scenario(
   return inOrg(organizationId, async (db) => {
     await ensureBranch(db, organizationId, branchId);
     const scope = { organizationId, branchId, actorId: ACTOR };
-    const { device } = await deps.devices.enrollPharmacyCounter(db, scope, {
+    const { device, secret } = await deps.devices.enrollPharmacyCounter(db, scope, {
       name: `Counter ${tag(label)}`,
     });
 
@@ -212,6 +213,7 @@ async function scenario(
       organizationId,
       branchId,
       deviceId: device.id,
+      deviceSecret: secret,
       locationId: location.id,
       lotId: lot.id,
       medicineId: medicine.id,
@@ -1158,6 +1160,7 @@ describeIfDatabase('leased receipt settlement', () => {
       });
     }
     const { applyPharmacyTender } = await import('./settlement');
+    const { signPharmacyCommand } = await import('./sales');
     const firstSale = await sale();
     const input = {
       saleId: firstSale.id,
@@ -1179,7 +1182,18 @@ describeIfDatabase('leased receipt settlement', () => {
       lease,
       input,
       sale,
-      apply: (command = input) => inOrg(ORG_A, (db) => applyPharmacyTender(db, scope, command)),
+      apply: (command = input) =>
+        inOrg(ORG_A, (db) =>
+          applyPharmacyTender(db, scope, command, {
+            deviceSecret: fixture.deviceSecret,
+            signature: signPharmacyCommand(
+              scope,
+              fixture.deviceId,
+              command.leasedReceipt,
+              fixture.deviceSecret
+            ),
+          })
+        ),
     };
   }
 
@@ -1225,12 +1239,26 @@ describeIfDatabase('leased receipt settlement', () => {
   it('rolls back cursor consumption when tender creation fails', async () => {
     const f = await setup();
     const { applyPharmacyTender } = await import('./settlement');
+    const { signPharmacyCommand } = await import('./sales');
     await expect(
       inOrg(ORG_A, (db) =>
-        applyPharmacyTender(db, scopeOf(f.fixture), {
-          ...f.input,
-          type: 'CASH',
-        })
+        applyPharmacyTender(
+          db,
+          scopeOf(f.fixture),
+          {
+            ...f.input,
+            type: 'CASH',
+          },
+          {
+            deviceSecret: f.fixture.deviceSecret,
+            signature: signPharmacyCommand(
+              scopeOf(f.fixture),
+              f.fixture.deviceId,
+              f.input.leasedReceipt,
+              f.fixture.deviceSecret
+            ),
+          }
+        )
       )
     ).rejects.toThrow('DRAWER_NOT_OPEN');
     const leases = await inOrg(ORG_A, (db) =>
