@@ -2,6 +2,7 @@ import { expect, test, type Page, type Request } from '@playwright/test';
 
 import {
   assertTerminalSecretIsBrowserIsolated,
+  establishTerminalFixture,
   installSeededTerminalCookie,
   restaurantE2eCredentials as fixture,
   terminalBrowserBaseUrl,
@@ -73,6 +74,187 @@ test('runtime observer ignores only aborted successful RSC fetches', () => {
   expect(isAbortedSuccessfulRscFetch({ ...expected, url: 'http://localhost/dashboard' })).toBe(
     false
   );
+});
+
+test('WHA-1600: POS earns, redeems on the next sale, and reverses earned points on refund', async ({
+  page,
+  browser,
+  request,
+}) => {
+  test.setTimeout(180_000);
+  const network: Array<{ method: string; path: string; status: number }> = [];
+  page.on('response', (response) => {
+    const path = new URL(response.url()).pathname;
+    if (path.startsWith('/api/restaurant/')) {
+      network.push({ method: response.request().method(), path, status: response.status() });
+    }
+  });
+  const origin = terminalBrowserBaseUrl();
+  const manager = await establishTerminalFixture(request, fixture.pos, fixture.manager);
+  const device = { ...fixture.caseRegisters[11], clientIp: '198.51.100.160' };
+  await installSeededTerminalCookie(page.context(), device, origin);
+  await page.goto(new URL('/pos', origin).href);
+  await page.getByLabel('Operator', { exact: true }).selectOption(fixture.manager.staffProfileId);
+  await page.getByLabel('Operator PIN', { exact: true }).fill(fixture.manager.pin);
+  await page.getByRole('button', { name: 'Unlock terminal', exact: true }).click();
+  await expect(page.getByRole('heading', { name: 'Order pad', exact: true })).toBeVisible();
+
+  const kitchen = await browser.newContext({ baseURL: origin });
+  try {
+    await installSeededTerminalCookie(kitchen, fixture.kds, origin);
+    const kds = await kitchen.newPage();
+    await kds.goto('/kds');
+    await kds.getByLabel('Acting operator').selectOption(fixture.operator.staffProfileId);
+    await kds.getByLabel('Operator PIN', { exact: true }).fill(fixture.operator.pin);
+    await kds.getByRole('button', { name: 'Verify PIN and unlock' }).click();
+    await expect(kds.getByRole('heading', { name: 'Kitchen floor' })).toBeVisible();
+
+    const responseFor = (path: string, method = 'POST') =>
+      page.waitForResponse(
+        (response) =>
+          new URL(response.url()).pathname === `/api/restaurant/${path}` &&
+          response.request().method() === method
+      );
+    const snapshot = async (billId: string) => {
+      const response = await request.get(`/api/restaurant/checkout/loyalty?billId=${billId}`, {
+        headers: manager.headers,
+      });
+      expect(response.status(), await response.text()).toBe(200);
+      return (await response.json()) as { balance: number; redeemedValue: string };
+    };
+    let openingBalance = 0;
+    let secondBillId = '';
+    let secondTenderId = '';
+    for (const sale of [0, 1]) {
+      await page.getByLabel('Channel', { exact: true }).selectOption('TAKEAWAY');
+      const opening = responseFor('orders/open');
+      await page.getByRole('button', { name: 'Open order', exact: true }).click();
+      const openedResponse = await opening;
+      expect(openedResponse.status(), await openedResponse.text()).toBe(201);
+      const opened = (await openedResponse.json()) as { orderId: string; orderNumber: number };
+      // The checkout guest picker appears only after PAYMENT_PENDING, but the
+      // transport accepts attachment only while OPEN. Keep that product seam
+      // explicit; attach through its authorized endpoint before sending food.
+      const guest = await request.post('/api/restaurant/orders/customer/attach', {
+        headers: { ...manager.headers, 'Idempotency-Key': `wha1600-guest-${opened.orderId}` },
+        data: { orderId: opened.orderId, customerId: fixture.customer.id },
+      });
+      expect(guest.status(), await guest.text()).toBe(200);
+      await page.getByRole('button', { name: new RegExp(fixture.menuItem.name) }).click();
+      await page.getByLabel(new RegExp(fixture.modifier.name)).check();
+      await page.getByRole('button', { name: 'Add to order', exact: true }).click();
+      await expect(page.getByText(`1 × ${fixture.menuItem.name}`)).toBeVisible();
+      await page.getByRole('button', { name: 'Send whole order' }).click();
+      await expect(page.getByText('Order sent to kitchen.')).toBeVisible();
+      await kds
+        .getByRole('button', {
+          name: `Start ${fixture.menuItem.name} for order ${opened.orderNumber}`,
+        })
+        .click();
+      await kds
+        .getByRole('button', {
+          name: `Mark ready ${fixture.menuItem.name} for order ${opened.orderNumber}`,
+        })
+        .click();
+      await page.getByRole('button', { name: new RegExp(`#${opened.orderNumber} ·`) }).click();
+      await page.getByRole('button', { name: 'Mark served', exact: true }).click();
+      await page.getByRole('button', { name: 'Close order', exact: true }).click();
+      const checkout = page.getByRole('dialog', { name: 'Collect payment' });
+      await expect(checkout).toBeVisible();
+      const loyalty = responseFor('checkout/loyalty', 'GET');
+      await checkout.getByRole('button', { name: 'Cut single bill', exact: true }).click();
+      const loyaltyResponse = await loyalty;
+      expect(loyaltyResponse.status(), await loyaltyResponse.text()).toBe(200);
+      const attached = (await loyaltyResponse.json()) as {
+        billId: string;
+        customerId: string;
+        balance: number;
+        outstanding: string;
+      };
+      expect(attached.customerId).toBe(fixture.customer.id);
+      expect(Number(attached.outstanding)).toBe(14);
+      if (sale === 0) openingBalance = attached.balance;
+      else {
+        expect(attached.balance).toBe(openingBalance + 14);
+        await checkout.getByLabel(/Points to redeem/).fill('10');
+        const redemption = responseFor('checkout/loyalty');
+        await checkout.getByRole('button', { name: 'Redeem', exact: true }).click();
+        const redeemedResponse = await redemption;
+        expect(redeemedResponse.status(), await redeemedResponse.text()).toBe(200);
+        expect(await redeemedResponse.json()).toMatchObject({
+          value: '0.1',
+          balance: openingBalance + 4,
+        });
+        await expect(checkout.getByLabel('Amount', { exact: true })).toHaveValue('13.90');
+      }
+      await checkout.getByLabel('Tender type').selectOption('CARD');
+      const payment = responseFor('checkout/tender');
+      await checkout.getByRole('button', { name: 'Apply tender', exact: true }).click();
+      const paidResponse = await payment;
+      expect(paidResponse.status(), await paidResponse.text()).toBe(200);
+      const paid = (await paidResponse.json()) as {
+        tenderId: string;
+        amount: string;
+        settled: boolean;
+      };
+      expect(paid).toMatchObject({ settled: true, amount: sale === 0 ? '14.00' : '13.90' });
+      await expect(checkout.getByRole('region', { name: /^Receipt \d+$/ })).toHaveCount(1);
+      await checkout.getByRole('button', { name: 'Close checkout', exact: true }).click();
+
+      // Settlement does not finalize the order in this UI. Exercise the real
+      // authorized close endpoint: the CLOSED transition owns the loyalty earn.
+      const closed = await request.post('/api/restaurant/orders/close', {
+        headers: { ...manager.headers, 'Idempotency-Key': `wha1600-close-${opened.orderId}` },
+        data: { orderId: opened.orderId },
+      });
+      expect(closed.status(), await closed.text()).toBe(200);
+      expect((await snapshot(attached.billId)).balance).toBe(
+        openingBalance + (sale === 0 ? 14 : 17)
+      );
+      if (sale === 1) {
+        secondBillId = attached.billId;
+        secondTenderId = paid.tenderId;
+      }
+    }
+    await page.getByRole('button', { name: 'Refund', exact: true }).click();
+    const refundDialog = page.getByRole('dialog', { name: 'Refund settled payment' });
+    await refundDialog.getByLabel('Settled receipt').selectOption(secondTenderId);
+    await refundDialog.getByLabel('Refund amount').fill('13.90');
+    await refundDialog
+      .getByLabel('Reason', { exact: true })
+      .fill('Loyalty earned-points reversal regression');
+    await refundDialog.getByLabel('Approving manager').selectOption(fixture.manager.staffProfileId);
+    await refundDialog.getByLabel('Manager PIN').fill(fixture.manager.pin);
+    await refundDialog.getByRole('button', { name: 'Review refund', exact: true }).click();
+    const refund = responseFor('checkout/refund');
+    await page.getByRole('button', { name: 'Confirm refund', exact: true }).click();
+    const refundedResponse = await refund;
+    expect(refundedResponse.status(), await refundedResponse.text()).toBe(200);
+    expect(await refundedResponse.json()).toMatchObject({ amount: '13.90' });
+    await expect(page.getByText('refund recorded', { exact: true })).toBeVisible();
+    // The second sale earned floor(13.90)=13 points; the full refund reverses
+    // those 13. The first sale's 14 and the 10-point redemption remain booked.
+    const final = await snapshot(secondBillId);
+    expect(final.balance).toBe(openingBalance + 4);
+    expect(Number(final.redeemedValue)).toBe(0.1);
+    await test.info().attach('loyalty-balances', {
+      body: JSON.stringify({
+        openingBalance,
+        firstEarn: 14,
+        redeemed: 10,
+        secondEarn: 13,
+        reversed: 13,
+        finalBalance: final.balance,
+      }),
+      contentType: 'application/json',
+    });
+  } finally {
+    await test.info().attach('loyalty-network', {
+      body: JSON.stringify(network),
+      contentType: 'application/json',
+    });
+    await kitchen.close();
+  }
 });
 
 test('integrated restaurant route matrix remains tenant-safe and browser-clean', async ({
