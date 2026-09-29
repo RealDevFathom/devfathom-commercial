@@ -2,6 +2,7 @@ import { expect, test, type Locator, type Page } from '@playwright/test';
 import { readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
+import { waitForLoginHydrated } from './fixtures/login-hydration';
 import { PHARMACY_E2E, PHARMACY_E2E_EXPECTED } from './pharmacy-counter-fixture';
 
 /**
@@ -38,6 +39,7 @@ async function pressControl(target: Locator) {
 
 async function signIn(page: Page) {
   await page.goto('/login');
+  await waitForLoginHydrated(page);
   const email = page.getByLabel('Email');
   await email.focus();
   await email.fill(process.env.PHARMACY_E2E_ADMIN_EMAIL!);

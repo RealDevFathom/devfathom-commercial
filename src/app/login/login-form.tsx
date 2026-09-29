@@ -4,6 +4,8 @@ import { useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { Building2, Eye, EyeOff, Loader2 } from 'lucide-react';
+import { LOGIN_ERROR_MESSAGES, type LoginErrorKey } from './login-errors';
+import { useHydrated } from './use-hydrated';
 
 const inputClass =
   'flex h-12 w-full rounded-[3px] border border-border-default bg-card px-4 text-sm text-foreground placeholder:text-text-faint transition-colors focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20';
@@ -14,17 +16,23 @@ export function LoginForm({
   // D15: already validated on the server. The form no longer reads, or trusts,
   // the raw query string.
   callbackUrl,
+  // WHA-1623: the outcome of a native submit that landed before hydration.
+  initialError,
 }: {
   connections: Array<{ id: string; name: string; protocol: 'OIDC' | 'SAML' }>;
   ssoEnforced: boolean;
   callbackUrl: string;
+  initialError?: LoginErrorKey;
 }) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string>(initialError ? LOGIN_ERROR_MESSAGES[initialError] : '');
   const [isSubmitting, setIsSubmitting] = useState(false);
   // IMP-AUTH-02: revealed after a correct password when the account has 2FA on.
-  const [twoFactor, setTwoFactor] = useState(false);
+  const [twoFactor, setTwoFactor] = useState(
+    initialError === '2fa-required' || initialError === '2fa-invalid'
+  );
 
   const onSubmit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
@@ -121,7 +129,16 @@ export function LoginForm({
       ) : null}
 
       {!ssoEnforced ? (
-        <form method="post" onSubmit={onSubmit} className="space-y-5">
+        // WHA-1623: `action` is the no-JavaScript path. Once hydrated, onSubmit
+        // prevents it and the client path below runs unchanged.
+        <form
+          method="post"
+          action="/login/submit"
+          onSubmit={onSubmit}
+          data-hydrated={hydrated ? 'true' : undefined}
+          className="space-y-5"
+        >
+          <input type="hidden" name="callbackUrl" value={callbackUrl} />
           <div className="space-y-2">
             <label htmlFor="email" className="block text-sm font-semibold text-foreground">
               Email
