@@ -20,6 +20,7 @@ vi.mock('@/lib/rate-limit', () => ({
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: (run: (db: unknown) => unknown) =>
     run({
+      $queryRawUnsafe: vi.fn(async () => []),
       platformUser: { findUnique: mocks.findUser, update: mocks.updateUser },
       platformSession: { create: mocks.createSession },
       platformAuditLog: { create: mocks.createAuditLog },

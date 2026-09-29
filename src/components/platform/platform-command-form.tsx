@@ -1,6 +1,6 @@
 'use client';
 
-import { useId, useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import { ChevronDown, LoaderCircle, Play, Save } from 'lucide-react';
 import { toast } from 'sonner';
@@ -38,6 +38,7 @@ export type CommandField = {
   placeholder?: string;
   help?: string;
   checkboxText?: string;
+  minLength?: number;
   min?: number;
   max?: number;
   step?: number;
@@ -174,13 +175,14 @@ function payloadFromForm(form: HTMLFormElement, fields: CommandField[]) {
 
 export function PlatformCommandForm({
   action,
-  fields,
+  fields: configuredFields,
   submitLabel = 'Save changes',
   title,
   description,
   compact = false,
   onSuccessPath,
   revealResultKey,
+  confirm,
 }: {
   action: string;
   fields: CommandField[];
@@ -190,7 +192,34 @@ export function PlatformCommandForm({
   compact?: boolean;
   onSuccessPath?: string;
   revealResultKey?: string;
+  confirm?: string;
 }) {
+  // Keep every sensitive form aligned with the server's mandatory reason contract.
+  const fields = useMemo(() => {
+    const requiresReason =
+      [
+        'organization.user.password',
+        'organization.scim.token',
+        'organization.scim.revoke',
+        'organization.transition',
+        'organization.identity',
+      ].includes(action) ||
+      action.startsWith('organization.identity.') ||
+      (action === 'organization.update' &&
+        configuredFields.some((field) => field.name === 'vertical'));
+    if (!requiresReason) return configuredFields;
+    const reason: CommandField = {
+      name: 'reason',
+      label: 'Reason (required)',
+      type: 'textarea',
+      required: true,
+      minLength: 10,
+      help: 'Explain why this change is needed (at least 10 characters).',
+    };
+    return configuredFields.some((field) => field.name === 'reason')
+      ? configuredFields.map((field) => (field.name === 'reason' ? { ...field, ...reason } : field))
+      : [...configuredFields, reason];
+  }, [action, configuredFields]);
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
@@ -228,6 +257,12 @@ export function PlatformCommandForm({
     setRevealed('');
     const clientFieldErrors: Record<string, string> = {};
     for (const field of fields) {
+      if (field.minLength) {
+        const value = String(new FormData(form).get(field.name) ?? '').trim();
+        if (value.length < field.minLength) {
+          clientFieldErrors[field.name] = `Enter at least ${field.minLength} characters.`;
+        }
+      }
       if (field.format !== 'time24') continue;
       const value = String(new FormData(form).get(field.name) ?? '');
       if (value && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
@@ -242,6 +277,7 @@ export function PlatformCommandForm({
         (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
       return;
     }
+    if (confirm && !window.confirm(confirm)) return;
     setPending(true);
     try {
       const payload = payloadFromForm(form, fields);
@@ -340,6 +376,7 @@ export function PlatformCommandForm({
                   id={fieldId}
                   name={field.name}
                   required={field.required}
+                  minLength={field.minLength}
                   disabled={field.disabled}
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
@@ -401,6 +438,7 @@ export function PlatformCommandForm({
                   name={field.name}
                   type={field.type ?? 'text'}
                   required={field.required}
+                  minLength={field.minLength}
                   disabled={field.disabled}
                   defaultValue={
                     typeof field.defaultValue === 'boolean'

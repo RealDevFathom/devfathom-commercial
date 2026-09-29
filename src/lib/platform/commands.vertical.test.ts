@@ -550,16 +550,24 @@ describe('organization.update vertical immutability + package compatibility', ()
       status: 'ONBOARDING',
       deploymentMode: 'SHARED',
     });
-    mocks.pkgFindUnique.mockResolvedValue({ active: true, vertical: 'RESTAURANT' });
+    mocks.pkgFindUnique.mockResolvedValue({
+      active: true,
+      vertical: 'RESTAURANT',
+    });
 
     await run('organization.update', {
       id: 'org_1',
       vertical: 'RESTAURANT',
+      reason: 'Correct onboarding classification',
       packageId: 'pkg_r',
     });
 
     expect(mocks.orgUpdate).toHaveBeenCalledWith(
-      expect.objectContaining({ data: expect.objectContaining({ vertical: 'RESTAURANT' }) })
+      expect.objectContaining({
+        data: expect.objectContaining({
+          vertical: 'RESTAURANT',
+        }),
+      })
     );
   });
 
@@ -573,7 +581,13 @@ describe('organization.update vertical immutability + package compatibility', ()
       deploymentMode: 'SHARED',
     });
 
-    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' }));
+    const error = await caught(
+      run('organization.update', {
+        id: 'org_1',
+        vertical: 'RESTAURANT',
+        reason: 'Correct onboarding classification',
+      })
+    );
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -585,6 +599,7 @@ describe('organization.update vertical immutability + package compatibility', ()
     mocks.orgFindUnique.mockResolvedValue({
       id: 'org_1',
       vertical: 'RESTAURANT',
+      reason: 'Correct onboarding classification',
       activatedAt: new Date('2026-01-01T00:00:00.000Z'),
       packageId: null,
       status: 'ACTIVE',
@@ -594,6 +609,7 @@ describe('organization.update vertical immutability + package compatibility', ()
     await run('organization.update', {
       id: 'org_1',
       vertical: 'RESTAURANT',
+      reason: 'Correct onboarding classification',
       displayName: 'Acme 2',
     });
 
@@ -604,6 +620,7 @@ describe('organization.update vertical immutability + package compatibility', ()
     mocks.orgFindUnique.mockResolvedValue({
       id: 'org_1',
       vertical: 'RESTAURANT',
+      reason: 'Correct onboarding classification',
       activatedAt: new Date('2026-01-01T00:00:00.000Z'),
       packageId: 'pkg_r',
       status: 'ACTIVE',
@@ -627,7 +644,13 @@ describe('organization.update vertical immutability + package compatibility', ()
       status: 'ONBOARDING',
       deploymentMode: 'SHARED',
     });
-    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' }));
+    const error = await caught(
+      run('organization.update', {
+        id: 'org_1',
+        vertical: 'RESTAURANT',
+        reason: 'Correct onboarding classification',
+      })
+    );
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -651,6 +674,7 @@ describe('organization.update vertical immutability + package compatibility', ()
       run('organization.update', {
         id: 'org_1',
         vertical: 'RESTAURANT',
+        reason: 'Correct onboarding classification',
         packageId: 'pkg_r',
       })
     );

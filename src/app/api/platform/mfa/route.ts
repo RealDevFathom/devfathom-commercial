@@ -1,6 +1,13 @@
 import { z } from 'zod';
 import { NextResponse } from 'next/server';
-import { requirePlatformSession } from '@/lib/platform/auth';
+import {
+  requirePlatformMfaSession,
+  platformRoleRequiresMfa,
+  promotePlatformEnrollment,
+  PLATFORM_SESSION_COOKIE,
+  platformCookieOptions,
+} from '@/lib/platform/auth';
+import { rateLimit } from '@/lib/rate-limit';
 import { assertPlatformMutationOrigin, PlatformSecurityError } from '@/lib/platform/security';
 import { decryptSecret, encryptSecret } from '@/lib/secret-crypto';
 import { generateRecoveryCodes, generateTotpSecret, totpAuthUri, verifyTotp } from '@/lib/totp';
@@ -26,12 +33,12 @@ function failure(error: unknown) {
 
 export async function GET(request: Request) {
   try {
-    const actor = await requirePlatformSession(request);
+    const actor = await requirePlatformMfaSession(request);
     const status = await withPlatformDb(async (db) => {
       const [user, recoveryCodes] = await Promise.all([
         db.platformUser.findUnique({
           where: { id: actor.id },
-          select: { mfaRequired: true, mfaEnabledAt: true },
+          select: { mfaRequired: true, mfaEnabledAt: true, role: true },
         }),
         db.platformRecoveryCode.count({
           where: { platformUserId: actor.id, usedAt: null },
@@ -39,7 +46,8 @@ export async function GET(request: Request) {
       ]);
       return {
         enabled: Boolean(user?.mfaEnabledAt),
-        required: Boolean(user?.mfaRequired),
+        required: Boolean(user && (user.mfaRequired || platformRoleRequiresMfa(user.role))),
+        enrollmentOnly: Boolean(actor.enrollmentOnly),
         recoveryCodes,
       };
     });
@@ -52,20 +60,33 @@ export async function GET(request: Request) {
 export async function POST(request: Request) {
   try {
     assertPlatformMutationOrigin(request);
-    const actor = await requirePlatformSession(request);
+    const actor = await requirePlatformMfaSession(request);
     const input = actionSchema.parse(await request.json());
+    if (actor.enrollmentOnly && !['begin', 'confirm'].includes(input.action)) {
+      throw new PlatformSecurityError('Complete MFA enrollment first.', 403);
+    }
+    if (!rateLimit(`platform-mfa:${actor.id}`, 12, 15 * 60_000).ok) {
+      throw new PlatformSecurityError('Too many MFA attempts. Try again later.', 429);
+    }
     const result = await withPlatformDb(async (db) => {
+      await db.$queryRawUnsafe('SELECT id FROM platform_users WHERE id = $1 FOR UPDATE', actor.id);
+      const session = await db.platformSession.findUnique({ where: { id: actor.sessionId } });
+      if (!session || session.revokedAt || session.expiresAt <= new Date()) {
+        throw new PlatformSecurityError('Sign in again before updating MFA.', 401);
+      }
       const user = await db.platformUser.findUnique({
         where: { id: actor.id },
         select: {
           id: true,
           email: true,
+          active: true,
+          role: true,
           encryptedTotpSecret: true,
           mfaEnabledAt: true,
           mfaRequired: true,
         },
       });
-      if (!user) throw new PlatformSecurityError('Operator not found.', 400);
+      if (!user?.active) throw new PlatformSecurityError('Operator not found.', 401);
 
       if (input.action === 'begin') {
         if (user.mfaEnabledAt) {
@@ -122,7 +143,13 @@ export async function POST(request: Request) {
             targetId: user.id,
           },
         });
-        return { action: input.action, recoveryCodes: recovery.codes };
+        return {
+          action: input.action,
+          recoveryCodes: recovery.codes,
+          ...(actor.enrollmentOnly
+            ? { session: await promotePlatformEnrollment(db, actor, request) }
+            : {}),
+        };
       }
 
       if (input.action === 'regenerate') {
@@ -145,7 +172,7 @@ export async function POST(request: Request) {
         return { action: input.action, recoveryCodes: recovery.codes };
       }
 
-      if (user.mfaRequired) {
+      if (user.mfaRequired || platformRoleRequiresMfa(user.role)) {
         throw new PlatformSecurityError(
           'MFA is required by policy. A super administrator must remove the requirement first.',
           403
@@ -166,7 +193,17 @@ export async function POST(request: Request) {
       });
       return { action: input.action, success: true };
     });
-    return NextResponse.json(result, { headers: { 'Cache-Control': 'private, no-store' } });
+    const { session, ...body } = result as typeof result & {
+      session?: { token: string; expiresAt: Date };
+    };
+    const response = NextResponse.json(body, { headers: { 'Cache-Control': 'private, no-store' } });
+    if (session)
+      response.cookies.set(
+        PLATFORM_SESSION_COOKIE,
+        session.token,
+        platformCookieOptions(session.expiresAt)
+      );
+    return response;
   } catch (error) {
     return failure(error);
   }

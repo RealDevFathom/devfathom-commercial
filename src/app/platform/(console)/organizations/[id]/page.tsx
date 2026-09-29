@@ -1536,21 +1536,34 @@ export default async function OrganizationDetailPage({
                         },
                       ]}
                     />
-                    <div className="flex gap-2 border-t border-border-subtle py-4">
-                      <PlatformCommandButton
+                    <div className="grid gap-4 border-t border-border-subtle py-4 sm:grid-cols-2">
+                      <PlatformCommandForm
+                        compact
                         action="organization.identity.test"
-                        label="Queue test"
-                        payload={{ id: connection.id }}
+                        submitLabel="Queue test"
+                        fields={[
+                          {
+                            name: 'id',
+                            label: 'Connection',
+                            type: 'hidden',
+                            defaultValue: connection.id,
+                          },
+                        ]}
                       />
-                      <PlatformCommandButton
+                      <PlatformCommandForm
+                        compact
                         action="organization.identity.remove"
-                        label="Remove"
-                        tone="danger"
+                        submitLabel="Remove connection"
                         confirm={`Remove ${connection.name}?`}
-                        payload={{
-                          id: connection.id,
-                          reason: 'Removed by platform operator',
-                        }}
+                        description={`Remove ${connection.name}? This disconnects the identity provider.`}
+                        fields={[
+                          {
+                            name: 'id',
+                            label: 'Connection',
+                            type: 'hidden',
+                            defaultValue: connection.id,
+                          },
+                        ]}
                       />
                     </div>
                   </div>
@@ -1658,7 +1671,10 @@ export default async function OrganizationDetailPage({
                 </p>
                 <div className="mt-3 divide-y divide-border-subtle border border-border-subtle">
                   {organization.scimTokens.map((token) => (
-                    <div key={token.id} className="flex items-center justify-between gap-3 p-3">
+                    <div
+                      key={token.id}
+                      className="flex flex-col items-stretch justify-between gap-3 p-3 sm:flex-row sm:items-center"
+                    >
                       <div>
                         <p className="text-xs font-semibold">{token.name}</p>
                         <p className="mt-1 font-mono text-[9px] text-text-muted">
@@ -1676,12 +1692,15 @@ export default async function OrganizationDetailPage({
                       {token.revokedAt ? (
                         <PlatformStatus value="REVOKED" />
                       ) : (
-                        <PlatformCommandButton
+                        <PlatformCommandForm
+                          compact
                           action="organization.scim.revoke"
-                          label="Revoke"
-                          tone="danger"
+                          submitLabel="Revoke token"
                           confirm={`Revoke ${token.name}? Connected directories will stop syncing immediately.`}
-                          payload={{ id: token.id }}
+                          description={`Revoke ${token.name}? Connected directories will stop syncing immediately.`}
+                          fields={[
+                            { name: 'id', label: 'Token', type: 'hidden', defaultValue: token.id },
+                          ]}
                         />
                       )}
                     </div>

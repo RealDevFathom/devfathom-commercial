@@ -229,7 +229,22 @@ export function auditProjection(result: Pick<CommandResult, 'audit' | 'auditBefo
   };
 }
 
+function sensitiveCommand(action: string): boolean {
+  return (
+    [
+      'organization.user.password',
+      'organization.scim.token',
+      'organization.scim.revoke',
+      'organization.transition',
+    ].includes(action) ||
+    action === 'organization.identity' ||
+    action.startsWith('organization.identity.')
+  );
+}
+const sensitiveReason = z.string().trim().min(10).max(500);
+
 function capabilityFor(action: string): string {
+  if (sensitiveCommand(action)) return 'organizations:security:write';
   const domain = action.split('.')[0] ?? '';
   const capability = COMMAND_CAPABILITY[domain];
   if (!capability) throw new PlatformSecurityError('Unknown platform command.', 400);
@@ -1428,6 +1443,7 @@ async function runCommand(
         })
         .parse(payload);
       const { id: organizationId, ...data } = input;
+      let correctionReason: string | undefined;
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
       const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
@@ -1437,6 +1453,8 @@ async function runCommand(
       // required in the same command so the organization can never commit a
       // vertical/package mismatch between requests.
       if (changesVertical) {
+        assertPlatformCapability(actor, 'organizations:security:write');
+        correctionReason = z.object({ reason: sensitiveReason }).parse(payload).reason;
         if (before.status !== 'ONBOARDING' || before.activatedAt !== null) {
           throw new PlatformSecurityError(
             'The organization vertical can only be corrected during early onboarding.',
@@ -1519,7 +1537,7 @@ async function runCommand(
         organizationId: organization.id,
         auditBefore: before,
         data: organization,
-        audit: organization,
+        audit: { ...organization, ...(correctionReason ? { reason: correctionReason } : {}) },
       };
     }
     case 'organization.transition': {
@@ -3378,17 +3396,33 @@ async function runCommand(
       if (!input.id && !input.password) {
         throw new PlatformSecurityError('A password is required for a new operator.', 400);
       }
+      // One transaction-scoped lock serializes count-and-demote across all
+      // operator commands; row locks alone cannot protect the last-admin count.
+      await db.$queryRawUnsafe('SELECT pg_advisory_xact_lock(1597, 1)');
       const existingOperator = input.id
-        ? await db.platformUser.findUnique({
-            where: { id: input.id },
-            select: { mfaEnabledAt: true },
-          })
+        ? await db.platformUser.findUnique({ where: { id: input.id } })
         : null;
-      if (input.mfaRequired && !existingOperator?.mfaEnabledAt) {
+      if (input.id && !existingOperator)
+        throw new PlatformSecurityError('Operator not found.', 400);
+      if (input.id === actor.id && (!input.active || input.role !== actor.role)) {
         throw new PlatformSecurityError(
-          'The operator must enroll an authenticator before MFA can be required.',
-          400
+          'You cannot demote or deactivate your own operator account.',
+          403
         );
+      }
+      if (
+        existingOperator?.active &&
+        existingOperator.role === 'SUPER_ADMIN' &&
+        (!input.active || input.role !== 'SUPER_ADMIN')
+      ) {
+        const remaining = await db.platformUser.count({
+          where: { active: true, role: 'SUPER_ADMIN', id: { not: existingOperator.id } },
+        });
+        if (remaining === 0)
+          throw new PlatformSecurityError(
+            'The last active super administrator cannot be demoted or deactivated.',
+            403
+          );
       }
       const passwordHash = input.password ? await hash(input.password, 12) : undefined;
       const saved = input.id
@@ -3413,7 +3447,10 @@ async function runCommand(
               passwordHash: passwordHash!,
             },
           });
-      if (!input.active) {
+      if (
+        !input.active ||
+        (existingOperator && (input.role !== existingOperator.role || input.password))
+      ) {
         await db.platformSession.updateMany({
           where: { platformUserId: saved.id, revokedAt: null },
           data: { revokedAt: new Date() },
@@ -3424,6 +3461,7 @@ async function runCommand(
     }
     case 'operator.mfa.reset': {
       const input = z.object({ id, reason: z.string().trim().min(10).max(500) }).parse(payload);
+      await db.$queryRawUnsafe('SELECT id FROM platform_users WHERE id = $1 FOR UPDATE', input.id);
       const before = await db.platformUser.findUnique({
         where: { id: input.id },
         select: { id: true, email: true, mfaRequired: true, mfaEnabledAt: true },
@@ -3530,7 +3568,11 @@ export async function executePlatformCommand(
     assertPlatformCapability(actor, capabilityFor(action));
 
     return await withPlatformDb(async (db) => {
+      const reason = sensitiveCommand(action)
+        ? z.object({ reason: sensitiveReason }).parse(payload).reason
+        : undefined;
       const result = await runCommand(db, actor, action, payload);
+      if (reason) result.audit = { ...(result.audit as Record<string, unknown>), reason };
       // The audit row is built from the command's declared projection only.
       // `result.data` is the reveal channel and never reaches this table.
       const { before, after } = auditProjection(result);
