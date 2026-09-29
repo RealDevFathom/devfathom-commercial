@@ -39,7 +39,8 @@ const attemptSchema = z.discriminatedUnion('kind', [
       reason: z.string(),
       idempotencyKey: z.string(),
       manualCashFallback: z.boolean(),
-      requireReturnedValue: z.literal(true),
+      // Preserve legacy saved attempts verbatim for idempotent recovery.
+      requireReturnedValue: z.literal(true).optional(),
     }),
   }),
 ]);
@@ -562,7 +563,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     reason,
                     idempotencyKey: browserUuid(),
                     manualCashFallback: manualRequired && manual,
-                    requireReturnedValue: true,
                   },
                 })
               }

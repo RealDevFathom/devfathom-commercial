@@ -134,22 +134,33 @@ describe('counter returns', () => {
     fireEvent.click(screen.getByLabelText(/No provider refund adapter/));
     expect(submit).toBeEnabled();
   });
-  it('restores an ambiguous refund after remount and retries the same key', async () => {
-    mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
-    const view = render(<ReturnForm {...props} />);
-    chooseReceipt();
-    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
-    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
-    await screen.findByRole('button', { name: 'Retry saved refund' });
-    await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Disconnected'));
-    const first = mocks.refund.mock.calls[0][0];
-    view.unmount();
-    render(<ReturnForm {...props} />);
-    fireEvent.click(await screen.findByRole('button', { name: 'Retry saved refund' }));
-    await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(2));
-    expect(mocks.refund.mock.calls[1][0]).toEqual(first);
-  });
+  it.each([false, true])(
+    'restores an ambiguous refund (legacy=%s) with the same payload',
+    async (legacy) => {
+      mocks.refund.mockRejectedValueOnce(new Error('Disconnected'));
+      const view = render(<ReturnForm {...props} />);
+      chooseReceipt();
+      fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
+      fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
+      fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
+      await screen.findByRole('button', { name: 'Retry saved refund' });
+      await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Disconnected'));
+      const first = mocks.refund.mock.calls[0][0];
+      expect(first).not.toHaveProperty('requireReturnedValue');
+      if (legacy) {
+        const key = 'pharmacy-return:o:a:b';
+        const saved = JSON.parse(localStorage.getItem(key)!);
+        saved.input.requireReturnedValue = true;
+        localStorage.setItem(key, JSON.stringify(saved));
+        first.requireReturnedValue = true;
+      }
+      view.unmount();
+      render(<ReturnForm {...props} />);
+      fireEvent.click(await screen.findByRole('button', { name: 'Retry saved refund' }));
+      await waitFor(() => expect(mocks.refund).toHaveBeenCalledTimes(2));
+      expect(mocks.refund.mock.calls[1][0]).toEqual(first);
+    }
+  );
   it('fails closed when saved recovery is corrupt', () => {
     localStorage.setItem('pharmacy-return:o:a:b', 'broken');
     render(<ReturnForm {...props} />);

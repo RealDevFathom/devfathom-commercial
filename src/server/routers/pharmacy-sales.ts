@@ -289,6 +289,7 @@ export const pharmacySalesRouter = router({
           amountMinor: z.number().int().positive(),
           reason: z.string().trim().min(1),
           manualCashFallback: z.boolean().optional(),
+          // Deprecated compatibility field; the service always enforces the return cap.
           requireReturnedValue: z.boolean().optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
         })

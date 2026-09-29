@@ -448,6 +448,7 @@ export async function refundPharmacyTender(
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     manualCashFallback?: boolean;
+    /** @deprecated Ignored: every refund is capped by returned value. */
     requireReturnedValue?: boolean;
   }
 ) {
@@ -479,34 +480,33 @@ export async function refundPharmacyTender(
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
     input.amountMinor
   );
-  if (input.requireReturnedValue) {
-    await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${tender.saleId}
-      AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
-    const sale = await db.pharmacySale.findFirst({
-      where: {
-        id: tender.saleId,
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        status: 'COMPLETED',
-      },
-      include: { lines: { include: { returnLines: true } }, refunds: true },
-    });
-    const returnValue =
-      sale?.lines.reduce(
-        (sum, line) =>
-          sum +
-          returnedLineValue(
-            line,
-            line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0)
-          ),
-        0
-      ) ?? 0;
-    if (
-      !sale ||
-      sale.refunds.reduce((sum, row) => sum + row.amountMinor, 0) + input.amountMinor > returnValue
-    )
-      throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
-  }
+  // Serialize refunds across all tenders of this sale before reading the aggregate.
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${tender.saleId}
+    AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+  const sale = await db.pharmacySale.findFirst({
+    where: {
+      id: tender.saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'COMPLETED',
+    },
+    include: { lines: { include: { returnLines: true } }, refunds: true },
+  });
+  const returnValue =
+    sale?.lines.reduce(
+      (sum, line) =>
+        sum +
+        returnedLineValue(
+          line,
+          line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0)
+        ),
+      0
+    ) ?? 0;
+  if (
+    !sale ||
+    sale.refunds.reduce((sum, row) => sum + row.amountMinor, 0) + input.amountMinor > returnValue
+  )
+    throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
   const manualReversalRequired =
     (tender.type === 'CARD' || tender.type === 'WALLET') &&
     !input.adapter &&
