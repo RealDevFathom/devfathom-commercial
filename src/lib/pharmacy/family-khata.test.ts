@@ -1,4 +1,4 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./patient-prescriptions', () => ({ auditPatientRead: vi.fn() }));
 
@@ -78,6 +78,12 @@ describe('CRM-L02 family privacy and khata settlement', () => {
 });
 
 describe('CRM-L04 explainable health suggestion', () => {
+  const now = new Date('2026-09-29T16:00:00.000Z');
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+  });
+  afterEach(() => vi.useRealTimers());
   const suggestion = calculateKhataHealthSuggestion(
     [
       {
@@ -145,6 +151,8 @@ describe('CRM-L04 explainable health suggestion', () => {
       familyAccountId: 'family_1',
       suggestion,
       ownerAuthorized: true,
+      ownerAuthorizedByUserId: scope.actorId,
+      ownerReauthenticatedAt: now,
       overrideLimitMinor: 15_000,
     });
     expect(update).toHaveBeenCalledWith(
@@ -152,8 +160,69 @@ describe('CRM-L04 explainable health suggestion', () => {
     );
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ kind: 'OVERRIDDEN', appliedLimitMinor: 15_000 }),
+        data: expect.objectContaining({
+          kind: 'OVERRIDDEN',
+          appliedLimitMinor: 15_000,
+          ownerActorId: scope.actorId,
+          reasons: {
+            reasons: suggestion.reasons,
+            ownerAuthorizedByUserId: scope.actorId,
+            ownerReauthenticatedAt: now.toISOString(),
+            ownerAuthorizedAt: now.toISOString(),
+          },
+        }),
       })
     );
+  });
+
+  it.each([
+    ['missing', undefined, scope.actorId],
+    ['expired', new Date('2026-09-29T15:54:59.999Z'), scope.actorId],
+    ['future', new Date('2026-09-29T16:00:00.001Z'), scope.actorId],
+    ['invalid', new Date('invalid'), scope.actorId],
+    ['different owner', new Date('2026-09-29T16:00:00.000Z'), 'other-owner'],
+  ])('rejects %s reauthentication before any write', async (_name, at, actor) => {
+    const update = vi.fn();
+    const create = vi.fn();
+    await expect(
+      applyKhataLimitDecision(
+        {
+          pharmacyFamilyAccount: { update },
+          pharmacyKhataLimitDecision: { create },
+        } as never,
+        scope,
+        {
+          familyAccountId: 'family_1',
+          suggestion,
+          ownerAuthorized: true,
+          ownerAuthorizedByUserId: actor,
+          ownerReauthenticatedAt: at,
+          overrideLimitMinor: 15_000,
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(update).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('accepts reauthentication exactly five minutes old', async () => {
+    const update = vi.fn().mockResolvedValue({ creditLimitMinor: 20_000 });
+    const create = vi.fn().mockResolvedValue({ kind: 'ACCEPTED' });
+    await applyKhataLimitDecision(
+      {
+        pharmacyFamilyAccount: { update },
+        pharmacyKhataLimitDecision: { create },
+      } as never,
+      scope,
+      {
+        familyAccountId: 'family_1',
+        suggestion,
+        ownerAuthorized: true,
+        ownerAuthorizedByUserId: scope.actorId,
+        ownerReauthenticatedAt: new Date(now.getTime() - 5 * 60_000),
+      }
+    );
+    expect(update).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledOnce();
   });
 });

@@ -212,11 +212,24 @@ export async function applyKhataLimitDecision(
   input: {
     familyAccountId: string;
     suggestion: KhataHealthSuggestion;
+    // Trusted server evidence only: never populate this from a client timestamp.
     ownerAuthorized: boolean;
+    ownerAuthorizedByUserId?: string;
+    ownerReauthenticatedAt?: Date;
     overrideLimitMinor?: number;
   }
 ) {
-  if (!input.ownerAuthorized) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  const authorizedAt = new Date();
+  const reauthenticatedAt = input.ownerReauthenticatedAt?.getTime();
+  if (
+    !input.ownerAuthorized ||
+    input.ownerAuthorizedByUserId !== scope.actorId ||
+    reauthenticatedAt === undefined ||
+    !Number.isFinite(reauthenticatedAt) ||
+    reauthenticatedAt > authorizedAt.getTime() ||
+    authorizedAt.getTime() - reauthenticatedAt > 5 * 60_000
+  )
+    throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
   const appliedLimitMinor = input.overrideLimitMinor ?? input.suggestion.suggestedLimitMinor;
   if (!Number.isSafeInteger(appliedLimitMinor) || appliedLimitMinor < 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -242,7 +255,12 @@ export async function applyKhataLimitDecision(
       windowEnd: input.suggestion.windowEnd,
       suggestedLimitMinor: input.suggestion.suggestedLimitMinor,
       appliedLimitMinor,
-      reasons: input.suggestion.reasons,
+      reasons: {
+        reasons: input.suggestion.reasons,
+        ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
+        ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
+        ownerAuthorizedAt: authorizedAt.toISOString(),
+      },
       ownerActorId: scope.actorId,
     },
   });
