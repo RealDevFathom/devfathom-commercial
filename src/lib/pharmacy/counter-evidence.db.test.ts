@@ -467,12 +467,22 @@ describeDatabase('CAM-2 counter evidence on migrated PostgreSQL', () => {
     });
     expect(close).toBeNull();
 
-    // A subject outside this branch is refused, not silently bound.
+    // Without a camera nothing is read, so even a foreign subject is a no-op.
     await expect(
       tenant(bare.scope, (db) =>
         evidence.requestCounterEvidence(db, bare.scope, {
           kind: 'TENDER',
           subjectId: tendered.tenderId,
+        })
+      )
+    ).resolves.toBeNull();
+
+    // With a camera, a subject outside this tenant is refused, not silently bound.
+    await expect(
+      tenant(t.scope, (db) =>
+        evidence.requestCounterEvidence(db, t.scope, {
+          kind: 'TENDER',
+          subjectId: bareTender.tenderId,
         })
       )
     ).rejects.toThrow('NOT_FOUND');

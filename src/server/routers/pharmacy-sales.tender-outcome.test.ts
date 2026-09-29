@@ -89,6 +89,8 @@ function fixture(raw: unknown = input) {
     pharmacySale: only({ findFirst: saleRead }),
     pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
     pharmacyTender: only({ findFirst: tenderRead }),
+    // CAM-2: no evidence camera in this branch, so no still is requested.
+    camera: only({ findFirst: vi.fn().mockResolvedValue(null) }),
     $executeRaw: execute,
     $transaction: transaction,
   });

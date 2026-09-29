@@ -69,14 +69,13 @@ export function settledSubjectId(result: object, key: 'tenderId' | 'refundId'): 
  * Request a still for one money event. Call inside the event's transaction.
  * Idempotent per event, so a replayed tender does not request a second still.
  * Returns null when the branch has no usable evidence camera: the sale is never
- * blocked by the absence of a camera.
+ * blocked by the absence of a camera, and nothing else is read or written.
  */
 export async function requestCounterEvidence(
   db: ScopedDb,
   scope: CounterScope,
   input: { kind: CounterEvidenceKind; subjectId: string }
 ): Promise<{ evidenceId: string } | null> {
-  const saleId = await subjectSale(db, scope, input.kind, input.subjectId);
   const camera = await db.camera.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -89,6 +88,7 @@ export async function requestCounterEvidence(
     select: { id: true },
   });
   if (!camera) return null;
+  const saleId = await subjectSale(db, scope, input.kind, input.subjectId);
 
   const subjectKind = SUBJECT[input.kind];
   await db.cameraEvidence.createMany({

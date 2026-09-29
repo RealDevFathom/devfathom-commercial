@@ -338,6 +338,11 @@ function ScopedPharmacyCounterConsole({
     { enabled: Boolean(branchId && saleId) && cartQuery.data?.status === 'COMPLETED' }
   );
 
+  const evidenceQuery = trpc.pharmacySales.counterEvidence.useQuery(
+    { branchId, saleId: saleId ?? '' },
+    { enabled: Boolean(branchId && saleId) && cartQuery.data?.status === 'COMPLETED' }
+  );
+
   const patientsQuery = trpc.pharmacyPrescriptions.counterPatients.useQuery(
     { query: submittedPatientQuery },
     { enabled: submittedPatientQuery.trim().length >= 2 && patientId === null }
@@ -1548,6 +1553,7 @@ function ScopedPharmacyCounterConsole({
               }
               locale={receiptLocale}
               format={receiptFormat}
+              evidence={evidenceQuery.data ?? null}
               reprint={receiptRenders > 0}
               printing={receiptQuery.isFetching}
               error={receiptQuery.error ? messageFrom(receiptQuery.error) : null}

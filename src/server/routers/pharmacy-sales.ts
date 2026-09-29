@@ -43,6 +43,11 @@ import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import {
+  readCounterEvidence,
+  requestCounterEvidence,
+  settledSubjectId,
+} from '@/lib/pharmacy/counter-evidence';
+import {
   applyPharmacyTender,
   closePharmacyDrawer,
   cutPharmacyDailyClose,
@@ -259,9 +264,13 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
-        cutPharmacyDailyClose(txDb(tx), scopeFor(ctx, input.branchId), input)
-      )
+      ctx.db.$transaction(async (tx) => {
+        const scope = scopeFor(ctx, input.branchId);
+        const close = await cutPharmacyDailyClose(txDb(tx), scope, input);
+        // CAM-2: the evidence request commits or rolls back with the close.
+        await requestCounterEvidence(txDb(tx), scope, { kind: 'DAILY_CLOSE', subjectId: close.id });
+        return close;
+      })
     ),
   tenderOutcome: protectedProcedure
     .input(tenderInput)
@@ -270,9 +279,15 @@ export const pharmacySalesRouter = router({
     ),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
     try {
-      return await ctx.db.$transaction((tx) =>
-        applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
-      );
+      return await ctx.db.$transaction(async (tx) => {
+        const scope = scopeFor(ctx, input.branchId);
+        const result = await applyPharmacyTender(txDb(tx), scope, input);
+        await requestCounterEvidence(txDb(tx), scope, {
+          kind: 'TENDER',
+          subjectId: settledSubjectId(result, 'tenderId'),
+        });
+        return result;
+      });
     } catch (error) {
       fail(error);
     }
@@ -293,9 +308,15 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          refundPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const scope = scopeFor(ctx, input.branchId);
+          const result = await refundPharmacyTender(txDb(tx), scope, input);
+          await requestCounterEvidence(txDb(tx), scope, {
+            kind: 'REFUND',
+            subjectId: settledSubjectId(result, 'refundId'),
+          });
+          return result;
+        });
       } catch (error) {
         fail(error);
       }
@@ -657,6 +678,23 @@ export const pharmacySalesRouter = router({
           name: branch.name,
           currency: organization?.currency ?? 'PKR',
         });
+      } catch (error) {
+        fail(error);
+      }
+    }),
+
+  /** CAM-2 camera stills bound to this sale's tenders and refunds, in this branch. */
+  counterEvidence: protectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        const branch = await ctx.db.pharmacyBranch.findFirst({
+          where: { id: input.branchId, organizationId: scope.organizationId },
+          select: { id: true },
+        });
+        if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
+        return await readCounterEvidence(ctx.db, scope, input.saleId);
       } catch (error) {
         fail(error);
       }
