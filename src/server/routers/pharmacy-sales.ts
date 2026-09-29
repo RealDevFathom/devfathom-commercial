@@ -1,3 +1,4 @@
+import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -653,10 +654,14 @@ export const pharmacySalesRouter = router({
           }),
         ]);
         if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
-        return await readCounterReceipt(ctx.db, scope, input.saleId, {
+        const receipt = await readCounterReceipt(ctx.db, scope, input.saleId, {
           name: branch.name,
           currency: organization?.currency ?? 'PKR',
         });
+        return {
+          ...receipt,
+          dispensingLabelSources: await readDispensingLabelSources(ctx.db, scope, receipt),
+        };
       } catch (error) {
         fail(error);
       }

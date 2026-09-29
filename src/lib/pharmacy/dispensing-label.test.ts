@@ -7,6 +7,8 @@ import type { CounterReceipt } from './counter-receipt';
 export const source: DispensingLabelSource = {
   saleId: 'sale',
   saleLineId: 'line',
+  rx: true,
+  pharmacistRegistration: 'REG',
   licenceNumber: 'TEST-LICENCE',
   directionsEnglish: 'English directions fixture',
   directionsUrdu: 'اردو',
@@ -56,6 +58,15 @@ export const receipt: CounterReceipt = {
 };
 afterEach(() => vi.restoreAllMocks());
 describe('50 × 30 mm dispensing labels', () => {
+  it('omits optional name and preserves registration; rejects non-Rx sources', () => {
+    expect(buildDispensingLabels(receipt, [source])).toContain('Pharmacist: <bdi>REG</bdi>');
+    expect(buildDispensingLabels(receipt, [{ ...source, pharmacistName: 'Actor' }])).toContain(
+      'Pharmacist: Actor · <bdi>REG</bdi>'
+    );
+    expect(() =>
+      buildDispensingLabels(receipt, [{ ...source, rx: false } as unknown as DispensingLabelSource])
+    ).toThrow();
+  });
   it('snapshots both issued batch labels with exact bilingual source text', () => {
     const before = JSON.stringify(receipt);
     const html = buildCounterBrowserReceipt(receipt, 'en', 'LABEL_50x30', false, [source]);

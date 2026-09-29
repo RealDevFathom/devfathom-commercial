@@ -184,6 +184,8 @@ it('opens isolated Rx labels and exposes popup failure with retry available', ()
     {
       saleId: 'sale-1',
       saleLineId: 'line-1',
+      rx: true,
+      pharmacistRegistration: 'REG',
       licenceNumber: 'TEST',
       directionsEnglish: 'English fixture',
       directionsUrdu: 'اردو',
@@ -208,5 +210,46 @@ it('opens isolated Rx labels and exposes popup failure with retry available', ()
   expect(popup.print).toHaveBeenCalledOnce();
   expect(input.onPrint).not.toHaveBeenCalled();
   expect(screen.queryByRole('alert')).toBeNull();
+  open.mockRestore();
+});
+
+it('selects only the clicked line source from the production receipt payload', () => {
+  const input = props();
+  const line = input.receipt!.lines[0]!;
+  input.receipt!.lines = ['first', 'second'].map((saleLineId) => ({
+    ...line,
+    saleLineId,
+    identityStatus: 'ISSUED',
+    allocations: [
+      {
+        allocationId: saleLineId,
+        inventoryLotId: saleLineId,
+        batchNumber: saleLineId,
+        expiresAt: '2027-01-01',
+        canonicalUnits: 1,
+      },
+    ],
+  }));
+  input.receipt!.dispensingLabelSources = ['first', 'second'].map((saleLineId) => ({
+    saleId: input.receipt!.saleId,
+    saleLineId,
+    rx: true,
+    licenceNumber: 'LIC',
+    pharmacistRegistration: 'REG',
+    directionsEnglish: `${saleLineId} directions`,
+    directionsUrdu: 'اردو',
+  }));
+  const popup = {
+    opener: window,
+    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
+    focus: vi.fn(),
+    print: vi.fn(),
+    close: vi.fn(),
+  };
+  const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  render(<CounterReceiptView {...input} />);
+  fireEvent.click(screen.getAllByRole('button', { name: /Print Rx labels/ })[1]!);
+  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('second directions'));
+  expect(popup.document.write.mock.calls[0]![0]).not.toContain('first directions');
   open.mockRestore();
 });

@@ -9,6 +9,7 @@ exports[`50 × 30 mm dispensing labels > snapshots both issued batch labels with
 .dispensing-label div { white-space: pre-wrap; }
 </style></head><body><section class="dispensing-label" aria-label="Rx dispensing label">
 <div><strong>Test pharmacy</strong> · Licence: <bdi>TEST-LICENCE</bdi></div>
+<div>Pharmacist: <bdi>REG</bdi></div>
 <div><strong>Test medicine · 500 mg · Tablet</strong></div>
 <div lang="en" dir="ltr">English directions fixture</div>
 <div lang="ur" dir="rtl">اردو</div>
@@ -16,6 +17,7 @@ exports[`50 × 30 mm dispensing labels > snapshots both issued batch labels with
 </section>
 <section class="dispensing-label" aria-label="Rx dispensing label">
 <div><strong>Test pharmacy</strong> · Licence: <bdi>TEST-LICENCE</bdi></div>
+<div>Pharmacist: <bdi>REG</bdi></div>
 <div><strong>Test medicine · 500 mg · Tablet</strong></div>
 <div lang="en" dir="ltr">English directions fixture</div>
 <div lang="ur" dir="rtl">اردو</div>

@@ -48,7 +48,7 @@ export function CounterReceiptView({
   format,
   reprint,
   printing = false,
-  dispensingLabelSources = [],
+  dispensingLabelSources = receipt?.dispensingLabelSources ?? [],
   error,
   onLocaleChange,
   onFormatChange,
@@ -97,13 +97,6 @@ export function CounterReceiptView({
       'This receipt cannot be previewed. Reload it or ask support to check its source data.';
   }
 
-  let labelUnavailable: string | null = null;
-  try {
-    buildDispensingLabels(receipt, dispensingLabelSources);
-  } catch (error) {
-    labelUnavailable = error instanceof Error ? error.message : 'Rx label source unavailable.';
-  }
-
   return (
     <div className="space-y-4">
       <div className="flex flex-wrap items-end gap-3">
@@ -144,32 +137,6 @@ export function CounterReceiptView({
         >
           {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
         </Button>
-        <Button
-          type="button"
-          variant="outline"
-          className="h-11"
-          disabled={printing || document === null || labelUnavailable !== null}
-          aria-describedby="rx-label-help"
-          onClick={() => {
-            setLabelError(null);
-            try {
-              printCounterBrowserReceipt(
-                receipt,
-                locale,
-                'LABEL_50x30',
-                reprint,
-                dispensingLabelSources
-              );
-            } catch (error) {
-              setLabelError({
-                saleId: receipt.saleId,
-                message: error instanceof Error ? error.message : 'Rx label printing failed.',
-              });
-            }
-          }}
-        >
-          Print Rx labels · 50 × 30 mm
-        </Button>
         {receipt.receiptNumber === null ? (
           <StatusPill status="unissued" tone="warning" label={strings.unissued} />
         ) : reprint ? (
@@ -179,10 +146,6 @@ export function CounterReceiptView({
         )}
       </div>
 
-      <p id="rx-label-help" className="text-sm text-text-muted">
-        {labelUnavailable ??
-          'Prints supplied English and Urdu directions, pharmacy licence and each issued batch expiry. Select 50 × 30 mm paper at 100% scale; disable browser headers and footers.'}
-      </p>
       {labelError?.saleId === receipt.saleId ? (
         <p role="alert" className="text-sm text-destructive">
           {labelError.message}
@@ -229,30 +192,73 @@ export function CounterReceiptView({
         </header>
 
         <ul className="divide-y divide-border-subtle">
-          {receipt.lines.map((line) => (
-            <li key={line.saleLineId} className="space-y-0.5 py-2">
-              <div className="flex justify-between gap-3">
-                <span className="min-w-0 break-words text-text-strong">
-                  {counterLinePresentation(line, locale).identity}
-                </span>
-                <span className="shrink-0 tabular-nums text-text-strong">
-                  {formatMinor(line.lineTotalMinor)}
-                </span>
-              </div>
-              <p className="text-text-muted">
-                {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
-                {formatMinor(line.unitPriceMinor)}
-              </p>
-              {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
-                <p
-                  key={line.allocations![index]!.allocationId}
-                  className="whitespace-pre-wrap break-words tabular-nums text-text-muted"
-                >
-                  {allocation}
+          {receipt.lines.map((line) => {
+            const lineSources = dispensingLabelSources.filter(
+              (source) => source.saleLineId === line.saleLineId
+            );
+            let labelUnavailable: string | null = null;
+            try {
+              buildDispensingLabels(receipt, lineSources);
+            } catch (error) {
+              labelUnavailable =
+                error instanceof Error ? error.message : 'Rx label source unavailable.';
+            }
+            return (
+              <li key={line.saleLineId} className="space-y-0.5 py-2">
+                <div className="flex justify-between gap-3">
+                  <span className="min-w-0 break-words text-text-strong">
+                    {counterLinePresentation(line, locale).identity}
+                  </span>
+                  <span className="shrink-0 tabular-nums text-text-strong">
+                    {formatMinor(line.lineTotalMinor)}
+                  </span>
+                </div>
+                <p className="text-text-muted">
+                  {line.quantity} {strings.saleUnit[line.saleUnit]} ×{' '}
+                  {formatMinor(line.unitPriceMinor)}
                 </p>
-              ))}
-            </li>
-          ))}
+                {counterLinePresentation(line, locale).allocations.map((allocation, index) => (
+                  <p
+                    key={line.allocations![index]!.allocationId}
+                    className="whitespace-pre-wrap break-words tabular-nums text-text-muted"
+                  >
+                    {allocation}
+                  </p>
+                ))}
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="h-11"
+                  disabled={printing || document === null || labelUnavailable !== null}
+                  aria-describedby={`rx-label-${line.saleLineId}`}
+                  onClick={() => {
+                    setLabelError(null);
+                    try {
+                      printCounterBrowserReceipt(
+                        receipt,
+                        locale,
+                        'LABEL_50x30',
+                        reprint,
+                        lineSources
+                      );
+                    } catch (error) {
+                      setLabelError({
+                        saleId: receipt.saleId,
+                        message:
+                          error instanceof Error ? error.message : 'Rx label printing failed.',
+                      });
+                    }
+                  }}
+                >
+                  Print Rx labels · 50 × 30 mm
+                </Button>
+                <p id={`rx-label-${line.saleLineId}`} className="text-text-muted">
+                  {labelUnavailable ??
+                    'English / Urdu · 50 × 30 mm, 100% scale, no browser headers or footers.'}
+                </p>
+              </li>
+            );
+          })}
         </ul>
 
         <dl className="space-y-1 border-t border-border-subtle pt-3">
