@@ -5,10 +5,8 @@ const PREVIOUS_DATE = new Date('2026-09-04T00:00:00.000Z');
 
 const mocks = vi.hoisted(() => {
   const findFirst = vi.fn();
-  const findStation = vi.fn();
   return {
     findFirst,
-    findStation,
     readStationQueue: vi.fn(),
     requireKdsStation: vi.fn(),
     resolveStationBusinessDate: vi.fn(),
@@ -19,7 +17,6 @@ const mocks = vi.hoisted(() => {
       device: { branchId: 'branch-bound' },
       db: {
         restaurantKitchenTicket: { findFirst },
-        restaurantKitchenStation: { findUnique: findStation },
       },
     },
   };
@@ -61,31 +58,27 @@ beforeEach(() => {
   mocks.requireKdsStation.mockReturnValue({ ok: true, stationId: 'station-bound' });
   mocks.resolveStationBusinessDate.mockResolvedValue(CURRENT_DATE);
   mocks.findFirst.mockResolvedValue(null);
-  mocks.findStation.mockResolvedValue({ name: 'Hot Kitchen' });
   mocks.readStationQueue.mockImplementation(async (_db: unknown, input: { businessDate: Date }) =>
     queue(input.businessDate)
   );
 });
 
 describe('GET KDS queue demo rollover', () => {
-  it.each([{ name: 'Hot Kitchen' }, null])(
-    'includes the bound station name even for an empty queue (%s)',
-    async (station) => {
+  it.each(['Hot Kitchen', null])(
+    'forwards stationName from readStationQueue (%s)',
+    async (stationName) => {
       mocks.context.demoActor = null;
-      mocks.findStation.mockResolvedValue(station);
+      mocks.readStationQueue.mockResolvedValue({ ...queue(CURRENT_DATE), stationName });
 
       const response = await GET(request());
 
       expect(response.status).toBe(200);
       await expect(response.json()).resolves.toMatchObject({
         stationId: 'station-bound',
-        stationName: station?.name ?? null,
+        stationName,
         tickets: [],
       });
-      expect(mocks.findStation).toHaveBeenCalledExactlyOnceWith({
-        where: { id: 'station-bound' },
-        select: { name: true },
-      });
+      expect(mocks.readStationQueue).toHaveBeenCalledTimes(1);
     }
   );
 

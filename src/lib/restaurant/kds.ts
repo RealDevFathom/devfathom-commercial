@@ -268,7 +268,7 @@ export type ReadStationQueueInput = {
 export async function readStationQueue(
   db: ScopedDb,
   input: ReadStationQueueInput
-): Promise<StationQueue> {
+): Promise<StationQueue & { stationName: string | null }> {
   const tickets = await db.restaurantKitchenTicket.findMany({
     where: { stationId: input.stationId, businessDate: input.businessDate },
     orderBy: { ticketNumber: 'asc' },
@@ -278,6 +278,7 @@ export async function readStationQueue(
       orderId: true,
       createdAt: true,
       order: { select: { orderNumber: true } },
+      station: { select: { name: true } },
       items: {
         select: {
           orderItemId: true,
@@ -296,7 +297,7 @@ export async function readStationQueue(
     },
   });
 
-  return projectStationQueue({
+  const queue = projectStationQueue({
     stationId: input.stationId,
     businessDate: input.businessDate,
     sinceCursor: input.sinceCursor,
@@ -318,6 +319,7 @@ export async function readStationQueue(
       })),
     })),
   });
+  return { ...queue, stationName: tickets[0]?.station.name ?? null };
 }
 
 /**
