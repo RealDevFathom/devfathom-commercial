@@ -138,7 +138,11 @@ export function CounterReceiptView({
           {printing ? 'Loading receipt…' : reprint ? 'Reprint receipt' : 'Print receipt'}
         </Button>
         {receipt.receiptNumber === null ? (
-          <StatusPill status="unissued" tone="warning" label={strings.unissued} />
+          <StatusPill
+            status="unissued"
+            tone="warning"
+            label={<span className="text-text-strong">{strings.unissued}</span>}
+          />
         ) : reprint ? (
           <StatusPill status="reprint" tone="info" label={strings.reprint} />
         ) : (
@@ -228,7 +232,7 @@ export function CounterReceiptView({
                 <Button
                   type="button"
                   variant="outline"
-                  className="h-11"
+                  className="h-auto min-h-11 max-w-full whitespace-normal py-2"
                   disabled={printing || document === null || labelUnavailable !== null}
                   aria-describedby={`rx-label-${line.saleLineId}`}
                   onClick={() => {
