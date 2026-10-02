@@ -619,6 +619,10 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
       ])
     );
     await expect(dayClose.getByRole('heading', { name: 'Closed day' })).toBeVisible();
+    // The post-close summary shows the count and variance beside cash expected.
+    await expect(dayClose.locator('dl').first()).toContainText(
+      /Refunds\s*0\.00[\s\S]*Cash expected\s*64\.00\s*Cash counted\s*63\.50\s*Cash variance\s*-0\.50/
+    );
     await expect(
       dayClose.getByRole('link', { name: 'Review in Restaurant Finance' })
     ).toBeVisible();

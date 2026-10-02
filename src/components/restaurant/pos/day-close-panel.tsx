@@ -33,7 +33,9 @@ type Preview = {
     netSales: string;
     deliveryFeeSales: string;
     deliveryFeeRefunds: string;
+    refundTotal: string;
     cashExpected: string;
+    cashCounted: string;
     cashVariance: string;
   };
 };
@@ -215,6 +217,14 @@ export function DayClosePanel({
                 <dd className="font-mono tabular-nums">{preview.totals.grossSales}</dd>
               </div>
               <div>
+                <dt className="text-text-muted">Net sales</dt>
+                <dd className="font-mono tabular-nums">{preview.totals.netSales}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Refunds</dt>
+                <dd className="font-mono tabular-nums">{preview.totals.refundTotal}</dd>
+              </div>
+              <div>
                 <dt className="text-text-muted">Delivery fee sales</dt>
                 <dd className="font-mono tabular-nums">{preview.totals.deliveryFeeSales}</dd>
               </div>
@@ -225,6 +235,14 @@ export function DayClosePanel({
               <div>
                 <dt className="text-text-muted">Cash expected</dt>
                 <dd className="font-mono tabular-nums">{preview.totals.cashExpected}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Cash counted</dt>
+                <dd className="font-mono tabular-nums">{preview.totals.cashCounted}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Cash variance</dt>
+                <dd className="font-mono tabular-nums">{preview.totals.cashVariance}</dd>
               </div>
             </dl>
             {!ready ? (

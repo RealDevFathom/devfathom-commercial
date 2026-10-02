@@ -25,7 +25,9 @@ describe('DayClosePanel', () => {
             deliveryFeeSales: '2.00',
             deliveryFeeRefunds: '0.50',
             netSales: '10.00',
+            refundTotal: '0.00',
             cashExpected: '10.00',
+            cashCounted: '10.00',
             cashVariance: '0.00',
           },
         } as T;
@@ -62,6 +64,43 @@ describe('DayClosePanel', () => {
       reason: 'Count verified',
       approving: { staffProfileId: 'manager-1', type: 'PIN', secret: '5678' },
     });
+  });
+
+  it('shows counted cash, cash variance and refunds beside cash expected after close', async () => {
+    const request: TerminalRequest = async <T,>(path: string) => {
+      if (path.endsWith('/current')) return { businessDate: '2026-09-28' } as T;
+      return {
+        businessDate: '2026-09-28',
+        readiness: { openBillCount: 0, openDrawerCount: 0 },
+        existingCloseId: 'close-1',
+        totals: {
+          grossSales: '28.00',
+          netSales: '14.00',
+          deliveryFeeSales: '0.00',
+          deliveryFeeRefunds: '0.00',
+          refundTotal: '14.00',
+          cashExpected: '100.00',
+          cashCounted: '99.50',
+          cashVariance: '-0.50',
+        },
+      } as T;
+    };
+
+    render(<DayClosePanel request={request} operators={operators} actingOperatorId="operator-1" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Close day' }));
+    const dialog = screen.getByRole('dialog', { name: 'Close business day' });
+    await waitFor(() =>
+      expect(within(dialog).getByLabelText('Business date')).toHaveValue('2026-09-28')
+    );
+    fireEvent.click(within(dialog).getByRole('button', { name: 'Check readiness' }));
+    await within(dialog).findByText('Closed day');
+
+    const value = (label: string) => within(dialog).getByText(label).nextElementSibling;
+    expect(value('Cash expected')).toHaveTextContent('100.00');
+    expect(value('Cash counted')).toHaveTextContent('99.50');
+    expect(value('Cash variance')).toHaveTextContent('-0.50');
+    expect(value('Refunds')).toHaveTextContent('14.00');
+    expect(value('Net sales')).toHaveTextContent('14.00');
   });
 
   it('shows a recoverable error and preserves keyboard dismissal', async () => {
