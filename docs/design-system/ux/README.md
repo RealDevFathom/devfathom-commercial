@@ -30,6 +30,15 @@ Suggested order: OFF-UX-1 → OFF-UX-4a (the counter gets a visible state) → P
 PHC-UX-4 → PHC-UX-5 → PHC-UX-3 → PHC-UX-6. Platform: SA-04..SA-07 (security, WHA-1578) first,
 then SA-UX-1 → SA-UX-3 → SA-UX-4, then the rest in any order. OFF-UX-4b waits for OFF-API-1.
 
+## UX-03 (WHA-1601): visual audit of the running screens
+
+Build `215568fa`. Covers 20 states × 3 viewports × light/dark (120 screenshots, not committed;
+`paperclip-worktrees/devfathom/_evidence/ux-03/`).
+
+| Doc                                      | What it is                                                                                                                                                                                                                                                                                |
+| ---------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| [06-visual-audit.md](06-visual-audit.md) | Screenshot audit of POS, KDS, pharmacy counter/inventory/receiving and the platform console. Contrast, truncation, scroll, tap targets, radius drift and dark-mode leaks, each with `file:line` and the token to change. Includes a fix list by owner (POS-UX-2..6, PH-A1/A2, KDS, SA-UX) |
+
 ## Headline numbers (restaurant POS)
 
 | Metric                               | Today                             | Target                          |
