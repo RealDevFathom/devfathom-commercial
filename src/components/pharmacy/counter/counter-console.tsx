@@ -246,12 +246,6 @@ function ScopedPharmacyCounterConsole({
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
 
-  // WHA-1623: `autoFocus` is not re-applied to server-rendered markup on
-  // hydration, so a full page load left the search unfocused. Focus on mount.
-  useEffect(() => {
-    searchRef.current?.focus();
-  }, []);
-
   // ── Data ──────────────────────────────────────────────────────────────────
 
   const branchesQuery = trpc.pharmacySales.counterBranches.useQuery(undefined, {
@@ -520,6 +514,16 @@ function ScopedPharmacyCounterConsole({
     attempt !== null ||
     checkingOutcome;
   const lineCount = cart?.lines.length ?? 0;
+
+  // WHA-1623: `autoFocus` is not re-applied to server-rendered markup on
+  // hydration, and the search starts disabled while tender recovery runs, so
+  // focus it once — the first time it is usable — as autoFocus intended.
+  const initialSearchFocused = useRef(false);
+  useEffect(() => {
+    if (busy || initialSearchFocused.current) return;
+    initialSearchFocused.current = true;
+    searchRef.current?.focus();
+  }, [busy]);
 
   const refreshTenderBill = useCallback(
     async (resolution = tenderOutcome?.status) => {
