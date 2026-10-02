@@ -4,6 +4,8 @@ import {
   currentPackPrice,
   packUnits,
   priceVariance,
+  priceIntelligence,
+  priceOverrides,
   resolveNoticePack,
 } from './pricing';
 import { confirmPriceChange, FileDrapNoticeSource, ingestDrapNotice } from './drap-monitoring';
@@ -192,6 +194,121 @@ describe('WHA-1606 pack pricing', () => {
         matchStatus: 'NO_MATCH',
         priceNotice: expect.objectContaining({ presentation: 'Tablet', packLevel: 'BOX' }),
       }),
+    });
+  });
+});
+
+describe('current pack report', () => {
+  it('selects current organization policies independently of notices, excludes expired packs and future/branch policies', async () => {
+    const now = new Date();
+    const pack = (id: string, effectiveTo: Date | null = null) => ({
+      id,
+      presentationId: 'presentation',
+      parentPackLevelId: null,
+      level: 'UNIT',
+      unitsPerParent: 1,
+      effectiveTo,
+      effectiveFrom: new Date('2020-01-01'),
+      presentation: {
+        medicineId: 'medicine',
+        presentation: 'Tablet',
+        medicine: { productName: 'Manual medicine', aliases: [{ value: 'گولی' }] },
+      },
+    });
+    const policy = (
+      id: string,
+      packLevelId: string,
+      date: string,
+      branchId: string | null = null
+    ) => ({
+      id,
+      packLevelId,
+      branchId,
+      mrpMinor: 100,
+      sellingPriceMinor: 120,
+      source: 'manual',
+      effectiveFrom: new Date(date),
+    });
+    const policies = [
+      policy('future', 'manual', '2099-01-01'),
+      policy('branch', 'manual', '2026-01-01', 'branch'),
+      policy('current', 'manual', '2025-01-01'),
+      policy('old', 'manual', '2024-01-01'),
+      policy('expired-price', 'expired', '2024-01-01'),
+    ];
+    const packs = [pack('manual'), pack('expired', new Date('2025-01-01'))];
+    const db = {
+      pharmacyDrapIngest: { findMany: vi.fn(async () => []) },
+      packLevel: {
+        findMany: vi.fn(async ({ where }) => {
+          expect(where).toMatchObject({
+            organizationId: scope.organizationId,
+            effectiveFrom: { lte: expect.any(Date) },
+            OR: [{ effectiveTo: null }, { effectiveTo: { gt: expect.any(Date) } }],
+          });
+          return packs.filter((p) => !p.effectiveTo || p.effectiveTo > now);
+        }),
+      },
+      pharmacyPackPrice: {
+        findMany: vi.fn(async ({ where }) => {
+          expect(where).toEqual({
+            organizationId: scope.organizationId,
+            branchId: null,
+            effectiveFrom: { lte: expect.any(Date) },
+          });
+          return policies.filter(
+            (p) => p.branchId === where.branchId && p.effectiveFrom <= where.effectiveFrom.lte
+          );
+        }),
+      },
+    };
+    const result = await priceIntelligence(db as unknown as ScopedDb, scope);
+    expect(result.rows).toEqual([]);
+    expect(result.packRows).toHaveLength(1);
+    expect(result.packRows[0]).toMatchObject({
+      id: 'manual',
+      source: 'manual',
+      effectiveDate: new Date('2025-01-01'),
+      confirmedMrpMinor: 100,
+      amountMinor: 20,
+      percent: 20,
+      units: 1,
+    });
+  });
+  it('preserves branch values and flags versions against latest organization policy', async () => {
+    const db = {
+      pharmacyPackPrice: {
+        findMany: vi.fn(async () => [
+          {
+            id: 'override',
+            packLevelId: 'box',
+            branchId: 'branch',
+            reviewedOrgPriceId: 'old',
+            mrpMinor: 150,
+            sellingPriceMinor: 140,
+          },
+        ]),
+        findFirst: vi.fn(async () => ({ id: 'new-scheduled' })),
+      },
+      packLevel: {
+        findFirst: vi.fn(async () => ({
+          level: 'BOX',
+          presentation: { presentation: 'Tablet', medicine: { productName: 'Medicine' } },
+        })),
+      },
+      pharmacyBranch: { findFirst: vi.fn(async () => ({ name: 'Main branch' })) },
+    };
+    const result = await priceOverrides(db as unknown as ScopedDb, scope);
+    expect(db.pharmacyPackPrice.findMany).toHaveBeenCalledWith({
+      where: { organizationId: scope.organizationId, branchId: { not: null }, isOverride: true },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    expect(result[0]).toMatchObject({
+      mrpMinor: 150,
+      sellingPriceMinor: 140,
+      needsReview: true,
+      branchName: 'Main branch',
+      medicine: 'Medicine',
     });
   });
 });

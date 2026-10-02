@@ -316,12 +316,65 @@ export async function priceIntelligence(db: ScopedDb, scope: PriceScope) {
   }
   // Org-wide safety capability sees only org prices. Branch override amounts are
   // admin-only; this queue discloses no branch data to ordinary safety operators.
-  return { asOf: now, rows };
+  const packs = await db.packLevel.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      effectiveFrom: { lte: now },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+    },
+    include: { presentation: { include: { medicine: { include: { aliases: true } } } } },
+    orderBy: [{ presentationId: 'asc' }, { id: 'asc' }],
+  });
+  const policies = await db.pharmacyPackPrice.findMany({
+    where: { organizationId: scope.organizationId, branchId: null, effectiveFrom: { lte: now } },
+    orderBy: [{ effectiveFrom: 'desc' }, { id: 'desc' }],
+  });
+  const currentPolicies = new Map<string, (typeof policies)[number]>();
+  for (const policy of policies) {
+    if (!currentPolicies.has(policy.packLevelId)) currentPolicies.set(policy.packLevelId, policy);
+  }
+  const packRows = packs.flatMap((pack) => {
+    const policy = currentPolicies.get(pack.id);
+    if (!policy) return [];
+    let units: number | null = null;
+    try {
+      units = packUnits(
+        packs.filter((p) => p.presentationId === pack.presentationId),
+        pack.id
+      );
+    } catch {
+      // Keep same-pack variance available; ambiguous conversions have no unit preview.
+    }
+    const variance = priceVariance(policy.sellingPriceMinor, policy.mrpMinor, units ?? 1);
+    return [
+      {
+        id: pack.id,
+        medicineId: pack.presentation.medicineId,
+        medicine: pack.presentation.medicine.productName,
+        aliases: pack.presentation.medicine.aliases.map((a) => a.value),
+        presentation: pack.presentation.presentation,
+        packLevel: pack.level,
+        units,
+        effectiveDate: policy.effectiveFrom,
+        source: policy.source,
+        confirmedMrpMinor: policy.mrpMinor,
+        sellingPriceMinor: policy.sellingPriceMinor,
+        ...variance,
+        mrpUnitMinor: units === null ? null : variance.mrpUnitMinor,
+        sellingUnitMinor: units === null ? null : variance.sellingUnitMinor,
+      },
+    ];
+  });
+  return { asOf: now, rows, packRows };
 }
 
-export async function priceOverrides(db: ScopedDb, scope: PriceScope, branchId: string) {
+export async function priceOverrides(db: ScopedDb, scope: PriceScope, branchId?: string) {
   const prices = await db.pharmacyPackPrice.findMany({
-    where: { organizationId: scope.organizationId, branchId, isOverride: true },
+    where: {
+      organizationId: scope.organizationId,
+      branchId: branchId ?? { not: null },
+      isOverride: true,
+    },
     orderBy: { effectiveFrom: 'desc' },
   });
   const result = [];
@@ -334,7 +387,21 @@ export async function priceOverrides(db: ScopedDb, scope: PriceScope, branchId: 
       },
       orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
     });
-    result.push({ ...price, needsReview: price.reviewedOrgPriceId !== (org?.id ?? null) });
+    const pack = await db.packLevel.findFirst({
+      where: { organizationId: scope.organizationId, id: price.packLevelId },
+      include: { presentation: { include: { medicine: true } } },
+    });
+    const branch = await db.pharmacyBranch.findFirst({
+      where: { organizationId: scope.organizationId, id: price.branchId! },
+    });
+    result.push({
+      ...price,
+      branchName: branch?.name ?? price.branchId,
+      medicine: pack?.presentation.medicine.productName ?? 'Unavailable medicine',
+      presentation: pack?.presentation.presentation ?? price.presentationId,
+      packLevel: pack?.level ?? price.packLevelId,
+      needsReview: price.reviewedOrgPriceId !== (org?.id ?? null),
+    });
   }
   return result;
 }

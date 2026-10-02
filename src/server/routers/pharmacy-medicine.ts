@@ -224,7 +224,7 @@ export const pharmacyMedicineRouter = router({
       )
     ),
   priceOverrides: adminProcedure
-    .input(z.object({ branchId: z.string().min(1) }).strict())
+    .input(z.object({ branchId: z.string().min(1).optional() }).strict())
     .query(({ ctx, input }) =>
       priceOverrides(
         ctx.db,

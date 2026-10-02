@@ -5,7 +5,7 @@ import { Button } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
-import type { priceIntelligence } from '@/lib/pharmacy/pricing';
+import type { priceIntelligence, priceOverrides } from '@/lib/pharmacy/pricing';
 
 type PriceData = Awaited<ReturnType<typeof priceIntelligence>>;
 const money = (minor: number | null) =>
@@ -23,15 +23,13 @@ const cell = (value: unknown) => {
 };
 export function pricesCsv(data: PriceData) {
   const header = [
-    'Reference',
     'Medicine',
     'Aliases',
     'Presentation',
     'Pack',
     'Units per pack',
-    'Status',
+    'Policy source',
     'Effective date',
-    'Notified MRP PKR',
     'Current confirmed MRP PKR',
     'Current selling PKR',
     'Variance PKR',
@@ -44,16 +42,14 @@ export function pricesCsv(data: PriceData) {
     '\uFEFF' +
     [
       header,
-      ...data.rows.map((r) => [
-        r.reference,
+      ...data.packRows.map((r) => [
         r.medicine,
         r.aliases.join(' / '),
         r.presentation,
         r.packLevel,
         r.units,
-        r.status,
-        r.effectiveDate?.toISOString() ?? '',
-        amount(r.notifiedMrpMinor),
+        r.source,
+        r.effectiveDate.toISOString(),
         amount(r.confirmedMrpMinor),
         amount(r.sellingPriceMinor),
         amount(r.amountMinor),
@@ -126,6 +122,74 @@ export function PriceNoticesView({
   };
   return (
     <div className="min-w-0 space-y-6">
+      <SectionCard title="Current organization pack prices" titleLevel={2}>
+        <p className="mb-4 text-sm text-text-muted">
+          One row per currently priced pack, including manual policies. Future prices remain
+          scheduled. Variance compares selling policy with confirmed MRP for the same pack.
+        </p>
+        {!data.packRows.length ? (
+          <p>No current organization pack policies.</p>
+        ) : (
+          <div className="max-w-full overflow-x-auto">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Current pack variance, PKR</caption>
+              <thead className="border-b border-border-default text-left font-mono text-xs uppercase">
+                <tr>
+                  {[
+                    'Medicine / presentation',
+                    'Pack',
+                    'Policy / effective',
+                    'Confirmed MRP',
+                    'Selling policy',
+                    'Variance',
+                  ].map((h) => (
+                    <th key={h} className="p-3">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.packRows.map((r) => (
+                  <tr key={r.id} className="border-b border-border-subtle hover:bg-surface-sunken">
+                    <td className="p-3">
+                      <span className="font-medium">{r.medicine}</span>
+                      <div dir="auto">{r.aliases.join(' / ')}</div>
+                      <div className="text-text-muted">{r.presentation}</div>
+                    </td>
+                    <td className="p-3">
+                      {r.packLevel}
+                      <div className="text-text-muted">
+                        {r.units === null ? 'Conversion unavailable' : `${r.units} UNIT`}
+                      </div>
+                    </td>
+                    <td className="p-3">
+                      {r.source}
+                      <div className="whitespace-nowrap text-text-muted">
+                        {r.effectiveDate.toISOString().slice(0, 10)}
+                      </div>
+                    </td>
+                    <td className="p-3 text-right tabular-nums">
+                      {money(r.confirmedMrpMinor)}
+                      <div className="text-xs text-text-muted">{money(r.mrpUnitMinor)} / UNIT</div>
+                    </td>
+                    <td className="p-3 text-right tabular-nums">
+                      {money(r.sellingPriceMinor)}
+                      <div className="text-xs text-text-muted">
+                        {money(r.sellingUnitMinor)} / UNIT
+                      </div>
+                    </td>
+                    <td className="p-3 text-right tabular-nums">
+                      {r.amountMinor === null ? 'Unknown' : money(r.amountMinor)}
+                      <div>{r.percent === null ? '—' : `${r.percent.toFixed(2)}%`}</div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+      </SectionCard>
       <SectionCard title="DRAP price notices" titleLevel={2}>
         <p className="mb-4 text-sm text-text-muted">
           Current prices as of {data.asOf.toISOString()}. Variance = selling − confirmed MRP for the
@@ -141,7 +205,7 @@ export function PriceNoticesView({
           >
             Review {ids.length} selected
           </Button>
-          <Button variant="outline" disabled={!data.rows.length || pending} onClick={exportCsv}>
+          <Button variant="outline" disabled={!data.packRows.length || pending} onClick={exportCsv}>
             Export CSV
           </Button>
           <label className="flex min-h-11 items-center gap-2 text-sm">
@@ -228,9 +292,6 @@ export function PriceNoticesView({
                     'Medicine / presentation',
                     'Notice / effective',
                     'Pack',
-                    'Confirmed MRP',
-                    'Selling policy',
-                    'Variance',
                     'Notified MRP',
                     'Status',
                   ].map((h) => (
@@ -278,20 +339,6 @@ export function PriceNoticesView({
                       {r.packLevel}
                       <div className="text-text-muted">{r.units} UNIT</div>
                     </td>
-                    <td className="p-3 text-right tabular-nums">
-                      {money(r.confirmedMrpMinor)}
-                      <div className="text-xs text-text-muted">{money(r.mrpUnitMinor)} / UNIT</div>
-                    </td>
-                    <td className="p-3 text-right tabular-nums">
-                      {money(r.sellingPriceMinor)}
-                      <div className="text-xs text-text-muted">
-                        {money(r.sellingUnitMinor)} / UNIT
-                      </div>
-                    </td>
-                    <td className="p-3 text-right tabular-nums">
-                      {r.amountMinor === null ? 'Unknown' : money(r.amountMinor)}
-                      <div>{r.percent === null ? '—' : `${r.percent.toFixed(2)}%`}</div>
-                    </td>
                     <td className="p-3 text-right tabular-nums">{money(r.notifiedMrpMinor)}</td>
                     <td className="p-3">
                       <StatusPill
@@ -314,7 +361,8 @@ export function PriceNoticesView({
       <SectionCard title={`Needs mapping (${mapping.length})`} titleLevel={2}>
         <p className="mb-3 text-sm text-text-muted">
           Missing, unmatched, or ambiguous presentation/pack identities cannot be confirmed. Review
-          catalog mapping and submit a corrected notice with a new source reference.
+          catalog mapping with an administrator. Keep the original source reference and payload
+          unchanged; unresolved notices remain blocked pending a supported mapping correction.
         </p>
         {!mapping.length ? (
           <p>No notices need mapping.</p>
@@ -338,24 +386,127 @@ export function PriceNoticesView({
   );
 }
 
+export function PriceOverridesView({
+  data,
+  loading,
+  error,
+  forbidden,
+  onRetry,
+}: {
+  data?: Awaited<ReturnType<typeof priceOverrides>>;
+  loading?: boolean;
+  error?: boolean;
+  forbidden?: boolean;
+  onRetry: () => void;
+}) {
+  return (
+    <SectionCard title="Preserved branch overrides" titleLevel={2}>
+      {forbidden ? (
+        <p>Administrator access is required to view branch overrides.</p>
+      ) : loading ? (
+        <p role="status">Loading branch overrides…</p>
+      ) : error || !data ? (
+        <div>
+          <p role="alert">Could not load branch overrides.</p>
+          <Button variant="outline" onClick={onRetry}>
+            Retry overrides
+          </Button>
+        </div>
+      ) : !data.length ? (
+        <p>No branch overrides.</p>
+      ) : (
+        <>
+          <p className="mb-4 text-sm text-text-muted">
+            Override versions retain their prices. Review flags compare each version with the latest
+            organization policy, including scheduled changes.
+          </p>
+          <div className="max-w-full overflow-x-auto">
+            <table className="w-full text-sm">
+              <caption className="sr-only">Preserved branch override versions, PKR</caption>
+              <thead className="border-b border-border-default text-left font-mono text-xs uppercase">
+                <tr>
+                  {[
+                    'Branch',
+                    'Medicine / presentation / pack',
+                    'Effective',
+                    'Override MRP',
+                    'Override selling',
+                    'Review',
+                  ].map((h) => (
+                    <th key={h} className="p-3">
+                      {h}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {data.map((r) => (
+                  <tr key={r.id} className="border-b border-border-subtle hover:bg-surface-sunken">
+                    <td className="p-3">{r.branchName}</td>
+                    <td className="p-3">
+                      {r.medicine}
+                      <div className="text-text-muted">
+                        {r.presentation} / {r.packLevel}
+                      </div>
+                    </td>
+                    <td className="whitespace-nowrap p-3">
+                      {r.effectiveFrom.toISOString().slice(0, 10)}
+                    </td>
+                    <td className="p-3 text-right tabular-nums">{money(r.mrpMinor)}</td>
+                    <td className="p-3 text-right tabular-nums">{money(r.sellingPriceMinor)}</td>
+                    <td className="p-3">
+                      <StatusPill
+                        status={r.needsReview ? 'review' : 'confirmed'}
+                        label={r.needsReview ? 'Needs review' : 'Reviewed'}
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </>
+      )}
+    </SectionCard>
+  );
+}
+
 export function PriceNotices() {
   const query = trpc.pharmacyMedicine.priceNotices.useQuery();
   const mutation = trpc.pharmacyMedicine.confirmPrices.useMutation();
+  const overrides = trpc.pharmacyMedicine.priceOverrides.useQuery(
+    {},
+    { retry: false, enabled: !!query.data }
+  );
   return (
-    <PriceNoticesView
-      data={query.data}
-      loading={query.isLoading}
-      error={query.isError}
-      forbidden={
-        query.error?.data?.code === 'FORBIDDEN' || query.error?.data?.code === 'UNAUTHORIZED'
-      }
-      pending={mutation.isPending}
-      mutationError={mutation.error?.message}
-      onRetry={() => void query.refetch()}
-      onConfirm={async (ids) => {
-        await mutation.mutateAsync({ proposalIds: ids });
-        await query.refetch();
-      }}
-    />
+    <div className="min-w-0 space-y-6">
+      <PriceNoticesView
+        data={query.data}
+        loading={query.isLoading}
+        error={query.isError}
+        forbidden={
+          query.error?.data?.code === 'FORBIDDEN' || query.error?.data?.code === 'UNAUTHORIZED'
+        }
+        pending={mutation.isPending}
+        mutationError={mutation.error?.message}
+        onRetry={() => void query.refetch()}
+        onConfirm={async (ids) => {
+          await mutation.mutateAsync({ proposalIds: ids });
+          await Promise.all([query.refetch(), overrides.refetch()]);
+        }}
+      />
+      {query.data && (
+        <PriceOverridesView
+          data={overrides.data}
+          loading={overrides.isLoading}
+          error={overrides.isError}
+          forbidden={
+            overrides.error?.data?.code === 'FORBIDDEN' ||
+            overrides.error?.data?.code === 'UNAUTHORIZED'
+          }
+          onRetry={() => void overrides.refetch()}
+        />
+      )}
+    </div>
   );
 }
