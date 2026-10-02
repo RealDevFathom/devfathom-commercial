@@ -220,6 +220,7 @@ model PharmacyBranch {
   refillReminderCaptures   PharmacyRefillReminderCapture[]
   pharmacovigilanceReports PharmacyPharmacovigilanceReport[]
   customerOrders           PharmacyCustomerOrder[]
+  whatsappMessageLogs      PharmacyMessageLog[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -1079,24 +1080,28 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
-  id               String   @id @default(cuid())
-  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  patientId        String
-  displayName      String
-  phoneLast4       String?
-  creditLimitMinor Int      @default(0)
-  active           Boolean  @default(true)
-  userId           String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  id                     String    @id @default(cuid())
+  organizationId         String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  patientId              String
+  displayName            String
+  phoneLast4             String?
+  creditLimitMinor       Int       @default(0)
+  active                 Boolean   @default(true)
+  userId                 String?
+  /// PH-B3 WhatsApp consent: null = never asked, true = opted in, false = opted out (STOP).
+  whatsappOptIn          Boolean?
+  whatsappOptInChangedAt DateTime?
+  createdAt              DateTime  @default(now())
+  updatedAt              DateTime  @updatedAt
 
   patient            PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
   sales              PharmacySale[]
   pointsEntries      PharmacyLoyaltyPointsEntry[]
   paidFamilyAccounts PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
   familyMemberships  PharmacyFamilyMember[]
-  user               User?                         @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
+  user               User?                        @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
   orders             PharmacyCustomerOrder[]
+  whatsappMessages   PharmacyMessageLog[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
@@ -4795,6 +4800,7 @@ model Organization {
   restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
   pharmacyOwnerDigestSettings          PharmacyOwnerDigestSetting[]
   pharmacyOwnerDigestCaptures          PharmacyOwnerDigestCapture[]
+  pharmacyMessageLogs                  PharmacyMessageLog[]
 
   @@index([status])
   @@index([deploymentMode])
@@ -13437,6 +13443,40 @@ model PharmacyOwnerDigestCapture {
   @@unique([organizationId, userId, branchId, businessDate], map: "pharmacy_owner_digest_captures_daily_key")
   @@index([organizationId, userId, capturedAt(sort: Desc)], map: "pharmacy_owner_digest_captures_history_idx")
   @@map("pharmacy_owner_digest_captures")
+}
+
+/// PH-B3 WhatsApp channel log. `dedupeKey` makes refill reminders idempotent
+/// per patient x medicine x due date and inbound webhook retries idempotent per
+/// provider message id. Phone numbers are never stored in full.
+model PharmacyMessageLog {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String?
+  customerId        String?
+  patientId         String?
+  channel           String   @default("WHATSAPP")
+  direction         String
+  kind              String
+  status            String
+  dedupeKey         String
+  phoneLast4        String?
+  templateName      String?
+  providerMessageId String?
+  refillCaptureId   String?
+  orderId           String?
+  dueDate           String?
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch?   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  customer     PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
+  @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
+  @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
+  @@map("pharmacy_message_logs")
 }
 
 enum PharmacyMarketingChannel {
