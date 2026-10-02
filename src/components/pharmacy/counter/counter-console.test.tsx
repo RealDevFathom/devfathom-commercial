@@ -87,7 +87,10 @@ vi.mock('@/lib/trpc', async () => {
     pharmacySales: {
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
+      counterSearch: { invalidate: vi.fn() },
     },
+    pharmacyPrescriptions: { counterPatientPanel: { invalidate: vi.fn() } },
+    pharmacySafety: { controlledRegister: { invalidate: vi.fn() } },
   };
   return {
     trpc: {
@@ -111,8 +114,13 @@ vi.mock('@/lib/trpc', async () => {
         'redeemPoints',
         'authenticatePack',
         'substituteProposals',
+        'lookupReceiptByNumber',
+        'returnHistory',
+        'returnLine',
+        'refundTender',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
+      pharmacySafety: router(['controlledPharmacists']),
     },
   };
 });
@@ -541,6 +549,9 @@ beforeEach(() => {
     'substituteProposals',
     'counterPatients',
     'counterPatientPanel',
+    'controlledPharmacists',
+    'lookupReceiptByNumber',
+    'returnHistory',
   ])
     mocks.queries[name] = query();
   mocks.queries.counterBranches = query({
@@ -560,6 +571,8 @@ beforeEach(() => {
     'linkCustomer',
     'redeemPoints',
     'authenticatePack',
+    'returnLine',
+    'refundTender',
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());
