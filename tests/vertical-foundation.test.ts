@@ -623,6 +623,10 @@ describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit',
   const APPROVED_EXACT_FILES = new Set([
     // Existing demo identity fixtures prove the Restaurant-only access boundary.
     'src/lib/auth.demo.test.ts',
+    // Shared-host rate-limit fixtures exercise Restaurant tenant login boundaries.
+    'src/lib/auth.rate-limit.test.ts',
+    // Hotel tax rejects Restaurant product-class fixtures rather than taxing them as rooms.
+    'src/lib/hotel/tax.test.ts',
     'src/lib/restaurant/terminal-auth.test.ts',
     'src/lib/tenancy/tenant-actor.test.ts',
     // Shared receipt designer selects the persisted layout contract by vertical.
