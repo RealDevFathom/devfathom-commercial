@@ -246,6 +246,12 @@ function ScopedPharmacyCounterConsole({
   const rxPanelRef = useRef<HTMLDivElement>(null);
   const tenderRef = useRef<HTMLDivElement>(null);
 
+  // WHA-1623: `autoFocus` is not re-applied to server-rendered markup on
+  // hydration, so a full page load left the search unfocused. Focus on mount.
+  useEffect(() => {
+    searchRef.current?.focus();
+  }, []);
+
   // ── Data ──────────────────────────────────────────────────────────────────
 
   const branchesQuery = trpc.pharmacySales.counterBranches.useQuery(undefined, {
@@ -1320,7 +1326,6 @@ function ScopedPharmacyCounterConsole({
                   <Input
                     id="counter-search"
                     ref={searchRef}
-                    autoFocus
                     autoComplete="off"
                     value={query}
                     disabled={busy}
