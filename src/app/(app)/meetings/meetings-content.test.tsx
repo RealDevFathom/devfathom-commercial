@@ -144,8 +144,9 @@ describe('MeetingsContent pagination', () => {
 
   // Past's own continuation control, walking Past's own cursor.
   it('offers a way past the page when the server reports more past meetings', () => {
-    mocks.upcoming = future(120);
-    mocks.pages = [{ items: past(50), nextCursor: 'cursor_1' }];
+    // Large-calendar rendering is covered above; this case tests cursor interaction.
+    mocks.upcoming = future(2);
+    mocks.pages = [{ items: past(2), nextCursor: 'cursor_1' }];
     mocks.hasNextPage = true;
 
     render(<MeetingsContent />);
