@@ -1,8 +1,9 @@
 'use client';
 
 import { forwardRef } from 'react';
+import Link from 'next/link';
 
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -22,6 +23,7 @@ export type CounterRxPanelProps = {
   onSearch: () => void;
   onSelectPatient: (patientId: string) => void;
   onClearPatient: () => void;
+  onCapturePrescription?: (context: { patientId: string }) => void;
 };
 
 /**
@@ -54,6 +56,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       onSearch,
       onSelectPatient,
       onClearPatient,
+      onCapturePrescription,
     },
     ref
   ) {
@@ -169,6 +172,41 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 </div>
               </div>
 
+              <div className="space-y-2">
+                {onCapturePrescription ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11"
+                    disabled={disabled || state === 'loading' || state === 'error'}
+                    onClick={() => onCapturePrescription({ patientId: patient.patientId })}
+                  >
+                    Capture prescription
+                  </Button>
+                ) : disabled || state === 'loading' || state === 'error' ? (
+                  <Button type="button" variant="outline" className="h-11" disabled>
+                    Capture prescription
+                  </Button>
+                ) : (
+                  <Link
+                    className={buttonVariants({ variant: 'outline', className: 'h-11' })}
+                    href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    prefetch={false}
+                  >
+                    Capture prescription
+                    <span className="sr-only"> for {patient.displayName} (opens in a new tab)</span>
+                  </Link>
+                )}
+                <p className="text-xs text-text-muted">
+                  {onCapturePrescription
+                    ? `Capture evidence for ${patient.displayName}.`
+                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                  Capture does not replace pharmacist review or dispensing consent.
+                </p>
+              </div>
+
               {patient.prescriptions.length === 0 ? (
                 <p className="text-sm text-text-muted">
                   No prescription is on file for this patient.
@@ -231,6 +269,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             </div>
           ) : (
             <div className="space-y-2">
+              <p className="text-sm text-text-muted">
+                Select a patient to capture their prescription.
+              </p>
               <div className="space-y-1.5">
                 <Label htmlFor="counter-patient-search">Find patient</Label>
                 <div className="flex gap-2">
