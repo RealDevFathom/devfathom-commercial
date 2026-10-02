@@ -1,4 +1,5 @@
 import { randomBytes } from 'node:crypto';
+import { hash } from 'bcryptjs';
 
 import { beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
@@ -227,7 +228,6 @@ import * as lockRoute from '@/app/api/restaurant/terminal/lock/route';
 import * as switchRoute from '@/app/api/restaurant/terminal/switch/route';
 import * as unlockRoute from '@/app/api/restaurant/terminal/unlock/route';
 import { enrollDevice, revokeDevice } from '@/lib/restaurant/devices';
-import { hashOperatorCredential } from '@/lib/restaurant/operator-credentials';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const ORG = 'org_m2';
@@ -315,7 +315,8 @@ beforeAll(async () => {
     await Promise.all(
       Object.entries(PINS).map(async ([staffProfileId, pin]) => [
         staffProfileId,
-        await hashOperatorCredential('PIN', pin),
+        // Keep real bcrypt verification; production cost is covered by primitive tests.
+        await hash(pin, 4),
       ])
     )
   );
@@ -410,7 +411,8 @@ describe('THREAT-2: revocation defeats queued and fresh calls', () => {
 
 describe('durable operator lockout', () => {
   it('locks after five failures, emits Retry-After, then accepts after that server interval', async () => {
-    vi.useFakeTimers();
+    // Freeze policy time without trapping bcrypt's asynchronous yield timers.
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-08-18T12:00:00.000Z'));
     try {
       const { device, secret } = await enroll('lockout');
@@ -439,7 +441,8 @@ describe('durable operator lockout', () => {
 
 describe('operator attribution and secret containment', () => {
   it('keeps acting and approving identities separate in complete server-stamped evidence', async () => {
-    vi.useFakeTimers();
+    // Freeze policy time without trapping bcrypt's asynchronous yield timers.
+    vi.useFakeTimers({ toFake: ['Date'] });
     vi.setSystemTime(new Date('2026-08-18T13:00:00.000Z'));
     try {
       const { device, secret } = await enroll('co-authorization');
