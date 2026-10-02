@@ -96,6 +96,7 @@ async function scenario(
         organizationId,
         productName: `Paracetamol 500mg ${tag(label)}`,
         productFamily: 'PHARMACEUTICAL',
+        saleable: true,
         presentations: { create: { organizationId, presentation: 'Tablet, 10 per strip' } },
       },
       include: { presentations: true },
@@ -228,6 +229,24 @@ vi.mock('@/lib/rate-limit', () => ({
 
 async function setup() {
   const fixture = await scenario(ORG_A, BRANCH_A, 'transport');
+  // A UNIT sale requires loose stock; sales never implicitly break a sealed pack.
+  const { breakPack } = await import('@/lib/pharmacy/stock-ledger');
+  await inOrg(ORG_A, (db) =>
+    breakPack(db, scopeOf(fixture), {
+      ...bucketOf(fixture),
+      requiredLooseUnits: 1,
+      idempotencyKey: tag('break-pack'),
+      at: new Date(),
+    })
+  );
+  const { openPharmacyDrawer } = await import('@/lib/pharmacy/settlement');
+  await inOrg(ORG_A, (db) =>
+    openPharmacyDrawer(db, scopeOf(fixture), {
+      deviceId: fixture.deviceId,
+      businessDate: new Date(),
+      openingFloatMinor: 0,
+    })
+  );
   const { pharmacyCounterRoute } = await import('./pharmacy-offline');
   let token = '';
   async function call(
