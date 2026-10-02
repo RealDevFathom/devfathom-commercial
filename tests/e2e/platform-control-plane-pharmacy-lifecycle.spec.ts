@@ -108,14 +108,14 @@ test('SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical req
     error: 'The selected package is not available for the PHARMACY vertical.',
   });
 
-  await seedProvisionalProfile(organizationId);
+  const branchId = await seedProvisionalProfile(organizationId);
   expect(
     (await transition(page, 'ACTIVE', 'E2E activation refused on provisional PK-PB rules')).status()
   ).toBe(400);
   await expect(page.getByText(/RULE_SET_UNCONFIRMED/)).toBeVisible();
   await expect(page.getByText('ONBOARDING', { exact: true }).first()).toBeVisible();
 
-  await seedMinimalReadiness(organizationId);
+  await seedMinimalReadiness(organizationId, branchId);
   await page.reload();
   const activation = await transition(
     page,
@@ -159,9 +159,9 @@ test('SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical req
     const regulatoryProfiles = await db.query(
       `SELECT version,"jurisdictionRuleSetId","effectiveFrom","effectiveTo"
        FROM pharmacy_branch_regulatory_profiles
-       WHERE "organizationId"=$1 AND "branchId"='e2e_pharmacy_branch'
+       WHERE "organizationId"=$1 AND "branchId"=$2
        ORDER BY version`,
-      [organizationId]
+      [organizationId, branchId]
     );
     expect(regulatoryProfiles.rows).toMatchObject([
       {
@@ -213,21 +213,29 @@ async function packageSelectOnProfile(page: import('@playwright/test').Page, pac
 }
 
 async function seedProvisionalProfile(organizationId: string) {
-  await withAdminDatabase(async (db) => {
-    await db.query(
-      `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode",active,"updatedAt") VALUES ('e2e_pharmacy_branch',$1,'MAIN','Main Pharmacy','1 Mall Road','Lahore','PK-PB',true,now())`,
+  return withAdminDatabase(async (db) => {
+    const branches = await db.query<{ id: string; code: string; name: string; active: boolean }>(
+      `SELECT id, code, name, active FROM pharmacy_branches WHERE "organizationId"=$1`,
       [organizationId]
     );
+    expect(branches.rows).toHaveLength(1);
+    expect(branches.rows[0]).toMatchObject({
+      code: 'MAIN',
+      name: 'Clifton Chemist',
+      active: true,
+    });
+    const branchId = branches.rows[0]!.id;
     await db.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
-       VALUES ('e2e_pharmacy_profile_provisional',$1,'e2e_pharmacy_branch',1,'2026-09-02T00:00:00.000Z','PK-PB','pk_pb_provisional_v1','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
-      [organizationId]
+       VALUES ('e2e_pharmacy_profile_provisional',$1,$2,1,'2026-09-02T00:00:00.000Z','PK-PB','pk_pb_provisional_v1','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
+      [organizationId, branchId]
     );
+    return branchId;
   });
 }
 
-async function seedMinimalReadiness(organizationId: string) {
+async function seedMinimalReadiness(organizationId: string, branchId: string) {
   await withAdminDatabase(async (db) => {
     for (const role of PHARMACY_ROLE_TEMPLATES) {
       await db.query(
@@ -251,8 +259,8 @@ async function seedMinimalReadiness(organizationId: string) {
     await db.query(
       `INSERT INTO pharmacy_branch_regulatory_profiles
        (id,"organizationId","branchId",version,"effectiveFrom","provinceCode","jurisdictionRuleSetId",premises,"licenceCategory","licenceNumber","licenceValidFrom","licenceValidTo","licenceEvidenceFileRef","permittedSchedules","qualifiedPersonRegistration","qualifiedPersonValidFrom","qualifiedPersonValidTo","qualifiedPersonCoverageRosterRef","fiscalStatus","retentionPolicy")
-       VALUES ('e2e_pharmacy_profile_confirmed',$1,'e2e_pharmacy_branch',2,'2026-09-02T01:00:00.000Z','PK-PB','e2e_pk_pb_confirmed','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
-      [organizationId]
+       VALUES ('e2e_pharmacy_profile_confirmed',$1,$2,2,'2026-09-02T01:00:00.000Z','PK-PB','e2e_pk_pb_confirmed','{}','PHARMACY','PB-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://licence',ARRAY['RX'],'QP-E2E-1',now()-interval '1 day',now()+interval '1 year','evidence://roster','REGISTERED','{}')`,
+      [organizationId, branchId]
     );
     await db.query(
       `INSERT INTO pharmacy_medicines (id,"organizationId","productName","productFamily",saleable,"updatedAt") VALUES ('e2e_medicine',$1,'E2E Medicine','PHARMACEUTICAL',true,now())`,
@@ -283,8 +291,8 @@ async function seedMinimalReadiness(organizationId: string) {
       [organizationId]
     );
     await db.query(
-      `INSERT INTO pharmacy_inventory_lots (id,"organizationId","branchId","manufacturingBatchId","packLevelId","unitsPerPack","supplierName","supplierInvoiceRef","unitCostMinor","printedMrpMinor","receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt") VALUES ('e2e_lot',$1,'e2e_pharmacy_branch','e2e_batch','e2e_pack',10,'E2E Supplier','INV-1',100,150,now()+interval '1 year','DAY',now(),now())`,
-      [organizationId]
+      `INSERT INTO pharmacy_inventory_lots (id,"organizationId","branchId","manufacturingBatchId","packLevelId","unitsPerPack","supplierName","supplierInvoiceRef","unitCostMinor","printedMrpMinor","receivedExpiresAt","receivedExpiryPrecision","receivedAt","updatedAt") VALUES ('e2e_lot',$1,$2,'e2e_batch','e2e_pack',10,'E2E Supplier','INV-1',100,150,now()+interval '1 year','DAY',now(),now())`,
+      [organizationId, branchId]
     );
     await db.query(
       `INSERT INTO pharmacy_suppliers (id,"organizationId",name,authorized,active,"updatedAt") VALUES ('e2e_supplier',$1,'E2E Authorized Supplier',true,true,now())`,
@@ -296,9 +304,9 @@ async function seedMinimalReadiness(organizationId: string) {
     );
     await db.query(
       `INSERT INTO pharmacy_onboarding_gate_states (id,"organizationId",gate,status,"evidenceRef","branchId","actorId","recordedAt","updatedAt")
-       SELECT 'e2e_gate_'||gate,$1,gate::"PharmacyOnboardingGate",'PASSED','evidence://'||gate,CASE WHEN gate IN ('PREMISES_AND_LICENCES','BRANCHES_AND_LOCATIONS') THEN 'e2e_pharmacy_branch' END,'e2e_platform_admin',now(),now()
+       SELECT 'e2e_gate_'||gate,$1,gate::"PharmacyOnboardingGate",'PASSED','evidence://'||gate,CASE WHEN gate IN ('PREMISES_AND_LICENCES','BRANCHES_AND_LOCATIONS') THEN $2 END,'e2e_platform_admin',now(),now()
        FROM unnest(enum_range(NULL::"PharmacyOnboardingGate")::text[]) gate`,
-      [organizationId]
+      [organizationId, branchId]
     );
   });
 }
