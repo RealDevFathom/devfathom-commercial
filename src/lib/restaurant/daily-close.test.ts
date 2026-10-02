@@ -71,7 +71,7 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
     expect(aggregate.deliveryFeeRefunds.toString()).toBe('3');
     expect(aggregate.compTotal.toString()).toBe('20');
     expect(aggregate.discountTotal.toString()).toBe('5');
-    expect(aggregate.netSales.toString()).toBe('75'); // 100 - 20 - 5
+    expect(aggregate.netSales.toString()).toBe('60'); // 100 - 20 - 5 - 15 refunds
     expect(aggregate.voidTotal.toString()).toBe('12.5');
     expect(aggregate.tipTotal.toString()).toBe('15');
     expect(aggregate.refundTotal.toString()).toBe('15');
@@ -89,6 +89,28 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
 });
 
 describe('resolveChainTip (pure)', () => {
+  it('deducts refunds from netSales and still reports them separately (WHA-1621 Q1)', () => {
+    const bill = {
+      status: 'SETTLED' as const,
+      subtotal: D('14.00'),
+      deliveryFeeTotal: D('0'),
+      taxTotal: D('0'),
+      serviceChargeTotal: D('0'),
+      compTotal: D('0'),
+      discountTotal: D('0'),
+      grandTotal: D('14.00'),
+    };
+    const aggregate = computeCloseAggregate({
+      bills: [bill, bill],
+      tenders: [],
+      refunds: [{ amount: D('14.00'), deliveryFeeRefundAmount: D('0') }],
+      drawers: [],
+    });
+    expect(aggregate.grossSales.toFixed(2)).toBe('28.00');
+    expect(aggregate.refundTotal.toFixed(2)).toBe('14.00');
+    expect(aggregate.netSales.toFixed(2)).toBe('14.00');
+  });
+
   it('finds the unsuperseded tip of a linear chain', () => {
     const tip = resolveChainTip([
       { id: 'a', supersedesCloseId: null },

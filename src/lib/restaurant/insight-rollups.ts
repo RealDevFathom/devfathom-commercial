@@ -71,9 +71,10 @@ export function computeReconciledFinancials(input: {
   const discountTotal = sum(settled.map((bill) => bill.discountTotal));
   const cashExpected = sum(input.drawers.map((drawer) => foldExpectedCash(drawer.movements)));
   const cashCounted = sum(input.drawers.map((drawer) => drawer.countedCash ?? ZERO));
+  const refundTotal = sum(input.refunds.map((refund) => refund.amount));
   return {
     grossSales,
-    netSales: sub(sub(grossSales, compTotal), discountTotal),
+    netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal),
     deliveryFeeSales: sum(settled.map((bill) => bill.deliveryFeeTotal)),
     deliveryFeeRefunds: sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount)),
     taxTotal: sum(settled.map((bill) => bill.taxTotal)),
@@ -81,7 +82,7 @@ export function computeReconciledFinancials(input: {
     tipTotal: sum(input.tenders.map((tender) => tender.tipAmount)),
     compTotal,
     discountTotal,
-    refundTotal: sum(input.refunds.map((refund) => refund.amount)),
+    refundTotal,
     voidTotal: sum(
       input.bills.filter((bill) => bill.status === 'VOID').map((bill) => bill.grandTotal)
     ),
@@ -228,7 +229,11 @@ function resolveCloseTip(closes: readonly CloseTip[]): CloseTip | null {
 
 function assertReconciles(close: CloseTip, raw: ReconciledFinancials): void {
   const mismatch = (Object.keys(raw) as Array<keyof ReconciledFinancials>).find(
-    (key) => !close[key].equals(raw[key])
+    (key) =>
+      !close[key].equals(raw[key]) &&
+      // Closes cut before WHA-1621 Q1 persisted netSales without the refund deduction;
+      // they are append-only, so accept that legacy formula rather than refuse to project.
+      !(key === 'netSales' && close.netSales.equals(add(raw.netSales, raw.refundTotal)))
   );
   if (mismatch) {
     throw new RollupError(

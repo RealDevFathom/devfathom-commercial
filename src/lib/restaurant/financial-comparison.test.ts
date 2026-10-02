@@ -128,7 +128,7 @@ describe('restaurant financial comparison from the existing payment reader', () 
       absoluteChange: '0.20',
       percentageChange: '200.00',
     });
-    expect(report.drivers.netSales.definition).toContain('Excludes refunds');
+    expect(report.drivers.netSales.definition).toContain('minus refundTotal');
     expect(report.drivers.refundTotal.current).toBe('5.50');
     expect(report.drivers.deliveryFeeRefunds.current).toBe('0.50');
     expect(report.drivers.grossSales.current).toBe('3.60');
