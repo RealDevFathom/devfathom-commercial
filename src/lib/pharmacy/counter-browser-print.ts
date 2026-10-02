@@ -9,6 +9,44 @@ import {
 // Transient browser paper choice, not a second saved designer/settings schema.
 export type CounterReceiptFormat = 'THERMAL' | 'THERMAL_58' | 'A4';
 
+/** A one-use, session-only window reserved during an operator gesture. */
+export type CounterBrowserPrintReservation = { cancel: () => void };
+
+const reservations = new WeakMap<
+  CounterBrowserPrintReservation,
+  { popup: Window | null; consumed: boolean }
+>();
+
+function closePopup(popup: Window | null): void {
+  try {
+    popup?.close();
+  } catch {
+    // Window cleanup must never interrupt payment or reconciliation handling.
+  }
+}
+
+/** Call synchronously from an enabled operator gesture, before awaiting settlement. */
+export function reserveCounterBrowserPrint(): CounterBrowserPrintReservation {
+  let popup: Window | null = null;
+  try {
+    popup = window.open('', '_blank', 'popup,width=480,height=720');
+    if (popup) popup.opener = null;
+  } catch {
+    closePopup(popup);
+    popup = null;
+  }
+  const state = { popup, consumed: false };
+  const reservation: CounterBrowserPrintReservation = {
+    cancel: () => {
+      if (state.consumed) return;
+      state.consumed = true;
+      closePopup(state.popup);
+    },
+  };
+  reservations.set(reservation, state);
+  return reservation;
+}
+
 function escapeHtml(value: string | number): string {
   return String(value).replace(/[&<>"']/g, (character) => {
     const entities: Record<string, string> = {
@@ -32,7 +70,12 @@ export function buildCounterBrowserReceipt(
   if (!['en', 'ur'].includes(locale) || !['THERMAL', 'THERMAL_58', 'A4'].includes(format)) {
     throw new Error('Choose a supported receipt language and paper size.');
   }
-  if (receipt.receiptNumber === null || !receipt.completedAt || receipt.lines.length === 0) {
+  if (
+    !Number.isSafeInteger(receipt.receiptNumber) ||
+    (receipt.receiptNumber ?? 0) <= 0 ||
+    !receipt.completedAt ||
+    receipt.lines.length === 0
+  ) {
     throw new Error('Load a settled receipt before printing.');
   }
   const width = format === 'THERMAL_58' ? '58mm' : format === 'THERMAL' ? '80mm' : '190mm';
@@ -56,20 +99,26 @@ export function printCounterBrowserReceipt(
   receipt: CounterReceipt,
   locale: CounterReceiptLocale,
   format: CounterReceiptFormat,
-  reprint = false
+  reprint = false,
+  reservation?: CounterBrowserPrintReservation
 ): void {
   const html = buildCounterBrowserReceipt(receipt, locale, format, reprint);
-  const popup = window.open('', '_blank', 'popup,width=480,height=720');
+  const reserved = reservations.get(reservation ?? reserveCounterBrowserPrint());
+  if (!reserved || reserved.consumed) {
+    throw new Error('This print window is no longer available. Retry Print receipt.');
+  }
+  reserved.consumed = true;
+  const popup = reserved.popup;
   if (!popup) throw new Error('Allow pop-ups for this site, then retry Print receipt.');
-  popup.opener = null;
   try {
+    if (popup.closed) throw new Error('Print window closed.');
     popup.document.open();
     popup.document.write(html);
     popup.document.close();
     popup.focus();
     popup.print();
   } catch {
-    popup.close();
+    closePopup(popup);
     throw new Error('The browser print dialog could not open. Retry Print receipt.');
   }
 }

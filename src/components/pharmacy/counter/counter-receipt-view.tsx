@@ -1,9 +1,16 @@
 'use client';
 
+import { useEffect, useRef, useState } from 'react';
+
 import { Button } from '@/components/ui/button';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
-import type { CounterReceiptFormat } from '@/lib/pharmacy/counter-browser-print';
+import {
+  buildCounterBrowserReceipt,
+  printCounterBrowserReceipt,
+  type CounterBrowserPrintReservation,
+  type CounterReceiptFormat,
+} from '@/lib/pharmacy/counter-browser-print';
 import {
   COUNTER_RECEIPT_DIRECTION,
   COUNTER_RECEIPT_STRINGS,
@@ -19,6 +26,22 @@ import {
   counterLinePresentation,
 } from '@/lib/pharmacy/counter-receipt-presentation';
 
+export type CounterReceiptSettlement =
+  | { status: 'pending' | 'unknown' }
+  | {
+      status: 'confirmed';
+      saleId: string;
+      receiptNumber: number;
+      autoPrint: boolean;
+      printReservation?: CounterBrowserPrintReservation;
+    };
+
+export type CounterReceiptPresentationResult = {
+  saleId: string;
+  receiptNumber: number;
+  printStatus: 'manual' | 'dialog-requested' | 'manual-required';
+};
+
 export type CounterReceiptViewProps = {
   receipt: CounterReceipt | null;
   state: 'idle' | 'loading' | 'ready' | 'error';
@@ -32,6 +55,10 @@ export type CounterReceiptViewProps = {
   onFormatChange: (format: CounterReceiptFormat) => void;
   onPrint: () => void;
   onRetry: () => void;
+  /** Only a newly settled, authoritatively read sale; never a historical load. */
+  settlement?: CounterReceiptSettlement | null;
+  /** Clear the event here; keep this view mounted across bills to retain deduplication. */
+  onSettlementPresented?: (result: CounterReceiptPresentationResult) => void;
 };
 
 /** Receipt browser preview; requesting a print never confirms paper delivery. */
@@ -47,7 +74,64 @@ export function CounterReceiptView({
   onFormatChange,
   onPrint,
   onRetry,
+  settlement,
+  onSettlementPresented,
 }: CounterReceiptViewProps) {
+  const receiptRegion = useRef<HTMLElement>(null);
+  const presentedReceipts = useRef(new Set<string>());
+  const [presentation, setPresentation] = useState<
+    (CounterReceiptPresentationResult & { message: string }) | null
+  >(null);
+
+  useEffect(() => {
+    if (
+      settlement?.status !== 'confirmed' ||
+      state !== 'ready' ||
+      printing ||
+      !receipt ||
+      receipt.saleId !== settlement.saleId ||
+      receipt.receiptNumber !== settlement.receiptNumber
+    )
+      return;
+
+    // Rendering issued data is not itself proof of a new settlement. The caller
+    // supplies that explicit event only after authoritative bill/receipt reads.
+    const key = JSON.stringify([receipt.saleId, receipt.receiptNumber]);
+    if (presentedReceipts.current.has(key)) return;
+    try {
+      buildCounterBrowserReceipt(receipt, locale, format);
+    } catch {
+      return;
+    }
+    // Consume before callbacks/printing so StrictMode and rerenders cannot replay.
+    presentedReceipts.current.add(key);
+    receiptRegion.current?.focus({ preventScroll: true });
+    receiptRegion.current?.scrollIntoView?.({ block: 'nearest', behavior: 'instant' });
+
+    let printStatus: CounterReceiptPresentationResult['printStatus'] = 'manual';
+    let message = 'Receipt ready. Use Print receipt to open the browser print dialog.';
+    if (settlement.autoPrint) {
+      try {
+        printCounterBrowserReceipt(receipt, locale, format, false, settlement.printReservation);
+        printStatus = 'dialog-requested';
+        message = 'Browser print dialog requested. Physical printing is not confirmed.';
+      } catch (error) {
+        printStatus = 'manual-required';
+        message =
+          error instanceof Error
+            ? error.message
+            : 'The browser print dialog could not open. Retry Print receipt.';
+      }
+    } else {
+      settlement.printReservation?.cancel();
+    }
+    const result = { saleId: receipt.saleId, receiptNumber: settlement.receiptNumber, printStatus };
+    // This result comes from the imperative browser print attempt, not derived props.
+    // eslint-disable-next-line react-hooks/set-state-in-effect -- Surface the external popup result for manual recovery.
+    setPresentation({ ...result, message });
+    onSettlementPresented?.(result);
+  }, [receipt, state, printing, settlement, locale, format, onSettlementPresented]);
+
   if (state === 'idle') {
     return <p className="text-sm text-text-muted">Settle the bill to render its receipt.</p>;
   }
@@ -144,6 +228,16 @@ export function CounterReceiptView({
         not connected yet. Printing cannot be confirmed here.
       </p>
 
+      {presentation?.saleId === receipt.saleId &&
+      presentation.receiptNumber === receipt.receiptNumber ? (
+        <p
+          role={presentation.printStatus === 'manual-required' ? 'alert' : 'status'}
+          className="text-sm text-text-muted"
+        >
+          {presentation.message}
+        </p>
+      ) : null}
+
       {documentError ? (
         <p className="text-sm text-destructive" role="alert">
           {documentError}
@@ -151,10 +245,12 @@ export function CounterReceiptView({
       ) : null}
 
       <section
+        ref={receiptRegion}
+        tabIndex={-1}
         aria-label={receiptTitle(receipt, locale)}
         lang={language}
         dir={direction}
-        className={`space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 ${
+        className={`space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
           format === 'THERMAL_58'
             ? 'max-w-[16rem] font-mono text-xs'
             : format === 'THERMAL'

@@ -1,6 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { buildCounterBrowserReceipt, printCounterBrowserReceipt } from './counter-browser-print';
+import {
+  buildCounterBrowserReceipt,
+  printCounterBrowserReceipt,
+  reserveCounterBrowserPrint,
+} from './counter-browser-print';
 import type { CounterReceipt, CounterReceiptLocale } from './counter-receipt';
 
 const receipt: CounterReceipt = {
@@ -171,6 +175,10 @@ describe('isolated Pharmacy browser receipt', () => {
     const open = vi.spyOn(window, 'open');
     for (const source of [
       { ...receipt, receiptNumber: null },
+      { ...receipt, receiptNumber: 0 },
+      { ...receipt, receiptNumber: -1 },
+      { ...receipt, receiptNumber: 1.5 },
+      { ...receipt, completedAt: null },
       { ...receipt, lines: [] },
       { ...receipt, totals: { ...receipt.totals, netMinor: NaN } },
     ])
@@ -219,5 +227,86 @@ describe('isolated Pharmacy browser receipt', () => {
     vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
     expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4')).toThrow('Retry Print receipt');
     expect(popup.close).toHaveBeenCalledOnce();
+  });
+
+  function printWindow() {
+    return {
+      opener: window,
+      closed: false,
+      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
+      focus: vi.fn(),
+      print: vi.fn(),
+      close: vi.fn(),
+    };
+  }
+
+  it('reserves in the gesture, then prints issued data once without opening another window', () => {
+    const popup = printWindow();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const before = JSON.stringify(receipt);
+    const reservation = reserveCounterBrowserPrint();
+    expect(popup.opener).toBeNull();
+    expect(popup.document.write).not.toHaveBeenCalled();
+    expect(popup.print).not.toHaveBeenCalled();
+    printCounterBrowserReceipt(receipt, 'ur', 'THERMAL_58', false, reservation);
+    expect(open).toHaveBeenCalledOnce();
+    expect(popup.print).toHaveBeenCalledOnce();
+    expect(popup.document.write).toHaveBeenCalledWith(
+      buildCounterBrowserReceipt(receipt, 'ur', 'THERMAL_58')
+    );
+    expect(JSON.stringify(receipt)).toBe(before);
+    expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4', false, reservation)).toThrow(
+      'Retry Print receipt'
+    );
+    reservation.cancel();
+    expect(popup.close).not.toHaveBeenCalled();
+    expect(popup.print).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it('cancels an unused reservation without printing or reopening it', () => {
+    const popup = printWindow();
+    const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    const reservation = reserveCounterBrowserPrint();
+    reservation.cancel();
+    reservation.cancel();
+    expect(popup.close).toHaveBeenCalledOnce();
+    expect(popup.print).not.toHaveBeenCalled();
+    expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4', false, reservation)).toThrow(
+      'Retry Print receipt'
+    );
+    expect(open).toHaveBeenCalledOnce();
+  });
+
+  it.each(['blocked', 'closed', 'throws'] as const)(
+    'keeps %s reservation failure on a manual recovery path',
+    (failure) => {
+      const popup = printWindow();
+      popup.closed = failure === 'closed';
+      const open = vi.spyOn(window, 'open').mockImplementation(() => {
+        if (failure === 'throws') throw new Error('denied');
+        return failure === 'blocked' ? null : (popup as unknown as Window);
+      });
+      const print = vi.spyOn(window, 'print').mockImplementation(() => {});
+      const reservation = reserveCounterBrowserPrint();
+      expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4', false, reservation)).toThrow(
+        /[Rr]etry Print receipt/
+      );
+      expect(() => printCounterBrowserReceipt(receipt, 'en', 'A4', false, reservation)).toThrow();
+      expect(open).toHaveBeenCalledOnce();
+      expect(print).not.toHaveBeenCalled();
+      expect(popup.print).not.toHaveBeenCalled();
+      expect(popup.document.write).not.toHaveBeenCalled();
+    }
+  );
+
+  it('does not let cancellation cleanup failure escape into settlement handling', () => {
+    const popup = printWindow();
+    popup.close.mockImplementation(() => {
+      throw new Error('closed by operator');
+    });
+    vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+    expect(() => reserveCounterBrowserPrint().cancel()).not.toThrow();
+    expect(popup.print).not.toHaveBeenCalled();
   });
 });

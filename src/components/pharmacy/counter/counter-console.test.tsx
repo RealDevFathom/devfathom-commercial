@@ -1,7 +1,11 @@
 import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { StrictMode } from 'react';
 
-import type { CounterCart } from '@/lib/pharmacy/counter';
+import type { CounterCart, CounterSearchRow } from '@/lib/pharmacy/counter';
+import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
+import type { CounterReceiptViewProps } from './counter-receipt-view';
 
 type Query = {
   data?: unknown;
@@ -23,8 +27,12 @@ const mocks = vi.hoisted(() => ({
   receiptInvalidate: vi.fn(),
   mutationOptions: vi.fn(),
   receiptProps: vi.fn(),
+  renderReceipt: false,
+  renderRx: false,
   outcomeQuery: vi.fn(),
   receiptRefetch: vi.fn(),
+  liveSearch: false,
+  searchFetch: vi.fn(),
   session: {
     status: 'authenticated',
     data: {
@@ -39,13 +47,29 @@ vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => mocks.entitlements,
 }));
 
-vi.mock('@/lib/trpc', () => {
+vi.mock('@/lib/trpc', async () => {
+  const { useQuery, QueryClient } = await import('@tanstack/react-query');
+  const idleClient = new QueryClient();
+  function useCounterSearch(input: unknown, options: { enabled?: boolean; staleTime?: number }) {
+    // Exercise the real query cache/observer without issuing requests in the bill-state tests.
+    const result = useQuery(
+      {
+        queryKey: ['counterSearch', input],
+        queryFn: () => mocks.searchFetch(input),
+        ...options,
+        enabled: mocks.liveSearch && options.enabled,
+        retry: false,
+      },
+      mocks.liveSearch ? undefined : idleClient
+    );
+    return mocks.liveSearch ? result : mocks.queries.counterSearch;
+  }
   const router = (names: string[]) =>
     Object.fromEntries(
       names.map((name) => [
         name,
         {
-          useQuery: () => mocks.queries[name],
+          useQuery: name === 'counterSearch' ? useCounterSearch : () => mocks.queries[name],
           useMutation: (options: unknown) => {
             mocks.mutationOptions(name, options);
             return {
@@ -93,17 +117,24 @@ vi.mock('@/lib/trpc', () => {
   };
 });
 
-vi.mock('./counter-receipt-view', () => ({
-  CounterReceiptView: (props: unknown) => {
-    mocks.receiptProps(props);
-    return null;
-  },
-}));
-vi.mock('./counter-rx-panel', () => ({ CounterRxPanel: () => null }));
+vi.mock('./counter-receipt-view', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./counter-receipt-view')>();
+  return {
+    CounterReceiptView: (props: CounterReceiptViewProps) => {
+      mocks.receiptProps(props);
+      return mocks.renderReceipt ? <actual.CounterReceiptView {...props} /> : null;
+    },
+  };
+});
+vi.mock('./counter-rx-panel', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('./counter-rx-panel')>();
+  return {
+    CounterRxPanel: (props: React.ComponentProps<typeof actual.CounterRxPanel>) =>
+      mocks.renderRx ? <actual.CounterRxPanel {...props} /> : null,
+  };
+});
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
-vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
-vi.mock('./counter-unit-toggle', () => ({ CounterUnitToggle: () => null }));
 
 import { PharmacyCounterConsole } from './counter-console';
 import {
@@ -112,6 +143,310 @@ import {
   tenderAttemptStorageKey,
   type TenderAttempt,
 } from './tender-attempt-storage';
+
+function medicineRow(overrides: Partial<CounterSearchRow> = {}): CounterSearchRow {
+  return {
+    medicineId: 'med-a',
+    displayName: 'Synthetic medicine',
+    brandName: null,
+    manufacturer: null,
+    strength: null,
+    presentationId: 'presentation-a',
+    presentation: 'Tablets',
+    dosageForm: null,
+    route: null,
+    matchedOn: 'NAME',
+    recommendedLotId: 'lot-a',
+    packLevelId: 'box',
+    unitsPerPack: 100,
+    printedMrpMinor: 10000,
+    roundingIncrementMinor: 1,
+    batchNumber: 'FEFO-A',
+    nearestSafeExpiry: '2027-06-01T00:00:00.000Z',
+    onHandUnits: 290,
+    saleUnits: [
+      { kind: 'PACK', packLevelId: 'box', levelLabel: 'BOX', canonicalUnitsPerSaleUnit: 100 },
+      { kind: 'STRIP', packLevelId: 'strip', levelLabel: 'STRIP', canonicalUnitsPerSaleUnit: 10 },
+      { kind: 'UNIT', packLevelId: 'unit', levelLabel: 'UNIT', canonicalUnitsPerSaleUnit: 1 },
+    ],
+    saleableUnits: [
+      {
+        kind: 'PACK',
+        levelLabel: 'BOX',
+        canonicalUnitsPerSaleUnit: 100,
+        wholeUnits: 2,
+        unitPriceMinor: 10000,
+        proRataCeilingMinor: 10000,
+      },
+    ],
+    restriction: {
+      rx: false,
+      otc: true,
+      controlled: false,
+      restricted: false,
+      highAlert: false,
+      lasa: false,
+    },
+    storage: { coldChain: false, locationKind: null, locationCode: null, locationName: null },
+    blocked: [],
+    ...overrides,
+  };
+}
+
+describe('counter live search and exact shortfall', () => {
+  let client: QueryClient;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    mocks.liveSearch = true;
+    mocks.searchFetch.mockResolvedValue({ rows: [medicineRow()], truncated: false });
+    client = new QueryClient({ defaultOptions: { queries: { retry: false, gcTime: Infinity } } });
+  });
+
+  afterEach(() => {
+    // Search, staging and demand capture must never create a bill or post stock/payment actions.
+    for (const name of ['create', 'addLine', 'transition', 'tender', 'openDrawer', 'redeemPoints'])
+      expect(mocks.mutations[name]).not.toHaveBeenCalled();
+    client.clear();
+    vi.useRealTimers();
+  });
+
+  function mount() {
+    return render(
+      <QueryClientProvider client={client}>
+        <PharmacyCounterConsole />
+      </QueryClientProvider>
+    );
+  }
+
+  function type(value: string) {
+    fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value } });
+  }
+
+  async function advance(ms: number) {
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(ms);
+    });
+  }
+
+  async function stage(row = medicineRow()) {
+    mocks.searchFetch.mockResolvedValue({ rows: [row], truncated: false });
+    mount();
+    type('Synthetic');
+    await advance(300);
+    await advance(1);
+    fireEvent.click(screen.getByRole('button', { name: /Synthetic medicine/ }));
+  }
+
+  it('debounces names, resets the timer, and never requests empty/one-character input', async () => {
+    mount();
+    type(' ');
+    await advance(400);
+    type('a');
+    await advance(400);
+    expect(mocks.searchFetch).not.toHaveBeenCalled();
+    type('sy');
+    await advance(299);
+    expect(mocks.searchFetch).not.toHaveBeenCalled();
+    type('syn');
+    await advance(299);
+    expect(mocks.searchFetch).not.toHaveBeenCalled();
+    await advance(1);
+    expect(mocks.searchFetch).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      query: 'syn',
+    });
+    type('');
+    await advance(400);
+    expect(mocks.searchFetch).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole('button', { name: /Synthetic medicine/ })).not.toBeInTheDocument();
+  });
+
+  it('Enter submits a plain barcode immediately without a later debounce duplicate', async () => {
+    mount();
+    type('0123456789012');
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'Enter' });
+    await advance(1);
+    expect(mocks.searchFetch).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      query: '0123456789012',
+    });
+    await advance(400);
+    expect(mocks.searchFetch).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.authenticatePack).not.toHaveBeenCalled();
+  });
+
+  it('waits for explicit GS1 Enter and searches the authenticated GTIN', async () => {
+    mocks.mutations.authenticatePack!.mockResolvedValue({
+      status: 'VERIFIED',
+      parsed: { gtin: '01234567890123' },
+      explanation: 'Pack verified.',
+    });
+    mount();
+    type('(01)01234567890123');
+    await advance(500);
+    expect(mocks.searchFetch).not.toHaveBeenCalled();
+    expect(mocks.mutations.authenticatePack).not.toHaveBeenCalled();
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'Enter' });
+    await advance(1);
+    expect(mocks.mutations.authenticatePack).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      payload: '(01)01234567890123',
+    });
+    expect(mocks.searchFetch).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-a',
+      query: '01234567890123',
+    });
+  });
+
+  it('hides old rows immediately and ignores a late response after the newer query wins', async () => {
+    let resolveOld!: (value: unknown) => void;
+    mocks.searchFetch.mockImplementation(({ query: text }: { query: string }) =>
+      text === 'older'
+        ? new Promise((resolve) => {
+            resolveOld = resolve;
+          })
+        : Promise.resolve({ rows: [medicineRow({ displayName: 'New result' })] })
+    );
+    mount();
+    type('older');
+    await advance(300);
+    type('newer');
+    expect(screen.queryByRole('list', { name: 'Search results' })).not.toBeInTheDocument();
+    await advance(300);
+    await advance(1);
+    expect(screen.getByRole('button', { name: /New result/ })).toBeVisible();
+    await act(async () => {
+      resolveOld({ rows: [medicineRow({ displayName: 'Old result' })] });
+    });
+    await advance(1);
+    expect(screen.queryByRole('button', { name: /Old result/ })).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /New result/ })).toBeVisible();
+    type('n');
+    await advance(400);
+    expect(screen.queryByRole('list', { name: 'Search results' })).not.toBeInTheDocument();
+    expect(mocks.searchFetch).toHaveBeenCalledTimes(2);
+  });
+
+  it('clears a staged row on query/branch changes and scopes the next request', async () => {
+    mocks.queries.counterBranches = query({
+      branches: [
+        { id: 'branch-a', name: 'Branch A' },
+        { id: 'branch-b', name: 'Branch B' },
+      ],
+    });
+    await stage();
+    expect(screen.getByLabelText('Quantity')).toBeVisible();
+    type('another');
+    expect(screen.queryByLabelText('Quantity')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch-b' } });
+    await advance(300);
+    expect(mocks.searchFetch).toHaveBeenLastCalledWith({ branchId: 'branch-b', query: 'another' });
+  });
+
+  it('does not search without an authorized branch', async () => {
+    mocks.queries.counterBranches = { ...query(), isSuccess: false, isError: true };
+    mount();
+    await advance(500);
+    expect(screen.queryByLabelText('Scan or search')).not.toBeInTheDocument();
+    expect(screen.getByText('Branches unavailable')).toBeVisible();
+    expect(mocks.searchFetch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['PACK', 10, 710, 100],
+    ['STRIP', 30, 10, 10],
+    ['UNIT', 1000, 710, 1],
+  ] as const)(
+    'captures the canonical difference for %s quantities',
+    async (unit, quantity, shortfall, scale) => {
+      await stage();
+      fireEvent.click(
+        screen.getByRole('radio', {
+          name: new RegExp(unit === 'PACK' ? 'Pack' : unit === 'STRIP' ? 'Strip' : 'Unit'),
+        })
+      );
+      fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: String(quantity) } });
+      expect(screen.getByRole('button', { name: /Add to cart/ })).toBeDisabled();
+      fireEvent.click(
+        screen.getByRole('button', { name: `Capture shortfall: ${shortfall} canonical units` })
+      );
+      await advance(1);
+      expect(mocks.mutations.captureDemand).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          requestedMedicineId: 'med-a',
+          saleUnit: 'UNIT',
+          quantity: shortfall,
+          reason: 'STOCKOUT',
+          inventoryRuleSnapshot: expect.objectContaining({
+            requestedQuantity: quantity,
+            requestedSaleUnit: unit,
+            canonicalUnitsPerSaleUnit: scale,
+            onHandUnits: 290,
+            requestedCanonicalUnits: quantity * scale,
+            shortfallCanonicalUnits: shortfall,
+          }),
+        })
+      );
+      expect(
+        screen.getByText(
+          `Captured ${shortfall} canonical units of unfulfilled demand for Synthetic medicine.`
+        )
+      ).toBeVisible();
+    }
+  );
+
+  it('offers explicit canonical-unit capture for an unavailable medicine without inventing a pack', async () => {
+    await stage(
+      medicineRow({
+        onHandUnits: 0,
+        saleUnits: [],
+        saleableUnits: [],
+        printedMrpMinor: null,
+        unitsPerPack: null,
+      })
+    );
+    fireEvent.change(screen.getByLabelText('Requested canonical units'), {
+      target: { value: '710' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Capture shortfall: 710 canonical units' }));
+    await advance(1);
+    expect(mocks.mutations.captureDemand).toHaveBeenCalledWith(
+      expect.objectContaining({ saleUnit: 'UNIT', quantity: 710 })
+    );
+  });
+
+  it('does not capture a fully covered request, even through the shortcut', async () => {
+    await stage();
+    expect(screen.queryByRole('button', { name: /Capture shortfall:/ })).not.toBeInTheDocument();
+    fireEvent.keyDown(window, { key: 'F3', shiftKey: true });
+    await advance(1);
+    expect(mocks.mutations.captureDemand).not.toHaveBeenCalled();
+  });
+
+  it('reports capture failure honestly, preserves quantity, and disables duplicate pending capture', async () => {
+    let rejectCapture!: (reason: Error) => void;
+    mocks.mutations.captureDemand!.mockImplementation(
+      () =>
+        new Promise((_, reject) => {
+          rejectCapture = reject;
+        })
+    );
+    await stage();
+    fireEvent.change(screen.getByLabelText('Quantity'), { target: { value: '10' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Capture shortfall: 710 canonical units' }));
+    expect(screen.getByRole('button', { name: 'Capturing…' })).toBeDisabled();
+    await act(async () => {
+      rejectCapture(new Error('Demand capture unavailable'));
+    });
+    expect(screen.getByText('Demand capture unavailable')).toBeVisible();
+    expect(screen.queryByText(/Captured 710 canonical/)).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Quantity')).toHaveValue(10);
+    expect(
+      screen.getByRole('button', { name: 'Capture shortfall: 710 canonical units' })
+    ).toBeEnabled();
+  });
+});
 
 function cart(overrides: Partial<CounterCart> = {}): CounterCart {
   return {
@@ -183,6 +518,10 @@ function enterPayment(type = 'CASH') {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.liveSearch = false;
+  mocks.renderReceipt = false;
+  mocks.renderRx = false;
+  mocks.searchFetch.mockReset();
   mocks.session = {
     status: 'authenticated',
     data: {
@@ -191,9 +530,7 @@ beforeEach(() => {
   };
   mocks.entitlements = { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] };
   mocks.outcomeQuery.mockReset().mockResolvedValue({ status: 'UNKNOWN', replayUnsafe: true });
-  mocks.receiptRefetch
-    .mockReset()
-    .mockResolvedValue({ isSuccess: true, data: { saleId: 'sale-a', receiptNumber: 42 } });
+  mocks.receiptRefetch.mockReset().mockResolvedValue({ isSuccess: true, data: issuedReceipt() });
   for (const name of [
     'counterBranches',
     'counterKeymap',
@@ -502,6 +839,387 @@ describe('PharmacyCounterConsole tender recovery', () => {
     expect(screen.getByText(/This bill carries an unresolved safety block/)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
     expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+});
+
+function issuedReceipt(overrides: Partial<CounterReceipt> = {}): CounterReceipt {
+  return {
+    saleId: 'sale-a',
+    receiptNumber: 42,
+    branchName: 'Synthetic branch',
+    businessDate: '2026-09-12',
+    completedAt: '2026-09-12T09:00:00Z',
+    currency: 'PKR',
+    lines: [
+      {
+        saleLineId: 'line-a',
+        medicineName: 'Synthetic item',
+        strength: null,
+        presentation: 'Pack',
+        batchNumber: 'BATCH-A',
+        expiresAt: '2027-06-01',
+        saleUnit: 'PACK',
+        quantity: 1,
+        canonicalUnits: 1,
+        unitPriceMinor: 25000,
+        discountMinor: 0,
+        lineTotalMinor: 25000,
+      },
+    ],
+    tenders: [],
+    totals: {
+      grossMinor: 25000,
+      discountMinor: 0,
+      netMinor: 25000,
+      tenderedMinor: 25000,
+      changeMinor: 5000,
+    },
+    ...overrides,
+  };
+}
+
+function completeBill(overrides: Partial<CounterCart> = {}) {
+  return cart({
+    status: 'COMPLETED',
+    receiptNumber: 42,
+    totals: { grossMinor: 25000, discountMinor: 0, netMinor: 25000, tenderedMinor: 25000 },
+    ...overrides,
+  });
+}
+
+function lastReceiptProps(): CounterReceiptViewProps {
+  return mocks.receiptProps.mock.calls.at(-1)![0];
+}
+
+describe('counter settlement receipt integration', () => {
+  function popup() {
+    return {
+      opener: window,
+      closed: false,
+      close: vi.fn(),
+      focus: vi.fn(),
+      print: vi.fn(),
+      document: { open: vi.fn(), write: vi.fn(), close: vi.fn() },
+    };
+  }
+
+  function mount(autoPrint = false) {
+    const view = render(
+      <StrictMode>
+        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+      </StrictMode>
+    );
+    if (autoPrint)
+      fireEvent.click(screen.getByRole('checkbox', { name: /Automatically open print dialog/ }));
+    return view;
+  }
+
+  function pay() {
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '250.00' } });
+    fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '300.00' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+  }
+
+  beforeEach(() => {
+    mocks.renderReceipt = true;
+    mocks.mutations.tender!.mockResolvedValue(accepted(0));
+    mocks.refetch.mockImplementation(async () => {
+      mocks.queries.counterCart!.data = completeBill();
+      return mocks.queries.counterCart;
+    });
+    mocks.receiptRefetch.mockImplementation(async () => {
+      mocks.queries.counterReceipt!.data = issuedReceipt();
+      return mocks.queries.counterReceipt;
+    });
+  });
+
+  it('defaults off, focuses the new receipt, clears the event, and counts only requested dialogs', async () => {
+    const printWindow = popup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window);
+    const view = mount();
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    pay();
+    await screen.findByText('Receipt ready. Use Print receipt to open the browser print dialog.');
+    expect(screen.getByRole('region', { name: /42/ })).toHaveFocus();
+    expect(open).not.toHaveBeenCalled();
+    expect(lastReceiptProps().settlement).toBeNull();
+    expect(lastReceiptProps().reprint).toBe(false);
+    fireEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
+    expect(printWindow.print).toHaveBeenCalledOnce();
+    expect(screen.getByRole('button', { name: 'Reprint receipt' })).toBeEnabled();
+    view.rerender(
+      <StrictMode>
+        <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+      </StrictMode>
+    );
+    expect(open).toHaveBeenCalledOnce();
+    expect(mocks.mutations.tender).toHaveBeenCalledOnce();
+  });
+
+  it('reserves within the native gesture, waits for matching issued reads, then prints once', async () => {
+    const printWindow = popup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window);
+    let acknowledge!: (value: ReturnType<typeof accepted>) => void;
+    let readReceipt!: (value: Query) => void;
+    mocks.mutations.tender!.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        })
+    );
+    mocks.receiptRefetch.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          readReceipt = resolve;
+        })
+    );
+    mount(true);
+    const checkbox = screen.getByRole('checkbox');
+    for (const key of ['Enter', ' ']) expect(fireEvent.keyDown(checkbox, { key })).toBe(true);
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+    pay();
+    expect(open).toHaveBeenCalledOnce();
+    expect(open.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.mutations.tender!.mock.invocationCallOrder[0]!
+    );
+    expect(printWindow.print).not.toHaveBeenCalled();
+    expect(checkbox).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: 'Taking payment…' }));
+    await act(async () => acknowledge(accepted(0)));
+    expect(lastReceiptProps().settlement).toBeNull();
+    expect(printWindow.print).not.toHaveBeenCalled();
+    await act(async () => {
+      mocks.queries.counterReceipt!.data = issuedReceipt();
+      readReceipt(mocks.queries.counterReceipt!);
+    });
+    expect(printWindow.print).toHaveBeenCalledOnce();
+    expect(open).toHaveBeenCalledOnce();
+    expect(lastReceiptProps().settlement).toBeNull();
+    expect(lastReceiptProps().reprint).toBe(true);
+    expect(mocks.mutations.tender).toHaveBeenCalledOnce();
+  });
+
+  it.each(['blocked', 'closed', 'print-error'])(
+    'keeps manual recovery after a %s popup without another automatic window',
+    async (kind) => {
+      const printWindow = popup();
+      printWindow.closed = kind === 'closed';
+      if (kind === 'print-error')
+        printWindow.print.mockImplementation(() => {
+          throw new Error('Print failed');
+        });
+      const open = vi
+        .spyOn(window, 'open')
+        .mockReturnValue(kind === 'blocked' ? null : (printWindow as unknown as Window));
+      mount(true);
+      pay();
+      await waitFor(() =>
+        expect(screen.getByRole('button', { name: 'Print receipt' })).toBeEnabled()
+      );
+      expect(lastReceiptProps().settlement).toBeNull();
+      expect(lastReceiptProps().reprint).toBe(false);
+      expect(open).toHaveBeenCalledOnce();
+      expect(
+        screen.getByText(/Allow pop-ups for this site|The browser print dialog could not open/)
+      ).toBeVisible();
+      const retryWindow = popup();
+      open.mockReturnValue(retryWindow as unknown as Window);
+      fireEvent.click(screen.getByRole('button', { name: 'Print receipt' }));
+      expect(retryWindow.print).toHaveBeenCalledOnce();
+      expect(open).toHaveBeenCalledTimes(2);
+      expect(lastReceiptProps().reprint).toBe(true);
+      expect(mocks.mutations.tender).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(['partial', 'replayed', 'unknown', 'rejected'])(
+    'cancels the reservation after %s payment without a settlement event',
+    async (kind) => {
+      const printWindow = popup();
+      const open = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window);
+      if (kind === 'partial') {
+        mocks.mutations.tender!.mockResolvedValue(accepted());
+        mocks.refetch.mockResolvedValue(query(cart()));
+      }
+      if (kind === 'replayed')
+        mocks.mutations.tender!.mockResolvedValue({ ...accepted(0), replayed: true });
+      if (kind === 'unknown')
+        mocks.mutations.tender!.mockRejectedValue(new Error('Connection lost'));
+      if (kind === 'rejected') mocks.mutations.tender!.mockRejectedValue(refused('BAD_REQUEST'));
+      mount(true);
+      pay();
+      await waitFor(() => expect(printWindow.close).toHaveBeenCalledOnce());
+      expect(lastReceiptProps().settlement).toBeNull();
+      expect(printWindow.print).not.toHaveBeenCalled();
+      if (kind === 'unknown') {
+        mocks.outcomeQuery.mockResolvedValue({
+          status: 'ACCEPTED',
+          replayUnsafe: true,
+          result: accepted(0),
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+        await screen.findByText('Settled');
+        expect(lastReceiptProps().settlement).toBeNull();
+        expect(printWindow.print).not.toHaveBeenCalled();
+      }
+      expect(open).toHaveBeenCalledOnce();
+      expect(mocks.mutations.tender).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(['bill-error', 'receipt-error', 'wrong-sale', 'wrong-number', 'unissued', 'underpaid'])(
+    'requires authoritative settlement through %s and makes later recovery manual',
+    async (kind) => {
+      const printWindow = popup();
+      const open = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window);
+      if (kind === 'bill-error') mocks.refetch.mockRejectedValueOnce(new Error('Bill failed'));
+      else if (kind === 'underpaid')
+        mocks.refetch.mockImplementationOnce(async () => {
+          mocks.queries.counterCart!.data = completeBill({ totals: cart().totals });
+          return mocks.queries.counterCart;
+        });
+      else if (kind === 'receipt-error')
+        mocks.receiptRefetch.mockRejectedValueOnce(new Error('Receipt failed'));
+      else
+        mocks.receiptRefetch.mockResolvedValueOnce(
+          query(
+            issuedReceipt(
+              kind === 'wrong-sale'
+                ? { saleId: 'other-sale' }
+                : kind === 'wrong-number'
+                  ? { receiptNumber: 99 }
+                  : { completedAt: null }
+            )
+          )
+        );
+      mount(true);
+      pay();
+      await waitFor(() => expect(printWindow.close).toHaveBeenCalledOnce());
+      expect(lastReceiptProps().settlement).toBeNull();
+      expect(printWindow.print).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh bill' }));
+      await screen.findByText('Receipt ready. Use Print receipt to open the browser print dialog.');
+      expect(lastReceiptProps().settlement).toBeNull();
+      expect(lastReceiptProps().reprint).toBe(false);
+      expect(printWindow.print).not.toHaveBeenCalled();
+      expect(open).toHaveBeenCalledOnce();
+      expect(mocks.mutations.tender).toHaveBeenCalledOnce();
+    }
+  );
+
+  it.each(['historical', 'restored'])('never auto-prints a %s completed bill', async (kind) => {
+    const open = vi.spyOn(window, 'open').mockReturnValue(null);
+    mocks.queries.counterCart!.data = completeBill();
+    mocks.queries.counterReceipt!.data = issuedReceipt();
+    if (kind === 'restored') {
+      persistTenderAttempt(savedAttempt());
+      mocks.outcomeQuery.mockResolvedValue({
+        status: 'ACCEPTED',
+        replayUnsafe: true,
+        result: accepted(0),
+      });
+    }
+    mount();
+    if (kind === 'restored') {
+      fireEvent.click(screen.getByRole('button', { name: 'Check payment outcome' }));
+      await screen.findByText('Settled');
+    }
+    fireEvent.click(screen.getByRole('checkbox'));
+    expect(lastReceiptProps().settlement).toBeNull();
+    expect(open).not.toHaveBeenCalled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+  });
+
+  it('cancels on unmount, ignores the late acknowledgement, and resets operator-session opt-in', async () => {
+    const printWindow = popup();
+    const open = vi.spyOn(window, 'open').mockReturnValue(printWindow as unknown as Window);
+    let acknowledge!: (value: ReturnType<typeof accepted>) => void;
+    mocks.mutations.tender!.mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          acknowledge = resolve;
+        })
+    );
+    const view = mount(true);
+    pay();
+    view.unmount();
+    expect(printWindow.close).toHaveBeenCalledOnce();
+    await act(async () => acknowledge(accepted(0)));
+    mount();
+    expect(screen.getByRole('checkbox')).not.toBeChecked();
+    expect(lastReceiptProps().settlement).toBeNull();
+    expect(printWindow.print).not.toHaveBeenCalled();
+    expect(open).toHaveBeenCalledOnce();
+    expect(mocks.mutations.tender).toHaveBeenCalledOnce();
+  });
+});
+
+describe('counter published patient and inventory routes', () => {
+  it('uses the actual Rx panel capture contract with the selected patient, retaining the bill', async () => {
+    mocks.renderRx = true;
+    const bill = cart();
+    bill.lines[0]!.rx = true;
+    mocks.queries.counterCart!.data = bill;
+    mocks.queries.counterPatients!.data = {
+      patients: [{ patientId: 'patient/a & b', displayName: 'Synthetic patient', phone: null }],
+    };
+    const view = render(
+      <PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />
+    );
+    fireEvent.change(screen.getByLabelText('Find patient'), { target: { value: 'Synthetic' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Search' }));
+    fireEvent.click(screen.getByRole('button', { name: /Synthetic patient/ }));
+    mocks.queries.counterPatientPanel!.data = {
+      patientId: 'patient/a & b',
+      displayName: 'Synthetic patient',
+      phone: null,
+      cnic: null,
+      dispensingConsent: false,
+      prescriptions: [],
+    };
+    view.rerender(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const capture = screen.getByRole('link', {
+      name: 'Capture prescriptionfor Synthetic patient (opens in a new tab)',
+    });
+    expect(capture).toHaveAttribute(
+      'href',
+      '/pharmacy/prescriptions#patientId=patient%2Fa%20%26%20b'
+    );
+    expect(capture).toHaveAttribute('target', '_blank');
+    expect(capture).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getByText('No prescription is on file for this patient.')).toBeVisible();
+    expect(
+      screen.getByText(/Capture does not replace pharmacist review or dispensing consent/)
+    ).toBeVisible();
+    expect(screen.getByText('1 × Synthetic item')).toBeVisible();
+    expect(screen.getByText(/This bill carries an unresolved safety block/)).toBeVisible();
+    expect(screen.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    expect(mocks.mutations.create).not.toHaveBeenCalled();
+  });
+
+  it('adds an encoded branch Inventory route to the pack-arrangement refusal', async () => {
+    const branchId = 'branch/a & b';
+    mocks.queries.counterBranches!.data = {
+      branches: [{ id: branchId, name: 'Synthetic branch' }],
+    };
+    mocks.queries.counterSearch!.data = { rows: [medicineRow()], truncated: false };
+    mocks.mutations.addLine!.mockRejectedValue(new Error('INVALID_ARRANGEMENT'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId={branchId} />);
+    fireEvent.change(screen.getByLabelText('Scan or search'), { target: { value: 'Synthetic' } });
+    fireEvent.keyDown(screen.getByLabelText('Scan or search'), { key: 'Enter' });
+    fireEvent.click(await screen.findByRole('button', { name: /Synthetic medicine/ }));
+    fireEvent.click(screen.getByRole('button', { name: /Add to cart/ }));
+    const link = await screen.findByRole('link', {
+      name: /Open Inventory to review pack breaking/,
+    });
+    expect(link).toHaveAttribute('href', '/pharmacy/inventory?branch=branch%2Fa%20%26%20b');
+    expect(link).toHaveAttribute('target', '_blank');
+    expect(link).toHaveAttribute('rel', 'noopener noreferrer');
+    expect(screen.getByText(/Sell the open loose units first/)).toBeVisible();
+    expect(mocks.mutations.addLine).toHaveBeenCalledOnce();
+    expect(mocks.mutations.tender).not.toHaveBeenCalled();
+    expect(mocks.mutations.transition).not.toHaveBeenCalled();
   });
 });
 
