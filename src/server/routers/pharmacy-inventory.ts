@@ -52,6 +52,7 @@ import {
   dismissSignal,
   markStaleSignals,
   ownerDigest,
+  PharmacyDraftIntentError,
   refreshStockSignals,
   roleDashboard,
   snoozeSignal,
@@ -955,6 +956,7 @@ export const pharmacyInventoryRouter = router({
           .object({
             kind: z.literal('DRAFT_REQUISITION'),
             branchId,
+            idempotencyKey: z.string().trim().min(1).max(200).optional(),
             signalId: z.string().min(1),
             reference: z.string().trim().min(1).max(120),
             medicineId: z.string().min(1),
@@ -968,6 +970,7 @@ export const pharmacyInventoryRouter = router({
           .object({
             kind: z.literal('DRAFT_TRANSFER'),
             branchId,
+            idempotencyKey: z.string().trim().min(1).max(200).optional(),
             signalId: z.string().min(1),
             fromBranchId: z.string().trim().min(1).max(128),
             lines: z
@@ -988,6 +991,7 @@ export const pharmacyInventoryRouter = router({
           .object({
             kind: z.literal('DRAFT_CLAIM'),
             branchId,
+            idempotencyKey: z.string().trim().min(1).max(200).optional(),
             signalId: z.string().min(1),
             reference: z.string().trim().min(1).max(120),
             supplierId: z.string().min(1),
@@ -1014,6 +1018,9 @@ export const pharmacyInventoryRouter = router({
       try {
         return await ctx.db.$transaction((tx) => createDraftAction(txDb(tx), scope, input));
       } catch (error) {
+        if (error instanceof PharmacyDraftIntentError) {
+          throw new TRPCError({ code: error.code, message: error.message });
+        }
         domainError(error);
       }
     }),
