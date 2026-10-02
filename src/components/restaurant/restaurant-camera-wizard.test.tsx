@@ -64,6 +64,28 @@ describe('RestaurantCameraWizard', () => {
     expect(onTest).not.toHaveBeenCalled();
     expect(await screen.findByRole('status')).toHaveTextContent('Check configured connection');
   });
+  test('CAM-3: registers a kitchen or counter preset and never offers cold chain', async () => {
+    const onSubmit = vi.fn(async () => undefined);
+    render(
+      <RestaurantCameraWizard
+        branches={branch}
+        presets={[]}
+        {...callbacks}
+        ownerProvisioned
+        onSubmit={onSubmit}
+      />
+    );
+    const watches = screen.getByLabelText('Watches');
+    expect(
+      Array.from((watches as HTMLSelectElement).options).map((option) => option.textContent)
+    ).toEqual(['Not set', 'Kitchen', 'Counter']);
+    fill();
+    fireEvent.change(watches, { target: { value: 'KITCHEN' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Register camera' }));
+    await waitFor(() =>
+      expect(onSubmit).toHaveBeenCalledWith(expect.objectContaining({ preset: 'KITCHEN' }))
+    );
+  });
   test('registration failure preserves values and displays a safe error', async () => {
     render(
       <RestaurantCameraWizard

@@ -28,11 +28,11 @@ export const PHARMACY_CAMERA_SNAPSHOT_JOB = 'pharmacy.camera.snapshot.v1';
 
 export type CounterEvidenceKind = 'TENDER' | 'REFUND' | 'DAILY_CLOSE';
 
-const SUBJECT: Record<CounterEvidenceKind, CameraEvidenceSubject> = {
+const SUBJECT = {
   TENDER: 'PHARMACY_TENDER',
   REFUND: 'PHARMACY_REFUND',
   DAILY_CLOSE: 'PHARMACY_DAILY_CLOSE',
-};
+} as const satisfies Record<CounterEvidenceKind, CameraEvidenceSubject>;
 
 async function subjectSale(
   db: ScopedDb,
@@ -128,7 +128,8 @@ export type CounterEvidenceView = {
   image: string | null;
 };
 
-const KIND: Record<CameraEvidenceSubject, CounterEvidenceKind> = {
+/** Counter subjects only: a sale's evidence never includes a CAM-3 excursion. */
+const KIND: Record<(typeof SUBJECT)[CounterEvidenceKind], CounterEvidenceKind> = {
   PHARMACY_TENDER: 'TENDER',
   PHARMACY_REFUND: 'REFUND',
   PHARMACY_DAILY_CLOSE: 'DAILY_CLOSE',
@@ -160,7 +161,7 @@ export async function readCounterEvidence(
   return Promise.all(
     rows.map(async (row) => ({
       id: row.id,
-      kind: KIND[row.subjectKind],
+      kind: KIND[row.subjectKind as keyof typeof KIND],
       status: row.status,
       requestedAt: row.requestedAt.toISOString(),
       capturedAt: row.capturedAt?.toISOString() ?? null,
@@ -172,7 +173,10 @@ export async function readCounterEvidence(
   );
 }
 
-async function stillDataUrl(organizationId: string, storageKey: string): Promise<string | null> {
+export async function stillDataUrl(
+  organizationId: string,
+  storageKey: string
+): Promise<string | null> {
   try {
     const bytes = await getUpload(organizationId, storageKey);
     return `data:image/png;base64,${bytes.toString('base64')}`;
@@ -215,9 +219,14 @@ export async function runCounterEvidenceSnapshotJob(
 /**
  * Legal holds that keep a counter still past retention: a FISCAL hold on the
  * sale it belongs to, or on the event itself (the only handle a daily close
- * has). Read through retention.ts so the latest hold event decides.
+ * has). Read through retention.ts so the latest hold event decides. A CAM-3
+ * excursion still is not a money record: an AUDIT hold on the temperature
+ * reading that opened the excursion keeps it.
  */
 async function counterEvidenceHolds(db: ScopedDb, evidence: ExpiredCameraEvidence) {
+  if (evidence.subjectKind === 'PHARMACY_TEMPERATURE_EXCURSION') {
+    return activeLegalHoldKeys(db, 'AUDIT', evidence.subjectId);
+  }
   const keys = new Set(await activeLegalHoldKeys(db, 'FISCAL', evidence.subjectId));
   if (evidence.saleId) {
     for (const key of await activeLegalHoldKeys(db, 'FISCAL', evidence.saleId)) keys.add(key);

@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
+import { ColdChainCameraSection } from '@/components/camera/cold-chain-camera-section';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -219,6 +220,7 @@ export default async function PharmacyInventoryPage({
     }
   }
   const outOfRangeLogs = [...latestTemperatureByZone.values()].filter((log) => log.outOfRange);
+  const zoneStatuses = await caller.temperatureZoneStatuses({ branchId: branch.id });
   const available = lots.flatMap((lot) =>
     lot.balances
       .filter((balance) => balance.disposition === 'AVAILABLE' && balance.onHandUnits > 0)
@@ -609,6 +611,19 @@ export default async function PharmacyInventoryPage({
                   />
                 </div>
               ))}
+            </div>
+            <div className="mt-6 border-t border-border-subtle pt-5">
+              <ColdChainCameraSection
+                db={ctx.db}
+                scope={{ organizationId, branchId: branch.id }}
+                zones={coldChainLocations}
+                statuses={zoneStatuses}
+                latestTemperatureC={
+                  new Map(
+                    [...latestTemperatureByZone].map(([zoneId, log]) => [zoneId, log.temperatureC])
+                  )
+                }
+              />
             </div>
           </div>
         </SectionCard>

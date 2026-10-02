@@ -1,6 +1,7 @@
 'use client';
 import { useMemo, useState, type FormEvent } from 'react';
 import { toast } from 'sonner';
+import { CameraTile } from '@/components/camera/camera-tile';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -161,12 +162,12 @@ export function RestaurantCamerasConsole() {
       <SectionCard eyebrow="Live view" title="Camera feeds">
         <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
           {(cameras.data ?? []).map((camera) => (
-            <article
+            <CameraTile
               key={camera.id}
-              className="rounded-md border border-border-subtle bg-surface-sunken p-4"
-            >
-              <div className="flex aspect-video items-center justify-center rounded-sm bg-foreground/10 text-sm text-text-muted">
-                {selectedCameraId === camera.id && camera.enabled ? (
+              name={camera.name}
+              preset={camera.preset ?? null}
+              media={
+                selectedCameraId === camera.id && camera.enabled ? (
                   <RestaurantCameraPlayer
                     cameraId={camera.id}
                     name={camera.name}
@@ -176,9 +177,9 @@ export function RestaurantCamerasConsole() {
                   />
                 ) : (
                   'Live feed paused'
-                )}
-              </div>
-              <h3 className="mt-3 font-semibold text-text-strong">{camera.name}</h3>
+                )
+              }
+            >
               <p className="text-sm text-text-muted">
                 {camera.enabled
                   ? 'Registered · connection requires verification'
@@ -193,7 +194,7 @@ export function RestaurantCamerasConsole() {
                 {selectedCameraId === camera.id ? 'Close live view' : 'Open live view'}
               </Button>
               {ownerProvisioned && <CameraConnectionCheck cameraId={camera.id} />}
-            </article>
+            </CameraTile>
           ))}
           {cameras.data?.length === 0 && (
             <p className="text-sm text-text-muted">No cameras registered yet.</p>

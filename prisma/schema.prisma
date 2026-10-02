@@ -42,17 +42,19 @@ model RestaurantCameraCredential {
 }
 
 model RestaurantCamera {
-  id             String    @id @default(cuid())
-  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String        @id @default(cuid())
+  organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   gatewayId      String
   branchId       String
   credentialId   String
   name           String
   sourceRef      String
-  enabled        Boolean   @default(true)
+  enabled        Boolean       @default(true)
+  /// CAM-3: KITCHEN or COUNTER only (CHECK in the migration).
+  preset         CameraPreset?
   lastSeenAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   @@index([organizationId, branchId])
   @@index([gatewayId])
@@ -113,29 +115,41 @@ model CameraCredential {
 }
 
 model Camera {
-  id              String              @id @default(cuid())
-  organizationId  String              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  gatewayId       String
-  branchId        String
-  credentialId    String
-  name            String
+  id                String              @id @default(cuid())
+  organizationId    String              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  gatewayId         String
+  branchId          String
+  credentialId      String
+  name              String
   /// The gateway-side camera reference passed to the adapter.
-  sourceRef       String
-  enabled         Boolean             @default(true)
+  sourceRef         String
+  enabled           Boolean             @default(true)
   /// Captures counter evidence stills (tender, refund, day close) for its branch.
-  counterEvidence Boolean             @default(false)
-  lastSeenAt      DateTime?
-  createdAt       DateTime            @default(now())
-  updatedAt       DateTime            @updatedAt
-  gateway         CameraGateway       @relation(fields: [organizationId, gatewayId], references: [organizationId, id], onDelete: Restrict)
-  credential      CameraCredential    @relation(fields: [organizationId, credentialId], references: [organizationId, id], onDelete: Restrict)
-  streamGrants    CameraStreamGrant[]
-  evidence        CameraEvidence[]
+  counterEvidence   Boolean             @default(false)
+  /// CAM-3: what the camera watches. Null for cameras registered before CAM-3.
+  preset            CameraPreset?
+  /// The temperature zone (pharmacy stock location) a COLD_CHAIN camera watches.
+  /// Not a foreign key, like branchId: the zone table belongs to the vertical.
+  temperatureZoneId String?
+  lastSeenAt        DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  gateway           CameraGateway       @relation(fields: [organizationId, gatewayId], references: [organizationId, id], onDelete: Restrict)
+  credential        CameraCredential    @relation(fields: [organizationId, credentialId], references: [organizationId, id], onDelete: Restrict)
+  streamGrants      CameraStreamGrant[]
+  evidence          CameraEvidence[]
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId])
   @@index([organizationId, gatewayId])
+  @@index([organizationId, temperatureZoneId])
   @@map("cameras")
+}
+
+enum CameraPreset {
+  COLD_CHAIN
+  COUNTER
+  KITCHEN
 }
 
 model CameraStreamGrant {
@@ -157,6 +171,7 @@ enum CameraEvidenceSubject {
   PHARMACY_TENDER
   PHARMACY_REFUND
   PHARMACY_DAILY_CLOSE
+  PHARMACY_TEMPERATURE_EXCURSION
 }
 
 enum CameraEvidenceStatus {
@@ -170,27 +185,32 @@ enum CameraEvidenceStatus {
 /// transaction; captured later by the pharmacy.camera.snapshot.v1 job. The row
 /// outlives its image: retention clears the still and keeps the row as PURGED.
 model CameraEvidence {
-  id             String                @id @default(cuid())
-  organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
-  subjectKind    CameraEvidenceSubject
-  subjectId      String
+  id                  String                @id @default(cuid())
+  organizationId      String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  subjectKind         CameraEvidenceSubject
+  subjectId           String
   /// The sale a tender or refund belongs to; null for a daily close.
-  saleId         String?
-  cameraId       String
-  status         CameraEvidenceStatus  @default(PENDING)
+  saleId              String?
+  cameraId            String
+  /// CAM-3 excursion evidence only: the zone and the reading that raised it.
+  temperatureZoneId   String?
+  readingTemperatureC Float?
+  readingRecordedAt   DateTime?
+  status              CameraEvidenceStatus  @default(PENDING)
   /// Opaque private-storage key; never a URL.
-  storageKey     String?
-  byteLength     Int?
-  failureReason  String?
-  requestedAt    DateTime              @default(now())
-  capturedAt     DateTime?
-  purgedAt       DateTime?
-  updatedAt      DateTime              @updatedAt
-  camera         Camera                @relation(fields: [organizationId, cameraId], references: [organizationId, id], onDelete: Restrict)
+  storageKey          String?
+  byteLength          Int?
+  failureReason       String?
+  requestedAt         DateTime              @default(now())
+  capturedAt          DateTime?
+  purgedAt            DateTime?
+  updatedAt           DateTime              @updatedAt
+  camera              Camera                @relation(fields: [organizationId, cameraId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, subjectKind, subjectId])
   @@index([organizationId, saleId])
+  @@index([organizationId, temperatureZoneId])
   @@index([organizationId, branchId, subjectKind])
   @@index([status, requestedAt])
   @@index([status, capturedAt])

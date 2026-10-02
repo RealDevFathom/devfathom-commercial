@@ -4,6 +4,7 @@ import { useMemo, useState, type FormEvent } from 'react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { SectionCard } from '@/components/ui/section-card';
+import { CAMERA_PRESET_LABELS, VERTICAL_CAMERA_PRESETS } from '@/lib/cameras/camera-preset';
 import { OperatorSafeSelector } from './operator-safe-selector';
 
 export type CameraWizardPreset = {
@@ -25,6 +26,8 @@ export type CameraWizardValues = {
   username: string;
   password: string;
   registerAnyway: boolean;
+  /** CAM-3: what the camera watches; unset leaves it unclassified. */
+  preset?: (typeof VERTICAL_CAMERA_PRESETS.restaurant)[number];
 };
 
 export function RestaurantCameraWizard({
@@ -74,6 +77,7 @@ export function RestaurantCameraWizard({
       username: String(data.get('username')),
       password: String(data.get('password')),
       registerAnyway: ownerProvisioned ? false : data.get('registerAnyway') === 'on',
+      preset: VERTICAL_CAMERA_PRESETS.restaurant.find((preset) => preset === data.get('preset')),
     };
   }
   async function test(event: FormEvent<HTMLFormElement>) {
@@ -199,6 +203,17 @@ export function RestaurantCameraWizard({
           <label className="text-sm font-medium text-text-strong">
             Camera name
             <Input name="name" required />
+          </label>
+          <label className="text-sm font-medium text-text-strong">
+            Watches
+            <select name="preset" className={field} defaultValue="">
+              <option value="">Not set</option>
+              {VERTICAL_CAMERA_PRESETS.restaurant.map((preset) => (
+                <option key={preset} value={preset}>
+                  {CAMERA_PRESET_LABELS[preset]}
+                </option>
+              ))}
+            </select>
           </label>
           <div className="text-sm font-medium text-text-strong">
             <span>Camera gateway</span>

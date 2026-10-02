@@ -6,6 +6,9 @@ const manifest = '#EXTM3U\n#EXT-X-VERSION:3\n#EXTINF:2,\nsegment-1.ts\n#EXT-X-EN
 const snapshotPng =
   'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR4nGNgYGD4DwABBAEAX+XDSwAAAABJRU5ErkJggg==';
 
+// CAM-3 preset cameras take stills too; listCameras keeps its one CAM-1 entry.
+const snapshotRefs = new Set(['sim-camera-1', 'sim-fridge-1', 'sim-kitchen-1', 'sim-counter-1']);
+
 export function createSimulatedCameraGateway(): CameraGatewayAdapter {
   return {
     async listCameras() {
@@ -15,7 +18,7 @@ export function createSimulatedCameraGateway(): CameraGatewayAdapter {
       return manifest;
     },
     async getSnapshot(cameraId) {
-      if (cameraId !== 'sim-camera-1') {
+      if (!snapshotRefs.has(cameraId)) {
         throw new Error('Camera snapshot unavailable.');
       }
       return new Uint8Array(Buffer.from(snapshotPng, 'base64'));

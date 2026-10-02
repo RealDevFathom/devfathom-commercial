@@ -1,3 +1,4 @@
+import { requestExcursionEvidence } from '@/lib/cameras/excursion-evidence';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { PharmacyInventoryError } from './inventory';
@@ -236,6 +237,9 @@ export async function ingestTemperatureReadings(
           source.kind === 'IMPORT' ? (reading.deviceIdentifier?.trim() ?? null) : null,
       })),
     });
+    // CAM-3: an excursion in a zone a cold-chain camera watches requests a
+    // still in this same transaction, so rolled-back readings request nothing.
+    await requestExcursionEvidence(tx, scope, stockLocationId, new Date());
     return { count: result.count };
   });
 }
