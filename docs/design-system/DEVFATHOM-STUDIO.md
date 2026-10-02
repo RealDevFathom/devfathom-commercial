@@ -64,9 +64,13 @@ the token source in `src/app/globals.css`.
 | White     | `#ffffff`   | Cards and raised surfaces              |
 | Ink       | `#111110`   | Primary text and decisive controls     |
 | Body ink  | `#333330`   | Body copy                              |
-| Muted ink | `#767672`   | Supporting text                        |
+| Muted ink | `#62625e`   | Supporting text                        |
 | Faint ink | `#a3a39e`   | Low-emphasis metadata                  |
-| Coral     | `#ff684f`   | Brand signal and focus                 |
+| Coral     | `#b83d29`   | Brand signal and focus                 |
+
+Light-theme coral hover uses `#a83222`; warning uses `#805514`. Muted text and
+`--muted-foreground` share `#62625e`. These shared values preserve AA text contrast on
+Studio paper, sunken surfaces, and opacity-composited status backgrounds.
 
 Dark-theme primitives are already defined under `[data-theme='dark']` in `globals.css`. Do not
 recreate theme logic inside a page or component.

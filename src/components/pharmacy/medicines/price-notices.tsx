@@ -130,7 +130,12 @@ export function PriceNoticesView({
         {!data.packRows.length ? (
           <p>No current organization pack policies.</p>
         ) : (
-          <div className="max-w-full overflow-x-auto">
+          <div
+            tabIndex={0}
+            role="region"
+            aria-label="Current organization pack price variance, PKR"
+            className="max-w-full overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <table className="w-full text-sm">
               <caption className="sr-only">Current pack variance, PKR</caption>
               <thead className="border-b border-border-default text-left font-mono text-xs uppercase">
@@ -282,7 +287,12 @@ export function PriceNoticesView({
           </p>
         )}
         {!!mapped.length && (
-          <div className="max-w-full overflow-x-auto">
+          <div
+            tabIndex={0}
+            role="region"
+            aria-label="Mapped DRAP pack price notices, PKR"
+            className="max-w-full overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <table className="w-full text-sm">
               <caption className="sr-only">Mapped pack price notices, PKR</caption>
               <thead className="border-b border-border-default text-left font-mono text-xs uppercase">
@@ -420,7 +430,12 @@ export function PriceOverridesView({
             Override versions retain their prices. Review flags compare each version with the latest
             organization policy, including scheduled changes.
           </p>
-          <div className="max-w-full overflow-x-auto">
+          <div
+            tabIndex={0}
+            role="region"
+            aria-label="Preserved branch override versions, PKR"
+            className="max-w-full overflow-x-auto focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+          >
             <table className="w-full text-sm">
               <caption className="sr-only">Preserved branch override versions, PKR</caption>
               <thead className="border-b border-border-default text-left font-mono text-xs uppercase">

@@ -108,6 +108,14 @@ describe('corrected reports', () => {
     render(<PriceNoticesView {...base} data={history} />);
     const table = screen.getByRole('table', { name: 'Current pack variance, PKR' });
     expect(within(table).getAllByRole('row')).toHaveLength(2);
+    for (const name of [
+      'Current organization pack price variance, PKR',
+      'Mapped DRAP pack price notices, PKR',
+    ]) {
+      const region = screen.getByRole('region', { name });
+      expect(region).toHaveAttribute('tabindex', '0');
+      expect(within(region).getByRole('table')).toBeVisible();
+    }
     expect(within(table).queryByText('historic')).not.toBeInTheDocument();
     expect(pricesCsv(history).split('\r\n')).toHaveLength(2);
     expect(screen.getByText(/Keep the original source reference and payload/)).toBeVisible();
@@ -141,6 +149,11 @@ describe('corrected reports', () => {
         onRetry={base.onRetry}
       />
     );
+    const region = screen.getByRole('region', {
+      name: 'Preserved branch override versions, PKR',
+    });
+    expect(region).toHaveAttribute('tabindex', '0');
+    expect(within(region).getByRole('table')).toBeVisible();
     expect(screen.getByText('Needs review')).toBeVisible();
     expect(screen.getByText('Reviewed')).toBeVisible();
     expect(screen.getAllByText(/123.00/)).toHaveLength(2);
