@@ -1,4 +1,5 @@
 import { router } from '../trpc';
+import { pharmacyOfflineRouter } from './pharmacy-offline';
 import { dashboardRouter } from './dashboard';
 import { projectsRouter } from './projects';
 import { financeRouter } from './finance';
@@ -61,6 +62,7 @@ import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 export const appRouter = router({
+  pharmacyOffline: pharmacyOfflineRouter,
   dashboard: dashboardRouter,
   projects: projectsRouter,
   finance: financeRouter,
