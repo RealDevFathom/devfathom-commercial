@@ -23,6 +23,16 @@ function message(error: unknown) {
   return error instanceof TRPCError ? error.message : 'The camera setting could not be saved.';
 }
 
+// Module scope on purpose: an inline server action may close over plain values
+// only, never over a function.
+function done(
+  vertical: CameraPrivacyVertical,
+  text: string,
+  kind: 'success' | 'error' = 'success'
+) {
+  return `/${vertical}/settings/cameras/privacy?${new URLSearchParams({ notice: text, kind })}`;
+}
+
 /** CAM-3: /pharmacy and /restaurant settings/cameras/privacy share this page. */
 export async function CameraPrivacyPage({
   vertical,
@@ -31,7 +41,6 @@ export async function CameraPrivacyPage({
   vertical: CameraPrivacyVertical;
   notice?: { text: string; kind: 'success' | 'error' };
 }) {
-  const route = `/${vertical}/settings/cameras/privacy`;
   const header = (
     <PageHeader
       eyebrow="Camera settings"
@@ -61,9 +70,6 @@ export async function CameraPrivacyPage({
     );
   }
 
-  const done = (text: string, kind: 'success' | 'error' = 'success') =>
-    `${route}?${new URLSearchParams({ notice: text, kind })}`;
-
   async function setRetentionAction(data: FormData) {
     'use server';
     let destination: string;
@@ -75,9 +81,9 @@ export async function CameraPrivacyPage({
         gatewayId: String(data.get('gatewayId') ?? ''),
         days: Number(data.get('days')),
       });
-      destination = done('Retention updated.');
+      destination = done(vertical, 'Retention updated.');
     } catch (error) {
-      destination = done(message(error), 'error');
+      destination = done(vertical, message(error), 'error');
     }
     redirect(destination);
   }
@@ -89,9 +95,9 @@ export async function CameraPrivacyPage({
       const writer = await privacyCaller();
       if (!writer) throw new TRPCError({ code: 'UNAUTHORIZED', message: 'Sign in again.' });
       await writer.revokeGrant({ vertical, grantId: String(data.get('grantId') ?? '') });
-      destination = done('Live-view access revoked.');
+      destination = done(vertical, 'Live-view access revoked.');
     } catch (error) {
-      destination = done(message(error), 'error');
+      destination = done(vertical, message(error), 'error');
     }
     redirect(destination);
   }
