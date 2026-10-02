@@ -66,9 +66,9 @@ type Section<T> = {
 const definitions = {
   grossSales: 'Settled bill subtotals on bill business date, before comps and discounts.',
   netSales:
-    'Settled gross sales minus comps and discounts on bill business date; excludes refunds, tax, fees and tips. Not profit or cash.',
+    'Settled gross sales minus comps and discounts on bill business date, minus refund principal on processing business date; excludes tax, fees and tips. Not profit or cash.',
   refundTotal:
-    'Refund principal on processing business date, including refunds for earlier sales; not a merchandise-sales deduction.',
+    'Refund principal on processing business date, including refunds for earlier sales; already deducted from netSales, reported separately.',
   tipTotal:
     'Tender tips on collection business date, including collections for earlier bills; not sales.',
   cashExpected:

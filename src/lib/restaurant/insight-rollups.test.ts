@@ -53,7 +53,7 @@ describe('pure rollup calculations', () => {
     expect(total.deliveryFeeSales.toString()).toBe('12');
     expect(total.deliveryFeeRefunds.toString()).toBe('1.25');
     expect(total.discountTotal.toString()).toBe('5');
-    expect(total.netSales.toString()).toBe('85');
+    expect(total.netSales.toString()).toBe('82.5');
     expect(total.taxTotal.toString()).toBe('7');
     expect(total.serviceChargeTotal.toString()).toBe('3');
     expect(total.tipTotal.toString()).toBe('6');
@@ -97,7 +97,7 @@ describe('pure rollup calculations', () => {
   });
 });
 
-function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
+function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?: boolean }) {
   const close = {
     id: 'close_1',
     createdAt: new Date('2026-08-21T02:00:00.000Z'),
@@ -105,7 +105,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
     grossSales: D(input?.mismatch ? '11' : '10'),
     deliveryFeeSales: D('2'),
     deliveryFeeRefunds: D('1'),
-    netSales: D('7'),
+    netSales: D(input?.legacyNet ? '7' : '4'),
     taxTotal: D('0'),
     serviceChargeTotal: D('0'),
     tipTotal: D('0'),
@@ -404,6 +404,16 @@ describe('rollupDay handler idempotency and correction', () => {
       })
     ).rejects.toMatchObject({ reason: 'RECONCILIATION_FAILED' });
     expect(db.insightDailyRollup.upsert).not.toHaveBeenCalled();
+  });
+
+  it('still projects a legacy close whose netSales predates the refund deduction', async () => {
+    const db = rollupDb({ legacyNet: true });
+    await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+      force: true,
+    });
+    expect(db.insightDailyRollup.upsert).toHaveBeenCalled();
   });
 
   it('strictly rejects unknown handler payload keys before touching DB', async () => {

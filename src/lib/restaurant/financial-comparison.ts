@@ -13,11 +13,11 @@ import {
 const definitions = {
   grossSales: 'Settled bill subtotals before comps and discounts, on bill business date.',
   netSales:
-    'Settled grossSales minus compTotal minus discountTotal. Excludes refunds, tax, service charges, tips and delivery fees; not profit or cash.',
+    'Settled grossSales minus compTotal minus discountTotal minus refundTotal. Excludes tax, service charges, tips and delivery fees; not profit or cash.',
   discountTotal: 'Discounts on settled bills, on bill business date.',
   compTotal: 'Comps on settled bills, on bill business date.',
   refundTotal:
-    'Refund principal on processing business date, potentially for earlier sales; includes components not allocated by this reader. Not a merchandise-sales deduction.',
+    'Refund principal on processing business date, potentially for earlier sales; includes components not allocated by this reader. Already deducted from netSales.',
   taxTotal: 'Tax on settled bills, before refunds, on bill business date.',
   serviceChargeTotal: 'Service charges on settled bills, before refunds, on bill business date.',
   tipTotal: 'Tender tips on collection business date; not sales or net of tip refunds.',

@@ -626,7 +626,7 @@ it.each(['settled_sales', 'financial_breakdown'])(
         ? {
             metrics: {
               grossSales: { value: '100' },
-              netSales: { value: '85' },
+              netSales: { value: '65' },
               refunds: { value: '20' },
             },
             openUnpaid: { value: null },
