@@ -13,6 +13,7 @@ const mocks = vi.hoisted(() => ({
   resolveForRequest: vi.fn(),
   resolveById: vi.fn(),
   withTenantDb: vi.fn(),
+  withPlatformDb: vi.fn(),
   peekIntent: vi.fn(),
   consumeIntent: vi.fn(),
   parseCookie: vi.fn(),
@@ -52,6 +53,7 @@ vi.mock('@/lib/tenancy/host', () => ({
 vi.mock('@/lib/tenancy/host-routing', () => ({ isSharedHost: () => true }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withTenantDb: mocks.withTenantDb,
+  withPlatformDb: mocks.withPlatformDb,
 }));
 vi.mock('@/lib/platform/security', () => ({ parseCookie: mocks.parseCookie }));
 vi.mock('@/lib/sso', () => ({ SSO_TICKET_COOKIE: 'df_sso_ticket' }));
@@ -130,6 +132,13 @@ beforeEach(() => {
     ],
   });
   mocks.consumeIntent.mockResolvedValue({ id: 'intent_1' });
+  mocks.withPlatformDb.mockImplementation(async (run) =>
+    run({
+      pendingLoginIntent: {
+        findUnique: vi.fn().mockResolvedValue({ createdAt: new Date(Date.now() - 120000) }),
+      },
+    })
+  );
   mocks.withTenantDb.mockImplementation(async (_organizationId, run) =>
     run({
       user: {
@@ -162,6 +171,39 @@ describe('demo Auth.js boundary', () => {
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 
+  it('preserves the password-route intent creation time after shared-host selection', async () => {
+    const createdAt = new Date(Date.now() - 240000);
+    const read = vi.fn().mockResolvedValue({ createdAt });
+    mocks.withPlatformDb.mockImplementation(async (run) =>
+      run({ pendingLoginIntent: { findUnique: read } })
+    );
+    mocks.resolveById.mockResolvedValue({ ...demoOrganization, id: 'org_real', isDemo: false });
+    mocks.peekIntent.mockResolvedValue({
+      email: demoUser.email,
+      candidates: [{ organizationId: 'org_real', userId: 'user_real' }],
+    });
+    mocks.withTenantDb.mockImplementation(async (_org, run) =>
+      run({
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            ...demoUser,
+            id: 'user_real',
+            organizationId: 'org_real',
+            password: 'stored-hash',
+          }),
+          update: vi.fn(),
+        },
+        organizationIdentityConnection: { findFirst: vi.fn().mockResolvedValue(null) },
+      })
+    );
+    const result = await config().providers[1]!.authorize(
+      { organizationId: 'org_real' },
+      request()
+    );
+    expect(result).toMatchObject({ passwordAuthenticatedAt: createdAt.getTime() });
+    expect(read).toHaveBeenCalledWith({ where: { id: 'intent_1' }, select: { createdAt: true } });
+  });
+
   it('admits only the exact marked demo manager through a live server-owned intent', async () => {
     const provider = config().providers[1]!;
     const result = await provider.authorize({ organizationId: demoOrganization.id }, request());
@@ -171,6 +213,8 @@ describe('demo Auth.js boundary', () => {
       organizationId: demoOrganization.id,
       demoAccessExpiresAt: expect.any(Number),
     });
+    expect(result).not.toHaveProperty('passwordAuthenticatedAt', expect.any(Number));
+    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
     expect(mocks.consumeIntent).toHaveBeenCalledWith(
       'opaque-handle',
       'www.devfathom.com',

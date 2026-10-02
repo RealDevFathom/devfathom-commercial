@@ -31,6 +31,7 @@ if (process.env.PHARMACY_E2E !== '1') throw new Error('PHARMACY_E2E=1 is require
 
 /** Focus a control and activate it with the keyboard. Never a pointer. */
 async function pressControl(target: Locator) {
+  await expect(target).toBeEnabled();
   await target.focus();
   await expect(target).toBeFocused();
   await target.press('Enter');
@@ -38,6 +39,14 @@ async function pressControl(target: Locator) {
 
 async function signIn(page: Page) {
   await page.goto('/login');
+  // Prove the client form is hydrated before entering credentials: a native
+  // pre-hydration submit otherwise posts back to /login and loses the draft.
+  await expect(async () => {
+    const passwordControl = page.getByRole('textbox', { name: 'Password' });
+    if ((await passwordControl.getAttribute('type')) === 'password')
+      await pressControl(page.getByRole('button', { name: 'Show password' }));
+    await expect(passwordControl).toHaveAttribute('type', 'text');
+  }).toPass({ timeout: 15_000 });
   const email = page.getByLabel('Email');
   await email.focus();
   await email.fill(process.env.PHARMACY_E2E_ADMIN_EMAIL!);
@@ -349,6 +358,207 @@ test('POS-01 — the workflow map is on screen and the Legacy Speed preset is an
   await preset.focus();
   await preset.selectOption('devfathom');
   await expect(placeholderNotice).toHaveCount(0);
+});
+
+test('Khata ledger limit, owner override, statement and loyalty regression', async ({
+  page,
+}, testInfo) => {
+  test.setTimeout(180_000);
+  const { Client } = await import('pg');
+  const db = new Client({ connectionString: process.env.PHARMACY_E2E_DATABASE_URL! });
+  await db.connect();
+  const familyId = `khata_e2e_${Date.now()}`;
+  const pageErrors: string[] = [];
+  page.on('pageerror', (error) => pageErrors.push(error.message));
+  let customerId = '';
+  let redemptionsBefore = 0;
+  const begin = async () => {
+    await db.query('BEGIN');
+    await db.query(
+      "SELECT set_config('app.current_organization_id', $1, true), set_config('app.current_branch_id', $2, true)",
+      [PHARMACY_E2E.organizationId, PHARMACY_E2E.branchId]
+    );
+  };
+  try {
+    await begin();
+    await db.query(
+      `INSERT INTO organization_role_permissions (id, "organizationId", "organizationRoleId", capability, effect) VALUES ($1, $2, $3, 'pharmacy:dispense', 'ALLOW') ON CONFLICT ("organizationRoleId", capability) DO UPDATE SET effect='ALLOW'`,
+      [familyId + '_permission', PHARMACY_E2E.organizationId, PHARMACY_E2E.roleId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_patient_consents (id, "organizationId", "patientId", purpose, channel, version, granted, "recordedByUserId") VALUES ($1, $2, $3, 'LOYALTY', 'IN_PERSON', 1, true, $4) ON CONFLICT DO NOTHING`,
+      [
+        familyId + '_consent',
+        PHARMACY_E2E.organizationId,
+        PHARMACY_E2E.patientId,
+        PHARMACY_E2E.adminId,
+      ]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_customers (id, "organizationId", "patientId", "displayName", "updatedAt") VALUES ($1, $2, $3, 'Khata family payer', now()) ON CONFLICT ("organizationId", "patientId") DO NOTHING`,
+      [familyId + '_customer', PHARMACY_E2E.organizationId, PHARMACY_E2E.patientId]
+    );
+    customerId = (
+      await db.query('SELECT id FROM pharmacy_customers WHERE "patientId"=$1', [
+        PHARMACY_E2E.patientId,
+      ])
+    ).rows[0].id;
+    await db.query(
+      `INSERT INTO pharmacy_family_accounts (id, "organizationId", "branchId", "payerCustomerId", "displayName", "creditLimitMinor", "updatedAt") VALUES ($1, $2, $3, $4, 'Counter test family', 1000, now())`,
+      [familyId, PHARMACY_E2E.organizationId, PHARMACY_E2E.branchId, customerId]
+    );
+    await db.query(
+      `INSERT INTO pharmacy_family_members (id, "organizationId", "branchId", "familyAccountId", "customerId") VALUES ($1, $2, $3, $4, $5)`,
+      [
+        familyId + '_member',
+        PHARMACY_E2E.organizationId,
+        PHARMACY_E2E.branchId,
+        familyId,
+        customerId,
+      ]
+    );
+    redemptionsBefore = Number(
+      (
+        await db.query(
+          `SELECT count(*) FROM pharmacy_loyalty_points_entries WHERE "customerId"=$1 AND kind='REDEEM'`,
+          [customerId]
+        )
+      ).rows[0].count
+    );
+    await db.query('COMMIT');
+    await signIn(page);
+    await page.goto('/pharmacy/counter');
+    await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
+    const makeBill = async () => {
+      const scan = page.getByLabel('Scan or search');
+      await scan.focus();
+      await scan.fill(PHARMACY_E2E.medicines.otc.barcode);
+      await scan.press('Enter');
+      await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
+      const strip = page.getByRole('radio', { name: /Strip/ });
+      await strip.focus();
+      await strip.press('Space');
+      await setQuantity(page, 1);
+      await pressControl(page.getByRole('button', { name: /Add to cart/ }));
+      await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(
+        PHARMACY_E2E.medicines.otc.name
+      );
+      const patientSearch = page.getByLabel('Find patient');
+      await patientSearch.focus();
+      await patientSearch.fill(PHARMACY_E2E.patientName);
+      await patientSearch.press('Enter');
+      await pressControl(page.getByRole('button', { name: new RegExp(PHARMACY_E2E.patientName) }));
+      await pressControl(page.getByRole('button', { name: 'Link selected patient' }));
+      await expect(page.getByText('Loyalty customer linked to this bill.')).toBeVisible();
+    };
+    await makeBill();
+    await page.getByLabel('Tender', { exact: true }).selectOption('KHATA');
+    await page.getByLabel('Family Khata account').selectOption(familyId);
+    await page.getByLabel('Amount', { exact: true }).fill('1.00');
+    await pressControl(page.getByRole('button', { name: 'Take payment' }));
+    await expect(page.getByText('Payment recorded.', { exact: true })).toBeVisible();
+    await expect(page.getByText(/Ledger balance 1\.00/)).toBeVisible();
+    await expect(page.getByText(/This charge exceeds the family credit limit/)).toContainText(
+      '25.00'
+    );
+    await expect(page.getByRole('button', { name: 'Take payment' })).toBeDisabled();
+    for (const width of [375, 768, 1024, 1440]) {
+      await page.setViewportSize({ width, height: 1000 });
+      for (const theme of ['light', 'dark']) {
+        await page.evaluate(
+          (value) => document.documentElement.setAttribute('data-theme', value),
+          theme
+        );
+        await page.emulateMedia({ reducedMotion: 'reduce' });
+        expect(
+          await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
+        ).toBe(true);
+        for (const reducedMotion of ['no-preference', 'reduce'] as const) {
+          await page.emulateMedia({ reducedMotion });
+          await page
+            .getByLabel('Family Khata account')
+            .locator('..')
+            .screenshot({
+              path: testInfo.outputPath(`khata-${width}-${theme}-${reducedMotion}.png`),
+            });
+        }
+      }
+    }
+    const override = page.getByLabel('Owner: authorize limit increase');
+    await override.focus();
+    await override.press('Space');
+    await page
+      .getByLabel('Family Khata account')
+      .locator('..')
+      .screenshot({ path: testInfo.outputPath('khata-owner-auth.png') });
+    await page
+      .getByLabel('Owner password (current account)')
+      .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
+    await pressControl(page.getByRole('button', { name: 'Take payment' }));
+    await expect(page.getByText('Settled', { exact: true })).toBeVisible();
+    const popupPromise = page.waitForEvent('popup');
+    await pressControl(page.getByRole('button', { name: 'Print Khata statement' }));
+    const popup = await popupPromise;
+    await expect(popup.locator('body')).toContainText('Family Khata statement');
+    await expect(popup.locator('body')).toContainText('CHARGE');
+    await expect(popup.locator('body')).not.toContainText(PHARMACY_E2E.patientName);
+    await popup.screenshot({ path: testInfo.outputPath('khata-statement.png') });
+    await popup.close();
+    await begin();
+    expect(
+      Number(
+        (
+          await db.query(
+            `SELECT count(*) FROM pharmacy_khata_events WHERE "familyAccountId"=$1 AND kind='CHARGE'`,
+            [familyId]
+          )
+        ).rows[0].count
+      )
+    ).toBe(2);
+    expect(
+      Number(
+        (
+          await db.query(
+            'SELECT count(*) FROM pharmacy_khata_limit_decisions WHERE "familyAccountId"=$1',
+            [familyId]
+          )
+        ).rows[0].count
+      )
+    ).toBe(1);
+    expect(
+      Number(
+        (
+          await db.query(
+            'SELECT sum(points) AS points FROM pharmacy_loyalty_points_entries WHERE "customerId"=$1',
+            [customerId]
+          )
+        ).rows[0].points
+      )
+    ).toBeGreaterThan(0);
+    await db.query('COMMIT');
+    // Loyalty remains the existing redeem path on the next bill.
+    await page.goto('/pharmacy/counter');
+    await makeBill();
+    await page.getByLabel('Points to redeem').fill('1');
+    await pressControl(page.getByRole('button', { name: 'Redeem', exact: true }));
+    await expect(page.getByText(/points added as a loyalty tender/)).toBeVisible();
+    await begin();
+    expect(
+      Number(
+        (
+          await db.query(
+            `SELECT count(*) FROM pharmacy_loyalty_points_entries WHERE "customerId"=$1 AND kind='REDEEM'`,
+            [customerId]
+          )
+        ).rows[0].count
+      )
+    ).toBe(redemptionsBefore + 1);
+    await db.query('COMMIT');
+    expect(pageErrors).toEqual([]);
+  } finally {
+    await db.query('ROLLBACK');
+    await db.end();
+  }
 });
 
 test('this spec drives the counter without a pointer', async () => {

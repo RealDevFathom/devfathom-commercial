@@ -24,6 +24,9 @@ const mocks = vi.hoisted(() => ({
   mutationOptions: vi.fn(),
   receiptProps: vi.fn(),
   outcomeQuery: vi.fn(),
+  khataAccounts: vi.fn(),
+  khataStatement: vi.fn(),
+  signIn: vi.fn(),
   receiptRefetch: vi.fn(),
   session: {
     status: 'authenticated',
@@ -34,7 +37,7 @@ const mocks = vi.hoisted(() => ({
   entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] },
 }));
 
-vi.mock('next-auth/react', () => ({ useSession: () => mocks.session }));
+vi.mock('next-auth/react', () => ({ useSession: () => mocks.session, signIn: mocks.signIn }));
 vi.mock('@/components/entitlements-provider', () => ({
   useEntitlements: () => mocks.entitlements,
 }));
@@ -59,7 +62,13 @@ vi.mock('@/lib/trpc', () => {
       ])
     );
   const utils = {
-    client: { pharmacySales: { tenderOutcome: { query: mocks.outcomeQuery } } },
+    client: {
+      pharmacySales: {
+        tenderOutcome: { query: mocks.outcomeQuery },
+        khataAccounts: { query: mocks.khataAccounts },
+        khataStatement: { query: mocks.khataStatement },
+      },
+    },
     pharmacySales: {
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
@@ -237,6 +246,10 @@ beforeEach(() => {
     });
     return mocks.queries.counterCart;
   });
+  mocks.khataAccounts.mockResolvedValue([
+    { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 100000 },
+  ]);
+  mocks.signIn.mockResolvedValue({ ok: true });
   window.localStorage.clear();
 });
 
@@ -333,7 +346,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
     ['FORBIDDEN', 'Access refused.', 'CASH'],
     ['UNAUTHORIZED', 'Sign in required.', 'CASH'],
     ['BAD_REQUEST', 'UNCERTIFIED_PROVIDER', 'CARD'],
-    ['BAD_REQUEST', 'CONSENT_REQUIRED', 'CREDIT'],
+    ['BAD_REQUEST', 'CONSENT_REQUIRED', 'BANK_TRANSFER'],
   ])('retains a %s / %s rejection on the same bill', async (code, message, type) => {
     mocks.mutations.tender!.mockRejectedValue(refused(code!, message));
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
@@ -844,3 +857,108 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
     expect(screen.queryByRole('button', { name: 'Check payment outcome' })).not.toBeInTheDocument();
   });
 });
+
+describe('PharmacyCounterConsole Khata wiring', () => {
+  it('persists and dispatches the selected family with no password fields', async () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText(/Ledger balance/);
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalled());
+    expect(mocks.mutations.tender).toHaveBeenCalledWith(
+      expect.objectContaining({
+        type: 'KHATA',
+        familyAccountId: 'family-a',
+        ownerOverride: false,
+        saleId: 'sale-a',
+        branchId: 'branch-a',
+      })
+    );
+    expect(mocks.mutations.tender!.mock.calls[0]![0]).not.toHaveProperty('password');
+    await waitFor(() => expect(screen.getByRole('button', { name: 'Take payment' })).toBeEnabled());
+    fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '125.50' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledTimes(2));
+    expect(mocks.mutations.tender!.mock.calls[1]![0].idempotencyKey).not.toBe(
+      mocks.mutations.tender!.mock.calls[0]![0].idempotencyKey
+    );
+  });
+  it('prints only the statement allowlist as inert text', async () => {
+    mocks.khataStatement.mockResolvedValue({
+      account: {
+        displayName: '<script>family</script>',
+        balanceMinor: 100,
+        creditLimitMinor: 1000,
+      },
+      generatedAt: new Date('2026-10-02'),
+      truncated: false,
+      entries: [
+        {
+          occurredAt: new Date('2026-10-01'),
+          kind: 'CHARGE',
+          amountMinor: 100,
+          note: 'private note',
+        },
+      ],
+    });
+    const body = document.createElement('div');
+    const print = vi.fn();
+    vi.spyOn(window, 'open').mockReturnValue({
+      opener: window,
+      document: { title: '', createElement: document.createElement.bind(document), body },
+      focus: vi.fn(),
+      print,
+      close: vi.fn(),
+    } as never);
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText(/Ledger balance/);
+    fireEvent.click(screen.getByRole('button', { name: 'Print Khata statement' }));
+    await waitFor(() => expect(print).toHaveBeenCalledOnce());
+    expect(body.textContent).toContain('<script>family</script>');
+    expect(body.querySelector('script')).toBeNull();
+    expect(body.textContent).not.toContain('private note');
+    expect(mocks.khataStatement).toHaveBeenCalledWith({
+      branchId: 'branch-a',
+      saleId: 'sale-a',
+      familyAccountId: 'family-a',
+    });
+  });
+});
+
+it.each([404, 200])(
+  'reauthenticates through the existing password transport (%s)',
+  async (status) => {
+    Object.assign(mocks.session.data.user, { email: 'owner@example.test' });
+    mocks.khataAccounts.mockResolvedValue([
+      { id: 'family-a', displayName: 'Family A', balanceMinor: 0, creditLimitMinor: 0 },
+    ]);
+    const fetch = vi.spyOn(globalThis, 'fetch').mockResolvedValue(
+      new Response(JSON.stringify({ organizations: [{ id: 'org-a', ssoEnforced: false }] }), {
+        status,
+      })
+    );
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
+    await screen.findByText(/Ledger balance/);
+    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+      target: { value: 'test-only-password' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
+    await waitFor(() => expect(mocks.mutations.tender).toHaveBeenCalledOnce());
+    expect(fetch).toHaveBeenCalledWith(
+      '/api/login',
+      expect.objectContaining({ method: 'POST', credentials: 'include' })
+    );
+    expect(mocks.signIn).toHaveBeenCalledWith(
+      status === 404 ? 'credentials' : 'login-intent',
+      expect.objectContaining(
+        status === 404
+          ? { email: 'owner@example.test', password: 'test-only-password', redirect: false }
+          : { organizationId: 'org-a', redirect: false }
+      )
+    );
+  }
+);

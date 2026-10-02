@@ -1,5 +1,14 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { Prisma } from '@/generated/prisma/client';
+import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
+import {
+  authorizeKhataCharge,
+  FamilyKhataError,
+  readSaleKhataAccounts,
+  readSaleKhataStatement,
+} from '@/lib/pharmacy/family-khata';
 
 import {
   PharmacyCounterError,
@@ -64,10 +73,12 @@ const tenderInput = z
     saleId: z.string().min(1),
     deviceId: z.string().min(1),
     businessDate: z.date(),
-    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT']),
+    type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA']),
     amountMinor: z.number().int().positive(),
     cashReceivedMinor: z.number().int().nonnegative().optional(),
     idempotencyKey: z.string().trim().min(1).max(160),
+    familyAccountId: z.string().trim().min(1).max(128).optional(),
+    ownerOverride: z.boolean().optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -93,7 +104,41 @@ function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
   return { organizationId, branchId: branch, actorId };
 }
 
+async function khataScope(ctx: TRPCContext, branch: string) {
+  const scope = scopeFor(ctx, branch);
+  if (
+    ctx.organization?.vertical !== 'PHARMACY' ||
+    ctx.organization.id !== scope.organizationId ||
+    ctx.session!.user.organizationId !== scope.organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }))
+  )
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
+  const available = await ctx.db.pharmacyBranch.findFirst({
+    where: { organizationId: scope.organizationId, id: branch, active: true },
+    select: { id: true },
+  });
+  if (!available)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  return scope;
+}
+
+async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT set_config('app.current_branch_id', ${scope.branchId}, true)`
+  );
+}
+
+function ledgerTender(input: z.infer<typeof tenderInput>) {
+  return { ...input, type: input.type === 'KHATA' ? ('CREDIT' as const) : input.type };
+}
+
 function fail(error: unknown): never {
+  if (error instanceof FamilyKhataError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
   if (error instanceof PharmacyInventoryError && error.reason === 'BLOCKED_STOCK') {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -143,6 +188,32 @@ function fail(error: unknown): never {
 }
 
 export const pharmacySalesRouter = router({
+  khataAccounts: protectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await khataScope(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        return readSaleKhataAccounts(db, scope, input.saleId);
+      });
+    }),
+  khataStatement: protectedProcedure
+    .input(
+      z.object({ branchId, saleId: z.string().min(1), familyAccountId: z.string().min(1) }).strict()
+    )
+    .query(async ({ ctx, input }) => {
+      try {
+        const scope = await khataScope(ctx, input.branchId);
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          await bindKhataBranch(db, scope);
+          return readSaleKhataStatement(db, scope, input.saleId, input.familyAccountId);
+        });
+      } catch (error) {
+        fail(error);
+      }
+    }),
   customerSnapshot: protectedProcedure
     .input(z.object({ branchId, customerId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
@@ -263,16 +334,71 @@ export const pharmacySalesRouter = router({
         cutPharmacyDailyClose(txDb(tx), scopeFor(ctx, input.branchId), input)
       )
     ),
-  tenderOutcome: protectedProcedure
-    .input(tenderInput)
-    .query(({ ctx, input }) =>
-      readPharmacyTenderOutcome(ctx.db, scopeFor(ctx, input.branchId), input)
-    ),
+  tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
+    const scope =
+      input.type === 'KHATA' || input.familyAccountId
+        ? await khataScope(ctx, input.branchId)
+        : scopeFor(ctx, input.branchId);
+    return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
+  }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
     try {
-      return await ctx.db.$transaction((tx) =>
-        applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
-      );
+      if (input.type !== 'KHATA' && input.type !== 'CREDIT') {
+        if (input.familyAccountId !== undefined || input.ownerOverride !== undefined)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Khata fields require Khata tender.',
+          });
+        return await ctx.db.$transaction((tx) =>
+          applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), ledgerTender(input))
+        );
+      }
+      const scope = await khataScope(ctx, input.branchId);
+      if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
+      const normalized = ledgerTender(input);
+      const ownerAuthorized =
+        input.ownerOverride === true &&
+        ctx.session!.user.role === 'ADMIN' &&
+        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
+          db: ctx.db,
+          source: 'TRPC',
+        }));
+      return await ctx.db.$transaction(async (tx) => {
+        const db = txDb(tx);
+        await bindKhataBranch(db, scope);
+        await db.$queryRaw(
+          Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+        );
+        const prior = await readPharmacyTenderOutcome(db, scope, normalized);
+        if (prior.status === 'ACCEPTED') return { ...prior.result, replayed: true };
+        const account = await authorizeKhataCharge(
+          db,
+          scope,
+          { ...input, familyAccountId: input.familyAccountId! },
+          {
+            authorized: ownerAuthorized,
+            passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
+          }
+        );
+        const result = await applyPharmacyTender(db, scope, normalized);
+        if (!('tenderId' in result) || typeof result.tenderId !== 'string')
+          throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+        await db.pharmacyKhataEvent.create({
+          data: {
+            id: `khata:${result.tenderId}`,
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            familyAccountId: input.familyAccountId!,
+            kind: 'CHARGE',
+            memberId: account.memberId,
+            dueAt: input.businessDate,
+            amountMinor: input.amountMinor,
+            actorId: scope.actorId,
+            note: `Tender ${result.tenderId}`,
+          },
+        });
+        return result;
+      });
     } catch (error) {
       fail(error);
     }
@@ -293,9 +419,55 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          refundPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = scopeFor(ctx, input.branchId);
+          const tender = await db.pharmacyTender.findFirst({
+            where: {
+              id: input.originalTenderId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+            select: { type: true },
+          });
+          if (tender?.type !== 'CREDIT') return refundPharmacyTender(db, scope, input);
+          await khataScope(ctx, input.branchId);
+          await bindKhataBranch(db, scope);
+          const charge = await db.pharmacyKhataEvent.findFirst({
+            where: {
+              id: `khata:${input.originalTenderId}`,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+          });
+          if (charge) {
+            await db.$queryRaw(
+              Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${charge.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+            );
+          }
+          const result = await refundPharmacyTender(db, scope, input);
+          if (charge && 'refundId' in result && typeof result.refundId === 'string') {
+            const id = `khata-refund:${result.refundId}`;
+            const prior = await db.pharmacyKhataEvent.findFirst({
+              where: { id, organizationId: scope.organizationId, branchId: scope.branchId },
+            });
+            if (!prior)
+              await db.pharmacyKhataEvent.create({
+                data: {
+                  id,
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  familyAccountId: charge.familyAccountId,
+                  kind: 'PAYMENT',
+                  amountMinor: input.amountMinor,
+                  settlesChargeId: charge.id,
+                  actorId: scope.actorId,
+                  note: `Refund ${result.refundId}`,
+                },
+              });
+          }
+          return result;
+        });
       } catch (error) {
         fail(error);
       }

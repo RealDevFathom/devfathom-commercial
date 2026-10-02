@@ -29,10 +29,12 @@ const storedSchema = z
         saleId: id,
         deviceId: id,
         businessDate: z.string().datetime({ offset: false }),
-        type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT']),
+        type: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET', 'CREDIT', 'KHATA']),
         amountMinor: minor.positive(),
         cashReceivedMinor: minor.optional(),
         idempotencyKey: z.string().trim().min(1).max(160),
+        familyAccountId: id.optional(),
+        ownerOverride: z.boolean().optional(),
       })
       .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
@@ -74,6 +76,9 @@ function decode(raw: string, scope: TenderAttemptScope): TenderAttempt {
   const input = stored.input;
   const date = new Date(input.businessDate);
   if (
+    (input.type === 'KHATA' && !input.familyAccountId) ||
+    ((input.familyAccountId !== undefined || input.ownerOverride !== undefined) &&
+      !['KHATA', 'CREDIT'].includes(input.type)) ||
     !sameScope(stored.scope, scope) ||
     input.branchId !== scope.branchId ||
     !Number.isFinite(date.getTime()) ||

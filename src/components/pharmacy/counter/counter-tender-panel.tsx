@@ -1,6 +1,6 @@
 'use client';
 
-import { forwardRef, useRef, useState } from 'react';
+import { forwardRef, useEffect, useRef, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -15,7 +15,8 @@ const TENDER_TYPES = [
   { value: 'CARD', label: 'Card', requiresAdapter: true },
   { value: 'BANK_TRANSFER', label: 'Bank transfer', requiresAdapter: false },
   { value: 'WALLET', label: 'Wallet', requiresAdapter: true },
-  { value: 'CREDIT', label: 'Khata / credit', requiresAdapter: false },
+  { value: 'KHATA', label: 'Khata / credit', requiresAdapter: false },
+  { value: 'CREDIT', label: 'Credit (legacy)', requiresAdapter: false },
 ] as const;
 
 export type CounterTenderType = (typeof TENDER_TYPES)[number]['value'];
@@ -28,7 +29,16 @@ export type CounterTenderResult = {
 export type CounterTenderBillState =
   'idle' | 'loading' | 'error' | 'stale' | 'unavailable' | 'ready' | 'settled';
 
+export type KhataAccount = {
+  id: string;
+  displayName: string;
+  creditLimitMinor: number;
+  balanceMinor: number;
+};
 export type CounterTenderPanelProps = {
+  loadKhataAccounts?: () => Promise<KhataAccount[]>;
+  reauthenticateOwner?: (password: string, totp: string) => Promise<void>;
+  printKhataStatement?: (familyAccountId: string) => Promise<void>;
   /** Only a known, current bill has a balance; zero alone is not settlement. */
   balanceMinor: number | null;
   state: CounterTenderBillState;
@@ -46,6 +56,8 @@ export type CounterTenderPanelProps = {
       type: CounterTenderType;
       amountMinor: number;
       cashReceivedMinor?: number;
+      familyAccountId?: string;
+      ownerOverride?: boolean;
     },
     draft: TenderDraft
   ) => Promise<CounterTenderResult>;
@@ -87,9 +99,20 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       recoveryOutcome,
       checkingOutcome = false,
       onCheckOutcome,
+      loadKhataAccounts,
+      reauthenticateOwner,
+      printKhataStatement,
     },
     ref
   ) {
+    const [accounts, setAccounts] = useState<KhataAccount[]>([]);
+    const [accountId, setAccountId] = useState('');
+    const [khataLoading, setKhataLoading] = useState(false);
+    const [khataError, setKhataError] = useState('');
+    const [ownerOverride, setOwnerOverride] = useState(false);
+    const [password, setPassword] = useState('');
+    const [totp, setTotp] = useState('');
+    const [statementPending, setStatementPending] = useState(false);
     const [type, setType] = useState<CounterTenderType>(initialDraft?.type ?? 'CASH');
     const [amount, setAmount] = useState(initialDraft?.amount ?? '');
     const [cashReceived, setCashReceived] = useState(initialDraft?.cashReceived ?? '');
@@ -120,7 +143,46 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         ? cashReceivedMinor - amountMinor
         : null;
     const selected = TENDER_TYPES.find((entry) => entry.value === type)!;
-    const submittable = editable && !blocked && amountValid && !cashShort && !cashInvalid;
+    const isKhata = type === 'KHATA' || type === 'CREDIT';
+    const account = accounts.find((row) => row.id === accountId);
+    const overLimit = Boolean(
+      account &&
+      amountMinor !== null &&
+      account.balanceMinor + amountMinor > account.creditLimitMinor
+    );
+    useEffect(() => {
+      if (!isKhata || !loadKhataAccounts) return;
+      let live = true;
+      setKhataLoading(true);
+      setKhataError('');
+      setAccounts([]);
+      void loadKhataAccounts()
+        .then((rows) => {
+          if (!live) return;
+          setAccounts(rows);
+          setAccountId(rows.length === 1 ? rows[0]!.id : '');
+        })
+        .catch(() => {
+          if (live)
+            setKhataError('Khata accounts could not be loaded. Refresh the bill and retry.');
+        })
+        .finally(() => {
+          if (live) setKhataLoading(false);
+        });
+      return () => {
+        live = false;
+      };
+    }, [isKhata, loadKhataAccounts]);
+    const submittable =
+      editable &&
+      !blocked &&
+      amountValid &&
+      !cashShort &&
+      !cashInvalid &&
+      (!isKhata ||
+        (Boolean(account) &&
+          !khataLoading &&
+          (!overLimit || (ownerOverride && Boolean(password) && Boolean(reauthenticateOwner)))));
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -128,10 +190,27 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       setSubmitting(true);
       setOutcome(null);
       try {
+        if (isKhata && overLimit) {
+          try {
+            await reauthenticateOwner!(password, totp);
+          } catch {
+            setOutcome({
+              status: 'rejected',
+              message: 'Owner re-authentication failed. Check password and authentication code.',
+            });
+            return;
+          } finally {
+            setPassword('');
+            setTotp('');
+          }
+        }
         const result = await onTender(
           {
             type,
             amountMinor,
+            ...(isKhata
+              ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride }
+              : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
           },
           { amount, cashReceived: type === 'CASH' ? cashReceived : '' }
@@ -140,6 +219,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
         if (result.status === 'accepted') {
           setAmount('');
           setCashReceived('');
+          if (isKhata && loadKhataAccounts) {
+            try {
+              setAccounts(await loadKhataAccounts());
+            } catch {
+              setAccounts([]);
+              setKhataError('Payment recorded. Refresh the bill to reload the Khata ledger.');
+            }
+          }
         }
       } catch {
         setOutcome({
@@ -284,6 +371,103 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             </p>
           ) : null}
         </div>
+
+        {isKhata ? (
+          <div className="space-y-3 rounded-md border border-border-default p-3">
+            <Label htmlFor="khata-account">Family Khata account</Label>
+            <select
+              id="khata-account"
+              className="h-11 w-full rounded-md border border-border-default bg-surface-card px-3 text-sm"
+              value={accountId}
+              disabled={!editable || khataLoading}
+              onChange={(event) => {
+                setAccountId(event.target.value);
+                setOwnerOverride(false);
+              }}
+            >
+              <option value="">Choose family account</option>
+              {accounts.map((row) => (
+                <option key={row.id} value={row.id}>
+                  {row.displayName}
+                </option>
+              ))}
+            </select>
+            {khataLoading ? <p role="status">Loading Khata ledger…</p> : null}
+            {khataError ? <p role="alert">{khataError}</p> : null}
+            {!khataLoading && !khataError && !accounts.length ? (
+              <p>Link a customer with an active family account before using Khata.</p>
+            ) : null}
+            {account ? (
+              <p className="text-sm text-text-body">
+                Due on this bill’s business date. Ledger balance {formatMinor(account.balanceMinor)}{' '}
+                · Limit {formatMinor(account.creditLimitMinor)}
+              </p>
+            ) : null}
+            {overLimit ? (
+              <>
+                <p role="alert" className="text-sm text-destructive">
+                  This charge exceeds the family credit limit. An owner must re-enter their password
+                  to raise the limit to {formatMinor(account!.balanceMinor + amountMinor!)}.
+                </p>
+                <Label className="flex min-h-11 items-center gap-2">
+                  <input
+                    type="checkbox"
+                    checked={ownerOverride}
+                    disabled={!editable}
+                    onChange={(event) => setOwnerOverride(event.target.checked)}
+                  />
+                  Owner: authorize limit increase
+                </Label>
+                {ownerOverride ? (
+                  <>
+                    <Label htmlFor="khata-password">Owner password (current account)</Label>
+                    <Input
+                      id="khata-password"
+                      type="password"
+                      autoComplete="current-password"
+                      value={password}
+                      disabled={!editable}
+                      onChange={(event) => setPassword(event.target.value)}
+                      className="h-11"
+                    />
+                    <Label htmlFor="khata-totp">Authentication or recovery code (if enabled)</Label>
+                    <Input
+                      id="khata-totp"
+                      autoComplete="one-time-code"
+                      value={totp}
+                      disabled={!editable}
+                      onChange={(event) => setTotp(event.target.value)}
+                      className="h-11"
+                    />
+                  </>
+                ) : null}
+              </>
+            ) : null}
+            <Button
+              type="button"
+              variant="outline"
+              disabled={
+                !account || statementPending || takingPayment || unknown || !printKhataStatement
+              }
+              onClick={async () => {
+                if (!account || !printKhataStatement) return;
+                setStatementPending(true);
+                try {
+                  await printKhataStatement(account.id);
+                  setKhataError('');
+                } catch {
+                  setKhataError(
+                    'Statement unavailable. Allow pop-ups and retry after refreshing the bill.'
+                  );
+                } finally {
+                  setStatementPending(false);
+                }
+              }}
+            >
+              {statementPending ? 'Loading statement…' : 'Print Khata statement'}
+            </Button>
+          </div>
+        ) : null}
 
         {type === 'CASH' ? (
           <div className="space-y-1.5">
