@@ -490,7 +490,10 @@ export async function refundPharmacyTender(
       branchId: scope.branchId,
       status: 'COMPLETED',
     },
-    include: { lines: { include: { returnLines: true } }, refunds: true },
+    include: {
+      lines: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+      refunds: true,
+    },
   });
   const returnValue =
     sale?.lines.reduce(
@@ -498,7 +501,8 @@ export async function refundPharmacyTender(
         sum +
         returnedLineValue(
           line,
-          line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0)
+          line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0) +
+            line.unidentifiedReturnHolds.reduce((n, row) => n + row.canonicalUnits, 0)
         ),
       0
     ) ?? 0;

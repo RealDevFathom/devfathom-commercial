@@ -1426,8 +1426,10 @@ model PharmacySaleLine {
   packLevel                 PackLevel                    @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
   allocations               PharmacySaleLineAllocation[]
   returnLines               PharmacySaleReturnLine[]
+  unidentifiedReturnHolds   PharmacyUnidentifiedReturnHold[]
 
   @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id])
   @@unique([organizationId, idempotencyKey])
   @@index([organizationId, branchId, saleId])
   @@map("pharmacy_sale_lines")
@@ -1479,6 +1481,7 @@ model PharmacySaleReturn {
   createdAt      DateTime                 @default(now())
   originalSale   PharmacySale             @relation("PharmacySaleReturns", fields: [organizationId, branchId, originalSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
   lines          PharmacySaleReturnLine[]
+  unidentifiedHolds PharmacyUnidentifiedReturnHold[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -1506,6 +1509,45 @@ model PharmacySaleReturnLine {
   @@unique([organizationId, stockMovementId])
   @@index([organizationId, saleLineId])
   @@map("pharmacy_sale_return_lines")
+}
+
+/// Physical returns whose lot identity is unknown. Never part of AVAILABLE stock.
+model PharmacyUnidentifiedReturnHold {
+  id                   String                          @id @default(cuid())
+  organizationId       String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId             String
+  returnId             String
+  saleLineId           String
+  quarantineLocationId String
+  canonicalUnits       Int
+  integrityDecision    String
+  actorId              String
+  createdAt            DateTime                        @default(now())
+  saleReturn           PharmacySaleReturn              @relation(fields: [organizationId, branchId, returnId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_hold_return_fk")
+  saleLine             PharmacySaleLine                @relation(fields: [organizationId, branchId, saleLineId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_hold_line_fk")
+  location             PharmacyStockLocation           @relation(fields: [organizationId, branchId, quarantineLocationId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_hold_location_fk")
+  verificationTask     PharmacyReturnVerificationTask?
+
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, returnId])
+  @@index([organizationId, branchId, saleLineId])
+  @@map("pharmacy_unidentified_return_holds")
+}
+
+/// One pharmacist task per physical holding, including repeated OTC returns.
+/// Separate from the prescription sale-release queue; no uniqueness by sale line.
+model PharmacyReturnVerificationTask {
+  id                String                         @id @default(cuid())
+  organizationId    String                         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  holdingId         String
+  requestedByUserId String
+  requestedAt       DateTime                       @default(now())
+  holding           PharmacyUnidentifiedReturnHold @relation(fields: [organizationId, branchId, holdingId], references: [organizationId, branchId, id], onDelete: Restrict, map: "return_task_hold_fk")
+
+  @@unique([organizationId, branchId, holdingId], map: "return_task_hold_key")
+  @@index([organizationId, branchId, requestedAt])
+  @@map("pharmacy_return_verification_tasks")
 }
 
 model UnfulfilledDemandEvent {
@@ -1739,6 +1781,7 @@ model PharmacyStockLocation {
   discrepancies           PharmacyStockDiscrepancy[]
   deviceQuotas            PharmacyDeviceLotQuota[]
   temperatureLogs         PharmacyTemperatureLog[]
+  unidentifiedReturnHolds PharmacyUnidentifiedReturnHold[]
 
   @@unique([organizationId, id], map: "pharmacy_stock_locations_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_stock_locations_org_branch_id_key")

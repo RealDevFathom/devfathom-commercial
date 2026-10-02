@@ -61,6 +61,7 @@ function fixture(returnedUnits: number, priorRefunds: number[] = []) {
             unitPriceMinor: 100,
             discountMinor: 0,
             canonicalUnits: 10,
+            unidentifiedReturnHolds: [] as Array<{ canonicalUnits: number }>,
             returnLines: returnedUnits ? [{ canonicalUnits: returnedUnits }] : [],
           },
         ],
@@ -117,7 +118,10 @@ for (const boundary of ['service', 'API'] as const) {
             branchId: 'branch-1',
             status: 'COMPLETED',
           },
-          include: { lines: { include: { returnLines: true } }, refunds: true },
+          include: {
+            lines: { include: { unidentifiedReturnHolds: true, returnLines: true } },
+            refunds: true,
+          },
         });
       };
       it(`rejects no-return refunds with flag ${label}`, async () => {
@@ -147,3 +151,16 @@ for (const boundary of ['service', 'API'] as const) {
     }
   });
 }
+
+it('includes unidentified quarantine holdings in the mandatory refund cap', async () => {
+  const f = fixture(0);
+  const sale = await f.db.pharmacySale.findFirst();
+  sale.lines[0].unidentifiedReturnHolds.push({ canonicalUnits: 2 });
+  await expect(f.caller.refundTender({ ...input, amountMinor: 201 })).rejects.toThrow(
+    'REFUND_EXCEEDS_TENDER'
+  );
+  expect(f.db.pharmacyRefund.create).not.toHaveBeenCalled();
+  await expect(f.caller.refundTender({ ...input, amountMinor: 200 })).resolves.toMatchObject({
+    refundId: 'refund-1',
+  });
+});

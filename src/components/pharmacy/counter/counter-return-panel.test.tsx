@@ -54,6 +54,10 @@ beforeEach(() => {
           canonicalUnits: 10,
           canonicalUnitsPerSaleUnit: 10,
           returnedUnits: 2,
+          lots: [
+            { lotId: 'lot-a', batchNumber: 'A', returnableUnits: 3, restockAllowed: true },
+            { lotId: 'lot-b', batchNumber: 'B', returnableUnits: 5, restockAllowed: false },
+          ],
         },
       ],
       tenders: [
@@ -167,4 +171,35 @@ describe('counter returns', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('recovery is unavailable');
     expect(screen.getByRole('button', { name: 'Find receipt' })).toBeDisabled();
   });
+});
+
+it('offers sold lots, prevents unsafe restock and caps the selected lot', async () => {
+  render(<ReturnForm {...props} />);
+  chooseReceipt();
+  fireEvent.change(screen.getByLabelText('Sold line'), { target: { value: 'line' } });
+  const restock = screen.getByRole('option', { name: /Restock to verified/ });
+  expect(restock).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-b' } });
+  expect(restock).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Returned lot / batch'), { target: { value: 'lot-a' } });
+  expect(restock).not.toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Stock disposition'), { target: { value: 'RESTOCK' } });
+  fireEvent.change(screen.getByLabelText('Inspection and integrity decision'), {
+    target: { value: 'Physical batch A verified, intact' },
+  });
+  fireEvent.change(screen.getByLabelText('Return quantity (base units)'), {
+    target: { value: '4' },
+  });
+  fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+  expect(screen.getByRole('button', { name: 'Record return' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Return quantity (base units)'), {
+    target: { value: '3' },
+  });
+  fireEvent.click(screen.getByLabelText(/I confirm the quantity/));
+  fireEvent.click(screen.getByRole('button', { name: 'Record return' }));
+  await waitFor(() =>
+    expect(mocks.returnLine).toHaveBeenCalledWith(
+      expect.objectContaining({ lotId: 'lot-a', canonicalUnits: 3, disposition: 'RESTOCK' })
+    )
+  );
 });

@@ -407,7 +407,8 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   if (device) await pressControl(matches.filter({ hasText: device }));
   else await pressControl(matches.first());
   await dialog.getByLabel('Sold line').selectOption({ index: 1 });
-  await dialog.getByLabel('Return quantity (base units)').fill('10');
+  await dialog.getByLabel('Returned lot / batch').selectOption({ index: 1 });
+  await dialog.getByLabel('Return quantity (base units)').fill('5');
   await dialog.getByLabel('Stock disposition', { exact: true }).selectOption('RESTOCK');
   await dialog
     .getByLabel('Inspection and integrity decision')
@@ -418,17 +419,39 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await pressControl(dialog.getByRole('button', { name: 'Record return', exact: true }));
   await expect(dialog.getByRole('status')).toContainText('Return recorded.');
   await dialog.getByLabel('Original tender').selectOption({ index: 1 });
-  await dialog.getByLabel('Refund amount (PKR)').fill(PHARMACY_E2E_EXPECTED.otcStripPrice);
+  await dialog
+    .getByLabel('Refund amount (PKR)')
+    .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
   await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
   await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
   await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
     'CASH refund:'
   );
+  // The remaining physical units have no verifiable lot. Keep separate quarantine custody.
+  await dialog.getByLabel('Returned lot / batch').selectOption('');
+  await dialog.getByLabel('Return quantity (base units)').fill('5');
+  await dialog.getByLabel('Quarantine location').selectOption({ index: 1 });
+  await dialog
+    .getByLabel('Inspection and integrity decision')
+    .fill('Batch marking unreadable; pharmacist verification required');
+  await confirm.focus();
+  await confirm.press('Space');
+  await pressControl(dialog.getByRole('button', { name: 'Record return', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText('Return recorded.');
+  await expect(dialog.getByRole('region', { name: 'Return and refund history' })).toContainText(
+    'pharmacist verification pending'
+  );
+  await dialog
+    .getByLabel('Refund amount (PKR)')
+    .fill((Number(PHARMACY_E2E_EXPECTED.otcStripPrice) / 2).toFixed(2));
+  await pressControl(dialog.getByRole('button', { name: 'Confirm refund', exact: true }));
+  await expect(dialog.getByRole('status')).toContainText('Refund recorded.');
   const popupPromise = page.waitForEvent('popup');
   await pressControl(dialog.getByRole('button', { name: 'Reprint receipt with refunds' }));
   const popup = await popupPromise;
   await expect(popup.locator('body')).toContainText('RETURNS & REFUNDS');
   await expect(popup.locator('body')).toContainText('WRONG_ITEM');
+  await expect(popup.locator('body')).toContainText('pharmacist verification pending');
   await popup.close();
   for (const width of [375, 768, 1024, 1440]) {
     await page.setViewportSize({ width, height: 900 });

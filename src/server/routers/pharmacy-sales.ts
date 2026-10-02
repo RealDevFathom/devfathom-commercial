@@ -406,6 +406,8 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleLineId: z.string().min(1),
+          // Omitted legacy/unknown lot is accepted only into unidentified quarantine custody.
+          lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),
           disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
