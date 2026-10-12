@@ -1,0 +1,1553 @@
+@import 'tailwindcss';
+@import 'tw-animate-css';
+@import 'shadcn/tailwind.css';
+
+/* Preserve the accepted Google-loader Arial fallback metrics. */
+@font-face {
+  font-family: Instrument Sans Fallback;
+  src: local(Arial);
+  ascent-override: 94.42%;
+  descent-override: 24.33%;
+  line-gap-override: 0.0%;
+  size-adjust: 102.74%;
+}
+
+@font-face {
+  font-family: IBM Plex Mono Fallback;
+  src: local(Arial);
+  ascent-override: 76.16%;
+  descent-override: 20.43%;
+  line-gap-override: 0.0%;
+  size-adjust: 134.59%;
+}
+
+/* Dark theme is driven by `data-theme="dark"` on <html>. The `dark:` utility
+   variant follows it. */
+@custom-variant dark (&:is([data-theme='dark'] *));
+
+/* ============================================================
+   DEVFATHOM — Fieldbook
+   Warm ledger navigation · linen surfaces · one deliberate clay
+   decision color. IBM Plex Sans carries both editorial hierarchy and UI;
+   IBM Plex Mono holds coordinates, dates, and operational metadata.
+   ============================================================ */
+
+@theme inline {
+  /* shadcn semantic names — kept so every existing component works.
+     They resolve to the canonical aliases defined in :root below. */
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --font-sans: var(--font-sans);
+  --font-mono: var(--font-mono);
+  --font-display: var(--font-display);
+  --font-heading: var(--font-display);
+  --color-sidebar-ring: var(--sidebar-ring);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar: var(--sidebar);
+  --color-chart-5: var(--chart-5);
+  --color-chart-4: var(--chart-4);
+  --color-chart-3: var(--chart-3);
+  --color-chart-2: var(--chart-2);
+  --color-chart-1: var(--chart-1);
+  --color-ring: var(--ring);
+  --color-input: var(--input);
+  --color-border: var(--border);
+  --color-destructive: var(--destructive);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent: var(--accent);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-muted: var(--muted);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-secondary: var(--secondary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-primary: var(--primary);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-popover: var(--popover);
+  --color-card-foreground: var(--card-foreground);
+  --color-card: var(--card);
+  --color-success: var(--success);
+  --color-success-foreground: var(--success-foreground);
+  --color-warning: var(--warning);
+  --color-warning-foreground: var(--warning-foreground);
+
+  /* --- Canonical numbered scales (utilities: bg-abyss-700, text-brass-500…) --- */
+  --color-abyss-900: var(--abyss-900);
+  --color-abyss-800: var(--abyss-800);
+  --color-abyss-700: var(--abyss-700);
+  --color-abyss-600: var(--abyss-600);
+  --color-abyss-500: var(--abyss-500);
+  --color-abyss-400: var(--abyss-400);
+  --color-abyss-300: var(--abyss-300);
+  --color-abyss-200: var(--abyss-200);
+  --color-abyss-100: var(--abyss-100);
+  --color-brass-700: var(--brass-700);
+  --color-brass-600: var(--brass-600);
+  --color-brass-500: var(--brass-500);
+  --color-brass-400: var(--brass-400);
+  --color-brass-300: var(--brass-300);
+  --color-brass-100: var(--brass-100);
+  --color-paper-white: var(--paper-white);
+  --color-paper-50: var(--paper-50);
+  --color-paper-100: var(--paper-100);
+  --color-paper-200: var(--paper-200);
+  --color-paper-300: var(--paper-300);
+  --color-slate-700: var(--slate-700);
+  --color-slate-600: var(--slate-600);
+  --color-slate-500: var(--slate-500);
+  --color-slate-400: var(--slate-400);
+  --color-slate-300: var(--slate-300);
+
+  /* --- Canonical semantic aliases (utilities: bg-surface-sunken…) --- */
+  --color-surface-page: var(--surface-page);
+  --color-surface-card: var(--surface-card);
+  --color-surface-sunken: var(--surface-sunken);
+  --color-surface-raised: var(--surface-raised);
+  --color-surface-inverse: var(--surface-inverse);
+  --color-text-strong: var(--text-strong);
+  --color-text-body: var(--text-body);
+  --color-text-muted: var(--text-muted);
+  --color-text-faint: var(--text-faint);
+  --color-text-inverse: var(--text-inverse);
+  --color-text-on-accent: var(--text-on-accent);
+  --color-border-subtle: var(--border-subtle);
+  --color-border-default: var(--border-default);
+  --color-border-strong: var(--border-strong);
+
+  /* Brand brass accent (responds to data-accent). Distinct from shadcn
+     --accent (a neutral hover wash). */
+  --color-accent-brand: var(--accent-brand);
+  --color-accent-brand-hover: var(--accent-brand-hover);
+  --color-brass: var(--accent-brand); /* legacy alias → brand accent */
+  --color-seafoam: var(--accent-brand); /* legacy alias */
+  --color-brand: var(--abyss-700);
+  --color-brand-dark: var(--abyss-800);
+  --color-brand-light: var(--abyss-500);
+  --color-primary-hover: var(--primary-hover);
+
+  /* Radii — small & architectural (2–16px). Not pill-shaped. */
+  --radius-xs: var(--radius-xs);
+  --radius-sm: var(--radius-sm);
+  --radius-md: var(--radius-md);
+  --radius-lg: var(--radius-lg);
+  --radius-xl: var(--radius-xl);
+  --radius-2xl: calc(var(--radius-lg) * 1.4);
+  --radius-3xl: calc(var(--radius-lg) * 1.6);
+  --radius-4xl: calc(var(--radius-lg) * 1.8);
+
+  /* Soft, low, warm shadows */
+  --shadow-xs: var(--shadow-xs);
+  --shadow-sm: var(--shadow-sm);
+  --shadow-md: var(--shadow-md);
+  --shadow-lg: var(--shadow-lg);
+
+  /* Motion eases */
+  --ease-standard: var(--ease-standard);
+  --ease-out: var(--ease-out);
+}
+
+@media print {
+  body:has(.medication-card-print-target) * {
+    visibility: hidden;
+  }
+
+  .medication-card-print-target,
+  .medication-card-print-target * {
+    visibility: visible;
+  }
+
+  .medication-card-print-target {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .medication-card-print-target .medication-card-actions {
+    display: none;
+  }
+}
+
+/* ============================================================
+   LIGHT THEME (default) — linen canvas, evergreen navigation
+   ============================================================ */
+:root {
+  /* Numbered scales — single source of truth */
+  --abyss-900: #263128;
+  --abyss-800: #344238;
+  --abyss-700: #465a4b;
+  --abyss-600: #5b6d58;
+  --abyss-500: #74866e;
+  --abyss-400: #9eae95;
+  --abyss-300: #c5d0bd;
+  --abyss-200: #e0e7da;
+  --abyss-100: #eef2ea;
+
+  --brass-700: #82331f;
+  --brass-600: #9e4028;
+  --brass-500: #b14e32;
+  --brass-400: #d27b5d;
+  --brass-300: #e8ad94;
+  --brass-100: #f7dfd5;
+
+  --paper-white: #fffcf6;
+  --paper-50: #f7f1e5;
+  --paper-100: #efe3d2;
+  --paper-200: #e5d3bd;
+  --paper-300: #d8c0a7;
+
+  --ink-900: #263128;
+  --slate-700: #3f443c;
+  --slate-600: #5e6259;
+  --slate-500: #7a7d73;
+  --slate-400: #a6a598;
+  --slate-300: #d8d5cc;
+
+  --green-600: #42624a;
+  --green-100: #cfe0cd;
+  --amber-600: #785217;
+  --amber-100: #f1dfb6;
+  --red-600: #904039;
+  --red-100: #f2d8d4;
+
+  /* Canonical semantic aliases */
+  --surface-page: var(--paper-50);
+  --surface-card: var(--paper-white);
+  --surface-sunken: var(--paper-100);
+  --surface-raised: var(--paper-white);
+  --surface-inverse: var(--abyss-900);
+
+  --text-strong: var(--ink-900);
+  --text-body: var(--slate-700);
+  --text-muted: var(--slate-500);
+  --text-faint: var(--slate-400);
+  --text-inverse: var(--paper-50);
+  --text-on-accent: var(--paper-white);
+  --text-link: var(--abyss-600);
+
+  --border-subtle: var(--paper-200);
+  --border-default: var(--paper-300);
+  --border-strong: var(--slate-400);
+
+  /* Clay signal: reserved for active routes and decisions. */
+  --accent-brand: var(--brass-500);
+  --accent-brand-hover: var(--brass-600);
+  --accent-quiet: var(--brass-100);
+
+  /* shadcn semantic names → mapped to canonical aliases */
+  --background: var(--surface-page);
+  --foreground: var(--text-strong);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-strong);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-strong);
+  --primary: var(--abyss-700);
+  --primary-foreground: var(--paper-white);
+  --primary-hover: var(--abyss-800);
+  --primary-quiet: var(--abyss-100);
+  --secondary: var(--paper-100);
+  --secondary-foreground: var(--slate-700);
+  --muted: var(--paper-100);
+  --muted-foreground: var(--slate-500);
+  /* shadcn --accent = neutral hover wash (NOT the brand brass) */
+  --accent: var(--paper-100);
+  --accent-foreground: var(--ink-900);
+
+  --destructive: var(--red-600);
+  --success: var(--green-600);
+  --success-foreground: var(--paper-white);
+  --warning: var(--amber-600);
+  --warning-foreground: var(--paper-white);
+
+  --border: var(--border-subtle);
+  --input: var(--border-subtle);
+  --ring: var(--accent-brand);
+
+  /* Drafting board geometry: deliberate corners, never pill-shaped by default. */
+  --radius-xs: 2px;
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 4px;
+  --radius-xl: 8px;
+  --radius: var(--radius-lg);
+
+  /* Charts — evergreen · stone · clay · green · moss */
+  --chart-1: var(--abyss-700);
+  --chart-2: var(--slate-500);
+  --chart-3: var(--brass-500);
+  --chart-4: var(--green-600);
+  --chart-5: var(--abyss-500);
+
+  --grid-line: rgba(38, 49, 40, 0.04);
+
+  /* Sidebar — fixed evergreen runbook surface (both themes) */
+  --sidebar: var(--abyss-900);
+  --sidebar-foreground: var(--abyss-200);
+  --sidebar-primary: var(--brass-500); /* clay — active accent */
+  --sidebar-primary-foreground: var(--paper-white);
+  --sidebar-accent: var(--abyss-800); /* hover/active background */
+  --sidebar-accent-foreground: var(--paper-white);
+  --sidebar-border: rgba(255, 255, 255, 0.08);
+  --sidebar-ring: var(--brass-500);
+
+  /* Typography */
+  --font-display: var(--font-sans);
+  --font-logo: var(--font-sans);
+  --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
+
+  /* Editorial display scale for page titles and big operational numbers. */
+  --type-display-xs: 1.375rem; /* 22 */
+  --type-display-sm: 1.75rem; /* 28 */
+  --type-display-md: 2.25rem; /* 36 */
+  --type-display-lg: 2.875rem; /* 46 */
+  --type-display-xl: 3.75rem; /* 60 */
+
+  --leading-tight: 1.08;
+  --leading-snug: 1.22;
+  --leading-normal: 1.5;
+  --leading-relaxed: 1.65;
+  --tracking-tight: -0.02em;
+  --tracking-snug: -0.01em;
+  --tracking-normal: 0;
+  --tracking-wide: 0.04em;
+  --tracking-caps: 0.14em; /* eyebrows */
+
+  /* Crisp lift — enough depth to separate linen from the board. */
+  --shadow-xs: 0 1px 2px rgba(38, 49, 40, 0.05);
+  --shadow-sm: 0 4px 10px -9px rgba(38, 49, 40, 0.28);
+  --shadow-md: 0 12px 26px -22px rgba(38, 49, 40, 0.34);
+  --shadow-lg: 0 20px 50px -34px rgba(38, 49, 40, 0.42);
+
+  /* Motion */
+  --ease-standard: cubic-bezier(0.4, 0.1, 0.2, 1);
+  --ease-out: cubic-bezier(0.16, 1, 0.3, 1);
+  --duration-fast: 120ms;
+  --duration-base: 200ms;
+  --duration-slow: 360ms;
+
+  color-scheme: light;
+}
+
+/* ============================================================
+   DARK THEME — deep evergreen canvas; clay actions stay high-contrast
+   ============================================================ */
+[data-theme='dark'] {
+  --surface-page: #18211b;
+  --surface-card: #212c23;
+  --surface-sunken: #111812;
+  --surface-raised: #2a382d;
+  --surface-inverse: #f7f1e5;
+
+  --text-strong: #f8f3ea;
+  --text-body: #ded8ce;
+  --text-muted: #b4aea3;
+  --text-faint: #7b8277;
+  --text-inverse: #18211b;
+  --text-on-accent: #18211b;
+  --text-link: #e0a37d;
+
+  --border-subtle: #304031;
+  --border-default: #405343;
+  --border-strong: #64755f;
+
+  /* Signal lightens in the dark without turning into decoration. */
+  --accent-brand: #e3926f;
+  --accent-brand-hover: #f1b18f;
+  --accent-quiet: #3e2721;
+
+  --background: var(--surface-page);
+  --foreground: var(--text-strong);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-strong);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-strong);
+
+  /* Clay remains dark enough for existing white-label actions. */
+  --primary: #a9462c;
+  --primary-foreground: #fffcf6;
+  --primary-hover: #bd5435;
+  --primary-quiet: #3e2721;
+
+  --secondary: #2a382d;
+  --secondary-foreground: var(--text-strong);
+  --muted: #2a382d;
+  --muted-foreground: #c2bbb0;
+  --accent: #2a382d;
+  --accent-foreground: #f7f1e5;
+
+  --destructive: #f0a89f;
+  --success: #a3c8a6;
+  --success-foreground: #18211b;
+  --warning: #e1bc72;
+  --warning-foreground: #2f2107;
+
+  --border: var(--border-subtle);
+  --input: var(--border-subtle);
+  --ring: var(--accent-brand);
+
+  --chart-1: #dec2a3;
+  --chart-2: #c1cfba;
+  --chart-3: #e3926f;
+  --chart-4: #9bc39e;
+  --chart-5: #82977b;
+
+  --grid-line: rgba(247, 241, 229, 0.05);
+
+  --sidebar: #131b15;
+  --sidebar-foreground: #dbe6d5;
+  --sidebar-primary: #e3926f;
+  --sidebar-primary-foreground: #18211b;
+  --sidebar-accent: #26352a;
+  --sidebar-accent-foreground: #f8f3ea;
+  --sidebar-border: #304031;
+  --sidebar-ring: #e3926f;
+
+  color-scheme: dark;
+}
+
+/* ============================================================
+   CONFIGURABLE SURFACE ATTRIBUTES (data-* toggles)
+   data-theme handled above. data-layout / data-icons are
+   structural (handled in components).
+   ============================================================ */
+
+/* Density — rescales Tailwind's entire spacing scale via --spacing. */
+[data-density='compact'] {
+  --spacing: 0.22rem; /* default 0.25rem */
+}
+
+/* Type scale — scales rem-based sizing from the root. */
+[data-type='lg'] {
+  font-size: 112.5%; /* 16 → 18 */
+}
+
+/* Accent intensity — "bold" lets clay run a touch warmer/stronger. */
+[data-accent='bold'] {
+  --accent-brand: var(--brass-600);
+  --accent-brand-hover: var(--brass-700);
+  --ring: var(--brass-600);
+}
+[data-theme='dark'][data-accent='bold'] {
+  --accent-brand: #e5bf97;
+  --accent-brand-hover: #f0d8b5;
+  --ring: #e5bf97;
+}
+
+/* ============================================================
+   BASE STYLES
+   ============================================================ */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+
+  html {
+    @apply font-sans antialiased;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  body {
+    @apply bg-background text-foreground;
+    font-size: 1rem;
+    line-height: 1.6;
+    letter-spacing: -0.006em;
+  }
+
+  [data-density='compact'] body {
+    line-height: 1.55;
+  }
+
+  ::selection {
+    background: var(--brass-300);
+    color: var(--abyss-900);
+  }
+
+  h1,
+  h2,
+  h3,
+  h4,
+  h5,
+  h6 {
+    @apply font-display tracking-tight;
+  }
+
+  h1 {
+    @apply text-3xl font-semibold;
+    letter-spacing: -0.045em;
+  }
+
+  h2 {
+    @apply text-2xl font-semibold;
+    letter-spacing: -0.035em;
+  }
+
+  h3 {
+    @apply text-xl font-semibold;
+    letter-spacing: -0.018em;
+  }
+
+  h4 {
+    @apply text-base font-semibold;
+  }
+
+  p {
+    color: var(--muted-foreground);
+  }
+}
+
+/* ============================================================
+   BRAND UTILITIES — eyebrow, stat figures, data text
+   ============================================================ */
+@layer components {
+  /* Mono uppercase eyebrow/label — "mono carries the data". */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: var(--tracking-caps);
+    font-size: 0.6875rem; /* ~11px */
+    line-height: 1.2;
+    color: var(--text-muted);
+  }
+  .eyebrow-accent {
+    color: var(--accent-brand);
+  }
+
+  /* Big stat figure — Oxanium, tabular, tight. */
+  .stat-figure {
+    font-family: var(--font-display);
+    font-weight: 600;
+    font-variant-numeric: tabular-nums;
+    letter-spacing: var(--tracking-tight);
+    color: var(--text-strong);
+    line-height: 1.05;
+  }
+
+  /* Inline data/metadata in mono. */
+  .data-mono {
+    font-family: var(--font-mono);
+    font-variant-numeric: tabular-nums;
+  }
+
+  /* Fieldbook is a working surface: a fine drafting grid sits behind content,
+     while the orange spine marks the current point of attention. */
+  .fieldbook-shell {
+    background: var(--surface-page);
+  }
+
+  .fieldbook-canvas {
+    background-color: var(--surface-page);
+    background-image:
+      linear-gradient(
+        to right,
+        color-mix(in srgb, var(--border-subtle) 52%, transparent) 1px,
+        transparent 1px
+      ),
+      linear-gradient(
+        to bottom,
+        color-mix(in srgb, var(--border-subtle) 52%, transparent) 1px,
+        transparent 1px
+      );
+    background-size: 40px 40px;
+  }
+
+  .fieldbook-stage {
+    isolation: isolate;
+  }
+
+  .fieldbook-stage::before {
+    position: absolute;
+    z-index: -1;
+    top: 0;
+    left: clamp(1.25rem, 5vw, 4.75rem);
+    width: 1px;
+    height: 100%;
+    content: '';
+    background: color-mix(in srgb, var(--border-default) 62%, transparent);
+  }
+
+  .fieldbook-spine {
+    position: absolute;
+    z-index: 2;
+    top: 0;
+    bottom: 0;
+    left: 22px;
+    width: 1px;
+    background: color-mix(in srgb, var(--border-strong) 58%, transparent);
+  }
+
+  .fieldbook-spine-marker {
+    display: block;
+    width: 3px;
+    height: 92px;
+    margin-left: -1px;
+    background: var(--accent-brand);
+    box-shadow: 0 0 0 5px color-mix(in srgb, var(--accent-brand) 12%, transparent);
+  }
+
+  .fieldbook-page-marker {
+    display: grid;
+    grid-template-rows: 8px 1fr;
+    width: 8px;
+    min-height: 72px;
+    gap: 8px;
+  }
+
+  .fieldbook-page-marker::before {
+    width: 8px;
+    height: 8px;
+    content: '';
+    background: var(--accent-brand);
+  }
+
+  .fieldbook-page-marker::after {
+    width: 1px;
+    height: 100%;
+    margin-left: 3px;
+    content: '';
+    background: var(--border-strong);
+  }
+
+  .fieldbook-rail {
+    box-shadow: 14px 0 42px -34px rgba(12, 29, 48, 0.9);
+  }
+
+  .fieldbook-topbar {
+    box-shadow: 0 12px 24px -30px rgba(12, 29, 48, 0.6);
+  }
+
+  .fieldbook-kpi {
+    position: relative;
+  }
+
+  .fieldbook-kpi::before {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 40px;
+    height: 3px;
+    content: '';
+    background: var(--accent-brand);
+  }
+
+  .fieldbook-filterbar {
+    border: 1px solid var(--border-default);
+    border-radius: 4px;
+    background: color-mix(in srgb, var(--surface-card) 82%, transparent);
+    box-shadow: var(--shadow-sm);
+  }
+
+  .fieldbook-login-hero {
+    /* Auth heroes stay ink-black in both themes. The Studio theme maps
+       --sidebar to white, which otherwise makes the white hero lockup vanish. */
+    background: #111110;
+  }
+
+  .fieldbook-login-grid {
+    opacity: 0.42;
+    background-image:
+      linear-gradient(rgba(255, 255, 255, 0.08) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(255, 255, 255, 0.08) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+}
+
+/* ============================================================
+   SCROLLBAR
+   ============================================================ */
+@layer base {
+  ::-webkit-scrollbar {
+    width: 6px;
+    height: 6px;
+  }
+
+  ::-webkit-scrollbar-track {
+    background: transparent;
+  }
+
+  ::-webkit-scrollbar-thumb {
+    background: var(--border);
+    border-radius: 9999px;
+  }
+
+  ::-webkit-scrollbar-thumb:hover {
+    background: var(--muted-foreground);
+  }
+}
+
+/* ============================================================
+   MOTION — calm expo ease (pairs with GSAP / Motion)
+   ============================================================ */
+@layer utilities {
+  .animate-fade-in {
+    animation: fade-in 240ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  .animate-slide-up {
+    animation: slide-up 340ms cubic-bezier(0.16, 1, 0.3, 1);
+  }
+
+  /* Brand accent on display text — solid Brass (no gradients per brand). */
+  .text-gradient {
+    color: var(--accent-brand);
+  }
+
+  /* No glow in the brand — soft, low, cool shadows (classes kept for
+     existing call sites). */
+  .glow-brand {
+    box-shadow:
+      0 1px 2px rgba(8, 34, 31, 0.05),
+      0 8px 20px rgba(8, 34, 31, 0.08);
+  }
+
+  .glow-brand-lg {
+    box-shadow:
+      0 4px 8px rgba(8, 34, 31, 0.06),
+      0 18px 40px rgba(8, 34, 31, 0.12);
+  }
+
+  /* Brass inset active bar (left-rail active item, etc.). */
+  .accent-bar-l {
+    box-shadow: inset 2px 0 0 0 var(--accent-brand);
+  }
+
+  /* Decorative grid (login, brand surfaces) */
+  .bg-grid {
+    background-image:
+      linear-gradient(var(--grid-line) 1px, transparent 1px),
+      linear-gradient(90deg, var(--grid-line) 1px, transparent 1px);
+    background-size: 56px 56px;
+  }
+}
+
+@keyframes fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
+@keyframes slide-up {
+  from {
+    opacity: 0;
+    transform: translateY(10px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Respect reduced-motion globally (Motion/GSAP also guard in JS) */
+@media (prefers-reduced-motion: reduce) {
+  *,
+  ::before,
+  ::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  [data-slot='page-transition'] {
+    opacity: 1 !important;
+    transform: none !important;
+  }
+}
+
+/* ============================================================
+   NOTE EDITOR — Tiptap prose styles
+   ============================================================ */
+.note-prose {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+  max-width: 100%;
+}
+.note-prose h1 {
+  font-size: 1.875rem;
+  font-weight: 700;
+  letter-spacing: -0.02em;
+  margin-top: 1.25rem;
+  margin-bottom: 0.5rem;
+  color: var(--foreground);
+}
+.note-prose h2 {
+  font-size: 1.5rem;
+  font-weight: 700;
+  letter-spacing: -0.015em;
+  margin-top: 1.1rem;
+  margin-bottom: 0.4rem;
+  color: var(--foreground);
+}
+.note-prose h3 {
+  font-size: 1.2rem;
+  font-weight: 600;
+  margin-top: 0.9rem;
+  margin-bottom: 0.3rem;
+  color: var(--foreground);
+}
+.note-prose p {
+  margin: 0.5rem 0;
+}
+.note-prose ul {
+  list-style: disc;
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+.note-prose ol {
+  list-style: decimal;
+  padding-left: 1.5rem;
+  margin: 0.5rem 0;
+}
+.note-prose li > p {
+  margin: 0.15rem 0;
+}
+.note-prose blockquote {
+  border-left: 3px solid var(--border);
+  padding-left: 1rem;
+  margin: 0.75rem 0;
+  color: var(--muted-foreground);
+  font-style: italic;
+}
+.note-prose code {
+  background: var(--muted);
+  padding: 0.1rem 0.35rem;
+  border-radius: 4px;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.85em;
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+.note-prose pre.note-codeblock,
+.note-prose pre {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 0.85rem 1rem;
+  margin: 0.75rem 0;
+  overflow-x: auto;
+  max-width: 100%;
+  font-size: 0.85rem;
+}
+.note-prose pre code {
+  background: transparent;
+  padding: 0;
+  overflow-wrap: normal;
+  word-break: normal;
+  white-space: pre;
+}
+.note-prose hr {
+  border: none;
+  border-top: 1px solid var(--border);
+  margin: 1.25rem 0;
+}
+.note-prose a:not(.note-link) {
+  color: var(--primary);
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+.note-prose a.note-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.25rem;
+  background: rgba(177, 78, 50, 0.14);
+  color: #9e4028;
+  border-radius: 6px;
+  padding: 0.05rem 0.4rem;
+  font-weight: 500;
+  text-decoration: none;
+  font-size: 0.95em;
+  transition: background 150ms;
+}
+.note-prose a.note-link:hover {
+  background: rgba(177, 78, 50, 0.24);
+}
+.note-prose table {
+  border-collapse: collapse;
+  margin: 0.75rem 0;
+  width: 100%;
+  table-layout: fixed;
+  overflow: hidden;
+}
+.note-prose th,
+.note-prose td {
+  border: 1px solid var(--border);
+  padding: 0.5rem 0.65rem;
+  vertical-align: top;
+  position: relative;
+  min-width: 6rem;
+}
+.note-prose th {
+  background: var(--muted);
+  font-weight: 600;
+  text-align: left;
+}
+.note-prose .selectedCell::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: rgba(177, 78, 50, 0.12);
+  pointer-events: none;
+}
+.note-prose ::selection {
+  background: #e8d8c3;
+  color: #263128;
+}
+.note-prose:focus {
+  outline: none;
+}
+
+/* ============================================================
+   DEVFATHOM STUDIO — spatial operating canvas
+   Fog surround · paper workspace · ink structure · coral signal
+   ============================================================ */
+:root {
+  --surface-page: #f6f6f3;
+  --surface-card: #ffffff;
+  --surface-sunken: #f1f1ee;
+  --surface-raised: #ffffff;
+  --surface-inverse: #111110;
+
+  --text-strong: #111110;
+  --text-body: #333330;
+  --text-muted: #6c6c68;
+  --text-faint: #a3a39e;
+  --text-inverse: #ffffff;
+  --text-on-accent: #ffffff;
+  --text-link: #111110;
+
+  --border-subtle: #e9e9e5;
+  --border-default: #deded9;
+  --border-strong: #c7c7c1;
+
+  --accent-brand: #bd3f2a;
+  --accent-brand-hover: #a5361f;
+  --accent-quiet: #fff0ec;
+
+  --background: var(--surface-page);
+  --foreground: var(--text-strong);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-strong);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-strong);
+  --primary: #111110;
+  --primary-foreground: #ffffff;
+  --primary-hover: #2c2c2a;
+  --primary-quiet: #eeeeeb;
+  --secondary: #f1f1ee;
+  --secondary-foreground: #333330;
+  --muted: #f1f1ee;
+  --muted-foreground: #6c6c68;
+  --accent: #f1f1ee;
+  --accent-foreground: #111110;
+  --border: var(--border-subtle);
+  --input: var(--border-default);
+  --ring: var(--accent-brand);
+
+  --chart-1: var(--accent-brand);
+  --chart-2: #111110;
+  --chart-3: #a3a39e;
+  --chart-4: #f4a261;
+  --chart-5: #6c756f;
+
+  --sidebar: #ffffff;
+  --sidebar-foreground: #333330;
+  --sidebar-primary: var(--accent-brand);
+  --sidebar-primary-foreground: #ffffff;
+  --sidebar-accent: #f1f1ee;
+  --sidebar-accent-foreground: #111110;
+  --sidebar-border: #e9e9e5;
+  --sidebar-ring: var(--accent-brand);
+
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+  --radius: var(--radius-lg);
+
+  --shadow-xs: 0 1px 2px rgba(17, 17, 16, 0.035);
+  --shadow-sm: 0 8px 24px -20px rgba(17, 17, 16, 0.22);
+  --shadow-md: 0 18px 42px -30px rgba(17, 17, 16, 0.3);
+  --shadow-lg: 0 32px 80px -44px rgba(17, 17, 16, 0.4);
+
+  --font-display: var(--font-sans);
+  --font-body: 'Instrument Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
+}
+
+[data-theme='dark'] {
+  --surface-page: #1c1c1a;
+  --surface-card: #242422;
+  --surface-sunken: #181817;
+  --surface-raised: #2c2c29;
+  --surface-inverse: #f7f7f4;
+  --text-strong: #f7f7f4;
+  --text-body: #dfdfda;
+  --text-muted: #aaa9a3;
+  --text-faint: #9a9993;
+  --text-inverse: #111110;
+  --text-on-accent: #ffffff;
+  --border-subtle: #343431;
+  --border-default: #44443f;
+  --border-strong: #5e5d57;
+  --accent-brand: #ff745d;
+  --accent-brand-hover: #ff8b78;
+  --accent-quiet: #48231d;
+  --background: var(--surface-page);
+  --foreground: var(--text-strong);
+  --card: var(--surface-card);
+  --card-foreground: var(--text-strong);
+  --popover: var(--surface-card);
+  --popover-foreground: var(--text-strong);
+  --primary: #f7f7f4;
+  --primary-foreground: #111110;
+  --primary-hover: #deded9;
+  --secondary: #30302d;
+  --secondary-foreground: #f7f7f4;
+  --muted: #30302d;
+  --muted-foreground: #aaa9a3;
+  --accent: #30302d;
+  --accent-foreground: #f7f7f4;
+  --border: var(--border-subtle);
+  --input: var(--border-default);
+  --ring: var(--accent-brand);
+  --sidebar: #242422;
+  --sidebar-foreground: #dfdfda;
+  --sidebar-accent: #30302d;
+  --sidebar-accent-foreground: #f7f7f4;
+  --sidebar-border: #343431;
+}
+
+@layer base {
+  body {
+    font-family: var(--font-sans);
+    background: #e8e8e5;
+    color: var(--foreground);
+  }
+
+  ::selection {
+    background: #ffb4a8;
+    color: #111110;
+  }
+}
+
+@layer components {
+  .studio-viewport {
+    background: #e8e8e5;
+  }
+
+  .studio-shell {
+    background: var(--surface-card);
+  }
+
+  .studio-canvas {
+    background: var(--surface-page);
+  }
+
+  .studio-stage {
+    isolation: isolate;
+  }
+
+  .studio-topbar,
+  .studio-navigation {
+    box-shadow: none;
+  }
+
+  .studio-icon-button {
+    display: flex;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    color: var(--text-body);
+    background: var(--surface-card);
+    transition:
+      border-color 180ms var(--ease-out),
+      transform 180ms var(--ease-out),
+      background 180ms var(--ease-out);
+  }
+
+  .studio-icon-button:hover {
+    border-color: var(--border-strong);
+    background: var(--surface-sunken);
+    transform: translateY(-1px);
+  }
+
+  .studio-search {
+    display: flex;
+    width: 44px;
+    height: 44px;
+    flex: 0 0 auto;
+    align-items: center;
+    justify-content: center;
+    gap: 10px;
+    overflow: hidden;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    color: var(--text-muted);
+    background: var(--surface-card);
+    font-size: 0.875rem;
+    white-space: nowrap;
+    transition:
+      border-color 180ms var(--ease-out),
+      background 180ms var(--ease-out);
+  }
+
+  .studio-search:hover,
+  .studio-search:focus-visible {
+    border-color: var(--border-strong);
+    background: var(--surface-sunken);
+  }
+
+  .studio-assistant-button {
+    display: flex;
+    min-width: 44px;
+    height: 44px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 0 13px;
+    color: var(--text-strong);
+    background: var(--surface-card);
+    transition:
+      border-color 180ms var(--ease-out),
+      transform 180ms var(--ease-out);
+  }
+
+  .studio-assistant-button:hover {
+    border-color: var(--accent-brand);
+    transform: translateY(-1px);
+  }
+
+  .studio-avatar-button {
+    display: flex;
+    min-width: 44px;
+    min-height: 44px;
+    align-items: center;
+    justify-content: center;
+    border: 1px solid transparent;
+    border-radius: 999px;
+    padding: 5px;
+    transition:
+      background 180ms var(--ease-out),
+      border-color 180ms var(--ease-out);
+  }
+
+  .studio-avatar-button:hover {
+    border-color: var(--border-subtle);
+    background: var(--surface-sunken);
+  }
+
+  .studio-command-grid {
+    display: grid;
+    grid-template-columns: minmax(0, 1fr);
+    gap: 12px;
+  }
+
+  .studio-date-panel,
+  .studio-greeting-panel {
+    min-width: 0;
+    border: 1px solid var(--border-subtle);
+    border-radius: 28px;
+    background: var(--surface-card);
+  }
+
+  .studio-date-panel {
+    position: relative;
+    display: flex;
+    min-height: 116px;
+    align-items: center;
+    gap: 16px;
+    padding: 22px;
+  }
+
+  .studio-date-number {
+    font-size: clamp(2.5rem, 7vw, 4.5rem);
+    font-weight: 500;
+    line-height: 0.9;
+    letter-spacing: -0.075em;
+    color: var(--foreground);
+  }
+
+  .studio-greeting-panel {
+    display: flex;
+    min-height: 220px;
+    flex-direction: column;
+    justify-content: space-between;
+    gap: 28px;
+    padding: clamp(24px, 4vw, 46px);
+  }
+
+  .studio-prompt-button {
+    display: flex;
+    width: 100%;
+    min-height: 64px;
+    align-items: center;
+    gap: 12px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 10px 14px 10px 10px;
+    background: var(--surface-sunken);
+    transition:
+      border-color 180ms var(--ease-out),
+      transform 180ms var(--ease-out),
+      background 180ms var(--ease-out);
+  }
+
+  .studio-prompt-button:hover {
+    border-color: color-mix(in srgb, var(--accent-brand) 55%, var(--border-default));
+    background: var(--surface-card);
+    transform: translateY(-1px);
+  }
+
+  .studio-customize-button {
+    display: flex;
+    min-height: 48px;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
+    border: 1px solid var(--border-subtle);
+    border-radius: 999px;
+    padding: 0 18px;
+    color: var(--text-body);
+    background: var(--surface-card);
+    font-size: 0.75rem;
+    font-weight: 650;
+    transition:
+      color 180ms var(--ease-out),
+      background 180ms var(--ease-out),
+      border-color 180ms var(--ease-out);
+  }
+
+  .studio-customize-button:hover,
+  .studio-customize-button.is-active {
+    border-color: var(--foreground);
+    color: var(--background);
+    background: var(--foreground);
+  }
+
+  .studio-meeting-card,
+  .studio-panel,
+  .studio-project-card,
+  .studio-kpi-card {
+    border-radius: 24px;
+    box-shadow: var(--shadow-xs);
+  }
+
+  .studio-kpi-card {
+    position: relative;
+    min-height: 172px;
+    border: 1px solid var(--border-subtle);
+    transition:
+      transform 180ms var(--ease-out),
+      border-color 180ms var(--ease-out),
+      box-shadow 180ms var(--ease-out);
+  }
+
+  .studio-kpi-card:hover {
+    border-color: var(--border-strong);
+    box-shadow: var(--shadow-md);
+    transform: translateY(-2px);
+  }
+
+  .studio-kpi-icon,
+  .studio-section-icon {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--accent-brand);
+    background: var(--accent-quiet);
+  }
+
+  .studio-kpi-icon {
+    position: absolute;
+    top: 20px;
+    right: 20px;
+    width: 36px;
+    height: 36px;
+    border-radius: 50%;
+  }
+
+  .studio-section-icon {
+    width: 28px;
+    height: 28px;
+    border-radius: 50%;
+  }
+
+  .studio-revenue-card {
+    min-height: 360px;
+  }
+}
+
+@media (min-width: 768px) {
+  .studio-greeting-panel {
+    flex-direction: row;
+    align-items: flex-end;
+  }
+
+  .studio-prompt-button {
+    width: min(320px, 42%);
+  }
+}
+
+@media (min-width: 1024px) {
+  .studio-search {
+    width: 220px;
+    justify-content: flex-start;
+    padding: 0 16px;
+  }
+
+  .studio-viewport {
+    padding: 22px;
+  }
+
+  .studio-shell {
+    border: 1px solid rgba(17, 17, 16, 0.04);
+    border-radius: 36px;
+    box-shadow: 0 34px 90px -56px rgba(17, 17, 16, 0.34);
+  }
+
+  .studio-topbar {
+    border-radius: 35px 35px 0 0;
+  }
+
+  .studio-command-grid {
+    grid-template-columns: minmax(230px, 0.8fr) minmax(0, 2.6fr) auto;
+    align-items: stretch;
+  }
+
+  .studio-date-panel {
+    min-height: 250px;
+    flex-direction: column;
+    align-items: flex-start;
+    justify-content: flex-end;
+  }
+
+  .studio-date-panel > svg {
+    position: absolute;
+    top: 24px;
+    right: 24px;
+  }
+
+  .studio-greeting-panel {
+    min-height: 250px;
+  }
+
+  .studio-customize-button {
+    width: 74px;
+    min-height: 74px;
+    align-self: center;
+    padding: 0;
+  }
+
+  .studio-customize-button span {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip: rect(0 0 0 0);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 767px) {
+  .studio-navigation {
+    display: none;
+  }
+}
+
+@media (min-width: 1280px) {
+  .studio-search {
+    width: 260px;
+  }
+}
+
+/* ============================================================
+   PLATFORM CONTROL — same Studio surface as the tenant workspace
+   The platform remains information-dense, while inheriting the same fog
+   surround, paper cards, rounded geometry, ink controls, and coral signal.
+   ============================================================ */
+@layer components {
+  .platform-workspace {
+    color: var(--text-strong);
+  }
+
+  .platform-workspace .platform-page-heading {
+    margin-bottom: 1.75rem;
+  }
+
+  .platform-workspace
+    :is(section, aside, details, form, div.overflow-x-auto).border.border-border-default {
+    overflow: hidden;
+    border-color: var(--border-subtle);
+    border-radius: var(--radius-md);
+    box-shadow: var(--shadow-xs);
+  }
+
+  .platform-workspace :is(section, details, form).bg-surface-card,
+  .platform-workspace div.overflow-x-auto.bg-surface-card {
+    background: var(--surface-card);
+  }
+
+  .platform-workspace :is(input, select, textarea) {
+    min-height: 44px;
+    border-color: var(--border-default);
+    border-radius: var(--radius-sm);
+    background: var(--surface-card);
+    color: var(--text-strong);
+    transition:
+      border-color 180ms var(--ease-out),
+      box-shadow 180ms var(--ease-out),
+      background 180ms var(--ease-out);
+  }
+
+  .platform-workspace :is(input, select, textarea):hover {
+    border-color: var(--border-strong);
+  }
+
+  .platform-workspace :is(input, select, textarea):focus {
+    border-color: var(--accent-brand);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-brand) 14%, transparent);
+  }
+
+  .platform-workspace input[type='checkbox'] {
+    min-height: 1rem;
+    border-radius: 4px;
+  }
+
+  .platform-workspace summary {
+    min-height: 44px;
+    transition: background 180ms var(--ease-out);
+  }
+
+  .platform-workspace summary:hover {
+    background: var(--surface-sunken);
+  }
+
+  .platform-workspace table {
+    border-collapse: separate;
+    border-spacing: 0;
+  }
+
+  .platform-workspace thead {
+    background: var(--surface-sunken);
+  }
+
+  .platform-workspace thead th {
+    color: var(--text-muted);
+    font-weight: 600;
+  }
+
+  .platform-workspace tbody tr {
+    transition: background 160ms var(--ease-out);
+  }
+
+  .platform-workspace tbody tr:hover {
+    background: color-mix(in srgb, var(--surface-sunken) 72%, transparent);
+  }
+
+  .platform-workspace .bg-abyss-900 {
+    border-radius: 3px;
+    background: var(--primary);
+    color: var(--primary-foreground);
+    box-shadow: 0 8px 18px -13px rgba(17, 17, 16, 0.72);
+  }
+
+  .platform-workspace .hover\:bg-abyss-800:hover,
+  .platform-workspace .bg-abyss-800 {
+    background: var(--primary-hover);
+    color: var(--primary-foreground);
+  }
+
+  .platform-workspace .border-abyss-900 {
+    border-color: var(--primary);
+  }
+
+  .platform-workspace .text-brass-300,
+  .platform-workspace .text-brass-500,
+  .platform-workspace .text-brass-700 {
+    color: var(--accent-brand);
+  }
+
+  .platform-workspace .bg-brass-100 {
+    background: var(--accent-quiet);
+  }
+
+  .platform-workspace button,
+  .platform-workspace a {
+    -webkit-tap-highlight-color: transparent;
+  }
+
+  .platform-workspace button:not(:disabled),
+  .platform-workspace summary {
+    cursor: pointer;
+  }
+
+  .platform-workspace button:focus-visible,
+  .platform-workspace a:focus-visible,
+  .platform-workspace summary:focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+}
+
+@media (max-width: 639px) {
+  .platform-workspace .platform-page-heading {
+    margin-bottom: 1.25rem;
+  }
+
+  .platform-workspace .platform-page-heading h1 {
+    font-size: clamp(2rem, 11vw, 2.65rem);
+  }
+}
+
+/* Unlayered compatibility bridge for the first platform implementation's
+   palette utilities. Unlayered rules intentionally outrank Tailwind's utility
+   layer so every existing route adopts Studio ink/coral without a brittle
+   route-by-route color rewrite. */
+.platform-workspace .bg-abyss-900 {
+  background-color: var(--primary);
+  color: var(--primary-foreground);
+}
+
+.platform-workspace .bg-abyss-800,
+.platform-workspace .hover\:bg-abyss-800:hover {
+  background-color: var(--primary-hover);
+  color: var(--primary-foreground);
+}
+
+.platform-workspace .border-abyss-900 {
+  border-color: var(--primary);
+}
+
+.platform-workspace .text-abyss-200,
+.platform-workspace .text-abyss-300,
+.platform-workspace .text-paper-50,
+.platform-workspace .text-paper-white {
+  color: var(--primary-foreground);
+}
+
+.platform-workspace .text-brass-300,
+.platform-workspace .text-brass-500,
+.platform-workspace .text-brass-700 {
+  color: var(--accent-brand);
+}
+
+.platform-workspace .bg-brass-100 {
+  background-color: var(--accent-quiet);
+}

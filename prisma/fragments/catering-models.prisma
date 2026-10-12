@@ -1,0 +1,58 @@
+// SQL migration is authoritative for cross-table FK/check/trigger/RLS constraints.
+model RestaurantCateringBranchCapacity {
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  maxConcurrentHeadcount Int?
+  @@id([organizationId, branchId])
+  @@map("restaurant_catering_branch_capacity")
+}
+model RestaurantCateringQuoteRevision {
+  id String @id
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId String
+  revision Int
+  snapshot Json @db.JsonB
+  contentHash String
+  createdByStaffId String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  @@unique([organizationId, orderId, revision], map: "catering_quote_revision_key")
+  @@unique([organizationId, orderId, id], map: "catering_quote_order_id_key")
+  @@map("restaurant_catering_quote_revisions")
+}
+model RestaurantCateringQuoteApproval {
+  id String @id
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId String
+  quoteRevisionId String
+  orderRevision Int
+  actorStaffProfileId String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  @@unique([organizationId, orderId, quoteRevisionId])
+  @@map("restaurant_catering_quote_approvals")
+}
+model RestaurantCateringDisposition {
+  id String @id
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId String
+  originalMovementId String
+  kind String
+  quantity Decimal @db.Decimal(18,6)
+  resultMovementId String?
+  reason String
+  actorStaffProfileId String
+  idempotencyKey String
+  payloadHash String
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  @@unique([organizationId, orderId, idempotencyKey])
+  @@map("restaurant_catering_dispositions")
+}
+model RestaurantCateringCommand {
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  orderId String
+  idempotencyKey String
+  payloadHash String
+  result Json @db.JsonB
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  @@id([organizationId, orderId, idempotencyKey])
+  @@map("restaurant_catering_commands")
+}
