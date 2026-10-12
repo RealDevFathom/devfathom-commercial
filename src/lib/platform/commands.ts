@@ -16,9 +16,9 @@ import { assertPlatformCapability } from '@/lib/platform/auth';
 import { ActivationPreflightError, PlatformSecurityError } from '@/lib/platform/security';
 import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
-import type { DemoSeatIdentity } from '@/lib/demo/seed-data';
+import type { DemoSeatIdentity } from '@/lib/platform/command-types';
 import { demoApproverEmail } from '@/lib/demo/approval';
-import { demoSharedDeploymentOrigin } from '@/lib/demo/deployment-origin';
+import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
@@ -968,7 +968,11 @@ async function bootstrapOrganization(
       organization,
       demo.now,
       'shared-platform-demo',
-      demoSharedDeploymentOrigin(organization)
+      demoSharedDeploymentOrigin(
+        organization,
+        process.env.AUTH_URL || process.env.NEXTAUTH_URL,
+        process.env.SHARED_APP_HOSTS
+      )
     );
   }
   await db.organizationLifecycleEvent.create({
@@ -1265,7 +1269,11 @@ export async function activateDemoRestaurantOrganizationInTransaction(
     organization,
     now,
     'shared-platform-demo',
-    demoSharedDeploymentOrigin(organization)
+    demoSharedDeploymentOrigin(
+        organization,
+        process.env.AUTH_URL || process.env.NEXTAUTH_URL,
+        process.env.SHARED_APP_HOSTS
+      )
   );
   await assertActivationReady(db, identity.organizationId);
   if (organization.status === 'ACTIVE') return;

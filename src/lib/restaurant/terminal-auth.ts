@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { demoSeatFromOrganizationId, isCanonicalDemoOrganization, isReservedDemoOrganizationId } from '@/lib/tenancy/demo-identity';
+
 import { hash as bcryptHash } from 'bcryptjs';
 import { NextResponse } from 'next/server';
 
@@ -9,14 +11,13 @@ import type {
 } from '@/generated/prisma/client';
 import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { liveDemoAccessExpiry } from '@/lib/auth/session-state';
-import { demoSeatFromOrganizationId } from '@/lib/demo/config';
+import { getDemoSeatCount } from '@/lib/demo/config';
 import {
   DEMO_PERSONAS,
   demoPersonaForUser,
   demoPersonaCanUseDevice,
   demoPersonaDeviceName,
   demoPersonaUserRole,
-  isCanonicalDemoOrganization,
 } from '@/lib/demo/personas';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
@@ -271,12 +272,12 @@ async function bindDemoActor(
 ): Promise<DeviceDiscovery | NextResponse> {
   if (!discovery.isDemo) {
     // Reserved demo devices cannot turn into production credentials if the flag changes.
-    return discovery.organizationId.startsWith('org_demo_restaurant_seat_')
+    return isReservedDemoOrganizationId(discovery.organizationId)
       ? unauthorized('Demo access is unavailable.')
       : discovery;
   }
   const actor = await resolveTenantActor({ request });
-  const seat = demoSeatFromOrganizationId(discovery.organizationId);
+  const seat = demoSeatFromOrganizationId(discovery.organizationId, getDemoSeatCount());
   if (
     !actor ||
     actor.support ||
@@ -284,7 +285,7 @@ async function bindDemoActor(
     !actor.organization.isDemo ||
     actor.organization.id !== discovery.organizationId ||
     actor.session.user.organizationId !== discovery.organizationId ||
-    !isCanonicalDemoOrganization(actor.organization) ||
+    !isCanonicalDemoOrganization(actor.organization, getDemoSeatCount()) ||
     !demoPersonaForUser(seat, actor.session.user) ||
     !liveDemoAccessExpiry(actor.session.user.demoAccessExpiresAt)
   ) {
@@ -300,7 +301,7 @@ async function demoDeviceActorMatches(
   activeStaffProfileId?: string | null
 ): Promise<boolean> {
   if (!actor) return true;
-  const seat = demoSeatFromOrganizationId(actor.organization.id);
+  const seat = demoSeatFromOrganizationId(actor.organization.id, getDemoSeatCount());
   const persona = seat ? demoPersonaForUser(seat, actor.session.user) : null;
   if (
     !seat ||

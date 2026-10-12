@@ -1,3 +1,6 @@
+import { demoSeatFromOrganizationId as seatFromOrganizationId } from '@/lib/tenancy/demo-identity';
+export { demoSeatSlug, demoOrganizationId } from '@/lib/tenancy/demo-identity';
+
 export const DEMO_SESSION_MAX_AGE = 12 * 60 * 60;
 export const DEMO_ACCESS_COOKIE = 'df_demo_access';
 
@@ -19,16 +22,8 @@ export function demoSeatName(seat: number): string {
   return `Demo Restaurant — Seat ${seat}`;
 }
 
-export function demoSeatSlug(seat: number): string {
-  return `demo-restaurant-seat-${seat}`;
-}
-
 export function demoManagerEmail(seat: number): string {
   return `manager.seat${seat}@demo.devfathom.invalid`;
-}
-
-export function demoOrganizationId(seat: number): string {
-  return `org_demo_restaurant_seat_${seat}`;
 }
 
 export function demoManagerId(seat: number): string {
@@ -36,7 +31,5 @@ export function demoManagerId(seat: number): string {
 }
 
 export function demoSeatFromOrganizationId(organizationId: string): number | null {
-  const match = /^org_demo_restaurant_seat_(\d+)$/.exec(organizationId);
-  const seat = match ? Number(match[1]) : 0;
-  return Number.isInteger(seat) && seat >= 1 && seat <= getDemoSeatCount() ? seat : null;
+  return seatFromOrganizationId(organizationId, getDemoSeatCount());
 }

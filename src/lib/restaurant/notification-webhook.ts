@@ -17,7 +17,7 @@ import {
 } from '@/lib/restaurant/outbox-dispatcher';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { enqueue } from '@/lib/restaurant/scheduler';
-import { isDemoTenant } from '@/lib/demo/isolation';
+import { isDemoTenant } from '@/lib/tenancy/demo-isolation';
 
 export const NOTIFICATION_WEBHOOK_EVENT_TYPE = 'restaurant.notification.webhook.v1';
 export const NOTIFICATION_WEBHOOK_JOB_TYPE = 'notification.webhook.deliver.v1';

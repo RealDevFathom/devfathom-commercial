@@ -1,3 +1,4 @@
+import { demoSeatFromOrganizationId, isCanonicalDemoOrganization } from '@/lib/tenancy/demo-identity';
 import NextAuth, { CredentialsSignin } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import { compare } from 'bcryptjs';
@@ -20,12 +21,11 @@ import { consumeLoginIntent, LOGIN_INTENT_COOKIE, peekLoginIntent } from '@/lib/
 import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
-import { demoSeatFromOrganizationId, isDemoEnabled } from '@/lib/demo/config';
+import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
 import {
   DEMO_PERSONAS,
   demoPersonaForUser,
   demoPersonaUserRole,
-  isCanonicalDemoOrganization,
 } from '@/lib/demo/personas';
 
 // Fail fast in production if the session-signing secret is missing, so the app
@@ -431,7 +431,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const organization = await resolveOrganizationById(organizationId);
         if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
-        const demoSeat = organization.isDemo ? demoSeatFromOrganizationId(organization.id) : null;
+        const demoSeat = organization.isDemo ? demoSeatFromOrganizationId(organization.id, getDemoSeatCount()) : null;
         const demoPersona = demoSeat
           ? demoPersonaForUser(demoSeat, { id: candidate.userId, email: intent.email })
           : null;
@@ -440,7 +440,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         if (
           organization.isDemo &&
           (!isDemoEnabled() ||
-            !isCanonicalDemoOrganization(organization) ||
+            !isCanonicalDemoOrganization(organization, getDemoSeatCount()) ||
             !demoPersona ||
             !liveDemoAccessExpiry(candidate.demoAccessExpiresAt))
         ) {

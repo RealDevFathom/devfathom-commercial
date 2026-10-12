@@ -4,7 +4,8 @@ import { TRPCError } from '@trpc/server';
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
-import { resolveDemoDirectoryScope } from '@/lib/demo/directory-access';
+import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
+import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
 import { ensureAdministratorStaffProfile } from '@/lib/restaurant/administrator-staff-profile';
 import {
   CommercialLimitError,
@@ -180,7 +181,7 @@ export const restaurantStaffRouter = router({
   // branch and staff identity. Return only the actor's effective management scope.
   listBranches: protectedProcedure.query(async ({ ctx }) => {
     const authorization =
-      (await resolveDemoDirectoryScope(ctx, 'branches')) ??
+      (await resolveDemoDirectoryScope(ctx, 'branches', demoDirectoryPolicy)) ??
       (await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user));
     return ctx.db.restaurantBranch.findMany({
       where: {

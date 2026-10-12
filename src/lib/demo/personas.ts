@@ -1,4 +1,5 @@
-import { demoOrganizationId, demoSeatFromOrganizationId, demoSeatSlug } from './config';
+import { getDemoSeatCount } from './config';
+import { isCanonicalDemoOrganization as canonicalOrganization } from '@/lib/tenancy/demo-identity';
 
 export const DEMO_PERSONA_KEYS = [
   'owner',
@@ -93,24 +94,10 @@ export function demoPersonaUserRole(persona: DemoPersona): 'ADMIN' | 'EMPLOYEE' 
   return persona === 'owner' || persona === 'manager' ? 'ADMIN' : 'EMPLOYEE';
 }
 
-export function isCanonicalDemoOrganization(organization: {
-  id: string;
-  slug: string;
-  isDemo: boolean;
-  status: string;
-  vertical?: string;
-  deploymentMode: string;
-}): boolean {
-  const seat = demoSeatFromOrganizationId(organization.id);
-  return Boolean(
-    seat &&
-    organization.id === demoOrganizationId(seat) &&
-    organization.slug === demoSeatSlug(seat) &&
-    organization.isDemo &&
-    organization.status === 'ACTIVE' &&
-    organization.vertical === 'RESTAURANT' &&
-    organization.deploymentMode === 'SHARED'
-  );
+export function isCanonicalDemoOrganization(
+  organization: Parameters<typeof canonicalOrganization>[0]
+): boolean {
+  return canonicalOrganization(organization, getDemoSeatCount());
 }
 
 export function demoPersonaDeviceName(
