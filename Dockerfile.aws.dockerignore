@@ -1077,3 +1077,11 @@
 !src/server/routers/restaurant-promotions.ts
 !src/lib/hotel/onboarding-checklist.ts
 !src/lib/hotel/property.ts
+
+!src/lib/hotel/extras.ts
+!src/lib/hotel/features.ts
+!src/lib/hotel/mode-overrides.ts
+!src/lib/hotel/modes.ts
+!src/lib/platform/hotel-property-maintenance.ts
+!src/server/hotel-property-scope.ts
+!src/server/routers/hotel-property.ts

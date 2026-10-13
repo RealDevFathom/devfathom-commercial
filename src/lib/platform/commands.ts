@@ -44,6 +44,7 @@ import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-c
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 import { defaultBookingEngineSlug } from '@/lib/hotel/property';
+import { deactivateHotelProperty, reactivateHotelProperty, recoverHotelPropertyManager } from '@/lib/platform/hotel-property-maintenance';
 import {
   ensureAdministratorStaffProfile,
   type AdministratorStaffProfileResult,
@@ -240,7 +241,8 @@ function sensitiveCommand(action: string): boolean {
       'organization.transition',
     ].includes(action) ||
     action === 'organization.identity' ||
-    action.startsWith('organization.identity.')
+    action.startsWith('organization.identity.') ||
+    action.startsWith('organization.hotelproperty.')
   );
 }
 const sensitiveReason = z.string().trim().min(10).max(500);
@@ -2396,6 +2398,105 @@ async function runCommand(
         organizationId: saved.organizationId,
         data: { id: saved.id, passwordReset: true },
         audit: { id: saved.id, passwordReset: true },
+      };
+    }
+    // PROP-04 G2 — break-glass property recovery. The tenant write policy on
+    // `hotel_property_assignments` requires the actor to already hold an
+    // assignment at that branch, which is correct for ordinary delegation and
+    // leaves exactly one hole: when the only assigned manager leaves, nobody
+    // inside the tenant can restore access to the property. This is the native,
+    // audited way out of that hole, and it deliberately does not read an existing
+    // manager — it cannot depend on the thing that is missing.
+    //
+    // It is not impersonation: no tenant session exists here, the work runs in
+    // the platform transaction under `organizations:security:write`, and the ledger
+    // records the operator who did it. It is not a blanket grant: one property,
+    // one named person, one role the organization already has.
+    case 'organization.hotelproperty.recover': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          userId: id,
+          organizationRoleId: id,
+          // Break-glass access is recorded with a reason an auditor can read.
+          // Longer than the ordinary override reason on purpose: this command's
+          // whole justification is the circumstance, so 'fix' is not an answer.
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const { reason, ...tuple } = input;
+      const recovered = await recoverHotelPropertyManager(db, tuple);
+      return {
+        targetType: 'HotelPropertyAssignment',
+        targetId: `${input.branchId}:${input.userId}`,
+        organizationId: input.organizationId,
+        // `reason` rides in the projection because the audit row's own `reason`
+        // column is written only by the failure path; the ledger's `after` is
+        // where a successful command states why it ran.
+        auditBefore: recovered.auditBefore ?? undefined,
+        data: {
+          ...recovered.audit,
+          propertyName: recovered.propertyName,
+          userName: recovered.userName,
+          roleName: recovered.roleName,
+        },
+        audit: { ...recovered.audit, reason, roleName: recovered.roleName },
+      };
+    }
+    // PROP-04 G3 — take one named property out of service. The restrictive policy
+    // denies an inactive property to every tenant connection, so this is a real
+    // access decision and not a display flag, and it is one-way from the tenant's
+    // side: once down, no tenant can see the row to raise it again.
+    case 'organization.hotelproperty.deactivate': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const property = await deactivateHotelProperty(db, input.organizationId, input.branchId);
+      return {
+        targetType: 'HotelProperty',
+        targetId: property.branchId,
+        organizationId: input.organizationId,
+        auditBefore: { branchId: property.branchId, active: true },
+        data: property,
+        audit: {
+          branchId: property.branchId,
+          name: property.name,
+          active: false,
+          reason: input.reason,
+        },
+      };
+    }
+    // PROP-04 G3 — return one named property to service, through the same audited
+    // path. Refused unless the organization may operate, the property's own
+    // onboarding evidence still stands, and an eligible explicit manager holds it;
+    // see `reactivateHotelProperty` for why each condition is checked rather than
+    // assumed.
+    case 'organization.hotelproperty.reactivate': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const property = await reactivateHotelProperty(db, input.organizationId, input.branchId);
+      return {
+        targetType: 'HotelProperty',
+        targetId: property.branchId,
+        organizationId: input.organizationId,
+        auditBefore: { branchId: property.branchId, active: false },
+        data: property,
+        audit: {
+          branchId: property.branchId,
+          name: property.name,
+          active: true,
+          reason: input.reason,
+        },
       };
     }
     case 'organization.usage': {

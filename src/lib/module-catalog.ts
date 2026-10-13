@@ -237,6 +237,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyMarketing: 'pharmacy-crm',
   pharmacyFinance: 'pharmacy-finance',
   pharmacyOrdering: 'pharmacy-counter',
+  hotelProperty: 'hotel-core',
 };
 
 export function moduleForProcedure(path: string): string | null {
