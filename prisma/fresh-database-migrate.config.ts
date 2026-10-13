@@ -1,6 +1,6 @@
 // Explicit migration-only context: no dotenv, seed, runtime-client substitution or execution here.
 export default {
-  schema: 'prisma/schema.prisma',
-  migrations: { path: 'prisma/migrations' },
+  schema: 'schema.prisma',
+  migrations: { path: 'migrations' },
   datasource: { url: process.env.DATABASE_URL },
 };

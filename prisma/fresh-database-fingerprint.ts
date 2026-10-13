@@ -9,6 +9,19 @@ export type ForeignKey = {
   table: string;
   references: string[];
   validated: boolean;
+  name?: string;
+  parentSchema?: string;
+  deferrable?: boolean;
+  deferred?: boolean;
+  enforcement?: Array<{
+    table: string;
+    schema: string;
+    function: string;
+    enabled: string;
+    internal: boolean;
+    deferrable: boolean;
+    deferred: boolean;
+  }>;
 };
 export type Table = {
   name: string;

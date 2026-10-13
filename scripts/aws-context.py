@@ -201,7 +201,8 @@ def import_errors(root, included):
 
 
 FROZEN_PRODUCTION_MANIFEST_SHA256 = 'e7ae5ef79fa373354c68be89681541b32cca6142523a3b2a5d299710673ae34e'
-INITIALIZER_SOURCE_PINS_SHA256 = '34777ad5f9d1f51098b21d874a7662f990654b07161060cc61cdd1551dfe8dd2'
+INITIALIZER_SOURCE_PINS_SHA256 = 'b0dd77fcf65f72d8a5662c3f30ce36a7e90b8b2521ea54e84176487cbac8e3b1'
+FINAL_DATABASE_MANIFEST_SHA256 = 'd4c5a91ff1f51b6c2bc9151e6fff6aa32016d7454e2e487284d3bbdcef74ff50'
 
 
 def validate_pinned_files(root, records, expected):
@@ -229,20 +230,38 @@ def validate_pinned_files(root, records, expected):
             'scope': 'initializer schema/migration bytes only; no executable initializer or DB acceptance'}
 
 
+def validate_final_database_pins(expected, historical, final):
+    """Preserve every historical SQL/lock pin and require the exact final schema/set."""
+    if any(item not in expected for item in historical):
+        raise ValueError('Historical migration pins changed')
+    by_path = {item['path']: item for item in expected}
+    if len(by_path) != len(expected):
+        raise ValueError('Duplicate initializer source pin')
+    if by_path.get('prisma/schema.prisma', {}).get('sha256') != final['schemaSha256']:
+        raise ValueError('Final schema pin mismatch')
+    approved = {'prisma/migrations/' + item['name'] + '/migration.sql': item['sha256']
+                for item in final['migrations']}
+    actual = {path: item['sha256'] for path, item in by_path.items()
+              if path.startswith('prisma/migrations/') and path.endswith('/migration.sql')}
+    if len(approved) != 127 or len(final['migrations']) != 127 or actual != approved:
+        raise ValueError('Expected exact approved 127 migration pins')
+
+
 def initializer_audit(root, manifest):
     source = (root / 'production-source-manifest.json').read_bytes()
     if hashlib.sha256(source).hexdigest() != FROZEN_PRODUCTION_MANIFEST_SHA256:
         raise ValueError('Frozen production manifest mismatch')
-    historical = [i for i in json.loads(source) if i['path'] == 'prisma/schema.prisma'
-                or i['path'].startswith('prisma/migrations/')]
+    historical = [i for i in json.loads(source) if i['path'].startswith('prisma/migrations/')]
     if sum(i['path'].endswith('/migration.sql') for i in historical) != 125:
         raise ValueError('Expected all 125 historical migrations')
     pins = (root / 'initializer-source-pins.json').read_bytes()
     if hashlib.sha256(pins).hexdigest() != INITIALIZER_SOURCE_PINS_SHA256:
         raise ValueError('Approved initializer source pins mismatch')
     expected = json.loads(pins)
-    if any(item not in expected for item in historical):
-        raise ValueError('Historical schema/migration pins changed')
+    final = (root / 'prisma/fresh-database-manifest.json').read_bytes()
+    if hashlib.sha256(final).hexdigest() != FINAL_DATABASE_MANIFEST_SHA256:
+        raise ValueError('Approved final database manifest mismatch')
+    validate_final_database_pins(expected, historical, json.loads(final))
     result = validate_pinned_files(root, json.loads(manifest.read_text()), expected)
     if result['admitted']:
         result['errors'].extend(import_errors(root, result['included']))

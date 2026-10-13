@@ -22,7 +22,7 @@ class IntegrityTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as t:
             root = Path(t) / 'root'
             paths = set(context.REQUIRED)
-            paths.update(f'prisma/migrations/synthetic_{i}/migration.sql' for i in range(125))
+            paths.update(f'prisma/migrations/synthetic_{i}/migration.sql' for i in range(127))
             paths.update(f'src/generated/prisma/synthetic_{i}.ts' for i in range(458))
             for rel in paths:
                 file = root / rel

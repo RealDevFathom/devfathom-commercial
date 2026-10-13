@@ -1,5 +1,5 @@
 {
-  "schemaSha256": "a89e29ead28f7efcdefc9135758ddcfaf888dc2860bcd98b2e38ac5e232d05bd",
+  "schemaSha256": "b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827",
   "migrations": [
     {
       "name": "20260728000000_baseline",
@@ -500,6 +500,14 @@
     {
       "name": "20261008190000_pharmacy_closed_demand_constraint",
       "sha256": "e27c2da7f5f910febfed8e700046d1b231569ea6d97dcb672294426ba1f43684"
+    },
+    {
+      "name": "20261012110000_pharmacy_migration_source_tenant_anchor",
+      "sha256": "ce6c4c2ce8d9d2230fd376843322bdd7ce817139fb295a51b85d0753f1001cde"
+    },
+    {
+      "name": "20261012120000_visibility_context_anchors",
+      "sha256": "0f9ed8587329beff27cc88770969b7eabac696293cd6872c1e6b0f5875c4a7c9"
     }
   ]
 }

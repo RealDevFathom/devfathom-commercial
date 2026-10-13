@@ -84,7 +84,7 @@ export function verifyFreshDatabaseSource(root: string): MigrationPin[] {
   // Independent pin: changing SQL and the manifest together must still fail closed.
   if (
     createHash('sha256').update(manifestBytes).digest('hex') !==
-    '4343385168f4b3c3c557266e48a13807589c5022edce2cf706a9047018add482'
+    'd4c5a91ff1f51b6c2bc9151e6fff6aa32016d7454e2e487284d3bbdcef74ff50'
   )
     throw new Error('Fresh database manifest identity mismatch.');
   const manifest = JSON.parse(manifestBytes.toString('utf8')) as {
@@ -93,7 +93,7 @@ export function verifyFreshDatabaseSource(root: string): MigrationPin[] {
   };
   const digest = (path: string) => createHash('sha256').update(readFileSync(path)).digest('hex');
   if (
-    manifest.schemaSha256 !== 'a89e29ead28f7efcdefc9135758ddcfaf888dc2860bcd98b2e38ac5e232d05bd' ||
+    manifest.schemaSha256 !== 'b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827' ||
     digest(join(root, 'prisma/schema.prisma')) !== manifest.schemaSha256
   )
     throw new Error('Fresh database schema pin mismatch.');
@@ -103,8 +103,8 @@ export function verifyFreshDatabaseSource(root: string): MigrationPin[] {
     .map((entry) => entry.name)
     .sort();
   if (
-    manifest.migrations.length !== 125 ||
-    new Set(manifest.migrations.map((pin) => pin.name)).size !== 125 ||
+    manifest.migrations.length !== 127 ||
+    new Set(manifest.migrations.map((pin) => pin.name)).size !== 127 ||
     JSON.stringify(names) !== JSON.stringify(manifest.migrations.map((pin) => pin.name).sort())
   )
     throw new Error('Fresh database migration inventory mismatch.');
@@ -175,7 +175,7 @@ export function freshDatabasePlan(root: string) {
   return {
     mode: 'source-only',
     migrationCount: migrations.length,
-    schemaSha256: 'a89e29ead28f7efcdefc9135758ddcfaf888dc2860bcd98b2e38ac5e232d05bd',
+    schemaSha256: 'b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827',
     phases: [
       'owner verifies empty target and provisioned restricted runtime role',
       'owner reviews extension preparation and managed-owner hardening exceptions',

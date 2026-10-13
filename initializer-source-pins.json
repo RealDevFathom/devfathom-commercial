@@ -31,8 +31,8 @@
   },
   {
     "path": "prisma/FRESH_DATABASE_ADAPTER.md",
-    "sha256": "c5d30ede1c6d3bc7f960a6df94c141e1ceb98c24d2383d51cb613dfee70f5f0a",
-    "bytes": 14475,
+    "sha256": "7cc676c33cfb675f0e19621c1f5e4b39e497c5d7bb9dffa2be645e5a14a74317",
+    "bytes": 15122,
     "mode": "000644"
   },
   {
@@ -48,9 +48,21 @@
     "mode": "000644"
   },
   {
+    "path": "prisma/fixtures/visibility-saved-125.json",
+    "sha256": "9a0b7f546ef0faa28650f45e696ab5267b2b205cfefad7fbeb2f53e9c9d85bf8",
+    "bytes": 21687,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/fk-test-premises.mjs",
+    "sha256": "019d908ef864f468441605cb946bba82975fa4fe07ddeb81fe0243e165dcf264",
+    "bytes": 802,
+    "mode": "000644"
+  },
+  {
     "path": "prisma/fresh-database-adapter.test.mjs",
-    "sha256": "3ec983c043fe4e6a06e7f78eca69097806dc3c01484725ea42c7b76c23f87bf9",
-    "bytes": 56871,
+    "sha256": "d40e5b711007735937702f60d13ea8eadd3f7dab0045ead06294669791676e96",
+    "bytes": 57057,
     "mode": "000644"
   },
   {
@@ -79,26 +91,26 @@
   },
   {
     "path": "prisma/fresh-database-fingerprint.ts",
-    "sha256": "b8abeb39e1e740a36d818d5b91bd5f63e481dbd53711205936505eee6e511a89",
-    "bytes": 12718,
+    "sha256": "f20a54dbd09133bae9beed6cda0f8360b48515fa1d5b4fc543c8b607b36f0f03",
+    "bytes": 12989,
     "mode": "000644"
   },
   {
     "path": "prisma/fresh-database-manifest.json",
-    "sha256": "4343385168f4b3c3c557266e48a13807589c5022edce2cf706a9047018add482",
-    "bytes": 19767,
+    "sha256": "d4c5a91ff1f51b6c2bc9151e6fff6aa32016d7454e2e487284d3bbdcef74ff50",
+    "bytes": 20090,
     "mode": "000644"
   },
   {
     "path": "prisma/fresh-database-migrate.config.ts",
-    "sha256": "e8312c4dbf5a59b8f114a125b2dfba6d0476e5021d01d158f7eef92b5cc2de74",
-    "bytes": 248,
+    "sha256": "7bd254a655aa54c39819ab387a836eb419d6fc6212b1dedb4832213d8813043f",
+    "bytes": 234,
     "mode": "000644"
   },
   {
     "path": "prisma/fresh-database-observer.ts",
-    "sha256": "c9afebb5d505e0211097d4b496278679ac2a7b36bef268067a7b70f48cb720c8",
-    "bytes": 20963,
+    "sha256": "6ccb0f0f2adaaf2081b1a16546646f6a949fb273eea24c61e9a9ed928b1bb93f",
+    "bytes": 39154,
     "mode": "000644"
   },
   {
@@ -109,7 +121,7 @@
   },
   {
     "path": "prisma/fresh-database-prep.ts",
-    "sha256": "6300ee600d2f5cc4770dd8113862aa79cf45ae38df894f1ced837a54172988c2",
+    "sha256": "efa05610658459cfec7d388373f9fc802ce61d80a4a8bb46760b28feee99d276",
     "bytes": 4586,
     "mode": "000644"
   },
@@ -120,14 +132,20 @@
     "mode": "000644"
   },
   {
+    "path": "prisma/fresh-database-visibility.test.mjs",
+    "sha256": "af03031de0345e313d6dcf6ab9d301c618b61cc49386e174edd7c52ced894b0f",
+    "bytes": 7636,
+    "mode": "000644"
+  },
+  {
     "path": "prisma/fresh-database.test.mjs",
-    "sha256": "81e33a9514fe68376337efa2cb076409550d504eedcdf14d9dedecb60de458fb",
+    "sha256": "52949713a33af5c7630100341ba8bc9a66cff56d6683b330211b9529691baec9",
     "bytes": 25363,
     "mode": "000644"
   },
   {
     "path": "prisma/fresh-database.ts",
-    "sha256": "e8e32c1a92f41e96a6a1d3e6d15b6acd39ef00efe36362764ee80148d1538bc5",
+    "sha256": "45169c5e9736fb282a684996120edb0fc6e21a6f9a75af75899109190eb97ba7",
     "bytes": 18239,
     "mode": "000644"
   },
@@ -1132,6 +1150,18 @@
     "origin": "frozen baseline"
   },
   {
+    "path": "prisma/migrations/20261012110000_pharmacy_migration_source_tenant_anchor/migration.sql",
+    "sha256": "ce6c4c2ce8d9d2230fd376843322bdd7ce817139fb295a51b85d0753f1001cde",
+    "bytes": 711,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/migrations/20261012120000_visibility_context_anchors/migration.sql",
+    "sha256": "0f9ed8587329beff27cc88770969b7eabac696293cd6872c1e6b0f5875c4a7c9",
+    "bytes": 4142,
+    "mode": "000644"
+  },
+  {
     "path": "prisma/migrations/migration_lock.toml",
     "sha256": "1db17a8d051aa136110736752c5e1f8b7ed92b6ea8e803112fbbe2497047c210",
     "bytes": 24,
@@ -1147,8 +1177,8 @@
   },
   {
     "path": "prisma/schema.prisma",
-    "sha256": "a89e29ead28f7efcdefc9135758ddcfaf888dc2860bcd98b2e38ac5e232d05bd",
-    "bytes": 611871,
+    "sha256": "b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827",
+    "bytes": 619525,
     "mode": "000644",
     "kind": "source",
     "origin": "frozen baseline"
@@ -1157,6 +1187,12 @@
     "path": "prisma/tsconfig.fresh-database.json",
     "sha256": "c6bd532c645a9d32b090fdb2f4d80b7eabf7772d752280bcc2618dc2eb3d5fcc",
     "bytes": 324,
+    "mode": "000644"
+  },
+  {
+    "path": "prisma/visibility-codegen.config.ts",
+    "sha256": "e35cf1bd4efce60b6a438586d6869d9df2b8d07d3e762e4c55317d0cf5848e38",
+    "bytes": 186,
     "mode": "000644"
   },
   {

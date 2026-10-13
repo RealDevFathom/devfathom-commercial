@@ -5,6 +5,7 @@ import importlib.util
 from pathlib import Path
 import tempfile
 import unittest
+import json
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('aws_context', Path(__file__).parents[1] / 'scripts/aws-context.py')
@@ -227,11 +228,30 @@ const load = () => import('./absent-runtime');
                 record = {'path': path}
                 self.assertFalse(context.validate_pinned_files(root, [record], [record])['admitted'])
 
+    def test_final_database_pins_reject_historical_and_final_set_tampering(self):
+        root = Path(__file__).parents[1]
+        expected = json.loads((root / 'initializer-source-pins.json').read_text())
+        historical = [r for r in json.loads((root / 'production-source-manifest.json').read_text())
+                      if r['path'].startswith('prisma/migrations/')]
+        final = json.loads((root / 'prisma/fresh-database-manifest.json').read_text())
+        context.validate_final_database_pins(expected, historical, final)
+        old_sql = next(r['path'] for r in historical if r['path'].endswith('/migration.sql'))
+        variants = []
+        for path in [old_sql, 'prisma/schema.prisma']:
+            variants.append([{**r, 'sha256': '0' * 64} if r['path'] == path else r for r in expected])
+        variants.append([r for r in expected if r['path'] != old_sql])
+        variants.append(expected + [{**next(r for r in expected if r['path'] == old_sql),
+                                     'path': 'prisma/migrations/unapproved/migration.sql'}])
+        variants.append(expected + [expected[0]])
+        for changed in variants:
+            with self.subTest(paths=len(changed)), self.assertRaises(ValueError):
+                context.validate_final_database_pins(changed, historical, final)
+
     def test_current_initializer_manifest_and_font_notices(self):
         root = Path(__file__).parents[1]
         result = context.initializer_audit(root, root / 'initializer-context-manifest.json')
         self.assertTrue(result['admitted'], result['errors'])
-        self.assertEqual(sum(i['path'].endswith('/migration.sql') for i in result['included']), 125)
+        self.assertEqual(sum(i['path'].endswith('/migration.sql') for i in result['included']), 127)
         entries = context.load_allowlist((root / 'Dockerfile.aws.dockerignore').read_text())
         self.assertEqual(sum(p.endswith('.woff2') for p in entries), 17)
         self.assertEqual(sum(p.startswith('public/licenses/') and p.endswith('-OFL.txt') for p in entries), 2)

@@ -1,3 +1,12 @@
+> Proposed visibility overlay, 2026-10-12: this candidate now pins 126 migrations
+> (125 historical files unchanged plus the separately reviewed tenant-anchor draft),
+> a new schema and regenerated client. Exact literal `true` is recognized only
+> under the existing conservative SELECT-policy contract. Execution remains held.
+> The migration config paths are relative to its `prisma/` directory, as required
+> by the local 7.9.1 CLI. Historical v2 evidence below remains attributed to v2;
+> its old source pins and 58-case receipt do not certify this new overlay.
+> See the separate visibility handoff and capture/proof packet before adoption.
+
 # Private Restaurant initializer source contract
 
 This is source preparation, not an approved execution packet. No target was connected during development. The canonical `production-bootstrap.ts` is byte-unchanged. There is one writer, one private pool (max 1), one owning serializable transaction, and no automatic retry.

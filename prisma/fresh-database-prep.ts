@@ -149,7 +149,7 @@ export function renderPreparation(
     `-- Apply as separately approved migration role ${migration}; never SET ROLE from the initializer.`,
     'CREATE EXTENSION IF NOT EXISTS btree_gist WITH SCHEMA public;',
     'CREATE EXTENSION IF NOT EXISTS pg_trgm WITH SCHEMA public;',
-    '-- Review extension function ACL hardening against all 125 pinned migrations before runtime admission.',
+    '-- Review extension function ACL hardening against all 126 pinned migrations before runtime admission.',
   ];
   return { runtimeSQL: statements.join('\n') + '\n', extensionSQL: extensions.join('\n') + '\n' };
 }

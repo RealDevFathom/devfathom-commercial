@@ -1,3 +1,4 @@
+import { enforced, withEnforcement } from './fk-test-premises.mjs';
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { EventEmitter } from 'node:events';
@@ -461,7 +462,7 @@ const table = (name, columns = [col('id')], foreignKeys = []) => ({
   name,
   columns,
   primaryKey: ['id'],
-  foreignKeys,
+  foreignKeys: foreignKeys.map((f, i) => enforced(name, f, i)),
 });
 const plan = (tables, created = []) => ({ version: 'restaurant-state-v2', tables, created });
 test('lossless canonical encoding sorts JSON keys, preserves numeric precision and rejects duplicates', () => {
@@ -640,7 +641,6 @@ test('exact supported policies include nullable global org rows and reject unkno
     { owner: 'devfathom_app' },
     { policies: [{ ...platformPolicy, permissive: false }] },
     { policies: [{ ...platformPolicy, using: 'true' }] },
-    { policies: [platformPolicy, orgPolicy] },
   ])
     assert.throws(() => policyScope({ ...catalogTable('users'), ...change }));
 });
@@ -650,6 +650,7 @@ test('strict org source without validated nonnullable anchor fails even with zer
   source.foreignKeys = [
     { columns: ['organizationId'], table: 'organizations', references: ['id'], validated: true },
   ];
+  withEnforcement([source]);
   assert.equal(proveVisibility([...anchors(), source]).get(source.name), 'organization');
   source.foreignKeys[0].validated = false;
   assert.throws(() => proveVisibility([...anchors(), source]));
@@ -972,6 +973,7 @@ function fullSyntheticReview(purpose = 'INITIAL_TRANSITION') {
           : [platformPolicy],
     })),
     facts: [
+      { section: 'execution_posture', value: { session_replication_role: 'origin' } },
       { section: 'role_database_settings', value: { entries: [] } },
       { section: 'rewrite_rules', value: { entries: [] } },
       { section: 'columns', value: { table: 'users', name: 'id', kind: 'r', select: true } },

@@ -1,3 +1,20 @@
+# Final source composition status — 2026-10-13
+
+The integrated source now has the reviewed final schema and 127 migrations.
+All 125 historical SQL files and the lockfile retain their accepted pins; the
+two additions are the source-tenant anchor and visibility-context anchors.
+The source library has 159 exact pins and the generated client has 459 files.
+
+The previous executable context proof below applies to the earlier 125-migration
+bytes. The new 1,820-entry executable inventory is an unmaterialized recipe:
+NOT_BUILT, dependency bytes not freshly revalidated, offline smoke NOT_RUN.
+Dependencies were neither copied nor installed. No database, image, release or
+runtime acceptance is claimed for the final composition. The exact context
+auditor remains strict and must be run on a separately materialized context
+before any later executable acceptance.
+
+---
+
 # Offline executable initializer context
 
 The separately materialized initializer context contains the accepted v2 runner,

@@ -10,7 +10,7 @@ import stat
 from pathlib import Path, PurePosixPath
 
 REQUIRED = {
-    'package.json', 'bun.lock', 'prisma/schema.prisma',
+    'package.json', 'bun.lock', 'prisma/schema.prisma', 'prisma/fresh-database-manifest.json',
     'prisma/fresh-database-runner.ts', 'prisma/fresh-database-adapter.ts',
     'prisma/fresh-database-observer.ts', 'prisma/fresh-database-fingerprint.ts',
     'prisma/fresh-database-baseline.ts', 'prisma/fresh-database-prep.ts',
@@ -51,8 +51,8 @@ def audit(root, manifest, expected_sha256):
     actual = {p.relative_to(root).as_posix() for p in root.rglob('*') if p.is_file() or p.is_symlink()}
     errors.extend('unlisted-path:' + p for p in sorted(actual - seen))
     errors.extend('required-path-missing:' + p for p in sorted(REQUIRED - seen))
-    if sum(p.startswith('prisma/migrations/') and p.endswith('/migration.sql') for p in seen) != 125:
-        errors.append('historical-migration-count')
+    if sum(p.startswith('prisma/migrations/') and p.endswith('/migration.sql') for p in seen) != 127:
+        errors.append('final-migration-count')
     if sum(p.startswith('src/generated/prisma/') for p in seen) != 459:
         errors.append('generated-client-count')
     return {'admitted': not errors, 'files': len(seen), 'errors': errors,

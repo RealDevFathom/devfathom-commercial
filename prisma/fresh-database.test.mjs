@@ -314,14 +314,14 @@ test('role flags and memberships fail closed', () => {
     assert.throws(() => assertFreshRuntimeRole({ ...role, [key]: true }));
   assert.throws(() => assertFreshRuntimeRole({ ...role, membership_count: 1 }));
 });
-test('125 migration bytes, schema and deterministic exact manifest verified', () => {
+test('127 migration bytes, schema and deterministic exact manifest verified', () => {
   const bytes = readFileSync(join(root, 'prisma/fresh-database-manifest.json'));
   assert.equal(
     createHash('sha256').update(bytes).digest('hex'),
-    '4343385168f4b3c3c557266e48a13807589c5022edce2cf706a9047018add482'
+    'd4c5a91ff1f51b6c2bc9151e6fff6aa32016d7454e2e487284d3bbdcef74ff50'
   );
   assert.equal(bytes.toString(), JSON.stringify(JSON.parse(bytes), null, 2) + '\n');
-  assert.equal(verifyFreshDatabaseSource(root).length, 125);
+  assert.equal(verifyFreshDatabaseSource(root).length, 127);
 });
 test('ledger rejects missing/extra/duplicate/unfinished/rolled-back/changed entries', () => {
   const pins = [{ name: 'one', sha256: 'checksum' }];

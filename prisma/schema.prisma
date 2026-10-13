@@ -42,19 +42,19 @@ model RestaurantCameraCredential {
 }
 
 model RestaurantCamera {
-  id             String    @id @default(cuid())
-  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String        @id @default(cuid())
+  organizationId String        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   gatewayId      String
   branchId       String
   credentialId   String
   name           String
   sourceRef      String
-  enabled        Boolean   @default(true)
+  enabled        Boolean       @default(true)
   /// CAM-3: KITCHEN or COUNTER only (CHECK in the migration).
   preset         CameraPreset?
   lastSeenAt     DateTime?
-  createdAt      DateTime  @default(now())
-  updatedAt      DateTime  @updatedAt
+  createdAt      DateTime      @default(now())
+  updatedAt      DateTime      @updatedAt
 
   @@index([organizationId, branchId])
   @@index([gatewayId])
@@ -189,17 +189,17 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
-  whatsappMessageLogs PharmacyMessageLog[]
+  whatsappMessageLogs    PharmacyMessageLog[]
   receiptLayout          Json?
-  receiptLayoutRevision  Int     @default(0)
-  id                     String  @id @default(cuid())
-  organizationId         String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  receiptLayoutRevision  Int                  @default(0)
+  id                     String               @id @default(cuid())
+  organizationId         String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   code                   String
   name                   String
   addressLine            String
   city                   String
   provinceCode           String
-  active                 Boolean @default(true)
+  active                 Boolean              @default(true)
   /// The stock location a branch-scoped operation defaults to. Nullable because
   /// a branch is created before its locations exist. The database constrains it
   /// to a location of *this* branch, via a composite foreign key on
@@ -211,18 +211,29 @@ model PharmacyBranch {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  regulatoryProfiles       BranchRegulatoryProfile[]
-  stockLocations           PharmacyStockLocation[]           @relation("PharmacyBranchStockLocations")
-  inventoryLots            PharmacyInventoryLot[]
-  requisitions             PharmacyRequisition[]
-  purchaseOrders           PharmacyPurchaseOrder[]
-  onboardingGates          PharmacyOnboardingGateState[]
-  registeredDevices        PharmacyRegisteredDevice[]
-  ownerDigestSettings      PharmacyOwnerDigestSetting[]
-  ownerDigestCaptures      PharmacyOwnerDigestCapture[]
-  refillReminderCaptures   PharmacyRefillReminderCapture[]
-  pharmacovigilanceReports PharmacyPharmacovigilanceReport[]
-  customerOrders           PharmacyCustomerOrder[]
+  regulatoryProfiles                       BranchRegulatoryProfile[]
+  stockLocations                           PharmacyStockLocation[]           @relation("PharmacyBranchStockLocations")
+  inventoryLots                            PharmacyInventoryLot[]
+  requisitions                             PharmacyRequisition[]
+  purchaseOrders                           PharmacyPurchaseOrder[]
+  onboardingGates                          PharmacyOnboardingGateState[]
+  registeredDevices                        PharmacyRegisteredDevice[]
+  ownerDigestSettings                      PharmacyOwnerDigestSetting[]
+  ownerDigestCaptures                      PharmacyOwnerDigestCapture[]
+  refillReminderCaptures                   PharmacyRefillReminderCapture[]
+  pharmacovigilanceReports                 PharmacyPharmacovigilanceReport[]
+  customerOrders                           PharmacyCustomerOrder[]
+  visibilityPharmacyAccountingPeriod       PharmacyAccountingPeriod[]        @relation("PharmacyAccountingPeriodVisibilityAnchor")
+  visibilityPharmacyBankStatementLine      PharmacyBankStatementLine[]       @relation("PharmacyBankStatementLineVisibilityAnchor")
+  visibilityPharmacyBookkeepingTransaction PharmacyBookkeepingTransaction[]  @relation("PharmacyBookkeepingTransactionVisibilityAnchor")
+  visibilityPharmacyDailyClose             PharmacyDailyClose[]              @relation("PharmacyDailyCloseVisibilityAnchor")
+  visibilityPharmacyDrawerSession          PharmacyDrawerSession[]           @relation("PharmacyDrawerSessionVisibilityAnchor")
+  visibilityPharmacyReceiptNumberSequence  PharmacyReceiptNumberSequence[]   @relation("PharmacyReceiptNumberSequenceVisibilityAnchor")
+  visibilityPharmacySale                   PharmacySale[]                    @relation("PharmacySaleVisibilityAnchor")
+  visibilityPharmacySettlementBatch        PharmacySettlementBatch[]         @relation("PharmacySettlementBatchVisibilityAnchor")
+  visibilityPharmacyTaxProfileVersion      PharmacyTaxProfileVersion[]       @relation("PharmacyTaxProfileVersionVisibilityAnchor")
+  visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
+  visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
@@ -483,19 +494,19 @@ model MedicineStrengthComponent {
 }
 
 model Presentation {
-  id                String             @id @default(cuid())
-  organizationId    String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  medicineId        String
-  dosageForm        String?
-  route             String?
-  presentation      String
-  createdAt         DateTime           @default(now())
-  updatedAt         DateTime           @updatedAt
-  medicine          Medicine           @relation(fields: [medicineId], references: [id], onDelete: Restrict)
-  packLevels        PackLevel[]
-  barcodes          MedicineBarcode[]
-  prescriptionLines PrescriptionLine[]
-  pharmacySaleLines PharmacySaleLine[]
+  id                 String                      @id @default(cuid())
+  organizationId     String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  medicineId         String
+  dosageForm         String?
+  route              String?
+  presentation       String
+  createdAt          DateTime                    @default(now())
+  updatedAt          DateTime                    @updatedAt
+  medicine           Medicine                    @relation(fields: [medicineId], references: [id], onDelete: Restrict)
+  packLevels         PackLevel[]
+  barcodes           MedicineBarcode[]
+  prescriptionLines  PrescriptionLine[]
+  pharmacySaleLines  PharmacySaleLine[]
   customerOrderLines PharmacyCustomerOrderLine[]
 
   @@index([organizationId, medicineId])
@@ -1074,6 +1085,7 @@ model PharmacySale {
   customer                  PharmacyCustomer?            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   loyaltyEntries            PharmacyLoyaltyPointsEntry[]
   customerOrder             PharmacyCustomerOrder?
+  visibilityAnchor          PharmacyBranch               @relation("PharmacySaleVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_sales_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
@@ -1085,32 +1097,32 @@ model PharmacySale {
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
   whatsappMessages PharmacyMessageLog[]
-  id               String   @id @default(cuid())
-  organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id               String               @id @default(cuid())
+  organizationId   String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   patientId        String
   displayName      String
   phoneLast4       String?
-  creditLimitMinor Int      @default(0)
-  active           Boolean  @default(true)
+  creditLimitMinor Int                  @default(0)
+  active           Boolean              @default(true)
   userId           String?
-  createdAt        DateTime @default(now())
-  updatedAt        DateTime @updatedAt
+  createdAt        DateTime             @default(now())
+  updatedAt        DateTime             @updatedAt
 
-  patient            PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
-  sales              PharmacySale[]
-  pointsEntries      PharmacyLoyaltyPointsEntry[]
-  paidFamilyAccounts PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
-  familyMemberships  PharmacyFamilyMember[]
-  user               User?                         @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
-  orders             PharmacyCustomerOrder[]
+  patient                PharmacyPatient              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  sales                  PharmacySale[]
+  pointsEntries          PharmacyLoyaltyPointsEntry[]
+  paidFamilyAccounts     PharmacyFamilyAccount[]      @relation("PharmacyFamilyPayer")
+  familyMemberships      PharmacyFamilyMember[]
+  user                   User?                        @relation("PharmacyCustomerUser", fields: [organizationId, userId], references: [organizationId, id], onDelete: Restrict)
+  orders                 PharmacyCustomerOrder[]
+  whatsappOptIn          Boolean?
+  whatsappOptInChangedAt DateTime?                    @db.Timestamp(3)
 
   @@unique([organizationId, id])
   @@unique([organizationId, patientId])
   @@unique([organizationId, userId])
   @@index([organizationId, displayName])
   @@map("pharmacy_customers")
-  whatsappOptIn Boolean?
-  whatsappOptInChangedAt DateTime? @db.Timestamp(3)
 }
 
 enum PharmacyKhataEventKind {
@@ -1244,14 +1256,15 @@ model PharmacyLoyaltyPointsEntry {
 }
 
 model PharmacyMoneyIdempotencyKey {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  deviceId       String
-  key            String
-  commandType    String
-  payloadHash    String
-  resultPayload  Json?
-  createdAt      DateTime @default(now())
+  id               String       @id @default(cuid())
+  organizationId   String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  deviceId         String
+  key              String
+  commandType      String
+  payloadHash      String
+  resultPayload    Json?
+  createdAt        DateTime     @default(now())
+  visibilityAnchor Organization @relation("PharmacyMoneyIdempotencyKeyVisibilityAnchor", fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_money_idempotency_keys_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, deviceId, key])
@@ -1323,6 +1336,7 @@ model PharmacyDrawerSession {
   closedAt            DateTime?
   movements           PharmacyDrawerMovement[]
   tenders             PharmacyTender[]
+  visibilityAnchor    PharmacyBranch              @relation("PharmacyDrawerSessionVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_drawer_sessions_visibility_fkey")
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, businessDate])
@@ -1346,10 +1360,10 @@ model PharmacyDrawerMovement {
 }
 
 model PharmacyDailyClose {
-  id                  String   @id @default(cuid())
-  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                  String         @id @default(cuid())
+  organizationId      String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId            String
-  businessDate        DateTime @db.Date
+  businessDate        DateTime       @db.Date
   sequence            Int
   supersedesCloseId   String?
   reason              String?
@@ -1367,8 +1381,9 @@ model PharmacyDailyClose {
   /// parallel-run comparison for it reconciles against the D05 threshold.
   /// Recorded on the close itself so the verdict is evidence, not a recomputation
   /// against thresholds that may since have moved.
-  isFinal             Boolean  @default(false)
-  createdAt           DateTime @default(now())
+  isFinal             Boolean        @default(false)
+  createdAt           DateTime       @default(now())
+  visibilityAnchor    PharmacyBranch @relation("PharmacyDailyCloseVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_daily_closes_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, businessDate, sequence])
@@ -1376,12 +1391,13 @@ model PharmacyDailyClose {
 }
 
 model PharmacyReceiptNumberSequence {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
-  deviceId       String
-  nextNumber     Int      @default(1)
-  updatedAt      DateTime @updatedAt
+  id               String         @id @default(cuid())
+  organizationId   String         @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  deviceId         String
+  nextNumber       Int            @default(1)
+  updatedAt        DateTime       @updatedAt
+  visibilityAnchor PharmacyBranch @relation("PharmacyReceiptNumberSequenceVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_receipt_number_sequences_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, deviceId])
@@ -1394,13 +1410,14 @@ model PharmacyReceiptNumberSequence {
 /// counter action to chord; it is validated by `resolveCounterKeymap` before it
 /// is stored, so an unknown action or a duplicate chord never reaches a row.
 model PharmacyCounterKeymapPreference {
-  id             String   @id @default(cuid())
-  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  userId         String
-  preset         String   @default("devfathom")
-  overrides      Json     @default("{}")
-  createdAt      DateTime @default(now())
-  updatedAt      DateTime @updatedAt
+  id               String       @id @default(cuid())
+  organizationId   String       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  userId           String
+  preset           String       @default("devfathom")
+  overrides        Json         @default("{}")
+  createdAt        DateTime     @default(now())
+  updatedAt        DateTime     @updatedAt
+  visibilityAnchor Organization @relation("PharmacyCounterKeymapPreferenceVisibilityAnchor", fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_counter_keymap_preferences_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, userId])
@@ -1544,6 +1561,7 @@ model UnfulfilledDemandEvent {
   medicine              Medicine?                 @relation(fields: [requestedMedicineId], references: [id], onDelete: Restrict)
   customer              PharmacyPatient?          @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
   restockInterests      PharmacyRestockInterest[]
+  visibilityAnchor      PharmacyBranch            @relation("UnfulfilledDemandEventVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_unfulfilled_demand_events_visibility_fkey")
 
   @@unique([organizationId, id])
   @@index([organizationId, branchId, createdAt, reason])
@@ -1570,12 +1588,13 @@ model PharmacyRestockInterest {
   createdAt           DateTime                      @default(now())
   updatedAt           DateTime                      @updatedAt
 
-  demandEvent   UnfulfilledDemandEvent        @relation(fields: [organizationId, demandEventId], references: [organizationId, id], onDelete: Restrict)
-  patient       PharmacyPatient?              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
-  recoveredSale PharmacySale?                 @relation("PharmacyRestockRecoverySale", fields: [organizationId, branchId, recoveredSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
-  reservation   PharmacyRestockReservation?
-  notifications PharmacyRestockNotification[]
-  orderLine     PharmacyCustomerOrderLine?      @relation(fields: [organizationId, branchId, orderLineId], references: [organizationId, branchId, id], onDelete: Restrict)
+  demandEvent      UnfulfilledDemandEvent        @relation(fields: [organizationId, demandEventId], references: [organizationId, id], onDelete: Restrict)
+  patient          PharmacyPatient?              @relation(fields: [organizationId, patientId], references: [organizationId, id], onDelete: Restrict)
+  recoveredSale    PharmacySale?                 @relation("PharmacyRestockRecoverySale", fields: [organizationId, branchId, recoveredSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  reservation      PharmacyRestockReservation?
+  notifications    PharmacyRestockNotification[]
+  orderLine        PharmacyCustomerOrderLine?    @relation(fields: [organizationId, branchId, orderLineId], references: [organizationId, branchId, id], onDelete: Restrict)
+  visibilityAnchor PharmacyBranch                @relation("PharmacyRestockInterestVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_restock_interests_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, demandEventId])
@@ -1630,13 +1649,13 @@ model PharmacyRestockNotification {
 /// or staff-runner delivery. Stock remains held by DEM-03 reservations until a
 /// staff member explicitly starts the existing counter-sale checkout.
 model PharmacyCustomerOrder {
-  id                    String                            @id @default(cuid())
-  organizationId        String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id                    String                           @id @default(cuid())
+  organizationId        String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId              String
   customerId            String
   placedByUserId        String
   fulfillment           PharmacyCustomerOrderFulfillment
-  status                PharmacyCustomerOrderStatus       @default(PROPOSED)
+  status                PharmacyCustomerOrderStatus      @default(PROPOSED)
   intendedPaymentMethod PharmacyTenderType
   addressLine           String?
   city                  String?
@@ -1651,18 +1670,19 @@ model PharmacyCustomerOrder {
   completedAt           DateTime?
   cancelledAt           DateTime?
   expiredAt             DateTime?
-  createdAt             DateTime                          @default(now())
-  updatedAt             DateTime                          @updatedAt
+  createdAt             DateTime                         @default(now())
+  updatedAt             DateTime                         @updatedAt
 
-  branch      PharmacyBranch              @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
-  customer    PharmacyCustomer            @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
-  placedBy    User                        @relation("PharmacyOrderPlacedBy", fields: [organizationId, placedByUserId], references: [organizationId, id], onDelete: Restrict)
-  runner      User?                       @relation("PharmacyOrderRunner", fields: [organizationId, runnerUserId], references: [organizationId, id], onDelete: Restrict)
-  counterSale PharmacySale?               @relation(fields: [organizationId, branchId, counterSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
+  branch      PharmacyBranch               @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  customer    PharmacyCustomer             @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  placedBy    User                         @relation("PharmacyOrderPlacedBy", fields: [organizationId, placedByUserId], references: [organizationId, id], onDelete: Restrict)
+  runner      User?                        @relation("PharmacyOrderRunner", fields: [organizationId, runnerUserId], references: [organizationId, id], onDelete: Restrict)
+  counterSale PharmacySale?                @relation(fields: [organizationId, branchId, counterSaleId], references: [organizationId, branchId, id], onDelete: Restrict)
   lines       PharmacyCustomerOrderLine[]
   events      PharmacyCustomerOrderEvent[]
 
   deliveryEvidence PharmacyOrderDeliveryEvidence[]
+
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@unique([organizationId, branchId, counterSaleId])
@@ -1688,10 +1708,10 @@ model PharmacyCustomerOrderLine {
   lineTotalMinor            Int
   createdAt                 DateTime         @default(now())
 
-  order        PharmacyCustomerOrder    @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
-  medicine     Medicine                 @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
-  presentation Presentation             @relation(fields: [presentationId], references: [id], onDelete: Restrict)
-  packLevel    PackLevel                @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
+  order        PharmacyCustomerOrder     @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
+  medicine     Medicine                  @relation(fields: [organizationId, medicineId], references: [organizationId, id], onDelete: Restrict)
+  presentation Presentation              @relation(fields: [presentationId], references: [id], onDelete: Restrict)
+  packLevel    PackLevel                 @relation(fields: [packLevelId], references: [id], onDelete: Restrict)
   interests    PharmacyRestockInterest[]
 
   @@unique([organizationId, id])
@@ -2780,6 +2800,7 @@ model User {
   pharmacyOrderEvents         PharmacyCustomerOrderEvent[]   @relation("PharmacyOrderEventActor")
 
   pharmacyDeliveryEvidence PharmacyOrderDeliveryEvidence[] @relation("PharmacyDeliveryEvidenceActor")
+
   @@unique([organizationId, id])
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -3406,9 +3427,10 @@ model FinanceJournalEntry {
   reversalReason  String?
   createdAt       DateTime          @default(now())
 
-  reverses FinanceJournalEntry?  @relation("FinanceEntryReversal", fields: [organizationId, reversesEntryId], references: [organizationId, id], onDelete: Restrict, map: "finance_journal_entries_reverses_fkey")
-  reversal FinanceJournalEntry[] @relation("FinanceEntryReversal")
-  lines    FinanceJournalLine[]
+  reverses         FinanceJournalEntry?  @relation("FinanceEntryReversal", fields: [organizationId, reversesEntryId], references: [organizationId, id], onDelete: Restrict, map: "finance_journal_entries_reverses_fkey")
+  reversal         FinanceJournalEntry[] @relation("FinanceEntryReversal")
+  lines            FinanceJournalLine[]
+  visibilityAnchor Organization          @relation("FinanceJournalEntryVisibilityAnchor", fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "finance_journal_entries_visibility_fkey")
 
   @@unique([organizationId, id], map: "finance_journal_entries_org_id_key")
   @@unique([organizationId, idempotencyKey], map: "finance_journal_entries_org_idempotency_key")
@@ -3476,8 +3498,9 @@ model PharmacyBookkeepingTransaction {
   reversalEntryId  String?
   createdAt        DateTime                  @default(now())
 
-  allocations PharmacyBookkeepingAllocation[]
-  bankMatches PharmacyBankReconciliation[]
+  allocations      PharmacyBookkeepingAllocation[]
+  bankMatches      PharmacyBankReconciliation[]
+  visibilityAnchor PharmacyBranch                  @relation("PharmacyBookkeepingTransactionVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_bookkeeping_transactions_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
@@ -3520,6 +3543,7 @@ model PharmacyAccountingPeriod {
   reopenedByUserId String?
   reopenReason     String?
   createdAt        DateTime                       @default(now())
+  visibilityAnchor PharmacyBranch                 @relation("PharmacyAccountingPeriodVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_accounting_periods_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, startsAt, endsAt])
@@ -3542,7 +3566,8 @@ model PharmacySettlementBatch {
   createdByUserId String
   createdAt       DateTime           @default(now())
 
-  tenders PharmacySettlementTender[]
+  tenders          PharmacySettlementTender[]
+  visibilityAnchor PharmacyBranch             @relation("PharmacySettlementBatchVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_settlement_batches_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, reference])
@@ -3578,7 +3603,8 @@ model PharmacyBankStatementLine {
   status         PharmacyBankLineStatus @default(UNMATCHED)
   createdAt      DateTime               @default(now())
 
-  matches PharmacyBankReconciliation[]
+  matches          PharmacyBankReconciliation[]
+  visibilityAnchor PharmacyBranch               @relation("PharmacyBankStatementLineVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_bank_statement_lines_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, statementRef, lineReference])
@@ -3623,7 +3649,8 @@ model PharmacyTaxProfileVersion {
   idempotencyKey    String
   createdAt         DateTime                 @default(now())
 
-  rules PharmacyTaxRuleVersion[]
+  rules            PharmacyTaxRuleVersion[]
+  visibilityAnchor PharmacyBranch           @relation("PharmacyTaxProfileVersionVisibilityAnchor", fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: Restrict, map: "pharmacy_tax_profile_versions_visibility_fkey")
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
@@ -4747,67 +4774,72 @@ enum RestaurantActivationAcknowledgementKind {
 }
 
 model Organization {
-  pharmacyMessageLogs PharmacyMessageLog[]
-  id                  String                     @id @default(cuid())
-  slug                String                     @unique
-  legalName           String
-  displayName         String
-  vertical            OrganizationVertical       @default(AGENCY)
-  status              OrganizationStatus         @default(ONBOARDING)
-  deploymentMode      OrganizationDeploymentMode @default(SHARED)
-  packageId           String?
-  timezone            String                     @default("UTC")
-  locale              String                     @default("en")
-  currency            String                     @default("USD")
-  seatLimit           Int                        @default(1)
-  isDemo              Boolean                    @default(false)
-  askFathomEnabled    Boolean                    @default(true)
-  lastDemoResetAt     DateTime?
-  gracePeriodDays     Int                        @default(0)
-  activatedAt         DateTime?
-  suspendedAt         DateTime?
-  terminatedAt        DateTime?
-  purgeScheduledAt    DateTime?
-  dataResidency       String?
-  primaryContactName  String?
-  primaryContactEmail String?
-  notes               String?
-  createdAt           DateTime                   @default(now())
-  updatedAt           DateTime                   @updatedAt
+  pharmacyMigrationSources PharmacyMigrationSource[]
+  pharmacyMessageLogs      PharmacyMessageLog[]
+  id                       String                     @id @default(cuid())
+  slug                     String                     @unique
+  legalName                String
+  displayName              String
+  vertical                 OrganizationVertical       @default(AGENCY)
+  status                   OrganizationStatus         @default(ONBOARDING)
+  deploymentMode           OrganizationDeploymentMode @default(SHARED)
+  packageId                String?
+  timezone                 String                     @default("UTC")
+  locale                   String                     @default("en")
+  currency                 String                     @default("USD")
+  seatLimit                Int                        @default(1)
+  isDemo                   Boolean                    @default(false)
+  askFathomEnabled         Boolean                    @default(true)
+  lastDemoResetAt          DateTime?
+  gracePeriodDays          Int                        @default(0)
+  activatedAt              DateTime?
+  suspendedAt              DateTime?
+  terminatedAt             DateTime?
+  purgeScheduledAt         DateTime?
+  dataResidency            String?
+  primaryContactName       String?
+  primaryContactEmail      String?
+  notes                    String?
+  createdAt                DateTime                   @default(now())
+  updatedAt                DateTime                   @updatedAt
 
-  package                              PlatformPackage?                      @relation(fields: [packageId], references: [id], onDelete: SetNull)
-  users                                User[]
-  roles                                OrganizationRole[]
-  departments                          OrganizationDepartment[]
-  pharmacyOnboarding                   PharmacyOnboardingState?
-  permissionOverrides                  UserPermissionOverride[]
-  modules                              OrganizationModule[]
-  limits                               OrganizationLimit[]
-  usageCounters                        OrganizationUsageCounter[]
-  brand                                OrganizationBrand?
-  emailSettings                        OrganizationEmailSettings?
-  domains                              OrganizationDomain[]
-  identityConnections                  OrganizationIdentityConnection[]
-  scimTokens                           OrganizationScimToken[]
-  scimEvents                           OrganizationScimEvent[]
-  accounts                             PlatformAccount[]
-  convertedOpportunities               PlatformOpportunity[]
-  contracts                            PlatformContract[]
-  invoices                             PlatformInvoice[]
-  payments                             PlatformPayment[]
-  renewals                             PlatformRenewal[]
-  deployments                          OrganizationDeployment[]
-  jobs                                 PlatformJob[]
-  lifecycleEvents                      OrganizationLifecycleEvent[]
-  supportSessions                      PlatformSupportSession[]
-  auditLogs                            PlatformAuditLog[]
-  ssoStates                            OrganizationSsoState[]
-  ssoTickets                           TenantSsoTicket[]
-  insightLoyaltyLiabilities            InsightLoyaltyLiability[]
-  restaurantNotificationWebhook        RestaurantNotificationWebhook?
-  restaurantActivationAcknowledgements RestaurantActivationAcknowledgement[]
-  pharmacyOwnerDigestSettings          PharmacyOwnerDigestSetting[]
-  pharmacyOwnerDigestCaptures          PharmacyOwnerDigestCapture[]
+  package                                   PlatformPackage?                      @relation(fields: [packageId], references: [id], onDelete: SetNull)
+  users                                     User[]
+  roles                                     OrganizationRole[]
+  departments                               OrganizationDepartment[]
+  pharmacyOnboarding                        PharmacyOnboardingState?
+  permissionOverrides                       UserPermissionOverride[]
+  modules                                   OrganizationModule[]
+  limits                                    OrganizationLimit[]
+  usageCounters                             OrganizationUsageCounter[]
+  brand                                     OrganizationBrand?
+  emailSettings                             OrganizationEmailSettings?
+  domains                                   OrganizationDomain[]
+  identityConnections                       OrganizationIdentityConnection[]
+  scimTokens                                OrganizationScimToken[]
+  scimEvents                                OrganizationScimEvent[]
+  accounts                                  PlatformAccount[]
+  convertedOpportunities                    PlatformOpportunity[]
+  contracts                                 PlatformContract[]
+  invoices                                  PlatformInvoice[]
+  payments                                  PlatformPayment[]
+  renewals                                  PlatformRenewal[]
+  deployments                               OrganizationDeployment[]
+  jobs                                      PlatformJob[]
+  lifecycleEvents                           OrganizationLifecycleEvent[]
+  supportSessions                           PlatformSupportSession[]
+  auditLogs                                 PlatformAuditLog[]
+  ssoStates                                 OrganizationSsoState[]
+  ssoTickets                                TenantSsoTicket[]
+  insightLoyaltyLiabilities                 InsightLoyaltyLiability[]
+  restaurantNotificationWebhook             RestaurantNotificationWebhook?
+  restaurantActivationAcknowledgements      RestaurantActivationAcknowledgement[]
+  pharmacyOwnerDigestSettings               PharmacyOwnerDigestSetting[]
+  pharmacyOwnerDigestCaptures               PharmacyOwnerDigestCapture[]
+  visibilityFinanceJournalEntry             FinanceJournalEntry[]                 @relation("FinanceJournalEntryVisibilityAnchor")
+  visibilityPharmacyMoneyIdempotencyKey     PharmacyMoneyIdempotencyKey[]         @relation("PharmacyMoneyIdempotencyKeyVisibilityAnchor")
+  visibilityRestaurantTaxOfficialSource     RestaurantTaxOfficialSource[]         @relation("RestaurantTaxOfficialSourceVisibilityAnchor")
+  visibilityPharmacyCounterKeymapPreference PharmacyCounterKeymapPreference[]     @relation("PharmacyCounterKeymapPreferenceVisibilityAnchor")
 
   @@index([status])
   @@index([deploymentMode])
@@ -4842,31 +4874,31 @@ model RestaurantActivationAcknowledgement {
 model RestaurantBranch {
   cateringCapacities RestaurantCateringBranchCapacity[]
 
-  id                  String   @id @default(cuid())
-  organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  name                String
+  id                    String   @id @default(cuid())
+  organizationId        String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  name                  String
   /// Stable operator-facing identifier. Database ids remain internal.
-  code                String   @default(dbgenerated("('BR-'::text || nextval('restaurant_branch_code_seq'::regclass)::text)"))
-  timezone            String   @default("UTC")
+  code                  String   @default(dbgenerated("('BR-'::text || nextval('restaurant_branch_code_seq'::regclass)::text)"))
+  timezone              String   @default("UTC")
   // M4-L1/C5: the branch-local wall-clock time (24h "HH:MM") at which one
   // business day rolls into the next. Additive with a conservative "00:00"
   // default (midnight = calendar day); the order business date is resolved from
   // timezone + this cutoff (src/lib/restaurant/business-date.ts) and stamped
   // explicitly, never recomputed later from UTC (§11.1 / BUILD-ASSUMPTIONS).
-  businessDayCutoff   String   @default("00:00")
+  businessDayCutoff     String   @default("00:00")
   // Completion wave: when true, an operator may only sign in at this branch's
   // terminals while holding an active, eligible `RestaurantShift`. Opt-in with a
   // conservative `false` default so a branch that does not roster keeps its
   // existing M2 sign-in behaviour untouched.
-  shiftSignInEnforced Boolean  @default(false)
+  shiftSignInEnforced   Boolean  @default(false)
   /// Shared receipt designer v1; null uses domain defaults. Existing branch RLS applies.
-  receiptLayout       Json?
-  receiptLayoutRevision Int   @default(0)
-  address             String?
-  active              Boolean  @default(true)
-  isDefault           Boolean  @default(false)
-  createdAt           DateTime @default(now())
-  updatedAt           DateTime @updatedAt
+  receiptLayout         Json?
+  receiptLayoutRevision Int      @default(0)
+  address               String?
+  active                Boolean  @default(true)
+  isDefault             Boolean  @default(false)
+  createdAt             DateTime @default(now())
+  updatedAt             DateTime @updatedAt
 
   assignments                 RestaurantBranchAssignment[]
   // M2-L1: staff pinned to this branch as their primary, and devices registered
@@ -4957,7 +4989,8 @@ model RestaurantTaxOfficialSource {
   expiresAt      DateTime?
   createdAt      DateTime  @default(now())
 
-  rules RestaurantTaxRuleVersion[]
+  rules            RestaurantTaxRuleVersion[]
+  visibilityAnchor Organization               @relation("RestaurantTaxOfficialSourceVisibilityAnchor", fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict, map: "restaurant_tax_official_sources_visibility_fkey")
 
   @@unique([organizationId, contentHash])
   @@unique([organizationId, id])
@@ -11411,7 +11444,8 @@ model PharmacyMigrationSource {
   capturedAt     DateTime                    @default(now())
   createdAt      DateTime                    @default(now())
 
-  batches PharmacyMigrationBatch[]
+  organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
+  batches      PharmacyMigrationBatch[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, contentHash])
@@ -11843,13 +11877,13 @@ enum PharmacySupplierSubmissionSource {
 /// SUP-01/SUP-03 — the active commercial relationship is the supplier's entire
 /// external authorization boundary. It is deliberately narrower than Supplier.
 model PharmacySupplierRelationship {
-  id             String    @id @default(cuid())
-  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
-  supplierId     String
-  active         Boolean   @default(true)
-  createdAt      DateTime  @default(now())
-  revokedAt      DateTime?
+  id                     String    @id @default(cuid())
+  organizationId         String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId               String
+  supplierId             String
+  active                 Boolean   @default(true)
+  createdAt              DateTime  @default(now())
+  revokedAt              DateTime?
   /// AI-02: number of days before printed expiry when this supplier accepts an
   /// expiry claim. Null means the relationship has no recorded return window.
   expiryReturnWindowDays Int?
@@ -13570,14 +13604,14 @@ model PharmacyCampaign {
 /// Capture mode only: records intended delivery; no provider delivery state exists.
 model PharmacyCampaignCapture {
   dispatchAttempts PharmacyCampaignDispatchAttempt[]
-  id             String                   @id @default(cuid())
-  organizationId String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId       String
-  campaignId     String
-  customerId     String
-  channel        PharmacyMarketingChannel
-  idempotencyKey String
-  capturedAt     DateTime                 @default(now())
+  id               String                            @id @default(cuid())
+  organizationId   String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  campaignId       String
+  customerId       String
+  channel          PharmacyMarketingChannel
+  idempotencyKey   String
+  capturedAt       DateTime                          @default(now())
 
   @@unique([organizationId, id])
   @@unique([organizationId, idempotencyKey])
@@ -13727,26 +13761,26 @@ enum PharmacyPackAuthenticationStatus {
 /// SAFE-05 — one branch-scoped scan verdict. Non-recall failures are advisory;
 /// reasoned acknowledgement is retained on the immutable scan evidence.
 model PharmacyPackAuthenticationScan {
-  id                   String                            @id @default(cuid())
-  organizationId       String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId             String
-  source               PharmacyPackAuthenticationSource
-  status               PharmacyPackAuthenticationStatus
-  gtin                 String?
-  batchNumber          String?
-  expiresOn            String?
-  serial               String?
-  medicineId           String?
-  manufacturingBatchId String?
-  issues               String[]
-  explanation          String
-  advisory             Boolean
-  scannedByUserId      String
-  acknowledgedAt       DateTime?
-  acknowledgedByUserId String?
+  id                    String                            @id @default(cuid())
+  organizationId        String                            @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId              String
+  source                PharmacyPackAuthenticationSource
+  status                PharmacyPackAuthenticationStatus
+  gtin                  String?
+  batchNumber           String?
+  expiresOn             String?
+  serial                String?
+  medicineId            String?
+  manufacturingBatchId  String?
+  issues                String[]
+  explanation           String
+  advisory              Boolean
+  scannedByUserId       String
+  acknowledgedAt        DateTime?
+  acknowledgedByUserId  String?
   acknowledgementReason String?
-  createdAt            DateTime                          @default(now())
-  events               PharmacyPackAuthenticationEvent[]
+  createdAt             DateTime                          @default(now())
+  events                PharmacyPackAuthenticationEvent[]
 
   @@unique([organizationId, id], map: "pharmacy_pack_authentication_scans_org_id_key")
   @@unique([organizationId, branchId, id], map: "pharmacy_pack_authentication_scans_org_branch_id_key")
@@ -13761,15 +13795,15 @@ enum PharmacyPackAuthenticationEventKind {
 }
 
 model PharmacyPackAuthenticationEvent {
-  id             String                                @id @default(cuid())
-  organizationId String                                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  id             String                              @id @default(cuid())
+  organizationId String                              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
   scanId         String
   kind           PharmacyPackAuthenticationEventKind
   actorId        String
   reason         String?
-  createdAt      DateTime                              @default(now())
-  scan           PharmacyPackAuthenticationScan        @relation(fields: [organizationId, branchId, scanId], references: [organizationId, branchId, id], onDelete: Restrict)
+  createdAt      DateTime                            @default(now())
+  scan           PharmacyPackAuthenticationScan      @relation(fields: [organizationId, branchId, scanId], references: [organizationId, branchId, id], onDelete: Restrict)
 
   @@unique([organizationId, id], map: "pharmacy_pack_authentication_events_org_id_key")
   @@index([organizationId, branchId, scanId, createdAt], map: "pharmacy_pack_authentication_events_org_scan_idx")
@@ -13896,36 +13930,38 @@ model CateringMoneyEvidence {
 
 // Growth SQL migrations own all FK, partial-index, CHECK, trigger and FORCE RLS contracts.
 model GrowthInsight {
-  id String @id
+  id             String   @id
   organizationId String
-  branchId String
-  vertical String
-  actorId String
-  schemaVersion Int
-  inputHash String
-  status String
-  failureCode String?
-  provider String?
-  model String?
-  snapshot Json
-  output Json?
-  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  branchId       String
+  vertical       String
+  actorId        String
+  schemaVersion  Int
+  inputHash      String
+  status         String
+  failureCode    String?
+  provider       String?
+  model          String?
+  snapshot       Json
+  output         Json?
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, createdAt], map: "growth_insights_scope")
   @@map("growth_insights")
 }
 
 model PharmacyGrowthReview {
-  id String @id
+  id             String   @id
   organizationId String
-  branchId String
-  insightId String
+  branchId       String
+  insightId      String
   recommendation Int
-  decision String
-  actorId String
-  settings Json?
-  campaignId String?
-  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  decision       String
+  actorId        String
+  settings       Json?
+  campaignId     String?
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
   @@map("pharmacy_growth_reviews")
 }
 
@@ -14150,21 +14186,21 @@ model CameraStreamGrant {
 }
 
 model PharmacyCampaignDeliveryEvent {
-  id String @id @default(cuid())
-  organizationId String
-  attemptId String
-  eventKey String
-  state String
-  provider String
-  senderId String
+  id                String                          @id @default(cuid())
+  organizationId    String
+  attemptId         String
+  eventKey          String
+  state             String
+  provider          String
+  senderId          String
   providerMessageId String?
-  acceptanceId String?
-  reason String?
-  occurredAt DateTime
-  recordedAt DateTime @default(now())
-  attempt PharmacyCampaignDispatchAttempt @relation(fields: [organizationId, attemptId, provider, senderId], references: [organizationId, id, provider, senderId], onDelete: Restrict)
-  acceptance PharmacyCampaignDeliveryEvent? @relation("CampaignAcceptance", fields: [organizationId, acceptanceId, attemptId, providerMessageId], references: [organizationId, id, attemptId, providerMessageId], onDelete: Restrict)
-  callbacks PharmacyCampaignDeliveryEvent[] @relation("CampaignAcceptance")
+  acceptanceId      String?
+  reason            String?
+  occurredAt        DateTime
+  recordedAt        DateTime                        @default(now())
+  attempt           PharmacyCampaignDispatchAttempt @relation(fields: [organizationId, attemptId, provider, senderId], references: [organizationId, id, provider, senderId], onDelete: Restrict)
+  acceptance        PharmacyCampaignDeliveryEvent?  @relation("CampaignAcceptance", fields: [organizationId, acceptanceId, attemptId, providerMessageId], references: [organizationId, id, attemptId, providerMessageId], onDelete: Restrict)
+  callbacks         PharmacyCampaignDeliveryEvent[] @relation("CampaignAcceptance")
 
   @@unique([organizationId, eventKey])
   @@unique([organizationId, id, attemptId, providerMessageId])
@@ -14173,17 +14209,17 @@ model PharmacyCampaignDeliveryEvent {
 }
 
 model PharmacyCampaignDispatchAttempt {
-  id String @id @default(cuid())
+  id             String                          @id @default(cuid())
   organizationId String
-  captureId String
-  requestKey String
-  attemptNumber Int
-  provider String
-  senderId String
+  captureId      String
+  requestKey     String
+  attemptNumber  Int
+  provider       String
+  senderId       String
   sandboxOutcome String?
-  reservedAt DateTime @default(now())
-  capture PharmacyCampaignCapture @relation(fields: [organizationId, captureId], references: [organizationId, id], onDelete: Restrict)
-  events PharmacyCampaignDeliveryEvent[]
+  reservedAt     DateTime                        @default(now())
+  capture        PharmacyCampaignCapture         @relation(fields: [organizationId, captureId], references: [organizationId, id], onDelete: Restrict)
+  events         PharmacyCampaignDeliveryEvent[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, id, provider, senderId])
@@ -14224,19 +14260,20 @@ model PharmacyMessageLog {
 }
 
 model PharmacyOrderDeliveryEvidence {
-  id String @id @default(cuid())
-  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId String
-  orderId String
-  actorUserId String
-  actor User @relation("PharmacyDeliveryEvidenceActor", fields: [organizationId, actorUserId], references: [organizationId, id], onDelete: Restrict)
-  action String
-  amountMinor Int?
-  reference String
-  requestKey String
-  fingerprint String
-  occurredAt DateTime @default(now())
-  order PharmacyCustomerOrder @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
+  id             String                @id @default(cuid())
+  organizationId String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  orderId        String
+  actorUserId    String
+  actor          User                  @relation("PharmacyDeliveryEvidenceActor", fields: [organizationId, actorUserId], references: [organizationId, id], onDelete: Restrict)
+  action         String
+  amountMinor    Int?
+  reference      String
+  requestKey     String
+  fingerprint    String
+  occurredAt     DateTime              @default(now())
+  order          PharmacyCustomerOrder @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
+
   @@unique([organizationId, branchId, orderId, requestKey])
   @@index([organizationId, branchId, orderId, occurredAt])
   @@map("pharmacy_order_delivery_evidence")
