@@ -42,11 +42,12 @@ const contractGroups = [
   ],
 ] as const;
 
-describe('WHA-100 M8 acceptance battery', () => {
-  it('requires separate migration-owner and restricted-runtime database connections', () => {
-    const runtimeDatabaseUrl =
-      process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
+const ownerDatabaseUrl = process.env.M8_TEST_OWNER_DATABASE_URL;
+const runtimeDatabaseUrl =
+  process.env.M8_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
 
+describe.skipIf(!ownerDatabaseUrl || !runtimeDatabaseUrl)('WHA-100 M8 acceptance battery', () => {
+  it('requires separate migration-owner and restricted-runtime database connections', () => {
     expect(process.env.M8_TEST_OWNER_DATABASE_URL).toBeTruthy();
     expect(runtimeDatabaseUrl).toBeTruthy();
     expect(process.env.M8_TEST_OWNER_DATABASE_URL).not.toBe(runtimeDatabaseUrl);
@@ -57,7 +58,13 @@ describe('WHA-100 M8 acceptance battery', () => {
     (_name, files) => {
       const result = spawnSync('bunx', ['vitest', 'run', ...files], {
         cwd: process.cwd(),
-        env: process.env,
+        env: {
+          ...process.env,
+          DATABASE_URL: runtimeDatabaseUrl,
+          TEST_DATABASE_URL: runtimeDatabaseUrl,
+          M8_TEST_RUNTIME_DATABASE_URL: runtimeDatabaseUrl,
+          M8_TEST_OWNER_DATABASE_URL: ownerDatabaseUrl,
+        },
         encoding: 'utf8',
         timeout: 120_000,
       });

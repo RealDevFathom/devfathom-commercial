@@ -744,7 +744,7 @@ composite tenant key for other reasons.
 cent (M5-L3)** · A branch × businessDate close aggregates ONLY the persisted rows for that date, defined
 exactly as: `grossSales` = Σ SETTLED bill `subtotal` (menu prices, pre-comp/pre-discount); `compTotal`,
 `taxTotal`, `serviceChargeTotal` = Σ SETTLED bill of the same column (tax/service-charge structurally zero
-in M5); `discountTotal` = 0; `netSales` = `grossSales − compTotal − discountTotal`; `voidTotal` = Σ VOID
+in M5); `discountTotal` = Σ settled bill discounts; current report `netSales` = `grossSales − compTotal − discountTotal − refundTotal` (refund principal on processing date, deducted once; legacy closes are normalized on read); `voidTotal` = Σ VOID
 bill `grandTotal`; `tipTotal` = Σ tender `tipAmount` for the date (GROSS — equal to Σ of the per-tender-type
 child `tipAmount`); `refundTotal` = Σ refund `amount` for the PROCESSING date (C7 — a cross-business-date
 correction lands on the day processed and never mutates a prior day's close); `cashExpected`/`cashCounted`/

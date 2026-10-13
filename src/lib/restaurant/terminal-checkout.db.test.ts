@@ -22,7 +22,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
@@ -1033,6 +1033,9 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
     const correctionKey = uniqueKey('daycorrect');
 
     beforeAll(async () => {
+      // Keep both cutoff settings on opposite sides of now, including at UTC midnight.
+      vi.useFakeTimers({ toFake: ['Date'] });
+      vi.setSystemTime(new Date(`${TODAY}T12:00:00.000Z`));
       token = await establishUnlock(ctx.posDay.secret, ctx.staffA, ctx.branchDay);
       await deps.withTenantDb(orgA, (tx) =>
         tx.restaurantBranch.update({
@@ -1079,6 +1082,8 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         })
       );
     });
+
+    afterAll(() => vi.useRealTimers());
 
     it('recovers the pending drawer date after the cutoff advances', async () => {
       const res = await call(deps.routes.dayCurrent, {

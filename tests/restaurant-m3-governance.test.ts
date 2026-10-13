@@ -216,6 +216,21 @@ const CATERING_TABLES = [
   'restaurant_catering_extra_costs',
   'restaurant_catering_deliveries',
   'restaurant_catering_events',
+  'restaurant_catering_branch_capacity',
+  'restaurant_catering_quote_revisions',
+  'restaurant_catering_quote_approvals',
+  'restaurant_catering_dispositions',
+  'restaurant_catering_commands',
+  'restaurant_catering_money_evidence',
+] as const;
+
+// October 8 review and sandbox migrations; every new table remains tenant scoped.
+const GROWTH_TABLES = [
+  'restaurant_growth_reviews',
+  'restaurant_growth_drafts',
+  'restaurant_growth_fixtures',
+  'restaurant_growth_attempts',
+  'restaurant_growth_receipt_events',
 ] as const;
 
 // SAFE-05 adds pharmacy tables outside the restaurant closed-world prefix, but
@@ -608,6 +623,7 @@ describe('M3 schema governance (real PostgreSQL)', () => {
         ...TERMINAL_PAYMENT_TABLES,
         ...DELIVERY_AND_PRINT_TABLES,
         ...CATERING_TABLES,
+        ...GROWTH_TABLES,
         ...PROMOTION_TABLES,
         ...COMPLETION_WAVE_TABLES,
         ...FINAL_CORRECTION_TABLES,

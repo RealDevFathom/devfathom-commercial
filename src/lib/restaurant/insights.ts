@@ -1,4 +1,5 @@
 import 'server-only';
+import { reportNetSales } from './report-net-sales';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -55,7 +56,15 @@ const DAILY_SELECT = {
   createdAt: true,
   updatedAt: true,
   branch: { select: { name: true, timezone: true } },
-  sourceDailyClose: { select: { supersededBy: { select: { id: true }, take: 1 } } },
+  sourceDailyClose: {
+    select: {
+      grossSales: true,
+      compTotal: true,
+      discountTotal: true,
+      refundTotal: true,
+      supersededBy: { select: { id: true }, take: 1 },
+    },
+  },
 } as const;
 
 const ITEM_SELECT = {
@@ -99,7 +108,13 @@ type DailyRow = {
   createdAt: Date;
   updatedAt: Date;
   branch: { name: string; timezone: string };
-  sourceDailyClose: { supersededBy: Array<{ id: string }> };
+  sourceDailyClose: {
+    grossSales: Prisma.Decimal;
+    compTotal: Prisma.Decimal;
+    discountTotal: Prisma.Decimal;
+    refundTotal: Prisma.Decimal;
+    supersededBy: Array<{ id: string }>;
+  };
 };
 
 type ItemRow = {
@@ -174,7 +189,8 @@ function serializeDaily(
     ...(kind === 'financial'
       ? {
           grossSales: row.grossSales.toString(),
-          netSales: row.netSales.toString(),
+          // Read the source components even for cached pre-v4 projections.
+          netSales: reportNetSales(row.sourceDailyClose).toString(),
           deliveryFeeSales: row.deliveryFeeSales.toString(),
           deliveryFeeRefunds: row.deliveryFeeRefunds.toString(),
           compTotal: row.compTotal.toString(),

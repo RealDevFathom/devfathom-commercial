@@ -13,11 +13,22 @@ import {
   useState,
 } from 'react';
 
-import type { CheckoutPanel, TerminalRequest, TerminalRequestOptions } from './checkout-panel';
+import type { CheckoutPanel } from './checkout-panel';
+import {
+  useTerminalSession,
+  request,
+  authHeaders,
+  RequestError,
+  messageFrom,
+  isDefinitiveMutationFailure,
+  type Runtime,
+  type TerminalSessionLifecycle,
+} from './use-terminal-session';
+export type { PosNotice } from './use-terminal-session';
 import type { DrawerPanel } from './drawer-panel';
 import type { DayClosePanel } from './day-close-panel';
 import type { MenuGrid, AddMenuItemInput, EffectiveMenu } from './menu-grid';
-import type { OperatorSwitch, OperatorSwitchInput } from './operator-switch';
+import type { OperatorSwitch } from './operator-switch';
 import type { Input } from '@/components/ui/input';
 import type { StatusPill } from '@/components/ui/status-pill';
 import type { RefundPanel } from './refund-panel';
@@ -33,23 +44,6 @@ import { countQueuedCommands, type PosQueueSnapshot } from '@/lib/restaurant/pos
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
 
 type Channel = OrderChannel;
-type Runtime = {
-  organizationId: string;
-  branchId: string;
-  deviceId: string;
-  deviceName: string;
-  sessionToken: string;
-  sessionId: string;
-  state: 'LOCKED' | 'UNLOCKED';
-  branchName: string;
-  operator: OperatorOption | null;
-};
-type OperatorOption = {
-  staffProfileId: string;
-  displayName: string;
-  role: string;
-  canApprove: boolean;
-};
 type OpenOrder = {
   id: string;
   orderNumber: number;
@@ -58,27 +52,6 @@ type OpenOrder = {
   activeTableIds: string[];
   itemCount: number;
   subtotal: string;
-};
-export type PosNotice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };
-type EstablishResponse = {
-  sessionToken: string;
-  session: {
-    id: string;
-    state: 'LOCKED' | 'UNLOCKED';
-    activeStaffProfileId?: string | null;
-    establishedAt: string;
-  };
-  device: {
-    id: string;
-    organizationId: string;
-    branchId: string;
-    name: string;
-    branchName: string;
-  };
-  operator?: OperatorOption;
-};
-type SessionResponse = {
-  session: { id: string; state: 'LOCKED' | 'UNLOCKED'; activeStaffProfileId: string | null };
 };
 type LocalDraftLine = AddMenuItemInput & { lineId: string; name: string; quotedUnitPrice: string };
 type DeliveryCustomer = {
@@ -110,64 +83,6 @@ type TerminalLayout = {
   sections: Array<{ id: string; name: string }>;
 };
 
-class RequestError extends Error {
-  constructor(
-    readonly status: number,
-    message: string
-  ) {
-    super(message);
-  }
-}
-
-function isDefinitiveMutationFailure(error: unknown) {
-  return (
-    error instanceof RequestError &&
-    error.status >= 400 &&
-    error.status < 500 &&
-    error.status !== 408 &&
-    error.status !== 429
-  );
-}
-
-function isDemoAccessExpiredError(error: unknown) {
-  return (
-    error instanceof RequestError &&
-    error.status === 401 &&
-    /^Demo access has expired(?:[.;]|$)/i.test(error.message)
-  );
-}
-
-function messageFrom(body: unknown) {
-  if (
-    typeof body === 'object' &&
-    body !== null &&
-    'error' in body &&
-    typeof body.error === 'string'
-  ) {
-    return body.error.slice(0, 240);
-  }
-  return 'Request failed without a safe server message.';
-}
-
-async function request<T>(path: string, init: RequestInit): Promise<T> {
-  const response = await fetch(path, {
-    ...init,
-    cache: 'no-store',
-    credentials: 'include',
-    signal: AbortSignal.timeout(10_000),
-  });
-  const body: unknown = await response.json().catch(() => null);
-  if (!response.ok) throw new RequestError(response.status, messageFrom(body));
-  return body as T;
-}
-
-function authHeaders(runtime: Runtime, json = false): HeadersInit {
-  return {
-    'X-Terminal-Session': runtime.sessionToken,
-    ...(json ? { 'Content-Type': 'application/json' } : {}),
-  };
-}
-
 function effectiveMenuPath(channel: Channel, publicationId?: string | null) {
   const query = new URLSearchParams({ channel });
   if (publicationId) query.set('publicationId', publicationId);
@@ -195,16 +110,33 @@ function cachedMenu(catalog: PosCatalogSnapshot): EffectiveMenu {
 }
 
 export function usePosRuntime({ demo = false }: { demo?: boolean }) {
-  const [runtime, setRuntime] = useState<Runtime | null>(null);
-  const [enrollmentState, setEnrollmentState] = useState<
-    'checking' | 'ready' | 'missing' | 'unrecoverable'
-  >('checking');
-  const [operators, setOperators] = useState<OperatorOption[]>([]);
-  const [operatorId, setOperatorId] = useState('');
-  const [operatorDirectoryState, setOperatorDirectoryState] = useState<
-    'idle' | 'loading' | 'ready' | 'error'
-  >('idle');
-  const [operatorPin, setOperatorPin] = useState('');
+  const lifecycleRef = useRef<TerminalSessionLifecycle>({});
+  const {
+    runtime,
+    setRuntime,
+    runtimeBoundary,
+    enrollmentState,
+    setEnrollmentState,
+    operators,
+    operatorId,
+    setOperatorId,
+    operatorDirectoryState,
+    operatorPin,
+    setOperatorPin,
+    pending,
+    setPending,
+    notice,
+    setNotice,
+    online,
+    idempotencyKeys,
+    loadOperators,
+    checkoutRequest,
+    handleError,
+    clearTerminalState,
+    unlock,
+    lock,
+    switchOperator,
+  } = useTerminalSession({ demo, lifecycleRef });
   const [channel, setChannel] = useState<Channel>('DINE_IN');
   const [tableIds, setTableIds] = useState<string[]>([]);
   const [covers, setCovers] = useState('');
@@ -227,15 +159,9 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
   const [order, setOrder] = useState<OrderDetail | null>(null);
   const [draftLines, setDraftLines] = useState<LocalDraftLine[]>([]);
   const [checkoutOrderId, setCheckoutOrderId] = useState<string | null>(null);
-  const [pending, setPending] = useState<string | null>(null);
-  const [notice, setNotice] = useState<PosNotice | null>(null);
-  const establishing = useRef(false);
-  const idempotencyKeys = useRef(new Map<string, string>());
   const stateEpoch = useRef(0);
-  const runtimeBoundary = useRef<Runtime | null>(null);
   const deliveryCustomerBoundary = useRef<DeliveryCustomer | null>(null);
   const offlineRuntime = useRef<PosOfflineRuntime | null>(null);
-  const [online, setOnline] = useState(true);
   const [queue, setQueue] = useState<PosQueueSnapshot | null>(null);
   const [discardedCount, setDiscardedCount] = useState(0);
   const [revoked, setRevoked] = useState(false);
@@ -244,27 +170,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     queue?.drafts.filter(
       (draft) => draft.status === 'NEEDS_REVIEW' || draft.status === 'QUARANTINED'
     ) ?? [];
-
-  const loadOperators = useCallback(async (activeRuntime: Runtime) => {
-    setOperatorDirectoryState('loading');
-    try {
-      const data = await request<{ operators: OperatorOption[] }>(
-        '/api/restaurant/terminal/operators',
-        { headers: authHeaders(activeRuntime) }
-      );
-      setOperators(data.operators);
-      setOperatorId((current) =>
-        data.operators.some((operator) => operator.staffProfileId === current)
-          ? current
-          : (data.operators[0]?.staffProfileId ?? '')
-      );
-      setOperatorDirectoryState('ready');
-    } catch {
-      setOperators([]);
-      setOperatorId('');
-      setOperatorDirectoryState('error');
-    }
-  }, []);
 
   const loadLayout = useCallback(async (activeRuntime: Runtime) => {
     setLayoutState('loading');
@@ -293,23 +198,17 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     setDeliveryInstructions('');
   }, []);
 
-  const clearTerminalState = useCallback(() => {
+  const clearWorkspace = useCallback(() => {
     stateEpoch.current += 1;
-    runtimeBoundary.current = null;
-    setRuntime(null);
     setDraftMenu(null);
     setOrderMenu(null);
     setOrder(null);
     setDraftLines([]);
     setCheckoutOrderId(null);
     setOpenOrders([]);
-    setOperators([]);
-    setOperatorId('');
-    setOperatorDirectoryState('idle');
     setLayout(null);
     setLayoutState('idle');
     clearDeliveryState(false);
-    idempotencyKeys.current.clear();
   }, [clearDeliveryState]);
 
   const captureDeliveryBoundary = useCallback(
@@ -338,7 +237,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         (deliveryCustomerBoundary.current?.customerId ?? null) === boundary.customerId
       );
     },
-    []
+    [runtimeBoundary]
   );
 
   const syncQueue = useCallback(() => {
@@ -379,7 +278,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       if (result.state === 'PAUSED' && local.snapshot().queue?.replay === 'PAUSED_REAUTH') {
         const locked = { ...activeRuntime, state: 'LOCKED' as const, operator: null };
         setRuntime(locked);
-        runtimeBoundary.current = locked;
         clearDeliveryState();
         setOperatorPin('');
         setNotice({
@@ -397,7 +295,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         });
       }
     },
-    [clearDeliveryState, clearTerminalState, syncQueue]
+    [clearDeliveryState, clearTerminalState, syncQueue, setRuntime, setOperatorPin, setNotice]
   );
 
   function keyFor(intent: string) {
@@ -407,91 +305,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     idempotencyKeys.current.set(intent, key);
     return key;
   }
-
-  const checkoutRequest = useCallback<TerminalRequest>(
-    async <T>(path: string, options: TerminalRequestOptions = {}): Promise<T> => {
-      if (!runtime || runtime.state !== 'UNLOCKED') {
-        throw new RequestError(401, 'An unlocked terminal session is required.');
-      }
-      const mutation = options.method === 'POST';
-      const intent =
-        options.intent ??
-        `${options.method ?? 'GET'}:${path}:${JSON.stringify(options.body ?? {})}`;
-      let idempotencyKey: string | null = null;
-      if (mutation) {
-        idempotencyKey = idempotencyKeys.current.get(intent) ?? browserUuid();
-        idempotencyKeys.current.set(intent, idempotencyKey);
-      }
-      try {
-        const data = await request<T>(path, {
-          method: options.method,
-          headers: {
-            ...authHeaders(runtime, options.body !== undefined),
-            ...(idempotencyKey ? { 'Idempotency-Key': idempotencyKey } : {}),
-          },
-          ...(options.body ? { body: JSON.stringify(options.body) } : {}),
-        });
-        if (mutation) idempotencyKeys.current.delete(intent);
-        return data;
-      } catch (error) {
-        if (mutation && isDefinitiveMutationFailure(error)) {
-          idempotencyKeys.current.delete(intent);
-        }
-        if (demo && isDemoAccessExpiredError(error)) {
-          clearTerminalState();
-          setEnrollmentState('missing');
-          setNotice({
-            tone: 'danger',
-            message: 'Demo access expired. Reopen the restaurant demo.',
-          });
-        } else if (
-          error instanceof RequestError &&
-          ((error.status === 403 && /device.+revoked/i.test(error.message)) ||
-            (error.status === 401 && /session|device/i.test(error.message)))
-        ) {
-          clearTerminalState();
-          setNotice({ tone: 'danger', message: `Terminal access ended: ${error.message}` });
-        }
-        throw error;
-      }
-    },
-    [clearTerminalState, demo, runtime]
-  );
-
-  const handleError = useCallback(
-    (error: unknown) => {
-      if (error instanceof RequestError) {
-        if (demo && isDemoAccessExpiredError(error)) {
-          clearTerminalState();
-          setEnrollmentState('missing');
-          setNotice({
-            tone: 'danger',
-            message: 'Demo access expired. Reopen the restaurant demo.',
-          });
-          return;
-        }
-        const revoked = error.status === 403 && /device.+revoked/i.test(error.message);
-        if (revoked) clearTerminalState();
-        if (error.status === 401 && /session|device/i.test(error.message)) {
-          clearTerminalState();
-        }
-        setNotice({
-          tone: error.status === 403 ? 'danger' : 'warning',
-          message: revoked
-            ? `Device revoked: ${error.message}`
-            : error.status === 403
-              ? `Permission denied: ${error.message}`
-              : error.message,
-        });
-        return;
-      }
-      setNotice({
-        tone: 'warning',
-        message: 'Network request failed. Retry this action.',
-      });
-    },
-    [clearTerminalState, demo]
-  );
 
   const loadMenu = useCallback(
     async (nextChannel: Channel, activeRuntime = runtime, standalone = true) => {
@@ -521,7 +334,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         if (standalone) setPending(null);
       }
     },
-    [handleError, runtime, syncQueue]
+    [handleError, runtime, syncQueue, setPending, setNotice]
   );
 
   const loadOpenOrders = useCallback(
@@ -542,7 +355,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         if (standalone) setPending(null);
       }
     },
-    [handleError, runtime]
+    [handleError, runtime, setPending]
   );
 
   async function loadDetail(orderId: string, activeRuntime = runtime, standalone = true) {
@@ -584,122 +397,60 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     [channel, loadLayout, loadMenu, loadOpenOrders, replayQueue]
   );
 
-  const establish = useCallback(async () => {
-    if (establishing.current || pending) return;
-    establishing.current = true;
-    setPending('establish');
-    setNotice(null);
-    try {
-      const data = await request<EstablishResponse>(
-        demo ? '/demo/restaurants/device-session' : '/api/restaurant/terminal/establish',
-        {
-          method: 'POST',
-          ...(demo
-            ? {
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ kind: 'POS' }),
-              }
-            : {}),
-        }
-      );
-      const established: Runtime = {
-        organizationId: data.device.organizationId,
-        branchId: data.device.branchId,
-        deviceId: data.device.id,
-        deviceName: data.device.name,
-        sessionToken: data.sessionToken,
-        sessionId: data.session.id,
-        state: data.session.state,
-        branchName: data.device.branchName,
-        operator: data.operator ?? null,
-      };
-      offlineRuntime.current?.close();
-      const local = new PosOfflineRuntime(
-        {
-          organizationId: established.organizationId,
-          branchId: established.branchId,
-          deviceId: established.deviceId,
-        },
-        isPosStoreSupported() ? createIndexedDbDriver() : createMemoryDriver()
-      );
-      offlineRuntime.current = local;
-      const hydration = await local.hydrate();
-      if (hydration === 'unrecoverable') {
-        local.close();
-        offlineRuntime.current = null;
-        setEnrollmentState('unrecoverable');
-        setNotice({
-          tone: 'danger',
-          message:
-            'Local POS data could not be recovered. Re-enroll or clear site data to continue.',
-        });
-        return;
-      }
-      syncQueue();
-      setRuntime(established);
-      runtimeBoundary.current = established;
-      setEnrollmentState('ready');
-      setNotice({
-        tone: 'success',
-        message: data.operator
-          ? `Demo terminal ready as ${data.operator.displayName}.`
-          : 'Device session established. Unlock to continue.',
-      });
-      await loadOperators(established);
-      if (established.state === 'UNLOCKED') await loadUnlockedWorkspace(established);
-    } catch (error) {
-      setEnrollmentState('missing');
-      handleError(error);
-    } finally {
-      establishing.current = false;
-      setPending(null);
-    }
-  }, [demo, handleError, loadOperators, loadUnlockedWorkspace, pending, syncQueue]);
-
-  useEffect(() => {
-    if (enrollmentState === 'checking') queueMicrotask(() => void establish());
-  }, [enrollmentState, establish]);
-
-  async function unlock(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!runtime || !operatorId.trim() || !/^\d{4,8}$/.test(operatorPin) || pending) return;
-    setPending('unlock');
-    setNotice(null);
-    try {
-      const data = await request<SessionResponse>('/api/restaurant/terminal/unlock', {
-        method: 'POST',
-        headers: authHeaders(runtime, true),
-        body: JSON.stringify({
-          staffProfileId: operatorId.trim(),
-          type: 'PIN',
-          secret: operatorPin,
-        }),
-      });
-      const unlocked: Runtime = {
-        ...runtime,
-        state: data.session.state,
-        operator:
-          operators.find(
-            (operator) => operator.staffProfileId === data.session.activeStaffProfileId
-          ) ?? null,
-      };
-      setRuntime(unlocked);
-      runtimeBoundary.current = unlocked;
-      await offlineRuntime.current?.resume();
-      setOperatorPin('');
-      setNotice({ tone: 'success', message: 'Terminal unlocked.' });
-      await loadUnlockedWorkspace(unlocked);
-    } catch (error) {
-      setOperatorPin('');
-      handleError(error);
-    } finally {
-      setPending(null);
-    }
+  function terminalRecovery() {
+    setEnrollmentState('unrecoverable');
+    setNotice({
+      tone: 'danger',
+      message: 'Local POS data could not be recovered. Re-enroll or clear site data to continue.',
+    });
+  }
+  function clearLockedWorkspace() {
+    setDraftMenu(null);
+    setOrderMenu(null);
+    setOrder(null);
+    setCheckoutOrderId(null);
+    setOpenOrders([]);
+    setLayout(null);
+    setLayoutState('idle');
+    clearDeliveryState();
   }
 
   useEffect(() => {
+    lifecycleRef.current = {
+      onEstablish: async (established) => {
+        offlineRuntime.current?.close();
+        const local = new PosOfflineRuntime(
+          {
+            organizationId: established.organizationId,
+            branchId: established.branchId,
+            deviceId: established.deviceId,
+          },
+          isPosStoreSupported() ? createIndexedDbDriver() : createMemoryDriver()
+        );
+        offlineRuntime.current = local;
+        const hydration = await local.hydrate();
+        if (hydration === 'unrecoverable') {
+          local.close();
+          offlineRuntime.current = null;
+          terminalRecovery();
+          return false;
+        }
+        syncQueue();
+        return true;
+      },
+      onReady: (activeRuntime) => loadUnlockedWorkspace(activeRuntime),
+      onUnlock: async (activeRuntime) => {
+        await offlineRuntime.current?.resume();
+        await loadUnlockedWorkspace(activeRuntime);
+      },
+      onLock: () => clearLockedWorkspace(),
+      onSwitch: () => clearDeliveryState(),
+      onClear: () => clearWorkspace(),
+    };
+  });
+
+  useEffect(() => {
     const update = () => {
-      setOnline(navigator.onLine);
       if (navigator.onLine && runtime?.state === 'UNLOCKED') void replayQueue(runtime);
     };
     const visible = () => {
@@ -715,71 +466,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       document.removeEventListener('visibilitychange', visible);
     };
   }, [replayQueue, runtime]);
-
-  async function lock() {
-    if (!runtime || pending) return;
-    setPending('lock');
-    try {
-      const data = await request<SessionResponse>('/api/restaurant/terminal/lock', {
-        method: 'POST',
-        headers: authHeaders(runtime),
-      });
-      const locked: Runtime = { ...runtime, state: data.session.state, operator: null };
-      setRuntime(locked);
-      runtimeBoundary.current = locked;
-      setOperatorId('');
-      setOperators([]);
-      setOperatorPin('');
-      setDraftMenu(null);
-      setOrderMenu(null);
-      setOrder(null);
-      setCheckoutOrderId(null);
-      setOpenOrders([]);
-      setLayout(null);
-      setLayoutState('idle');
-      clearDeliveryState();
-      idempotencyKeys.current.clear();
-      setNotice({ tone: 'success', message: 'Terminal locked.' });
-      await loadOperators(locked);
-    } catch (error) {
-      handleError(error);
-    } finally {
-      setPending(null);
-    }
-  }
-
-  async function switchOperator(input: OperatorSwitchInput) {
-    if (!runtime || pending) return false;
-    setPending('switch');
-    setNotice(null);
-    try {
-      const data = await request<SessionResponse>('/api/restaurant/terminal/switch', {
-        method: 'POST',
-        headers: authHeaders(runtime, true),
-        body: JSON.stringify(input),
-      });
-      const switched: Runtime = {
-        ...runtime,
-        operator:
-          operators.find(
-            (operator) => operator.staffProfileId === data.session.activeStaffProfileId
-          ) ?? null,
-      };
-      setRuntime(switched);
-      runtimeBoundary.current = switched;
-      clearDeliveryState();
-      setNotice({
-        tone: 'success',
-        message: 'Operator switched. New actions use the incoming identity.',
-      });
-      return true;
-    } catch (error) {
-      handleError(error);
-      return false;
-    } finally {
-      setPending(null);
-    }
-  }
 
   async function mutate(
     path: string,
@@ -895,7 +581,9 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         ]);
         return;
       }
-      if (draftLines.length === 0 && navigator.onLine) {
+      if (navigator.onLine) {
+        // Online, a composed draft is opened directly and becomes the active order;
+        // only an offline draft goes through the local queue.
         const intent = `open:${JSON.stringify(body)}`;
         const data = await request<{ orderId: string; orderNumber: number }>(
           '/api/restaurant/orders/open',
@@ -908,7 +596,25 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
             body: JSON.stringify(body),
           }
         );
+        for (const line of draftLines) {
+          await request('/api/restaurant/orders/add-item', {
+            method: 'POST',
+            headers: {
+              ...authHeaders(runtime, true),
+              'Idempotency-Key': keyFor(`open-line:${data.orderId}:${line.lineId}`),
+            },
+            body: JSON.stringify({
+              orderId: data.orderId,
+              menuItemId: line.menuItemId,
+              quantity: line.quantity,
+              course: line.course,
+              seatNumber: line.seatNumber,
+              modifierOptionIds: line.modifierOptionIds,
+            }),
+          });
+        }
         idempotencyKeys.current.delete(intent);
+        setDraftLines([]);
         setNotice({ tone: 'success', message: `Order ${data.orderNumber} opened.` });
         await Promise.all([
           loadDetail(data.orderId, runtime, false),
@@ -945,6 +651,15 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     } finally {
       setPending(null);
     }
+  }
+
+  /** A settled check is finished: clear it so the next taps compose a fresh draft. */
+  function startFreshDraft() {
+    stateEpoch.current += 1;
+    setOrder(null);
+    setOrderMenu(null);
+    setDraftLines([]);
+    if (runtime && navigator.onLine) void loadOpenOrders(runtime, false);
   }
 
   async function closeForPayment() {
@@ -1309,7 +1024,10 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       orderId: checkoutOrderId,
       request: checkoutRequest,
       connected: online,
-      onClose: () => setCheckoutOrderId(null),
+      onClose: ({ settled }) => {
+        setCheckoutOrderId(null);
+        if (settled) startFreshDraft();
+      },
     } satisfies ComponentProps<typeof CheckoutPanel>,
   };
   const controls = {

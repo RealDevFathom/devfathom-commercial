@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { readPaymentsReport, exportRestaurantReportCsv } from './reports';
 import { readFinancialComparison, restaurantComparisonWindows } from './financial-comparison';
 
 const range = { branchIds: ['b1', 'b2'], from: '2024-03-01', to: '2024-03-01' };
@@ -16,7 +17,8 @@ function close(id: string, businessDate: string, netSales: string, branchId = 'b
     businessDate: new Date(`${businessDate}T00:00:00Z`),
     createdAt: new Date('2024-03-02T12:00:00Z'),
     supersedesCloseId: null as string | null,
-    grossSales: value.plus('3.30'),
+    // Current fixture: comp 1.10 + discount 2.20 + refund 5.50.
+    grossSales: value.plus('8.80'),
     netSales: value,
     compTotal: new Prisma.Decimal('1.10'),
     discountTotal: new Prisma.Decimal('2.20'),
@@ -128,10 +130,10 @@ describe('restaurant financial comparison from the existing payment reader', () 
       absoluteChange: '0.20',
       percentageChange: '200.00',
     });
-    expect(report.drivers.netSales.definition).toContain('Excludes refunds');
+    expect(report.drivers.netSales.definition).toContain('minus refundTotal');
     expect(report.drivers.refundTotal.current).toBe('5.50');
     expect(report.drivers.deliveryFeeRefunds.current).toBe('0.50');
-    expect(report.drivers.grossSales.current).toBe('3.60');
+    expect(report.drivers.grossSales.current).toBe('9.10');
     expect(report.drivers.discountTotal.current).toBe('2.20');
     expect(report.drivers.compTotal.current).toBe('1.10');
     expect(report.drivers.taxTotal.current).toBe('0.70');
@@ -471,4 +473,38 @@ describe('restaurant financial comparison from the existing payment reader', () 
       unavailableReason: { current: null },
     });
   });
+});
+
+describe('legacy close net-sales normalization', () => {
+  it.each([['7'], ['4'], ['7', '4']])(
+    'normalizes stored values %j without mutating closes',
+    async (...stored) => {
+      const rows = stored.map((net, i) => ({
+        ...close(`legacy-${i}`, i === 0 ? range.from : '2024-03-02', net),
+        grossSales: new Prisma.Decimal('10'),
+        compTotal: new Prisma.Decimal('2'),
+        discountTotal: new Prisma.Decimal('1'),
+        refundTotal: new Prisma.Decimal('3'),
+      }));
+      const before = rows.map((row) => row.netSales.toString());
+      const period = { ...range, to: stored.length === 2 ? '2024-03-02' : range.to };
+      const { read } = fixture(rows);
+      const paymentDb = fixture(rows).db;
+      const payments = await readPaymentsReport(paymentDb as unknown as ScopedDb, period);
+      expect(payments.netSales).toBe(stored.length === 2 ? '8' : '4');
+      const csv = await exportRestaurantReportCsv(
+        fixture(rows).db as unknown as ScopedDb,
+        'payments',
+        period,
+        { includeLabourCosts: false }
+      );
+      const [header, line] = csv.content.split('\n');
+      expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe(payments.netSales);
+      const report = await read(period);
+      expect(report.drivers.netSales.current).toBe(stored.length === 2 ? '8.00' : '4.00');
+      expect(report.drivers.netSales.definition).toContain('minus refundTotal');
+      expect(report.drivers.refundTotal.definition).toContain('Already deducted');
+      expect(rows.map((row) => row.netSales.toString())).toEqual(before);
+    }
+  );
 });

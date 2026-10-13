@@ -358,16 +358,16 @@ test.describe('restaurant POS and KDS core flow', () => {
     expect(
       openedOrderTenders.find((tender) => tender.tenderId === refundableTender!.tenderId)
     ).toMatchObject({
-      paidAmount: Number(splitAmount).toString(),
-      refundedAmount: '1',
-      remainingAmount: (Number(splitAmount) - 1).toString(),
+      paidAmount: Number(splitAmount).toFixed(2),
+      refundedAmount: '1.00',
+      remainingAmount: (Number(splitAmount) - 1).toFixed(2),
     });
     expect(
       openedOrderTenders.find((tender) => tender.tenderId !== refundableTender!.tenderId)
     ).toMatchObject({
-      paidAmount: Number(splitAmount).toString(),
-      refundedAmount: '0',
-      remainingAmount: Number(splitAmount).toString(),
+      paidAmount: Number(splitAmount).toFixed(2),
+      refundedAmount: '0.00',
+      remainingAmount: Number(splitAmount).toFixed(2),
     });
 
     const overRefund = await request.post('/api/restaurant/checkout/refund', {
@@ -414,16 +414,23 @@ test.describe('restaurant POS and KDS core flow', () => {
       },
       e2eIdempotencyKey('drawer-paid-in', opened.orderNumber)
     );
-    await post(
+    // Only this drawer remains open; already-counted drawers belong to the branch total.
+    expect(postRefundPreview.readiness.openDrawerCount).toBe(1);
+    const drawerClose = await post(
       request,
       pos,
       '/api/restaurant/cash/drawer/close',
       {
         drawerSessionId: 'drawer_restaurant_e2e',
-        countedCash: (Number(postRefundPreview.totals.cashExpected) + 5).toFixed(2),
+        countedCash: (
+          Number(postRefundPreview.totals.cashExpected) -
+          Number(postRefundPreview.totals.cashCounted) +
+          5
+        ).toFixed(2),
       },
       e2eIdempotencyKey('drawer-close', opened.orderNumber)
     );
+    expect((await drawerClose.json()).variance).toBe('0.00');
     const closeResponse = await post(
       request,
       pos,

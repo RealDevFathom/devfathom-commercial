@@ -99,11 +99,15 @@ export function assertAuthorizedBranch(
   if (!branchId || !authorization.branchIds.includes(branchId)) denyStaffBranchAccess();
 }
 
-/** Require the derived staff identity itself to be linked to the target branch. */
+/**
+ * Require the derived staff identity itself to be linked to the target branch.
+ * An organization-wide administrator (the owner) is eligible on every branch.
+ */
 export function assertActorEligibleForBranch(
   authorization: StaffBranchAuthorization,
   branchId: string
 ): void {
+  if (authorization.organizationWide) return;
   if (!authorization.actorBranchIds.includes(branchId)) denyStaffBranchAccess();
 }
 

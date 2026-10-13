@@ -15,7 +15,9 @@ type RecipeSelector =
   | { organizationId: string; recipeId?: never; recipeVersionId: string };
 
 export type ExplodeRecipeInput = RecipeSelector & {
+  /** Requested servings, scaled by the selected version's portionCount. */
   portions?: Prisma.Decimal;
+  /** Multiples of the complete bill of materials; defaults to one. */
   batches?: Prisma.Decimal;
 };
 
@@ -132,6 +134,9 @@ async function conversionFactor(
       'NO_UNIT_CONVERSION'
     );
   }
+  if (!conversion.factor.isFinite() || !conversion.factor.greaterThan(ZERO)) {
+    throw new RecipeCostingError('Unit conversion factor must be positive.', 'INVALID');
+  }
   cache.set(key, conversion.factor);
   return conversion.factor;
 }
@@ -196,7 +201,19 @@ async function explodeVersion(
       recipeId: line.subRecipeId,
     });
     const subYield = subVersion.yieldQuantity;
-    const subBatches = subYield && !subYield.isZero() ? quantity.dividedBy(subYield) : quantity;
+    if (
+      !subYield ||
+      !subYield.isFinite() ||
+      !subYield.greaterThan(ZERO) ||
+      !subVersion.yieldUnitId
+    ) {
+      throw new RecipeCostingError(
+        'Sub-recipe requires a positive yield and yield unit.',
+        'INVALID'
+      );
+    }
+    const factor = await conversionFactor(db, line.unitId, subVersion.yieldUnitId, conversions);
+    const subBatches = quantity.times(factor).dividedBy(subYield);
     leaves.push(
       ...(await explodeVersion(
         db,
@@ -216,19 +233,21 @@ export async function explodeRecipeInDb(
   db: ScopedDb,
   input: ExplodeRecipeInput
 ): Promise<ExplodeRecipeResult> {
-  if (input.portions && input.batches) {
+  if (input.portions !== undefined && input.batches !== undefined) {
     throw new RecipeCostingError('Specify portions or batches, not both.', 'INVALID');
   }
   const version = await resolveVersion(db, input);
-  const batches = input.batches
-    ? new Prisma.Decimal(input.batches)
-    : input.portions && version.yieldQuantity && !version.yieldQuantity.isZero()
-      ? new Prisma.Decimal(input.portions).dividedBy(version.yieldQuantity)
-      : input.portions
-        ? new Prisma.Decimal(input.portions)
-        : ONE;
-  if (batches.isNegative()) {
-    throw new RecipeCostingError('Recipe scale cannot be negative.', 'INVALID');
+  let batches = input.batches === undefined ? ONE : new Prisma.Decimal(input.batches);
+  if (input.portions !== undefined) {
+    const portionCount =
+      version.portionCount === null ? null : new Prisma.Decimal(version.portionCount);
+    if (!portionCount || !portionCount.isFinite() || !portionCount.greaterThan(ZERO)) {
+      throw new RecipeCostingError('Portion scaling requires a positive portion count.', 'INVALID');
+    }
+    batches = new Prisma.Decimal(input.portions).dividedBy(portionCount);
+  }
+  if (!batches.isFinite() || batches.isNegative()) {
+    throw new RecipeCostingError('Recipe scale must be finite and nonnegative.', 'INVALID');
   }
   const leaves = await explodeVersion(
     db,
@@ -257,88 +276,94 @@ export async function explodeRecipe(input: ExplodeRecipeInput): Promise<ExplodeR
   return withTenantDb(input.organizationId, (db) => explodeRecipeInDb(db, input));
 }
 
-export async function computeRecipeCost(input: RecipeSelector): Promise<RecipeCostResult> {
-  return withTenantDb(input.organizationId, async (db) => {
-    const version = await resolveVersion(db, input);
-    const explosion = await explodeRecipeInDb(db, { ...input, batches: ONE });
-    const stockItemIds = explosion.ingredients.flatMap((line) =>
-      line.stockItemId ? [line.stockItemId] : []
-    );
-    const movements = stockItemIds.length
-      ? await db.restaurantStockMovement.findMany({
-          where: { stockItemId: { in: stockItemIds }, unitCost: { not: null } },
-          select: { stockItemId: true, quantity: true, unitCost: true },
-        })
-      : [];
-    const costs = new Map<string, { quantity: Prisma.Decimal; cost: Prisma.Decimal }>();
-    for (const movement of movements) {
-      if (!movement.unitCost) continue;
-      const value = costs.get(movement.stockItemId) ?? { quantity: ZERO, cost: ZERO };
-      value.quantity = value.quantity.plus(movement.quantity);
-      value.cost = value.cost.plus(movement.quantity.times(movement.unitCost));
-      costs.set(movement.stockItemId, value);
-    }
-    const ingredients = await db.restaurantIngredient.findMany({
-      where: { id: { in: explosion.ingredients.map((line) => line.ingredientId) } },
-      select: {
-        id: true,
-        referenceCost: true,
-        baseUnitId: true,
-        stockItem: { select: { id: true, canonicalUnitId: true } },
-      },
-    });
-    const ingredientMap = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
-    const conversions = new Map<string, Prisma.Decimal>();
-    const lines: RecipeCostLine[] = [];
-    for (const line of explosion.ingredients) {
-      const ingredient = ingredientMap.get(line.ingredientId);
-      const weighted = line.stockItemId ? costs.get(line.stockItemId) : undefined;
-      let unitCost = ZERO;
-      let source: RecipeCostSource = 'MISSING';
-      if (weighted && !weighted.quantity.isZero()) {
-        const canonicalCost = weighted.cost.dividedBy(weighted.quantity);
-        if (canonicalCost.greaterThan(ZERO)) {
-          const factor = ingredient?.stockItem
-            ? await conversionFactor(
-                db,
-                ingredient.baseUnitId,
-                ingredient.stockItem.canonicalUnitId,
-                conversions
-              )
-            : ONE;
-          unitCost = canonicalCost.times(factor);
-          source = 'WEIGHTED_AVERAGE';
-        }
-      }
-      if (source === 'MISSING' && ingredient?.referenceCost?.greaterThan(ZERO)) {
-        unitCost = ingredient.referenceCost;
-        source = 'REFERENCE';
-      }
-      lines.push({
-        ...line,
-        unitCost,
-        source,
-        lineCost: line.quantityInBaseUnit.times(unitCost),
-      });
-    }
-    const batchCost = lines.reduce((total, line) => total.plus(line.lineCost), ZERO);
-    return {
-      recipeId: version.recipeId,
-      recipeVersionId: version.id,
-      portionCount: version.portionCount,
-      yieldQuantity: version.yieldQuantity,
-      yieldUnitId: version.yieldUnitId,
-      lines,
-      batchCost,
-      costPerPortion:
-        version.portionCount && version.portionCount > 0
-          ? batchCost.dividedBy(new Prisma.Decimal(version.portionCount))
-          : null,
-      costPerYieldUnit:
-        version.yieldQuantity && !version.yieldQuantity.isZero()
-          ? batchCost.dividedBy(version.yieldQuantity)
-          : null,
-      missing: lines.filter((line) => line.source === 'MISSING').map((line) => line.ingredientId),
-    };
+/** Uses the caller's tenant-scoped transaction; does not open another transaction. */
+export async function computeRecipeCostInDb(
+  db: ScopedDb,
+  input: RecipeSelector
+): Promise<RecipeCostResult> {
+  const version = await resolveVersion(db, input);
+  const explosion = await explodeRecipeInDb(db, { ...input, batches: ONE });
+  const stockItemIds = explosion.ingredients.flatMap((line) =>
+    line.stockItemId ? [line.stockItemId] : []
+  );
+  const movements = stockItemIds.length
+    ? await db.restaurantStockMovement.findMany({
+        where: { stockItemId: { in: stockItemIds }, unitCost: { not: null } },
+        select: { stockItemId: true, quantity: true, unitCost: true },
+      })
+    : [];
+  const costs = new Map<string, { quantity: Prisma.Decimal; cost: Prisma.Decimal }>();
+  for (const movement of movements) {
+    if (!movement.unitCost) continue;
+    const value = costs.get(movement.stockItemId) ?? { quantity: ZERO, cost: ZERO };
+    value.quantity = value.quantity.plus(movement.quantity);
+    value.cost = value.cost.plus(movement.quantity.times(movement.unitCost));
+    costs.set(movement.stockItemId, value);
+  }
+  const ingredients = await db.restaurantIngredient.findMany({
+    where: { id: { in: explosion.ingredients.map((line) => line.ingredientId) } },
+    select: {
+      id: true,
+      referenceCost: true,
+      baseUnitId: true,
+      stockItem: { select: { id: true, canonicalUnitId: true } },
+    },
   });
+  const ingredientMap = new Map(ingredients.map((ingredient) => [ingredient.id, ingredient]));
+  const conversions = new Map<string, Prisma.Decimal>();
+  const lines: RecipeCostLine[] = [];
+  for (const line of explosion.ingredients) {
+    const ingredient = ingredientMap.get(line.ingredientId);
+    const weighted = line.stockItemId ? costs.get(line.stockItemId) : undefined;
+    let unitCost = ZERO;
+    let source: RecipeCostSource = 'MISSING';
+    if (weighted && !weighted.quantity.isZero()) {
+      const canonicalCost = weighted.cost.dividedBy(weighted.quantity);
+      if (canonicalCost.greaterThan(ZERO)) {
+        const factor = ingredient?.stockItem
+          ? await conversionFactor(
+              db,
+              ingredient.baseUnitId,
+              ingredient.stockItem.canonicalUnitId,
+              conversions
+            )
+          : ONE;
+        unitCost = canonicalCost.times(factor);
+        source = 'WEIGHTED_AVERAGE';
+      }
+    }
+    if (source === 'MISSING' && ingredient?.referenceCost?.greaterThan(ZERO)) {
+      unitCost = ingredient.referenceCost;
+      source = 'REFERENCE';
+    }
+    lines.push({
+      ...line,
+      unitCost,
+      source,
+      lineCost: line.quantityInBaseUnit.times(unitCost),
+    });
+  }
+  const batchCost = lines.reduce((total, line) => total.plus(line.lineCost), ZERO);
+  return {
+    recipeId: version.recipeId,
+    recipeVersionId: version.id,
+    portionCount: version.portionCount,
+    yieldQuantity: version.yieldQuantity,
+    yieldUnitId: version.yieldUnitId,
+    lines,
+    batchCost,
+    costPerPortion:
+      version.portionCount && version.portionCount > 0
+        ? batchCost.dividedBy(new Prisma.Decimal(version.portionCount))
+        : null,
+    costPerYieldUnit:
+      version.yieldQuantity?.isFinite() && version.yieldQuantity.greaterThan(ZERO)
+        ? batchCost.dividedBy(version.yieldQuantity)
+        : null,
+    missing: lines.filter((line) => line.source === 'MISSING').map((line) => line.ingredientId),
+  };
+}
+
+export async function computeRecipeCost(input: RecipeSelector): Promise<RecipeCostResult> {
+  return withTenantDb(input.organizationId, (db) => computeRecipeCostInDb(db, input));
 }

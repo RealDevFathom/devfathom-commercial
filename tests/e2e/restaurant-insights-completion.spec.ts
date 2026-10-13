@@ -563,9 +563,12 @@ test('prepares a populated close packet that matches live evidence and redacts u
       `${state.unbilledOrderIds.length} orders with active items have no live bill. Operational handover requires review.`
     );
     await expect(
-      operational.getByText(
-        `Observed record references (${Math.min(state.unbilledOrderIds.length, 100)})`
-      )
+      operational
+        .getByRole('listitem')
+        .filter({ hasText: 'orders with active items have no live bill' })
+        .getByText(`Observed record references (${Math.min(state.unbilledOrderIds.length, 100)})`, {
+          exact: true,
+        })
     ).toBeVisible();
   }
 });
@@ -813,36 +816,50 @@ test('serves ordinary Insights reports without any AskFathom transport or chat a
 test('denies every Insights read to an actor without the report capabilities', async ({ page }) => {
   test.slow();
   await openInsights(page, 'restaurantOperator');
-  await selectSeededBranch(page);
-
-  await openInsightsTab(page, 'Financial');
-  const financialCard = sectionCard(page, 'Sales and reconciliation');
-  await expect(financialCard.getByText('Permission denied')).toBeVisible();
-  await expect(financialCard.getByText('Insights access denied')).toBeVisible();
-  await expect(financialCard).toContainText(
-    'Your role does not grant the capability and branch assignment required for this report.'
-  );
-  // A denied read offers no retry and leaks no rollup row.
-  await expect(financialCard.getByRole('button', { name: 'Retry' })).toHaveCount(0);
+  const origin = new URL(page.url()).origin;
+  // This actor cannot list branches. The UI correctly fails closed before any
+  // branch-scoped card can load; selecting an unavailable option is not a user path.
+  const branch = page.getByLabel('Branch', { exact: true });
+  await expect(branch).toBeDisabled();
+  await expect(branch).toHaveAttribute('aria-invalid', 'true');
+  await expect(branch).toContainText('Branches unavailable');
+  for (const tab of ['Financial', 'Operational', 'Labour', 'Close readiness']) {
+    await openInsightsTab(page, tab);
+    await expect(sectionCard(page, 'Branch required')).toBeVisible();
+    await expect(page.getByRole('main')).not.toContainText('Gross sales');
+  }
   await expect(page.getByRole('region', { name: 'financial reports table' })).toHaveCount(0);
-
-  await openInsightsTab(page, 'Labour');
-  const labourCard = sectionCard(page, 'Imported labour cost facts');
-  await expect(labourCard.getByText('Insights access denied')).toBeVisible();
-  await expect(labourCard.getByRole('button', { name: 'Export labour report CSV' })).toHaveCount(0);
   await expect(page.getByRole('region', { name: 'Labour cost facts table' })).toHaveCount(0);
-
-  await openInsightsTab(page, 'Close readiness');
-  await preparePacket(page, businessDate);
-  const packetAlert = page.getByRole('alert').filter({ hasText: 'Permission denied' });
-  await expect(packetAlert).toBeVisible();
-  await expect(packetAlert).toContainText(
-    'Your current role or branch assignment does not permit this packet. Financial data is absent. Ask your administrator to review access, then retry.'
-  );
   await expect(sectionCard(page, 'Financial readiness')).toHaveCount(0);
-  await expect(sectionCard(page, 'Operational handover')).toHaveCount(0);
-  await expect(page.getByRole('main')).not.toContainText('Gross sales');
-  await expect(page.getByRole('main')).not.toContainText(`Currency: ${currency}`);
+
+  // A disabled selector is not authorization. Prove the same authenticated
+  // actor cannot bypass it by supplying the known fixture branch to any read.
+  const range = { branchId: fixture.branchId, from: businessDate, to: businessDate };
+  const detail = { branchId: fixture.branchId, businessDate };
+  const reads: Array<[string, Record<string, unknown> | undefined]> = [
+    ['restaurantStaff.listBranches', undefined],
+    ['restaurantInsights.listFinancialReports', { ...range, limit: 100 }],
+    ['restaurantInsights.readFinancialReport', detail],
+    ['restaurantInsights.listOperationalReports', { ...range, limit: 100 }],
+    ['restaurantInsights.readOperationalReport', detail],
+    ['restaurantInsights.listLabourCosts', { ...range, limit: 100 }],
+    ['restaurantInsights.exportFinancialReports', range],
+    ['restaurantInsights.prepareClosePacket', { ...detail, asOf: new Date().toISOString() }],
+  ];
+  for (const [procedure, input] of reads) {
+    const url = new URL(`/api/trpc/${procedure}`, origin);
+    if (input) url.searchParams.set('input', JSON.stringify({ json: input }));
+    const response = await page.request.get(url.href, { headers: { Origin: origin } });
+    expect(response.status(), procedure).toBe(403);
+    const payload = await response.json();
+    expect(payload).toMatchObject({
+      error: { json: { data: { code: 'FORBIDDEN', httpStatus: 403, path: procedure } } },
+    });
+    expect(payload).not.toHaveProperty('result');
+    for (const key of ['grossSales', 'netSales', 'coverCount', 'labourCost']) {
+      expect(JSON.stringify(payload), `${procedure} must not leak ${key}`).not.toContain(key);
+    }
+  }
 });
 
 test('serves populated Insights on a tenant whose company chat is persistently off', async ({

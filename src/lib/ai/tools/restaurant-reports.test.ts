@@ -593,6 +593,18 @@ it.each(['settled_sales', 'financial_breakdown'])(
       branch: { name: 'Main' },
     };
     const reportDb = {
+      restaurantDrawerSession: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            branchId: close.branchId,
+            businessDate: close.businessDate,
+            createdAt: new Date('2026-09-07T08:00:00Z'),
+            closedAt: new Date('2026-09-08T00:00:00Z'),
+            status: 'CLOSED',
+            countedCash: decimal(39.5),
+          },
+        ]),
+      },
       restaurantDailyClose: {
         findMany: vi.fn().mockResolvedValue([
           {
@@ -626,7 +638,7 @@ it.each(['settled_sales', 'financial_breakdown'])(
         ? {
             metrics: {
               grossSales: { value: '100' },
-              netSales: { value: '85' },
+              netSales: { value: '65' },
               refunds: { value: '20' },
             },
             openUnpaid: { value: null },

@@ -5,7 +5,13 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('server-only', () => ({}));
 
-import { formatBranchTimestamp, importLabourCost, listInsightReports } from './insights';
+import {
+  exportInsightReports,
+  readInsightReport,
+  formatBranchTimestamp,
+  importLabourCost,
+  listInsightReports,
+} from './insights';
 
 const D = (value: string) => new Prisma.Decimal(value);
 const computedAt = new Date('2026-08-21T12:34:56.000Z');
@@ -29,12 +35,19 @@ const dailyRow = {
   createdAt: computedAt,
   updatedAt: computedAt,
   branch: { name: 'Main', timezone: 'Asia/Karachi' },
-  sourceDailyClose: { supersededBy: [] },
+  sourceDailyClose: {
+    grossSales: D('125.50'),
+    compTotal: D('5.25'),
+    discountTotal: D('0'),
+    refundTotal: D('10'),
+    supersededBy: [],
+  },
 };
 
 const db = {
-  insightDailyRollup: { findMany: vi.fn() },
-  insightLoyaltyLiability: { findMany: vi.fn() },
+  insightDailyRollup: { findMany: vi.fn(), findFirst: vi.fn() },
+  insightItemMixRollup: { findMany: vi.fn().mockResolvedValue([]) },
+  insightLoyaltyLiability: { findMany: vi.fn(), findFirst: vi.fn().mockResolvedValue(null) },
   labourCostFact: { findFirst: vi.fn(), create: vi.fn() },
 };
 
@@ -131,3 +144,42 @@ describe('append-only labour import', () => {
     expect(db.labourCostFact.create).not.toHaveBeenCalled();
   });
 });
+
+it.each(['7', '4'])(
+  'normalizes existing cached net %s from source close without writes',
+  async (stored) => {
+    const row = {
+      ...dailyRow,
+      netSales: D(stored),
+      sourceDailyClose: {
+        grossSales: D('10'),
+        compTotal: D('2'),
+        discountTotal: D('1'),
+        refundTotal: D('3'),
+        supersededBy: [],
+      },
+    };
+    db.insightDailyRollup.findMany.mockResolvedValue([row]);
+    const [report] = await listInsightReports(db as unknown as ScopedDb, 'financial', {});
+    expect(report.netSales).toBe('4');
+    db.insightDailyRollup.findFirst.mockResolvedValue(row);
+    const detail = await readInsightReport(db as unknown as ScopedDb, 'financial', {
+      branchId: row.branchId,
+      businessDate: '2026-08-20',
+    });
+    expect(detail.netSales).toBe('4');
+    const csv = await exportInsightReports(db as unknown as ScopedDb, 'financial', {});
+    const [header, line] = csv.content.split('\n');
+    expect(line!.split(',')[header!.split(',').indexOf('netSales')]).toBe('4');
+    expect(row.netSales.toString()).toBe(stored);
+    expect(db.insightDailyRollup.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          sourceDailyClose: expect.objectContaining({
+            select: expect.objectContaining({ discountTotal: true, refundTotal: true }),
+          }),
+        }),
+      })
+    );
+  }
+);

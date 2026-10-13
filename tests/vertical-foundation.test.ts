@@ -621,8 +621,36 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
 // ---------------------------------------------------------------------------
 describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit', () => {
   const APPROVED_EXACT_FILES = new Set([
+    // Accepted catering/growth boundaries and their vertical-isolation fixtures.
+    // Exact consumers only; no directory-wide exemption.
+    'src/lib/ai/growth-recommendations.test.ts',
+    'src/lib/ai/growth-recommendations.ts',
+    'src/lib/restaurant/catering-endpoints.db.test.ts',
+    'src/lib/restaurant/catering-money.ts',
+    'src/lib/restaurant/growth-binding.ts',
+    'src/lib/restaurant/growth-concurrency.db.test.ts',
+    'src/lib/restaurant/growth-evidence.test.ts',
+    'src/lib/restaurant/growth-evidence.ts',
+    'src/lib/restaurant/growth-generation.test.ts',
+    'src/lib/restaurant/growth-generation.ts',
+    'src/lib/restaurant/growth-review.db.test.ts',
+    'src/lib/restaurant/growth-review.test.ts',
+    'src/lib/restaurant/growth-review.ts',
+    'src/lib/restaurant/growth-sandbox.test.ts',
+    'src/lib/restaurant/growth-source.ts',
+    'src/server/routers/restaurant-growth.test.ts',
+    'src/server/routers/restaurant-growth.ts',
+    // Accepted platform overview groups cross-tenant counts by vertical under
+    // requirePlatformRead/withPlatformDb, matching the console consumer contract.
+    // Exact files only: this does not admit other platform routes.
+    'src/app/platform/(console)/page.tsx',
+    'src/app/platform/(console)/page.test.tsx',
     // Existing demo identity fixtures prove the Restaurant-only access boundary.
     'src/lib/auth.demo.test.ts',
+    // Shared-host rate-limit fixtures exercise Restaurant tenant login boundaries.
+    'src/lib/auth.rate-limit.test.ts',
+    // Hotel tax rejects Restaurant product-class fixtures rather than taxing them as rooms.
+    'src/lib/hotel/tax.test.ts',
     'src/lib/restaurant/terminal-auth.test.ts',
     'src/lib/tenancy/tenant-actor.test.ts',
     // Shared receipt designer selects the persisted layout contract by vertical.

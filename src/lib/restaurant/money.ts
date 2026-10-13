@@ -73,6 +73,11 @@ export function roundMoney(value: MoneyInput): Prisma.Decimal {
   return money(value).toDecimalPlaces(MONEY_SCALE, ROUND_HALF_UP);
 }
 
+/** The display/wire form of a money value: always 2dp ("28.00", "-0.50"). */
+export function formatMoney(value: MoneyInput): string {
+  return money(value).toFixed(MONEY_SCALE, ROUND_HALF_UP);
+}
+
 /** -1 | 0 | 1 for a<b | a==b | a>b (exact numeric comparison). */
 export function compare(a: MoneyInput, b: MoneyInput): -1 | 0 | 1 {
   return money(a).comparedTo(money(b)) as -1 | 0 | 1;

@@ -246,6 +246,7 @@ beforeAll(async () => {
         status: 'ACTIVE',
         yieldQuantity: '4',
         yieldUnitId: ids.portion,
+        portionCount: 4,
         activatedAt: new Date('2026-01-01T00:00:00.000Z'),
       },
     });
@@ -457,6 +458,7 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
               status: 'ACTIVE',
               yieldQuantity: '4',
               yieldUnitId: ids.portion,
+              portionCount: 4,
             },
           });
           await tx.restaurantRecipeLine.create({

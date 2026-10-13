@@ -35,6 +35,10 @@ describe('pharmacy medicine PostgreSQL RLS and immutability', () => {
     await client.query(`CREATE ROLE "${role}" LOGIN NOSUPERUSER NOBYPASSRLS`);
     await client.query(`GRANT "${role}" TO CURRENT_USER`);
     await client.query(`GRANT USAGE ON SCHEMA public TO "${role}"`);
+    // Extension preparation revokes PUBLIC EXECUTE. The disposable lane's
+    // extension owner must grant this exact function to the test owner WITH
+    // GRANT OPTION; this transaction delegates only the catalog-search operator.
+    await client.query(`GRANT EXECUTE ON FUNCTION public.similarity_op(text,text) TO "${role}"`);
     await client.query(
       `GRANT SELECT,INSERT,UPDATE,DELETE ON pharmacy_ingredients,pharmacy_medicines,pharmacy_medicine_strength_components,pharmacy_presentations,pharmacy_pack_levels,pharmacy_medicine_pack_mrps,pharmacy_medicine_provenance,pharmacy_medicine_barcodes,pharmacy_medicine_aliases,pharmacy_medicine_review_decisions,pharmacy_medicine_publication_batches,pharmacy_medicine_publication_entries TO "${role}"`
     );
@@ -66,6 +70,10 @@ describe('pharmacy medicine PostgreSQL RLS and immutability', () => {
     }
     await client.query(`SELECT set_config('app.is_platform_admin','false',true)`);
     await client.query(`SET LOCAL ROLE "${role}"`);
+    const runtimeRole = await client.query(
+      `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
+    );
+    expect(runtimeRole.rows).toEqual([{ rolsuper: false, rolbypassrls: false }]);
     await client.query(`SELECT set_config('app.current_organization_id',$1,true)`, [orgA]);
   });
 

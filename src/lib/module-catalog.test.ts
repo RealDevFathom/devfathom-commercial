@@ -56,6 +56,8 @@ describe('module catalog routing', () => {
     ['restaurantLoyalty.readAccount', 'restaurant-loyalty'],
     ['restaurantInsights.listFinancialReports', 'restaurant-insights'],
     ['restaurantDashboard.getPreferences', 'restaurant-core'],
+    ['restaurantGrowth.read', 'restaurant-core'],
+    ['restaurantGrowth.review', 'restaurant-core'],
     ['unknown.list', null],
   ])('maps tRPC procedure %s to %s', (procedure, expected) => {
     expect(moduleForProcedure(procedure)).toBe(expected);
@@ -82,6 +84,7 @@ describe('module catalog routing', () => {
       restaurantInventory: 'restaurant-inventory',
       restaurantPurchasing: 'restaurant-purchasing',
       restaurantReports: 'restaurant-core',
+      restaurantGrowth: 'restaurant-core',
       restaurantJobs: 'restaurant-sop',
       restaurantSop: 'restaurant-sop',
       restaurantSopExecution: 'restaurant-sop',
@@ -113,6 +116,7 @@ describe('module catalog routing', () => {
   });
 
   it('matches exact pages and descendants without matching lookalike prefixes', () => {
+    expect(moduleForPath('/restaurant/growth')).toBe('restaurant-core');
     expect(moduleForPath('/team')).toBe('hr');
     expect(moduleForPath('/team/stats')).toBe('hr');
     expect(moduleForPath('/projects/project_123')).toBe('projects');

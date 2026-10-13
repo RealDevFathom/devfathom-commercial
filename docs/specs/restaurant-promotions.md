@@ -179,7 +179,7 @@ A sold combo is one priced order line by default; its components are not separat
 - `grossSales`: settled pre-comp/pre-discount merchandise subtotal from authoritative line snapshots.
 - `compTotal`: manager comps only.
 - `discountTotal`: promotion discounts plus loyalty redemption and any future explicitly classified discounts; daily close retains this total.
-- `netSales = grossSales - compTotal - discountTotal`; tax, service charge, tips, refunds, and voids remain separately reported under existing contracts.
+- `netSales = grossSales - compTotal - discountTotal - refundTotal`; refunds use processing business date and are deducted once. Tax, service charge, tips and voids remain separately reported under existing contracts.
 - Add promotion rollups keyed by tenant, branch, business date, promotion ID/version/rule, source daily-close chain tip, with application count, discounted quantity, qualifying gross, and discount amount. They are rebuildable projections, never financial authority.
 - Item-mix allocates promotion cents to product lines and computes `netSales = grossSales - comp allocation - promotion allocation - other classified line discounts`. Order-level and fractional cents use the immutable allocation rows; they are never guessed during projection.
 - Refunds append proportional promotion reversals from the refunded unit allocations. They do not retroactively make another item eligible or re-run stacking. Loyalty reversal uses the refunded net merchandise amount.

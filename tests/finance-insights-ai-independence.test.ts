@@ -98,7 +98,13 @@ function fixture(
     createdAt: date,
     updatedAt: date,
     branch: { name: organizationId, timezone: 'Asia/Karachi' },
-    sourceDailyClose: { supersededBy: [] },
+    sourceDailyClose: {
+      grossSales: new Prisma.Decimal('125.50'),
+      compTotal: new Prisma.Decimal('0'),
+      discountTotal: new Prisma.Decimal('5.25'),
+      refundTotal: new Prisma.Decimal('0'),
+      supersededBy: [],
+    },
   };
   const branches = vi.fn(async ({ where }: { where: { organizationId: string } }) =>
     where.organizationId === organizationId ? [{ id: branchId, name: organizationId }] : []

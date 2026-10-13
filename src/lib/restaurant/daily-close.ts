@@ -39,7 +39,9 @@ import { enqueueInsightRollup } from './insight-rollups';
  *   - taxTotal / serviceChargeTotal = Σ SETTLED bill.{taxTotal,serviceChargeTotal}
  *                    (structurally zero in M5)
  *   - discountTotal= Σ SETTLED bill.discountTotal
- *   - netSales     = grossSales − compTotal − discountTotal
+ *   - netSales     = grossSales − compTotal − discountTotal − refundTotal
+ *                    (board decision WHA-1621 Q1; refunds are still reported
+ *                    separately as refundTotal)
  *   - tipTotal     = Σ tender.tipAmount for the date (== Σ child tipAmount)
  *   - refundTotal  = Σ refund.amount for the PROCESSING date (C7 — cross-date
  *                    corrections land on the day processed, never a prior close)
@@ -157,11 +159,11 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   const taxTotal = sum(settled.map((b) => b.taxTotal));
   const serviceChargeTotal = sum(settled.map((b) => b.serviceChargeTotal));
   const discountTotal = sum(settled.map((b) => b.discountTotal));
-  const netSales = sub(sub(grossSales, compTotal), discountTotal);
   const voidTotal = sum(voided.map((b) => b.grandTotal));
 
   const tipTotal = sum(inputs.tenders.map((t) => t.tipAmount));
   const refundTotal = sum(inputs.refunds.map((r) => r.amount));
+  const netSales = sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal);
   const deliveryFeeRefunds = sum(inputs.refunds.map((r) => r.deliveryFeeRefundAmount));
 
   const cashExpected = sum(inputs.drawers.map((d) => d.expectedCash));

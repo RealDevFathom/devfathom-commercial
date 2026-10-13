@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useEffect, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { Printer, Plus } from 'lucide-react';
 import { toast } from 'sonner';
@@ -31,6 +31,8 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
+import { CateringEvidence } from './catering-evidence';
+import { CateringTerminalBoundary } from './catering-terminal-boundary';
 import type { AppRouter } from '@/server/routers/_app';
 
 type Outputs = inferRouterOutputs<AppRouter>;
@@ -181,8 +183,8 @@ export function CateringConsole({ currency }: { currency: string | null }) {
   const currencyLabel = currency?.trim() || 'Currency unavailable';
   // Catering returns Decimal major-unit strings, including recipe-cost precision.
   // Display those exact amounts; do not coerce to Number or infer a currency/scale.
-  const money = (amount: { toString(): string } | null | undefined) =>
-    amount == null ? '—' : `${currencyLabel} ${amount.toString()}`;
+  const money = (amount: { toString(): string } | null | undefined, label = currencyLabel) =>
+    amount == null ? '—' : `${label} ${amount.toString()}`;
   const entitlements = useEntitlements();
   const enabled = entitlements.enabledModules.includes('restaurant-core');
   const utils = trpc.useUtils();
@@ -192,15 +194,22 @@ export function CateringConsole({ currency }: { currency: string | null }) {
   const [to, setTo] = useState('');
   const [selectedId, setSelectedId] = useState('');
   const [editor, setEditor] = useState<Editor>(null);
+  const editorTrigger = useRef<HTMLButtonElement | null>(null);
   const [orderCustomerId, setOrderCustomerId] = useState('');
-  const [transitionTarget, setTransitionTarget] = useState<{ order: Order; to: Status } | null>(
-    null
-  );
+  const [transitionTarget, setTransitionTarget] = useState<{
+    order: Order;
+    to: Status;
+    idempotencyKey: string;
+  } | null>(null);
+  const lifecyclePending = useRef(false);
+  const [moneyUnresolved, setMoneyUnresolved] = useState(false);
   const [dirtyForms, setDirtyForms] = useState<string[]>([]);
   const [switchTarget, setSwitchTarget] = useState<Order | 'new' | null>(null);
   const [mutationError, setMutationError] = useState('');
 
-  const branches = trpc.restaurantStaff.listBranches.useQuery(undefined, { enabled });
+  const branches = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled,
+  });
   const list = trpc.restaurantCatering.list.useQuery(
     {
       ...(branchId ? { branchId } : {}),
@@ -215,7 +224,9 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     { enabled: enabled && Boolean(selectedId) }
   );
   const products = trpc.restaurantCatalog.listProducts.useQuery({ status: 'ACTIVE' }, { enabled });
-  const recipes = trpc.restaurantCatalog.listRecipes.useQuery(undefined, { enabled });
+  const recipes = trpc.restaurantCatalog.listRecipes.useQuery(undefined, {
+    enabled,
+  });
   const recipeCosts = trpc.restaurantCatalog.listRecipeCosts.useQuery({}, { enabled });
   const customers = trpc.restaurantDelivery.listCustomers.useQuery({ limit: 100 }, { enabled });
   const addresses = trpc.restaurantDelivery.listAddresses.useQuery(
@@ -234,6 +245,26 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     { enabled: enabled && Boolean(selectedId) }
   );
 
+  const availability = trpc.restaurantCatering.bookingAvailability.useQuery(
+    { orderId: selectedId },
+    { enabled: enabled && Boolean(selectedId) }
+  );
+  const quotes = trpc.restaurantCatering.quoteHistory.useQuery(
+    { orderId: selectedId },
+    { enabled: enabled && Boolean(selectedId) }
+  );
+  const locations = trpc.restaurantCatering.bookingLocations.useQuery(
+    { branchId: detail.data?.branchId ?? '' },
+    { enabled: enabled && Boolean(detail.data?.branchId) }
+  );
+  useEffect(() => {
+    if (!dirtyForms.length) return;
+    const warn = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+    };
+    window.addEventListener('beforeunload', warn);
+    return () => window.removeEventListener('beforeunload', warn);
+  }, [dirtyForms.length]);
   const refresh = () => {
     void utils.restaurantCatering.invalidate();
   };
@@ -279,9 +310,37 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     onSuccess: () => succeed('Delivery schedule saved.'),
     onError: fail,
   });
-  const transition = trpc.restaurantCatering.transition.useMutation({
-    onSuccess: () => succeed('Order status updated.'),
+  const setBooking = trpc.restaurantCatering.setBooking.useMutation({
+    onSuccess: () => {
+      clearDraft('booking');
+      succeed('Booking saved. Quote approval must be renewed.');
+    },
     onError: fail,
+  });
+  const setCapacity = trpc.restaurantCatering.setBranchCapacity.useMutation({
+    onSuccess: () => {
+      clearDraft('capacity');
+      succeed('Branch capacity saved.');
+    },
+    onError: fail,
+  });
+  const publishQuote = trpc.restaurantCatering.publishQuote.useMutation({
+    onSuccess: () => succeed('Quote revision published.'),
+    onError: fail,
+  });
+  const approveQuote = trpc.restaurantCatering.approveQuote.useMutation({
+    onSuccess: () => succeed('Quote approved.'),
+    onError: fail,
+  });
+  const transition = trpc.restaurantCatering.transition.useMutation({
+    onSuccess: () => {
+      lifecyclePending.current = false;
+      succeed('Order status updated.');
+    },
+    onError: (error) => {
+      lifecyclePending.current = false;
+      fail(error);
+    },
   });
   const busy = [
     create,
@@ -292,6 +351,10 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     removeExtra,
     setDelivery,
     transition,
+    setBooking,
+    setCapacity,
+    publishQuote,
+    approveQuote,
   ].some((item) => item.isPending);
 
   const markDirty = (name: string) =>
@@ -299,6 +362,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
   const clearDraft = (name: string) =>
     setDirtyForms((current) => current.filter((item) => item !== name));
   const switchEvent = (target: Order | 'new') => {
+    if (moneyUnresolved) return;
     setDirtyForms([]);
     setMutationError('');
     setSwitchTarget(null);
@@ -309,7 +373,13 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     } else setSelectedId(target.id);
   };
   const requestSwitch = (target: Order | 'new') => {
-    if (busy || editor || transitionTarget || (target !== 'new' && target.id === selectedId))
+    if (
+      moneyUnresolved ||
+      busy ||
+      editor ||
+      transitionTarget ||
+      (target !== 'new' && target.id === selectedId)
+    )
       return;
     if (dirtyForms.length) setSwitchTarget(target);
     else switchEvent(target);
@@ -408,7 +478,35 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     );
   };
   const order = detail.data?.id === selectedId ? detail.data : undefined;
-  const actionsDisabled = busy || Boolean(detail.error);
+  const accessDenied = !enabled || denied(list.error);
+  const actionsDisabled = accessDenied || busy || Boolean(detail.error);
+  const costCurrency = order?.confirmedQuoteRevisionId
+    ? (quotes.data?.find((quote) => quote.id === order.confirmedQuoteRevisionId)?.snapshot
+        .currency ?? 'Currency unavailable')
+    : currencyLabel;
+  const editable = Boolean(order && ['DRAFT', 'QUOTED'].includes(order.status));
+  const currentQuote = quotes.data?.find(
+    (quote) => quote.id === order?.approvedQuoteRevisionId && quote.revision === order?.revision
+  );
+  const canConfirm = Boolean(
+    currentQuote &&
+    !detail.isFetching &&
+    !quotes.error &&
+    !quotes.isFetching &&
+    !availability.error &&
+    !availability.isFetching &&
+    availability.data?.capacityStatus === 'AVAILABLE' &&
+    order?.bookingStartsAt &&
+    order.bookingEndsAt &&
+    order.fulfillmentMode &&
+    order.stockLocationId
+  );
+  const quoteActionsDisabled =
+    actionsDisabled ||
+    !editable ||
+    Boolean(quotes.error) ||
+    quotes.isFetching ||
+    dirtyForms.length > 0;
   const canPrint =
     Boolean(order) &&
     !detail.error &&
@@ -419,33 +517,35 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     !requirements.isPlaceholderData &&
     Array.isArray(requirements.data);
 
-  if (!enabled)
-    return (
-      <>
-        <PageHeader
-          eyebrow="Restaurant"
-          heading="Catering"
-          description="Plan catered events, production, and delivery."
-        />
-        <SectionCard title="Restaurant Core module disabled" titleLevel={2}>
-          <p className="text-sm text-text-muted">Ask an administrator to enable Restaurant Core.</p>
-        </SectionCard>
-      </>
-    );
-  if (denied(list.error))
-    return (
-      <>
-        <PageHeader eyebrow="Restaurant" heading="Catering" />
-        <SectionCard title="Catering access unavailable" titleLevel={2}>
-          <p className="text-sm text-text-muted">
-            You do not have permission to view catering orders.
-          </p>
-        </SectionCard>
-      </>
-    );
+  const accessNotice = !enabled ? (
+    <div key="access">
+      <PageHeader
+        eyebrow="Restaurant"
+        heading="Catering"
+        description="Plan catered events, production, and delivery."
+      />
+      <SectionCard title="Restaurant Core module disabled" titleLevel={2}>
+        <p className="text-sm text-text-muted">Ask an administrator to enable Restaurant Core.</p>
+      </SectionCard>
+    </div>
+  ) : denied(list.error) ? (
+    <div key="access">
+      <PageHeader eyebrow="Restaurant" heading="Catering" />
+      <SectionCard title="Catering access unavailable" titleLevel={2}>
+        <p className="text-sm text-text-muted">
+          You do not have permission to view catering orders.
+        </p>
+        <Button variant="outline" onClick={() => void list.refetch()}>
+          Retry catering access
+        </Button>
+      </SectionCard>
+    </div>
+  ) : null;
 
-  return (
-    <div className="space-y-6">
+  // Keep unresolved payment intent mounted while denied content is hidden and disabled.
+  return [
+    accessNotice,
+    <div key="workspace" hidden={accessDenied} className="space-y-6">
       <PageHeader
         eyebrow="Restaurant operations"
         heading="Catering"
@@ -453,8 +553,11 @@ export function CateringConsole({ currency }: { currency: string | null }) {
         actions={
           <Button
             className="min-h-11"
-            disabled={busy || Boolean(editor) || Boolean(transitionTarget)}
-            onClick={() => requestSwitch('new')}
+            disabled={moneyUnresolved || busy || Boolean(editor) || Boolean(transitionTarget)}
+            onClick={(event) => {
+              editorTrigger.current = event.currentTarget;
+              requestSwitch('new');
+            }}
           >
             <Plus />
             New order
@@ -547,7 +650,9 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                         variant="ghost"
                         aria-label={`Select event ${eventIdentity(item)}`}
                         aria-pressed={selectedId === item.id}
-                        disabled={busy || Boolean(editor) || Boolean(transitionTarget)}
+                        disabled={
+                          moneyUnresolved || busy || Boolean(editor) || Boolean(transitionTarget)
+                        }
                         onClick={() => requestSwitch(item)}
                       >
                         {item.eventName}
@@ -623,8 +728,9 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                     <Button
                       className="min-h-11"
                       variant="outline"
-                      disabled={actionsDisabled}
-                      onClick={() => {
+                      disabled={actionsDisabled || !editable}
+                      onClick={(event) => {
+                        editorTrigger.current = event.currentTarget;
                         setMutationError('');
                         setOrderCustomerId(order.customerId ?? '');
                         setEditor({ order });
@@ -635,10 +741,18 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                     {nextStatus[order.status] ? (
                       <Button
                         className="min-h-11"
-                        disabled={actionsDisabled}
+                        disabled={
+                          actionsDisabled ||
+                          dirtyForms.length > 0 ||
+                          (nextStatus[order.status] === 'CONFIRMED' && !canConfirm)
+                        }
                         onClick={() => {
                           setMutationError('');
-                          setTransitionTarget({ order, to: nextStatus[order.status]! });
+                          setTransitionTarget({
+                            order,
+                            to: nextStatus[order.status]!,
+                            idempotencyKey: crypto.randomUUID(),
+                          });
                         }}
                       >
                         Move to {nextStatus[order.status]!.replaceAll('_', ' ').toLowerCase()}
@@ -648,10 +762,14 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       <Button
                         className="min-h-11"
                         variant="destructive"
-                        disabled={actionsDisabled}
+                        disabled={actionsDisabled || dirtyForms.length > 0}
                         onClick={() => {
                           setMutationError('');
-                          setTransitionTarget({ order, to: 'CANCELLED' });
+                          setTransitionTarget({
+                            order,
+                            to: 'CANCELLED',
+                            idempotencyKey: crypto.randomUUID(),
+                          });
                         }}
                       >
                         Cancel
@@ -664,7 +782,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                   <Stat label="Status" value={order.status.replaceAll('_', ' ')} />
                   <Stat label="Headcount" value={order.headcount} />
                   <Stat label="Quoted" value={money(order.quotedTotal)} />
-                  <Stat label="Deposit" value={money(order.depositAmount)} />
+                  <Stat label="Planned deposit" value={money(order.depositAmount)} />
                 </div>
                 <p role="status" className="mt-4 text-sm text-text-muted">
                   {busy
@@ -674,6 +792,336 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                       : currencyLabel}
                 </p>
               </SectionCard>
+              <SectionCard key={`booking:${order.id}`} title="Booking and capacity">
+                <p className="mb-4 text-sm text-text-muted">
+                  Enter start and end with an explicit UTC offset, for example
+                  2026-10-07T18:00:00+05:00. The offset applies to that instant; check it for the
+                  event date. Saving booking or menu changes invalidates quote approval. Confirmed
+                  bookings cannot be edited.
+                </p>
+                <form
+                  aria-label="Booking"
+                  onChange={() => markDirty('booking')}
+                  onSubmit={(event) => {
+                    event.preventDefault();
+                    if (actionsDisabled || !editable) return;
+                    const data = new FormData(event.currentTarget);
+                    const start = value(data, 'bookingStartsAt'),
+                      end = value(data, 'bookingEndsAt');
+                    const zoned =
+                      /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d{1,3})?)?(?:Z|[+-]\d{2}:\d{2})$/;
+                    if (
+                      !zoned.test(start) ||
+                      !zoned.test(end) ||
+                      !Number.isFinite(Date.parse(start)) ||
+                      !Number.isFinite(Date.parse(end)) ||
+                      Date.parse(end) <= Date.parse(start)
+                    ) {
+                      fail({
+                        message:
+                          'Use valid timestamps with an explicit UTC offset and an end after start.',
+                      });
+                      return;
+                    }
+                    const mode = value(data, 'fulfillmentMode');
+                    if (mode !== 'PICKUP' && mode !== 'DELIVERY') return;
+                    setBooking.mutate({
+                      orderId: order.id,
+                      bookingStartsAt: new Date(start),
+                      bookingEndsAt: new Date(end),
+                      fulfillmentMode: mode,
+                      stockLocationId: value(data, 'stockLocationId'),
+                    });
+                  }}
+                >
+                  <fieldset
+                    disabled={
+                      actionsDisabled ||
+                      !editable ||
+                      locations.isLoading ||
+                      Boolean(locations.error)
+                    }
+                    className="grid min-w-0 gap-3 sm:grid-cols-2"
+                  >
+                    <Field label="Booking start with UTC offset">
+                      <Input
+                        className="min-h-11"
+                        required
+                        name="bookingStartsAt"
+                        defaultValue={
+                          order.bookingStartsAt ? new Date(order.bookingStartsAt).toISOString() : ''
+                        }
+                      />
+                    </Field>
+                    <Field label="Booking end with UTC offset">
+                      <Input
+                        className="min-h-11"
+                        required
+                        name="bookingEndsAt"
+                        defaultValue={
+                          order.bookingEndsAt ? new Date(order.bookingEndsAt).toISOString() : ''
+                        }
+                      />
+                    </Field>
+                    <Field label="Fulfillment">
+                      <select
+                        className={inputClass}
+                        required
+                        name="fulfillmentMode"
+                        defaultValue={order.fulfillmentMode ?? ''}
+                      >
+                        <option value="">Choose fulfillment</option>
+                        <option value="PICKUP">Pickup</option>
+                        <option value="DELIVERY">Delivery</option>
+                      </select>
+                    </Field>
+                    <Field label="Stock location">
+                      <select
+                        className={inputClass}
+                        required
+                        name="stockLocationId"
+                        defaultValue={order.stockLocationId ?? ''}
+                      >
+                        <option value="">Choose stock location</option>
+                        {locations.data?.map((location) => (
+                          <option key={location.id} value={location.id}>
+                            {location.name}
+                          </option>
+                        ))}
+                      </select>
+                    </Field>
+                    <Button className="min-h-11" type="submit">
+                      Save booking
+                    </Button>
+                  </fieldset>
+                </form>
+                {locations.isLoading ? (
+                  <p role="status">Loading stock locations…</p>
+                ) : locations.error ? (
+                  <div role="alert">
+                    <p>{locations.error.message}</p>
+                    <Button
+                      className="min-h-11"
+                      variant="outline"
+                      disabled={locations.isFetching}
+                      onClick={() => locations.refetch()}
+                    >
+                      Retry stock locations
+                    </Button>
+                  </div>
+                ) : !locations.data?.length ? (
+                  <p>
+                    No active stock locations are available for this branch. Booking cannot be
+                    saved.
+                  </p>
+                ) : null}
+                <div className="mt-4 space-y-3">
+                  {availability.isLoading ? (
+                    <p role="status">Checking capacity…</p>
+                  ) : availability.error ? (
+                    <div role="alert">
+                      <p>{availability.error.message}</p>
+                      <Button
+                        className="min-h-11"
+                        variant="outline"
+                        disabled={availability.isFetching}
+                        onClick={() => availability.refetch()}
+                      >
+                        Retry capacity
+                      </Button>
+                    </div>
+                  ) : (
+                    <p role="status">
+                      Capacity: {availability.data?.capacityStatus ?? 'UNKNOWN'} · Configured
+                      guests: {availability.data?.maxConcurrentHeadcount ?? 'Unknown'} · Peak
+                      guests: {availability.data?.peakHeadcount ?? 'Unknown'}. Unknown or exceeded
+                      capacity prevents confirmation.
+                    </p>
+                  )}
+                  <form
+                    key={availability.isLoading ? 'loading' : 'loaded'}
+                    aria-label="Branch capacity"
+                    onChange={() => markDirty('capacity')}
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      if (actionsDisabled || availability.error) return;
+                      const amount = value(new FormData(event.currentTarget), 'capacity');
+                      setCapacity.mutate({
+                        branchId: order.branchId,
+                        maxConcurrentHeadcount: amount ? Number(amount) : null,
+                      });
+                    }}
+                  >
+                    <fieldset
+                      disabled={
+                        actionsDisabled || availability.isLoading || Boolean(availability.error)
+                      }
+                      className="flex flex-wrap items-end gap-3"
+                    >
+                      <Field label="Maximum concurrent guests">
+                        <Input
+                          className="min-h-11"
+                          name="capacity"
+                          type="number"
+                          min="1"
+                          step="1"
+                          defaultValue={availability.data?.maxConcurrentHeadcount ?? ''}
+                        />
+                      </Field>
+                      <Button className="min-h-11" variant="outline" type="submit">
+                        Save branch capacity
+                      </Button>
+                    </fieldset>
+                    <p className="mt-2 text-sm text-text-muted">
+                      Requires catering management permission. Empty means unknown, not unlimited.
+                    </p>
+                  </form>
+                </div>
+              </SectionCard>
+              <SectionCard title="Quote revisions and approval">
+                <p className="mb-3 text-sm text-text-muted">
+                  Only approval of the current revision permits confirmation. Planned deposit is a
+                  planning amount, not a recorded receipt. Persisted receipts and refunds appear in
+                  Payment evidence.
+                </p>
+                <p role="status">
+                  {currentQuote
+                    ? `Current revision ${currentQuote.revision} approved.`
+                    : 'Current quote approval required.'}{' '}
+                  See Approval history for persisted approval records.
+                </p>
+                {!currency || !/^[A-Z]{3}$/.test(currency) ? (
+                  <p role="alert">
+                    Configure a valid three-letter currency before publishing a quote.
+                  </p>
+                ) : null}
+                <Button
+                  className="my-3 min-h-11"
+                  disabled={quoteActionsDisabled || !currency || !/^[A-Z]{3}$/.test(currency)}
+                  onClick={() => {
+                    if (currency) publishQuote.mutate({ orderId: order.id, currency });
+                  }}
+                >
+                  Publish quote revision
+                </Button>
+                {quotes.isLoading ? (
+                  <p role="status">Loading quote history…</p>
+                ) : quotes.error ? (
+                  <div role="alert">
+                    <p>{quotes.error.message}</p>
+                    <Button
+                      className="min-h-11"
+                      variant="outline"
+                      disabled={quotes.isFetching}
+                      onClick={() => quotes.refetch()}
+                    >
+                      Retry quote history
+                    </Button>
+                  </div>
+                ) : !quotes.data?.length ? (
+                  <p>No published quote revisions.</p>
+                ) : (
+                  quotes.data.map((quote) => (
+                    <div className="space-y-3 border-t border-border-subtle py-4" key={quote.id}>
+                      <h4 className="font-semibold">
+                        Revision {quote.revision} · {quote.snapshot.currency}{' '}
+                        {quote.snapshot.quotedTotal} · {quote.snapshot.headcount} guests
+                      </h4>
+                      <p className="text-sm">
+                        {quote.snapshot.fulfillmentMode ?? 'Fulfillment unknown'} ·{' '}
+                        {quote.snapshot.bookingStartsAt ?? 'Start unknown'} →{' '}
+                        {quote.snapshot.bookingEndsAt ?? 'End unknown'}
+                      </p>
+                      <p className="text-sm text-text-muted">
+                        Frozen reference estimate; actual cost unknown.{' '}
+                        {quote.snapshot.missing.length
+                          ? `Missing costs: ${quote.snapshot.missing.join(', ')}`
+                          : 'No missing reference costs reported.'}
+                      </p>
+                      <div className="overflow-x-auto">
+                        <Table>
+                          <TableHeader>
+                            <TableRow>
+                              <TableHead>Frozen menu</TableHead>
+                              <TableHead>Portions</TableHead>
+                              <TableHead>Unit price</TableHead>
+                            </TableRow>
+                          </TableHeader>
+                          <TableBody>
+                            {quote.snapshot.lines.map((line) => (
+                              <TableRow key={line.id}>
+                                <TableCell>{line.description}</TableCell>
+                                <TableCell>{line.portions}</TableCell>
+                                <TableCell>
+                                  {quote.snapshot.currency} {line.unitPrice}
+                                </TableCell>
+                              </TableRow>
+                            ))}
+                          </TableBody>
+                        </Table>
+                      </div>
+                      {quote.snapshot.extraCosts.map((extra, index) => (
+                        <p key={index}>
+                          {extra.label}: {quote.snapshot.currency} {extra.amount}
+                        </p>
+                      ))}
+                      <details>
+                        <summary>Frozen ingredient basis</summary>
+                        <ul className="space-y-2 break-words">
+                          {quote.snapshot.requirements.map((item) => (
+                            <li key={item.ingredientId}>
+                              {item.ingredientName}: {item.quantityInBaseUnit} canonical base units
+                              (unit reference: {item.baseUnitId});{' '}
+                              {item.unitCost === null
+                                ? 'MISSING'
+                                : `${quote.snapshot.currency} ${item.unitCost} per base unit — REFERENCE`}
+                            </li>
+                          ))}
+                        </ul>
+                      </details>
+                      <Button
+                        variant="outline"
+                        className="min-h-11"
+                        disabled={
+                          quoteActionsDisabled ||
+                          quote.revision !== order.revision ||
+                          quote.id === order.approvedQuoteRevisionId
+                        }
+                        onClick={() =>
+                          approveQuote.mutate({
+                            orderId: order.id,
+                            quoteRevisionId: quote.id,
+                          })
+                        }
+                      >
+                        {quote.id === order.approvedQuoteRevisionId
+                          ? 'Approved'
+                          : quote.revision !== order.revision
+                            ? 'Superseded'
+                            : 'Approve quote revision'}
+                      </Button>
+                    </div>
+                  ))
+                )}
+              </SectionCard>
+              <CateringTerminalBoundary
+                key={order.id}
+                organizationId={entitlements.organizationId}
+                branchId={order.branchId}
+              >
+                <CateringEvidence
+                  orderId={order.id}
+                  approvedQuoteRevisionId={currentQuote?.id ?? null}
+                  cancelled={order.status === 'CANCELLED'}
+                  receivable={!['CANCELLED', 'CLOSED'].includes(order.status)}
+                  disabled={actionsDisabled}
+                  onDirty={() => markDirty('disposition')}
+                  onSaved={() => clearDraft('disposition')}
+                  onMoneyDirty={() => markDirty('money')}
+                  onMoneySaved={() => clearDraft('money')}
+                  onMoneyUnresolved={setMoneyUnresolved}
+                />
+              </CateringTerminalBoundary>
               <div className="grid gap-6 xl:grid-cols-2">
                 <SectionCard title="Order lines">
                   <form
@@ -684,7 +1132,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                     onSubmit={submitLine}
                   >
                     <fieldset
-                      disabled={actionsDisabled}
+                      disabled={actionsDisabled || !editable}
                       className="grid min-w-0 gap-3 sm:grid-cols-2"
                     >
                       <Field label="Product or recipe">
@@ -702,16 +1150,23 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                           ))}
                           {recipes.data
                             ?.filter((item) => item.activeVersionId)
-                            .map((item) => (
-                              <option key={item.id} value={`recipe:${item.id}`}>
-                                {item.name} ·{' '}
-                                {money(
-                                  recipeCosts.data?.find((cost) => cost.recipeId === item.id)
-                                    ?.costPerPortion
-                                )}
-                                /portion
-                              </option>
-                            ))}
+                            .map((item) => {
+                              const cost = recipeCosts.data?.find(
+                                (cost) => cost.recipeId === item.id
+                              );
+                              return (
+                                <option
+                                  key={item.id}
+                                  value={`recipe:${item.id}`}
+                                  disabled={Boolean(cost?.error)}
+                                >
+                                  {item.name} ·{' '}
+                                  {cost?.error
+                                    ? `Cost unavailable: ${cost.error}`
+                                    : `${money(cost?.costPerPortion)}/portion`}
+                                </option>
+                              );
+                            })}
                         </select>
                       </Field>
                       <Field label="Description">
@@ -760,10 +1215,13 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                             className="min-h-11"
                             variant="ghost"
                             size="sm"
-                            disabled={actionsDisabled}
+                            disabled={actionsDisabled || !editable}
                             aria-label={`Remove ${line.description} from ${eventIdentity(order)}`}
                             onClick={() =>
-                              removeLine.mutate({ orderId: order.id, lineId: line.id })
+                              removeLine.mutate({
+                                orderId: order.id,
+                                lineId: line.id,
+                              })
                             }
                           >
                             Remove
@@ -786,7 +1244,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                     onSubmit={submitExtra}
                   >
                     <fieldset
-                      disabled={actionsDisabled}
+                      disabled={actionsDisabled || !editable}
                       className="grid min-w-0 gap-3 sm:grid-cols-2"
                     >
                       <Field label="Cost type">
@@ -830,10 +1288,13 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                           className="min-h-11"
                           variant="ghost"
                           size="sm"
-                          disabled={actionsDisabled}
+                          disabled={actionsDisabled || !editable}
                           aria-label={`Remove ${cost.label} from ${eventIdentity(order)}`}
                           onClick={() =>
-                            removeExtra.mutate({ orderId: order.id, extraCostId: cost.id })
+                            removeExtra.mutate({
+                              orderId: order.id,
+                              extraCostId: cost.id,
+                            })
                           }
                         >
                           Remove
@@ -892,7 +1353,11 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                         {requirements.data.map((item) => (
                           <TableRow key={item.ingredientId}>
                             <TableCell>{item.ingredientName}</TableCell>
-                            <TableCell>{item.baseUnitId}</TableCell>
+                            <TableCell>
+                              {item.baseUnit
+                                ? `${item.baseUnit.name}${item.baseUnit.abbreviation ? ` (${item.baseUnit.abbreviation})` : ''}`
+                                : `Unit label unavailable (${item.baseUnitId})`}
+                            </TableCell>
                             <TableCell className="text-right tabular-nums">
                               {item.quantityInBaseUnit.toString()}
                             </TableCell>
@@ -915,16 +1380,16 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                     key={order.id}
                     order={order}
                     staff={staff.data}
-                    disabled={actionsDisabled}
+                    disabled={actionsDisabled || ['CANCELLED', 'CLOSED'].includes(order.status)}
                     onChange={() => markDirty('delivery')}
                     onSubmit={submitDelivery}
                   />
                 </SectionCard>
                 <SectionCard title="Cost summary">
                   <p className="mb-4 text-sm text-text-muted">
-                    {eventIdentity(order)} · {currencyLabel}. Latest loaded event quote, recipe
-                    costs and extras. Margin is the quoted amount less included costs; it is not
-                    realized profit or cash.
+                    {eventIdentity(order)} · {costCurrency}. Latest loaded event quote, recipe costs
+                    and extras. Margin is the quoted amount less included costs; it is not realized
+                    profit or cash.
                   </p>
                   {costs.isLoading ? (
                     <Skeleton className="h-32 w-full" />
@@ -942,18 +1407,28 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                     </div>
                   ) : costs.data ? (
                     <div className="grid grid-cols-2 gap-5">
-                      <Stat label="Ingredient cost" value={money(costs.data.recipeCost)} />
-                      <Stat label="Extras" value={money(costs.data.extraCost)} />
-                      <Stat label="Quoted total" value={money(costs.data.quotedTotal)} />
+                      <p className="col-span-2 text-sm">
+                        Cost basis: {costs.data.costBasis}. Actual cost: unknown. Missing costs:{' '}
+                        {costs.data.missing?.join(', ') || 'None reported'}.
+                      </p>
                       <Stat
-                        label="Margin"
-                        value={money(costs.data.margin)}
+                        label="Ingredient cost"
+                        value={money(costs.data.ingredientCost, costCurrency)}
+                      />
+                      <Stat label="Extras" value={money(costs.data.extraCost, costCurrency)} />
+                      <Stat
+                        label="Quoted total"
+                        value={money(costs.data.quotedTotal, costCurrency)}
+                      />
+                      <Stat
+                        label="Estimated gross margin"
+                        value={money(costs.data.grossMargin, costCurrency)}
                         delta={
-                          costs.data.marginPercent
-                            ? `${Number(costs.data.marginPercent).toFixed(1)}%`
+                          'marginPercent' in costs.data && costs.data.marginPercent
+                            ? `${costs.data.marginPercent}%`
                             : '—'
                         }
-                        deltaDirection={costs.data.margin?.startsWith('-') ? 'down' : 'up'}
+                        deltaDirection={costs.data.grossMargin?.startsWith('-') ? 'down' : 'up'}
                       />
                     </div>
                   ) : (
@@ -968,6 +1443,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
 
       <Dialog open={editor !== null} onOpenChange={(open) => !open && !busy && setEditor(null)}>
         <DialogContent
+          finalFocus={editorTrigger}
           showCloseButton={!busy}
           className="max-h-[90vh] overflow-y-auto sm:max-w-2xl"
         >
@@ -1083,7 +1559,7 @@ export function CateringConsole({ currency }: { currency: string | null }) {
                   defaultValue={editor?.order?.quotedTotal?.toString() ?? ''}
                 />
               </Field>
-              <Field label="Deposit">
+              <Field label="Planned deposit">
                 <Input
                   className="min-h-11"
                   name="depositAmount"
@@ -1132,9 +1608,15 @@ export function CateringConsole({ currency }: { currency: string | null }) {
             <DialogDescription>
               {transitionTarget ? `${eventIdentity(transitionTarget.order)}. ` : ''}
               {transitionTarget?.to === 'CANCELLED'
-                ? 'Cancel this order? Ready-order ingredient consumption will be reversed.'
+                ? 'Cancel this order? Prepared inventory remains consumed.'
                 : `Move this order to ${transitionTarget?.to.replaceAll('_', ' ').toLowerCase()}? This action is recorded in the order timeline.`}
             </DialogDescription>
+            {transitionTarget?.to === 'CANCELLED' ? (
+              <p>
+                Cancellation does not return prepared inventory or refund money. Physical
+                disposition and refunds are separate actions.
+              </p>
+            ) : null}
           </DialogHeader>
           {mutationError ? (
             <p role="alert" className="text-sm text-destructive">
@@ -1153,12 +1635,23 @@ export function CateringConsole({ currency }: { currency: string | null }) {
             <Button
               className="min-h-11"
               variant={transitionTarget?.to === 'CANCELLED' ? 'destructive' : 'default'}
-              disabled={actionsDisabled}
-              onClick={() =>
-                !actionsDisabled &&
-                transitionTarget?.order.id === selectedId &&
-                transition.mutate({ orderId: transitionTarget.order.id, to: transitionTarget.to })
-              }
+              disabled={actionsDisabled || (transitionTarget?.to === 'CONFIRMED' && !canConfirm)}
+              onClick={() => {
+                if (
+                  actionsDisabled ||
+                  !transitionTarget ||
+                  transitionTarget.order.id !== selectedId ||
+                  lifecyclePending.current ||
+                  (transitionTarget.to === 'CONFIRMED' && !canConfirm)
+                )
+                  return;
+                lifecyclePending.current = true;
+                transition.mutate({
+                  orderId: transitionTarget.order.id,
+                  to: transitionTarget.to,
+                  idempotencyKey: transitionTarget.idempotencyKey,
+                });
+              }}
             >
               Confirm change
             </Button>
@@ -1195,6 +1688,6 @@ export function CateringConsole({ currency }: { currency: string | null }) {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
-  );
+    </div>,
+  ];
 }

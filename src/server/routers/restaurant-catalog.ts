@@ -1056,14 +1056,31 @@ export const restaurantCatalogRouter = router({
             })
           ).map((recipe) => recipe.id);
         return await Promise.all(
-          recipeIds.map(async (recipeId) =>
-            serializeRecipeCost(
-              await computeRecipeCost({
+          recipeIds.map(async (recipeId) => {
+            try {
+              const cost = await computeRecipeCost({
                 organizationId: ctx.entitlements.organizationId,
                 recipeId,
-              })
-            )
-          )
+              });
+              if (cost.missing.length > 0 || cost.costPerPortion === null) {
+                return {
+                  recipeId,
+                  costPerPortion: null,
+                  error:
+                    cost.missing.length > 0
+                      ? 'Ingredient prices are missing.'
+                      : 'Portion cost is unavailable.',
+                };
+              }
+              return {
+                ...serializeRecipeCost(cost),
+                error: null,
+              };
+            } catch (error) {
+              if (!(error instanceof RecipeCostingError)) throw error;
+              return { recipeId, costPerPortion: null, error: error.message };
+            }
+          })
         );
       } catch (err) {
         mapCatalogError(err);

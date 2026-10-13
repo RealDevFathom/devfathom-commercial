@@ -9,6 +9,10 @@ const REQUIRED_INTEGRATED_ENV = [
   'RESTAURANT_ACTOR_ADMIN_PASSWORD',
   'RESTAURANT_ACTOR_OPERATOR_EMAIL',
   'RESTAURANT_ACTOR_OPERATOR_PASSWORD',
+  'RESTAURANT_ACTOR_AGENCY_EMAIL',
+  'RESTAURANT_ACTOR_AGENCY_PASSWORD',
+  'RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL',
+  'RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD',
 ] as const;
 const INTEGRATED_CREDENTIALS = new Set<string>(REQUIRED_INTEGRATED_ENV);
 const RESTAURANT_OPERATOR_EMAIL = 'operator@restaurant-e2e.test';
@@ -111,6 +115,22 @@ export function restaurantE2eEnvironment(
   }
   if (env.SEED_PASSWORD && env.RESTAURANT_ACTOR_ADMIN_PASSWORD !== env.SEED_PASSWORD) {
     throw new Error('RESTAURANT_ACTOR_ADMIN_PASSWORD must equal SEED_PASSWORD.');
+  }
+  // Reuse the identities seeded by prisma/seed.ts in the disposable template.
+  if (env.RESTAURANT_ACTOR_AGENCY_EMAIL !== RESTAURANT_ADMIN_EMAIL) {
+    throw new Error(`RESTAURANT_ACTOR_AGENCY_EMAIL must be ${RESTAURANT_ADMIN_EMAIL}.`);
+  }
+  if (env.RESTAURANT_ACTOR_AGENCY_PASSWORD !== env.RESTAURANT_ACTOR_ADMIN_PASSWORD) {
+    throw new Error('RESTAURANT_ACTOR_AGENCY_PASSWORD must equal RESTAURANT_ACTOR_ADMIN_PASSWORD.');
+  }
+  if (!env.PLATFORM_ADMIN_EMAIL || !env.PLATFORM_ADMIN_PASSWORD) {
+    throw new Error('Disposable template PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD are required.');
+  }
+  if (env.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL !== env.PLATFORM_ADMIN_EMAIL.toLowerCase()) {
+    throw new Error('RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL must match the seeded PLATFORM_ADMIN_EMAIL.');
+  }
+  if (env.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD !== env.PLATFORM_ADMIN_PASSWORD) {
+    throw new Error('RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD must equal PLATFORM_ADMIN_PASSWORD.');
   }
   const databaseUrl = resolveRestaurantE2eDatabaseUrl(env);
   const result: Record<string, string | undefined> = {

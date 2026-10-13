@@ -1,4 +1,6 @@
 import { createHash } from 'node:crypto';
+import { spawnSync } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 
 import { PrismaPg } from '@prisma/adapter-pg';
 import { hashSync } from 'bcryptjs';
@@ -19,6 +21,7 @@ import {
   seedRecipeProfitabilityFixture,
 } from './seed-restaurant-acceptance-fixtures.js';
 import {
+  roleTemplatesForVertical,
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
@@ -101,6 +104,9 @@ const CASE_TERMINAL_INDEXES = Array.from(
 const SOP_EVIDENCE_RETENTION_DAYS = 365;
 
 const IDS = {
+  reportsOperationalUser: 'user_restaurant_e2e_reports_operational',
+  reportsOperationalRole: 'role_restaurant_e2e_reports_operational',
+  reportsOperationalStaff: 'staff_restaurant_e2e_reports_operational',
   alexUser: 'user_chai_chowk_alex',
   alexStaff: 'staff_chai_chowk_alex',
   operatorUser: 'user_restaurant_e2e_operator',
@@ -203,7 +209,10 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
     'organization_departments',
     ['department_restaurant_e2e_kitchen', 'department_restaurant_e2e_front_of_house'],
   ],
-  ['organization_roles', [IDS.operatorRole, IDS.deniedOperatorRole, IDS.managerRole]],
+  [
+    'organization_roles',
+    [IDS.operatorRole, IDS.deniedOperatorRole, IDS.managerRole, IDS.reportsOperationalRole],
+  ],
   [
     'organization_role_permissions',
     [
@@ -215,11 +224,13 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
       'permission_restaurant_e2e_operator_5',
       'permission_restaurant_e2e_delivery_denied',
       'permission_restaurant_e2e_manager_all',
+      'permission_restaurant_e2e_reports_operational',
     ],
   ],
   [
     'users',
     [
+      IDS.reportsOperationalUser,
       IDS.alexUser,
       IDS.operatorUser,
       IDS.deniedOperatorUser,
@@ -232,6 +243,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   [
     'restaurant_branch_assignments',
     [
+      `assignment_${IDS.reportsOperationalUser}`,
       `assignment_${IDS.alexUser}`,
       `assignment_${IDS.operatorUser}`,
       `assignment_${IDS.deniedOperatorUser}`,
@@ -246,6 +258,7 @@ export const RESTAURANT_E2E_OWNED_FIXTURES = [
   [
     'restaurant_staff_profiles',
     [
+      IDS.reportsOperationalStaff,
       IDS.alexStaff,
       RESTAURANT_E2E.operatorId,
       RESTAURANT_E2E.deniedOperatorId,
@@ -700,6 +713,287 @@ async function seedAsciiReceiptTaxProfile(tx: Prisma.TransactionClient) {
   });
 }
 
+/** Cut an empty, genuinely closed prior day through the production money path.
+ * Yesterday is inside the default seven-day comparison window; today stays
+ * open for POS acceptance. No prior-window close is fabricated, so unknown
+ * comparison values remain unknown. The device/date key makes seed replay safe.
+ */
+function seedCurrentWindowClose(databaseUrl: string) {
+  const day = new Date(CURRENT_BUSINESS_DATE);
+  day.setUTCDate(day.getUTCDate() - 1);
+  const businessDate = day.toISOString().slice(0, 10);
+  // The scripts tsconfig supplies the existing server-only shim. A child keeps
+  // that script-only resolution out of the seed's normal application imports.
+  const input = {
+    branchId: RESTAURANT_E2E.branchId,
+    businessDate,
+    actor: {
+      staffProfileId: RESTAURANT_E2E.managerId,
+      deviceId: RESTAURANT_E2E.posDeviceId,
+      idempotencyKey: `e2e-comparison-close-${businessDate}`,
+    },
+  };
+  const result = spawnSync(
+    process.execPath,
+    [
+      fileURLToPath(new URL('../node_modules/tsx/dist/cli.mjs', import.meta.url)),
+      `--tsconfig=${fileURLToPath(new URL('./tsconfig.json', import.meta.url))}`,
+      '--eval',
+      `
+      import { cutClose } from './src/lib/restaurant/daily-close';
+      import { withTenantDb } from './src/lib/tenancy/scoped-db';
+      import { db } from './src/lib/db';
+      withTenantDb(${JSON.stringify(RESTAURANT_E2E.organizationId)}, tx =>
+        cutClose(tx, ${JSON.stringify(input)})
+      ).then(result => console.log('Current-window close:', result.dailyCloseId,
+        'date:', ${JSON.stringify(businessDate)}, 'replayed:', result.replayed))
+       .catch(error => { console.error(error); process.exitCode = 1; })
+       .finally(() => db.$disconnect());
+    `,
+    ],
+    {
+      cwd: fileURLToPath(new URL('..', import.meta.url)),
+      env: { ...process.env, DATABASE_URL: databaseUrl },
+      stdio: 'inherit',
+    }
+  );
+  if (result.error) throw result.error;
+  if (result.status !== 0) throw new Error('Current-window daily-close fixture failed.');
+}
+
+/** Match platform onboarding's role catalog without changing existing actor grants. */
+async function seedFirstRunRoles(tx: Prisma.TransactionClient, organizationId: string) {
+  for (const template of roleTemplatesForVertical('RESTAURANT')) {
+    await tx.organizationRole.upsert({
+      where: {
+        organizationId_key: {
+          organizationId,
+          key: template.key,
+        },
+      },
+      update: {},
+      create: {
+        key: template.key,
+        name: template.name,
+        isSystem: template.isSystem,
+        permissions: {
+          create: template.capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+        },
+      },
+    });
+  }
+}
+
+/** Setup-only tenant: never seed orders, bills, tenders, receipts or closes. */
+async function seedFirstSaleTenant(prisma: PrismaClient, password: string) {
+  const organizationId = 'org_restaurant_first_sale';
+  const id = (key: string) => `first_sale_${key}`;
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_organization_id', ${organizationId}, true), set_config('app.is_platform_admin', 'true', true)`;
+      const existing = await tx.organization.findUnique({ where: { id: organizationId } });
+      if (existing) {
+        if (
+          (await tx.restaurantOrder.count({ where: { organizationId } })) ||
+          (await tx.restaurantBill.count({ where: { organizationId } }))
+        )
+          throw new Error(
+            'First-sale tenant has trading history; use a fresh disposable database.'
+          );
+        console.log('First-sale tenant replay: zero orders and bills.');
+        return;
+      }
+      const source = await tx.organization.findUniqueOrThrow({
+        where: { id: RESTAURANT_E2E.organizationId },
+      });
+      await tx.organization.create({
+        data: {
+          id: organizationId,
+          slug: 'restaurant-first-sale',
+          displayName: 'First Sale Cafe',
+          legalName: 'First Sale Cafe Test Fixture',
+          vertical: 'RESTAURANT',
+          status: 'ACTIVE',
+          deploymentMode: 'SHARED',
+          timezone: 'Asia/Karachi',
+          currency: 'PKR',
+          locale: 'en',
+          packageId: source.packageId,
+          seatLimit: 5,
+          activatedAt: FIXED_AT,
+        },
+      });
+      await tx.$executeRaw`SELECT set_config('app.is_platform_admin', 'false', true)`;
+      for (const department of defaultDepartmentRowsForVertical('RESTAURANT'))
+        await tx.organizationDepartment.create({ data: department });
+      await seedFirstRunRoles(tx, organizationId);
+      const owner = await tx.organizationRole.findUniqueOrThrow({
+        where: { organizationId_key: { organizationId, key: 'owner' } },
+      });
+      await tx.user.create({
+        data: {
+          id: id('user'),
+          name: 'First Sale Owner',
+          email: 'first-sale@restaurant-e2e.test',
+          password,
+          role: 'EMPLOYEE',
+          department: adminDepartmentKeyForVertical('RESTAURANT'),
+          title: 'Owner',
+          organizationRoleId: owner.id,
+        },
+      });
+      await tx.restaurantBranch.create({
+        data: {
+          id: id('branch'),
+          name: 'First Sale Kitchen',
+          timezone: 'Asia/Karachi',
+          isDefault: true,
+        },
+      });
+      await tx.restaurantBranchAssignment.create({
+        data: { branchId: id('branch'), userId: id('user') },
+      });
+      await tx.restaurantStaffProfile.create({
+        data: {
+          id: id('staff'),
+          userId: id('user'),
+          displayName: 'First Sale Owner',
+          primaryBranchId: id('branch'),
+        },
+      });
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: id('staff'),
+          type: 'PIN',
+          credentialHash: hashSync('424242', PIN_BCRYPT_SALT),
+        },
+      });
+      await tx.restaurantKitchenStation.create({
+        data: { id: id('station'), branchId: id('branch'), name: 'Kitchen', isDefault: true },
+      });
+      for (const kind of ['POS', 'KDS'] as const) {
+        await tx.restaurantRegisteredDevice.create({
+          data: {
+            id: id(kind.toLowerCase()),
+            branchId: id('branch'),
+            name: `First Sale ${kind}`,
+            kind,
+            stationId: kind === 'KDS' ? id('station') : null,
+            deviceSecretHash: deviceSecretHash(
+              `rdk_first_sale_${kind.toLowerCase()}_local_ci_only`
+            ),
+          },
+        });
+      }
+      await tx.restaurantDrawerSession.create({
+        data: {
+          deviceId: id('pos'),
+          branchId: id('branch'),
+          staffProfileId: id('staff'),
+          businessDate: CURRENT_BUSINESS_DATE,
+          openingFloat: '100.00',
+        },
+      });
+      await tx.restaurantFloor.create({
+        data: { id: id('floor'), branchId: id('branch'), name: 'Dining' },
+      });
+      await tx.restaurantTable.create({
+        data: { id: id('table'), floorId: id('floor'), code: 'Table 1', capacity: 4 },
+      });
+      await tx.restaurantBrand.create({
+        data: { id: id('brand'), name: 'First Sale', isDefault: true },
+      });
+      await tx.restaurantCategory.create({ data: { id: id('category'), name: 'Mains' } });
+      await tx.restaurantProduct.create({
+        data: { id: id('product'), categoryId: id('category'), name: 'First Sale Bun' },
+      });
+      await tx.restaurantPriceList.create({
+        data: { id: id('prices'), name: 'First Sale Prices', isDefault: true },
+      });
+      await tx.restaurantPriceListVersion.create({
+        data: {
+          id: id('price_version'),
+          priceListId: id('prices'),
+          versionNumber: 1,
+          effectiveFrom: FIXED_AT,
+          status: 'ACTIVE',
+          activatedAt: FIXED_AT,
+        },
+      });
+      await tx.restaurantPriceListEntry.create({
+        data: { priceListVersionId: id('price_version'), productId: id('product'), price: '12.50' },
+      });
+      await tx.restaurantMenu.create({
+        data: { id: id('menu'), brandId: id('brand'), name: 'First Sale Menu' },
+      });
+      await tx.restaurantMenuSection.create({
+        data: { id: id('section'), menuId: id('menu'), name: 'Mains' },
+      });
+      await tx.restaurantMenuItem.create({
+        data: { sectionId: id('section'), productId: id('product') },
+      });
+      await tx.restaurantBranchMenuPublication.create({
+        data: {
+          id: id('publication'),
+          branchId: id('branch'),
+          menuId: id('menu'),
+          priceListId: id('prices'),
+          status: 'PUBLISHED',
+          channels: ['DINE_IN'],
+          publishedAt: FIXED_AT,
+        },
+      });
+      await tx.restaurantMenuAvailabilityWindow.create({
+        data: {
+          publicationId: id('publication'),
+          daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+          startMinutes: 0,
+          endMinutes: 0,
+        },
+      });
+      await tx.restaurantTaxOfficialSource.create({
+        data: {
+          id: id('tax_source'),
+          authorityCode: 'TEST-E2E',
+          documentTitle: 'Synthetic zero-rate first-sale fixture',
+          sourceUrl: 'https://example.invalid/first-sale/synthetic-zero-rate-tax',
+          contentHash: createHash('sha256').update('first-sale synthetic zero rate').digest('hex'),
+          retrievedAt: FIXED_AT,
+        },
+      });
+      await tx.restaurantTaxProfileVersion.create({
+        data: {
+          id: id('tax_profile'),
+          branchId: id('branch'),
+          versionNumber: 1,
+          status: 'PUBLISHED',
+          effectiveFrom: FIXED_AT,
+          approvedAt: FIXED_AT,
+          publishedAt: FIXED_AT,
+          approvalReference: 'TEST_ONLY · SYNTHETIC_ZERO_RATE',
+          priceMode: 'INCLUSIVE',
+          rules: {
+            create: ['CASH', 'CARD', 'OTHER'].map((paymentCategory) => ({
+              officialSourceId: id('tax_source'),
+              ruleCode: `TEST_ZERO_${paymentCategory}`,
+              paymentCategory,
+              priceMode: 'INCLUSIVE',
+              rate: '0',
+              status: 'PUBLISHED',
+              effectiveFrom: FIXED_AT,
+              approvalReference: 'TEST_ONLY · SYNTHETIC_ZERO_RATE',
+              approvedAt: FIXED_AT,
+              publishedAt: FIXED_AT,
+            })),
+          },
+        },
+      });
+      console.log('Seeded separate first-sale tenant: setup only; zero trading history.');
+    },
+    { timeout: 60_000 }
+  );
+}
+
 async function main() {
   const databaseUrl = resolveRestaurantE2eDatabaseUrl();
   const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
@@ -949,6 +1243,7 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await seedFirstRunRoles(tx, RESTAURANT_E2E.organizationId);
         await requirePristineDeliveryLane(tx);
         await seedDeliveryTaxProfile(tx);
         await seedCoreTaxProfile(tx);
@@ -1096,7 +1391,47 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        // CSV denial case: a real operational reader with branch scope, but
+        // no financial capability and no wildcard administrator grant.
+        await tx.organizationRole.upsert({
+          where: { id: IDS.reportsOperationalRole },
+          update: {
+            permissions: {
+              deleteMany: {},
+              create: [
+                {
+                  id: 'permission_restaurant_e2e_reports_operational',
+                  capability: 'reports:operational',
+                  effect: 'ALLOW',
+                },
+              ],
+            },
+          },
+          create: {
+            id: IDS.reportsOperationalRole,
+            key: 'restaurant-e2e-reports-operational',
+            name: 'Operational reports reader',
+            permissions: {
+              create: [
+                {
+                  id: 'permission_restaurant_e2e_reports_operational',
+                  capability: 'reports:operational',
+                  effect: 'ALLOW',
+                },
+              ],
+            },
+          },
+        });
         for (const user of [
+          {
+            id: IDS.reportsOperationalUser,
+            roleId: IDS.reportsOperationalRole,
+            name: 'Operational Reports Reader',
+            email: 'reports-operational@restaurant-e2e.test',
+            title: 'Reports reader',
+            password: devFathomAlexPassword,
+            branchId: RESTAURANT_E2E.branchId,
+          },
           {
             id: IDS.alexUser,
             roleId: IDS.managerRole,
@@ -1217,6 +1552,20 @@ async function main() {
             },
           });
         }
+        await tx.restaurantStaffProfile.upsert({
+          where: { id: IDS.reportsOperationalStaff },
+          update: {
+            userId: IDS.reportsOperationalUser,
+            primaryBranchId: RESTAURANT_E2E.branchId,
+            status: 'ACTIVE',
+          },
+          create: {
+            id: IDS.reportsOperationalStaff,
+            userId: IDS.reportsOperationalUser,
+            primaryBranchId: RESTAURANT_E2E.branchId,
+            displayName: 'Operational Reports Reader',
+          },
+        });
         await tx.restaurantBranchAssignment.upsert({
           where: {
             branchId_userId: { branchId: RESTAURANT_E2E.branchA2Id, userId: IDS.alexUser },
@@ -2478,6 +2827,9 @@ async function main() {
     // WHA-1553 — the two isolated Insights completion acceptance tenants. They
     // own separate organizations and never read or write Chai Chowk's rows, so
     // they run after the verification above rather than inside it.
+    await seedFirstSaleTenant(prisma, devFathomAlexPassword!);
+    seedCurrentWindowClose(databaseUrl);
+
     const insightsCompletion = await seedRestaurantInsightsCompletionFixtures(prisma);
     console.log(
       `Seeded restaurant Insights completion fixtures: ${JSON.stringify(insightsCompletion)}`

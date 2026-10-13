@@ -41,6 +41,7 @@ vi.mock('@/lib/abac', async () => {
 import { restaurantCatalogRouter } from './restaurant-catalog';
 import type { TRPCContext } from '../trpc';
 import { Prisma } from '@/generated/prisma/client';
+import { RecipeCostingError } from '@/lib/restaurant/recipe-costing';
 
 // ── Minimal in-memory db ──────────────────────────────────────────────────────
 
@@ -414,9 +415,71 @@ describe('recipe costing reads', () => {
     expect((db.restaurantRecipe as Delegate).findMany).not.toHaveBeenCalled();
   });
 
+  it.each(['INVALID', 'CYCLE'] as const)(
+    'isolates a %s recipe without discarding valid costs',
+    async (reason) => {
+      mocks.computeRecipeCost.mockImplementation(async ({ recipeId }: { recipeId: string }) => {
+        if (recipeId === 'invalid')
+          throw new RecipeCostingError('Recipe cannot be costed.', reason);
+        return cost(recipeId);
+      });
+      const result = await caller().listRecipeCosts({ recipeIds: ['r1', 'invalid', 'r2'] });
+      expect(result).toEqual([
+        expect.objectContaining({ recipeId: 'r1', costPerPortion: '1.25', error: null }),
+        { recipeId: 'invalid', costPerPortion: null, error: 'Recipe cannot be costed.' },
+        expect.objectContaining({ recipeId: 'r2', costPerPortion: '1.25', error: null }),
+      ]);
+    }
+  );
+
+  it.each([
+    [
+      'partial',
+      ['ingredient_missing'],
+      new Prisma.Decimal('1.25'),
+      'Ingredient prices are missing.',
+    ],
+    ['zero', ['ingredient_missing'], new Prisma.Decimal('0'), 'Ingredient prices are missing.'],
+    ['no-portions', [], null, 'Portion cost is unavailable.'],
+  ] as const)(
+    'marks %s costs unavailable without discarding valid neighbors',
+    async (_, missing, portionCost, error) => {
+      const exactCost = new Prisma.Decimal('9007199254740993.1234');
+      mocks.computeRecipeCost.mockImplementation(async ({ recipeId }: { recipeId: string }) => ({
+        ...cost(recipeId),
+        missing: recipeId === 'unavailable' ? [...missing] : [],
+        costPerPortion: recipeId === 'unavailable' ? portionCost : exactCost,
+      }));
+      const result = await caller().listRecipeCosts({ recipeIds: ['r1', 'unavailable', 'r2'] });
+      expect(result).toEqual([
+        expect.objectContaining({
+          recipeId: 'r1',
+          costPerPortion: exactCost.toString(),
+          error: null,
+        }),
+        { recipeId: 'unavailable', costPerPortion: null, error },
+        expect.objectContaining({
+          recipeId: 'r2',
+          costPerPortion: exactCost.toString(),
+          error: null,
+        }),
+      ]);
+    }
+  );
+
+  it('does not turn unexpected cost failures into unavailable recipe data', async () => {
+    mocks.computeRecipeCost.mockRejectedValue(new Error('Database unavailable'));
+    await expect(caller().listRecipeCosts({ recipeIds: ['r1'] })).rejects.toThrow(
+      'Database unavailable'
+    );
+  });
+
   it('uses the same menu:read capability guard as recipe reads', async () => {
     mocks.can.mockResolvedValue(false);
     await expect(caller().getRecipeCost({ recipeId: 'r1' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(caller().listRecipeCosts({ recipeIds: ['r1'] })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
     expect(mocks.computeRecipeCost).not.toHaveBeenCalled();

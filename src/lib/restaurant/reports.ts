@@ -1,4 +1,5 @@
 import 'server-only';
+import { reportNetSales } from './report-net-sales';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -295,7 +296,7 @@ export async function readPaymentsReport(db: ScopedDb, range: RestaurantReportRa
       | 'cashCounted'
       | 'cashVariance'
   ) => add(closes.map((close) => close[key]));
-  const netSales = total('netSales');
+  const netSales = add(closes.map(reportNetSales));
   return {
     range,
     freshness: freshnessFor(range, parsed, closes, rollups),

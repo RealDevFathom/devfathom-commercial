@@ -12,7 +12,7 @@ import type { RestaurantJobHandler } from './job-handlers';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
-export const INSIGHT_PROJECTION_VERSION = 3;
+export const INSIGHT_PROJECTION_VERSION = 4;
 
 export type RollupErrorReason = 'CLOSE_NOT_FOUND' | 'RECONCILIATION_FAILED' | 'INVALID';
 
@@ -71,9 +71,10 @@ export function computeReconciledFinancials(input: {
   const discountTotal = sum(settled.map((bill) => bill.discountTotal));
   const cashExpected = sum(input.drawers.map((drawer) => foldExpectedCash(drawer.movements)));
   const cashCounted = sum(input.drawers.map((drawer) => drawer.countedCash ?? ZERO));
+  const refundTotal = sum(input.refunds.map((refund) => refund.amount));
   return {
     grossSales,
-    netSales: sub(sub(grossSales, compTotal), discountTotal),
+    netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal),
     deliveryFeeSales: sum(settled.map((bill) => bill.deliveryFeeTotal)),
     deliveryFeeRefunds: sum(input.refunds.map((refund) => refund.deliveryFeeRefundAmount)),
     taxTotal: sum(settled.map((bill) => bill.taxTotal)),
@@ -81,7 +82,7 @@ export function computeReconciledFinancials(input: {
     tipTotal: sum(input.tenders.map((tender) => tender.tipAmount)),
     compTotal,
     discountTotal,
-    refundTotal: sum(input.refunds.map((refund) => refund.amount)),
+    refundTotal,
     voidTotal: sum(
       input.bills.filter((bill) => bill.status === 'VOID').map((bill) => bill.grandTotal)
     ),
@@ -228,7 +229,11 @@ function resolveCloseTip(closes: readonly CloseTip[]): CloseTip | null {
 
 function assertReconciles(close: CloseTip, raw: ReconciledFinancials): void {
   const mismatch = (Object.keys(raw) as Array<keyof ReconciledFinancials>).find(
-    (key) => !close[key].equals(raw[key])
+    (key) =>
+      !close[key].equals(raw[key]) &&
+      // Closes cut before WHA-1621 Q1 persisted netSales without the refund deduction;
+      // they are append-only, so accept that legacy formula rather than refuse to project.
+      !(key === 'netSales' && close.netSales.equals(add(raw.netSales, raw.refundTotal)))
   );
   if (mismatch) {
     throw new RollupError(
@@ -450,7 +455,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         orderCount: orders.length,
         coverCount: orders.reduce((total, order) => total + (order.coverCount ?? 0), 0),
         grossSales: close.grossSales,
-        netSales: close.netSales,
+        netSales: raw.netSales,
         deliveryFeeSales: close.deliveryFeeSales,
         deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,
@@ -466,7 +471,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         orderCount: orders.length,
         coverCount: orders.reduce((total, order) => total + (order.coverCount ?? 0), 0),
         grossSales: close.grossSales,
-        netSales: close.netSales,
+        netSales: raw.netSales,
         deliveryFeeSales: close.deliveryFeeSales,
         deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,

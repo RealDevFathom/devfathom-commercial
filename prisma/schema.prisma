@@ -4827,6 +4827,8 @@ model RestaurantActivationAcknowledgement {
 /// the operational tables (bare RLS-guarded organizationId, no cross-org
 /// aggregation — D09); a partial unique index enforces one default branch per org.
 model RestaurantBranch {
+  cateringCapacities RestaurantCateringBranchCapacity[]
+
   id                  String   @id @default(cuid())
   organizationId      String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   name                String
@@ -5247,6 +5249,14 @@ enum RestaurantRegisteredDeviceStatus {
 /// migration, since Prisma cannot express a filtered unique). Org-scoped under
 /// forced RLS; the operator's credentials and sessions hang off this row.
 model RestaurantStaffProfile {
+  cateringMoneyEvidence CateringMoneyEvidence[]
+
+  cateringDispositions RestaurantCateringDisposition[]
+
+  cateringQuoteApprovals RestaurantCateringQuoteApproval[]
+
+  cateringQuoteRevisions RestaurantCateringQuoteRevision[]
+
   id              String                @id @default(cuid())
   organizationId  String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   userId          String?
@@ -5322,6 +5332,7 @@ model RestaurantStaffProfile {
   shiftSwapRequests     RestaurantShiftSwapRequest[] @relation("ShiftSwapRequester")
   shiftSwapReplacements RestaurantShiftSwapRequest[] @relation("ShiftSwapReplacement")
 
+  @@unique([organizationId, id], map: "catering_money_staff_scope_key")
   @@index([organizationId])
   @@index([userId])
   @@index([primaryBranchId])
@@ -5365,6 +5376,8 @@ model RestaurantOperatorCredential {
 /// `status`/`revokedAt` are re-checked in the DB on every terminal call so a
 /// revoked device cannot keep operating from a stale client cache.
 model RestaurantRegisteredDevice {
+  cateringMoneyEvidence CateringMoneyEvidence[]
+
   id               String                           @id @default(cuid())
   organizationId   String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId         String
@@ -5406,6 +5419,7 @@ model RestaurantRegisteredDevice {
   inventoryPurchaseReceipts RestaurantPurchaseReceipt[]
   inventoryIdempotencyKeys  RestaurantInventoryIdempotencyKey[]
 
+  @@unique([organizationId, branchId, id], map: "catering_money_device_scope_key")
   @@unique([organizationId, id])
   @@index([organizationId])
   @@index([branchId])
@@ -7369,6 +7383,8 @@ model RestaurantDrawerSession {
 /// by `kind`. Optional `tenderId`/`refundId` link the movement to the money
 /// record that produced it. No updatedAt; DB-enforced append-only.
 model RestaurantDrawerMovement {
+  cateringMoneyEvidence CateringMoneyEvidence[]
+
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   drawerSessionId String
@@ -7387,6 +7403,7 @@ model RestaurantDrawerMovement {
   staff         RestaurantStaffProfile     @relation(fields: [staffProfileId], references: [id], onDelete: Restrict)
   device        RestaurantRegisteredDevice @relation(fields: [deviceId], references: [id], onDelete: Restrict)
 
+  @@unique([organizationId, id], map: "catering_money_movement_scope_key")
   @@index([organizationId])
   @@index([drawerSessionId])
   @@index([tenderId])
@@ -7659,6 +7676,10 @@ model RestaurantStockItem {
 /// carry the order's operator when known. No updatedAt; DB-enforced append-only
 /// (SELECT+INSERT RLS only) — a correction is a NEW movement, never an edit.
 model RestaurantStockMovement {
+  cateringResultDispositions RestaurantCateringDisposition[] @relation("CateringDispositionResult")
+
+  cateringSourceDispositions RestaurantCateringDisposition[] @relation("CateringDispositionSource")
+
   id             String                        @id @default(cuid())
   organizationId String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   stockItemId    String
@@ -9076,6 +9097,27 @@ enum RestaurantCateringExtraCostKind {
 }
 
 model RestaurantCateringOrder {
+  cateringMoneyEvidence CateringMoneyEvidence[]
+
+  commands RestaurantCateringCommand[]
+
+  dispositions RestaurantCateringDisposition[]
+
+  confirmedQuote RestaurantCateringQuoteRevision? @relation("CateringConfirmedQuote", fields: [organizationId, id, confirmedQuoteRevisionId], references: [organizationId, orderId, id], onDelete: Restrict, onUpdate: NoAction, map: "catering_confirmed_quote_fk")
+
+  approvedQuote RestaurantCateringQuoteRevision? @relation("CateringApprovedQuote", fields: [organizationId, id, approvedQuoteRevisionId], references: [organizationId, orderId, id], onDelete: Restrict, onUpdate: NoAction, map: "catering_approved_quote_fk")
+
+  quoteRevisions RestaurantCateringQuoteRevision[] @relation("CateringQuoteHistory")
+
+  // Insert inside RestaurantCateringOrder during central composition.
+  bookingStartsAt          DateTime? @db.Timestamptz(6)
+  bookingEndsAt            DateTime? @db.Timestamptz(6)
+  fulfillmentMode          String?
+  stockLocationId          String?
+  revision                 Int       @default(0)
+  approvedQuoteRevisionId  String?
+  confirmedQuoteRevisionId String?
+
   id                String                        @id @default(cuid())
   organizationId    String                        @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId          String
@@ -9103,7 +9145,9 @@ model RestaurantCateringOrder {
   delivery        RestaurantCateringDelivery?
   events          RestaurantCateringEvent[]
 
+  @@unique([organizationId, branchId, id], map: "catering_order_money_scope_key")
   @@unique([organizationId, id])
+  @@index([organizationId, branchId, bookingStartsAt, bookingEndsAt], map: "catering_booking_overlap")
   @@index([organizationId, branchId, eventDate])
   @@index([organizationId, status])
   @@index([customerId])
@@ -13712,4 +13756,241 @@ model PharmacyPackAuthenticationEvent {
   @@unique([organizationId, id], map: "pharmacy_pack_authentication_events_org_id_key")
   @@index([organizationId, branchId, scanId, createdAt], map: "pharmacy_pack_authentication_events_org_scan_idx")
   @@map("pharmacy_pack_authentication_events")
+}
+
+// SQL migration is authoritative for cross-table FK/check/trigger/RLS constraints.
+model RestaurantCateringBranchCapacity {
+  organizationId         String           @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
+  branchId               String
+  maxConcurrentHeadcount Int?
+  branch                 RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_branch_capacit_organizationId_branchId_fkey")
+
+  @@id([organizationId, branchId])
+  @@map("restaurant_catering_branch_capacity")
+}
+
+model RestaurantCateringQuoteRevision {
+  id                    String                           @id
+  organizationId        String                           @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
+  orderId               String
+  revision              Int
+  snapshot              Json
+  contentHash           String
+  createdByStaffId      String
+  createdAt             DateTime                         @default(now()) @db.Timestamptz(6)
+  cateringMoneyEvidence CateringMoneyEvidence[]
+  approvedOrders        RestaurantCateringOrder[]        @relation("CateringApprovedQuote")
+  confirmedOrders       RestaurantCateringOrder[]        @relation("CateringConfirmedQuote")
+  approvals             RestaurantCateringQuoteApproval?
+  creator               RestaurantStaffProfile           @relation(fields: [createdByStaffId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_quote_revisions_createdByStaffId_fkey")
+  order                 RestaurantCateringOrder          @relation("CateringQuoteHistory", fields: [organizationId, orderId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_quote_revisions_organizationId_orderId_fkey")
+
+  @@unique([organizationId, orderId, id], map: "catering_quote_money_scope_key")
+  @@unique([organizationId, orderId, revision], map: "catering_quote_revision_key")
+  @@unique([organizationId, orderId, id], map: "catering_quote_order_id_key")
+  @@map("restaurant_catering_quote_revisions")
+}
+
+model RestaurantCateringQuoteApproval {
+  id                  String                          @id
+  organizationId      String                          @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
+  orderId             String
+  quoteRevisionId     String
+  orderRevision       Int
+  actorStaffProfileId String
+  createdAt           DateTime                        @default(now()) @db.Timestamptz(6)
+  quote               RestaurantCateringQuoteRevision @relation(fields: [organizationId, orderId, quoteRevisionId], references: [organizationId, orderId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_quote_app_organizationId_orderId_quote_fkey")
+  actor               RestaurantStaffProfile          @relation(fields: [actorStaffProfileId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_quote_approvals_actorStaffProfileId_fkey")
+
+  @@unique([organizationId, orderId, quoteRevisionId], map: "restaurant_catering_quote_app_organizationId_orderId_quoteR_key")
+  @@map("restaurant_catering_quote_approvals")
+}
+
+model RestaurantCateringDisposition {
+  id                  String                   @id
+  organizationId      String                   @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
+  orderId             String
+  originalMovementId  String
+  kind                String
+  quantity            Decimal                  @db.Decimal(18, 6)
+  resultMovementId    String?
+  reason              String
+  actorStaffProfileId String
+  idempotencyKey      String
+  payloadHash         String
+  createdAt           DateTime                 @default(now()) @db.Timestamptz(6)
+  actor               RestaurantStaffProfile   @relation(fields: [actorStaffProfileId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_dispositions_actorStaffProfileId_fkey")
+  order               RestaurantCateringOrder  @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_dispositions_organizationId_orderId_fkey")
+  originalMovement    RestaurantStockMovement  @relation("CateringDispositionSource", fields: [originalMovementId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_dispositions_originalMovementId_fkey")
+  resultMovement      RestaurantStockMovement? @relation("CateringDispositionResult", fields: [resultMovementId], references: [id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_dispositions_resultMovementId_fkey")
+
+  @@unique([organizationId, orderId, idempotencyKey], map: "restaurant_catering_dispositi_organizationId_orderId_idempo_key")
+  @@map("restaurant_catering_dispositions")
+}
+
+model RestaurantCateringCommand {
+  organizationId String                  @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
+  orderId        String
+  idempotencyKey String
+  payloadHash    String
+  result         Json
+  createdAt      DateTime                @default(now()) @db.Timestamptz(6)
+  order          RestaurantCateringOrder @relation(fields: [organizationId, orderId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_commands_organizationId_orderId_fkey")
+
+  @@id([organizationId, orderId, idempotencyKey])
+  @@map("restaurant_catering_commands")
+}
+
+// Composition fragment only. SQL fragment owns composite FKs, CHECKs and forced RLS.
+// Coordinator adds inverse relation fields when composing into the shared Prisma schema.
+model CateringMoneyEvidence {
+  id                        String                          @id @default(uuid())
+  organizationId            String                          @default(dbgenerated("current_setting('app.current_organization_id'::text, true)"))
+  branchId                  String
+  cateringOrderId           String
+  quoteRevisionId           String
+  kind                      String
+  amount                    Decimal                         @db.Decimal(12, 2)
+  currency                  String
+  source                    String
+  originalEvidenceId        String?
+  externalEvidenceSource    String?
+  externalEvidenceReference String?
+  drawerMovementId          String?
+  actorStaffProfileId       String
+  deviceId                  String
+  businessDate              DateTime                        @db.Date
+  createdAt                 DateTime                        @default(now()) @db.Timestamptz(6)
+  original                  CateringMoneyEvidence?          @relation("CateringMoneyRefund", fields: [organizationId, branchId, cateringOrderId, currency, source, originalEvidenceId], references: [organizationId, branchId, cateringOrderId, currency, source, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_money_ev_organizationId_branchId_cate_fkey1")
+  refunds                   CateringMoneyEvidence[]         @relation("CateringMoneyRefund")
+  actor                     RestaurantStaffProfile          @relation(fields: [organizationId, actorStaffProfileId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_money_evi_organizationId_actorStaffPro_fkey")
+  order                     RestaurantCateringOrder         @relation(fields: [organizationId, branchId, cateringOrderId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_money_evi_organizationId_branchId_cate_fkey")
+  device                    RestaurantRegisteredDevice      @relation(fields: [organizationId, branchId, deviceId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_money_evi_organizationId_branchId_devi_fkey")
+  quote                     RestaurantCateringQuoteRevision @relation(fields: [organizationId, cateringOrderId, quoteRevisionId], references: [organizationId, orderId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_money_evi_organizationId_cateringOrder_fkey")
+  drawerMovement            RestaurantDrawerMovement?       @relation(fields: [organizationId, drawerMovementId], references: [organizationId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_catering_money_evi_organizationId_drawerMovemen_fkey")
+
+  @@unique([organizationId, branchId, cateringOrderId, currency, source, id], map: "restaurant_catering_money_evi_organizationId_branchId_cater_key")
+  @@unique([organizationId, drawerMovementId], map: "restaurant_catering_money_evi_organizationId_drawerMovement_key")
+  @@unique([organizationId, externalEvidenceSource, externalEvidenceReference], map: "restaurant_catering_money_evi_organizationId_externalEviden_key")
+  @@index([organizationId, cateringOrderId], map: "catering_money_order_idx")
+  @@map("restaurant_catering_money_evidence")
+}
+
+// Growth SQL migrations own all FK, partial-index, CHECK, trigger and FORCE RLS contracts.
+model GrowthInsight {
+  id String @id
+  organizationId String
+  branchId String
+  vertical String
+  actorId String
+  schemaVersion Int
+  inputHash String
+  status String
+  failureCode String?
+  provider String?
+  model String?
+  snapshot Json
+  output Json?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, createdAt], map: "growth_insights_scope")
+  @@map("growth_insights")
+}
+
+model PharmacyGrowthReview {
+  id String @id
+  organizationId String
+  branchId String
+  insightId String
+  recommendation Int
+  decision String
+  actorId String
+  settings Json?
+  campaignId String?
+  createdAt DateTime @default(now()) @db.Timestamptz(6)
+  @@map("pharmacy_growth_reviews")
+}
+
+// Scalar mappings follow the accepted shared growth models. The exact ordered
+// SQL owns composite/deferred FKs and append-only ledgers; never use db push.
+model RestaurantGrowthReview {
+  id             String   @id
+  organizationId String
+  branchId       String
+  insightId      String
+  recommendation Int
+  revision       Int
+  decision       String
+  actorId        String
+  settings       Json
+  draftId        String?
+  requestId      String   @db.Uuid
+  fingerprint    String
+  inputHash      String
+  schemaVersion  Int
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, insightId, requestId])
+  @@unique([organizationId, insightId, recommendation, revision])
+  @@map("restaurant_growth_reviews")
+}
+
+model RestaurantGrowthDraft {
+  id             String   @id
+  organizationId String
+  branchId       String
+  insightId      String
+  recommendation Int
+  reviewId       String
+  action         String
+  settings       Json
+  actorId        String
+  status         String   @default("DRAFT")
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, insightId, recommendation])
+  @@unique([organizationId, reviewId])
+  @@map("restaurant_growth_drafts")
+}
+
+model RestaurantGrowthFixture {
+  organizationId String
+  branchId       String
+  customerId     String
+  environment    String @default("TEST_SANDBOX")
+
+  @@id([organizationId, branchId, customerId])
+  @@map("restaurant_growth_fixtures")
+}
+
+model RestaurantGrowthAttempt {
+  id             String   @id @db.Uuid
+  organizationId String
+  branchId       String
+  draftId        String
+  reviewId       String
+  customerId     String
+  requestId      String   @db.Uuid
+  fingerprint    String
+  cutoff         DateTime @db.Timestamptz(6)
+  state          String
+  createdAt      DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  @@unique([organizationId, branchId, id, customerId])
+  @@unique([organizationId, draftId, customerId])
+  @@map("restaurant_growth_attempts")
+}
+
+model RestaurantGrowthReceiptEvent {
+  organizationId String
+  branchId       String
+  attemptId      String   @db.Uuid
+  customerId     String
+  billId         String
+  createdAt      DateTime @default(dbgenerated("clock_timestamp()")) @db.Timestamptz(6)
+
+  @@id([organizationId, billId])
+  @@map("restaurant_growth_receipt_events")
 }

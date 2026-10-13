@@ -202,6 +202,7 @@ describe('append-only ledger', () => {
   it('accrues floor(net promotion-adjusted grand total × rate)', async () => {
     db.restaurantBill.findUnique.mockResolvedValue({
       order: { customerId: 'customer_1' },
+      grandTotal: new Prisma.Decimal('14.30'),
     });
     db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
     db.loyaltyProgramVersion.findFirst.mockResolvedValue({
@@ -225,6 +226,69 @@ describe('append-only ledger', () => {
         }),
       })
     );
+  });
+
+  it.each([
+    { eligible: '8.47', payable: '10.00', points: 8 },
+    { eligible: '14.30', payable: '16.30', points: 14 },
+    { eligible: '14.00', payable: '13.90', points: 13 },
+  ])(
+    'caps $eligible eligible at $payable payable without raising a tax-exclusive basis',
+    async ({ eligible, payable, points }) => {
+      db.restaurantBill.findUnique.mockResolvedValue({
+        order: { customerId: 'customer_1' },
+        grandTotal: new Prisma.Decimal(payable),
+      });
+      db.loyaltyAccount.findUnique.mockResolvedValue({ id: 'account_1', active: true });
+      db.loyaltyProgramVersion.findFirst.mockResolvedValue({
+        id: 'program_1',
+        earnRate: new Prisma.Decimal('1'),
+        expiryDays: null,
+      });
+      const earn = await accrueLoyaltyForSettledBill(scoped(), {
+        billId: 'bill_1',
+        netGrandTotal: new Prisma.Decimal(eligible),
+        at: AT,
+      });
+      expect(earn).toMatchObject({ kind: 'EARN', points });
+    }
+  );
+
+  it('earns on the persisted redeemed total once and reverses that earn on full refund', async () => {
+    settledOrder([{ id: 'bill_redeemed', grandTotal: '13.90' }]);
+    db.restaurantBill.findUnique.mockResolvedValue({
+      order: { customerId: 'customer_1' },
+      grandTotal: new Prisma.Decimal('13.90'),
+    });
+    const program = { id: 'program_1', earnRate: new Prisma.Decimal('1'), expiryDays: null };
+    db.loyaltyProgramVersion.findFirst.mockResolvedValue(program);
+
+    // The tax quote's net precedes the 0.10 after-tax redemption discount.
+    const earn = await accrueLoyaltyForSettledBill(scoped(), {
+      billId: 'bill_redeemed',
+      netGrandTotal: new Prisma.Decimal('14.00'),
+      at: AT,
+    });
+    expect(earn).toMatchObject({ kind: 'EARN', points: 13, billId: 'bill_redeemed' });
+
+    db.loyaltyPointsEntry.findFirst.mockResolvedValue(earn);
+    await earnLoyaltyForClosedOrder(scoped(), 'order_1', AT);
+    expect(db.loyaltyPointsEntry.create).toHaveBeenCalledTimes(1);
+
+    db.loyaltyPointsEntry.findFirst
+      .mockReset()
+      .mockResolvedValueOnce({ ...earn, programVersion: program })
+      .mockResolvedValueOnce(null);
+    db.restaurantRefund.aggregate.mockResolvedValue({
+      _sum: { amount: new Prisma.Decimal('13.90') },
+    });
+    const reversal = await reverseLoyaltyForRefund(scoped(), {
+      billId: 'bill_redeemed',
+      refundId: 'refund_1',
+      at: AT,
+    });
+    expect(reversal).toMatchObject({ kind: 'REVERSAL', points: -13, reversesEntryId: earn!.id });
+    expect(db.loyaltyPointsEntry.create).toHaveBeenCalledTimes(2);
   });
 
   it('redeems with Decimal math and updates discount/grand total atomically', async () => {

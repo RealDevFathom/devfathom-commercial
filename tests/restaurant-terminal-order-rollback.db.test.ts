@@ -380,6 +380,7 @@ beforeAll(async () => {
         status: 'ACTIVE',
         yieldQuantity: '1',
         yieldUnitId: ids.kilogram,
+        portionCount: 1,
         activatedAt: new Date('2020-01-01T00:00:00.000Z'),
       },
     });

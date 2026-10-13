@@ -375,7 +375,8 @@ async function sellThroughCheckout(pos: Page, kds: Page, tender: 'CASH' | 'CARD'
   expect(opened.status()).toBe(201);
   const { orderNumber } = (await opened.json()) as { orderNumber: number };
   const orderButton = pos.getByRole('button', { name: new RegExp(`^#${orderNumber} ·`) });
-  await orderButton.click();
+  // Online, the composed check opens directly and becomes the active order.
+  await expect(pos.getByText(`Order ${orderNumber} opened.`)).toBeVisible();
   await expect(pos.getByRole('heading', { name: `Order ${orderNumber}` })).toBeVisible();
   await expect(pos.getByText(`1 × ${fixture.menuItem.name}`)).toBeVisible();
   await pos.getByRole('button', { name: 'Send whole order' }).click();
@@ -403,7 +404,14 @@ async function sellThroughCheckout(pos: Page, kds: Page, tender: 'CASH' | 'CARD'
   await pos.getByRole('button', { name: 'Close order' }).click();
   const checkout = pos.getByRole('dialog', { name: 'Collect payment' });
   await expect(checkout).toBeVisible();
+  // The cashier reads (never redeems) loyalty for the bill: no 403 on checkout.
+  const loyaltyRead = pos.waitForResponse(
+    (response) =>
+      response.url().includes('/api/restaurant/checkout/loyalty?') &&
+      response.request().method() === 'GET'
+  );
   await checkout.getByRole('button', { name: 'Cut single bill' }).click();
+  expect((await loyaltyRead).status()).toBe(200);
   await checkout.getByLabel('Tender type').selectOption(tender);
   await checkout.getByLabel('Amount').fill(DAY_CLOSE_BRANCH.saleTotal);
   if (tender === 'CASH') await checkout.getByLabel('Cash received').fill('20.00');
@@ -516,10 +524,8 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
     await expect(cashSale.receipt.getByRole('region', { name: 'Receipt printing' })).toBeVisible();
     await cashSale.checkout.getByRole('button', { name: 'Close checkout' }).click();
     await expect(cashSale.checkout).toHaveCount(0);
-    // A settled check stays PAYMENT_PENDING and active (WHA-1576 defect list); locking
-    // the register is the operator path that clears it before the next check.
-    await pos.getByRole('button', { name: 'Lock terminal' }).click();
-    await unlockDayCloseRegister(pos);
+    // Closing a settled checkout starts a fresh draft for the next check.
+    await expect(pos.getByRole('heading', { name: 'No active order' })).toBeVisible();
 
     const cardSale = await sellThroughCheckout(pos, kds, 'CARD');
     await expect(cardSale.receipt).toContainText(/CARD\s*14\.00/);
@@ -618,6 +624,10 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
       ])
     );
     await expect(dayClose.getByRole('heading', { name: 'Closed day' })).toBeVisible();
+    // The post-close summary shows the count and variance beside cash expected.
+    await expect(dayClose.locator('dl').first()).toContainText(
+      /Refunds\s*0\.00[\s\S]*Cash expected\s*64\.00\s*Cash counted\s*63\.50\s*Cash variance\s*-0\.50/
+    );
     await expect(
       dayClose.getByRole('link', { name: 'Review in Restaurant Finance' })
     ).toBeVisible();
@@ -640,10 +650,10 @@ test('a cashier walks drawer, cash and card sales, receipt, day close, and Finan
       .filter({ hasText: close.dailyCloseId });
     await expect(closeRow).toContainText('Authoritative tip');
     await expect(closeRow).toContainText('Original close');
-    // Gross, Net, Refunds, Cash variance. Tolerates the un-padded Decimal serialization.
-    await expect(closeRow.getByRole('cell').nth(4)).toHaveText(/^28(\.00)?$/);
-    await expect(closeRow.getByRole('cell').nth(6)).toHaveText(/^0(\.00)?$/);
-    await expect(closeRow.getByRole('cell').nth(7)).toHaveText(/^-0\.50?$/);
+    // Gross, Net, Refunds, Cash variance — money renders at 2dp.
+    await expect(closeRow.getByRole('cell').nth(4)).toHaveText('28.00');
+    await expect(closeRow.getByRole('cell').nth(6)).toHaveText('0.00');
+    await expect(closeRow.getByRole('cell').nth(7)).toHaveText('-0.50');
   } catch (error) {
     primaryFailure = error;
     throw error;

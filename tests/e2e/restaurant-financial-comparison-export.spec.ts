@@ -330,7 +330,7 @@ async function applySeededBranchFilters(page: Page, origin: string) {
   await page.goto(new URL('/restaurant/reports', origin).href);
   await expect(page.getByRole('heading', { name: 'Reports', exact: true })).toBeVisible();
   const filters = reportFilters(page);
-  await filters.getByLabel('Branch', { exact: true }).selectOption(fixture.branchId);
+  await filters.locator('select[name="branch"]').selectOption(fixture.branchId);
   const from = await filters.getByLabel('From date', { exact: true }).inputValue();
   const to = await filters.getByLabel('To date', { exact: true }).inputValue();
   await filters.getByRole('button', { name: 'Apply filters', exact: true }).click();

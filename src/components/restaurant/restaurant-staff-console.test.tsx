@@ -222,6 +222,25 @@ const entitlements = {
 } as EntitlementView;
 
 describe('Restaurant staff credential UI', () => {
+  it('shows the branch name without exposing its ID and preserves branch selection', () => {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+
+    const row = screen.getByRole('row', { name: /Shift Lead/ });
+    expect(within(row).getAllByRole('cell')[2]).toHaveTextContent(/^Downtown$/);
+    expect(document.body).not.toHaveTextContent('branch_1');
+
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    expect(screen.getByRole('row', { name: /Shift Lead/ })).toBeVisible();
+
+    fireEvent.click(within(row).getByRole('button', { name: 'Edit' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit staff member' });
+    expect(within(dialog).getByLabelText('Primary branch')).toHaveValue('branch_1');
+  });
+
   it('selects organization users by human identity and marks linked users unavailable', () => {
     render(
       <EntitlementsProvider value={entitlements}>

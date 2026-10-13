@@ -15,6 +15,12 @@ const credentials = {
   RESTAURANT_ACTOR_ADMIN_PASSWORD: 'test-only',
   RESTAURANT_ACTOR_OPERATOR_EMAIL: 'operator@restaurant-e2e.test',
   RESTAURANT_ACTOR_OPERATOR_PASSWORD: 'operator-test-only',
+  RESTAURANT_ACTOR_AGENCY_EMAIL: 'alex@company.com',
+  RESTAURANT_ACTOR_AGENCY_PASSWORD: 'test-only',
+  RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL: 'platform@restaurant-e2e.test',
+  RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD: 'platform-test-only',
+  PLATFORM_ADMIN_EMAIL: 'platform@restaurant-e2e.test',
+  PLATFORM_ADMIN_PASSWORD: 'platform-test-only',
 };
 const integratedSpec = readFileSync(
   resolve(process.cwd(), 'tests/e2e/restaurant-integrated.spec.ts'),
@@ -144,8 +150,6 @@ describe('Restaurant integrated E2E safety', () => {
     const env = restaurantE2eEnvironment({
       RESTAURANT_E2E_DATABASE_URL: target,
       ...credentials,
-      RESTAURANT_ACTOR_AGENCY_EMAIL: 'unused@example.test',
-      RESTAURANT_ACTOR_AGENCY_PASSWORD: 'unused',
       RESTAURANT_ACTOR_FUTURE_EMAIL: 'future@example.test',
       RESTAURANT_ACTOR_FUTURE_PASSWORD: 'unused',
     });
@@ -154,9 +158,36 @@ describe('Restaurant integrated E2E safety', () => {
     expect(env.RESTAURANT_ACTOR_OPERATOR_PASSWORD).toBe(
       credentials.RESTAURANT_ACTOR_OPERATOR_PASSWORD
     );
-    expect(env.RESTAURANT_ACTOR_AGENCY_EMAIL).toBeUndefined();
+    expect(env.RESTAURANT_ACTOR_AGENCY_EMAIL).toBe(credentials.RESTAURANT_ACTOR_AGENCY_EMAIL);
+    expect(env.RESTAURANT_ACTOR_AGENCY_PASSWORD).toBe(credentials.RESTAURANT_ACTOR_AGENCY_PASSWORD);
+    expect(env.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL).toBe(credentials.RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL);
+    expect(env.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD).toBe(credentials.RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD);
     expect(env.RESTAURANT_ACTOR_FUTURE_EMAIL).toBeUndefined();
     expect(env.RESTAURANT_ACTOR_FUTURE_PASSWORD).toBeUndefined();
+  });
+
+  test.each([
+    'RESTAURANT_ACTOR_AGENCY_EMAIL',
+    'RESTAURANT_ACTOR_AGENCY_PASSWORD',
+    'RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL',
+    'RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD',
+    'PLATFORM_ADMIN_EMAIL',
+    'PLATFORM_ADMIN_PASSWORD',
+  ])('rejects missing actor seed input %s', (name) => {
+    expect(() => restaurantE2eEnvironment({
+      RESTAURANT_E2E_DATABASE_URL: target, ...credentials, [name]: undefined,
+    })).toThrow();
+  });
+
+  test.each([
+    ['RESTAURANT_ACTOR_AGENCY_EMAIL', 'unseeded@example.test'],
+    ['RESTAURANT_ACTOR_AGENCY_PASSWORD', 'wrong-password'],
+    ['RESTAURANT_ACTOR_SUPER_ADMIN_EMAIL', 'unseeded@example.test'],
+    ['RESTAURANT_ACTOR_SUPER_ADMIN_PASSWORD', 'wrong-password'],
+  ])('rejects mismatched actor seed input %s', (name, value) => {
+    expect(() => restaurantE2eEnvironment({
+      RESTAURANT_E2E_DATABASE_URL: target, ...credentials, [name]: value,
+    })).toThrow();
   });
 
   test('has one desktop project, one worker, and no parallel fan-out', () => {

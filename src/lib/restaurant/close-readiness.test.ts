@@ -242,7 +242,11 @@ describe('read-only close preparation', () => {
 
   it('uses authoritative corrected close amounts and existing coverage/freshness', async () => {
     const f = fixture();
-    f.state.closes.push(close(), { ...close('corrected', 'close1'), netSales: D('300.25') });
+    f.state.closes.push(close(), {
+      ...close('corrected', 'close1'),
+      grossSales: D('300.25'),
+      netSales: D('300.25'),
+    });
     f.state.drawers.push(drawer(null));
     const packet = await f.prepare();
     expect(packet.status).toBe('ALREADY_CLOSED');

@@ -53,7 +53,7 @@ describe('pure rollup calculations', () => {
     expect(total.deliveryFeeSales.toString()).toBe('12');
     expect(total.deliveryFeeRefunds.toString()).toBe('1.25');
     expect(total.discountTotal.toString()).toBe('5');
-    expect(total.netSales.toString()).toBe('85');
+    expect(total.netSales.toString()).toBe('82.5');
     expect(total.taxTotal.toString()).toBe('7');
     expect(total.serviceChargeTotal.toString()).toBe('3');
     expect(total.tipTotal.toString()).toBe('6');
@@ -97,7 +97,7 @@ describe('pure rollup calculations', () => {
   });
 });
 
-function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
+function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?: boolean }) {
   const close = {
     id: 'close_1',
     createdAt: new Date('2026-08-21T02:00:00.000Z'),
@@ -105,7 +105,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
     grossSales: D(input?.mismatch ? '11' : '10'),
     deliveryFeeSales: D('2'),
     deliveryFeeRefunds: D('1'),
-    netSales: D('7'),
+    netSales: D(input?.legacyNet ? '7' : '4'),
     taxTotal: D('0'),
     serviceChargeTotal: D('0'),
     tipTotal: D('0'),
@@ -163,7 +163,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
           sourceDailyCloseId: string;
           projectionVersion: number;
         } | null>
-      >(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 3 })),
+      >(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 4 })),
       upsert: vi.fn(async () => ({ id: 'rollup_1' })),
     },
     insightLoyaltyLiability: {
@@ -184,7 +184,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean }) {
         positivePoints: BigInt(0),
         signedPoints: BigInt(0),
         liability: D('0'),
-        projectionVersion: 3,
+        projectionVersion: 4,
       })),
       upsert: vi.fn<(args?: { update: { liability: Prisma.Decimal } }) => Promise<{ id: string }>>(
         async () => ({ id: 'liability_1' })
@@ -274,7 +274,7 @@ describe('rollupDay handler idempotency and correction', () => {
 
       db.insightDailyRollup.findFirst
         .mockResolvedValueOnce(null)
-        .mockResolvedValue({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 3 });
+        .mockResolvedValue({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 4 });
       db.insightLoyaltyLiability.findFirst.mockResolvedValueOnce(null).mockResolvedValue({
         cutoffAt: new Date('2026-08-20T19:00:00.000Z'),
         programVersionId: 'program_1',
@@ -282,7 +282,7 @@ describe('rollupDay handler idempotency and correction', () => {
         positivePoints: BigInt(100),
         signedPoints: BigInt(100),
         liability: D('1.5'),
-        projectionVersion: 3,
+        projectionVersion: 4,
       });
       db.loyaltyProgramVersion.findFirst.mockResolvedValue({
         id: 'program_1',
@@ -405,6 +405,31 @@ describe('rollupDay handler idempotency and correction', () => {
     ).rejects.toMatchObject({ reason: 'RECONCILIATION_FAILED' });
     expect(db.insightDailyRollup.upsert).not.toHaveBeenCalled();
   });
+
+  it.each([true, false])(
+    'normalizes legacy=%s and refreshes an existing v3 projection',
+    async (legacyNet) => {
+      const db = rollupDb({ legacyNet });
+      db.insightDailyRollup.findFirst.mockResolvedValue({
+        id: 'rollup_1',
+        sourceDailyCloseId: 'close_1',
+        projectionVersion: 3,
+      });
+      await rollupDay(db as unknown as ScopedDb, {
+        branchId: 'branch_1',
+        businessDate: '2026-08-20',
+      });
+      expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ netSales: D('4') }),
+          update: expect.objectContaining({ netSales: D('4') }),
+        })
+      );
+      expect((await db.restaurantDailyClose.findMany())[0].netSales.toString()).toBe(
+        legacyNet ? '7' : '4'
+      );
+    }
+  );
 
   it('strictly rejects unknown handler payload keys before touching DB', async () => {
     await expect(

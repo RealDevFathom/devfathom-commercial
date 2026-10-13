@@ -130,3 +130,68 @@ describe('usePosRuntime boundaries', () => {
     expect(result.current.customerQuery).toBe('');
   });
 });
+
+describe('POS workspace after session extraction', () => {
+  it('keeps menu and queue hydration in POS, clears the workspace on lock and reloads on unlock', async () => {
+    const fetch = transport((path) => {
+      if (path.endsWith('/terminal/lock'))
+        return Promise.resolve(
+          json({ session: { id: 'session-1', state: 'LOCKED', activeStaffProfileId: null } })
+        );
+      if (path.endsWith('/terminal/unlock'))
+        return Promise.resolve(
+          json({ session: { id: 'session-1', state: 'UNLOCKED', activeStaffProfileId: 'staff-1' } })
+        );
+    });
+    vi.stubGlobal('fetch', fetch);
+    const { result } = renderHook(() => usePosRuntime({ demo: true }));
+    await waitFor(() => expect(result.current.draftMenu?.menu.name).toBe('Dinner'));
+    await waitFor(() => expect(result.current.pending).toBeNull());
+    expect(result.current.queue).not.toBeNull();
+    const oldRequest = result.current.workspace!.checkoutPanelProps.request;
+    act(() => result.current.workspace!.lockTerminal());
+    await waitFor(() => expect(result.current.runtime?.state).toBe('LOCKED'));
+    expect(result.current.draftMenu).toBeNull();
+    expect(result.current.layout).toBeNull();
+    expect(result.current.openOrders).toEqual([]);
+    await expect(oldRequest('/api/restaurant/bills/cut', { method: 'POST' })).rejects.toThrow(
+      'unlocked terminal'
+    );
+    await waitFor(() => expect(result.current.pending).toBeNull());
+    act(() =>
+      result.current.workspace!.changePin({
+        target: { value: '1234' },
+      } as ChangeEvent<HTMLInputElement>)
+    );
+    await act(() => result.current.workspace!.unlock({ preventDefault() {} } as never));
+    await waitFor(() => expect(result.current.draftMenu?.menu.name).toBe('Dinner'));
+    expect(result.current.runtime?.operator?.staffProfileId).toBe('staff-1');
+    expect(result.current.operatorPin).toBe('');
+    expect(
+      fetch.mock.calls.filter(([path]) => String(path).includes('/effective-menu'))
+    ).toHaveLength(2);
+  });
+  it('preserves demo expiry recovery and clears POS workspace after terminal access ends', async () => {
+    const fetch = transport((path) =>
+      path.endsWith('/bills/cut')
+        ? Promise.resolve(json({ error: 'Demo access has expired.' }, 401))
+        : undefined
+    );
+    vi.stubGlobal('fetch', fetch);
+    const { result } = renderHook(() => usePosRuntime({ demo: true }));
+    await waitFor(() => expect(result.current.draftMenu).not.toBeNull());
+    await waitFor(() => expect(result.current.pending).toBeNull());
+    await act(async () => {
+      await expect(
+        result.current.workspace!.checkoutPanelProps.request('/api/restaurant/bills/cut', {
+          method: 'POST',
+        })
+      ).rejects.toThrow('Demo access');
+    });
+    expect(result.current.runtime).toBeNull();
+    expect(result.current.draftMenu).toBeNull();
+    expect(result.current.workspace).toBeNull();
+    expect(result.current.enrollmentState).toBe('missing');
+    expect(result.current.notice?.message).toBe('Demo access expired. Reopen the restaurant demo.');
+  });
+});

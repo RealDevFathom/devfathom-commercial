@@ -337,11 +337,27 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
         heading="Reports"
         description="Bounded Restaurant operational and financial ledgers. Advanced Insights remains a separately licensed workspace."
         actions={
-          hasModule(ctx.entitlements, 'restaurant-insights') ? (
-            <Link className={buttonVariants({ variant: 'secondary' })} href="/restaurant/insights">
-              Open Advanced Insights
-            </Link>
-          ) : undefined
+          <>
+            {canFinancial &&
+            posEnabled &&
+            hasModule(ctx.entitlements, 'restaurant-core') &&
+            branch !== 'all' ? (
+              <Link
+                className={buttonVariants({ variant: 'secondary' })}
+                href={`/restaurant/growth?${new URLSearchParams({ branch })}`}
+              >
+                Review growth
+              </Link>
+            ) : null}
+            {hasModule(ctx.entitlements, 'restaurant-insights') ? (
+              <Link
+                className={buttonVariants({ variant: 'secondary' })}
+                href="/restaurant/insights"
+              >
+                Open Advanced Insights
+              </Link>
+            ) : null}
+          </>
         }
       />
 

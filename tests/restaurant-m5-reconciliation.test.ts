@@ -440,6 +440,7 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
           taxTotal: true,
           serviceChargeTotal: true,
           compTotal: true,
+          discountTotal: true,
           grandTotal: true,
         },
       }),
@@ -522,6 +523,7 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
     const expected = {
       grossSales: sum(settledBills.map((bill) => bill.subtotal)),
       compTotal: sum(settledBills.map((bill) => bill.compTotal)),
+      discountTotal: sum(settledBills.map((bill) => bill.discountTotal)),
       taxTotal: sum(settledBills.map((bill) => bill.taxTotal)),
       serviceChargeTotal: sum(settledBills.map((bill) => bill.serviceChargeTotal)),
       tipTotal: sum(raw.tenders.map((tenderRow) => tenderRow.tipAmount)),
@@ -530,7 +532,10 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
       cashExpected: movementFold,
       cashCounted: sum(raw.drawers.map((drawer) => D(drawer.countedCash ?? '0'))),
     };
-    const netSales = expected.grossSales.minus(expected.compTotal);
+    const netSales = expected.grossSales
+      .minus(expected.compTotal)
+      .minus(expected.discountTotal)
+      .minus(expected.refundTotal);
     const cashVariance = expected.cashCounted.minus(expected.cashExpected);
     expect(raw.close).not.toBeNull();
     eqMoney(raw.close!.grossSales, expected.grossSales);
@@ -540,6 +545,7 @@ describeIfDatabase('WHA-62 M5 reconciliation headline battery (real REST + DB)',
     eqMoney(raw.close!.tipTotal, expected.tipTotal);
     eqMoney(raw.close!.compTotal, expected.compTotal);
     eqMoney(raw.close!.discountTotal, '0');
+    eqMoney(raw.close!.discountTotal, expected.discountTotal);
     eqMoney(raw.close!.refundTotal, expected.refundTotal);
     eqMoney(raw.close!.voidTotal, expected.voidTotal);
     eqMoney(raw.close!.cashExpected, expected.cashExpected);
