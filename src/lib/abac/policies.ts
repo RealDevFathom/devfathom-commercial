@@ -73,6 +73,27 @@ export const ALL_ACTIONS = [
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
+  // H1-01: hospitality capabilities use explicit organization-role grants.
+  // Property scope is enforced separately by the consuming procedures.
+  'hotel:reservations',
+  'hotel:front-desk',
+  'hotel:folio',
+  'hotel:folio-adjust',
+  'hotel:payments',
+  'hotel:refunds',
+  'hotel:rates',
+  'hotel:availability-override',
+  'hotel:housekeeping',
+  'hotel:night-audit',
+  'hotel:guest-identity',
+  'hotel:reports-financial',
+  'hotel:channels',
+  'hotel:property-admin',
+  'hotel:marketing',
+  'hotel:agents',
+  'hotel:banquets',
+  'hotel:maintenance',
+  'hotel:api-admin',
 ] as const;
 
 export type Action = (typeof ALL_ACTIONS)[number];
@@ -209,4 +230,26 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],
+
+  // H1-01: no static agency-role policy grants hospitality capabilities.
+  // Explicit capabilities and wildcards use the existing customDecision path.
+  'hotel:reservations': [],
+  'hotel:front-desk': [],
+  'hotel:folio': [],
+  'hotel:folio-adjust': [],
+  'hotel:payments': [],
+  'hotel:refunds': [],
+  'hotel:rates': [],
+  'hotel:availability-override': [],
+  'hotel:housekeeping': [],
+  'hotel:night-audit': [],
+  'hotel:guest-identity': [],
+  'hotel:reports-financial': [],
+  'hotel:channels': [],
+  'hotel:property-admin': [],
+  'hotel:marketing': [],
+  'hotel:agents': [],
+  'hotel:banquets': [],
+  'hotel:maintenance': [],
+  'hotel:api-admin': [],
 };

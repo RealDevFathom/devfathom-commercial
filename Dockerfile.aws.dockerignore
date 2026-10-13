@@ -386,6 +386,7 @@
 !src/app/terminal/page.tsx
 !src/components/app-providers.tsx
 !src/components/assistant/assistant-panel.tsx
+!src/components/assistant/assistant-suggestions.ts
 !src/components/assistant/markdown.tsx
 !src/components/brand/logo.tsx
 !src/components/camera/camera-evidence-viewer.tsx

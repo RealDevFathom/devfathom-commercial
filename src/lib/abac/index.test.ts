@@ -175,13 +175,76 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS).toHaveLength(41);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(41);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);
       await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
         false
       );
+    }
+  });
+});
+
+describe('hospitality capability namespace', () => {
+  // H1-01 capability contract only. Role templates and property scope are separate steps.
+  const actions = [
+    'hotel:reservations',
+    'hotel:front-desk',
+    'hotel:folio',
+    'hotel:folio-adjust',
+    'hotel:payments',
+    'hotel:refunds',
+    'hotel:rates',
+    'hotel:availability-override',
+    'hotel:housekeeping',
+    'hotel:night-audit',
+    'hotel:guest-identity',
+    'hotel:reports-financial',
+    'hotel:channels',
+    'hotel:property-admin',
+    'hotel:marketing',
+    'hotel:agents',
+    'hotel:banquets',
+    'hotel:maintenance',
+    'hotel:api-admin',
+  ] as const satisfies readonly Action[];
+
+  it('registers the nineteen hospitality actions without static role grants', () => {
+    expect(ALL_ACTIONS.filter((action) => action.startsWith('hotel:'))).toEqual(actions);
+    for (const action of actions) expect(POLICIES[action]).toEqual([]);
+  });
+  it.each(['EMPLOYEE', 'ADMIN'])('does not grant hospitality through the %s role alone', async (role) => {
+    const db = authorizationDb({});
+    for (const action of actions) {
+      await expect(can({ ...employee, role }, action, undefined, { db })).resolves.toBe(false);
+    }
+  });
+  it.each(actions)('allows an explicit organization-role grant for %s', async (action) => {
+    const db = authorizationDb({ rolePermissions: [{ capability: action, effect: 'ALLOW' }] });
+    await expect(can(employee, action, undefined, { db })).resolves.toBe(true);
+  });
+  it('does not widen folio access into folio adjustment', async () => {
+    const db = authorizationDb({ rolePermissions: [{ capability: 'hotel:folio', effect: 'ALLOW' }] });
+    await expect(can(employee, 'hotel:folio', undefined, { db })).resolves.toBe(true);
+    await expect(can(employee, 'hotel:folio-adjust', undefined, { db })).resolves.toBe(false);
+  });
+  it.each(['hotel:*', '*'])('allows explicit %s while preserving user-level deny precedence', async (capability) => {
+    const subject = { ...employee, role: 'ADMIN' };
+    const granted = authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] });
+    const denied = authorizationDb({
+      rolePermissions: [{ capability, effect: 'ALLOW' }],
+      overrides: [{ capability: 'hotel:*', effect: 'DENY' }],
+    });
+    for (const action of actions) {
+      await expect(can(subject, action, undefined, { db: granted })).resolves.toBe(true);
+      await expect(can(subject, action, undefined, { db: denied })).resolves.toBe(false);
+    }
+  });
+  it('fails closed when hospitality permission lookup is unavailable', async () => {
+    const db = authorizationDb({ throws: true });
+    for (const role of ['EMPLOYEE', 'ADMIN']) {
+      await expect(can({ ...employee, role }, 'hotel:folio-adjust', undefined, { db })).resolves.toBe(false);
     }
   });
 });
