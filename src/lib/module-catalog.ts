@@ -270,6 +270,7 @@ export function moduleForApiScope(scope: string): string | null {
  * catalog instead of repeating module strings in the sidebar.
  */
 export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
+  ['/hotel/settings', 'hotel-core'],
   // R-lane (WHA-210): the OCR menu-import review console. Listed before the
   // restaurant core catch-all because `moduleForPath` takes the first prefix match.
   ['/restaurant/menu-import', 'restaurant-menu'],

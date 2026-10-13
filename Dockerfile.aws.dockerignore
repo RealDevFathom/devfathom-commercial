@@ -1085,3 +1085,8 @@
 !src/lib/platform/hotel-property-maintenance.ts
 !src/server/hotel-property-scope.ts
 !src/server/routers/hotel-property.ts
+
+!src/app/(app)/hotel/settings/extras/page.tsx
+!src/app/(app)/hotel/settings/property/page.tsx
+!src/components/hotel/extras-catalog.tsx
+!src/components/hotel/property-settings-form.tsx
