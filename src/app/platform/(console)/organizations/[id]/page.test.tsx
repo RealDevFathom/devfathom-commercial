@@ -1,4 +1,4 @@
-import { render, screen, within } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor, within } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import OrganizationDetailPage from './page';
@@ -725,5 +725,37 @@ describe('vertical readiness parity', () => {
     expect(screen.getByText('Restaurant readiness')).toBeInTheDocument();
     expect(screen.queryByRole('region', { name: 'Agency readiness' })).toBeNull();
     expect(mocks.pharmacyReadiness).not.toHaveBeenCalled();
+  });
+});
+
+describe('destructive lifecycle reason', () => {
+  it('requires an operator-entered purge reason and preserves confirmation', async () => {
+    const fetchMock = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ data: {} }) });
+    vi.stubGlobal('fetch', fetchMock);
+    const confirm = vi.spyOn(window, 'confirm').mockReturnValue(false);
+    try {
+      await renderDetail({ org: organization({ status: 'TERMINATED' }) });
+      const form = screen.getByRole('button', { name: 'Schedule purge' }).closest('form')!;
+      const reason = within(form).getByRole('textbox', { name: 'Reason (required)' });
+      expect(reason).toHaveValue('');
+      fireEvent.submit(form);
+      expect(fetchMock).not.toHaveBeenCalled();
+      expect(confirm).not.toHaveBeenCalled();
+      fireEvent.change(reason, { target: { value: 'Retention reviewed and approved by the owner' } });
+      fireEvent.submit(form);
+      expect(confirm).toHaveBeenCalledWith('Schedule this organization for purge? This begins the retention countdown.');
+      expect(fetchMock).not.toHaveBeenCalled();
+      confirm.mockReturnValue(true);
+      fireEvent.submit(form);
+      await waitFor(() => expect(fetchMock).toHaveBeenCalledOnce());
+      expect(JSON.parse(fetchMock.mock.calls[0][1].body)).toEqual({
+        action: 'organization.transition',
+        payload: { id: 'org_1', status: 'PURGING', reason: 'Retention reviewed and approved by the owner' },
+      });
+      await waitFor(() => expect(within(form).getByRole('button')).not.toBeDisabled());
+    } finally {
+      confirm.mockRestore();
+      vi.unstubAllGlobals();
+    }
   });
 });

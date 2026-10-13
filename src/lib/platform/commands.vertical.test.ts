@@ -563,6 +563,7 @@ describe('organization.update vertical immutability + package compatibility', ()
     await run('organization.update', {
       id: 'org_1',
       vertical: 'RESTAURANT',
+      reason: 'Correct onboarding classification',
       packageId: 'pkg_r',
     });
 
@@ -581,7 +582,7 @@ describe('organization.update vertical immutability + package compatibility', ()
       deploymentMode: 'SHARED',
     });
 
-    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' }));
+    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT', reason: 'Correct onboarding classification' }));
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -635,7 +636,7 @@ describe('organization.update vertical immutability + package compatibility', ()
       status: 'ONBOARDING',
       deploymentMode: 'SHARED',
     });
-    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT' }));
+    const error = await caught(run('organization.update', { id: 'org_1', vertical: 'RESTAURANT', reason: 'Correct onboarding classification' }));
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -659,6 +660,7 @@ describe('organization.update vertical immutability + package compatibility', ()
       run('organization.update', {
         id: 'org_1',
         vertical: 'RESTAURANT',
+        reason: 'Correct onboarding classification',
         packageId: 'pkg_r',
       })
     );

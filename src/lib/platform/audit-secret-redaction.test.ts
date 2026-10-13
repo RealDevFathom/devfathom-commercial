@@ -154,6 +154,7 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
     const issued = (await run('organization.scim.token', {
       organizationId: ORGANIZATION,
       name: 'Provisioning',
+      reason: 'Verify persisted credential redaction',
     })) as { id: string; token: string; prefix: string };
 
     expect(issued.token).toMatch(/^scim_/);
@@ -176,6 +177,7 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
     const issued = (await run('organization.scim.token', {
       organizationId: ORGANIZATION,
       name: 'Reveal once',
+      reason: 'Verify persisted credential redaction',
     })) as { id: string; token: string };
 
     expect(issued.token).toMatch(/^scim_/);
@@ -186,7 +188,7 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
     );
     expect(Object.values(stored)).not.toContain(issued.token);
 
-    const revoked = (await run('organization.scim.revoke', { id: issued.id })) as Record<
+    const revoked = (await run('organization.scim.revoke', { id: issued.id, reason: 'Verify revocation remains redacted' })) as Record<
       string,
       unknown
     >;
@@ -278,7 +280,7 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
 
     // Failed after the credential was generated: the organization does not exist.
     await expect(
-      run('organization.scim.token', { organizationId: id('missing_org'), name: 'Orphan' })
+      run('organization.scim.token', { organizationId: id('missing_org'), name: 'Orphan', reason: 'Verify failed issuance is sanitized' })
     ).rejects.toThrow();
 
     const failures = await deps.withPlatformDb((db) =>
