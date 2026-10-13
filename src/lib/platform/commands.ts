@@ -42,6 +42,8 @@ import {
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
+import { defaultBookingEngineSlug } from '@/lib/hotel/property';
 import {
   ensureAdministratorStaffProfile,
   type AdministratorStaffProfileResult,
@@ -479,6 +481,24 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     return;
   }
 
+  // H1-01 / PROP-01 — hospitality runs through the same gate as pharmacy: the
+  // onboarding checklist is recomputed here from the property record and the
+  // organization's roles, never read off a stored claim, so activation cannot be
+  // reached by writing rows. "No go-live without tax profile, mode and business
+  // date" is the acceptance criterion this enforces.
+  if (organization.vertical === 'HOSPITALITY') {
+    const readiness = await evaluateHotelReadiness(db, organizationId);
+    if (!readiness.ready) {
+      throw new PlatformSecurityError(
+        `Activation preflight failed: hotel onboarding steps not done (${readiness.blocking
+          .map((item) => item.key)
+          .join(', ')}).`,
+        400
+      );
+    }
+    return;
+  }
+
   // §9 Step 7 — restaurant activation preflight (the implementable subset). The
   // agency path is complete above and returns here with byte-identical behavior;
   // the checks below only run for restaurant organizations. Operator credential
@@ -669,6 +689,7 @@ const organizationInput = z
     const branchFields: Record<OrganizationVertical, readonly (keyof typeof input)[]> = {
       AGENCY: [],
       RESTAURANT: ['firstBranchName', 'firstBranchAddress', 'businessDayCutoff'],
+      HOSPITALITY: ['firstBranchName', 'firstBranchAddress', 'firstBranchCity'],
       PHARMACY: [
         'firstBranchName',
         'firstBranchAddress',
@@ -932,10 +953,11 @@ async function bootstrapOrganization(
   // requires. Seeding it would change every agency onboarding to close a gap
   // agencies do not have; that is a product decision about a shipped vertical,
   // not part of this fix.
+  const hospitalityRoleIds = new Map<string, string>();
   if (input.vertical !== 'AGENCY') {
     for (const template of roleTemplatesForVertical(input.vertical)) {
       if (demo && template.key === 'owner') continue;
-      await db.organizationRole.create({
+      const role = await db.organizationRole.create({
         data: {
           organizationId: organization.id,
           key: template.key,
@@ -950,7 +972,38 @@ async function bootstrapOrganization(
           },
         },
       });
+      if (input.vertical === 'HOSPITALITY') hospitalityRoleIds.set(template.key, role.id);
     }
+  }
+  // The named administrator gets one explicit assignment to this new property.
+  // Preserve the existing role loop and Restaurant demo owner exclusion above.
+  if (input.vertical === 'HOSPITALITY') {
+    const ownerRoleId = hospitalityRoleIds.get('owner');
+    if (!ownerRoleId) {
+      throw new PlatformSecurityError(
+        'The hospitality Owner role was not provisioned for this organization.',
+        500
+      );
+    }
+    const property = await db.hotelProperty.create({
+      data: {
+        organizationId: organization.id,
+        name: input.firstBranchName!,
+        addressLine: input.firstBranchAddress!,
+        city: input.firstBranchCity!,
+        timezone: input.timezone,
+        bookingEngineSlug: defaultBookingEngineSlug(input.slug, input.firstBranchName!),
+      },
+    });
+    await db.hotelPropertyAssignment.create({
+      data: {
+        organizationId: organization.id,
+        branchId: property.branchId,
+        userId: admin.id,
+        organizationRoleId: ownerRoleId,
+        active: true,
+      },
+    });
   }
   // §2.3: onboarding no longer copies the package's enabled modules into
   // OrganizationModule. Those rows behave as permanent OVERRIDEs in the resolver

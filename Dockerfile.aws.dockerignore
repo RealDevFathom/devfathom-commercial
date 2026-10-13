@@ -1075,3 +1075,5 @@
 !src/app/(app)/restaurant/promotions/page.tsx
 !src/components/restaurant/promotions/promotions-console.tsx
 !src/server/routers/restaurant-promotions.ts
+!src/lib/hotel/onboarding-checklist.ts
+!src/lib/hotel/property.ts

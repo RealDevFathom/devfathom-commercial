@@ -2,7 +2,7 @@ import { isDeepStrictEqual } from 'node:util';
 
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { MODULE_CATALOG } from '../src/lib/module-catalog.js';
-import { PHARMACY_PACKAGES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
+import { HOSPITALITY_PACKAGES, PHARMACY_PACKAGES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
 
 /**
  * Agency modules, as `[key, name, category, routePrefix]`. The restaurant half
@@ -68,7 +68,7 @@ export async function syncPlatformCatalog(
   }
   const packages = restaurantPackage
     ? [restaurantPackage]
-    : [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES];
+    : [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES];
   const modules = restaurantPackage
     ? CATALOG_MODULES.filter(
         (module) => module.band === 'BASELINE' || restaurantPackage.moduleKeys.includes(module.key)

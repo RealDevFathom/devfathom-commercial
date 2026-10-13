@@ -23,6 +23,15 @@
       "generatedCount": 459,
       "migrationCount": 127,
       "executableCount": 1820
+    },
+    "application132-hospitality-foundation": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifest.json",
+      "sourceManifestSha256": "74525a751a637bdf2867f2c6d4830e5f8fa4be6c138f87f11de42cec0f4f6eb4",
+      "schemaSha256": "19959a5a39484545e1ded91308889c4180e5fbb9ddb7165920309cd61c52e38e",
+      "migrationCount": 132,
+      "generatedCount": 462,
+      "initializerAdmission": false
     }
   }
 }
