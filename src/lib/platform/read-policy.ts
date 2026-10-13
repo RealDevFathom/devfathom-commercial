@@ -29,6 +29,7 @@ export const PLATFORM_READ_ROUTES = [
     group: 'Operations',
   },
   { label: 'Jobs', href: '/platform/jobs', capability: 'jobs:read', group: 'Operations' },
+  { label: 'Health', href: '/platform/health', capability: 'jobs:read', group: 'Operations' },
   { label: 'Sales CRM', href: '/platform/crm', capability: 'crm:read', group: 'Revenue' },
   {
     label: 'Commercial',

@@ -1062,3 +1062,10 @@
 !src/lib/tenancy/demo-identity.ts
 !src/lib/tenancy/demo-isolation.ts
 !src/lib/demo/isolation.ts
+
+# Platform health source additions. Test fixtures remain excluded.
+!src/app/platform/(console)/health/error.tsx
+!src/app/platform/(console)/health/loading.tsx
+!src/app/platform/(console)/health/page.tsx
+!src/app/platform/(console)/health/snapshot.tsx
+!src/server/routers/platform-health.ts

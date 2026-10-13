@@ -21,6 +21,7 @@ const routes = [
   '/platform/organizations',
   '/platform/deployments',
   '/platform/jobs',
+    '/platform/health',
   '/platform/catalog',
 ] as const satisfies readonly PlatformReadHref[];
 
@@ -31,6 +32,7 @@ const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
     '/platform/organizations',
     '/platform/deployments',
     '/platform/jobs',
+    '/platform/health',
     '/platform/catalog',
   ],
   SALES: ['/platform/commercial', '/platform/crm', '/platform/organizations', '/platform/catalog'],
@@ -45,6 +47,7 @@ const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
     '/platform/organizations',
     '/platform/deployments',
     '/platform/jobs',
+    '/platform/health',
     '/platform/catalog',
   ],
   AUDITOR: [
@@ -54,15 +57,24 @@ const expected: Record<PlatformRole, readonly PlatformReadHref[]> = {
     '/platform/organizations',
     '/platform/deployments',
     '/platform/jobs',
+    '/platform/health',
     '/platform/catalog',
   ],
 };
 
 describe('platform read route policy', () => {
+  it('gates health before invoking its shared data reader', () => {
+    const source = readFileSync('src/app/platform/(console)/health/page.tsx', 'utf8');
+    const gate = "await requirePlatformRead('/platform/health')";
+    expect(source).toContain(gate);
+    expect(source.indexOf(gate)).toBeLessThan(source.indexOf('await readPlatformHealth('));
+  });
+
   it.each([
     ['/platform', '/platform'],
     ['/platform/organizations', '/platform/organizations'],
     ['/platform/organizations/org-1', '/platform/organizations'],
+    ['/platform/health', '/platform/health'],
     ['/platform/login', null],
     ['/platform/not-a-declared-route', null],
   ] as const)('maps %s to its declared read route', (pathname, href) => {
