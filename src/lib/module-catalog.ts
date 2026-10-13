@@ -156,6 +156,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   // "Menu and Costing" module (`restaurant-menu`) — the module whose licensed
   // purpose is exactly this surface (BUILD-ASSUMPTIONS).
   restaurantMenus: 'restaurant-menu',
+  restaurantPromotions: 'restaurant-menu',
   // M4-L3: floors, tables, server sections and kitchen stations gate on the POS
   // module (`restaurant-pos`) — the module whose licensed purpose is running the
   // service floor and kitchen (BUILD-ASSUMPTIONS).
@@ -303,6 +304,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/restaurant/growth', 'restaurant-core'],
   ['/restaurant/catalog', 'restaurant-menu'],
   ['/restaurant/menus', 'restaurant-menu'],
+  ['/restaurant/promotions', 'restaurant-menu'],
   // Core-owned back-office surfaces, then the `/restaurant` core catch-all —
   // the vertical catalog owns the `/restaurant` route prefix via
   // `restaurant-core` (mandatory for every restaurant organization).

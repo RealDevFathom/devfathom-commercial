@@ -1069,3 +1069,9 @@
 !src/app/platform/(console)/health/page.tsx
 !src/app/platform/(console)/health/snapshot.tsx
 !src/server/routers/platform-health.ts
+
+# Restaurant Offers production modules. Tests remain excluded.
+!src/app/(app)/restaurant/promotions/loading.tsx
+!src/app/(app)/restaurant/promotions/page.tsx
+!src/components/restaurant/promotions/promotions-console.tsx
+!src/server/routers/restaurant-promotions.ts

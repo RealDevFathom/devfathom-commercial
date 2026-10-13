@@ -1,6 +1,7 @@
 import { pharmacyCamerasRouter } from './pharmacy-cameras';
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
 import { router } from '../trpc';
+import { restaurantPromotionsRouter } from './restaurant-promotions';
 import { platformHealthRouter } from './platform-health';
 import { dashboardRouter } from './dashboard';
 import { projectsRouter } from './projects';
@@ -65,6 +66,7 @@ import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 export const appRouter = router({
+  restaurantPromotions: restaurantPromotionsRouter,
   platformHealth: platformHealthRouter,
   dashboard: dashboardRouter,
   projects: projectsRouter,
