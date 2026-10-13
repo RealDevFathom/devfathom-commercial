@@ -2,7 +2,7 @@
 
 Only `**` followed by literal file exceptions is accepted. Docker pattern escapes
 are decoded here; glob rules/directories are rejected, keeping membership exact.
-Excluded file contents are never opened. Run from the source root.
+Excluded file contents are never opened. --root selects the audited source root.
 """
 import argparse
 import hashlib
@@ -203,6 +203,7 @@ def import_errors(root, included):
 FROZEN_PRODUCTION_MANIFEST_SHA256 = 'e7ae5ef79fa373354c68be89681541b32cca6142523a3b2a5d299710673ae34e'
 INITIALIZER_SOURCE_PINS_SHA256 = '3b801fd6974fa2b774c39255e7bb8fb82f16034539830ddb3f081d1a183d1a16'
 FINAL_DATABASE_MANIFEST_SHA256 = 'd4c5a91ff1f51b6c2bc9151e6fff6aa32016d7454e2e487284d3bbdcef74ff50'
+SOURCE_PROFILES_SHA256 = '167d0036b9ad2a92b5da738f8ecb9308b804afb096a5e83851104b3f2b2ab58a'
 
 
 def validate_pinned_files(root, records, expected):
@@ -247,26 +248,96 @@ def validate_final_database_pins(expected, historical, final):
         raise ValueError('Expected exact approved 127 migration pins')
 
 
-def initializer_audit(root, manifest):
-    source = (root / 'production-source-manifest.json').read_bytes()
+def selected_root(root):
+    # Canonicalize only the caller-selected root, never substitute cwd or a sibling.
+    root = Path(root).resolve(strict=True)
+    if not root.is_dir():
+        raise ValueError('Selected root is not a directory')
+    return root
+
+
+def control_file(root, name):
+    """Reject traversal and symlink components before reading a control file."""
+    raw = Path(name)
+    if '..' in raw.parts or '\\' in str(raw):
+        raise ValueError('Unsafe control file path')
+    path = raw if raw.is_absolute() else root / raw
+    try:
+        rel = path.relative_to(root)
+    except ValueError:
+        raise ValueError('Control file must belong to selected root') from None
+    if category(rel.as_posix()) != 'not-required':
+        raise ValueError('Prohibited control file category')
+    if not rel.parts or any((root / Path(*rel.parts[:i])).is_symlink()
+                            for i in range(1, len(rel.parts) + 1)):
+        raise ValueError('Control file symlink or unsafe path')
+    if not path.is_file():
+        raise ValueError('Control file must be a regular file')
+    return path
+
+
+def initializer_profile(name):
+    # Policy belongs to this trusted tool, not the untrusted audited source tree.
+    tooling = Path(__file__).resolve().parents[1]
+    data = control_file(tooling, 'source-profiles.json').read_bytes()
+    if hashlib.sha256(data).hexdigest() != SOURCE_PROFILES_SHA256:
+        raise ValueError('Approved source profile registry mismatch')
+    registry = json.loads(data)
+    if registry['version'] != 1:
+        raise ValueError('Unsupported source profile registry version')
+    profile = registry['profiles'].get(name)
+    if not profile or profile['kind'] != 'initializer':
+        raise ValueError('Unknown or non-initializer source profile')
+    return profile
+
+
+def initializer_audit(root, manifest, profile_name=None):
+    root = selected_root(root)
+    profile = initializer_profile(profile_name) if profile_name is not None else None
+    # Validate every supplied/control path before reading any of their bytes.
+    controls = {name: control_file(root, name) for name in [
+        'production-source-manifest.json', 'initializer-source-pins.json',
+        'prisma/fresh-database-manifest.json', manifest,
+        *(['generated-client-manifest.json'] if profile else []),
+    ]}
+    source = controls['production-source-manifest.json'].read_bytes()
     if hashlib.sha256(source).hexdigest() != FROZEN_PRODUCTION_MANIFEST_SHA256:
         raise ValueError('Frozen production manifest mismatch')
     historical = [i for i in json.loads(source) if i['path'].startswith('prisma/migrations/')]
     if sum(i['path'].endswith('/migration.sql') for i in historical) != 125:
         raise ValueError('Expected all 125 historical migrations')
-    pins = (root / 'initializer-source-pins.json').read_bytes()
-    if hashlib.sha256(pins).hexdigest() != INITIALIZER_SOURCE_PINS_SHA256:
+    pins = controls['initializer-source-pins.json'].read_bytes()
+    pins_digest = profile['sourcePinsSha256'] if profile else INITIALIZER_SOURCE_PINS_SHA256
+    if hashlib.sha256(pins).hexdigest() != pins_digest:
         raise ValueError('Approved initializer source pins mismatch')
     expected = json.loads(pins)
-    final = (root / 'prisma/fresh-database-manifest.json').read_bytes()
+    final = controls['prisma/fresh-database-manifest.json'].read_bytes()
     if hashlib.sha256(final).hexdigest() != FINAL_DATABASE_MANIFEST_SHA256:
         raise ValueError('Approved final database manifest mismatch')
     validate_final_database_pins(expected, historical, json.loads(final))
-    result = validate_pinned_files(root, json.loads(manifest.read_text()), expected)
+    result = validate_pinned_files(root, json.loads(controls[manifest].read_text()), expected)
     if result['admitted']:
         result['errors'].extend(import_errors(root, result['included']))
+    if profile:
+        generated_data = controls['generated-client-manifest.json'].read_bytes()
+        if hashlib.sha256(generated_data).hexdigest() != profile['generatedManifestSha256']:
+            raise ValueError('Approved generated client manifest mismatch')
+        generated = json.loads(generated_data)
+        if (len(expected) != profile['sourceCount'] or len(generated) != 459
+                or profile['generatedCount'] != 459 or profile['migrationCount'] != 127
+                or json.loads(final)['schemaSha256'] != profile['schemaSha256']
+                or any(not item['path'].startswith('src/generated/prisma/') for item in generated)
+                or len({item['path'] for item in generated}) != 459):
+            raise ValueError('Initializer profile shape mismatch')
+        generated_result = validate_pinned_files(root, generated, generated)
+        result['errors'].extend(generated_result['errors'])
+        result['generatedCount'] = generated_result['includedCount']
+        result['profile'] = profile_name
+        result['executableManifestSha256'] = profile['executableManifestSha256']
+    result['root'] = str(root)
     result['admitted'] = not result['errors']
-    result['scope'] = 'initializer source bundle and literal closure only; no executable initializer, generated client, runtime adapter or DB acceptance'
+    result['scope'] = ('initializer source and pinned generated client only; full executable integrity and DB execution remain separate'
+                       if profile else 'initializer source bundle and literal closure only; no executable initializer, generated client, runtime adapter or DB acceptance')
     return result
 
 
@@ -285,16 +356,20 @@ def select_composition(result, composition):
 
 if __name__ == '__main__':
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument('--root', type=Path, default=Path.cwd())
+    parser.add_argument('--initializer-profile', help='Trusted initializer identity from source-profiles.json')
     parser.add_argument('--context', choices=['web', 'initializer'], default='web')
     parser.add_argument('--composition', choices=['existing-demo', 'production-safe'], default='existing-demo')
     parser.add_argument('--initializer-manifest', type=Path, default=Path('initializer-context-manifest.json'))
     args = parser.parse_args()
-    root = Path.cwd()
     try:
+        root = selected_root(args.root)
+        if args.initializer_profile is not None and args.context != 'initializer':
+            raise ValueError('Initializer profile requires initializer context')
         if args.context == 'initializer':
-            result = initializer_audit(root, args.initializer_manifest)
+            result = initializer_audit(root, args.initializer_manifest, args.initializer_profile)
         else:
-            result = select_composition(audit(root, load_allowlist((root / 'Dockerfile.aws.dockerignore').read_text())), args.composition)
+            result = select_composition(audit(root, load_allowlist(control_file(root, 'Dockerfile.aws.dockerignore').read_text())), args.composition)
     except (OSError, ValueError, KeyError, TypeError) as error:
         result = {'admitted': False, 'errors': [{'reason': 'invalid-context-input', 'detail': str(error)}]}
     print(json.dumps(result, indent=2))

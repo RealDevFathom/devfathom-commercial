@@ -1,0 +1,28 @@
+{
+  "version": 1,
+  "scope": "Offline source/integrity identities only; no execution, database, image or deployment admission.",
+  "profiles": {
+    "initializer-final127": {
+      "kind": "initializer",
+      "sourcePinsSha256": "b0dd77fcf65f72d8a5662c3f30ce36a7e90b8b2521ea54e84176487cbac8e3b1",
+      "generatedManifestSha256": "7089c0b75ac41abff8a778322e3983ee5368039adb30cbd84c9703207d6091fc",
+      "executableManifestSha256": "90aa8ac8883e7fabcd059fe7a36c7b9b0dc203a5ccc2630be240d9a1347962af",
+      "schemaSha256": "b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827",
+      "sourceCount": 159,
+      "generatedCount": 459,
+      "migrationCount": 127,
+      "executableCount": 1820
+    },
+    "initializer-final127-catalog": {
+      "kind": "initializer",
+      "sourcePinsSha256": "3b801fd6974fa2b774c39255e7bb8fb82f16034539830ddb3f081d1a183d1a16",
+      "generatedManifestSha256": "7089c0b75ac41abff8a778322e3983ee5368039adb30cbd84c9703207d6091fc",
+      "executableManifestSha256": "41cc4c27ca56c356635327145e98c019558e9a87effab80d2bf8efa2b1aaea1c",
+      "schemaSha256": "b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827",
+      "sourceCount": 159,
+      "generatedCount": 459,
+      "migrationCount": 127,
+      "executableCount": 1820
+    }
+  }
+}

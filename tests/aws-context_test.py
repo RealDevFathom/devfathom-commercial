@@ -6,11 +6,18 @@ from pathlib import Path
 import tempfile
 import unittest
 import json
+import os
 from unittest.mock import patch
 
 spec = importlib.util.spec_from_file_location('aws_context', Path(__file__).parents[1] / 'scripts/aws-context.py')
 context = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(context)
+
+
+def initializer_root():
+    # A composed application may evolve separately from the fixed127 initializer.
+    # An explicitly selected missing root must fail rather than fall back.
+    return context.selected_root(os.environ.get('INITIALIZER_SOURCE_ROOT', Path(__file__).parents[1]))
 
 
 class ContextTests(unittest.TestCase):
@@ -181,8 +188,8 @@ const load = () => import('./absent-runtime');
 
     def test_initializer_rejects_manifest_omission_and_pin_tampering(self):
         import json
-        root = Path(__file__).parents[1]
-        with tempfile.TemporaryDirectory() as tmp:
+        root = initializer_root()
+        with tempfile.TemporaryDirectory(dir=root) as tmp:
             manifest = Path(tmp) / 'manifest.json'
             records = json.loads((root / 'initializer-context-manifest.json').read_text())
             manifest.write_text(json.dumps(records[:-1]))
@@ -229,7 +236,7 @@ const load = () => import('./absent-runtime');
                 self.assertFalse(context.validate_pinned_files(root, [record], [record])['admitted'])
 
     def test_final_database_pins_reject_historical_and_final_set_tampering(self):
-        root = Path(__file__).parents[1]
+        root = initializer_root()
         expected = json.loads((root / 'initializer-source-pins.json').read_text())
         historical = [r for r in json.loads((root / 'production-source-manifest.json').read_text())
                       if r['path'].startswith('prisma/migrations/')]
@@ -248,11 +255,11 @@ const load = () => import('./absent-runtime');
                 context.validate_final_database_pins(changed, historical, final)
 
     def test_current_initializer_manifest_and_font_notices(self):
-        root = Path(__file__).parents[1]
+        root = initializer_root()
         result = context.initializer_audit(root, root / 'initializer-context-manifest.json')
         self.assertTrue(result['admitted'], result['errors'])
         self.assertEqual(sum(i['path'].endswith('/migration.sql') for i in result['included']), 127)
-        entries = context.load_allowlist((root / 'Dockerfile.aws.dockerignore').read_text())
+        entries = context.load_allowlist((Path(__file__).parents[1] / 'Dockerfile.aws.dockerignore').read_text())
         self.assertEqual(sum(p.endswith('.woff2') for p in entries), 17)
         self.assertEqual(sum(p.startswith('public/licenses/') and p.endswith('-OFL.txt') for p in entries), 2)
 
