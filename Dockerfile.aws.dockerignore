@@ -872,6 +872,7 @@
 !src/lib/restaurant/menu-import-uploads.ts
 !src/lib/restaurant/menu-import.ts
 !src/lib/restaurant/menus.ts
+!src/lib/restaurant/money-arithmetic.ts
 !src/lib/restaurant/money.ts
 !src/lib/restaurant/notification-fanout.ts
 !src/lib/restaurant/notification-webhook.ts

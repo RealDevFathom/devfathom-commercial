@@ -304,6 +304,43 @@ describe('physical count workflow', () => {
     ).toBeDefined();
     expect(within(previousDetail).getByRole('cell', { name: '30.75' })).toBeDefined();
   });
+  it('awaits consecutive add-line writes and redirects each success to a fresh safe URL', async () => {
+    const { page, caller } = await pageWithCount('DRAFT');
+    const pending: Array<() => void> = [];
+    caller.addStockCountLine.mockImplementation(
+      () =>
+        new Promise<{ id: string }>((resolve) => pending.push(() => resolve({ id: 'line-secret' })))
+    );
+    const addLine = formAction(page, 'Add count line');
+    const line = new FormData();
+    line.set('stockCountId', 'count-1');
+    line.set('stockItemId', 'item-1');
+    line.set('countedQuantity', '12.5');
+
+    const first = addLine(line);
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    expect(mocks.redirect).not.toHaveBeenCalled();
+    pending.shift()?.();
+    await first;
+    const second = addLine(line);
+    await vi.waitFor(() => expect(pending).toHaveLength(1));
+    expect(mocks.redirect).toHaveBeenCalledTimes(1);
+    pending.shift()?.();
+    await second;
+
+    const targets = mocks.redirect.mock.calls.map(([target]) => String(target));
+    expect(targets).toHaveLength(2);
+    expect(targets[0]).not.toBe(targets[1]);
+    for (const target of targets) {
+      const destination = new URL(target, 'https://devfathom.test');
+      expect(destination.pathname).toBe('/restaurant/inventory');
+      expect(destination.searchParams.get('selected')).toBe('count-1');
+      expect(destination.searchParams.get('fresh')).toBeTruthy();
+      for (const rawId of ['line-secret', 'item-1', 'loc-1', 'org-1', 'user-1']) {
+        expect(target).not.toContain(rawId);
+      }
+    }
+  });
   it('redirects an add-line write failure to visible error feedback without claiming freshness', async () => {
     const { page, caller } = await pageWithCount('DRAFT');
     caller.addStockCountLine.mockRejectedValueOnce(new Error('Write failed.'));
