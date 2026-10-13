@@ -6,6 +6,7 @@ import { demoOrganizationId, getDemoSeatCount, isDemoEnabled } from '@/lib/demo/
 import { resetDemoSeatInTransaction } from '@/lib/demo/reset';
 import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
 import {
+  DEMO_RESET_JOB_TYPE,
   drainDueJobs,
   enqueue,
   recoverStaleJobs,
@@ -15,7 +16,7 @@ import {
 } from '@/lib/restaurant/scheduler';
 import { withPlatformDb, withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 
-export const DEMO_RESET_JOB_TYPE = 'demo-reset';
+export { DEMO_RESET_JOB_TYPE } from '@/lib/restaurant/scheduler';
 /** One reset may rebuild 90 days of demo data in the same tenant transaction. */
 export const DEMO_RESET_TRANSACTION_TIMEOUT_MS = 30 * 60_000;
 /** Outlive the transaction timeout so another cron cannot recover active work. */

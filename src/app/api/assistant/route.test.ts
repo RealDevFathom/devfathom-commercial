@@ -12,7 +12,10 @@ const mocks = vi.hoisted(() => ({
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: mocks.actor }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: mocks.db }));
 vi.mock('@/lib/entitlements', () => ({ resolveOrganizationEntitlements: mocks.entitlements }));
-vi.mock('@/lib/ai/provider', () => ({ createAIModel: mocks.model }));
+vi.mock('@/lib/ai/provider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/ai/provider')>()),
+  createAIModel: mocks.model,
+}));
 vi.mock('@/lib/ai/tools', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/lib/ai/tools')>();
   mocks.tools.mockImplementation(actual.buildAssistantTools);
@@ -55,6 +58,7 @@ function approval(toolName: string) {
 }
 
 beforeEach(() => {
+  vi.stubEnv('AI_PROVIDER', 'google');
   vi.clearAllMocks();
   vi.spyOn(console, 'error').mockImplementation(() => {});
   mocks.actor.mockResolvedValue(actor());
@@ -67,7 +71,10 @@ beforeEach(() => {
   });
 });
 
-afterEach(() => vi.restoreAllMocks());
+afterEach(() => {
+  vi.unstubAllEnvs();
+  vi.restoreAllMocks();
+});
 
 describe('assistant API scope', () => {
   it('ignores forged client organization, role, vertical, modules and branch', async () => {
@@ -363,4 +370,28 @@ describe('company AskFathom chat gate', () => {
     expect(mocks.model).toHaveBeenCalledOnce();
     expect(mocks.stream).toHaveBeenCalledOnce();
   });
+});
+
+describe('global availability', () => {
+  it.each([undefined, '', '  ', 'disabled', 'unknown'])(
+    'blocks %s and approval continuation',
+    async (provider) => {
+      vi.stubEnv('AI_PROVIDER', provider);
+      for (const messages of [[user], [user, approval('requestLeave')]]) {
+        const response = await POST(request({ messages }));
+        expect(response.status).toBe(503);
+        expect(await response.json()).toEqual({
+          error: 'Ask Fathom is currently unavailable. No cached answer was used.',
+        });
+      }
+      expect(mocks.entitlements).not.toHaveBeenCalled();
+      expect(mocks.tools).not.toHaveBeenCalled();
+      expect(mocks.model).not.toHaveBeenCalled();
+      expect(mocks.stream).not.toHaveBeenCalled();
+      mocks.actor.mockResolvedValueOnce(null);
+      expect((await POST(request({ messages: [user] }))).status).toBe(401);
+      mocks.findOrganization.mockResolvedValueOnce({ id: 'server-org', askFathomEnabled: false });
+      expect((await POST(request({ messages: [user] }))).status).toBe(403);
+    }
+  );
 });

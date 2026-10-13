@@ -1,7 +1,11 @@
 import { NoObjectGeneratedError, JSONParseError, TypeValidationError } from 'ai';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ config: vi.fn(), model: vi.fn(), generate: vi.fn() }));
-vi.mock('./provider', () => ({ readAIConfig: mocks.config, createAIModel: mocks.model }));
+vi.mock('./provider', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./provider')>()),
+  readAIConfig: mocks.config,
+  createAIModel: mocks.model,
+}));
 vi.mock('ai', async () => ({
   ...(await vi.importActual<typeof import('ai')>('ai')),
   generateText: mocks.generate,
@@ -43,12 +47,14 @@ const output = {
   ],
 };
 beforeEach(() => {
+  vi.stubEnv('AI_PROVIDER', 'google');
   vi.resetAllMocks();
   mocks.config.mockReturnValue({ provider: 'google', model: 'test-model' });
   mocks.model.mockReturnValue({ provider: 'google', modelId: 'test-model', model: {} });
   mocks.generate.mockResolvedValue({ finishReason: 'stop', output });
 });
 afterEach(() => {
+  vi.unstubAllEnvs();
   vi.useRealTimers();
   vi.restoreAllMocks();
 });
@@ -455,4 +461,25 @@ it('does not repair missing inventory evidence', async () => {
     })
   ).toMatchObject({ status: 'INVALID', failureCode: 'OUTPUT', output: null });
   expect(mocks.generate).toHaveBeenCalledTimes(1);
+});
+
+describe('global gate before injected model', () => {
+  it.each([undefined, '', '  ', 'disabled', 'typo'])(
+    'blocks %s including sparse input',
+    async (provider) => {
+      vi.stubEnv('AI_PROVIDER', provider);
+      for (const input of [facts, { ...facts, facts: [] }]) {
+        expect(await generateGrowthRecommendations(input)).toMatchObject({
+          status: 'UNAVAILABLE',
+          failureCode: 'CONFIGURATION',
+          provider: null,
+          model: null,
+          output: null,
+        });
+      }
+      expect(mocks.config).not.toHaveBeenCalled();
+      expect(mocks.model).not.toHaveBeenCalled();
+      expect(mocks.generate).not.toHaveBeenCalled();
+    }
+  );
 });

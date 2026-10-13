@@ -23,7 +23,7 @@ function numericLimits(value: Prisma.JsonValue | null | undefined): Record<strin
  */
 export async function resolveOrganizationEntitlements(
   organizationId: string,
-  db: ScopedDb,
+  db: Pick<ScopedDb, 'organization' | 'organizationModule' | 'organizationLimit' | 'user'>,
   now = new Date()
 ): Promise<EntitlementView> {
   const organizationPromise = db.organization.findUnique({

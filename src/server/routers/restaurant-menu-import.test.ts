@@ -4,7 +4,7 @@
  * against a stubbed domain layer; ABAC, entitlements and audit are mocked, as in
  * the sibling restaurant router tests.
  */
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => true),
@@ -42,6 +42,7 @@ vi.mock('@/lib/restaurant/menu-import', async () => {
   );
   return {
     MenuImportError: actual.MenuImportError,
+    getMenuImportAvailability: actual.getMenuImportAvailability,
     createMenuImport: mocks.createMenuImport,
     reviewMenuImportLine: mocks.reviewMenuImportLine,
     commitMenuImport: mocks.commitMenuImport,
@@ -91,9 +92,12 @@ function caller(overrides: { organizationId?: string | null } = {}) {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('MENU_IMPORT_ADAPTER', 'disabled');
   mocks.can.mockResolvedValue(true);
   mocks.listMenuImports.mockResolvedValue([]);
 });
+
+afterEach(() => vi.unstubAllEnvs());
 
 describe('gating', () => {
   it('registers menu:import as a real capability gated on the menu module', () => {
@@ -126,6 +130,9 @@ describe('gating', () => {
 
   it('publishes the upload limits a client should pre-check against', async () => {
     await expect(caller().uploadLimits()).resolves.toEqual({
+      available: false,
+      explanation:
+        'Menu extraction is unavailable. You can still edit menus manually and review existing imports.',
       maxBytes: MAX_UPLOAD_BYTES,
       allowedMimeTypes: ['image/png', 'image/jpeg', 'image/webp', 'application/pdf'],
     });
@@ -291,5 +298,24 @@ describe('audit evidence is ids only', () => {
     });
     await caller().commit({ importId: 'imp_1' });
     expect(mocks.annotateAudit.mock.calls[0]![1].description).toMatch(/nothing was created/);
+  });
+});
+
+describe('safe unavailable mapping', () => {
+  it('maps extraction and storage failures to safe 503', async () => {
+    const { MenuExtractionError } = await import('@/lib/restaurant/menu-extraction');
+    const { StorageUnavailableError } = await import('@/lib/storage');
+    for (const error of [
+      new MenuExtractionError('fake internal detail', 'ADAPTER_UNAVAILABLE'),
+      new StorageUnavailableError('disabled'),
+    ]) {
+      mocks.createMenuImport.mockRejectedValueOnce(error);
+      await expect(
+        caller().upload({ fileName: 'menu.png', content: PNG_BASE64 })
+      ).rejects.toMatchObject({
+        code: 'SERVICE_UNAVAILABLE',
+        message: 'Menu uploads are unavailable.',
+      });
+    }
   });
 });

@@ -19,10 +19,14 @@
  * instead of the shortfall, so the shortfall signal is absent and closes. There
  * is no second closing rule that could disagree with the raising rule.
  */
-import { Prisma } from '@/generated/prisma/client';
+import { createHash, randomUUID } from 'node:crypto';
+
+import { Prisma, type PharmacyStockSignalAction } from '@/generated/prisma/client';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import type { LedgerScope } from './stock-ledger';
+import { packConversions } from './pack-conversion';
 import { loadTemperatureZoneStatuses } from './temperature-log';
 import {
   DEFAULT_SIGNAL_POLICY,
@@ -545,7 +549,17 @@ export async function dismissSignal(
   return updated;
 }
 
-export type DraftActionInput =
+export class PharmacyDraftIntentError extends Error {
+  constructor(
+    readonly code: 'FORBIDDEN' | 'CONFLICT' | 'BAD_REQUEST',
+    message: string
+  ) {
+    super(message);
+    this.name = 'PharmacyDraftIntentError';
+  }
+}
+
+export type DraftActionInput = { idempotencyKey?: string } & (
   | {
       kind: 'DRAFT_REQUISITION';
       signalId: string;
@@ -580,7 +594,8 @@ export type DraftActionInput =
         returnWindowEndsAt: Date;
         expectedCreditMinor: number;
       }>;
-    };
+    }
+);
 
 /**
  * §8A invariant 29 — the one-click action. Creates exactly one DRAFT document
@@ -592,11 +607,357 @@ export type DraftActionInput =
  * reservation (a DRAFT return takes none — the INV-09 claim is taken at
  * submission, by a human, in `submitPurchaseReturn`).
  */
-export async function createDraftAction(db: ScopedDb, scope: LedgerScope, input: DraftActionInput) {
-  const signal = await loadSignal(db, scope, input.signalId);
-  if (signal.status === 'DISMISSED' || signal.status === 'CLOSED') {
+type DraftIntentAction = PharmacyStockSignalAction & {
+  idempotencyKey: string;
+  payloadHash: string;
+};
+
+/** Explicit fields keep transport metadata and object insertion order out of identity. */
+function normalizeDraftInput(input: DraftActionInput): DraftActionInput {
+  if (input.kind === 'DRAFT_REQUISITION') {
+    return {
+      kind: input.kind,
+      signalId: input.signalId,
+      reference: input.reference.trim(),
+      medicineId: input.medicineId,
+      packLevelId: input.packLevelId,
+      canonicalUnitsPerPack: input.canonicalUnitsPerPack,
+      quantityPacks: input.quantityPacks,
+      neededBy: input.neededBy,
+    };
+  }
+  if (input.kind === 'DRAFT_TRANSFER') {
+    return {
+      kind: input.kind,
+      signalId: input.signalId,
+      fromBranchId: input.fromBranchId.trim(),
+      lines: input.lines.map((line) => ({
+        sourceLotId: line.sourceLotId,
+        sourceStockLocationId: line.sourceStockLocationId,
+        destinationStockLocationId: line.destinationStockLocationId,
+        quantityUnits: line.quantityUnits,
+      })),
+    };
+  }
+  return {
+    kind: input.kind,
+    signalId: input.signalId,
+    reference: input.reference.trim(),
+    supplierId: input.supplierId,
+    // Line order is semantic: it determines the saved claim line numbers.
+    lines: input.lines.map((line) => ({
+      inventoryLotId: line.inventoryLotId,
+      stockLocationId: line.stockLocationId,
+      quantityUnits: line.quantityUnits,
+      reason: line.reason.trim(),
+      returnWindowEndsAt: line.returnWindowEndsAt,
+      expectedCreditMinor: line.expectedCreditMinor,
+    })),
+  };
+}
+
+async function authorizeDraftIntent(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: DraftActionInput,
+  at: Date
+) {
+  const [binding] = await db.$queryRaw<Array<{ organizationId: string; branchId: string | null }>>(
+    Prisma.sql`SELECT current_setting('app.current_organization_id', true) AS "organizationId",
+      NULLIF(current_setting('app.current_branch_id', true), '') AS "branchId"`
+  );
+  if (
+    binding?.organizationId !== scope.organizationId ||
+    (binding.branchId !== null &&
+      (binding.branchId !== scope.branchId ||
+        (input.kind === 'DRAFT_TRANSFER' && binding.branchId !== input.fromBranchId)))
+  )
+    throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft scope is not authorized.');
+
+  const user = await db.user.findFirst({
+    where: { id: scope.actorId, organizationId: scope.organizationId },
+    select: {
+      status: true,
+      organization: { select: { status: true, vertical: true } },
+      organizationRole: { select: { permissions: { select: { capability: true, effect: true } } } },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (
+    !user ||
+    !ACTIVE_STATUSES.has(user.status) ||
+    user.organization.vertical !== 'PHARMACY' ||
+    !['ONBOARDING', 'ACTIVE', 'GRACE'].includes(user.organization.status)
+  )
+    throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft actor is not authorized.');
+
+  // These are the native PHARMACY_ROLE_TEMPLATES grants, not Restaurant actions.
+  // Preserve the established override-before-role, deny-before-allow precedence.
+  const capability =
+    input.kind === 'DRAFT_TRANSFER' ? 'pharmacy.inventory' : 'pharmacy.procurement';
+  const matches = (rule: { capability: string }) =>
+    [capability, 'pharmacy.*', '*'].includes(rule.capability);
+  const overrides = user.permissionOverrides.filter(matches);
+  const rules = overrides.length
+    ? overrides
+    : (user.organizationRole?.permissions ?? []).filter(matches);
+  if (
+    rules.some((rule) => rule.effect === 'DENY') ||
+    !rules.some((rule) => rule.effect === 'ALLOW')
+  ) {
+    throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft capability is not authorized.');
+  }
+  const branches =
+    input.kind === 'DRAFT_TRANSFER' ? [scope.branchId, input.fromBranchId] : [scope.branchId];
+  for (const branchId of branches) {
+    const branch = await db.pharmacyBranch.findFirst({
+      where: { id: branchId, organizationId: scope.organizationId, active: true },
+    });
+    if (!branch) throw new PharmacyDraftIntentError('FORBIDDEN', 'Draft branch is not authorized.');
+  }
+}
+
+async function assertDraftEligible(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: DraftActionInput,
+  signal: Awaited<ReturnType<typeof loadSignal>>,
+  at: Date
+) {
+  if (
+    !['OPEN', 'ACKNOWLEDGED', 'SNOOZED'].includes(signal.status) ||
+    isStale(signal, at) ||
+    (signal.status === 'SNOOZED' && (!signal.snoozedUntil || signal.snoozedUntil > at))
+  )
+    throw new PharmacyStockSignalError('INVALID_STATE');
+  const kinds =
+    input.kind === 'DRAFT_CLAIM'
+      ? ['NEAR_EXPIRY', 'RETURN_WINDOW']
+      : ['LOW_STOCK', 'STOCKOUT', 'PROJECTED_STOCKOUT'];
+  const facts = await loadSignalFacts(db, scope, at);
+  if (
+    !kinds.includes(signal.kind) ||
+    !evaluateStockSignals(facts).some((current) => current.dedupKey === signal.dedupKey)
+  ) {
     throw new PharmacyStockSignalError('INVALID_STATE');
   }
+  const medicine = await db.medicine.findFirst({
+    where: { id: signal.medicineId, organizationId: scope.organizationId },
+  });
+  if (!medicine) throw new PharmacyStockSignalError('NOT_FOUND');
+  const positive = (value: number) =>
+    Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647;
+  if (input.kind === 'DRAFT_REQUISITION') {
+    if (input.medicineId !== signal.medicineId) throw new PharmacyStockSignalError('INVALID_STATE');
+    if (
+      !input.reference ||
+      !positive(input.quantityPacks * input.canonicalUnitsPerPack) ||
+      !positive(input.quantityPacks) ||
+      !positive(input.canonicalUnitsPerPack) ||
+      (input.neededBy && !Number.isFinite(input.neededBy.getTime()))
+    ) {
+      throw new PharmacyStockSignalError('INVALID_UNITS');
+    }
+    const pack = await db.packLevel.findFirst({
+      where: {
+        id: input.packLevelId,
+        organizationId: scope.organizationId,
+        presentation: { organizationId: scope.organizationId, medicineId: input.medicineId },
+      },
+    });
+    if (!pack) throw new PharmacyStockSignalError('NOT_FOUND');
+    const levels = await db.packLevel.findMany({
+      where: { organizationId: scope.organizationId, presentationId: pack.presentationId },
+    });
+    const conversion = packConversions(levels, at).find((row) => row.packLevelId === pack.id);
+    if (conversion?.canonicalUnitsPerPack !== input.canonicalUnitsPerPack) {
+      throw new PharmacyStockSignalError('INVALID_UNITS');
+    }
+    return;
+  }
+  if (!input.lines.length) throw new PharmacyStockSignalError('INVALID_UNITS');
+  if (input.kind === 'DRAFT_TRANSFER' && input.fromBranchId === scope.branchId) {
+    throw new PharmacyStockSignalError('INVALID_STATE');
+  }
+  if (input.kind === 'DRAFT_CLAIM') {
+    const supplier = await db.pharmacySupplier.findFirst({
+      where: { id: input.supplierId, organizationId: scope.organizationId, active: true },
+    });
+    if (!supplier || !input.reference) throw new PharmacyStockSignalError('NOT_FOUND');
+  }
+  const lotTotals = new Map<string, number>();
+  const locationTotals = new Map<string, number>();
+  for (const line of input.lines) {
+    const transfer = 'sourceLotId' in line;
+    const branchId = input.kind === 'DRAFT_TRANSFER' ? input.fromBranchId : scope.branchId;
+    const lotId = transfer ? line.sourceLotId : line.inventoryLotId;
+    const locationId = transfer ? line.sourceStockLocationId : line.stockLocationId;
+    const lot = await db.pharmacyInventoryLot.findFirst({
+      where: { id: lotId, organizationId: scope.organizationId, branchId },
+      include: { batch: true },
+    });
+    const location = await db.pharmacyStockLocation.findFirst({
+      where: { id: locationId, organizationId: scope.organizationId, branchId, active: true },
+    });
+    if (
+      !lot ||
+      !location ||
+      lot.batch.medicineId !== signal.medicineId ||
+      (!transfer &&
+        ((signal.inventoryLotId && signal.inventoryLotId !== lotId) ||
+          (signal.stockLocationId && signal.stockLocationId !== locationId)))
+    ) {
+      throw new PharmacyStockSignalError('NOT_FOUND');
+    }
+    if (!positive(line.quantityUnits)) throw new PharmacyStockSignalError('INVALID_UNITS');
+    const balance = await db.pharmacyStockBalance.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        branchId,
+        inventoryLotId: lotId,
+        stockLocationId: locationId,
+        disposition: 'AVAILABLE',
+      },
+    });
+    const reserved = await db.pharmacySupplierClaim.aggregate({
+      where: {
+        organizationId: scope.organizationId,
+        branchId,
+        inventoryLotId: lotId,
+        status: 'RESERVED',
+      },
+      _sum: { reservedUnits: true },
+    });
+    const stock = await db.pharmacyStockBalance.aggregate({
+      where: {
+        organizationId: scope.organizationId,
+        branchId,
+        inventoryLotId: lotId,
+        disposition: 'AVAILABLE',
+      },
+      _sum: { onHandUnits: true },
+    });
+    const lotUnits = (lotTotals.get(lotId) ?? 0) + line.quantityUnits;
+    const locationKey = JSON.stringify([lotId, locationId]);
+    const locationUnits = (locationTotals.get(locationKey) ?? 0) + line.quantityUnits;
+    lotTotals.set(lotId, lotUnits);
+    locationTotals.set(locationKey, locationUnits);
+    if (
+      !balance ||
+      locationUnits > balance.onHandUnits ||
+      lotUnits > (stock._sum.onHandUnits ?? 0) - (reserved._sum.reservedUnits ?? 0)
+    ) {
+      throw new PharmacyStockSignalError('INVALID_UNITS');
+    }
+    if (transfer) {
+      const destination = await db.pharmacyStockLocation.findFirst({
+        where: {
+          id: line.destinationStockLocationId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+        },
+      });
+      const recall = await db.pharmacyRecallNotice.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          status: 'OPEN',
+          OR: [{ batchId: lot.manufacturingBatchId }, { medicineId: signal.medicineId }],
+        },
+      });
+      if (
+        !destination ||
+        lot.batch.state !== 'ACTIVE' ||
+        lot.batch.expiresAt <= at ||
+        recall ||
+        (medicine.coldChain && (!location.coldChain || !destination.coldChain))
+      ) {
+        throw new PharmacyStockSignalError('INVALID_STATE');
+      }
+      if (medicine.coldChain) {
+        for (const [temperatureBranch, stockLocationId] of [
+          [branchId, locationId],
+          [scope.branchId, destination.id],
+        ]) {
+          const statuses = await loadTemperatureZoneStatuses(
+            db,
+            { organizationId: scope.organizationId, branchId: temperatureBranch },
+            at,
+            [stockLocationId]
+          );
+          if (statuses.some((status) => status.status === 'EXCURSION'))
+            throw new PharmacyStockSignalError('INVALID_STATE');
+        }
+      }
+    } else {
+      if (
+        !line.reason ||
+        !Number.isFinite(line.returnWindowEndsAt.getTime()) ||
+        line.returnWindowEndsAt <= at ||
+        !Number.isSafeInteger(line.expectedCreditMinor) ||
+        line.expectedCreditMinor < 0 ||
+        line.expectedCreditMinor > 2_147_483_647
+      ) {
+        throw new PharmacyStockSignalError('INVALID_STATE');
+      }
+      // The native receipt links establish supplier ownership; a typed name does not.
+      const receipt = await db.pharmacyGoodsReceiptLine.findFirst({
+        where: {
+          organizationId: scope.organizationId,
+          inventoryLotId: lotId,
+          goodsReceipt: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            supplierId: input.kind === 'DRAFT_CLAIM' ? input.supplierId : '',
+            status: 'POSTED',
+          },
+        },
+      });
+      if (!receipt) throw new PharmacyStockSignalError('NOT_FOUND');
+    }
+  }
+}
+
+/** Caller must supply the owning tenant transaction; errors must escape it. */
+export async function createDraftAction(
+  db: ScopedDb,
+  scope: LedgerScope,
+  supplied: DraftActionInput
+) {
+  const input = normalizeDraftInput(supplied);
+  // Requisitions/claims already have a stable native unique reference. Transfers
+  // do not, so an explicit operation key is mandatory for that native draft.
+  const idempotencyKey =
+    supplied.idempotencyKey?.trim() ?? (input.kind === 'DRAFT_TRANSFER' ? '' : input.reference);
+  if (!idempotencyKey || idempotencyKey.length > 200) {
+    throw new PharmacyDraftIntentError('BAD_REQUEST', 'A stable idempotencyKey is required.');
+  }
+  await db.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtextextended(
+    ${JSON.stringify(['pharmacy-draft', scope.organizationId, scope.branchId, idempotencyKey])}, 0))`);
+  await authorizeDraftIntent(db, scope, input, new Date());
+  // Match after acquiring the transaction lock. No P2002 catch inside a failed
+  // PostgreSQL transaction, no in-memory cache, and no second draft on replay.
+  const payloadHash = createHash('sha256').update(JSON.stringify(input)).digest('hex');
+  const [previous] = await db.$queryRaw<DraftIntentAction[]>(Prisma.sql`
+    SELECT * FROM "pharmacy_stock_signal_actions"
+    WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+      AND "idempotencyKey" = ${idempotencyKey}`);
+  if (previous) {
+    if (previous.payloadHash !== payloadHash) {
+      throw new PharmacyDraftIntentError('CONFLICT', 'IDEMPOTENCY_CONFLICT');
+    }
+    // Recheck visibility even when the original signal has since closed.
+    await loadSignal(db, scope, previous.signalId);
+    return previous;
+  }
+  await db.$queryRaw(Prisma.sql`SELECT "id" FROM "pharmacy_stock_signals"
+    WHERE "organizationId" = ${scope.organizationId} AND "branchId" = ${scope.branchId}
+      AND "id" = ${input.signalId} FOR UPDATE`);
+  const signal = await loadSignal(db, scope, input.signalId);
+  await assertDraftEligible(db, scope, input, signal, new Date());
 
   let requisitionId: string | null = null;
   let transferId: string | null = null;
@@ -686,18 +1047,15 @@ export async function createDraftAction(db: ScopedDb, scope: LedgerScope, input:
     detail = `DRAFT expiry claim ${purchaseReturn.reference}`;
   }
 
-  const action = await db.pharmacyStockSignalAction.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      signalId: signal.id,
-      kind: input.kind,
-      actorId: scope.actorId,
-      requisitionId,
-      transferId,
-      purchaseReturnId,
-    },
-  });
+  const [action] = await db.$queryRaw<DraftIntentAction[]>(Prisma.sql`
+    INSERT INTO "pharmacy_stock_signal_actions"
+      ("id", "organizationId", "branchId", "signalId", "kind", "actorId",
+       "requisitionId", "transferId", "purchaseReturnId", "idempotencyKey", "payloadHash", "createdAt")
+    VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${signal.id},
+      ${input.kind}::"PharmacyStockSignalActionKind", ${scope.actorId}, ${requisitionId},
+      ${transferId}, ${purchaseReturnId}, ${idempotencyKey}, ${payloadHash}, CURRENT_TIMESTAMP)
+    RETURNING *`);
+  if (!action) throw new Error('Draft action insert returned no reference.');
   await db.pharmacyStockSignalEvent.create({
     data: {
       organizationId: scope.organizationId,

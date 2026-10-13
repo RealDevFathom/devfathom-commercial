@@ -165,6 +165,15 @@ function toCandidate(row: CandidateRow): AllocationCandidate {
   };
 }
 
+/** Read-only ledger evidence, net of supplier claims and customer restock reservations. */
+export async function loadStockCandidatesForRead(
+  db: ScopedDb,
+  scope: Pick<LedgerScope, 'organizationId' | 'branchId'>,
+  medicineId: string
+): Promise<AllocationCandidate[]> {
+  return (await loadCandidates(db, scope, medicineId, false)).map(toCandidate);
+}
+
 export type ReceiveLotInput = {
   manufacturingBatchId: string;
   packLevelId: string;
@@ -422,7 +431,10 @@ export async function allocateForSale(
 ): Promise<AllocateForSaleResult> {
   const rows = await loadCandidates(db, scope, input.medicineId, true);
   const byBucket = new Map(
-    rows.map((row) => [`${row.inventoryLotId}:${row.stockLocationId}`, row])
+    // Plans debit AVAILABLE only; blocked dispositions remain candidates for refusal evidence.
+    rows
+      .filter((row) => row.disposition === 'AVAILABLE')
+      .map((row) => [`${row.inventoryLotId}:${row.stockLocationId}`, row])
   );
   const candidates = rows.map(toCandidate);
   const allocationScope = {
@@ -482,6 +494,89 @@ export async function allocateForSale(
     overrideId,
     discrepancyId: null,
     movementIds: await postSaleMovements(db, scope, input, plan.allocations, byBucket, overrideId),
+  };
+}
+
+/** Internal, already locked customer-order reservation plan; never public counter input. */
+export type ReservedSaleAllocation = {
+  allocations: readonly Allocation[];
+  expiresAt: Date;
+};
+
+export async function allocateReservedForSale(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AllocateForSaleInput,
+  packLevelId: string,
+  reservation: ReservedSaleAllocation
+): Promise<AllocateForSaleResult> {
+  // Aggregate identical buckets, never distinct locations of the same lot.
+  const buckets = new Map<string, Allocation>();
+  for (const part of reservation.allocations) {
+    if (!Number.isSafeInteger(part.units) || part.units <= 0) {
+      throw new PharmacyInventoryError('INVALID_QUANTITY');
+    }
+    const key = `${part.inventoryLotId}:${part.stockLocationId}`;
+    const prior = buckets.get(key);
+    buckets.set(key, { ...part, units: part.units + (prior?.units ?? 0) });
+  }
+  const allocations = [...buckets.values()];
+  if (
+    !allocations.length ||
+    input.override ||
+    input.emergency ||
+    allocations.reduce((sum, part) => sum + part.units, 0) !== input.requiredUnits
+  ) {
+    throw new PharmacyInventoryError('INSUFFICIENT_STOCK');
+  }
+  const query = Prisma.sql`
+    /* reserved_sale_buckets */
+    SELECT ${CANDIDATE_COLUMNS}
+    ${CANDIDATE_JOINS}
+    JOIN "pharmacy_medicines" medicine
+      ON medicine.id = batch."medicineId" AND medicine."organizationId" = batch."organizationId"
+    WHERE balance."organizationId" = ${scope.organizationId}
+      AND balance."branchId" = ${scope.branchId} AND lot."branchId" = ${scope.branchId}
+      AND batch."medicineId" = ${input.medicineId} AND lot."packLevelId" = ${packLevelId}
+      AND medicine.saleable AND medicine.otc AND NOT medicine.rx
+      AND NOT medicine.restricted AND NOT medicine.controlled
+      AND balance.disposition = 'AVAILABLE'
+      AND (${Prisma.join(
+        allocations.map(
+          (part) => Prisma.sql`
+        (balance."inventoryLotId" = ${part.inventoryLotId} AND balance."stockLocationId" = ${part.stockLocationId})
+      `
+        ),
+        ' OR '
+      )})
+    ORDER BY batch.id, lot.id, balance."stockLocationId"
+  `;
+  await db.$queryRaw(Prisma.sql`${query} FOR UPDATE OF batch, medicine, lot, balance`);
+  const rows = await db.$queryRaw<CandidateRow[]>(query);
+  const byBucket = new Map(
+    rows.map((row) => [`${row.inventoryLotId}:${row.stockLocationId}`, row])
+  );
+  const at = new Date();
+  if (reservation.expiresAt.getTime() <= at.getTime()) {
+    throw new PharmacyInventoryError('BLOCKED_STOCK');
+  }
+  for (const part of allocations) {
+    const row = byBucket.get(`${part.inventoryLotId}:${part.stockLocationId}`);
+    if (
+      !row ||
+      blockReasonFor(toCandidate(row), { ...scope, at }) ||
+      Number(row.availableUnits) < part.units
+    ) {
+      throw new PharmacyInventoryError('BLOCKED_STOCK');
+    }
+  }
+  return {
+    allocations,
+    recommendedLotId: null,
+    blocked: [],
+    overrideId: null,
+    discrepancyId: null,
+    movementIds: await postSaleMovements(db, scope, { ...input, at }, allocations, byBucket, null),
   };
 }
 
@@ -566,12 +661,21 @@ async function postSaleMovements(
     const row = byBucket.get(`${allocation.inventoryLotId}:${allocation.stockLocationId}`);
     if (!row) throw new PharmacyInventoryError('NOT_FOUND');
 
-    // Draw loose units first, so a sale never silently breaks a sealed pack.
-    // Breaking one is its own BREAK_PACK movement (INV-04); a sale that would
-    // need to break a pack is refused rather than reinterpreting the shelf.
-    const fromLoose = Math.min(row.looseUnits, allocation.units);
+    // Maximize loose depletion subject to the remainder being whole sealed packs.
+    // Partial dispensing still requires explicit BREAK_PACK; never open one here.
+    const remainder = allocation.units % row.unitsPerPack;
+    const maxLoose = Math.min(row.looseUnits, allocation.units);
+    if (maxLoose < remainder) throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
+    const fromLoose =
+      remainder + Math.floor((maxLoose - remainder) / row.unitsPerPack) * row.unitsPerPack;
     const fromSealed = allocation.units - fromLoose;
-    if (fromSealed % row.unitsPerPack !== 0) {
+    if (
+      !Number.isInteger(fromLoose) ||
+      fromLoose < 0 ||
+      !Number.isInteger(fromSealed / row.unitsPerPack) ||
+      fromSealed < 0 ||
+      fromSealed / row.unitsPerPack > row.sealedPacks
+    ) {
       throw new PharmacyInventoryError('INVALID_ARRANGEMENT');
     }
 

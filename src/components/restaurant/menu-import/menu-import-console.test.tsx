@@ -232,7 +232,12 @@ describe('Restaurant menu-import console', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.uploadLimits.mockReturnValue({
-      data: { maxBytes: 10 * 1024 * 1024, allowedMimeTypes: ['application/pdf', 'image/png'] },
+      data: {
+        available: true,
+        explanation: null,
+        maxBytes: 10 * 1024 * 1024,
+        allowedMimeTypes: ['application/pdf', 'image/png'],
+      },
       error: null,
       isLoading: false,
       refetch: vi.fn(),
@@ -489,9 +494,61 @@ describe('Restaurant menu-import console', () => {
   });
 
   describe('upload limits', () => {
+    it('disables unavailable uploads and drops while preserving review', () => {
+      mocks.uploadLimits.mockReturnValue({
+        data: {
+          available: false,
+          explanation:
+            'Menu extraction is unavailable. You can still edit menus manually and review existing imports.',
+          maxBytes: 1000,
+          allowedMimeTypes: ['image/png'],
+        },
+        error: null,
+      });
+      renderConsole();
+      expect(screen.getByLabelText('Menu file')).toBeDisabled();
+      expect(screen.getByText(/Menu extraction is unavailable/)).toBeInTheDocument();
+      const file = new File(['fake'], 'menu.png', { type: 'image/png' });
+      fireEvent.change(screen.getByLabelText('Menu file'), { target: { files: [file] } });
+      fireEvent.drop(screen.getByText('Drop a menu file here'), {
+        dataTransfer: { files: [file] },
+      });
+      expect(mocks.upload).not.toHaveBeenCalled();
+      fireEvent.click(screen.getByRole('button', { name: 'Accept Grilled Chicken' }));
+      expect(mocks.reviewLine).toHaveBeenCalledWith(
+        expect.objectContaining({ lineId: 'line_1', decision: 'ACCEPTED' })
+      );
+    });
+
+    it.each([
+      { data: undefined, error: null, isLoading: true },
+      {
+        data: {
+          available: true,
+          explanation: null,
+          maxBytes: 1000,
+          allowedMimeTypes: ['image/png'],
+        },
+        error: new Error('Unavailable'),
+      },
+    ])('disables uploads while availability is unknown or failed', (result) => {
+      mocks.uploadLimits.mockReturnValue(result);
+      renderConsole();
+      expect(screen.getByLabelText('Menu file')).toBeDisabled();
+      fireEvent.drop(screen.getByText('Drop a menu file here'), {
+        dataTransfer: { files: [new File(['fake'], 'menu.png', { type: 'image/png' })] },
+      });
+      expect(mocks.upload).not.toHaveBeenCalled();
+    });
+
     it('rejects an oversized file client-side without calling upload', () => {
       mocks.uploadLimits.mockReturnValue({
-        data: { maxBytes: 16, allowedMimeTypes: ['application/pdf'] },
+        data: {
+          available: true,
+          explanation: null,
+          maxBytes: 16,
+          allowedMimeTypes: ['application/pdf'],
+        },
         error: null,
         isLoading: false,
         refetch: vi.fn(),

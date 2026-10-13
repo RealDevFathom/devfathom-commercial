@@ -1,7 +1,7 @@
 import 'server-only';
 
 import { randomUUID } from 'node:crypto';
-import { putUpload } from '@/lib/storage';
+import { assertStorageAvailable, putUpload } from '@/lib/storage';
 import type { CameraGatewayAdapter } from './contract';
 
 /**
@@ -18,6 +18,7 @@ export async function storeCameraSnapshot(
     throw new Error('Invalid snapshot organization.');
   }
 
+  assertStorageAvailable();
   const bytes = await adapter.getSnapshot(input.cameraId);
   if (bytes.byteLength === 0) throw new Error('Camera snapshot unavailable.');
 

@@ -119,7 +119,7 @@ export default async function OrganizationDetailPage({
               organizationRoleId: true,
             },
           },
-          _count: { select: { users: true, supportSessions: true } },
+          _count: { select: { users: true } },
         },
       }),
       db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),

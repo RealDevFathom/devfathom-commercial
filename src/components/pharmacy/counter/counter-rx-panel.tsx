@@ -1,16 +1,504 @@
 'use client';
 
-import { forwardRef } from 'react';
+import { forwardRef, useEffect, useMemo, useRef, useState, type FormEvent } from 'react';
+import Link from 'next/link';
 
-import { Button } from '@/components/ui/button';
+import {
+  attachmentUrl,
+  fileError,
+  imageBase64,
+  isImageType,
+} from '@/components/pharmacy/dispensing/prescriptions-console';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterAlert } from '@/lib/pharmacy/counter-alerts';
 import type { CounterPatientPanel } from '@/lib/pharmacy/counter-prescriptions';
 import { formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
+import type { RxOcrPrefill } from '@/lib/pharmacy/rx-ocr';
+import { trpc } from '@/lib/trpc';
+
+const selectClass =
+  'h-11 w-full rounded-md border border-border-subtle bg-surface px-3 text-sm text-text-strong focus-visible:ring-3 focus-visible:ring-ring focus-visible:outline-none disabled:opacity-60';
+
+/**
+ * Photo captures store the prescription under `rx-<file id>` (see
+ * `pharmacyPrescriptions.capture`), so the private evidence URL follows from
+ * the id. Anything else (seeded or legacy references) has no thumbnail.
+ */
+function photoUrlFor(prescriptionId: string): string | null {
+  const url = `/api/pharmacy/prescription-files?id=${prescriptionId.replace(/^rx-/, '')}`;
+  return prescriptionId.startsWith('rx-') && attachmentUrl(url) ? url : null;
+}
+
+function PrescriptionThumbnail({ url, label }: { url: string; label: string }) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="inline-block shrink-0 rounded-md focus-visible:ring-3 focus-visible:ring-ring focus-visible:outline-none"
+    >
+      {/* Private, authenticated, no-store evidence: next/image would cache it. */}
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={url}
+        alt={label}
+        loading="lazy"
+        className="size-14 rounded-md border border-border-subtle object-cover"
+      />
+      <span className="sr-only"> (opens in a new tab)</span>
+    </a>
+  );
+}
+
+const isoDay = (offsetDays = 0) =>
+  new Date(Date.now() + offsetDays * 86_400_000).toISOString().slice(0, 10);
+
+/**
+ * PH-A3 — photograph a paper Rx at the counter without leaving the bill.
+ *
+ * The photo is stored privately first; optional OCR then PROPOSES drug and
+ * dose. A proposal is never applied by itself: each value is applied only when
+ * the operator chooses it, stays editable, and a used proposal must be
+ * explicitly confirmed against the photo before the prescription is saved.
+ * Saving never signs anything — pharmacist review still releases the line.
+ */
+function CounterRxPhotoCapture({
+  patientId,
+  patientName,
+  disabled,
+}: {
+  patientId: string;
+  patientName: string;
+  disabled: boolean;
+}) {
+  const utils = trpc.useUtils();
+  const [open, setOpen] = useState(false);
+  const workspace = trpc.pharmacyPrescriptions.workspace.useQuery(undefined, { enabled: open });
+  const uploadSource = trpc.pharmacyPrescriptions.uploadSource.useMutation();
+  const extractSource = trpc.pharmacyPrescriptions.extractSource.useMutation();
+  const capture = trpc.pharmacyPrescriptions.capture.useMutation();
+
+  const [file, setFile] = useState<File | null>(null);
+  const [preview, setPreview] = useState<string | null>(null);
+  const [uploadedUrl, setUploadedUrl] = useState<string | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [prefill, setPrefill] = useState<RxOcrPrefill | null>(null);
+  const [medicineId, setMedicineId] = useState('');
+  const [presentationId, setPresentationId] = useState('');
+  const [directions, setDirections] = useState('');
+  const [usedSuggestion, setUsedSuggestion] = useState(false);
+  const [confirmed, setConfirmed] = useState(false);
+  const [saved, setSaved] = useState<{ url: string } | null>(null);
+  const inFlight = useRef(false);
+
+  useEffect(() => () => void (preview && URL.revokeObjectURL(preview)), [preview]);
+
+  const medicine = useMemo(
+    () => workspace.data?.medicines.find((item) => item.id === medicineId) ?? null,
+    [medicineId, workspace.data]
+  );
+  const busy = uploadSource.isPending || extractSource.isPending || capture.isPending;
+
+  function reset() {
+    setFile(null);
+    setPreview(null);
+    setUploadedUrl(null);
+    setPrefill(null);
+    setMedicineId('');
+    setPresentationId('');
+    setDirections('');
+    setUsedSuggestion(false);
+    setConfirmed(false);
+    setError(null);
+  }
+
+  async function ensureUploaded(): Promise<string> {
+    if (uploadedUrl) return uploadedUrl;
+    if (!file || !isImageType(file.type)) throw new Error('Take or choose a prescription photo.');
+    const result = await uploadSource.mutateAsync({
+      patientId,
+      contentType: file.type,
+      dataBase64: await imageBase64(file),
+    });
+    if (!attachmentUrl(result?.url) || result.sourceFileRef !== result.url) {
+      throw new Error('The upload could not be confirmed. Retry the photo.');
+    }
+    setUploadedUrl(result.url);
+    return result.url;
+  }
+
+  async function suggest() {
+    if (inFlight.current) return;
+    inFlight.current = true;
+    setError(null);
+    try {
+      setPrefill(await extractSource.mutateAsync({ sourceFileRef: await ensureUploaded() }));
+    } catch (failure) {
+      setError(failure instanceof Error ? failure.message : 'The prescription could not be read.');
+    } finally {
+      inFlight.current = false;
+    }
+  }
+
+  function applySuggestion(apply: () => void) {
+    apply();
+    setUsedSuggestion(true);
+    setConfirmed(false);
+  }
+
+  async function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (inFlight.current) return;
+    const form = event.currentTarget;
+    const validation = fileError(file);
+    if (validation) {
+      setError(validation);
+      return;
+    }
+    if (usedSuggestion && !confirmed) {
+      setError('Confirm the suggested values against the photo before saving.');
+      return;
+    }
+    const data = new FormData(form);
+    inFlight.current = true;
+    setError(null);
+    try {
+      const sourceFileRef = await ensureUploaded();
+      await capture.mutateAsync({
+        patientId,
+        prescriberId: String(data.get('prescriberId')),
+        sourceKind: 'PAPER_IMAGE',
+        sourceFileRef,
+        custodyState: String(data.get('custodyState')) as 'NOT_HELD' | 'HELD_AT_PHARMACY',
+        validFrom: new Date(isoDay()),
+        validUntil: new Date(String(data.get('validUntil'))),
+        authorizedRepeats: 0,
+        lines: [
+          {
+            lineNumber: 1,
+            medicineId,
+            presentationId,
+            authorizedCanonicalUnits: Number(data.get('quantity')),
+            directions: directions.trim(),
+          },
+        ],
+      });
+      setSaved({ url: sourceFileRef });
+      reset();
+      setOpen(false);
+    } catch (failure) {
+      setError(
+        `${failure instanceof Error ? failure.message : 'The request failed.'} Your photo and form are kept for retry.`
+      );
+      return;
+    } finally {
+      inFlight.current = false;
+    }
+    await Promise.allSettled([
+      utils.pharmacyPrescriptions.counterPatientPanel.invalidate({ patientId }),
+      utils.pharmacyPrescriptions.workspace.invalidate(),
+    ]);
+  }
+
+  return (
+    <div className="space-y-2">
+      {saved ? (
+        <div role="status" className="flex items-center gap-3 text-sm text-text-body">
+          <PrescriptionThumbnail
+            url={saved.url}
+            label={`Saved prescription photo for ${patientName}`}
+          />
+          <span>Prescription photo saved. A pharmacist must still sign it before release.</span>
+        </div>
+      ) : null}
+      {!open ? (
+        <Button
+          type="button"
+          variant="outline"
+          className="h-11"
+          disabled={disabled}
+          onClick={() => {
+            setSaved(null);
+            setOpen(true);
+          }}
+        >
+          Photograph prescription
+        </Button>
+      ) : (
+        <form
+          aria-label="Photograph prescription"
+          aria-busy={busy}
+          onSubmit={submit}
+          className="space-y-3 rounded-md border border-border-subtle p-3"
+        >
+          <fieldset disabled={disabled || busy} className="grid min-w-0 gap-3">
+            <div className="space-y-1.5">
+              <Label htmlFor="counter-rx-photo">Prescription photo</Label>
+              <input
+                id="counter-rx-photo"
+                type="file"
+                accept="image/*"
+                capture="environment"
+                aria-describedby="counter-rx-photo-hint"
+                onChange={(event) => {
+                  const next = event.target.files?.[0] ?? null;
+                  reset();
+                  setFile(next);
+                  setError(fileError(next));
+                  setPreview(next && !fileError(next) ? URL.createObjectURL(next) : null);
+                }}
+                className="block w-full text-sm file:mr-3 file:h-11 file:rounded-md file:border file:border-border-subtle file:bg-transparent file:px-3 file:font-semibold"
+              />
+              <p id="counter-rx-photo-hint" className="text-xs text-text-muted">
+                JPEG, PNG or WebP up to 5 MiB. Stored privately as inspection evidence.
+              </p>
+            </div>
+            {preview ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={preview}
+                alt="Selected prescription photo"
+                className="size-24 rounded-md border border-border-subtle object-cover"
+              />
+            ) : null}
+
+            {file && !fileError(file) ? (
+              <Button type="button" variant="outline" className="h-11" onClick={suggest}>
+                {extractSource.isPending ? 'Reading photo…' : 'Suggest from photo'}
+              </Button>
+            ) : null}
+
+            {prefill ? (
+              <section aria-label="Suggestions from photo" className="space-y-2">
+                <p className="text-xs text-text-muted">
+                  Read by {prefill.adapter.toLowerCase()} OCR. Nothing is filled in until you choose
+                  a suggestion.
+                </p>
+                {prefill.lines.length === 0 ? (
+                  <p className="text-sm text-text-muted">
+                    No medicine could be read from the photo.
+                  </p>
+                ) : null}
+                {prefill.lines.map((line, index) => (
+                  <div key={index} className="space-y-1 rounded-md bg-surface-sunken p-2 text-sm">
+                    <p className="text-text-strong">
+                      Read:{' '}
+                      {[line.drugName.value, line.strength.value].filter(Boolean).join(' ') || '—'}{' '}
+                      <span className="font-mono text-xs text-text-muted">
+                        {Math.round(line.drugName.confidence * 100)}%
+                      </span>
+                    </p>
+                    <div className="flex flex-wrap gap-2">
+                      {line.medicineCandidates.map((candidate) => (
+                        <Button
+                          key={candidate.medicineId}
+                          type="button"
+                          variant="outline"
+                          className="h-11"
+                          onClick={() =>
+                            applySuggestion(() => {
+                              setMedicineId(candidate.medicineId);
+                              setPresentationId('');
+                            })
+                          }
+                        >
+                          Use medicine {candidate.label}
+                        </Button>
+                      ))}
+                      {line.dose.value ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-11"
+                          onClick={() =>
+                            applySuggestion(() => setDirections(line.dose.value ?? ''))
+                          }
+                        >
+                          Use directions “{line.dose.value}” (
+                          {Math.round(line.dose.confidence * 100)}
+                          %)
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                ))}
+              </section>
+            ) : null}
+
+            {workspace.error ? (
+              <p role="alert" className="text-sm text-destructive">
+                {workspace.error.message}
+              </p>
+            ) : null}
+            <div className="grid gap-3 sm:grid-cols-2">
+              <div className="space-y-1.5">
+                <Label htmlFor="counter-rx-prescriber">Prescriber</Label>
+                <select
+                  id="counter-rx-prescriber"
+                  name="prescriberId"
+                  required
+                  defaultValue=""
+                  className={selectClass}
+                >
+                  <option value="" disabled>
+                    {workspace.isLoading ? 'Loading…' : 'Select prescriber'}
+                  </option>
+                  {workspace.data?.prescribers.map((prescriber) => (
+                    <option key={prescriber.id} value={prescriber.id}>
+                      {prescriber.name} · {prescriber.registrationNumber}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="counter-rx-valid-until">Valid until</Label>
+                <Input
+                  id="counter-rx-valid-until"
+                  name="validUntil"
+                  type="date"
+                  required
+                  min={isoDay(1)}
+                  defaultValue={isoDay(30)}
+                  className="h-11"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="counter-rx-medicine">Medicine</Label>
+                <select
+                  id="counter-rx-medicine"
+                  required
+                  value={medicineId}
+                  onChange={(event) => {
+                    setMedicineId(event.target.value);
+                    setPresentationId('');
+                  }}
+                  className={selectClass}
+                >
+                  <option value="" disabled>
+                    Select medicine
+                  </option>
+                  {workspace.data?.medicines.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.productName}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="counter-rx-presentation">Presentation</Label>
+                <select
+                  id="counter-rx-presentation"
+                  required
+                  disabled={!medicine}
+                  value={presentationId}
+                  onChange={(event) => setPresentationId(event.target.value)}
+                  className={selectClass}
+                >
+                  <option value="" disabled>
+                    Select presentation
+                  </option>
+                  {medicine?.presentations.map((item) => (
+                    <option key={item.id} value={item.id}>
+                      {item.presentation}
+                    </option>
+                  ))}
+                </select>
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="counter-rx-quantity">Authorized units</Label>
+                <Input
+                  id="counter-rx-quantity"
+                  name="quantity"
+                  type="number"
+                  min={1}
+                  required
+                  className="h-11"
+                />
+              </div>
+              <div className="space-y-1.5">
+                <Label htmlFor="counter-rx-custody">Original custody</Label>
+                <select
+                  id="counter-rx-custody"
+                  name="custodyState"
+                  defaultValue="NOT_HELD"
+                  className={selectClass}
+                >
+                  <option value="NOT_HELD">Returned / not held</option>
+                  <option value="HELD_AT_PHARMACY">Held at pharmacy</option>
+                </select>
+              </div>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="counter-rx-directions">Directions</Label>
+              <Input
+                id="counter-rx-directions"
+                required
+                value={directions}
+                onChange={(event) => setDirections(event.target.value)}
+                className="h-11"
+              />
+            </div>
+            {usedSuggestion ? (
+              <label className="flex items-start gap-2 text-sm text-text-body">
+                <input
+                  type="checkbox"
+                  required
+                  checked={confirmed}
+                  onChange={(event) => setConfirmed(event.target.checked)}
+                  className="mt-1 size-4"
+                />
+                I have checked the suggested medicine and directions against the photo.
+              </label>
+            ) : null}
+            {error ? (
+              <p role="alert" className="text-sm text-destructive">
+                {error}
+              </p>
+            ) : null}
+            <div className="flex flex-wrap gap-2">
+              <Button
+                type="submit"
+                className="h-11"
+                disabled={!file || Boolean(fileError(file)) || (usedSuggestion && !confirmed)}
+              >
+                {uploadSource.isPending
+                  ? 'Uploading photo…'
+                  : capture.isPending
+                    ? 'Saving…'
+                    : 'Save prescription'}
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11"
+                onClick={() => {
+                  reset();
+                  setOpen(false);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </fieldset>
+        </form>
+      )}
+    </div>
+  );
+}
 
 export type CounterRxPanelProps = {
+  controlled?: {
+    prescriptionLineId: string;
+    staffProfileId: string;
+    pin: string;
+    pharmacists: ReadonlyArray<{ id: string; name: string }>;
+    loading: boolean;
+    error: boolean;
+    onChange: (field: 'prescriptionLineId' | 'staffProfileId' | 'pin', value: string) => void;
+  };
   alerts: readonly CounterAlert[];
   patient: CounterPatientPanel | null;
   candidates: ReadonlyArray<{ patientId: string; displayName: string; phone: string | null }>;
@@ -22,6 +510,7 @@ export type CounterRxPanelProps = {
   onSearch: () => void;
   onSelectPatient: (patientId: string) => void;
   onClearPatient: () => void;
+  onCapturePrescription?: (context: { patientId: string }) => void;
 };
 
 /**
@@ -43,6 +532,7 @@ export type CounterRxPanelProps = {
 export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
   function CounterRxPanel(
     {
+      controlled,
       alerts,
       patient,
       candidates,
@@ -54,6 +544,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       onSearch,
       onSelectPatient,
       onClearPatient,
+      onCapturePrescription,
     },
     ref
   ) {
@@ -63,6 +554,79 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
 
     return (
       <div ref={ref} tabIndex={-1} className="space-y-5 focus-visible:outline-none">
+        {controlled ? (
+          <section
+            aria-label="Controlled medicine authorization"
+            className="space-y-3 rounded-md border border-border-subtle p-3"
+          >
+            <h4 className="font-semibold text-text-strong">Controlled medicine authorization</h4>
+            <p className="text-sm text-text-body">
+              Attach a patient with ID on file, select the prescription, and ask an independent
+              pharmacist to enter their PIN. Online only.
+            </p>
+            <Label htmlFor="controlled-prescription">Prescription line</Label>
+            <select
+              id="controlled-prescription"
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+              disabled={disabled || !patient}
+              value={controlled.prescriptionLineId}
+              onChange={(event) => controlled.onChange('prescriptionLineId', event.target.value)}
+            >
+              <option value="">Select prescription</option>
+              {patient?.prescriptions
+                .filter((rx) => rx.inDate)
+                .flatMap((rx) =>
+                  rx.lines.map((line) => (
+                    <option key={line.prescriptionLineId} value={line.prescriptionLineId}>
+                      {line.medicineName} · {rx.prescriberName} · {line.remainingAuthorizedUnits}{' '}
+                      units
+                    </option>
+                  ))
+                )}
+            </select>
+            <Label htmlFor="controlled-pharmacist">Approving pharmacist</Label>
+            <select
+              id="controlled-pharmacist"
+              className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+              disabled={disabled || controlled.loading || controlled.error}
+              value={controlled.staffProfileId}
+              onChange={(event) => controlled.onChange('staffProfileId', event.target.value)}
+            >
+              <option value="">Select pharmacist</option>
+              {controlled.pharmacists.map((staff) => (
+                <option key={staff.id} value={staff.id}>
+                  {staff.name}
+                </option>
+              ))}
+            </select>
+            {controlled.loading ? (
+              <p role="status">Loading pharmacists…</p>
+            ) : controlled.error ? (
+              <p role="alert">Pharmacists could not be loaded. Retry by refreshing the counter.</p>
+            ) : controlled.pharmacists.length === 0 ? (
+              <p role="status">
+                No independent pharmacist with an active staff PIN is available. Ask your
+                administrator to configure one.
+              </p>
+            ) : null}
+            <Label htmlFor="controlled-pin">Pharmacist PIN</Label>
+            <Input
+              id="controlled-pin"
+              type="password"
+              inputMode="numeric"
+              autoComplete="off"
+              maxLength={8}
+              className="h-11"
+              disabled={disabled || !controlled.staffProfileId}
+              value={controlled.pin}
+              onChange={(event) => controlled.onChange('pin', event.target.value)}
+            />
+            <p className="text-xs text-text-muted">
+              PIN is cleared after each attempt. Five incorrect attempts lock the credential for 15
+              minutes.
+            </p>
+          </section>
+        ) : null}
         <section aria-label="Safety blocks" className="space-y-2">
           <h4 className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">
             Safety blocks
@@ -169,6 +733,47 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                 </div>
               </div>
 
+              <div className="space-y-2">
+                {onCapturePrescription ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11"
+                    disabled={disabled || state === 'loading' || state === 'error'}
+                    onClick={() => onCapturePrescription({ patientId: patient.patientId })}
+                  >
+                    Capture prescription
+                  </Button>
+                ) : disabled || state === 'loading' || state === 'error' ? (
+                  <Button type="button" variant="outline" className="h-11" disabled>
+                    Capture prescription
+                  </Button>
+                ) : (
+                  <Link
+                    className={buttonVariants({ variant: 'outline', className: 'h-11' })}
+                    href={`/pharmacy/prescriptions#patientId=${encodeURIComponent(patient.patientId)}`}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    prefetch={false}
+                  >
+                    Capture prescription
+                    <span className="sr-only"> for {patient.displayName} (opens in a new tab)</span>
+                  </Link>
+                )}
+                <p className="text-xs text-text-muted">
+                  {onCapturePrescription
+                    ? `Capture evidence for ${patient.displayName}.`
+                    : `Opens capture for ${patient.displayName} in a new tab. This bill stays open.`}{' '}
+                  Capture does not replace pharmacist review or dispensing consent.
+                </p>
+                <CounterRxPhotoCapture
+                  key={patient.patientId}
+                  patientId={patient.patientId}
+                  patientName={patient.displayName}
+                  disabled={disabled || state === 'loading' || state === 'error'}
+                />
+              </div>
+
               {patient.prescriptions.length === 0 ? (
                 <p className="text-sm text-text-muted">
                   No prescription is on file for this patient.
@@ -181,7 +786,15 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                       className="rounded-md border border-border-subtle p-3"
                     >
                       <div className="flex flex-wrap items-center justify-between gap-2">
-                        <p className="text-sm text-text-strong">{prescription.prescriberName}</p>
+                        <div className="flex items-center gap-3">
+                          {photoUrlFor(prescription.prescriptionId) ? (
+                            <PrescriptionThumbnail
+                              url={photoUrlFor(prescription.prescriptionId)!}
+                              label={`Prescription photo from ${prescription.prescriberName}`}
+                            />
+                          ) : null}
+                          <p className="text-sm text-text-strong">{prescription.prescriberName}</p>
+                        </div>
                         {prescription.inDate ? (
                           <StatusPill status="valid" tone="success" label="In date" />
                         ) : (
@@ -231,6 +844,9 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             </div>
           ) : (
             <div className="space-y-2">
+              <p className="text-sm text-text-muted">
+                Select a patient to capture their prescription.
+              </p>
               <div className="space-y-1.5">
                 <Label htmlFor="counter-patient-search">Find patient</Label>
                 <div className="flex gap-2">

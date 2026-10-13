@@ -1,0 +1,40 @@
+{
+  "version": "restaurant-private-config-v1",
+  "sourceRoot": "/REPLACE_WITH_COMPOSED_SOURCE_ROOT",
+  "env": {
+    "DATABASE_URL": "postgresql://synthetic_migration:PRIVATE_TEST_ONLY@unit.invalid/unit?sslmode=verify-full",
+    "APP_DATABASE_URL": "postgresql://devfathom_app:PRIVATE_TEST_ONLY@unit.invalid/unit?sslmode=verify-full",
+    "FRESH_DATABASE_TARGET": "unit.invalid:5432/unit",
+    "BOOTSTRAP_MODE": "RESTAURANT",
+    "ORGANIZATION_ID": "synthetic_private_test_only",
+    "ORGANIZATION_SLUG": "synthetic-private-test-only",
+    "ORGANIZATION_LEGAL_NAME": "Synthetic Private Test Only",
+    "ORGANIZATION_DISPLAY_NAME": "Synthetic Private Test Only",
+    "BOOTSTRAP_PACKAGE_KEY": "REPLACE_WITH_REVIEWED_PACKAGE",
+    "ADMIN_ID": "synthetic_admin",
+    "ADMIN_NAME": "Synthetic Admin",
+    "ADMIN_EMAIL": "synthetic-admin@example.invalid",
+    "ADMIN_TITLE": "Owner",
+    "ADMIN_PASSWORD": "REPLACE_VIA_APPROVED_SECRET_CHANNEL",
+    "PLATFORM_ADMIN_ID": "synthetic_platform",
+    "PLATFORM_ADMIN_NAME": "Synthetic Platform",
+    "PLATFORM_ADMIN_EMAIL": "synthetic-platform@example.invalid",
+    "PLATFORM_ADMIN_PASSWORD": "REPLACE_VIA_APPROVED_SECRET_CHANNEL"
+  },
+  "endpoint": {
+    "hostname": "unit.invalid",
+    "port": 5432,
+    "database": "unit",
+    "tlsServerName": "unit.invalid",
+    "caSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "caFile": "/PRIVATE_REVIEWED_CA_FILE",
+  "artifactFile": "/PRIVATE_INDEPENDENTLY_REVIEWED_BASELINE_FILE",
+  "artifactSha256": "0000000000000000000000000000000000000000000000000000000000000000",
+  "approval": {
+    "reviewId": "SYNTHETIC_PRIVATE_TEST_ONLY_NOT_APPROVED",
+    "target": "unit.invalid:5432/unit",
+    "endpointSha256": "0000000000000000000000000000000000000000000000000000000000000000"
+  },
+  "deadlineMs": 330000
+}

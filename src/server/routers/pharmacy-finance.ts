@@ -2,6 +2,7 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
+import { financialStatements } from '@/lib/pharmacy/financial-statements';
 import {
   grossMargin,
   grossMarginComparison,
@@ -25,6 +26,19 @@ import { adminProcedure, router, type TRPCContext } from '../trpc';
 const id = z.string().trim().min(1).max(128);
 const moneyMinor = z.number().int().positive().max(999_999_999);
 const at = z.coerce.date();
+
+// Server pages also use a standalone caller, where the root router prefix is
+// absent. Enforce bookkeeping licensing here as well as in the module registry.
+const bookkeepingProcedure = adminProcedure.use(({ ctx, next }) => {
+  if (
+    !hasModule(ctx.entitlements, 'pharmacy-finance') ||
+    !ctx.organization?.id ||
+    ctx.entitlements.organizationId !== ctx.organization.id
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy Finance access is required.' });
+  }
+  return next({ ctx });
+});
 
 const reportInstant = z.iso.datetime({ offset: true });
 const reportPeriod = z
@@ -129,6 +143,12 @@ const allocation = z.object({
 });
 
 export const pharmacyFinanceRouter = router({
+  financialStatements: ledgerReportProcedure
+    .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
+    .query(async ({ ctx, input }) => ({
+      ...ledgerMetadata(ctx.reportScope, 'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'),
+      ...await financialStatements(ctx.db, ctx.reportScope, { from: new Date(input.from), to: new Date(input.to), page: input.page }),
+    })),
   perpetualValuation: ledgerReportProcedure
     .input(
       z
@@ -229,15 +249,23 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  workspace: adminProcedure.input(z.object({ branchId: id })).query(async ({ ctx, input }) => {
-    const organizationId = ctx.entitlements.organizationId;
-    const branch = await ctx.db.pharmacyBranch.findFirst({
-      where: { organizationId, id: input.branchId, active: true },
-      select: { id: true, name: true },
-    });
-    if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
-    const [transactions, periods, bankLines, taxProfiles, settlementCandidates, settlementBatches] =
-      await Promise.all([
+  workspace: bookkeepingProcedure
+    .input(z.object({ branchId: id }))
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { organizationId, id: input.branchId, active: true },
+        select: { id: true, name: true },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      const [
+        transactions,
+        periods,
+        bankLines,
+        taxProfiles,
+        settlementCandidates,
+        settlementBatches,
+      ] = await Promise.all([
         ctx.db.pharmacyBookkeepingTransaction.findMany({
           where: { organizationId, branchId: branch.id },
           include: { allocations: true },
@@ -278,18 +306,18 @@ export const pharmacyFinanceRouter = router({
           take: 25,
         }),
       ]);
-    return {
-      branch,
-      transactions,
-      periods,
-      bankLines,
-      taxProfiles,
-      settlementCandidates,
-      settlementBatches,
-    };
-  }),
+      return {
+        branch,
+        transactions,
+        periods,
+        bankLines,
+        taxProfiles,
+        settlementCandidates,
+        settlementBatches,
+      };
+    }),
 
-  post: adminProcedure
+  post: bookkeepingProcedure
     .input(
       z.object({
         branchId: id,
@@ -326,7 +354,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  reverse: adminProcedure
+  reverse: bookkeepingProcedure
     .input(
       z.object({
         branchId: id,
@@ -346,7 +374,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  closePeriod: adminProcedure
+  closePeriod: bookkeepingProcedure
     .input(z.object({ branchId: id, startsAt: at, endsAt: at }))
     .mutation(async ({ ctx, input }) => {
       try {
@@ -358,7 +386,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  reopenPeriod: adminProcedure
+  reopenPeriod: bookkeepingProcedure
     .input(z.object({ branchId: id, periodId: id, reason: z.string().trim().min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {
       try {
@@ -370,7 +398,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  importBankLine: adminProcedure
+  importBankLine: bookkeepingProcedure
     .input(
       z.object({
         branchId: id,
@@ -390,7 +418,7 @@ export const pharmacyFinanceRouter = router({
       })
     ),
 
-  reconcile: adminProcedure
+  reconcile: bookkeepingProcedure
     .input(
       z.object({ branchId: id, statementLineId: id, transactionId: id, amountMinor: moneyMinor })
     )
@@ -404,7 +432,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  createSettlementBatch: adminProcedure
+  createSettlementBatch: bookkeepingProcedure
     .input(
       z.object({
         branchId: id,
@@ -425,7 +453,7 @@ export const pharmacyFinanceRouter = router({
       }
     }),
 
-  publishTaxProfile: adminProcedure
+  publishTaxProfile: bookkeepingProcedure
     .input(
       z.object({
         branchId: id,

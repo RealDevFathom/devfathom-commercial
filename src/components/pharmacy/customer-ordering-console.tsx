@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { DeliveryEvidenceForm } from './delivery-evidence-form';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 
@@ -96,7 +97,7 @@ function OrderCard({
         <div className="text-right">
           <StatusPill status={order.status} />
           <p className="mt-2 font-mono text-xs tabular-nums text-text-strong">
-            {money(total, currency)}
+            Quoted total: {money(total, currency)}
           </p>
         </div>
       </div>
@@ -112,6 +113,21 @@ function OrderCard({
           </li>
         ))}
       </ul>
+      <ol aria-label="Order tracking" className="mt-3 space-y-1 text-sm text-text-muted">
+        {order.events.map((event) => (
+          <li key={event.id}>
+            {event.kind.replaceAll('_', ' ')} · {dateTime(event.occurredAt)}
+          </li>
+        ))}
+        {order.deliveryEvidence.map((event) => (
+          <li key={event.id}>
+            {event.action.replaceAll('_', ' ')} · {dateTime(event.occurredAt)}
+          </li>
+        ))}
+      </ol>
+      {staff && ['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY', 'COMPLETED'].includes(order.status) ? (
+        <DeliveryEvidenceForm branchId={order.branchId} orderId={order.id} />
+      ) : null}
       {order.runner ? (
         <p className="mt-3 text-xs text-text-muted">Runner: {order.runner.name}</p>
       ) : null}

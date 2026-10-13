@@ -1,3 +1,19 @@
+import { hasModule } from '@/lib/entitlements';
+import {
+  executeSandboxPayment,
+  sandboxPaymentInput,
+  PharmacyPaymentSandboxError,
+} from '@/lib/pharmacy/payment-sandbox';
+import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
+import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
+import { can } from '@/lib/abac';
+import { annotateAudit } from '@/server/audit';
+import {
+  isLockedOut,
+  registerFailedAttempt,
+  clearLockout,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
@@ -20,6 +36,15 @@ import {
 } from '@/lib/pharmacy/customer-loyalty';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
+  buildPharmacyReceiptEscPosJob,
+  PharmacyReceiptPrintError,
+  readPharmacyReceiptFormat,
+  readPharmacyReceiptTaxIdentity,
+  savePharmacyReceiptFormat,
+} from '@/lib/pharmacy/receipt-print';
+import { SaveReceiptLayoutSchema } from '@/lib/receipts/configuration';
+import { RawPrintValidationError } from '@/lib/restaurant/printing/contract';
+import {
   declineSubstitute,
   findSubstituteProposals,
   PharmacySubstituteError,
@@ -38,6 +63,7 @@ import {
   recoverRestockInterest,
   restockRecoveryReport,
   returnSaleLine,
+  readReturnHistory,
 } from '@/lib/pharmacy/sales';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -53,7 +79,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -94,6 +120,8 @@ function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacyPaymentSandboxError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyInventoryError && error.reason === 'BLOCKED_STOCK') {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -142,12 +170,89 @@ function fail(error: unknown): never {
   throw error;
 }
 
+async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: string) {
+  const [branch, organization] = await Promise.all([
+    ctx.db.pharmacyBranch.findFirst({
+      where: { id: scope.branchId, organizationId: scope.organizationId },
+      select: { name: true },
+    }),
+    ctx.db.organization.findUnique({
+      where: { id: scope.organizationId },
+      select: { currency: true },
+    }),
+  ]);
+  if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
+  return readCounterReceipt(ctx.db, scope, saleId, {
+    name: branch.name,
+    currency: organization?.currency ?? 'PKR',
+  });
+}
+
 export const pharmacySalesRouter = router({
+  sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
+    annotateAudit(ctx, { skipInput: true });
+    try {
+      return await ctx.db.$transaction((tx) =>
+        executeSandboxPayment(txDb(tx), scopeFor(ctx, input.branchId), input)
+      );
+    } catch (error) {
+      fail(error);
+    }
+  }),
+  customerDirectory: adminProcedure
+    .input(z.object({ branchId, query: z.string().trim().max(100).default('') }).strict())
+    .query(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-crm')) throw new TRPCError({ code: 'FORBIDDEN' });
+      const scope = scopeFor(ctx, input.branchId);
+      if (
+        !(await ctx.db.pharmacyBranch.findFirst({
+          where: { id: input.branchId, organizationId: scope.organizationId, active: true },
+        }))
+      )
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      return ctx.db.pharmacyCustomer.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          active: true,
+          displayName: { contains: input.query, mode: 'insensitive' },
+        },
+        orderBy: [{ displayName: 'asc' }, { id: 'asc' }],
+        take: 50,
+        select: { id: true, displayName: true, phoneLast4: true },
+      });
+    }),
+  // Evidence contains staff/customer imagery; keep owner-only access separate
+  // from cashier receipt access. Tenant and branch filters apply before storage.
+  counterEvidence: adminProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .query(({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-core')) throw new TRPCError({ code: 'FORBIDDEN' });
+      return readCounterEvidence(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+    }),
+  dailyCloseEvidence: adminProcedure
+    .input(z.object({ branchId, closeId: z.string().min(1) }).strict())
+    .query(({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-core')) throw new TRPCError({ code: 'FORBIDDEN' });
+      return readDailyCloseEvidence(ctx.db, scopeFor(ctx, input.branchId), input.closeId);
+    }),
   customerSnapshot: protectedProcedure
-    .input(z.object({ branchId, customerId: z.string().min(1) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          customerId: z.string().min(1),
+          page: z.number().int().min(1).max(10000).default(1),
+        })
+        .strict()
+    )
     .query(async ({ ctx, input }) => {
       try {
-        return await readCustomerSnapshot(ctx.db, scopeFor(ctx, input.branchId), input.customerId);
+        return await readCustomerSnapshot(
+          ctx.db,
+          scopeFor(ctx, input.branchId),
+          input.customerId,
+          input.page
+        );
       } catch (error) {
         fail(error);
       }
@@ -287,6 +392,8 @@ export const pharmacySalesRouter = router({
           businessDate: z.date(),
           amountMinor: z.number().int().positive(),
           reason: z.string().trim().min(1),
+          manualCashFallback: z.boolean().optional(),
+          requireReturnedValue: z.boolean().optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
         })
         .strict()
@@ -311,6 +418,15 @@ export const pharmacySalesRouter = router({
     .input(
       z
         .object({
+          controlledAuthorization: z
+            .object({
+              prescriptionLineId: z.string().min(1),
+              patientId: z.string().min(1),
+              staffProfileId: z.string().min(1),
+              pin: z.string().regex(/^\d{4,8}$/),
+            })
+            .strict()
+            .optional(),
           branchId,
           saleId: z.string().min(1),
           medicineId: z.string().min(1),
@@ -336,10 +452,188 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
       try {
-        return await ctx.db.$transaction((tx) =>
-          addSaleLine(txDb(tx), scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = scopeFor(ctx, input.branchId);
+          const medicine = await db.medicine.findFirst({
+            where: { id: input.medicineId, organizationId: scope.organizationId },
+          });
+          if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          const authorization = input.controlledAuthorization;
+          const blocked = {
+            blocked:
+              'Controlled medicine requires a valid prescription, patient ID and an independent pharmacist PIN.',
+          } as const;
+          if (!authorization) return blocked;
+          // Serialize credential attempts; returning a denial commits durable lockout counters.
+          await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${authorization.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+          const credential = await db.restaurantOperatorCredential.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              staffProfileId: authorization.staffProfileId,
+              type: 'PIN',
+              revokedAt: null,
+              deviceId: null,
+            },
+            include: { staffProfile: { include: { user: true } } },
+          });
+          const pharmacist = credential?.staffProfile.user;
+          const now = new Date();
+          if (
+            !credential ||
+            credential.staffProfile.status !== 'ACTIVE' ||
+            !pharmacist ||
+            pharmacist.organizationId !== scope.organizationId ||
+            pharmacist.status !== 'ACTIVE' ||
+            pharmacist.id === scope.actorId ||
+            isLockedOut(credential, now)
+          )
+            return blocked;
+          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
+          if (
+            !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
+          ) {
+            await db.restaurantOperatorCredential.update({
+              where: { id: credential.id },
+              data: registerFailedAttempt(credential, now),
+            });
+            return blocked;
+          }
+          await db.restaurantOperatorCredential.update({
+            where: { id: credential.id },
+            data: clearLockout(),
+          });
+          // Lock prescription and branch before stock allocation, fill numbering and register numbering.
+          await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${authorization.prescriptionLineId} FOR UPDATE`;
+          await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+          const rx = await db.prescriptionLine.findFirst({
+            where: {
+              id: authorization.prescriptionLineId,
+              organizationId: scope.organizationId,
+              medicineId: input.medicineId,
+              presentationId: input.presentationId,
+            },
+            include: {
+              prescription: { include: { patient: true, prescriber: true } },
+              fills: true,
+            },
+          });
+          if (
+            !rx ||
+            rx.prescription.patientId !== authorization.patientId ||
+            !rx.prescription.patient.cnic?.trim() ||
+            !rx.prescription.prescriber.registrationNumber.trim() ||
+            rx.prescription.validFrom > now ||
+            rx.prescription.validUntil <= now
+          )
+            return blocked;
+          const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+          const previous = await db.pharmacySaleLine.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleId: input.saleId,
+              idempotencyKey: input.idempotencyKey,
+            },
+          });
+          if (previous)
+            return {
+              blocked:
+                'This request was already recorded. Refresh the cart before adding another line.',
+            };
+          if (
+            !Number.isSafeInteger(units) ||
+            rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
+              rx.authorizedCanonicalUnits ||
+            rx.fills.length > rx.prescription.authorizedRepeats
+          )
+            return { blocked: 'Prescription quantity or repeat allowance is exhausted.' };
+          const consent = await db.patientConsent.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              patientId: authorization.patientId,
+              purpose: 'DISPENSING',
+            },
+            orderBy: { version: 'desc' },
+          });
+          if (!consent?.granted || consent.revokedAt)
+            return { blocked: 'Patient dispensing consent is required.' };
+          const result = await addSaleLine(db, scope, input);
+          await db.prescriptionFill.create({
+            data: {
+              organizationId: scope.organizationId,
+              prescriptionLineId: rx.id,
+              fillSequence: rx.fills.length + 1,
+              quantityCanonicalUnits: units,
+              dispensedByUserId: pharmacist.id,
+              idempotencyKey: `controlled:${result.line.id}`,
+            },
+          });
+          const review = await db.pharmacyPharmacistReviewItem.create({
+            data: {
+              organizationId: scope.organizationId,
+              prescriptionLineId: rx.id,
+              saleLineId: result.line.id,
+              requestedByUserId: scope.actorId,
+            },
+          });
+          await db.pharmacyPharmacistReviewDecision.create({
+            data: {
+              organizationId: scope.organizationId,
+              reviewItemId: review.id,
+              kind: 'SIGN',
+              actorUserId: pharmacist.id,
+              signedAt: now,
+            },
+          });
+          const latest = await db.pharmacyControlledRegisterEntry.aggregate({
+            where: { organizationId: scope.organizationId, branchId: scope.branchId },
+            _max: { serial: true },
+          });
+          let serial = latest._max.serial ?? 0;
+          for (const movementId of result.allocation.movementIds) {
+            const movement = await db.pharmacyStockMovement.findFirstOrThrow({
+              where: {
+                id: movementId,
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+              },
+            });
+            const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
+              where: { id: movement.inventoryLotId, organizationId: scope.organizationId },
+              include: { batch: true },
+            });
+            const balance = await db.pharmacyStockBalance.aggregate({
+              where: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                inventoryLotId: lot.id,
+              },
+              _sum: { onHandUnits: true },
+            });
+            await db.pharmacyControlledRegisterEntry.create({
+              data: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                serial: ++serial,
+                prescriptionId: rx.prescriptionId,
+                prescriptionLineId: rx.id,
+                patientId: authorization.patientId,
+                prescriberId: rx.prescription.prescriberId,
+                inventoryLotId: lot.id,
+                stockMovementId: movement.id,
+                batchNumber: lot.batch.batchNumber,
+                quantityCanonicalUnits: -movement.quantityUnits,
+                runningBalance: balance._sum.onHandUnits ?? 0,
+                recordedByUserId: scope.actorId,
+                witnessedByUserId: pharmacist.id,
+              },
+            });
+          }
+          return result;
+        });
       } catch (error) {
         fail(error);
       }
@@ -370,6 +664,32 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  lookupReceiptByNumber: protectedProcedure
+    .input(z.object({ branchId, receiptNumber: z.number().int().positive() }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      // Receipt sequences are per device/date: never pick an arbitrary matching sale.
+      return ctx.db.pharmacySale.findMany({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          receiptNumber: input.receiptNumber,
+          status: 'COMPLETED',
+        },
+        select: { id: true, receiptNumber: true, receiptDeviceId: true, businessDate: true },
+        orderBy: { completedAt: 'desc' },
+        take: 50,
+      });
+    }),
+  returnHistory: protectedProcedure
+    .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      try {
+        return await readReturnHistory(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+      } catch (error) {
+        fail(error);
+      }
+    }),
   returnLine: protectedProcedure
     .input(
       z
@@ -377,7 +697,8 @@ export const pharmacySalesRouter = router({
           branchId,
           saleLineId: z.string().min(1),
           canonicalUnits: z.number().int().positive(),
-          quarantineLocationId: z.string().min(1),
+          quarantineLocationId: z.string().min(1).optional(),
+          disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),
           reason: z.string().trim().min(1),
           integrityDecision: z.string().trim().min(1),
           idempotencyKey: z.string().trim().min(1),
@@ -582,7 +903,11 @@ export const pharmacySalesRouter = router({
         select: { currency: true },
       }),
     ]);
-    return { branches, currency: organization?.currency ?? 'PKR' };
+    return {
+      branches,
+      currency: organization?.currency ?? 'PKR',
+      paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+    };
   }),
 
   /** POS-02: one search across brand, generic, ingredient, form, barcode and alias. */
@@ -642,25 +967,78 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = scopeFor(ctx, input.branchId);
       try {
-        const [branch, organization] = await Promise.all([
-          ctx.db.pharmacyBranch.findFirst({
-            where: { id: input.branchId, organizationId: scope.organizationId },
-            select: { name: true },
-          }),
-          ctx.db.organization.findUnique({
-            where: { id: scope.organizationId },
-            select: { currency: true },
-          }),
-        ]);
-        if (!branch) throw new PharmacyCounterError('CROSS_BRANCH_REFERENCE');
-        return await readCounterReceipt(ctx.db, scope, input.saleId, {
-          name: branch.name,
-          currency: organization?.currency ?? 'PKR',
-        });
+        return await loadCounterReceipt(ctx, scope, input.saleId);
       } catch (error) {
         fail(error);
       }
     }),
+
+  /**
+   * PH-A7: the settled receipt as a validated ESC/POS `RECEIPT` job, using the
+   * branch's saved format. A read: printing and reprinting from history
+   * re-read the same sale, so neither can issue or change a receipt number.
+   * Text the raw baseline cannot print returns the browser/OS fallback.
+   */
+  counterReceiptPrintJob: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleId: z.string().min(1),
+          locale: z.enum(['en', 'ur']),
+          reprint: z.boolean(),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      try {
+        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        if (receipt.receiptNumber === null || !receipt.completedAt) {
+          throw new PharmacyReceiptPrintError('RECEIPT_NOT_ISSUED');
+        }
+        const [format, taxIdentity] = await Promise.all([
+          readPharmacyReceiptFormat(ctx.db, scope),
+          readPharmacyReceiptTaxIdentity(ctx.db, scope, new Date(receipt.completedAt)),
+        ]);
+        return {
+          status: 'READY' as const,
+          ...buildPharmacyReceiptEscPosJob(receipt, input.locale, {
+            layout: format.layout,
+            taxIdentity,
+            reprint: input.reprint,
+          }),
+        };
+      } catch (error) {
+        if (error instanceof RawPrintValidationError) {
+          return {
+            status: 'FALLBACK' as const,
+            code: error.code,
+            fallback: error.fallback,
+            message: error.message,
+          };
+        }
+        if (error instanceof PharmacyReceiptPrintError) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This bill is not settled, so it has no receipt to print.',
+          });
+        }
+        fail(error);
+      }
+    }),
+
+  /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */
+  counterReceiptFormat: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(({ ctx, input }) => readPharmacyReceiptFormat(ctx.db, scopeFor(ctx, input.branchId))),
+
+  /** PH-A7: save the branch receipt format. Optimistic revision; admins only. */
+  counterSaveReceiptFormat: adminProcedure
+    .input(SaveReceiptLayoutSchema)
+    .mutation(({ ctx, input }) =>
+      savePharmacyReceiptFormat(ctx.db, scopeFor(ctx, input.branchId).organizationId, input)
+    ),
 
   // ── POS-01 configurable shortcuts ─────────────────────────────────────────
 

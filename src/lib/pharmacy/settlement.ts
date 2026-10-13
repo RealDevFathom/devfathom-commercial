@@ -1,3 +1,4 @@
+import { requestCounterEvidence } from './counter-evidence';
 import 'server-only';
 
 import { createHash, randomUUID } from 'node:crypto';
@@ -6,10 +7,14 @@ import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { reverseRefundedEarnedPoints } from './customer-loyalty-earned-reversal';
 import { accrueSalePoints, restoreRefundedLoyaltyPoints } from './customer-loyalty';
+import { returnedLineValue } from './sales';
+import { postTenderEntry, postTenderRefundEntry } from './finance-postings';
 import { firstCloseIsFinal } from './migration/first-close';
-import { PharmacyReceiptIdentityError, validateReceiptIdentity } from './receipt-identity';
+import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import type { LedgerScope } from './stock-ledger';
+import { paymentSandboxAdmitted } from './payment-sandbox-admission';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT';
 
@@ -34,6 +39,7 @@ export class PharmacySettlementError extends Error {
 export interface PharmacyPaymentAdapter {
   readonly name: string;
   readonly certified: boolean;
+  readonly localSandbox?: true;
   execute(input: {
     capability: 'SALE' | 'REFUND';
     amountMinor: number;
@@ -46,6 +52,11 @@ export function requireReleaseSafeAdapter(
   adapter: PharmacyPaymentAdapter,
   environment = process.env.NODE_ENV
 ) {
+  if (adapter.localSandbox) {
+    if (adapter.name !== 'LOCAL_TOKEN_SANDBOX' || !paymentSandboxAdmitted())
+      throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
+    return adapter;
+  }
   if (environment === 'production' && adapter.name.toUpperCase() === 'MOCK')
     throw new PharmacySettlementError('MOCK_PROVIDER_IN_RELEASE');
   if (!adapter.certified) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
@@ -239,16 +250,7 @@ export async function applyPharmacyTender(
   );
   const sale = await db.pharmacySale.findFirst({
     where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: {
-      lines: {
-        include: {
-          medicine: { include: { strengths: { orderBy: { id: 'asc' } } } },
-          presentation: true,
-          allocations: { orderBy: { id: 'asc' }, include: { lot: { include: { batch: true } } } },
-        },
-      },
-      tenders: true,
-    },
+    include: completionSaleInclude,
   });
   if (!sale || sale.status !== 'OPEN') throw new PharmacySettlementError('SALE_NOT_OPEN');
   const totalMinor = saleTotalMinor(sale.lines);
@@ -306,6 +308,7 @@ export async function applyPharmacyTender(
       deviceId: input.deviceId,
     },
   });
+  await postTenderEntry(db, scope, { tenderId: tender.id, at: tender.createdAt });
   if (drawerSessionId)
     await db.pharmacyDrawerMovement.create({
       data: {
@@ -320,98 +323,10 @@ export async function applyPharmacyTender(
   const settled = tenderedMinor + input.amountMinor === totalMinor;
   let receiptNumber: number | null = null;
   if (settled) {
-    const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
-      INSERT INTO pharmacy_receipt_number_sequences (id, "organizationId", "branchId", "deviceId", "nextNumber", "updatedAt")
-      VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.deviceId}, 2, now())
-      ON CONFLICT ("organizationId", "branchId", "deviceId")
-      DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + 1, "updatedAt" = now()
-      RETURNING "nextNumber" - 1 AS receipt_number`);
-    receiptNumber = rows[0]!.receipt_number;
-    const issuedAt = new Date();
-    await db.pharmacySale.update({
-      where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
-      data: {
-        status: 'COMPLETED',
-        completedAt: issuedAt,
-        receiptNumber,
-        receiptDeviceId: input.deviceId,
-        businessDate: input.businessDate,
-      },
-    });
-    for (const line of sale.lines) {
-      if (
-        line.organizationId !== scope.organizationId ||
-        line.branchId !== scope.branchId ||
-        line.medicine.organizationId !== scope.organizationId ||
-        line.presentation.organizationId !== scope.organizationId ||
-        line.presentation.medicineId !== line.medicineId ||
-        line.allocations.some(
-          (allocation) =>
-            allocation.organizationId !== scope.organizationId ||
-            allocation.branchId !== scope.branchId ||
-            allocation.lot.organizationId !== scope.organizationId ||
-            allocation.lot.branchId !== scope.branchId ||
-            allocation.lot.batch.organizationId !== scope.organizationId ||
-            allocation.lot.batch.medicineId !== line.medicineId
-        )
-      )
-        throw new PharmacyReceiptIdentityError();
-    }
-    const snapshot = validateReceiptIdentity(
-      {
-        receiptIdentitySnapshotVersion: 1,
-        saleId: sale.id,
-        receiptNumber,
-        deviceId: input.deviceId,
-        businessDate: input.businessDate.toISOString().slice(0, 10),
-        issuedAt: issuedAt.toISOString(),
-        lines: sale.lines.map((line) => ({
-          saleLineId: line.id,
-          medicineId: line.medicineId,
-          presentationId: line.presentationId,
-          medicineName: line.medicine.productName,
-          strength: line.medicine.strengths.length
-            ? line.medicine.strengths
-                .map((component) => {
-                  const raw = String(component.value);
-                  const value = raw.includes('.')
-                    ? raw.replace(/(\.\d*?)0+$/, '$1').replace(/\.$/, '')
-                    : raw;
-                  return `${value} ${component.unit}`;
-                })
-                .join(' + ')
-            : null,
-          presentation: line.presentation.presentation,
-          allocations: line.allocations.map((allocation) => ({
-            allocationId: allocation.id,
-            inventoryLotId: allocation.inventoryLotId,
-            batchNumber: allocation.lot.batch.batchNumber,
-            expiresAt: allocation.lot.batch.expiresAt.toISOString(),
-            canonicalUnits: allocation.canonicalUnits,
-          })),
-        })),
-      },
-      {
-        ...sale,
-        receiptNumber,
-        receiptDeviceId: input.deviceId,
-        businessDate: input.businessDate,
-        completedAt: issuedAt,
-      }
-    );
-    await db.pharmacySaleEvent.create({
-      data: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        saleId: sale.id,
-        kind: 'COMPLETED',
-        actorId: scope.actorId,
-        occurredAt: issuedAt,
-        payload: snapshot,
-      },
-    });
+    receiptNumber = await completePaidPharmacySale(db, scope, sale, input);
     if (sale.customerId) await accrueSalePoints(db, scope, sale.id);
   }
+  await requestCounterEvidence(db, scope, { kind: 'TENDER', subjectId: tender.id });
   const result = {
     tenderId: tender.id,
     settled,
@@ -446,6 +361,8 @@ export async function refundPharmacyTender(
     reason: string;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
+    manualCashFallback?: boolean;
+    requireReturnedValue?: boolean;
   }
 ) {
   if (!input.reason.trim()) throw new PharmacySettlementError('INVALID_AMOUNT');
@@ -459,6 +376,11 @@ export async function refundPharmacyTender(
     payloadHash
   );
   if (idem.resultPayload) return { ...(idem.resultPayload as object), replayed: true };
+  // Same sale-before-customer protocol as redemption; serialize refunds across tenders.
+  await db.$queryRaw(Prisma.sql`SELECT s.id FROM pharmacy_sales s
+    JOIN pharmacy_tenders t ON t."saleId"=s.id AND t."organizationId"=s."organizationId"
+    WHERE t.id=${input.originalTenderId} AND s."organizationId"=${scope.organizationId}
+      AND s."branchId"=${scope.branchId} FOR UPDATE OF s`);
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_tenders WHERE id=${input.originalTenderId} AND "organizationId"=${scope.organizationId} FOR UPDATE`
   );
@@ -476,9 +398,44 @@ export async function refundPharmacyTender(
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
     input.amountMinor
   );
+  if (input.requireReturnedValue) {
+    await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${tender.saleId}
+      AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+    const sale = await db.pharmacySale.findFirst({
+      where: {
+        id: tender.saleId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'COMPLETED',
+      },
+      include: { lines: { include: { returnLines: true } }, refunds: true },
+    });
+    const returnValue =
+      sale?.lines.reduce(
+        (sum, line) =>
+          sum +
+          returnedLineValue(
+            line,
+            line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0)
+          ),
+        0
+      ) ?? 0;
+    if (
+      !sale ||
+      sale.refunds.reduce((sum, row) => sum + row.amountMinor, 0) + input.amountMinor > returnValue
+    )
+      throw new PharmacySettlementError('REFUND_EXCEEDS_TENDER');
+  }
+  const manualReversalRequired =
+    (tender.type === 'CARD' || tender.type === 'WALLET') &&
+    !input.adapter &&
+    input.manualCashFallback === true;
+  const refundReason = manualReversalRequired
+    ? `[CASH; MANUAL REVERSAL REQUIRED] ${input.reason.trim()}`
+    : input.reason.trim();
   let providerRef: string | undefined;
   let drawerSessionId: string | undefined;
-  if (tender.type === 'CARD' || tender.type === 'WALLET') {
+  if ((tender.type === 'CARD' || tender.type === 'WALLET') && !manualReversalRequired) {
     if (!input.adapter || !tender.providerRef)
       throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     const adapter = requireReleaseSafeAdapter(input.adapter);
@@ -490,7 +447,7 @@ export async function refundPharmacyTender(
     });
     if (!result.approved) throw new PharmacySettlementError('UNCERTIFIED_PROVIDER');
     providerRef = result.providerRef;
-  } else if (tender.type === 'CASH') {
+  } else if (tender.type === 'CASH' || manualReversalRequired) {
     const drawer = await db.pharmacyDrawerSession.findFirst({
       where: {
         organizationId: scope.organizationId,
@@ -512,10 +469,11 @@ export async function refundPharmacyTender(
       providerRef,
       drawerSessionId,
       businessDate: input.businessDate,
-      reason: input.reason.trim(),
+      reason: refundReason,
       actorId: scope.actorId,
     },
   });
+  await postTenderRefundEntry(db, scope, { refundId: refund.id, at: refund.createdAt });
   if (tender.type === 'LOYALTY' && tender.sale.customerId) {
     await restoreRefundedLoyaltyPoints(db, scope, {
       refundId: refund.id,
@@ -524,6 +482,8 @@ export async function refundPharmacyTender(
       customerId: tender.sale.customerId,
     });
   }
+  if (tender.type !== 'LOYALTY' && tender.sale.customerId)
+    await reverseRefundedEarnedPoints(db, scope, refund.id);
   if (drawerSessionId)
     await db.pharmacyDrawerMovement.create({
       data: {
@@ -531,12 +491,14 @@ export async function refundPharmacyTender(
         drawerSessionId,
         kind: 'CASH_REFUND',
         amountMinor: input.amountMinor,
-        reason: input.reason.trim(),
+        reason: refundReason,
         actorId: scope.actorId,
       },
     });
+  await requestCounterEvidence(db, scope, { kind: 'REFUND', subjectId: refund.id });
   const result = {
     refundId: refund.id,
+    manualReversalRequired,
     originalTenderId: tender.id,
     amountMinor: refund.amountMinor,
   };
@@ -763,7 +725,7 @@ export async function cutPharmacyDailyClose(
   // reconciles. One helper, consulted here and nowhere else in the close.
   const isFinal = await firstCloseIsFinal(db, scope.organizationId, scope.branchId);
 
-  return db.pharmacyDailyClose.create({
+  const close = await db.pharmacyDailyClose.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
@@ -777,4 +739,6 @@ export async function cutPharmacyDailyClose(
       actorId: scope.actorId,
     },
   });
+  await requestCounterEvidence(db, scope, { kind: 'DAILY_CLOSE', subjectId: close.id });
+  return close;
 }

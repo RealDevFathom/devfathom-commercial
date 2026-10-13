@@ -3,7 +3,7 @@ import 'server-only';
 import { generateObject, NoObjectGeneratedError } from 'ai';
 import { z } from 'zod';
 
-import { createAIModel, type AIModelSelection } from '@/lib/ai/provider';
+import { createAIModel, readAIAvailability, type AIModelSelection } from '@/lib/ai/provider';
 import {
   MenuExtractionError,
   normalizeExtraction,
@@ -147,18 +147,16 @@ export function createVisionMenuExtractionAdapter(
     name: 'VISION',
     version: VISION_ADAPTER_VERSION,
     async extract(request: MenuExtractionRequest): Promise<MenuExtractionResult> {
+      if (!readAIAvailability().available) {
+        throw new MenuExtractionError('Menu extraction is unavailable.', 'ADAPTER_UNAVAILABLE');
+      }
       let selection: AIModelSelection;
       try {
         selection = selectModel();
-      } catch (error) {
+      } catch {
         // A missing AI_PROVIDER/API key is a configuration fault, not a bad
         // menu — it must not burn the job's retry budget as a provider failure.
-        throw new MenuExtractionError(
-          `The vision extraction provider is not configured: ${
-            error instanceof Error ? error.message : String(error)
-          }`,
-          'ADAPTER_UNAVAILABLE'
-        );
+        throw new MenuExtractionError('Menu extraction is unavailable.', 'ADAPTER_UNAVAILABLE');
       }
 
       const timeout = AbortSignal.timeout(timeoutMs);

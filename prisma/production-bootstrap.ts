@@ -1,15 +1,18 @@
 import { hash } from 'bcryptjs';
+import { z } from 'zod';
 
 import type { Prisma } from '../src/generated/prisma/client.js';
 import {
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
+  RESTAURANT_PACKAGES,
+  roleTemplatesForVertical,
 } from '../src/lib/vertical-catalog.js';
 import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
 
 export { AGENCY_SUITE_MODULES, PLATFORM_MODULES } from './catalog-sync.js';
 
-export type ProductionBootstrapInput = {
+type BootstrapAdministrators = {
   organizationId: string;
   adminName: string;
   adminEmail: string;
@@ -18,8 +21,98 @@ export type ProductionBootstrapInput = {
   platformAdminName: string;
   platformAdminEmail: string;
   platformAdminPassword?: string;
-  deploymentUrl: string;
 };
+
+const identity = z
+  .string()
+  .trim()
+  .min(1)
+  .max(128)
+  .regex(/^[A-Za-z0-9_-]+$/);
+const name = z.string().trim().min(1).max(200);
+const restaurantInput = z.object({
+  mode: z.literal('RESTAURANT'),
+  organizationId: identity,
+  organizationSlug: z
+    .string()
+    .trim()
+    .min(1)
+    .max(63)
+    .regex(/^[a-z0-9]+(?:-[a-z0-9]+)*$/),
+  organizationLegalName: name,
+  organizationDisplayName: name,
+  packageKey: z.string().refine((key) => RESTAURANT_PACKAGES.some((pkg) => pkg.key === key)),
+  adminId: identity,
+  adminName: name,
+  adminEmail: z.string().trim().toLowerCase().email(),
+  adminPassword: z.string().optional(),
+  adminTitle: name,
+  platformAdminId: identity,
+  platformAdminName: name,
+  platformAdminEmail: z.string().trim().toLowerCase().email(),
+  platformAdminPassword: z.string().optional(),
+});
+
+export type RestaurantBootstrapInput = z.infer<typeof restaurantInput>;
+export type ProductionBootstrapInput =
+  (BootstrapAdministrators & { mode?: 'AGENCY'; deploymentUrl: string }) | RestaurantBootstrapInput;
+
+/** Pure CLI mapping: Restaurant identities have no fallback values. */
+export function productionBootstrapInputFromEnvironment(
+  env: Record<string, string | undefined>
+): ProductionBootstrapInput {
+  const required = (key: string) => {
+    const value = env[key];
+    if (!value?.trim()) throw new Error(`Missing required environment variable: ${key}`);
+    return value;
+  };
+  const mode = env.BOOTSTRAP_MODE;
+  if (mode !== undefined && mode !== 'AGENCY' && mode !== 'RESTAURANT') {
+    throw new Error('Invalid BOOTSTRAP_MODE.');
+  }
+  if (mode === 'RESTAURANT') {
+    return validateRestaurantInput({
+      mode,
+      organizationId: required('ORGANIZATION_ID'),
+      organizationSlug: required('ORGANIZATION_SLUG'),
+      organizationLegalName: required('ORGANIZATION_LEGAL_NAME'),
+      organizationDisplayName: required('ORGANIZATION_DISPLAY_NAME'),
+      packageKey: required('BOOTSTRAP_PACKAGE_KEY'),
+      adminId: required('ADMIN_ID'),
+      adminName: required('ADMIN_NAME'),
+      adminEmail: required('ADMIN_EMAIL'),
+      adminPassword: env.ADMIN_PASSWORD,
+      adminTitle: required('ADMIN_TITLE'),
+      platformAdminId: required('PLATFORM_ADMIN_ID'),
+      platformAdminName: required('PLATFORM_ADMIN_NAME'),
+      platformAdminEmail: required('PLATFORM_ADMIN_EMAIL'),
+      platformAdminPassword: env.PLATFORM_ADMIN_PASSWORD,
+    });
+  }
+  return {
+    organizationId:
+      env.DEFAULT_ORGANIZATION_ID?.trim() || env.ORGANIZATION_ID?.trim() || 'org_devfathom',
+    adminName: env.ADMIN_NAME?.trim() || 'Workspace Administrator',
+    adminEmail: required('ADMIN_EMAIL'),
+    adminPassword: env.ADMIN_PASSWORD,
+    adminTitle: env.ADMIN_TITLE?.trim() || 'Administrator',
+    platformAdminName: env.PLATFORM_ADMIN_NAME?.trim() || 'Platform Administrator',
+    platformAdminEmail: required('PLATFORM_ADMIN_EMAIL'),
+    platformAdminPassword: env.PLATFORM_ADMIN_PASSWORD,
+    deploymentUrl: required('AUTH_URL'),
+  };
+}
+
+function validateRestaurantInput(input: RestaurantBootstrapInput): RestaurantBootstrapInput {
+  const parsed = restaurantInput.safeParse(input);
+  if (!parsed.success)
+    throw new Error('Invalid Restaurant bootstrap identity or package selection.');
+  const value = parsed.data;
+  if (value.adminId === value.platformAdminId || value.adminEmail === value.platformAdminEmail) {
+    throw new Error('Restaurant bootstrap administrator identities must be distinct.');
+  }
+  return value;
+}
 
 type PasswordHasher = (password: string) => Promise<string>;
 
@@ -35,6 +128,12 @@ export async function bootstrapProduction(
   input: ProductionBootstrapInput,
   hashPassword: PasswordHasher = (password) => hash(password, 12)
 ) {
+  if (input.mode === 'RESTAURANT') {
+    return bootstrapRestaurant(tx, validateRestaurantInput(input), hashPassword);
+  }
+  if (input.mode !== undefined && input.mode !== 'AGENCY') {
+    throw new Error('Invalid production bootstrap mode.');
+  }
   const adminEmail = input.adminEmail.trim().toLowerCase();
   const platformAdminEmail = input.platformAdminEmail.trim().toLowerCase();
   const deploymentUrl = input.deploymentUrl.trim();
@@ -217,4 +316,147 @@ export async function bootstrapProduction(
       },
     });
   }
+}
+
+async function bootstrapRestaurant(
+  tx: Prisma.TransactionClient,
+  input: RestaurantBootstrapInput,
+  hashPassword: PasswordHasher
+) {
+  await tx.$executeRawUnsafe(
+    `SELECT set_config('app.is_platform_admin', 'true', true),
+            set_config('app.current_organization_id', $1, true)`,
+    input.organizationId
+  );
+  // Serialize bootstrap checks across both account namespaces; unique indexes remain authoritative.
+  await tx.$executeRawUnsafe(`SELECT pg_advisory_xact_lock(734219061)`);
+  const identities = {
+    OR: [
+      { id: { in: [input.adminId, input.platformAdminId] } },
+      { email: { equals: input.adminEmail, mode: 'insensitive' as const } },
+      { email: { equals: input.platformAdminEmail, mode: 'insensitive' as const } },
+    ],
+  };
+  const organizations = await tx.organization.findMany({
+    where: { OR: [{ id: input.organizationId }, { slug: input.organizationSlug }] },
+  });
+  const users = await tx.user.findMany({
+    where: identities,
+    select: { id: true, organizationId: true, email: true },
+  });
+  const platformUsers = await tx.platformUser.findMany({
+    where: identities,
+    select: { id: true, email: true },
+  });
+  const organization = organizations[0];
+  if (organization) {
+    const selectedPackage = await tx.platformPackage.findUnique({
+      where: { key: input.packageKey },
+    });
+    if (
+      organizations.length !== 1 ||
+      organization.id !== input.organizationId ||
+      organization.slug !== input.organizationSlug ||
+      organization.legalName !== input.organizationLegalName ||
+      organization.displayName !== input.organizationDisplayName ||
+      organization.vertical !== 'RESTAURANT' ||
+      organization.isDemo ||
+      !selectedPackage ||
+      selectedPackage.vertical !== 'RESTAURANT' ||
+      organization.packageId !== selectedPackage.id ||
+      users.length !== 1 ||
+      users[0].id !== input.adminId ||
+      users[0].organizationId !== input.organizationId ||
+      users[0].email.toLowerCase() !== input.adminEmail ||
+      platformUsers.length !== 1 ||
+      platformUsers[0].id !== input.platformAdminId ||
+      platformUsers[0].email.toLowerCase() !== input.platformAdminEmail
+    ) {
+      throw new Error('Restaurant bootstrap identity collision; explicit review required.');
+    }
+    // Replay never repairs accounts, permissions, packages, or operator changes.
+    return;
+  }
+  if (users.length || platformUsers.length) {
+    throw new Error('Restaurant bootstrap identity collision; explicit review required.');
+  }
+  const adminPassword = initialPassword(input.adminPassword);
+  const platformAdminPassword = initialPassword(input.platformAdminPassword);
+  if (
+    new TextEncoder().encode(adminPassword).length > 72 ||
+    new TextEncoder().encode(platformAdminPassword).length > 72
+  ) {
+    throw new Error('Invalid Restaurant bootstrap credential length.');
+  }
+  const password = await hashPassword(adminPassword);
+  const passwordHash = await hashPassword(platformAdminPassword);
+  await syncPlatformCatalog(tx, { vertical: 'RESTAURANT', packageKey: input.packageKey });
+  const selectedPackage = await tx.platformPackage.findUniqueOrThrow({
+    where: { key: input.packageKey },
+  });
+  await tx.organization.create({
+    data: {
+      id: input.organizationId,
+      slug: input.organizationSlug,
+      legalName: input.organizationLegalName,
+      displayName: input.organizationDisplayName,
+      vertical: 'RESTAURANT',
+      status: 'ONBOARDING',
+      isDemo: false,
+      packageId: selectedPackage.id,
+      seatLimit: selectedPackage.defaultSeats,
+    },
+  });
+  await tx.organizationDepartment.createMany({
+    data: defaultDepartmentRowsForVertical('RESTAURANT').map((department) => ({
+      organizationId: input.organizationId,
+      ...department,
+    })),
+  });
+  let ownerRoleId: string | undefined;
+  for (const template of roleTemplatesForVertical('RESTAURANT')) {
+    const role = await tx.organizationRole.create({
+      data: {
+        organizationId: input.organizationId,
+        key: template.key,
+        name: template.name,
+        isSystem: template.isSystem,
+        permissions: {
+          create: template.capabilities.map((capability) => ({
+            organizationId: input.organizationId,
+            capability,
+            effect: 'ALLOW',
+          })),
+        },
+      },
+    });
+    if (template.key === 'owner') ownerRoleId = role.id;
+  }
+  if (!ownerRoleId) throw new Error('Restaurant owner role is missing from the catalog.');
+  await tx.organizationBrand.create({ data: { organizationId: input.organizationId } });
+  await tx.user.create({
+    data: {
+      id: input.adminId,
+      organizationId: input.organizationId,
+      organizationRoleId: ownerRoleId,
+      name: input.adminName,
+      email: input.adminEmail,
+      password,
+      role: 'ADMIN',
+      department: adminDepartmentKeyForVertical('RESTAURANT'),
+      title: input.adminTitle,
+      status: 'ACTIVE',
+    },
+  });
+  await tx.platformUser.create({
+    data: {
+      id: input.platformAdminId,
+      name: input.platformAdminName,
+      email: input.platformAdminEmail,
+      passwordHash,
+      role: 'SUPER_ADMIN',
+      active: true,
+    },
+  });
+  // Deployment evidence is written only by the real deployment workflow.
 }

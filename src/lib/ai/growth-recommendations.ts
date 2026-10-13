@@ -9,7 +9,7 @@ import {
   TypeValidationError,
 } from 'ai';
 import { z } from 'zod';
-import { createAIModel, readAIConfig } from './provider';
+import { createAIModel, readAIConfig, readAIAvailability } from './provider';
 
 export const GROWTH_SCHEMA_VERSION = 1 as const;
 export const GROWTH_MIN_COHORT = 10;
@@ -213,6 +213,9 @@ export async function generateGrowthRecommendations(raw: GrowthInput): Promise<G
     input,
     output: null,
   };
+  // Validation/suppression still run first; global unavailability takes precedence over SPARSE.
+  if (!readAIAvailability().available)
+    return { ...result, status: 'UNAVAILABLE', failureCode: 'CONFIGURATION' };
   if (!input.facts.length || !input.actions.length) return result;
   try {
     const config = readAIConfig();

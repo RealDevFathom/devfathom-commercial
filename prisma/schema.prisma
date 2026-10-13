@@ -50,6 +50,8 @@ model RestaurantCamera {
   name           String
   sourceRef      String
   enabled        Boolean   @default(true)
+  /// CAM-3: KITCHEN or COUNTER only (CHECK in the migration).
+  preset         CameraPreset?
   lastSeenAt     DateTime?
   createdAt      DateTime  @default(now())
   updatedAt      DateTime  @updatedAt
@@ -187,6 +189,7 @@ model BranchRegulatoryProfile {
 /// `organizationId` remains the tenant boundary under FORCE row-level security;
 /// the branch is a scope *inside* that boundary, never a substitute for it.
 model PharmacyBranch {
+  whatsappMessageLogs PharmacyMessageLog[]
   receiptLayout          Json?
   receiptLayoutRevision  Int     @default(0)
   id                     String  @id @default(cuid())
@@ -958,6 +961,7 @@ enum PharmacyTenderType {
 }
 
 enum PharmacyLoyaltyEntryKind {
+  EARN_REVERSAL
   EARN
   REDEEM
   REFUND
@@ -1029,6 +1033,7 @@ enum PharmacyCustomerOrderStatus {
   COMPLETED
   CANCELLED
   EXPIRED
+  RETURNED
 }
 
 enum PharmacyCustomerOrderEventKind {
@@ -1079,6 +1084,7 @@ model PharmacySale {
 /// CRM-L01 retail identity. Clinical identity remains in PharmacyPatient and is
 /// joined only server-side after a current LOYALTY consent check.
 model PharmacyCustomer {
+  whatsappMessages PharmacyMessageLog[]
   id               String   @id @default(cuid())
   organizationId   String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   patientId        String
@@ -1103,6 +1109,8 @@ model PharmacyCustomer {
   @@unique([organizationId, userId])
   @@index([organizationId, displayName])
   @@map("pharmacy_customers")
+  whatsappOptIn Boolean?
+  whatsappOptInChangedAt DateTime? @db.Timestamp(3)
 }
 
 enum PharmacyKhataEventKind {
@@ -1654,6 +1662,7 @@ model PharmacyCustomerOrder {
   lines       PharmacyCustomerOrderLine[]
   events      PharmacyCustomerOrderEvent[]
 
+  deliveryEvidence PharmacyOrderDeliveryEvidence[]
   @@unique([organizationId, id])
   @@unique([organizationId, branchId, id])
   @@unique([organizationId, branchId, counterSaleId])
@@ -2591,6 +2600,8 @@ enum PlatformJobType {
   PURGE_DATA
   SUSPEND
   RESUME
+  PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
+  CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
 }
 
 enum PlatformJobStatus {
@@ -2768,6 +2779,7 @@ model User {
   pharmacyOrdersRun           PharmacyCustomerOrder[]        @relation("PharmacyOrderRunner")
   pharmacyOrderEvents         PharmacyCustomerOrderEvent[]   @relation("PharmacyOrderEventActor")
 
+  pharmacyDeliveryEvidence PharmacyOrderDeliveryEvidence[] @relation("PharmacyDeliveryEvidenceActor")
   @@unique([organizationId, id])
   @@unique([organizationId, email])
   @@index([organizationId])
@@ -4735,6 +4747,7 @@ enum RestaurantActivationAcknowledgementKind {
 }
 
 model Organization {
+  pharmacyMessageLogs PharmacyMessageLog[]
   id                  String                     @id @default(cuid())
   slug                String                     @unique
   legalName           String
@@ -12811,6 +12824,9 @@ model PharmacyStockSignalAction {
   requisitionId    String?
   transferId       String?
   purchaseReturnId String?
+  /// Nullable only for pre-identity historical actions; new drafts always bind both.
+  idempotencyKey   String?
+  payloadHash      String?
   createdAt        DateTime                      @default(now())
 
   signal         PharmacyStockSignal          @relation(fields: [organizationId, branchId, signalId], references: [organizationId, branchId, id], onDelete: Restrict)
@@ -12819,6 +12835,7 @@ model PharmacyStockSignalAction {
   purchaseReturn PharmacyPurchaseReturn?      @relation(fields: [organizationId, purchaseReturnId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, id], map: "pharmacy_stock_signal_actions_org_id_key")
+  @@unique([organizationId, branchId, idempotencyKey], map: "pharmacy_stock_signal_actions_org_branch_intent_key")
   @@index([organizationId, branchId, signalId, createdAt], map: "pharmacy_stock_signal_actions_org_signal_idx")
   @@map("pharmacy_stock_signal_actions")
 }
@@ -13552,6 +13569,7 @@ model PharmacyCampaign {
 
 /// Capture mode only: records intended delivery; no provider delivery state exists.
 model PharmacyCampaignCapture {
+  dispatchAttempts PharmacyCampaignDispatchAttempt[]
   id             String                   @id @default(cuid())
   organizationId String                   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId       String
@@ -13993,4 +14011,233 @@ model RestaurantGrowthReceiptEvent {
 
   @@id([organizationId, billId])
   @@map("restaurant_growth_receipt_events")
+}
+
+enum CameraEvidenceStatus {
+  PENDING
+  CAPTURED
+  FAILED
+  PURGED
+}
+
+enum CameraEvidenceSubject {
+  PHARMACY_TENDER
+  PHARMACY_REFUND
+  PHARMACY_DAILY_CLOSE
+  PHARMACY_TEMPERATURE_EXCURSION
+}
+
+enum CameraPreset {
+  COLD_CHAIN
+  COUNTER
+  KITCHEN
+}
+
+model Camera {
+  id                String              @id @default(cuid())
+  organizationId    String              @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  gatewayId         String
+  branchId          String
+  credentialId      String
+  name              String
+  /// The gateway-side camera reference passed to the adapter.
+  sourceRef         String
+  enabled           Boolean             @default(true)
+  /// Captures counter evidence stills (tender, refund, day close) for its branch.
+  counterEvidence   Boolean             @default(false)
+  /// CAM-3: what the camera watches. Null for cameras registered before CAM-3.
+  preset            CameraPreset?
+  /// The temperature zone (pharmacy stock location) a COLD_CHAIN camera watches.
+  /// Not a foreign key, like branchId: the zone table belongs to the vertical.
+  temperatureZoneId String?
+  lastSeenAt        DateTime?
+  createdAt         DateTime            @default(now())
+  updatedAt         DateTime            @updatedAt
+  gateway           CameraGateway       @relation(fields: [organizationId, gatewayId], references: [organizationId, id], onDelete: Restrict)
+  credential        CameraCredential    @relation(fields: [organizationId, credentialId], references: [organizationId, id], onDelete: Restrict)
+  streamGrants      CameraStreamGrant[]
+  evidence          CameraEvidence[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId])
+  @@index([organizationId, gatewayId])
+  @@index([organizationId, temperatureZoneId])
+  @@map("cameras")
+}
+
+model CameraCredential {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  sealedValue    String
+  version        Int       @default(1)
+  rotatedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  updatedAt      DateTime  @updatedAt
+  cameras        Camera[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@map("camera_credentials")
+}
+
+model CameraEvidence {
+  id                  String                @id @default(cuid())
+  organizationId      String                @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId            String
+  subjectKind         CameraEvidenceSubject
+  subjectId           String
+  /// The sale a tender or refund belongs to; null for a daily close.
+  saleId              String?
+  cameraId            String
+  /// CAM-3 excursion evidence only: the zone and the reading that raised it.
+  temperatureZoneId   String?
+  readingTemperatureC Float?
+  readingRecordedAt   DateTime?
+  status              CameraEvidenceStatus  @default(PENDING)
+  /// Opaque private-storage key; never a URL.
+  storageKey          String?
+  byteLength          Int?
+  failureReason       String?
+  requestedAt         DateTime              @default(now())
+  capturedAt          DateTime?
+  purgedAt            DateTime?
+  updatedAt           DateTime              @updatedAt
+  camera              Camera                @relation(fields: [organizationId, cameraId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, subjectKind, subjectId])
+  @@index([organizationId, saleId])
+  @@index([organizationId, temperatureZoneId])
+  @@index([organizationId, branchId, subjectKind])
+  @@index([status, requestedAt])
+  @@index([status, capturedAt])
+  @@map("camera_evidence")
+}
+
+model CameraGateway {
+  id                String    @id @default(cuid())
+  organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String
+  name              String
+  gatewaySecretHash String    @unique
+  status            String    @default("ACTIVE")
+  revokedAt         DateTime?
+  lastSeenAt        DateTime?
+  baseUrl           String
+  /// Days a captured still is kept before the retention job clears it.
+  retentionDays     Int       @default(7)
+  createdAt         DateTime  @default(now())
+  updatedAt         DateTime  @updatedAt
+  cameras           Camera[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId])
+  @@map("camera_gateways")
+}
+
+model CameraStreamGrant {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  cameraId       String
+  viewerId       String
+  expiresAt      DateTime
+  revokedAt      DateTime?
+  createdAt      DateTime  @default(now())
+  camera         Camera    @relation(fields: [organizationId, cameraId], references: [organizationId, id], onDelete: Cascade)
+
+  @@index([organizationId, cameraId, viewerId])
+  @@index([expiresAt])
+  @@map("camera_stream_grants")
+}
+
+model PharmacyCampaignDeliveryEvent {
+  id String @id @default(cuid())
+  organizationId String
+  attemptId String
+  eventKey String
+  state String
+  provider String
+  senderId String
+  providerMessageId String?
+  acceptanceId String?
+  reason String?
+  occurredAt DateTime
+  recordedAt DateTime @default(now())
+  attempt PharmacyCampaignDispatchAttempt @relation(fields: [organizationId, attemptId, provider, senderId], references: [organizationId, id, provider, senderId], onDelete: Restrict)
+  acceptance PharmacyCampaignDeliveryEvent? @relation("CampaignAcceptance", fields: [organizationId, acceptanceId, attemptId, providerMessageId], references: [organizationId, id, attemptId, providerMessageId], onDelete: Restrict)
+  callbacks PharmacyCampaignDeliveryEvent[] @relation("CampaignAcceptance")
+
+  @@unique([organizationId, eventKey])
+  @@unique([organizationId, id, attemptId, providerMessageId])
+  @@index([organizationId, attemptId, recordedAt], map: "pharmacy_campaign_delivery_events_attempt_idx")
+  @@map("pharmacy_campaign_delivery_events")
+}
+
+model PharmacyCampaignDispatchAttempt {
+  id String @id @default(cuid())
+  organizationId String
+  captureId String
+  requestKey String
+  attemptNumber Int
+  provider String
+  senderId String
+  sandboxOutcome String?
+  reservedAt DateTime @default(now())
+  capture PharmacyCampaignCapture @relation(fields: [organizationId, captureId], references: [organizationId, id], onDelete: Restrict)
+  events PharmacyCampaignDeliveryEvent[]
+
+  @@unique([organizationId, id])
+  @@unique([organizationId, id, provider, senderId])
+  @@unique([organizationId, captureId, requestKey], map: "campaign_attempt_request_key")
+  @@unique([organizationId, captureId, attemptNumber], map: "campaign_attempt_number_key")
+  @@map("pharmacy_campaign_dispatch_attempts")
+}
+
+model PharmacyMessageLog {
+  id                String   @id @default(cuid())
+  organizationId    String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String?
+  customerId        String?
+  patientId         String?
+  channel           String   @default("WHATSAPP")
+  direction         String
+  kind              String
+  status            String
+  dedupeKey         String
+  phoneLast4        String?
+  templateName      String?
+  providerMessageId String?
+  refillCaptureId   String?
+  orderId           String?
+  dueDate           String?
+  error             String?
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  organization Organization      @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+  branch       PharmacyBranch?   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  customer     PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
+  @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
+  @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
+  @@map("pharmacy_message_logs")
+}
+
+model PharmacyOrderDeliveryEvidence {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  orderId String
+  actorUserId String
+  actor User @relation("PharmacyDeliveryEvidenceActor", fields: [organizationId, actorUserId], references: [organizationId, id], onDelete: Restrict)
+  action String
+  amountMinor Int?
+  reference String
+  requestKey String
+  fingerprint String
+  occurredAt DateTime @default(now())
+  order PharmacyCustomerOrder @relation(fields: [organizationId, branchId, orderId], references: [organizationId, branchId, id], onDelete: Restrict)
+  @@unique([organizationId, branchId, orderId, requestKey])
+  @@index([organizationId, branchId, orderId, occurredAt])
+  @@map("pharmacy_order_delivery_evidence")
 }

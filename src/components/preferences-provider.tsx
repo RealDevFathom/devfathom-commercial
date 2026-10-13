@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
+import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from 'react';
 
 /* ============================================================
    PreferencesProvider — the five configurable surface toggles
@@ -52,7 +52,7 @@ export interface PreferencesContextValue extends Preferences {
   setPreferences: (partial: Partial<Preferences>) => void;
 }
 
-const PreferencesContext = createContext<PreferencesContextValue | null>(null);
+const PreferencesContext = createContext(false);
 
 // Allow-list so a tampered/legacy/forward-compat localStorage blob can never
 // push a bogus value onto an <html> attribute.
@@ -170,20 +170,23 @@ function setPreferencesImpl(partial: Partial<Preferences>) {
 /* --- provider + hook ----------------------------------------- */
 
 export function PreferencesProvider({ children }: { children: React.ReactNode }) {
-  const prefs = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  // Keep cross-tab attributes current even before the first consumer hydrates.
+  // This subscription never changes the provider's context value.
+  useEffect(() => subscribe(() => {}), []);
+  // Keep context stable while descendants are still streaming. Each consumer
+  // subscribes at its own hydration boundary and starts from getServerSnapshot.
+  return <PreferencesContext.Provider value={true}>{children}</PreferencesContext.Provider>;
+}
 
+export function usePreferences(): PreferencesContextValue {
+  const provided = useContext(PreferencesContext);
+  const prefs = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const value = useMemo<PreferencesContextValue>(
     () => ({ ...prefs, setPreference: setPreferenceImpl, setPreferences: setPreferencesImpl }),
     [prefs]
   );
-
-  return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
-}
-
-export function usePreferences(): PreferencesContextValue {
-  const ctx = useContext(PreferencesContext);
-  if (!ctx) {
+  if (!provided) {
     throw new Error('usePreferences must be used within a <PreferencesProvider>');
   }
-  return ctx;
+  return value;
 }

@@ -303,6 +303,9 @@ export const navigation: NavItem[] = [
     icon: BarChart3,
     group: 'Pharmacy',
   },
+  { label: 'Cameras', href: '/pharmacy/cameras', icon: Camera, group: 'Pharmacy', adminOnly: true, module: 'pharmacy-core' },
+  { label: 'Loyalty points', href: '/pharmacy/loyalty', icon: Users, group: 'Pharmacy', adminOnly: true, module: 'pharmacy-crm' },
+  { label: 'Marketing & growth', href: '/pharmacy/marketing', icon: BarChart3, group: 'Pharmacy', adminOnly: true, module: 'pharmacy-crm' },
   {
     label: 'Prescriptions',
     href: '/pharmacy/prescriptions',

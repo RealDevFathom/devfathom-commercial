@@ -155,6 +155,72 @@ beforeEach(() => {
   mocks.jobFindFirst.mockResolvedValue(null);
 });
 
+describe('OrganizationDetailPage restricted database reads', () => {
+  it('renders required organization data without reading denied support-session counts', async () => {
+    mocks.orgFindUnique.mockImplementationOnce(
+      async (query: {
+        where: { id: string };
+        include: { _count?: { select: { users?: boolean; supportSessions?: boolean } } };
+      }) => {
+        if (query.include._count?.select.supportSessions) {
+          throw Object.assign(new Error('permission denied for table platform_support_sessions'), {
+            code: '42501',
+          });
+        }
+        return organization({
+          _count: query.include._count?.select.users ? { users: 3 } : {},
+        });
+      }
+    );
+
+    await renderDetail();
+
+    expect(screen.getByRole('heading', { name: 'Northwind Kitchens' })).toBeInTheDocument();
+    expect(screen.getByText(/Northwind Kitchens Ltd.*3\/25 seats/)).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Workspace profile' })).toBeInTheDocument();
+    expect(screen.getByText('Restaurant readiness')).toBeInTheDocument();
+    expect(mocks.orgFindUnique).toHaveBeenCalledExactlyOnceWith(
+      expect.objectContaining({
+        where: { id: 'org_1' },
+        include: expect.objectContaining({
+          users: expect.objectContaining({
+            select: expect.objectContaining({ role: true, status: true }),
+          }),
+          package: expect.any(Object),
+          modules: expect.any(Object),
+          deployments: expect.any(Object),
+          _count: { select: { users: true } },
+        }),
+      })
+    );
+    expect(mocks.requirePlatformRead).toHaveBeenCalledExactlyOnceWith('/platform/organizations');
+    expect(mocks.requirePlatformRead.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.withPlatformDb.mock.invocationCallOrder[0]
+    );
+  });
+
+  it('rejects unauthorized access before opening the platform database scope', async () => {
+    const denied = new Error('Platform read denied');
+    mocks.requirePlatformRead.mockRejectedValueOnce(denied);
+
+    await expect(renderDetail()).rejects.toBe(denied);
+
+    expect(mocks.requirePlatformRead).toHaveBeenCalledExactlyOnceWith('/platform/organizations');
+    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
+    expect(mocks.orgFindUnique).not.toHaveBeenCalled();
+  });
+
+  it('still propagates a database failure on required organization data', async () => {
+    const denied = Object.assign(new Error('permission denied for table organizations'), {
+      code: '42501',
+    });
+    mocks.orgFindUnique.mockRejectedValueOnce(denied);
+
+    await expect(renderDetail()).rejects.toBe(denied);
+    expect(mocks.orgFindUnique).toHaveBeenCalledTimes(1);
+  });
+});
+
 describe('OrganizationDetailPage provisioning recovery', () => {
   it('names the failed step, owner, and safe retry without exposing the worker error', async () => {
     mocks.jobFindFirst.mockResolvedValue({

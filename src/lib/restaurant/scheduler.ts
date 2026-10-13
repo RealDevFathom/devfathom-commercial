@@ -46,6 +46,8 @@ export type FailOutcome = 'retried' | 'dead' | 'failed';
 /** A server clock; injectable so tests and the battery are deterministic. */
 export type Clock = () => Date;
 
+export const DEMO_RESET_JOB_TYPE = 'demo-reset';
+
 export const DEFAULT_MAX_ATTEMPTS = 5;
 /** First-retry delay; doubles per prior attempt, capped by RETRY_CAP_MS. */
 export const RETRY_BASE_MS = 30_000;

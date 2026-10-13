@@ -152,6 +152,8 @@ Rules:
 - Numeric ledgers use tabular numbers.
 - Do not add another font without changing this contract and the root font setup together.
 
+Font delivery uses `next/font/local` with the 17 unchanged WOFF2 assets from the accepted build, preserving subsets, weights, Latin preloads, fallback metrics, and semantic variables. Full copyright/OFL notices ship at `/licenses/instrument-sans-OFL.txt` and `/licenses/ibm-plex-mono-OFL.txt` through the existing public-assets copy in the Dockerfile; standalone distributions must include `public` and `.next/static`. Original Google binary retrieval URLs, headers, time, and revision were not retained.
+
 ## 5. Application geometry
 
 ### Desktop

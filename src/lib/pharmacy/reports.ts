@@ -2,6 +2,7 @@ import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { grossMarginQuery } from './finance-reports';
 
 export const MAX_PHARMACY_REPORT_DAYS = 90;
 export const MAX_PHARMACY_REPORT_BRANCHES = 100;
@@ -38,9 +39,9 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'marginMinor',
     'Gross margin',
-    'Sales revenue less frozen lot cost for allocated canonical units.',
-    'pharmacy_sale_lines (frozen unit cost)',
-    'selected branches and business dates',
+    'Posted revenue less discounts and exact allocated lot cost, including return and reversal postings. Missing journal evidence is unknown; source completeness is not asserted.',
+    'finance_journal_entries + finance_journal_lines',
+    'selected branches and UTC posting dates',
     '/pharmacy/reports?section=sales',
     'reports:financial',
   ],
@@ -182,25 +183,25 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'accountsPayableMinor',
     'Accounts payable',
-    'Not available: no pharmacy AP ledger exists in this release.',
+    'Unknown in this report. Recorded accounts payable balances are available in Finance with financial-report permission and Pharmacy Reports access. Open-item and due-date aging remain unknown; full posting coverage is not asserted.',
     null,
     'not asserted',
-    null,
+    '/pharmacy/finance',
     'reports:financial',
   ],
   [
     'accountsReceivableMinor',
     'Accounts receivable',
-    'Not available: no pharmacy AR ledger exists in this release.',
+    'Unknown in this report. Recorded accounts receivable balances are available in Finance with financial-report permission and Pharmacy Reports access. Open-item and due-date aging remain unknown; full posting coverage is not asserted.',
     null,
     'not asserted',
-    null,
+    '/pharmacy/finance',
     'reports:financial',
   ],
   [
     'khataAgingMinor',
     'Khata aging',
-    'Not available: no pharmacy khata ledger exists in this release.',
+    'Unknown: customer open-item and due-date aging are not available. Recorded account balances in Finance are not aging.',
     null,
     'not asserted',
     null,
@@ -265,7 +266,7 @@ export function validatePharmacyReportFilters(filters: PharmacyReportFilters) {
 
 type MoneyCounts = {
   salesMinor: number;
-  marginMinor: number;
+  marginMinor: number | null;
   cashMinor: number;
   refundsMinor: number;
   cashVarianceMinor: number;
@@ -274,10 +275,18 @@ type MoneyCounts = {
 export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: PharmacyReportFilters) {
   const parsed = validatePharmacyReportFilters(filters);
   const branches = Prisma.join(filters.branchIds);
+  // Same signed journal query as Finance: no rounded sale-unit cost arithmetic.
+  const marginQuery = grossMarginQuery(
+    {
+      organizationId: Prisma.sql`current_setting('app.current_organization_id', true)`,
+      branchIds: filters.branchIds,
+    },
+    { from: parsed.from, to: parsed.to, by: 'branch' }
+  );
   const [money, stock, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
     await Promise.all([
       db.$queryRaw<MoneyCounts[]>(
-        Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor" - l."unitCostMinor" * l."canonicalUnits") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to}),0)::int AS "cashVarianceMinor"`
+        Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
       ),
       db.$queryRaw<Array<{ open: number; recommended: number }>>(
         Prisma.sql`SELECT COUNT(*)::int AS "open", COUNT(*) FILTER (WHERE EXISTS (SELECT 1 FROM "pharmacy_stock_signal_actions" a WHERE a."organizationId"=s."organizationId" AND a."branchId"=s."branchId" AND a."signalId"=s."id" AND a."kind"='DRAFT_REQUISITION' AND a."requisitionId" IS NOT NULL))::int AS "recommended" FROM "pharmacy_stock_signals" s WHERE s."branchId" IN (${branches}) AND s."status" IN ('OPEN','ACKNOWLEDGED','SNOOZED')`
@@ -302,7 +311,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
         },
       }),
       db.$queryRaw<Array<{ value: number }>>(
-        Prisma.sql`SELECT (SELECT COUNT(*) FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*) FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN') AS value`
+        Prisma.sql`SELECT (SELECT COUNT(*)::int FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*)::int FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN') AS value`
       ),
       db.$queryRaw<Array<{ aging: number; rejected: number }>>(
         Prisma.sql`SELECT COUNT(*) FILTER (WHERE "status" IN ('QUEUED','SUBMITTING') AND "createdAt"<=CURRENT_TIMESTAMP-interval '15 minutes')::int AS aging, COUNT(*) FILTER (WHERE "status" IN ('REJECTED','DEAD'))::int AS rejected FROM "pharmacy_fiscal_documents" WHERE "branchId" IN (${branches})`
@@ -310,7 +319,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
     ]);
   const m = money[0] ?? {
     salesMinor: 0,
-    marginMinor: 0,
+    marginMinor: null,
     cashMinor: 0,
     refundsMinor: 0,
     cashVarianceMinor: 0,
@@ -346,7 +355,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
       accountsPayableMinor: null,
       accountsReceivableMinor: null,
       khataAgingMinor: null,
-      deviceFiscalOfflineExceptions: (fiscal[0]?.aging ?? 0) + (fiscal[0]?.rejected ?? 0),
+      deviceFiscalOfflineExceptions: null,
     },
   };
 }

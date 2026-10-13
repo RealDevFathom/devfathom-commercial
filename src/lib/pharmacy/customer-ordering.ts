@@ -3,9 +3,11 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { planAllocation, PharmacyInventoryError } from './inventory';
+import { blockReasonFor, planAllocation, PharmacyInventoryError } from './inventory';
 import { priceFromLot } from './medicine';
-import { addSaleLine, createSale } from './sales';
+import { deliveryTotals } from './customer-delivery';
+import { saleTotalMinor } from './settlement';
+import { addReservedSaleLine, createSale } from './sales';
 import type { LedgerScope } from './stock-ledger';
 
 export type CustomerOrderFulfillment = 'COLLECT' | 'DELIVER';
@@ -17,7 +19,8 @@ export type CustomerOrderStatus =
   | 'OUT_FOR_DELIVERY'
   | 'COMPLETED'
   | 'CANCELLED'
-  | 'EXPIRED';
+  | 'EXPIRED'
+  | 'RETURNED';
 
 export class PharmacyCustomerOrderError extends Error {
   constructor(
@@ -32,6 +35,7 @@ export class PharmacyCustomerOrderError extends Error {
       | 'ORDER_NOT_FOUND'
       | 'RUNNER_REQUIRED'
       | 'SALE_NOT_COMPLETED'
+      | 'RESERVATION_UNAVAILABLE'
   ) {
     super(reason);
   }
@@ -452,7 +456,11 @@ const orderInclude = {
     orderBy: { createdAt: 'asc' as const },
   },
   events: { orderBy: { occurredAt: 'asc' as const } },
-} as const;
+  deliveryEvidence: {
+    select: { id: true, action: true, occurredAt: true, amountMinor: true },
+    orderBy: [{ occurredAt: 'asc' as const }, { id: 'asc' as const }],
+  },
+} satisfies Prisma.PharmacyCustomerOrderInclude;
 
 async function readOrder(db: ScopedDb, organizationId: string, orderId: string) {
   return db.pharmacyCustomerOrder.findFirst({
@@ -509,7 +517,7 @@ async function appendOrderEvent(
   });
 }
 
-async function releaseOrderReservations(db: ScopedDb, scope: LedgerScope, orderId: string) {
+export async function releaseOrderReservations(db: ScopedDb, scope: LedgerScope, orderId: string) {
   const at = new Date();
   const interests = await db.pharmacyRestockInterest.findMany({
     where: {
@@ -549,15 +557,16 @@ export async function cancelMyCustomerOrder(db: ScopedDb, scope: LedgerScope, or
     Prisma.sql`SELECT id FROM "pharmacy_customer_orders" WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${orderId} FOR UPDATE`
   );
   const customer = await db.pharmacyCustomer.findFirst({
-    where: { organizationId: scope.organizationId, userId: scope.actorId },
+    where: { organizationId: scope.organizationId, userId: scope.actorId, active: true },
     select: { id: true },
   });
+  if (!customer) throw new PharmacyCustomerOrderError('CUSTOMER_NOT_FOUND');
   const order = await db.pharmacyCustomerOrder.findFirst({
     where: {
       id: orderId,
       organizationId: scope.organizationId,
       branchId: scope.branchId,
-      customerId: customer?.id,
+      customerId: customer.id,
     },
   });
   if (!order) throw new PharmacyCustomerOrderError('ORDER_NOT_FOUND');
@@ -590,6 +599,99 @@ const STAFF_TRANSITIONS = {
     at: 'outForDeliveryAt',
   },
 } as const;
+
+// Runs inside the caller's transaction, after locking the order. Revalidate the
+// held lots themselves: selecting a fresh FEFO plan could silently swap stock.
+async function revalidateOrderReservations(db: ScopedDb, scope: LedgerScope, orderId: string) {
+  const lines = await db.pharmacyCustomerOrderLine.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, orderId },
+    select: { id: true, canonicalUnits: true },
+  });
+  const query = Prisma.sql`
+    /* handoff_reservations */
+    SELECT interest."orderLineId", reservation."reservedUnits",
+           balance."inventoryLotId", balance."stockLocationId",
+           balance."organizationId", balance."branchId",
+           balance."disposition"::text AS disposition, batch."state"::text AS "batchState",
+           batch."expiresAt", lot."receivedAt",
+           medicine.saleable, medicine.otc, medicine.rx, medicine.restricted, medicine.controlled,
+           (balance."onHandUnits" - COALESCE((
+             SELECT SUM(other."reservedUnits") FROM "pharmacy_restock_reservations" other
+             WHERE other."organizationId" = balance."organizationId"
+               AND other."branchId" = balance."branchId"
+               AND other."inventoryLotId" = balance."inventoryLotId"
+               AND other."stockLocationId" = balance."stockLocationId"
+               AND other.status = 'RESERVED' AND other.id <> reservation.id
+           ), 0) - COALESCE((
+             SELECT SUM(claim."reservedUnits") FROM "pharmacy_supplier_claims" claim
+             WHERE claim."organizationId" = balance."organizationId"
+               AND claim."branchId" = balance."branchId"
+               AND claim."inventoryLotId" = balance."inventoryLotId"
+               AND claim.status = 'RESERVED'
+           ), 0))::integer AS "availableUnits"
+    FROM "pharmacy_restock_reservations" reservation
+    JOIN "pharmacy_restock_interests" interest
+      ON interest."organizationId" = reservation."organizationId"
+     AND interest."branchId" = reservation."branchId" AND interest.id = reservation."interestId"
+    JOIN "pharmacy_customer_order_lines" line
+      ON line."organizationId" = interest."organizationId"
+     AND line."branchId" = interest."branchId" AND line.id = interest."orderLineId"
+    JOIN "pharmacy_stock_balances" balance
+      ON balance."organizationId" = reservation."organizationId"
+     AND balance."branchId" = reservation."branchId"
+     AND balance."inventoryLotId" = reservation."inventoryLotId"
+     AND balance."stockLocationId" = reservation."stockLocationId"
+     AND balance.disposition = 'AVAILABLE'
+    JOIN "pharmacy_inventory_lots" lot
+      ON lot."organizationId" = balance."organizationId"
+     AND lot."branchId" = balance."branchId" AND lot.id = balance."inventoryLotId"
+     AND lot."packLevelId" = line."packLevelId"
+    JOIN "pharmacy_manufacturing_batches" batch
+      ON batch."organizationId" = lot."organizationId" AND batch.id = lot."manufacturingBatchId"
+     AND batch."medicineId" = line."medicineId"
+    JOIN "pharmacy_medicines" medicine
+      ON medicine."organizationId" = batch."organizationId" AND medicine.id = batch."medicineId"
+    WHERE reservation."organizationId" = ${scope.organizationId}
+      AND reservation."branchId" = ${scope.branchId} AND line."orderId" = ${orderId}
+      AND reservation.status = 'RESERVED'
+    ORDER BY batch.id, lot.id, balance."stockLocationId", reservation.id
+  `;
+  await db.$queryRaw(Prisma.sql`${query} FOR UPDATE OF batch, medicine, lot, balance, reservation`);
+  // Read again after any lock wait so reservation/claim totals use a fresh
+  // READ COMMITTED snapshot; competing stock writers also lock the balance.
+  const reservations = await db.$queryRaw<
+    (ReservationCandidate &
+      Parameters<typeof isCustomerOrderableMedicine>[0] & {
+        orderLineId: string;
+        reservedUnits: number;
+      })[]
+  >(query);
+  const at = new Date();
+  const coverage = new Map<string, number>();
+  for (const reservation of reservations) {
+    if (
+      !isCustomerOrderableMedicine(reservation) ||
+      blockReasonFor(reservation, { ...scope, at }) ||
+      !Number.isSafeInteger(reservation.reservedUnits) ||
+      reservation.reservedUnits <= 0 ||
+      reservation.availableUnits < reservation.reservedUnits
+    ) {
+      throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+    }
+    coverage.set(
+      reservation.orderLineId,
+      (coverage.get(reservation.orderLineId) ?? 0) + reservation.reservedUnits
+    );
+  }
+  if (
+    lines.length === 0 ||
+    coverage.size !== lines.length ||
+    lines.some((line) => coverage.get(line.id) !== line.canonicalUnits)
+  ) {
+    throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+  }
+  return reservations;
+}
 
 export async function transitionCustomerOrder(
   db: ScopedDb,
@@ -647,6 +749,15 @@ export async function transitionCustomerOrder(
     });
     if (!runner) throw new PharmacyCustomerOrderError('RUNNER_REQUIRED');
   }
+  if (input.action === 'ready' || input.action === 'dispatch') {
+    if (order.reservationExpiresAt.getTime() <= Date.now()) {
+      throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+    }
+    await revalidateOrderReservations(db, scope, order.id);
+    if (order.reservationExpiresAt.getTime() <= Date.now()) {
+      throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+    }
+  }
   const at = new Date();
   await db.pharmacyCustomerOrder.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: order.id } },
@@ -671,13 +782,26 @@ export async function startCustomerOrderCheckout(
   );
   const order = await db.pharmacyCustomerOrder.findFirst({
     where: { id: orderId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { lines: { orderBy: { createdAt: 'asc' } } },
+    include: {
+      lines: { orderBy: { createdAt: 'asc' } },
+      deliveryEvidence: { select: { action: true } },
+    },
   });
   if (!order) throw new PharmacyCustomerOrderError('ORDER_NOT_FOUND');
   if (!['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY'].includes(order.status)) {
     throw new PharmacyCustomerOrderError('INVALID_STATE');
   }
+  if (
+    order.deliveryEvidence?.some((row) =>
+      ['REFUSED', 'FAILED', 'PHYSICAL_RETURN'].includes(row.action)
+    )
+  )
+    throw new PharmacyCustomerOrderError('INVALID_STATE');
   if (order.counterSaleId) return { saleId: order.counterSaleId, replayed: true };
+  const reservations = await revalidateOrderReservations(db, scope, order.id);
+  if (order.reservationExpiresAt.getTime() <= Date.now()) {
+    throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
+  }
   await releaseOrderReservations(db, scope, order.id);
   const sale = await createSale(db, scope);
   await db.pharmacySale.update({
@@ -685,16 +809,30 @@ export async function startCustomerOrderCheckout(
     data: { customerId: order.customerId },
   });
   for (const line of order.lines) {
-    await addSaleLine(db, scope, {
-      saleId: sale.id,
-      medicineId: line.medicineId,
-      presentationId: line.presentationId,
-      packLevelId: line.packLevelId,
-      saleUnit: line.saleUnit,
-      quantity: line.quantity,
-      canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
-      idempotencyKey: `customer-order:${order.id}:${line.id}`,
-    });
+    await addReservedSaleLine(
+      db,
+      scope,
+      {
+        saleId: sale.id,
+        medicineId: line.medicineId,
+        presentationId: line.presentationId,
+        packLevelId: line.packLevelId,
+        saleUnit: line.saleUnit,
+        quantity: line.quantity,
+        canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
+        idempotencyKey: `customer-order:${order.id}:${line.id}`,
+      },
+      {
+        expiresAt: order.reservationExpiresAt,
+        allocations: reservations
+          .filter((row) => row.orderLineId === line.id)
+          .map((row) => ({
+            inventoryLotId: row.inventoryLotId,
+            stockLocationId: row.stockLocationId,
+            units: row.reservedUnits,
+          })),
+      }
+    );
   }
   await db.pharmacyCustomerOrder.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: order.id } },
@@ -719,15 +857,23 @@ export async function completeCustomerOrder(db: ScopedDb, scope: LedgerScope, or
   );
   const order = await db.pharmacyCustomerOrder.findFirst({
     where: { id: orderId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { counterSale: true },
+    include: { counterSale: { include: { lines: true } }, deliveryEvidence: true },
   });
   if (!order) throw new PharmacyCustomerOrderError('ORDER_NOT_FOUND');
   if (
+    order.deliveryEvidence?.some((row) =>
+      ['REFUSED', 'FAILED', 'PHYSICAL_RETURN'].includes(row.action)
+    ) ||
     !['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY'].includes(order.status) ||
     !order.counterSale ||
     order.counterSale.status !== 'COMPLETED'
   ) {
     throw new PharmacyCustomerOrderError('SALE_NOT_COMPLETED');
+  }
+  if (order.fulfillment === 'DELIVER' && order.intendedPaymentMethod === 'CASH') {
+    const cash = deliveryTotals(order.deliveryEvidence);
+    if (cash.custodyMinor !== 0 || cash.remittedMinor !== saleTotalMinor(order.counterSale.lines))
+      throw new PharmacyCustomerOrderError('SALE_NOT_COMPLETED');
   }
   const completedAt = new Date();
   await db.pharmacyCustomerOrder.update({

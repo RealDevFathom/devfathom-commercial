@@ -1,3 +1,4 @@
+import AxeBuilder from '@axe-core/playwright';
 import { expect, test } from '@playwright/test';
 import { createHash } from 'node:crypto';
 import {
@@ -57,6 +58,116 @@ test('full administrator can load every declared route and matching navigation',
   }
   expect(browserErrors).toEqual([]);
 });
+
+for (const theme of ['light', 'dark'] as const) {
+  test(`CRM scroll regions support keyboard access and axe in ${theme} theme`, async ({
+    page,
+  }, testInfo) => {
+    const browserErrors: string[] = [];
+    page.on('console', (message) => {
+      if (message.type() === 'error') browserErrors.push(message.text());
+    });
+    page.on('pageerror', (error) => browserErrors.push(error.message));
+
+    // The six board columns and the 700px Leads table overflow even an empty
+    // disposable fixture at this viewport. No extra CRM records are needed.
+    await page.setViewportSize({ width: 375, height: 812 });
+    await loginPlatform(page);
+    const html = page.locator('html');
+    await expect(html).toHaveAttribute('data-theme', /^(light|dark)$/);
+    if ((await html.getAttribute('data-theme')) !== theme) {
+      await page
+        .getByRole('button', { name: theme === 'dark' ? 'Use dark theme' : 'Use light theme' })
+        .click();
+    }
+    await expect(html).toHaveAttribute('data-theme', theme);
+    const response = await page.goto('/platform/crm');
+    expect(response?.status(), `CRM document in ${theme} theme`).toBe(200);
+    await expect(page.getByRole('heading', { name: 'Sales command', exact: true })).toBeVisible();
+    await expect(html).toHaveAttribute('data-theme', theme);
+
+    for (const name of ['Opportunity board', 'Leads'] as const) {
+      await test.step(`${name}: overflow, Tab, focus ring, scrolling and axe (${theme})`, async () => {
+        const region = page.getByRole('region', { name, exact: true });
+        const context = `${name} (${theme})`;
+        await expect(region, context).toHaveCount(1);
+        await expect(region, context).toBeVisible();
+        await expect(region, context).toHaveAttribute('tabindex', '0');
+        const headingId = await page.getByRole('heading', { name, exact: true }).getAttribute('id');
+        expect(headingId, `${context}: visible heading has an ID`).toBeTruthy();
+        await expect(region, context).toHaveAttribute('aria-labelledby', headingId!);
+        await expect(region, context).toHaveCSS('overflow-x', 'auto');
+        await expect
+          .poll(() => region.evaluate((element) => element.scrollWidth - element.clientWidth), {
+            message: `${context}: the named region must actually overflow horizontally`,
+          })
+          .toBeGreaterThan(0);
+
+        const restingShadow = await region.evaluate(
+          (element) => getComputedStyle(element).boxShadow
+        );
+        // An upper bound based on this document's potential Tab stops allows
+        // changing fixture content without depending on its order or row IDs.
+        const tabBudget =
+          (await page
+            .locator('a[href], button, input, select, textarea, summary, [tabindex]')
+            .count()) + 2;
+        let reached = false;
+        for (let presses = 0; presses < tabBudget; presses += 1) {
+          await page.keyboard.press('Tab');
+          if (await region.evaluate((element) => document.activeElement === element)) {
+            reached = true;
+            break;
+          }
+        }
+        expect(reached, `${context}: real Tab traversal exhausted ${tabBudget} presses`).toBe(true);
+        await expect(region, context).toBeFocused();
+        expect(await region.evaluate((element) => element.matches(':focus-visible')), context).toBe(
+          true
+        );
+        await expect(region, context).toHaveClass(/\bfocus-visible:ring-2\b/);
+        await expect(region, context).toHaveClass(/\bfocus-visible:ring-ring\b/);
+        await expect
+          .poll(() => region.evaluate((element) => getComputedStyle(element).boxShadow), {
+            message: `${context}: keyboard focus must render the semantic ring`,
+          })
+          .not.toBe(restingShadow);
+        await expect(region, context).not.toHaveCSS('box-shadow', 'none');
+
+        // Tab may reveal a descendant while traversing the board. Choose the
+        // arrow with room to scroll, and measure this region rather than main.
+        const before = await region.evaluate((element) => ({
+          left: element.scrollLeft,
+          max: element.scrollWidth - element.clientWidth,
+        }));
+        const direction = before.left < before.max / 2 ? 1 : -1;
+        await page.keyboard.press(direction === 1 ? 'ArrowRight' : 'ArrowLeft');
+        await expect
+          .poll(() => region.evaluate((element) => element.scrollLeft), {
+            message: `${context}: arrow key must scroll the focused region`,
+          })
+          [direction === 1 ? 'toBeGreaterThan' : 'toBeLessThan'](before.left);
+        await expect(region, context).toBeFocused();
+        await testInfo.attach(`${name}-${theme}-keyboard-focus`, {
+          body: await page.screenshot(),
+          contentType: 'image/png',
+        });
+
+        const results = await new AxeBuilder({ page })
+          .include(`[role="region"][aria-labelledby="${headingId}"]`)
+          .withRules(['scrollable-region-focusable'])
+          .analyze();
+        expect(results.violations, `${context}: ${JSON.stringify(results.violations)}`).toEqual([]);
+        expect(results.incomplete, `${context}: axe needs a conclusive result`).toEqual([]);
+        expect(
+          results.passes.map((result) => result.id),
+          `${context}: rule was exercised`
+        ).toContain('scrollable-region-focusable');
+      });
+    }
+    expect(browserErrors, `CRM browser errors in ${theme} theme`).toEqual([]);
+  });
+}
 
 test('restricted operator sees only grants and denied document/data requests fail safely', async ({
   page,

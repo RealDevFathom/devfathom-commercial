@@ -17,7 +17,7 @@ import {
   isAuditExcludedPath,
   recordTrpcAudit,
 } from '@/server/audit';
-import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
+import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/tenancy/demo-isolation';
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls

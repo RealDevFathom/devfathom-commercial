@@ -26,7 +26,13 @@ export type ReportScope = {
   branchId?: string;
 };
 
-function branchFilter(scope: ReportScope) {
+type JournalReportScope = Omit<ReportScope, 'organizationId'> & {
+  organizationId: string | Prisma.Sql;
+  branchIds?: string[];
+};
+
+function branchFilter(scope: JournalReportScope) {
+  if (scope.branchIds) return Prisma.sql`AND line."branchId" IN (${Prisma.join(scope.branchIds)})`;
   return scope.branchId
     ? Prisma.sql`AND line."branchId" = ${scope.branchId}`
     : Prisma.sql`AND TRUE`;
@@ -114,8 +120,8 @@ export async function grossMargin(
   return db.$queryRaw<MarginRow[]>(grossMarginQuery(scope, input));
 }
 
-function grossMarginQuery(
-  scope: ReportScope,
+export function grossMarginQuery(
+  scope: JournalReportScope,
   input: { from: Date; to: Date; by: MarginDimension }
 ) {
   const key = {

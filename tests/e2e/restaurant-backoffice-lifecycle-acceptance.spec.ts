@@ -324,13 +324,36 @@ test('a supplier created in the registry persists and becomes orderable', async 
 
 test('an approved purchase order receipt reaches the stock ledger and on-hand position', async ({
   page,
-}) => {
+}, testInfo) => {
   requireAdminActor();
+  const browserErrors: string[] = [];
+  page.on('pageerror', (error) => browserErrors.push(error.message));
+  page.on('console', (message) => {
+    if (message.type() === 'error') browserErrors.push(message.text());
+  });
+  const savedPreferences = {
+    density: 'compact',
+    type: 'lg',
+    accent: 'bold',
+    layout: 'top',
+    icons: 'architectural',
+  };
+  // Seed real persisted settings before the first document, including purchasing.
+  await page.addInitScript((preferences) => {
+    localStorage.setItem('theme', 'dark');
+    localStorage.setItem('devfathom-prefs', JSON.stringify(preferences));
+  }, savedPreferences);
+  const assertSavedSettings = async () => {
+    for (const [key, value] of Object.entries({ theme: 'dark', ...savedPreferences })) {
+      await expect(page.locator('html')).toHaveAttribute(`data-${key}`, value);
+    }
+  };
   const origin = await signInAs(page, 'restaurantAdmin');
   const purchasing = new URL(ROUTES.purchasing, origin).href;
   const inventory = new URL(ROUTES.inventory, origin).href;
 
   await page.goto(purchasing);
+  await assertSavedSettings();
   const orderForm = card(page, 'New purchase order');
   await expectFieldCaption(orderForm, 'locationId', 'Location');
   await expectFieldCaption(orderForm, 'stockItemId', 'Stock item');
@@ -399,6 +422,7 @@ test('an approved purchase order receipt reaches the stock ledger and on-hand po
     await expect(queueRow, 'the created purchase order must appear in the queue').toHaveCount(1);
     await queueRow.getByRole('link', { name: /^(?:Review|Selected)$/ }).click();
     await expect(page.getByRole('heading', { name: orderReference, exact: true })).toBeVisible();
+    await assertSavedSettings();
   };
 
   await openOrder();
@@ -449,7 +473,18 @@ test('an approved purchase order receipt reaches the stock ledger and on-hand po
     received.value,
     6
   );
+  await expect(page.locator('#receipt-history')).toHaveCount(1);
   await expect(page.locator('#receipt-history')).toContainText(receiptReference);
+
+  // Reopen the same order twice: count all DOM matches, including hidden
+  // streamed copies, and retain the strict receipt-content oracle each time.
+  for (let revisit = 0; revisit < 2; revisit += 1) {
+    await page.goto(inventory);
+    await expect(card(page, 'Stock on hand')).toBeVisible();
+    await openOrder();
+    await expect(page.locator('#receipt-history')).toHaveCount(1);
+    await expect(page.locator('#receipt-history')).toContainText(receiptReference);
+  }
 
   await page.goto(inventory);
   await expect(card(page, 'Movement ledger')).toBeVisible();
@@ -476,6 +511,18 @@ test('an approved purchase order receipt reaches the stock ledger and on-hand po
     onHandAfter,
     'a posted receipt must raise derived stock by exactly the received quantity'
   ).toBeCloseTo(onHandBefore + received.value, 6);
+  await assertSavedSettings();
+  await testInfo.attach('saved-settings', {
+    body: JSON.stringify({ theme: 'dark', ...savedPreferences, browserErrors }),
+    contentType: 'application/json',
+  });
+  await testInfo.attach('saved-settings-final', {
+    body: await page.screenshot({ fullPage: true }),
+    contentType: 'image/png',
+  });
+  expect(browserErrors, 'saved-settings purchase lifecycle must have no browser errors').toEqual(
+    []
+  );
 });
 
 test('a physical count freezes its snapshot and posts the variance to the stock ledger', async ({

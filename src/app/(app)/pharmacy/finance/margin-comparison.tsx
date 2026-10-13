@@ -14,7 +14,7 @@ import type { pharmacyFinanceRouter } from '@/server/routers/pharmacy-finance';
 
 type Comparison = Awaited<ReturnType<typeof grossMarginComparison>>;
 const money = (minor: number) =>
-  `PKR ${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}`;
+  `${(minor / 100).toLocaleString('en-PK', { minimumFractionDigits: 2, maximumFractionDigits: 2 })} (currency unknown)`;
 
 export function MarginComparisonLedger({ report }: { report: Comparison }) {
   const rows = [
@@ -64,8 +64,8 @@ export function MarginComparisonLedger({ report }: { report: Comparison }) {
       ) : null}
       <Table>
         <caption className="text-left text-sm text-text-muted">
-          Accounting decomposition · PKR · posted revenue, discounts and COGS, including reversals
-          and returns recorded in the journal.
+          Accounting decomposition · currency unknown · posted revenue, discounts and COGS,
+          including reversals and returns recorded in the journal.
         </caption>
         <TableHeader>
           <TableRow>
@@ -108,11 +108,19 @@ export async function MarginComparisonSection({
   branch,
   from,
   to,
+  ledgerFrom,
+  ledgerTo,
+  ledgerAt,
+  ledgerBy,
 }: {
   caller: ReturnType<typeof pharmacyFinanceRouter.createCaller>;
   branch: { id: string; name: string };
   from?: string;
   to?: string;
+  ledgerFrom?: string;
+  ledgerTo?: string;
+  ledgerAt?: string;
+  ledgerBy?: string;
 }) {
   const end = new Date();
   end.setUTCHours(0, 0, 0, 0);
@@ -142,6 +150,10 @@ export async function MarginComparisonSection({
       </p>
       <form action="/pharmacy/finance" method="get" className="mb-5 flex flex-wrap items-end gap-3">
         <input type="hidden" name="branch" value={branch.id} />
+        {/* LedgerReportsSection owns defaults and validation, including invalid submissions. */}
+        {Object.entries({ ledgerFrom, ledgerTo, ledgerAt, ledgerBy }).map(([name, value]) =>
+          value !== undefined ? <input key={name} type="hidden" name={name} value={value} /> : null
+        )}
         <label className="text-sm">
           Current start (UTC)
           <Input

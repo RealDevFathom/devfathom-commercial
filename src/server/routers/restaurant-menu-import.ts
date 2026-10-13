@@ -1,3 +1,5 @@
+import { MenuExtractionError } from '@/lib/restaurant/menu-extraction';
+import { StorageUnavailableError } from '@/lib/storage';
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
@@ -5,6 +7,7 @@ import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
   MenuImportError,
+  getMenuImportAvailability,
   commitMenuImport,
   createMenuImport,
   discardMenuImport,
@@ -39,6 +42,12 @@ const importProcedure = capabilityProcedure('menu:import');
 
 /** Translate domain errors to tRPC status. Rethrows anything unrecognised. */
 function mapMenuImportError(err: unknown): never {
+  if (
+    (err instanceof MenuExtractionError && err.reason === 'ADAPTER_UNAVAILABLE') ||
+    err instanceof StorageUnavailableError
+  ) {
+    throw new TRPCError({ code: 'SERVICE_UNAVAILABLE', message: 'Menu uploads are unavailable.' });
+  }
   if (err instanceof MenuImportError) {
     const code =
       err.reason === 'NOT_FOUND' || err.reason === 'MERGE_TARGET_NOT_FOUND'
@@ -75,6 +84,7 @@ const REVIEW_DECISION = z.enum(['ACCEPTED', 'REJECTED', 'MERGED']);
 export const restaurantMenuImportRouter = router({
   /** The limits a client should enforce before it bothers uploading. */
   uploadLimits: importProcedure.query(() => ({
+    ...getMenuImportAvailability(),
     maxBytes: MAX_UPLOAD_BYTES,
     allowedMimeTypes: [...ALLOWED_MENU_UPLOAD_TYPES],
   })),

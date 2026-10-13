@@ -85,7 +85,7 @@ export function AssistantPanel() {
   const { open, setOpen } = useAssistant();
   const [input, setInput] = useState('');
 
-  const { messages, sendMessage, status, stop, addToolApprovalResponse } = useChat({
+  const { messages, sendMessage, status, error, stop, addToolApprovalResponse } = useChat({
     transport: new DefaultChatTransport({ api: '/api/assistant' }),
     // Auto-continue the run after EITHER tool results OR an approval response.
     // The approval case is essential: when the user approves a write, its tool
@@ -130,7 +130,7 @@ export function AssistantPanel() {
             </div>
             <div>
               <p className="font-display text-sm font-semibold leading-none">Assistant</p>
-              <p className="mt-1 text-[11px] text-muted-foreground">DevFathom · Gemini</p>
+              <p className="mt-1 text-[11px] text-muted-foreground">DevFathom · Ask Fathom</p>
             </div>
           </div>
           <button
@@ -150,6 +150,15 @@ export function AssistantPanel() {
             messages.map((m) => <MessageBubble key={m.id} message={m} onApprove={approve} />)
           )}
           {status === 'submitted' && <Thinking />}
+          {error && (
+            <div
+              role="alert"
+              className="rounded-xl border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+            >
+              Ask Fathom could not complete this request. No cached answer was used. Please try
+              again later or contact your company administrator.
+            </div>
+          )}
         </div>
 
         {/* Composer */}

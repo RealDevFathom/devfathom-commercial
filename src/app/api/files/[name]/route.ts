@@ -10,7 +10,7 @@
 
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { getUpload } from '@/lib/storage';
+import { getUpload, StorageUnavailableError } from '@/lib/storage';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -40,6 +40,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   // Defense-in-depth against path traversal — only a bare filename is valid.
   if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
     return new Response('Bad request', { status: 400 });
+  }
+  // Camera stills require their evidence reader's grant and retention checks.
+  if (/^camera-snapshot-/iu.test(name)) {
+    return new Response('Not found', { status: 404 });
   }
   const organization = actor.organization;
 
@@ -106,7 +110,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
         'Cache-Control': 'private, max-age=3600',
       },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof StorageUnavailableError) {
+      return new Response('Files are unavailable.', { status: 503 });
+    }
     return new Response('Not found', { status: 404 });
   }
 }

@@ -6,15 +6,59 @@ import { join } from 'node:path';
 const localRoot = join(process.cwd(), 'private-uploads');
 let blobService: BlobServiceClient | undefined;
 
+export type StorageUnavailableReason = 'disabled' | 'invalid_configuration';
+export type StorageAvailability =
+  | { available: true; adapter: 'local' }
+  | { available: true; adapter: 'azure'; account: string; container: string }
+  | { available: false; reason: StorageUnavailableReason };
+
+export class StorageUnavailableError extends Error {
+  readonly code = 'STORAGE_UNAVAILABLE';
+
+  constructor(readonly reason: StorageUnavailableReason) {
+    super('Storage is unavailable.');
+    this.name = 'StorageUnavailableError';
+  }
+}
+
+/** Pure preflight; availability does not certify provider connectivity. */
+export function getStorageAvailability(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): StorageAvailability {
+  const adapter = env.STORAGE_ADAPTER?.trim();
+  if (!adapter || adapter === 'disabled') return { available: false, reason: 'disabled' };
+  if (adapter === 'local' && (env.NODE_ENV === 'test' || env.NODE_ENV === 'development')) {
+    return { available: true, adapter: 'local' };
+  }
+  if (adapter === 'azure') {
+    const account = env.AZURE_STORAGE_ACCOUNT_NAME?.trim();
+    const container = env.AZURE_STORAGE_CONTAINER?.trim();
+    if (account && container) return { available: true, adapter, account, container };
+  }
+  return { available: false, reason: 'invalid_configuration' };
+}
+
+export function assertStorageAvailable(
+  env: Readonly<Record<string, string | undefined>> = process.env
+): Extract<StorageAvailability, { available: true }> {
+  const availability = getStorageAvailability(env);
+  if (!availability.available) throw new StorageUnavailableError(availability.reason);
+  return availability;
+}
+
+let blobAccount: string | undefined;
+
 function container() {
-  const account = process.env.AZURE_STORAGE_ACCOUNT_NAME?.trim();
-  if (!account) return null;
-  const name = process.env.AZURE_STORAGE_CONTAINER?.trim();
-  if (!name) throw new Error('AZURE_STORAGE_CONTAINER is required when Azure storage is enabled.');
-  blobService ??= new BlobServiceClient(
-    `https://${account}.blob.core.windows.net`,
-    new DefaultAzureCredential()
-  );
+  const availability = assertStorageAvailable();
+  if (availability.adapter === 'local') return null;
+  const { account, container: name } = availability;
+  if (!blobService || blobAccount !== account) {
+    blobService = new BlobServiceClient(
+      `https://${account}.blob.core.windows.net`,
+      new DefaultAzureCredential()
+    );
+    blobAccount = account;
+  }
   return blobService.getContainerClient(name);
 }
 

@@ -1,3 +1,5 @@
+import { isDeepStrictEqual } from 'node:util';
+
 import type { Prisma } from '../src/generated/prisma/client.js';
 import { MODULE_CATALOG } from '../src/lib/module-catalog.js';
 import { PHARMACY_PACKAGES, RESTAURANT_PACKAGES } from '../src/lib/vertical-catalog.js';
@@ -55,12 +57,68 @@ export type PlatformCatalogSync = {
  * Safe to run on every deployment, and idempotent: a second pass returns zeros.
  */
 export async function syncPlatformCatalog(
-  tx: Prisma.TransactionClient
+  tx: Prisma.TransactionClient,
+  scope?: { vertical: 'RESTAURANT'; packageKey: string }
 ): Promise<PlatformCatalogSync> {
+  const restaurantPackage = scope
+    ? RESTAURANT_PACKAGES.find((definition) => definition.key === scope.packageKey)
+    : undefined;
+  if (scope && (scope.vertical !== 'RESTAURANT' || !restaurantPackage)) {
+    throw new Error('Invalid Restaurant catalog scope.');
+  }
+  const packages = restaurantPackage
+    ? [restaurantPackage]
+    : [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES];
+  const modules = restaurantPackage
+    ? CATALOG_MODULES.filter(
+        (module) => module.band === 'BASELINE' || restaurantPackage.moduleKeys.includes(module.key)
+      )
+    : CATALOG_MODULES;
+
+  // A fresh bootstrap must not silently repair or expand an operator's entitlements.
+  if (restaurantPackage) {
+    const existingModules = await tx.platformModule.findMany({
+      where: { key: { in: modules.map((module) => module.key) } },
+    });
+    if (
+      existingModules.some((module) => {
+        const definition = modules.find((candidate) => candidate.key === module.key)!;
+        return (
+          !module.active ||
+          module.band !== definition.band ||
+          module.vertical !== definition.vertical
+        );
+      })
+    ) {
+      throw new Error('Restaurant catalog module conflicts with the code catalog.');
+    }
+    const existingPackage = await tx.platformPackage.findUnique({
+      where: { key: restaurantPackage.key },
+      include: { moduleLinks: { include: { module: true } } },
+    });
+    if (
+      existingPackage &&
+      (!existingPackage.active ||
+        existingPackage.vertical !== 'RESTAURANT' ||
+        existingPackage.moduleLinks.length !== restaurantPackage.moduleKeys.length ||
+        existingPackage.moduleLinks.some(
+          (link) =>
+            !link.enabled ||
+            !link.module.active ||
+            !restaurantPackage.moduleKeys.includes(link.module.key) ||
+            !isDeepStrictEqual(
+              link.limits,
+              link.module.key.endsWith('-core') ? restaurantPackage.defaultLimits : null
+            )
+        ))
+    ) {
+      throw new Error('Restaurant package conflicts with the code catalog; review it explicitly.');
+    }
+  }
   const existingModuleKeys = new Set(
     (
       await tx.platformModule.findMany({
-        where: { key: { in: CATALOG_MODULES.map((definition) => definition.key) } },
+        where: { key: { in: modules.map((definition) => definition.key) } },
         select: { key: true },
       })
     ).map((row) => row.key)
@@ -68,7 +126,7 @@ export async function syncPlatformCatalog(
 
   const moduleIds = new Map<string, string>();
   let modulesCreated = 0;
-  for (const definition of CATALOG_MODULES) {
+  for (const definition of modules) {
     const platformModule = await tx.platformModule.upsert({
       where: { key: definition.key },
       update: {},
@@ -90,7 +148,7 @@ export async function syncPlatformCatalog(
       await tx.platformPackage.findMany({
         where: {
           key: {
-            in: [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES].map((definition) => definition.key),
+            in: packages.map((definition) => definition.key),
           },
         },
         select: { key: true },
@@ -100,7 +158,7 @@ export async function syncPlatformCatalog(
 
   let packagesCreated = 0;
   let linksCreated = 0;
-  for (const definition of [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES]) {
+  for (const definition of packages) {
     if (existingPackageKeys.has(definition.key)) continue;
 
     const platformPackage = await tx.platformPackage.upsert({

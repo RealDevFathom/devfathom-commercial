@@ -21,7 +21,12 @@ import {
 
 import { CounterCartPanel } from './counter-cart';
 import { CounterKeymapLegend } from './counter-keymap-legend';
-import { CounterReceiptView } from './counter-receipt-view';
+import {
+  CounterReceiptView,
+  type CounterReceiptPresentationResult,
+  type CounterReceiptSettlement,
+} from './counter-receipt-view';
+import { CounterReturnPanel } from './counter-return-panel';
 import { CounterRxPanel } from './counter-rx-panel';
 import { CounterSearchResults } from './counter-search-results';
 import { CounterSubstituteProposals } from './counter-substitute-proposals';
@@ -53,17 +58,33 @@ import {
   type CounterAction,
   type CounterKeymapPresetKey,
 } from '@/lib/pharmacy/counter-keymap';
-import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
+import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
+import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
 import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import {
+  buildCounterBrowserReceipt,
   printCounterBrowserReceipt,
+  reserveCounterBrowserPrint,
+  type CounterBrowserPrintReservation,
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
 import { trpc } from '@/lib/trpc';
 
-type Notice = { tone: 'success' | 'warning' | 'danger' | 'neutral'; message: string };
+type Notice = {
+  tone: 'success' | 'warning' | 'danger' | 'neutral';
+  message: string;
+  inventoryBranchId?: string;
+};
+
+type ReceiptIntent = {
+  saleId: string;
+  branchId: string;
+  receiptNumber: number | null;
+  autoPrint: boolean;
+  printReservation?: CounterBrowserPrintReservation;
+};
 
 /**
  * A stable per-browser identifier for the drawer session and receipt sequence.
@@ -191,6 +212,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       key={JSON.stringify([user.organizationId, user.id])}
       organizationId={user.organizationId}
       accountId={user.id}
+      evidenceAuthorized={user.role === 'ADMIN'}
     />
   );
 }
@@ -209,12 +231,15 @@ function ScopedPharmacyCounterConsole({
   initialBranchId = '',
   organizationId,
   accountId,
-}: ConsoleProps & { organizationId: string; accountId: string }) {
+  evidenceAuthorized = false,
+}: ConsoleProps & { organizationId: string; accountId: string; evidenceAuthorized?: boolean }) {
   const utils = trpc.useUtils();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
   const [query, setQuery] = useState('');
-  const [submittedQuery, setSubmittedQuery] = useState('');
+  const [submittedSearch, setSubmittedSearch] = useState({ text: '', query: '', branchId: '' });
+  const submittedQuery = submittedSearch.query;
+  const scannerRevision = useRef(0);
   const [activeRow, setActiveRow] = useState<CounterSearchRow | null>(null);
   const [saleUnit, setSaleUnit] = useState<SaleUnitKind | null>(null);
   const [quantity, setQuantity] = useState(1);
@@ -222,12 +247,22 @@ function ScopedPharmacyCounterConsole({
   const [heldSaleId, setHeldSaleId] = useState<string | null>(null);
   const [patientQuery, setPatientQuery] = useState('');
   const [submittedPatientQuery, setSubmittedPatientQuery] = useState('');
+  const [controlledAuth, setControlledAuth] = useState({
+    prescriptionLineId: '',
+    staffProfileId: '',
+    pin: '',
+  });
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
   const [patientId, setPatientId] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
   const [receiptFormat, setReceiptFormat] = useState<CounterReceiptFormat>('THERMAL');
   const [receiptRenders, setReceiptRenders] = useState(0);
+  const [autoPrint, setAutoPrint] = useState(false);
+  const [receiptSettlement, setReceiptSettlement] = useState<CounterReceiptSettlement | null>(null);
+  const receiptIntent = useRef<ReceiptIntent | null>(null);
+  const autoPrintRef = useRef<HTMLInputElement>(null);
   const [notice, setNotice] = useState<Notice | null>(null);
   const [pending, setPending] = useState<string | null>(null);
   const [tenderOutcome, setTenderOutcome] = useState<CounterTenderResult | null>(null);
@@ -264,6 +299,25 @@ function ScopedPharmacyCounterConsole({
     branchesQuery.isSuccess &&
     !branchesQuery.isError &&
     branches.some((branch) => branch.id === branchId);
+
+  const discardReceiptIntent = useCallback(() => {
+    receiptIntent.current?.printReservation?.cancel();
+    receiptIntent.current = null;
+  }, []);
+
+  // A reserved window belongs only to this mounted operator/branch session.
+  useEffect(() => discardReceiptIntent, [branchAuthorized, branchId, discardReceiptIntent]);
+
+  const receiptPresented = useCallback(
+    (result: CounterReceiptPresentationResult) => {
+      const intent = receiptIntent.current;
+      if (intent?.saleId !== result.saleId || intent.receiptNumber !== result.receiptNumber) return;
+      discardReceiptIntent();
+      setReceiptSettlement(null);
+      if (result.printStatus === 'dialog-requested') setReceiptRenders((count) => count + 1);
+    },
+    [discardReceiptIntent]
+  );
 
   useEffect(() => {
     if (!branchAuthorized) return;
@@ -323,9 +377,25 @@ function ScopedPharmacyCounterConsole({
     onError: (error) => setNotice({ tone: 'danger', message: messageFrom(error) }),
   });
 
+  const trimmedQuery = query.trim();
+  const scannerQuery = trimmedQuery.startsWith(']d2') || trimmedQuery.startsWith('(01)');
+  const searchCurrent =
+    branchAuthorized &&
+    trimmedQuery.length >= 2 &&
+    submittedSearch.text === trimmedQuery &&
+    submittedSearch.branchId === branchId;
+
+  useEffect(() => {
+    if (!branchAuthorized || trimmedQuery.length < 2 || scannerQuery || searchCurrent) return;
+    const timer = window.setTimeout(() => {
+      setSubmittedSearch({ text: trimmedQuery, query: trimmedQuery, branchId });
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [branchAuthorized, branchId, scannerQuery, searchCurrent, trimmedQuery]);
+
   const searchQuery = trpc.pharmacySales.counterSearch.useQuery(
     { branchId, query: submittedQuery },
-    { enabled: Boolean(branchId) && submittedQuery.trim().length >= 2, staleTime: 10_000 }
+    { enabled: searchCurrent && submittedQuery.length >= 2, staleTime: 10_000 }
   );
 
   const cartQuery = trpc.pharmacySales.counterCart.useQuery(
@@ -337,6 +407,20 @@ function ScopedPharmacyCounterConsole({
     { branchId, saleId: saleId ?? '' },
     { enabled: Boolean(branchId && saleId) && cartQuery.data?.status === 'COMPLETED' }
   );
+
+  // Owner-only stills: a disabled query still returns cached data, so cached
+  // images are dropped (not just hidden) once owner eligibility is revoked. A
+  // failed read (access lost mid-session) withholds stills until a fresh read
+  // succeeds; resetting there would refetch the active query in a loop.
+  const evidenceEligible =
+    evidenceAuthorized && Boolean(branchId && saleId) && cartQuery.data?.status === 'COMPLETED';
+  const evidenceQuery = trpc.pharmacySales.counterEvidence.useQuery(
+    { branchId, saleId: saleId ?? '' },
+    { enabled: evidenceEligible, retry: false }
+  );
+  useEffect(() => {
+    if (!evidenceAuthorized) void utils.pharmacySales.counterEvidence.reset();
+  }, [evidenceAuthorized, utils]);
 
   const patientsQuery = trpc.pharmacyPrescriptions.counterPatients.useQuery(
     { query: submittedPatientQuery },
@@ -369,15 +453,20 @@ function ScopedPharmacyCounterConsole({
     await refreshCounterQueries(utils.pharmacySales);
   }, [utils]);
 
-  const setActiveSale = useCallback((nextSaleId: string | null) => {
-    setSaleId(nextSaleId);
-    setReceiptRenders(0);
-    setCustomerId(null);
-    setRedeemPoints(0);
-    setTenderOutcome(null);
-    setTenderReadRequired(false);
-    setRestoredAttempt(null);
-  }, []);
+  const setActiveSale = useCallback(
+    (nextSaleId: string | null) => {
+      discardReceiptIntent();
+      setReceiptSettlement(null);
+      setSaleId(nextSaleId);
+      setReceiptRenders(0);
+      setCustomerId(null);
+      setRedeemPoints(0);
+      setTenderOutcome(null);
+      setTenderReadRequired(false);
+      setRestoredAttempt(null);
+    },
+    [discardReceiptIntent]
+  );
 
   // ── Derived state ─────────────────────────────────────────────────────────
 
@@ -414,7 +503,16 @@ function ScopedPharmacyCounterConsole({
 
   const requestedCanonicalUnits = selectedOption
     ? selectedOption.canonicalUnitsPerSaleUnit * quantity
-    : null;
+    : activeRow?.saleUnits.length === 0
+      ? quantity
+      : null;
+  const shortfallUnits =
+    activeRow &&
+    requestedCanonicalUnits !== null &&
+    Number.isSafeInteger(requestedCanonicalUnits) &&
+    requestedCanonicalUnits > 0
+      ? Math.max(0, requestedCanonicalUnits - activeRow.onHandUnits)
+      : 0;
   const substituteInput =
     activeRow &&
     selectedOption &&
@@ -468,7 +566,9 @@ function ScopedPharmacyCounterConsole({
               id: prescriptionLine.entry.prescriptionLineId,
               verified: prescriptionLine.entry.verified,
               expiresAt: new Date(prescriptionLine.prescription.validUntil),
-              remainingAuthorizedUnits: prescriptionLine.entry.remainingAuthorizedUnits,
+              remainingAuthorizedUnits:
+                prescriptionLine.entry.remainingAuthorizedUnits +
+                (line.controlled && prescriptionLine.entry.verified ? line.canonicalUnits : 0),
             }
           : null,
         requestedCanonicalUnits: line.canonicalUnits,
@@ -526,6 +626,7 @@ function ScopedPharmacyCounterConsole({
       )
         return false;
       setRefreshingTenderBill(true);
+      let confirmed: CounterReceiptSettlement | null = null;
       try {
         if (!attemptRef.current) {
           const saved = readTenderAttempt(recoveryScope);
@@ -561,6 +662,25 @@ function ScopedPharmacyCounterConsole({
             receipt.data.receiptNumber !== read.data.receiptNumber
           )
             throw new Error('Receipt unavailable');
+          const intent = receiptIntent.current;
+          if (
+            resolution === 'accepted' &&
+            intent?.saleId === saleId &&
+            intent.branchId === branchId &&
+            intent.receiptNumber !== null &&
+            intent.receiptNumber === read.data.receiptNumber &&
+            read.data.totals.netMinor === read.data.totals.tenderedMinor &&
+            read.data.lines.length > 0
+          ) {
+            buildCounterBrowserReceipt(receipt.data, receiptLocale, receiptFormat);
+            confirmed = {
+              status: 'confirmed',
+              saleId,
+              receiptNumber: intent.receiptNumber,
+              autoPrint: intent.autoPrint,
+              printReservation: intent.printReservation,
+            };
+          }
         }
         if (attemptRef.current && (resolution === 'accepted' || resolution === 'rejected')) {
           try {
@@ -575,17 +695,31 @@ function ScopedPharmacyCounterConsole({
           }
         }
         setTenderReadRequired(false);
+        if (confirmed) setReceiptSettlement(confirmed);
         return true;
       } catch {
         setTenderReadRequired(true);
         return false;
       } finally {
+        if (!confirmed || attemptRef.current) {
+          // A failed read may later reveal the new receipt, but needs a fresh
+          // manual print gesture. Never keep a blank popup through recovery.
+          const intent = receiptIntent.current;
+          intent?.printReservation?.cancel();
+          if (intent) {
+            intent.printReservation = undefined;
+            intent.autoPrint = false;
+          }
+        }
         setRefreshingTenderBill(false);
       }
     },
     [
       branchAuthorized,
+      branchId,
       cartQuery,
+      receiptFormat,
+      receiptLocale,
       receiptQuery,
       recoveryScope,
       refreshingTenderBill,
@@ -603,6 +737,7 @@ function ScopedPharmacyCounterConsole({
   }, []);
 
   const runSearch = useCallback(async () => {
+    if (!branchAuthorized) return;
     const trimmed = query.trim();
     if (trimmed.length < 2) {
       setNotice({ tone: 'warning', message: 'Type at least two characters to search.' });
@@ -610,13 +745,15 @@ function ScopedPharmacyCounterConsole({
     }
     const looksLikeGs1 = trimmed.startsWith(']d2') || trimmed.startsWith('(01)');
     if (!looksLikeGs1) {
-      setSubmittedQuery(trimmed);
+      setSubmittedSearch({ text: trimmed, query: trimmed, branchId });
       return;
     }
+    const revision = ++scannerRevision.current;
     setPending('authenticatePack');
     try {
       const verdict = await authenticatePack.mutateAsync({ branchId, payload: trimmed });
-      setSubmittedQuery(verdict.parsed?.gtin ?? trimmed);
+      if (revision !== scannerRevision.current) return;
+      setSubmittedSearch({ text: trimmed, query: verdict.parsed?.gtin ?? trimmed, branchId });
       setNotice({
         tone:
           verdict.status === 'VERIFIED'
@@ -627,11 +764,12 @@ function ScopedPharmacyCounterConsole({
         message: verdict.explanation,
       });
     } catch (error) {
+      if (revision !== scannerRevision.current) return;
       setNotice({ tone: 'danger', message: messageFrom(error) });
     } finally {
       setPending(null);
     }
-  }, [authenticatePack, branchId, query]);
+  }, [authenticatePack, branchAuthorized, branchId, query]);
 
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
@@ -659,7 +797,26 @@ function ScopedPharmacyCounterConsole({
     setNotice(null);
     try {
       const activeSaleId = await ensureSale();
-      await addLine.mutateAsync({
+      const controlled = activeRow.restriction.controlled;
+      if (
+        controlled &&
+        (!patient ||
+          !controlledAuth.prescriptionLineId ||
+          !controlledAuth.staffProfileId ||
+          !/^\d{4,8}$/.test(controlledAuth.pin) ||
+          !navigator.onLine)
+      ) {
+        setNotice({
+          tone: 'warning',
+          message:
+            'Controlled medicine needs a patient with ID, prescription and independent pharmacist PIN. Connect online, then complete the authorization panel.',
+        });
+        rxPanelRef.current?.focus();
+        return;
+      }
+      const added = await addLine.mutateAsync({
+        controlledAuthorization:
+          controlled && patient ? { ...controlledAuth, patientId: patient.patientId } : undefined,
         branchId,
         saleId: activeSaleId,
         medicineId: activeRow.medicineId,
@@ -672,7 +829,13 @@ function ScopedPharmacyCounterConsole({
         // the add chord cannot post the same line twice.
         idempotencyKey: `counter:${activeSaleId}:${activeRow.medicineId}:${selectedOption.packLevelId}:${selectedOption.kind}:${quantity}`,
       });
+      if ('blocked' in added) {
+        setNotice({ tone: 'warning', message: added.blocked });
+        return;
+      }
       await refreshCart();
+      await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
+      await utils.pharmacySafety.controlledRegister.invalidate();
       await utils.pharmacySales.counterSearch.invalidate();
       setNotice({
         tone: 'success',
@@ -681,13 +844,23 @@ function ScopedPharmacyCounterConsole({
       setQuery('');
       focusSearch();
     } catch (error) {
-      setNotice({ tone: 'danger', message: messageFrom(error) });
+      const message = messageFrom(error);
+      setNotice({
+        tone: 'danger',
+        message,
+        ...(message === COUNTER_ERROR_MESSAGES.INVALID_ARRANGEMENT
+          ? { inventoryBranchId: branchId }
+          : {}),
+      });
     } finally {
+      setControlledAuth((value) => ({ ...value, pin: '' }));
       setPending(null);
     }
   }, [
     activeRow,
     addLine,
+    controlledAuth,
+    patient,
     branchId,
     busy,
     ensureSale,
@@ -756,6 +929,8 @@ function ScopedPharmacyCounterConsole({
       setPending('tender');
       setTenderOutcome(null);
       setTenderReadRequired(true);
+      discardReceiptIntent();
+      setReceiptSettlement(null);
       let dispatched = false;
       let outcome: CounterTenderResult;
       try {
@@ -781,12 +956,29 @@ function ScopedPharmacyCounterConsole({
         persistTenderAttempt(original);
         attemptRef.current = original;
         setAttempt(original);
+        const intent: ReceiptIntent = {
+          saleId,
+          branchId,
+          receiptNumber: null,
+          autoPrint,
+          // Still inside the native payment gesture: no await precedes this.
+          printReservation: autoPrint ? reserveCounterBrowserPrint() : undefined,
+        };
+        receiptIntent.current = intent;
         dispatched = true;
         const result = await tender.mutateAsync(payload);
         outcome = tenderAcknowledgement(result)
           ? { status: 'accepted', message: 'Payment recorded.' }
           : { status: 'unknown', message: UNKNOWN_TENDER_MESSAGE };
+        if (receiptIntent.current === intent) {
+          if (tenderAcknowledgement(result) && result.settled && result.replayed === false) {
+            intent.receiptNumber = result.receiptNumber;
+          } else {
+            discardReceiptIntent();
+          }
+        }
       } catch (error) {
+        discardReceiptIntent();
         if (!dispatched) setStorageError(true);
         outcome =
           !dispatched || tenderRejected(error)
@@ -810,7 +1002,18 @@ function ScopedPharmacyCounterConsole({
       setPending(null);
       return outcome;
     },
-    [billState, blocked, branchId, busy, recoveryScope, refreshTenderBill, saleId, tender]
+    [
+      autoPrint,
+      billState,
+      blocked,
+      branchId,
+      busy,
+      discardReceiptIntent,
+      recoveryScope,
+      refreshTenderBill,
+      saleId,
+      tender,
+    ]
   );
 
   const checkPaymentOutcome = useCallback(async (): Promise<CounterTenderResult> => {
@@ -910,30 +1113,44 @@ function ScopedPharmacyCounterConsole({
   }, [branchId, busy, customerQuery, redeemLoyalty, redeemPoints, refreshCart, saleId]);
 
   const captureShortfall = useCallback(async () => {
-    if (busy || !branchId) return;
-    const requested = activeRow?.displayName ?? (submittedQuery.trim() || query.trim());
+    if (busy || !branchAuthorized) return;
+    const requested = activeRow?.displayName ?? query.trim();
     if (!requested) {
       setNotice({ tone: 'warning', message: 'Search for the medicine first, then capture it.' });
       return;
     }
+    const capturedUnits = activeRow ? shortfallUnits : quantity;
+    if (!Number.isSafeInteger(capturedUnits) || capturedUnits <= 0) {
+      setNotice({ tone: 'warning', message: 'There is no stock shortfall to capture.' });
+      return;
+    }
     setPending('captureDemand');
+    setNotice(null);
     try {
       await captureDemand.mutateAsync({
         branchId,
         ...(saleId ? { saleId } : {}),
         ...(activeRow ? { requestedMedicineId: activeRow.medicineId } : {}),
         requestedText: requested,
-        saleUnit: saleUnit ?? 'UNIT',
-        quantity,
+        saleUnit: 'UNIT',
+        quantity: capturedUnits,
         reason: activeRow ? 'STOCKOUT' : 'NOT_CARRIED',
         inventoryRuleSnapshot: {
-          query: submittedQuery || query,
+          query: query.trim(),
+          requestedQuantity: quantity,
+          requestedSaleUnit: saleUnit ?? 'UNIT',
+          canonicalUnitsPerSaleUnit: selectedOption?.canonicalUnitsPerSaleUnit ?? 1,
+          requestedCanonicalUnits: requestedCanonicalUnits ?? quantity,
+          shortfallCanonicalUnits: capturedUnits,
           onHandUnits: activeRow?.onHandUnits ?? 0,
           blocked: activeRow?.blocked ?? [],
           capturedAt: new Date().toISOString(),
         },
       });
-      setNotice({ tone: 'success', message: 'Unfulfilled demand captured.' });
+      setNotice({
+        tone: 'success',
+        message: `Captured ${capturedUnits} canonical units of unfulfilled demand for ${requested}.`,
+      });
       focusSearch();
     } catch (error) {
       setNotice({ tone: 'danger', message: messageFrom(error) });
@@ -942,6 +1159,7 @@ function ScopedPharmacyCounterConsole({
     }
   }, [
     activeRow,
+    branchAuthorized,
     branchId,
     busy,
     captureDemand,
@@ -950,7 +1168,9 @@ function ScopedPharmacyCounterConsole({
     quantity,
     saleId,
     saleUnit,
-    submittedQuery,
+    selectedOption,
+    requestedCanonicalUnits,
+    shortfallUnits,
   ]);
 
   const declineVisibleSubstitutes = useCallback(async () => {
@@ -994,6 +1214,7 @@ function ScopedPharmacyCounterConsole({
     if (
       !receipt ||
       receipt.saleId !== saleId ||
+      receipt.receiptNumber !== cart?.receiptNumber ||
       billState !== 'settled' ||
       receiptQuery.isFetching ||
       receiptQuery.isError
@@ -1001,6 +1222,8 @@ function ScopedPharmacyCounterConsole({
       setNotice({ tone: 'danger', message: 'Load the settled receipt before printing.' });
       return;
     }
+    discardReceiptIntent();
+    setReceiptSettlement(null);
     try {
       printCounterBrowserReceipt(receipt, receiptLocale, receiptFormat, receiptRenders > 0);
       setReceiptRenders((count) => count + 1);
@@ -1014,6 +1237,8 @@ function ScopedPharmacyCounterConsole({
     }
   }, [
     billState,
+    cart?.receiptNumber,
+    discardReceiptIntent,
     receiptFormat,
     receiptLocale,
     receiptQuery.data,
@@ -1082,7 +1307,7 @@ function ScopedPharmacyCounterConsole({
       if (
         (event.key === 'Enter' || event.key === ' ') &&
         event.target instanceof Node &&
-        tenderRef.current?.contains(event.target)
+        (tenderRef.current?.contains(event.target) || event.target === autoPrintRef.current)
       )
         return;
       if (!shouldHandleCounterKey(event)) return;
@@ -1097,10 +1322,14 @@ function ScopedPharmacyCounterConsole({
     return () => window.removeEventListener('keydown', onKeyDown);
   }, [keymap.bindings, runAction]);
 
-  /** Persistent scan focus (POS-01): the field regains focus after every action. */
+  /**
+   * Persistent scan focus (POS-01): the field regains focus after every action.
+   * Keyed on `busy`, not `pending`: the field mounts disabled until tender
+   * recovery is ready, so `autoFocus` alone cannot land on it.
+   */
   useEffect(() => {
-    if (pending === null && document.activeElement === document.body) focusSearch();
-  }, [focusSearch, pending]);
+    if (!busy && document.activeElement === document.body) focusSearch();
+  }, [busy, focusSearch]);
 
   const chordFor = useCallback(
     (kind: SaleUnitKind) =>
@@ -1236,6 +1465,13 @@ function ScopedPharmacyCounterConsole({
         description="Keyboard-first dispensing: scan, choose a sale unit, allocate by FEFO, tender and print."
         actions={
           <div className="flex flex-wrap items-center justify-end gap-2">
+            <CounterReturnPanel
+              branchId={branchId}
+              organizationId={organizationId}
+              accountId={accountId}
+              deviceId={counterDeviceId}
+              businessDate={businessDate}
+            />
             <Link
               className={buttonVariants({ variant: 'outline', size: 'lg' })}
               href="/pharmacy/orders"
@@ -1306,7 +1542,23 @@ function ScopedPharmacyCounterConsole({
           }`}
         >
           <StatusPill status={notice.tone} tone={notice.tone} />
-          <p className="min-w-0 text-sm text-text-body">{notice.message}</p>
+          <div className="min-w-0 space-y-2 text-sm text-text-body">
+            <p>{notice.message}</p>
+            {notice.inventoryBranchId ? (
+              <Link
+                href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
+                target="_blank"
+                rel="noopener noreferrer"
+                prefetch={false}
+                className={buttonVariants({
+                  variant: 'outline',
+                  className: 'h-auto min-h-11 whitespace-normal',
+                })}
+              >
+                Open Inventory to review pack breaking (new tab)
+              </Link>
+            ) : null}
+          </div>
         </div>
       ) : null}
 
@@ -1325,7 +1577,14 @@ function ScopedPharmacyCounterConsole({
                     value={query}
                     disabled={busy}
                     placeholder="Brand, generic, ingredient, strength, form, barcode, alias"
-                    onChange={(event) => setQuery(event.target.value)}
+                    aria-describedby="counter-search-help"
+                    onChange={(event) => {
+                      scannerRevision.current += 1;
+                      setQuery(event.target.value);
+                      setActiveRow(null);
+                      setSaleUnit(null);
+                      setQuantity(1);
+                    }}
                     onKeyDown={(event) => {
                       if (event.key !== 'Enter') return;
                       event.preventDefault();
@@ -1333,6 +1592,9 @@ function ScopedPharmacyCounterConsole({
                     }}
                     className="h-11"
                   />
+                  <p id="counter-search-help" className="text-xs text-text-muted">
+                    Names search as you type. Scan a barcode and press Enter to search immediately.
+                  </p>
                 </div>
                 <div className="space-y-1.5">
                   <Label htmlFor="counter-branch">Branch</Label>
@@ -1341,6 +1603,7 @@ function ScopedPharmacyCounterConsole({
                     value={branchId}
                     disabled={busy}
                     onChange={(event) => {
+                      scannerRevision.current += 1;
                       setSelectedBranchId(event.target.value);
                       setActiveRow(null);
                       setActiveSale(null);
@@ -1358,22 +1621,29 @@ function ScopedPharmacyCounterConsole({
               </div>
 
               <CounterSearchResults
-                rows={searchQuery.data?.rows ?? []}
+                rows={
+                  searchCurrent && !searchQuery.isPlaceholderData
+                    ? (searchQuery.data?.rows ?? [])
+                    : []
+                }
                 state={
-                  submittedQuery.trim().length < 2
+                  !branchAuthorized || trimmedQuery.length < 2 || (scannerQuery && !searchCurrent)
                     ? 'idle'
-                    : searchQuery.isLoading
+                    : !searchCurrent || searchQuery.isFetching || searchQuery.isPlaceholderData
                       ? 'loading'
                       : searchQuery.isError
                         ? 'error'
                         : 'ready'
                 }
-                query={submittedQuery}
+                query={trimmedQuery}
+                disabled={busy || !branchAuthorized}
                 activeMedicineId={activeRow?.medicineId ?? null}
                 error={searchQuery.error ? messageFrom(searchQuery.error) : null}
                 onSelect={stageRow}
                 onCaptureDemand={() => void captureShortfall()}
-                onRetry={() => void searchQuery.refetch()}
+                onRetry={() => {
+                  if (searchCurrent) void searchQuery.refetch();
+                }}
               />
             </div>
           </SectionCard>
@@ -1394,7 +1664,11 @@ function ScopedPharmacyCounterConsole({
                 disabled={busy}
                 onChoose={(proposal) => {
                   setQuery(proposal.displayName);
-                  setSubmittedQuery(proposal.displayName);
+                  setSubmittedSearch({
+                    text: proposal.displayName,
+                    query: proposal.displayName,
+                    branchId,
+                  });
                   setActiveRow(null);
                 }}
                 onDecline={() => void declineVisibleSubstitutes()}
@@ -1410,7 +1684,7 @@ function ScopedPharmacyCounterConsole({
               <Button
                 type="button"
                 className="h-11"
-                disabled={busy || !activeRow || !preview}
+                disabled={busy || !activeRow || !preview?.sufficient}
                 onClick={() => void addToCart()}
               >
                 {pending === 'addToCart'
@@ -1420,16 +1694,49 @@ function ScopedPharmacyCounterConsole({
             }
           >
             {activeRow ? (
-              <CounterUnitToggle
-                options={activeRow.saleUnits}
-                selected={saleUnit}
-                quantity={quantity}
-                preview={preview}
-                disabled={busy}
-                onSelect={setSaleUnit}
-                onQuantityChange={setQuantity}
-                chordFor={chordFor}
-              />
+              <div className="space-y-4">
+                <CounterUnitToggle
+                  options={activeRow.saleUnits}
+                  selected={saleUnit}
+                  quantity={quantity}
+                  preview={preview}
+                  disabled={busy}
+                  onSelect={setSaleUnit}
+                  onQuantityChange={setQuantity}
+                  chordFor={chordFor}
+                />
+                {activeRow.saleUnits.length === 0 ? (
+                  <div className="space-y-1.5">
+                    <Label htmlFor="counter-demand-units">Requested canonical units</Label>
+                    <Input
+                      id="counter-demand-units"
+                      type="number"
+                      min={1}
+                      step={1}
+                      className="h-11 w-32"
+                      value={quantity}
+                      disabled={busy}
+                      onChange={(event) => {
+                        const next = Number(event.target.value);
+                        setQuantity(Number.isSafeInteger(next) && next > 0 ? next : 1);
+                      }}
+                    />
+                  </div>
+                ) : null}
+                {shortfallUnits > 0 ? (
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-auto min-h-11 whitespace-normal"
+                    disabled={busy || !branchAuthorized}
+                    onClick={() => void captureShortfall()}
+                  >
+                    {pending === 'captureDemand'
+                      ? 'Capturing…'
+                      : `Capture shortfall: ${shortfallUnits} canonical units`}
+                  </Button>
+                ) : null}
+              </div>
             ) : (
               <p className="text-sm text-text-muted">
                 Select a search result to choose its sale unit.
@@ -1493,6 +1800,36 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
 
           <SectionCard eyebrow="POS-05" title="Tender">
+            <div className="mb-4 space-y-1">
+              <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
+                <input
+                  ref={autoPrintRef}
+                  id="counter-auto-print"
+                  type="checkbox"
+                  checked={autoPrint}
+                  disabled={busy}
+                  onChange={(event) => setAutoPrint(event.target.checked)}
+                  aria-describedby="counter-auto-print-help"
+                  className="size-4 shrink-0 accent-primary focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+                />
+                Automatically open print dialog after payment
+              </Label>
+              <p id="counter-auto-print-help" className="text-xs text-text-muted">
+                This counter session only. Requires a newly settled bill and issued receipt.
+                Physical printing is not confirmed.
+              </p>
+            </div>
+            {branchesQuery.data?.paymentSandboxAvailable && saleId ? (
+              <PaymentSandboxPanel
+                key={`${branchId}:${saleId}`}
+                branchId={branchId}
+                saleId={saleId}
+                deviceId={counterDeviceId()}
+                businessDate={businessDate()}
+                disabled={busy || blocked}
+                onRecorded={refreshCart}
+              />
+            ) : null}
             <CounterTenderPanel
               key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
               ref={tenderRef}
@@ -1529,11 +1866,13 @@ function ScopedPharmacyCounterConsole({
 
           <SectionCard eyebrow="POS-08" title="Receipt">
             <CounterReceiptView
+              branchId={branchId}
               receipt={
                 billState === 'settled' &&
                 !receiptQuery.isError &&
                 !receiptQuery.isFetching &&
-                receiptQuery.data?.saleId === saleId
+                receiptQuery.data?.saleId === saleId &&
+                receiptQuery.data.receiptNumber === cart?.receiptNumber
                   ? receiptQuery.data
                   : null
               }
@@ -1546,6 +1885,10 @@ function ScopedPharmacyCounterConsole({
                       ? 'error'
                       : 'ready'
               }
+              evidence={evidenceEligible && !evidenceQuery.isError ? evidenceQuery.data : null}
+              evidenceError={evidenceEligible && evidenceQuery.isError}
+              evidenceRefreshing={evidenceQuery.isFetching}
+              onEvidenceRefresh={evidenceEligible ? () => void evidenceQuery.refetch() : undefined}
               locale={receiptLocale}
               format={receiptFormat}
               reprint={receiptRenders > 0}
@@ -1555,6 +1898,8 @@ function ScopedPharmacyCounterConsole({
               onFormatChange={setReceiptFormat}
               onPrint={printReceipt}
               onRetry={() => void receiptQuery.refetch()}
+              settlement={receiptSettlement}
+              onSettlementPresented={receiptPresented}
             />
           </SectionCard>
         </div>
@@ -1618,6 +1963,26 @@ function ScopedPharmacyCounterConsole({
                 </div>
                 <div>
                   <p className="font-mono text-xs uppercase tracking-wide text-text-muted">
+                    Points ledger · latest 25 entries
+                  </p>
+                  <ul className="mt-2 space-y-2" aria-label="Points ledger">
+                    {customerQuery.data.pointsHistory?.map((entry) => (
+                      <li
+                        key={entry.id}
+                        className="flex flex-wrap justify-between gap-2 border-b border-border-subtle pb-2"
+                      >
+                        <span>
+                          {entry.kind} · Receipt {entry.sale.receiptNumber ?? '—'} ·{' '}
+                          {new Date(entry.occurredAt).toISOString().slice(0, 10)}
+                        </span>
+                        <span className="font-mono tabular-nums">
+                          {entry.points > 0 ? '+' : ''}
+                          {entry.points}
+                        </span>
+                      </li>
+                    ))}
+                  </ul>
+                  <p className="mt-3 font-mono text-xs uppercase tracking-wide text-text-muted">
                     Purchase history
                   </p>
                   {customerQuery.data.history.length ? (
@@ -1654,6 +2019,14 @@ function ScopedPharmacyCounterConsole({
           >
             <CounterRxPanel
               ref={rxPanelRef}
+              controlled={{
+                ...controlledAuth,
+                pharmacists: pharmacistsQuery.data ?? [],
+                loading: pharmacistsQuery.isLoading,
+                error: pharmacistsQuery.isError,
+                onChange: (field, value) =>
+                  setControlledAuth((current) => ({ ...current, [field]: value })),
+              }}
               alerts={alerts}
               patient={patient}
               candidates={patientsQuery.data?.patients ?? []}

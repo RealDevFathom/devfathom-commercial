@@ -1,3 +1,5 @@
+import { liveDemoAccessExpiry } from '@/lib/auth/session-state';
+import type { TRPCContext } from '@/server/trpc';
 import { TRPCError } from '@trpc/server';
 
 import { can, subjectFromSession } from '@/lib/abac';
@@ -155,4 +157,43 @@ export async function assertAuthorizedStaffProfile(
   ) {
     denyStaffBranchAccess();
   }
+}
+
+
+export type DemoDirectoryPolicy = {
+  seatFromOrganizationId: (organizationId: string) => number | null;
+  isCanonicalOrganization: (organization: NonNullable<TRPCContext['organization']>) => boolean;
+  personaForUser: (seat: number, user: SessionUser) => string | null;
+};
+
+/** Console directories disclose only branches covered by the actor's existing read duty. */
+export async function resolveDemoDirectoryScope(
+  ctx: TRPCContext,
+  directory: 'branches' | 'devices',
+  demo: DemoDirectoryPolicy
+) {
+  if (!ctx.organization?.isDemo) return null;
+  const user = ctx.session?.user;
+  const seat = demo.seatFromOrganizationId(ctx.organization.id);
+  if (
+    !seat ||
+    !user ||
+    user.organizationId !== ctx.organization.id ||
+    !demo.isCanonicalOrganization(ctx.organization) ||
+    !liveDemoAccessExpiry(user.demoAccessExpiresAt)
+  )
+    denyStaffBranchAccess();
+  const persona = demo.personaForUser(seat, user);
+  const capability =
+    persona === 'finance'
+      ? 'money:read'
+      : persona === 'inventory' && directory === 'branches'
+        ? 'inventory:read'
+        : null;
+  if (!capability) return null;
+  if (!(await can(subjectFromSession(user), capability, undefined, { db: ctx.db, source: 'TRPC' })))
+    denyStaffBranchAccess();
+  return resolveCapabilityBranchAuthorization(ctx.db, user, capability, {
+    requireExactlyOneActiveActor: true,
+  });
 }

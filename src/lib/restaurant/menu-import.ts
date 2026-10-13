@@ -19,7 +19,6 @@ import {
   type MenuExtractionResult,
   type MenuLineFlag,
 } from '@/lib/restaurant/menu-extraction';
-import { createFixtureMenuExtractionAdapter } from '@/lib/restaurant/menu-extraction-fixtures';
 import { createVisionMenuExtractionAdapter } from '@/lib/restaurant/menu-extraction-vision';
 import {
   menuImportObjectName,
@@ -29,9 +28,16 @@ import {
 import { createMenu, createMenuItem, createMenuSection } from '@/lib/restaurant/menus';
 import { addPriceListEntry, createPriceListVersion } from '@/lib/restaurant/price-lists';
 import { enqueue } from '@/lib/restaurant/scheduler';
-import { deleteUpload, getUpload, putUpload } from '@/lib/storage';
+import {
+  assertStorageAvailable,
+  getStorageAvailability,
+  deleteUpload,
+  getUpload,
+  putUpload,
+} from '@/lib/storage';
+import { readAIAvailability } from '@/lib/ai/provider';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { isDemoTenant } from '@/lib/demo/isolation';
+import { isDemoTenant } from '@/lib/tenancy/demo-isolation';
 
 /**
  * R-lane / WHA-194 — the menu-import domain: upload -> asynchronous extraction
@@ -113,23 +119,52 @@ export type MenuImportRuntime = {
 };
 
 export const defaultMenuImportRuntime: MenuImportRuntime = {
-  resolveAdapter: (name) =>
-    name === 'VISION' ? createVisionMenuExtractionAdapter() : createFixtureMenuExtractionAdapter(),
+  resolveAdapter: (name) => {
+    if (name === 'VISION') return createVisionMenuExtractionAdapter();
+    throw new MenuExtractionError('Menu extraction is unavailable.', 'ADAPTER_UNAVAILABLE');
+  },
   putSource: putUpload,
   readSource: getUpload,
   deleteSource: deleteUpload,
 };
 
-/**
- * Which adapter a new import uses. `MENU_IMPORT_ADAPTER=VISION` opts an
- * environment into the real provider; everything else stays on the deterministic
- * fixture adapter, so an environment without AI credentials degrades to
- * something inspectable rather than to a stack trace.
- */
+/** Resolve only explicitly enabled extraction; fixtures never run in production. */
 export function configuredAdapterName(
   env: Record<string, string | undefined> = process.env
 ): MenuExtractionAdapterName {
-  return env.MENU_IMPORT_ADAPTER?.trim().toUpperCase() === 'VISION' ? 'VISION' : 'FIXTURE';
+  const name = env.MENU_IMPORT_ADAPTER?.trim().toUpperCase();
+  if (name === 'VISION' && readAIAvailability(env).available) return 'VISION';
+  if (name === 'FIXTURE' && (env.NODE_ENV === 'test' || env.NODE_ENV === 'development')) {
+    return 'FIXTURE';
+  }
+  throw new MenuExtractionError('Menu extraction is unavailable.', 'ADAPTER_UNAVAILABLE');
+}
+
+function assertMenuAdapterAvailable(name: MenuExtractionAdapterName): void {
+  if (configuredAdapterName() !== name) {
+    throw new MenuExtractionError('Menu extraction is unavailable.', 'ADAPTER_UNAVAILABLE');
+  }
+}
+
+/** Public availability contains no provider or storage configuration. */
+export function getMenuImportAvailability(): { available: boolean; explanation: string | null } {
+  try {
+    configuredAdapterName();
+  } catch {
+    return {
+      available: false,
+      explanation:
+        'Menu extraction is unavailable. You can still edit menus manually and review existing imports.',
+    };
+  }
+  if (!getStorageAvailability().available) {
+    return {
+      available: false,
+      explanation:
+        'Menu uploads are unavailable. You can still edit menus manually and review existing imports.',
+    };
+  }
+  return { available: true, explanation: null };
 }
 
 /** Open one tenant-scoped interactive transaction (same shape as the M5-M7 domains). */
@@ -186,6 +221,10 @@ export async function createMenuImport(
     throw new MenuImportError('The upload needs an uploading user.', 'INVALID');
   }
 
+  const adapter = input.adapter ?? configuredAdapterName();
+  assertMenuAdapterAvailable(adapter);
+  assertStorageAvailable();
+
   const upload = validateMenuUpload({
     content: input.content,
     declaredMimeType: input.declaredMimeType,
@@ -222,7 +261,6 @@ export async function createMenuImport(
     }
   }
 
-  const adapter = input.adapter ?? configuredAdapterName();
   let deduplicated = Boolean(existing);
 
   if (!existing) {
@@ -451,8 +489,12 @@ export async function runMenuImportExtraction(
 
   let result: MenuExtractionResult;
   try {
-    const content = await runtime.readSource(record.organizationId, record.storageObjectName);
+    assertMenuAdapterAvailable(record.adapter);
+    if (!getStorageAvailability().available) {
+      throw new MenuExtractionError('Menu upload storage is unavailable.', 'ADAPTER_UNAVAILABLE');
+    }
     const adapter = runtime.resolveAdapter(record.adapter);
+    const content = await runtime.readSource(record.organizationId, record.storageObjectName);
     result = await adapter.extract({
       content,
       mimeType: record.mimeType as MenuUploadMimeType,

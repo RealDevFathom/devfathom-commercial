@@ -1,3 +1,6 @@
+import type { DemoSeatIdentity } from '@/lib/platform/command-types';
+export type { DemoSeatIdentity } from '@/lib/platform/command-types';
+
 import { resolveBusinessDate } from '@/lib/restaurant/business-date';
 
 const RANDOM_SEED = 0x4b4b_2026;
@@ -10,14 +13,6 @@ export const DEMO_CURRENCY = 'PKR';
 export type DemoBaseUnit = 'kg' | 'litre' | 'piece';
 export type DemoRecipeUnit = 'g' | 'ml' | 'piece';
 
-export interface DemoSeatIdentity {
-  seatNumber: number;
-  organizationId: string;
-  slug: string;
-  displayName: string;
-  managerUserId: string;
-  managerEmail: string;
-}
 
 interface DemoTable {
   id: string;

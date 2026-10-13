@@ -64,6 +64,11 @@ const contentSecurityPolicy = [
 
 const nextConfig: NextConfig = {
   output: 'standalone',
+  // Dev-only (WHA-1623). The browser suites serve `next dev` on 127.0.0.1, and
+  // Next 16 blocks its dev websocket for any origin not listed here. That
+  // socket also carries the React debug channel, so without it the page never
+  // hydrates. Ignored by `next start` / production. See tests/e2e/README.md.
+  allowedDevOrigins: ['127.0.0.1'],
   typescript: {
     // Docker runs `tsc --noEmit` in a clean process before `next build` so the
     // low-memory ACR builder does not retain compiler and bundler heaps together.

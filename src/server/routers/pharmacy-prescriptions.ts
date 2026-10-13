@@ -1,5 +1,15 @@
+import { writePatientConsent } from '@/lib/pharmacy/consent-writer';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import { can, subjectFromSession } from '@/lib/abac';
+import { hasModule } from '@/lib/entitlements';
+import {
+  loadPrescriptionFile,
+  persistPrescriptionFile,
+  prescriptionFileId,
+  prescriptionFileRefSchema,
+  prescriptionUploadSchema,
+} from '@/lib/pharmacy/prescription-files';
 import {
   PharmacyCounterPrescriptionError,
   readCounterPatientPanel,
@@ -8,14 +18,77 @@ import {
 import { auditPatientRead, maskedPatient } from '@/lib/pharmacy/patient-prescriptions';
 import { captureRefillReminder, RefillSupportError } from '@/lib/pharmacy/refill-support';
 import {
+  configuredRxOcrAdapterName,
+  proposeRxPrefill,
+  resolveRxOcrAdapter,
+  RxOcrError,
+} from '@/lib/pharmacy/rx-ocr';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import {
   auditedProtectedProcedure,
   capabilityProcedure,
   protectedProcedure,
+  publicProcedure,
   router,
 } from '../trpc';
 
 const purpose = z.enum(['DISPENSING', 'REMINDERS', 'LOYALTY', 'MARKETING']);
 const channel = z.enum(['IN_PERSON', 'PHONE', 'SMS', 'WHATSAPP', 'EMAIL']);
+
+// Suppress sensitive payload auditing before authentication/input validation,
+// including denied uploads. Keep the existing audited guards and ABAC engine.
+const fileProcedure = publicProcedure
+  .use(({ ctx, next }) => {
+    ctx.audit.detail.skipInput = true;
+    return next();
+  })
+  .concat(auditedProtectedProcedure)
+  .use(async ({ ctx, next }) => {
+    const subject = subjectFromSession(ctx.session.user);
+    const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+    if (
+      !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
+      !(
+        (await can(subject, 'pharmacy:orders', undefined, options)) ||
+        (await can(subject, 'pharmacy:dispense', undefined, options))
+      )
+    ) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Prescription file access is not permitted.',
+      });
+    }
+    return next();
+  });
+
+/**
+ * Load a stored Rx image the caller may see. Before capture only the uploader
+ * may preview it; after capture the stored prescription must prove the same
+ * patient/file binding.
+ */
+async function readableSourceFile(
+  ctx: {
+    db: ScopedDb;
+    entitlements: { organizationId: string };
+    session: { user: { id: string } };
+  },
+  sourceFileRef: string
+) {
+  const organizationId = ctx.entitlements.organizationId;
+  const file = await loadPrescriptionFile(organizationId, sourceFileRef);
+  const patient = await ctx.db.pharmacyPatient.findFirst({
+    where: { id: file.patientId, organizationId },
+    select: { id: true },
+  });
+  const prescription = await ctx.db.prescription.findFirst({
+    where: { organizationId, patientId: file.patientId, sourceFileRef },
+    select: { id: true },
+  });
+  if (!patient || (!prescription && file.uploadedByUserId !== ctx.session.user.id)) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Prescription image unavailable.' });
+  }
+  return file;
+}
 
 export const pharmacyPrescriptionsRouter = router({
   workspace: protectedProcedure
@@ -110,30 +183,90 @@ export const pharmacyPrescriptionsRouter = router({
           patientId: z.string().min(1),
           purpose,
           channel,
-          version: z.number().int().positive(),
+          version: z.number().int().positive().optional(),
           granted: z.boolean(),
           supersedesId: z.string().optional(),
         })
         .strict()
     )
     .mutation(({ ctx, input }) =>
-      ctx.db.patientConsent.create({
-        data: {
-          ...input,
-          recordedByUserId: ctx.session.user.id,
-          revokedAt: input.granted ? undefined : new Date(),
-        },
-      })
+      ctx.db.$transaction((db) =>
+        writePatientConsent(
+          db as typeof ctx.db,
+          ctx.entitlements.organizationId,
+          ctx.session.user.id,
+          input
+        )
+      )
     ),
 
-  capture: protectedProcedure
+  uploadSource: fileProcedure.input(prescriptionUploadSchema).mutation(async ({ ctx, input }) => {
+    const organizationId = ctx.entitlements.organizationId;
+    const patient = await ctx.db.pharmacyPatient.findFirst({
+      where: { id: input.patientId, organizationId },
+      select: { id: true },
+    });
+    if (!patient) throw new TRPCError({ code: 'NOT_FOUND', message: 'Patient not found.' });
+    return persistPrescriptionFile(organizationId, ctx.session.user.id, input);
+  }),
+
+  readSource: fileProcedure
+    .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
+    .query(async ({ ctx, input }) => {
+      const file = await readableSourceFile(ctx, input.sourceFileRef);
+      return { dataBase64: file.dataBase64, contentType: file.contentType };
+    }),
+
+  /**
+   * PH-A3: read drug and dose off a stored Rx image as a PROPOSAL. Nothing is
+   * written; the pharmacist confirms each value into the capture form, and
+   * `capture` never reads OCR output. Off unless PHARMACY_RX_OCR_ADAPTER is set.
+   */
+  extractSource: fileProcedure
+    .input(z.object({ sourceFileRef: prescriptionFileRefSchema }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const adapterName = configuredRxOcrAdapterName();
+      if (!adapterName) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'Prescription reading is not enabled for this workspace.',
+        });
+      }
+      const file = await readableSourceFile(ctx, input.sourceFileRef);
+      let extraction;
+      try {
+        extraction = await resolveRxOcrAdapter(adapterName).extract({
+          content: file.bytes,
+          mimeType: file.contentType,
+          sourceFileRef: input.sourceFileRef,
+        });
+      } catch (error) {
+        if (error instanceof RxOcrError) {
+          // Provider detail stays server-side; the counter gets an operator sentence.
+          throw new TRPCError({
+            code: error.reason === 'ADAPTER_UNAVAILABLE' ? 'PRECONDITION_FAILED' : 'BAD_GATEWAY',
+            message: 'The prescription could not be read. Enter the details by hand.',
+            cause: error,
+          });
+        }
+        throw error;
+      }
+      const medicines = await ctx.db.medicine.findMany({
+        where: { organizationId: ctx.entitlements.organizationId, saleable: true },
+        select: { id: true, productName: true, brandName: true },
+        orderBy: { productName: 'asc' },
+      });
+      return proposeRxPrefill(extraction, medicines);
+    }),
+
+  capture: fileProcedure
     .input(
       z
         .object({
           patientId: z.string().min(1),
           prescriberId: z.string().min(1),
           sourceKind: z.enum(['PAPER_IMAGE', 'WHATSAPP_PHOTO']),
-          sourceFileRef: z.string().trim().min(1),
+          sourceFileRef: prescriptionFileRefSchema,
           custodyState: z
             .enum(['NOT_HELD', 'HELD_AT_PHARMACY', 'RETURNED_TO_PATIENT', 'TRANSFERRED'])
             .optional(),
@@ -156,10 +289,73 @@ export const pharmacyPrescriptionsRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       const { lines, ...prescription } = input;
+      const organizationId = ctx.entitlements.organizationId;
+      const file = await loadPrescriptionFile(organizationId, input.sourceFileRef);
+      if (file.patientId !== input.patientId || file.uploadedByUserId !== ctx.session.user.id) {
+        throw new TRPCError({
+          code: 'NOT_FOUND',
+          message: 'Prescription image unavailable for this patient.',
+        });
+      }
+      const [patient, prescriber] = await Promise.all([
+        ctx.db.pharmacyPatient.findFirst({
+          where: { id: input.patientId, organizationId },
+          select: { id: true },
+        }),
+        ctx.db.pharmacyPrescriber.findFirst({
+          where: { id: input.prescriberId, organizationId },
+          select: { id: true },
+        }),
+      ]);
+      if (!patient || !prescriber)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Patient or prescriber not found.' });
+      // One durable file identifies one capture. A failed/uncertain create can
+      // be retried without duplicate records; competing inserts fail on the PK.
+      const id = `rx-${prescriptionFileId(input.sourceFileRef)}`;
+      const existing = await ctx.db.prescription.findFirst({
+        where: { id, organizationId },
+        include: { lines: true },
+      });
+      if (existing) {
+        const savedLinesInOrder = [...existing.lines].sort((a, b) => a.lineNumber - b.lineNumber);
+        const inputLinesInOrder = [...lines].sort((a, b) => a.lineNumber - b.lineNumber);
+        const sameLines =
+          existing.lines.length === lines.length &&
+          inputLinesInOrder.every((line, index) =>
+            Object.entries(line).every(
+              ([key, value]) =>
+                savedLinesInOrder[index][key as keyof (typeof savedLinesInOrder)[number]] === value
+            )
+          );
+        if (
+          existing.patientId !== input.patientId ||
+          existing.prescriberId !== input.prescriberId ||
+          existing.sourceFileRef !== input.sourceFileRef ||
+          existing.sourceKind !== input.sourceKind ||
+          existing.custodyState !== (input.custodyState ?? 'NOT_HELD') ||
+          existing.validFrom.getTime() !== input.validFrom.getTime() ||
+          existing.validUntil.getTime() !== input.validUntil.getTime() ||
+          existing.authorizedRepeats !== input.authorizedRepeats ||
+          !sameLines
+        ) {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'This image already belongs to a different capture.',
+          });
+        }
+        const { lines: savedLines, ...saved } = existing;
+        void savedLines;
+        return saved;
+      }
       return ctx.db.prescription.create({
-        data: { ...prescription, capturedByUserId: ctx.session.user.id, lines: { create: lines } },
+        data: {
+          ...prescription,
+          id,
+          capturedByUserId: ctx.session.user.id,
+          lines: { create: lines },
+        },
       });
     }),
 

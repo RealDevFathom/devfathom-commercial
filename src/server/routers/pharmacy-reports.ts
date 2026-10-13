@@ -1,6 +1,12 @@
 import { readRepeatPurchasing, validateRepeatFilters } from '@/lib/pharmacy/repeat-purchasing';
+import { readPharmacyMarketingReport, validateMarketingReportFilters } from '@/lib/pharmacy/marketing-report';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
+import {
+  pharmacyReplenishmentReportInput,
+  readPharmacyReplenishmentReport,
+  validatePharmacyReplenishmentReportInput,
+} from '@/lib/pharmacy/replenishment-report';
 
 import { hasModule } from '@/lib/entitlements';
 import { can, subjectFromSession } from '@/lib/abac';
@@ -151,6 +157,20 @@ async function requireOwnerBranch(ctx: TRPCContext, branchId: string) {
 }
 
 export const pharmacyReportsRouter = router({
+  marketing: reports
+    .input(filters.pick({ branchId: true, from: true, to: true }))
+    .query(async ({ ctx, input }) => {
+      const scoped = await ownerFilters(ctx, input);
+      try {
+        validateMarketingReportFilters(scoped);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Invalid marketing report dates.',
+        });
+      }
+      return readPharmacyMarketingReport(ctx.db, ctx.entitlements.organizationId, scoped);
+    }),
   createPharmacovigilanceReport: auditedProtectedProcedure
     .input(
       z
@@ -295,6 +315,42 @@ export const pharmacyReportsRouter = router({
       };
     }),
   branches: reports.query(({ ctx }) => scope(ctx)),
+  replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
+    // Existing capability middleware denies before report reads; scope enforces licensing.
+    const available = await scope(ctx);
+    if (!available.branches.some((branch) => branch.id === input.branchId))
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your report scope.' });
+    const financial =
+      ctx.session!.user.role === 'ADMIN' &&
+      (await can(subjectFromSession(ctx.session!.user), 'reports:financial', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+        ip: ctx.requestMeta.ip,
+      }));
+    const readAt = new Date();
+    try {
+      validatePharmacyReplenishmentReportInput(input, readAt);
+    } catch {
+      throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid replenishment report inputs.' });
+    }
+    try {
+      return await readPharmacyReplenishmentReport(
+        ctx.db,
+        {
+          ...input,
+          organizationId: available.organizationId,
+          authorizedBranchIds: available.branches.map((branch) => branch.id),
+          financial,
+        },
+        readAt
+      );
+    } catch {
+      throw new TRPCError({
+        code: 'BAD_REQUEST',
+        message: 'Replenishment evidence is unavailable for this scope or scenario.',
+      });
+    }
+  }),
   dailyWorkPack: reports
     .input(
       filters

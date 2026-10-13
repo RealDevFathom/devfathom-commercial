@@ -15,13 +15,15 @@ vi.mock('@/lib/abac', () => ({
   subjectFromSession: () => ({ id: 'user-1' }),
 }));
 vi.mock('@/lib/restaurant/sop-execution', () => ({ attachEvidence: mocks.attachEvidence }));
-vi.mock('@/lib/storage', () => ({
+vi.mock('@/lib/storage', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/storage')>()),
   deleteUpload: mocks.deleteUpload,
   putUpload: mocks.putUpload,
 }));
 vi.mock('@/server/trpc', () => ({ createTRPCContext: mocks.createTRPCContext }));
 
 import { POST } from './route';
+import { StorageUnavailableError } from '@/lib/storage';
 
 function request(overrides?: {
   type?: string;
@@ -317,4 +319,30 @@ describe('POST SOP evidence', () => {
     expect(response.status).toBe(303);
     expect(response.headers.get('location')).toContain('Proof+capture+failed');
   });
+});
+
+it('unavailable storage creates no evidence and makes no cleanup attempt', async () => {
+  mocks.putUpload.mockRejectedValueOnce(new StorageUnavailableError('disabled'));
+  const response = await POST(request());
+  expect(response.headers.get('location')).toContain('Storage+is+unavailable');
+  expect(mocks.attachEvidence).not.toHaveBeenCalled();
+  expect(mocks.deleteUpload).not.toHaveBeenCalled();
+});
+it('failed redundant-file deletion never reports success or retries deletion', async () => {
+  mocks.attachEvidence.mockResolvedValueOnce({ evidenceId: 'existing-evidence', created: false });
+  mocks.deleteUpload.mockRejectedValueOnce(new StorageUnavailableError('disabled'));
+  const response = await POST(request());
+  expect(response.headers.get('location')).toContain('cleanup+is+incomplete');
+  expect(response.headers.get('location')).not.toContain('Proof+captured');
+  expect(mocks.deleteUpload).toHaveBeenCalledOnce();
+  expect(mocks.attachEvidence).toHaveBeenCalledOnce();
+});
+it('failed cleanup after attach failure is visible and sanitized', async () => {
+  mocks.attachEvidence.mockRejectedValueOnce(new Error('fake private error'));
+  mocks.deleteUpload.mockRejectedValueOnce(new Error('fake private storage error'));
+  const warn = vi.spyOn(console, 'warn').mockImplementation(() => undefined);
+  const response = await POST(request());
+  expect(response.headers.get('location')).toContain('cleanup+is+incomplete');
+  expect(JSON.stringify(warn.mock.calls)).not.toContain('private');
+  expect(mocks.deleteUpload).toHaveBeenCalledOnce();
 });

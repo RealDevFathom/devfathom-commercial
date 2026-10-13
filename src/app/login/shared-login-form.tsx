@@ -4,6 +4,8 @@ import { useId, useRef, useState, type FormEvent } from 'react';
 import { signIn } from 'next-auth/react';
 import { useRouter } from 'next/navigation';
 import { ArrowRight, Building2, Eye, EyeOff, Loader2, ShieldCheck } from 'lucide-react';
+import { LOGIN_ERROR_MESSAGES, type LoginErrorKey } from './login-errors';
+import { useHydrated } from './use-hydrated';
 
 type Organization = {
   id: string;
@@ -55,13 +57,23 @@ function rateLimitedError(retryAfterHeader: string | null): string {
  * screen. The chosen organization travels in the authenticated session, never in
  * the address bar.
  */
-export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
+export function SharedLoginForm({
+  callbackUrl,
+  // WHA-1623: the outcome of a native submit that landed before hydration.
+  initialError,
+}: {
+  callbackUrl: string;
+  initialError?: LoginErrorKey;
+}) {
   const router = useRouter();
+  const hydrated = useHydrated();
   const errorId = useId();
   const [stage, setStage] = useState<Stage>('credentials');
   const [organizations, setOrganizations] = useState<Organization[]>([]);
   const [showPassword, setShowPassword] = useState(false);
-  const [error, setError] = useState('');
+  const [error, setError] = useState<string>(
+    initialError ? LOGIN_ERROR_MESSAGES[initialError] : ''
+  );
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [pendingOrganizationId, setPendingOrganizationId] = useState<string | null>(null);
   // Revealed only after a correct password, when the chosen account has 2FA on.
@@ -229,7 +241,16 @@ export function SharedLoginForm({ callbackUrl }: { callbackUrl: string }) {
       <>
         {header}
         {alert}
-        <form method="post" onSubmit={onSubmitCredentials} className="space-y-5">
+        {/* WHA-1623: `action` is the no-JavaScript path. Once hydrated,
+            onSubmitCredentials prevents it and the two-step flow runs unchanged. */}
+        <form
+          method="post"
+          action="/login/submit"
+          onSubmit={onSubmitCredentials}
+          data-hydrated={hydrated ? 'true' : undefined}
+          className="space-y-5"
+        >
+          <input type="hidden" name="callbackUrl" value={callbackUrl} />
           <div className="space-y-2">
             <label htmlFor="email" className="block text-sm font-semibold text-foreground">
               Email

@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { can, subjectFromSession } from '@/lib/abac';
-import { resolveDemoDirectoryScope } from '@/lib/demo/directory-access';
+import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
+import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
 import { z } from 'zod';
 
 import {
@@ -47,7 +48,7 @@ const manageDevicesProcedure = capabilityProcedure('devices:manage');
 export const restaurantDevicesRouter = router({
   /** List registered devices with derived operational health (no secret material). */
   list: auditedProtectedProcedure.query(async ({ ctx }) => {
-    let authorization = await resolveDemoDirectoryScope(ctx, 'devices');
+    let authorization = await resolveDemoDirectoryScope(ctx, 'devices', demoDirectoryPolicy);
     if (!authorization) {
       if (
         !(await can(subjectFromSession(ctx.session!.user), 'devices:manage', undefined, {

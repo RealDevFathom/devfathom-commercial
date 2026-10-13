@@ -281,6 +281,15 @@ export async function postSaleReturnEntry(
     throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   }
 
+  const existing = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: postingKey('PHARMACY_SALE_RETURN_LINE', returnLine.id),
+    },
+    include: { lines: true },
+  });
+  if (existing) return existing;
+
   const saleLine = returnLine.saleLine;
   const lots = await loadLots(db, scope, [returnLine.inventoryLotId]);
   const lot = lots.get(returnLine.inventoryLotId);
@@ -289,8 +298,22 @@ export async function postSaleReturnEntry(
   const grossMinor = saleLine.unitPriceMinor * saleLine.quantity;
   const returned = returnLine.canonicalUnits;
   const sold = saleLine.canonicalUnits;
-  const gross = apportion(grossMinor, [returned, sold - returned])[0] ?? 0;
-  const discount = apportion(saleLine.discountMinor, [returned, sold - returned])[0] ?? 0;
+  // returnSaleLine holds the sold-line lock and posts each newly inserted
+  // allocation before inserting the next. Reverse cumulative deltas, so split
+  // returns recover the final rounding minor unit instead of flooring it away.
+  const cumulative = await db.pharmacySaleReturnLine.aggregate({
+    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
+    _sum: { canonicalUnits: true },
+  });
+  const through = cumulative._sum.canonicalUnits ?? 0;
+  const before = through - returned;
+  if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
+  const delta = (amount: number) =>
+    Math.floor((amount * through) / sold) - Math.floor((amount * before) / sold);
+  const discount = delta(saleLine.discountMinor);
+  // Refund authorization rounds cumulative NET. Derive gross from that same
+  // net plus discount, so every partial reversal clears its authorized refund.
+  const gross = delta(grossMinor - saleLine.discountMinor) + discount;
   const cost = lot.unitCostMinor * returned;
 
   const dimensions = {
@@ -622,7 +645,7 @@ export async function postTenderRefundEntry(
   if (!refund) throw new PharmacyFinanceError('NOT_FOUND');
   if (refund.branchId !== scope.branchId) throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
   const settlementAccount =
-    refund.originalTender.type === 'CASH'
+    refund.drawerSessionId || refund.originalTender.type === 'CASH'
       ? 'CASH'
       : refund.originalTender.type === 'CREDIT'
         ? 'ACCOUNTS_RECEIVABLE'

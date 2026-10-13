@@ -5,6 +5,7 @@ import { redirect } from 'next/navigation';
 import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
+import { ColdChainCameraSection } from '@/components/camera/cold-chain-camera-section';
 import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
@@ -17,9 +18,13 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { hasModule } from '@/lib/entitlements';
+import { evaluateSessionUser } from '@/lib/auth/session-state';
+import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/demo/isolation';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { pharmacyInventoryRouter } from '@/server/routers/pharmacy-inventory';
 import { createTRPCContext } from '@/server/trpc';
+
+import { BreakPackForm } from './break-pack-form';
 
 export const metadata: Metadata = { title: 'Pharmacy inventory' };
 
@@ -110,6 +115,14 @@ export default async function PharmacyInventoryPage({
   }
 
   const organizationId = ctx.organization!.id;
+  // eslint-disable-next-line react-hooks/purity -- Request-time Server Component expiry snapshot; client receives a stable timestamp.
+  const observedAt = Date.now();
+  const sessionVerdict = evaluateSessionUser(ctx.session.user);
+  const breakPackPermission = !sessionVerdict.ok
+    ? sessionVerdict.message
+    : ctx.organization?.isDemo && isDemoProcedureBlocked('pharmacyInventory.breakPack', 'mutation')
+      ? DEMO_UNAVAILABLE_MESSAGE
+      : null;
   const branches = await ctx.db.pharmacyBranch.findMany({
     where: { organizationId, active: true },
     orderBy: { name: 'asc' },
@@ -219,6 +232,7 @@ export default async function PharmacyInventoryPage({
     }
   }
   const outOfRangeLogs = [...latestTemperatureByZone.values()].filter((log) => log.outOfRange);
+  const zoneStatuses = await caller.temperatureZoneStatuses({ branchId: branch.id });
   const available = lots.flatMap((lot) =>
     lot.balances
       .filter((balance) => balance.disposition === 'AVAILABLE' && balance.onHandUnits > 0)
@@ -382,6 +396,11 @@ export default async function PharmacyInventoryPage({
         eyebrow="Pharmacy operations · INV-01—09 / PUR-07"
         heading="Inventory"
         description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
+        actions={
+          <Link href="/pharmacy/inventory/imports" className={buttonVariants({ variant: 'secondary' })}>
+            Imported stock / Awaiting verification
+          </Link>
+        }
       />
       {query.notice ? (
         <div
@@ -453,6 +472,7 @@ export default async function PharmacyInventoryPage({
                   <TableHead>Location</TableHead>
                   <TableHead>Disposition</TableHead>
                   <TableHead className="text-right">Physical arrangement</TableHead>
+                  <TableHead className="text-right">Pack action</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -478,6 +498,36 @@ export default async function PharmacyInventoryPage({
                     <TableCell className="text-right tabular-nums">
                       {balance.onHandUnits} units · {balance.sealedPacks} sealed +{' '}
                       {balance.looseUnits} loose
+                    </TableCell>
+                    <TableCell className="whitespace-normal align-top text-right">
+                      <BreakPackForm
+                        branchId={branch.id}
+                        inventoryLotId={lot.id}
+                        stockLocationId={balance.stockLocationId}
+                        medicineName={
+                          lot.batch.medicine.brandName ?? lot.batch.medicine.productName
+                        }
+                        batchNumber={lot.batch.batchNumber}
+                        locationName={balance.location.name}
+                        sealedPacks={balance.sealedPacks}
+                        looseUnits={balance.looseUnits}
+                        unitsPerPack={lot.unitsPerPack}
+                        onHandUnits={balance.onHandUnits}
+                        expiresAt={lot.batch.expiresAt.toISOString()}
+                        observedAt={observedAt}
+                        unavailableReason={
+                          breakPackPermission ??
+                          (lot.batch.state !== 'ACTIVE'
+                            ? `Batch is ${label(lot.batch.state).toLowerCase()}.`
+                            : !lot.receivedAt
+                              ? 'Stock has not been received.'
+                              : !balance.location.active
+                                ? 'Stock location is inactive.'
+                                : balance.disposition !== 'AVAILABLE'
+                                  ? 'Stock is not available.'
+                                  : null)
+                        }
+                      />
                     </TableCell>
                   </TableRow>
                 ))}
@@ -609,6 +659,19 @@ export default async function PharmacyInventoryPage({
                   />
                 </div>
               ))}
+            </div>
+            <div className="mt-6 border-t border-border-subtle pt-5">
+              <ColdChainCameraSection
+                db={ctx.db}
+                scope={{ organizationId, branchId: branch.id }}
+                zones={coldChainLocations}
+                statuses={zoneStatuses}
+                latestTemperatureC={
+                  new Map(
+                    [...latestTemperatureByZone].map(([zoneId, log]) => [zoneId, log.temperatureC])
+                  )
+                }
+              />
             </div>
           </div>
         </SectionCard>
@@ -921,7 +984,18 @@ export default async function PharmacyInventoryPage({
             })}
           </div>
         </SectionCard>
-        <SectionCard title="Near-expiry and return windows" eyebrow="INV-09">
+        <SectionCard
+          title="Near-expiry and return windows"
+          eyebrow="INV-09"
+          actions={
+            <Link
+              className={buttonVariants({ size: 'sm', variant: 'secondary' })}
+              href={`/pharmacy/inventory/expiry?branch=${encodeURIComponent(branch.id)}`}
+            >
+              Act on expiring stock
+            </Link>
+          }
+        >
           <div className="grid gap-3 sm:grid-cols-2">
             {nearExpiry.map((bucket) => (
               <div

@@ -1,37 +1,38 @@
 // @vitest-environment node
-import { mkdtemp, rm } from 'node:fs/promises';
-import { tmpdir } from 'node:os';
-import { join } from 'node:path';
-import { afterAll, afterEach, beforeAll, expect, test, vi } from 'vitest';
+import { afterEach, beforeEach, expect, test, vi } from 'vitest';
 import { createSimulatedCameraGateway } from './simulated-gateway';
 import { resolveCameraGatewayRuntime } from './camera-gateway-runtime';
 
-let directory: string;
-let cwdSpy: ReturnType<typeof vi.spyOn>;
-let storage: typeof import('@/lib/storage');
-let storeCameraSnapshot: typeof import('./snapshots').storeCameraSnapshot;
+const files = vi.hoisted(() => new Map<string, Buffer>());
+vi.mock('node:fs/promises', () => ({
+  mkdir: vi.fn(),
+  writeFile: vi.fn(async (name: string, bytes: Buffer) => {
+    files.set(name, Buffer.from(bytes));
+  }),
+  readFile: vi.fn(async (name: string) => {
+    if (!files.has(name)) throw Object.assign(new Error('Missing'), { code: 'ENOENT' });
+    return files.get(name);
+  }),
+  rm: vi.fn(async (name: string) => {
+    files.delete(name);
+  }),
+}));
+vi.mock('@azure/identity', () => ({ DefaultAzureCredential: vi.fn() }));
+vi.mock('@azure/storage-blob', () => ({ BlobServiceClient: vi.fn() }));
+import * as storage from '@/lib/storage';
+import { storeCameraSnapshot } from './snapshots';
 
-beforeAll(async () => {
-  directory = await mkdtemp(
-    join(process.env.PAPERCLIP_RUN_SCRATCH_DIR ?? tmpdir(), 'camera-snapshots-')
-  );
-  vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', '');
-  cwdSpy = vi.spyOn(process, 'cwd').mockReturnValue(directory);
-  storage = await import('@/lib/storage');
-  ({ storeCameraSnapshot } = await import('./snapshots'));
+beforeEach(() => {
+  files.clear();
+  vi.stubEnv('STORAGE_ADAPTER', 'local');
+  vi.stubEnv('NODE_ENV', 'test');
 });
-
 afterEach(() => {
-  vi.mocked(storage.putUpload).mockRestore?.();
-});
-
-afterAll(async () => {
-  cwdSpy.mockRestore();
+  vi.restoreAllMocks();
   vi.unstubAllEnvs();
-  await rm(directory, { recursive: true, force: true });
 });
 
-test('simulated PNG bytes are stored and retrieved through real private storage', async () => {
+test('simulated PNG bytes are stored and retrieved through private storage with fake filesystem', async () => {
   const gateway = createSimulatedCameraGateway();
   const bytes = await gateway.getSnapshot('sim-camera-1');
   expect(Array.from(bytes.slice(0, 8))).toEqual([137, 80, 78, 71, 13, 10, 26, 10]);
@@ -134,4 +135,26 @@ test('production MediaMTX rejects snapshots by bare camera ID', async () => {
   await expect(runtime.adapter.getSnapshot('camera-a')).rejects.toThrow(
     'Operation unsupported by the configured live camera gateway.'
   );
+});
+
+test.each(['disabled', '', 'unknown', 'azure'])(
+  'unavailable %j skips camera capture and writes',
+  async (adapter) => {
+    vi.stubEnv('STORAGE_ADAPTER', adapter);
+    vi.stubEnv('AZURE_STORAGE_ACCOUNT_NAME', '');
+    const getSnapshot = vi.fn();
+    await expect(
+      storeCameraSnapshot({ getSnapshot }, { organizationId: 'tenant-a', cameraId: 'camera-a' })
+    ).rejects.toBeInstanceOf(storage.StorageUnavailableError);
+    expect(getSnapshot).not.toHaveBeenCalled();
+    expect(files.size).toBe(0);
+  }
+);
+test('production local skips camera capture', async () => {
+  vi.stubEnv('NODE_ENV', 'production');
+  const getSnapshot = vi.fn();
+  await expect(
+    storeCameraSnapshot({ getSnapshot }, { organizationId: 'tenant-a', cameraId: 'camera-a' })
+  ).rejects.toBeInstanceOf(storage.StorageUnavailableError);
+  expect(getSnapshot).not.toHaveBeenCalled();
 });

@@ -1,7 +1,6 @@
 import 'server-only';
 
 import { Prisma } from '@/generated/prisma/client';
-import { DEMO_RESET_JOB_TYPE } from '@/lib/demo/jobs';
 import '@/lib/restaurant/notification-webhook';
 import { runRestaurantJob } from '@/lib/restaurant/job-handlers';
 import {
@@ -11,6 +10,7 @@ import {
   type OutboxDispatchSummary,
 } from '@/lib/restaurant/outbox-dispatcher';
 import {
+  DEMO_RESET_JOB_TYPE,
   drainDueJobs,
   recoverStaleJobs,
   type Clock,

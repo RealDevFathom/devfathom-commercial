@@ -9,7 +9,7 @@ import {
 } from 'ai';
 import { assistantVertical } from '@/lib/ai/context';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
-import { createAIModel } from '@/lib/ai/provider';
+import { createAIModel, readAIAvailability } from '@/lib/ai/provider';
 import { assistantToolChoice, buildAssistantTools } from '@/lib/ai/tools';
 import { assistantSystemPrompt } from '@/lib/ai/prompt';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -89,6 +89,10 @@ async function respond(req: Request) {
   }
   if (organization.isDemo) {
     return Response.json({ error: 'Not available in demo.' }, { status: 403 });
+  }
+  // Rechecked for every request, including approved tool continuations.
+  if (!readAIAvailability().available) {
+    return Response.json({ error: UNAVAILABLE }, { status: 503 });
   }
   const entitlements = await resolveOrganizationEntitlements(organization.id, tenantDb);
 

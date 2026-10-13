@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { demoSeatFromOrganizationId, isCanonicalDemoOrganization } from '@/lib/tenancy/demo-identity';
+
 import { cache } from 'react';
 import { headers } from 'next/headers';
 import type { Session } from 'next-auth';
@@ -16,8 +18,8 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { getSupportSession, type SupportIdentity } from '@/lib/tenancy/support-session';
-import { demoSeatFromOrganizationId, isDemoEnabled } from '@/lib/demo/config';
-import { demoPersonaForUser, isCanonicalDemoOrganization } from '@/lib/demo/personas';
+import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
+import { demoPersonaForUser } from '@/lib/demo/personas';
 import {
   evaluateSessionUser,
   isSessionUsable,
@@ -182,10 +184,10 @@ async function resolveTenantActorUncached(
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
     if (organization.isDemo || session.user.demoAccessExpiresAt !== undefined) {
-      const seat = demoSeatFromOrganizationId(organization.id);
+      const seat = demoSeatFromOrganizationId(organization.id, getDemoSeatCount());
       if (
         !isDemoEnabled() ||
-        !isCanonicalDemoOrganization(organization) ||
+        !isCanonicalDemoOrganization(organization, getDemoSeatCount()) ||
         !seat ||
         !demoPersonaForUser(seat, session.user) ||
         !liveDemoAccessExpiry(session.user.demoAccessExpiresAt)

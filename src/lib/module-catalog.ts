@@ -227,10 +227,18 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyDispensing: 'pharmacy-dispensing',
   pharmacySafety: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
+  pharmacyCameras: 'pharmacy-core',
+  pharmacyMarketing: 'pharmacy-crm',
+  pharmacyFinance: 'pharmacy-finance',
   pharmacyOrdering: 'pharmacy-counter',
 };
 
 export function moduleForProcedure(path: string): string | null {
+  if (
+    /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(path)
+  ) {
+    return 'pharmacy-reports';
+  }
   return PROCEDURE_MODULES[path.split('.')[0] ?? ''] ?? null;
 }
 
@@ -308,6 +316,9 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],
+  ['/pharmacy/marketing', 'pharmacy-crm'],
+  ['/pharmacy/loyalty', 'pharmacy-crm'],
+  ['/pharmacy/cameras', 'pharmacy-core'],
   ['/pharmacy/orders', 'pharmacy-counter'],
   ['/restaurant/staff/roster', 'restaurant-core'],
   ['/restaurant/staff', 'restaurant-core'],

@@ -2,8 +2,9 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { priceFromLot } from './medicine';
-import { allocateForSale, reverseMovements } from './stock-ledger';
-import type { LedgerScope } from './stock-ledger';
+import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
+import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
+import { postSaleReturnEntry } from './finance-postings';
 
 /**
  * Re-exported from `./medicine`, where MED-08 pricing now lives so the counter
@@ -23,6 +24,7 @@ export class PharmacySaleError extends Error {
       | 'APPROVAL_REQUIRED'
       | 'REGULATED_DISCOUNT_REFUSED'
       | 'RETURN_EXCEEDS_SOLD'
+      | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
       | 'CROSS_BRANCH_REFERENCE'
@@ -91,24 +93,44 @@ export async function createSale(db: ScopedDb, scope: LedgerScope, quotation = f
   return sale;
 }
 
-export async function addSaleLine(
+type AddSaleLineInput = {
+  saleId: string;
+  medicineId: string;
+  presentationId: string;
+  packLevelId: string;
+  saleUnit: 'PACK' | 'STRIP' | 'UNIT';
+  quantity: number;
+  canonicalUnitsPerSaleUnit: number;
+  discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
+  discountMinor?: number;
+  approvedByUserId?: string;
+  approvalPolicy?: string;
+  override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
+  idempotencyKey: string;
+};
+
+export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
+  return addSaleLineWithAllocation(db, scope, input);
+}
+
+/** Internal customer-order path; never accepted by the counter's public input schema.
+ * Caller holds order/reservation/stock locks and releases the validated reservations
+ * in this same transaction. No override approval is fabricated for reserved stock.
+ */
+export async function addReservedSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
-  input: {
-    saleId: string;
-    medicineId: string;
-    presentationId: string;
-    packLevelId: string;
-    saleUnit: 'PACK' | 'STRIP' | 'UNIT';
-    quantity: number;
-    canonicalUnitsPerSaleUnit: number;
-    discountKind?: 'DISCOUNT' | 'PROMOTION' | 'COMPLIMENTARY';
-    discountMinor?: number;
-    approvedByUserId?: string;
-    approvalPolicy?: string;
-    override?: { inventoryLotId: string; reason: string; approvalPolicy: string };
-    idempotencyKey: string;
-  }
+  input: Omit<AddSaleLineInput, 'override'>,
+  reservation: ReservedSaleAllocation
+) {
+  return addSaleLineWithAllocation(db, scope, input, reservation);
+}
+
+async function addSaleLineWithAllocation(
+  db: ScopedDb,
+  scope: LedgerScope,
+  input: AddSaleLineInput,
+  reservation?: ReservedSaleAllocation
 ) {
   const sale = await saleInScope(db, scope, input.saleId);
   if (sale.status !== 'OPEN') throw new PharmacySaleError('INVALID_STATE');
@@ -140,13 +162,16 @@ export async function addSaleLine(
     where: { id: input.medicineId, organizationId: scope.organizationId, saleable: true },
   });
   if (!medicine) throw new PharmacySaleError('NOT_FOUND');
-  const allocation = await allocateForSale(db, scope, {
+  const allocationInput = {
     medicineId: input.medicineId,
     requiredUnits: canonicalUnits,
     at: new Date(),
     idempotencyKeyPrefix: `sale:${input.idempotencyKey}`,
     override: input.override,
-  });
+  };
+  const allocation = reservation
+    ? await allocateReservedForSale(db, scope, allocationInput, input.packLevelId, reservation)
+    : await allocateForSale(db, scope, allocationInput);
   const lots = await db.pharmacyInventoryLot.findMany({
     where: {
       id: { in: allocation.allocations.map((a) => a.inventoryLotId) },
@@ -270,28 +295,181 @@ export async function changeSaleStatus(
   return saleInScope(db, scope, saleId);
 }
 
+/** Cumulative rounding ensures partial returns sum to the original net line value. */
+export function returnedLineValue(
+  line: {
+    quantity: number;
+    unitPriceMinor: number;
+    discountMinor: number;
+    canonicalUnits: number;
+  },
+  units: number
+) {
+  return Math.floor(
+    ((line.quantity * line.unitPriceMinor - line.discountMinor) * units) / line.canonicalUnits
+  );
+}
+
+export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId: string) {
+  const sale = await db.pharmacySale.findFirst({
+    where: {
+      id: saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'COMPLETED',
+    },
+    include: {
+      lines: { include: { medicine: { select: { productName: true } }, returnLines: true } },
+      tenders: { include: { refunds: true } },
+      returns: { include: { lines: true } },
+    },
+  });
+  if (!sale) throw new PharmacySaleError('NOT_FOUND');
+  const locations = await db.pharmacyStockLocation.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+      kind: 'QUARANTINE',
+    },
+    select: { id: true, name: true },
+  });
+  const lines = sale.lines.map((line) => {
+    const returnedUnits = line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0);
+    return {
+      id: line.id,
+      name: line.medicine.productName,
+      saleUnit: line.saleUnit,
+      quantity: line.quantity,
+      canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
+      canonicalUnits: line.canonicalUnits,
+      returnedUnits,
+      returnedMinor: returnedLineValue(line, returnedUnits),
+      netMinor: line.quantity * line.unitPriceMinor - line.discountMinor,
+    };
+  });
+  const tenders = sale.tenders.map((tender) => ({
+    id: tender.id,
+    type: tender.type,
+    amountMinor: tender.amountMinor,
+    refundedMinor: tender.refunds.reduce((n, row) => n + row.amountMinor, 0),
+    refunds: tender.refunds.map((row) => ({
+      id: row.id,
+      amountMinor: row.amountMinor,
+      reason: row.reason,
+      createdAt: row.createdAt,
+      manualReversalRequired: row.reason.startsWith('[CASH; MANUAL REVERSAL REQUIRED]'),
+    })),
+  }));
+  return {
+    saleId: sale.id,
+    receiptNumber: sale.receiptNumber,
+    receiptDeviceId: sale.receiptDeviceId,
+    businessDate: sale.businessDate,
+    lines,
+    tenders,
+    locations,
+    refundableMinor: Math.max(
+      0,
+      lines.reduce((n, row) => n + row.returnedMinor, 0) -
+        tenders.reduce((n, row) => n + row.refundedMinor, 0)
+    ),
+    returns: sale.returns.map((row) => ({
+      id: row.id,
+      reason: row.reason,
+      createdAt: row.createdAt,
+      lines: row.lines.map((line) => ({
+        saleLineId: line.saleLineId,
+        canonicalUnits: line.canonicalUnits,
+        integrityDecision: line.integrityDecision,
+      })),
+    })),
+  };
+}
+
 export async function returnSaleLine(
   db: ScopedDb,
   scope: LedgerScope,
   input: {
     saleLineId: string;
     canonicalUnits: number;
-    quarantineLocationId: string;
+    quarantineLocationId?: string;
+    disposition?: 'RESTOCK' | 'QUARANTINE';
     reason: string;
     integrityDecision: string;
     idempotencyKey: string;
   }
 ) {
+  // Serialize the operation key across lines, then quantity checks for this sold line.
+  await db.$queryRaw(
+    Prisma.sql`SELECT 1 AS locked FROM pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':return:' + input.idempotencyKey}, 0))`
+  );
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sale_lines WHERE id=${input.saleLineId}
+    AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
   const line = await db.pharmacySaleLine.findFirst({
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { sale: true, allocations: true, returnLines: true },
+    include: { sale: true, allocations: { orderBy: { id: 'asc' } }, returnLines: true },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
+  const disposition = input.disposition ?? 'QUARANTINE';
+  const fingerprint = JSON.stringify({ ...input, disposition });
+  const prior = await db.pharmacySaleEvent.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: line.saleId,
+      kind: 'RETURNED',
+      payload: { path: ['idempotencyKey'], equals: input.idempotencyKey },
+    },
+  });
+  if (prior) {
+    const payload = prior.payload as { fingerprint?: string; returnId?: string };
+    if (payload.fingerprint !== fingerprint) throw new PharmacySaleError('IDEMPOTENCY_CONFLICT');
+    const saleReturn = await db.pharmacySaleReturn.findFirst({
+      where: {
+        id: payload.returnId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        originalSaleId: line.saleId,
+      },
+      include: { lines: { orderBy: { id: 'asc' } } },
+    });
+    const returnLine = saleReturn?.lines[0];
+    const movement =
+      returnLine &&
+      (await db.pharmacyStockMovement.findFirst({
+        where: {
+          id: returnLine.stockMovementId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+        },
+      }));
+    if (!saleReturn || !returnLine || !movement) throw new PharmacySaleError('INVALID_STATE');
+    return { saleReturn, returnLine, movement, returnId: saleReturn.id, replayed: true };
+  }
   const returned = line.returnLines.reduce((sum, item) => sum + item.canonicalUnits, 0);
-  if (input.canonicalUnits <= 0 || returned + input.canonicalUnits > line.canonicalUnits)
+  if (
+    !Number.isSafeInteger(input.canonicalUnits) ||
+    input.canonicalUnits <= 0 ||
+    returned + input.canonicalUnits > line.canonicalUnits
+  )
     throw new PharmacySaleError('RETURN_EXCEEDS_SOLD');
-  const allocation = line.allocations.find((item) => item.canonicalUnits >= input.canonicalUnits);
-  if (!allocation) throw new PharmacySaleError('INVALID_QUANTITY');
+  if (!input.reason.trim() || !input.integrityDecision.trim())
+    throw new PharmacySaleError('INVALID_STATE');
+  if (disposition === 'QUARANTINE') {
+    const location =
+      input.quarantineLocationId &&
+      (await db.pharmacyStockLocation.findFirst({
+        where: {
+          id: input.quarantineLocationId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+          kind: 'QUARANTINE',
+        },
+      }));
+    if (!location) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  }
   const saleReturn = await db.pharmacySaleReturn.create({
     data: {
       organizationId: scope.organizationId,
@@ -301,36 +479,97 @@ export async function returnSaleLine(
       reason: input.reason,
     },
   });
-  const movement = await db.pharmacyStockMovement.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      inventoryLotId: allocation.inventoryLotId,
-      stockLocationId: input.quarantineLocationId,
-      kind: 'RETURN',
-      disposition: 'QUARANTINE',
-      quantityUnits: input.canonicalUnits,
-      looseUnitDelta: input.canonicalUnits,
-      actorId: scope.actorId,
-      reason: input.reason,
-      idempotencyKey: input.idempotencyKey,
-    },
+  let remaining = input.canonicalUnits;
+  let firstReturnLine: Awaited<ReturnType<typeof db.pharmacySaleReturnLine.create>> | undefined;
+  let firstMovement: Awaited<ReturnType<typeof db.pharmacyStockMovement.create>> | undefined;
+  const consumed = new Map<string, number>();
+  for (const row of line.returnLines)
+    consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
+  for (const allocation of line.allocations) {
+    const used = Math.min(allocation.canonicalUnits, consumed.get(allocation.inventoryLotId) ?? 0);
+    consumed.set(allocation.inventoryLotId, (consumed.get(allocation.inventoryLotId) ?? 0) - used);
+    const units = Math.min(remaining, allocation.canonicalUnits - used);
+    if (!units) continue;
+    if (disposition === 'RESTOCK') {
+      // Batch lock shares the recall boundary; never restore unsafe stock as available.
+      await db.$queryRaw(Prisma.sql`SELECT b.id FROM pharmacy_manufacturing_batches b
+        JOIN pharmacy_inventory_lots l ON l."manufacturingBatchId"=b.id AND l."organizationId"=b."organizationId"
+        WHERE l.id=${allocation.inventoryLotId} AND l."organizationId"=${scope.organizationId} FOR UPDATE OF b`);
+      const lot = await db.pharmacyInventoryLot.findFirst({
+        where: {
+          id: allocation.inventoryLotId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+        },
+        include: { batch: true },
+      });
+      const location = await db.pharmacyStockLocation.findFirst({
+        where: {
+          id: allocation.stockLocationId,
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          active: true,
+          kind: { notIn: ['QUARANTINE', 'RETURNS'] },
+        },
+      });
+      if (!lot || lot.batch.state !== 'ACTIVE' || lot.batch.expiresAt <= new Date() || !location)
+        throw new PharmacySaleError('UNSAFE_STOCK');
+    }
+    const stockLocationId =
+      disposition === 'RESTOCK' ? allocation.stockLocationId : input.quarantineLocationId!;
+    const movement = await db.pharmacyStockMovement.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        inventoryLotId: allocation.inventoryLotId,
+        stockLocationId,
+        kind: 'RETURN',
+        disposition: disposition === 'RESTOCK' ? 'AVAILABLE' : 'QUARANTINE',
+        quantityUnits: units,
+        looseUnitDelta: units,
+        actorId: scope.actorId,
+        reason: input.reason,
+        idempotencyKey: `${input.idempotencyKey}:${allocation.id}`,
+      },
+    });
+    const returnedLine = await db.pharmacySaleReturnLine.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        returnId: saleReturn.id,
+        saleLineId: line.id,
+        inventoryLotId: allocation.inventoryLotId,
+        stockLocationId,
+        canonicalUnits: units,
+        integrityDecision: `${disposition}: ${input.integrityDecision}`,
+        stockMovementId: movement.id,
+      },
+    });
+    await postSaleReturnEntry(db, scope, {
+      saleReturnLineId: returnedLine.id,
+      at: saleReturn.createdAt,
+    });
+    firstReturnLine ??= returnedLine;
+    firstMovement ??= movement;
+    remaining -= units;
+    if (!remaining) break;
+  }
+  if (remaining || !firstReturnLine || !firstMovement)
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  await event(db, scope, line.saleId, 'RETURNED', input.reason, {
+    returnId: saleReturn.id,
+    disposition,
+    integrityDecision: input.integrityDecision,
+    idempotencyKey: input.idempotencyKey,
+    fingerprint,
   });
-  const returnLine = await db.pharmacySaleReturnLine.create({
-    data: {
-      organizationId: scope.organizationId,
-      branchId: scope.branchId,
-      returnId: saleReturn.id,
-      saleLineId: line.id,
-      inventoryLotId: allocation.inventoryLotId,
-      stockLocationId: input.quarantineLocationId,
-      canonicalUnits: input.canonicalUnits,
-      integrityDecision: input.integrityDecision,
-      stockMovementId: movement.id,
-    },
-  });
-  await event(db, scope, line.saleId, 'RETURNED', input.reason, { returnId: saleReturn.id });
-  return { saleReturn, returnLine, movement };
+  return {
+    saleReturn,
+    returnLine: firstReturnLine,
+    movement: firstMovement,
+    returnId: saleReturn.id,
+    replayed: false,
+  };
 }
 
 export async function captureDemand(
@@ -567,6 +806,7 @@ export async function optOutRestockInterest(db: ScopedDb, scope: LedgerScope, in
     where: { id: interestId, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (!interest || interest.status === 'RECOVERED') throw new PharmacySaleError('NOT_FOUND');
+  if (interest.orderLineId) throw new PharmacySaleError('INVALID_STATE');
   const at = new Date();
   await db.pharmacyRestockNotification.updateMany({
     where: {
@@ -606,6 +846,7 @@ export async function recoverRestockInterest(
     },
     include: { demandEvent: true },
   });
+  if (interest?.orderLineId) throw new PharmacySaleError('INVALID_STATE');
   const line = await db.pharmacySaleLine.findFirst({
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { sale: true },

@@ -13,6 +13,11 @@ import {
   startCustomerOrderCheckout,
   transitionCustomerOrder,
 } from '@/lib/pharmacy/customer-ordering';
+import {
+  deliveryCommandInput,
+  recordDeliveryCommand,
+  PharmacyDeliveryError,
+} from '@/lib/pharmacy/customer-delivery';
 import type { LedgerScope } from '@/lib/pharmacy/stock-ledger';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -39,6 +44,8 @@ async function isStaff(ctx: TRPCContext) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof PharmacyDeliveryError)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof PharmacyCustomerOrderError) {
     const code =
       error.reason === 'ORDER_NOT_FOUND' || error.reason === 'CUSTOMER_NOT_FOUND'
@@ -62,6 +69,15 @@ const orderLine = z
   .strict();
 
 export const pharmacyOrderingRouter = router({
+  deliveryCommand: staffProcedure.input(deliveryCommandInput).mutation(async ({ ctx, input }) => {
+    try {
+      return await ctx.db.$transaction((tx) =>
+        recordDeliveryCommand(txDb(tx), scopeFor(ctx, input.branchId), input)
+      );
+    } catch (error) {
+      fail(error);
+    }
+  }),
   branches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements.organizationId;
     const [branches, organization, customer] = await Promise.all([

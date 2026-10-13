@@ -348,7 +348,7 @@ export function RestaurantMenuImportConsole({
   const readyToCommit = summary?.readyToCommit ?? false;
 
   async function submitFile(file: File | undefined) {
-    if (!file) return;
+    if (!file || busy || !limitsQuery.data?.available || limitsQuery.error) return;
     const limits = limitsQuery.data;
     setUploadError('');
     // Honour the server's limits before spending the user's bandwidth. The
@@ -523,6 +523,11 @@ export function RestaurantMenuImportConsole({
               ? `Accepted: ${limitsQuery.data.allowedMimeTypes.join(', ')}.`
               : 'Loading the accepted file types…'}
           </p>
+          {limitsQuery.data?.explanation ? (
+            <p role="status" className="mt-3 text-sm text-text-muted">
+              {limitsQuery.data.explanation}
+            </p>
+          ) : null}
           <div className="mt-4 flex justify-center">
             <Field label="Menu file">
               <input
@@ -530,7 +535,7 @@ export function RestaurantMenuImportConsole({
                 type="file"
                 accept={limitsQuery.data?.allowedMimeTypes.join(',')}
                 onChange={onFileChange}
-                disabled={busy}
+                disabled={busy || !limitsQuery.data?.available || Boolean(limitsQuery.error)}
                 className="block w-full text-sm text-text-muted file:mr-3 file:h-11 file:cursor-pointer file:rounded-md file:border file:border-input file:bg-surface-raised file:px-4 file:text-sm file:font-medium file:text-text-strong hover:file:bg-muted focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:cursor-not-allowed disabled:opacity-50"
               />
             </Field>

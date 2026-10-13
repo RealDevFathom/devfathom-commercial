@@ -6,7 +6,7 @@ import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
 import { can, subjectFromSession } from '@/lib/abac';
 import { publicRequestOrigin } from '@/lib/http-origin';
 import { attachEvidence } from '@/lib/restaurant/sop-execution';
-import { deleteUpload, putUpload } from '@/lib/storage';
+import { deleteUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
 import { createTRPCContext } from '@/server/trpc';
 
 const EVIDENCE_TYPES = {
@@ -15,7 +15,8 @@ const EVIDENCE_TYPES = {
   'image/webp': 'webp',
 } as const;
 
-type EvidenceCaptureStage = 'file_validation' | 'context' | 'authorization' | 'storage' | 'attach';
+type EvidenceCaptureStage =
+  'file_validation' | 'context' | 'authorization' | 'storage' | 'attach' | 'cleanup';
 
 function warnEvidenceCaptureFailure(stage: EvidenceCaptureStage, error: unknown) {
   try {
@@ -141,17 +142,45 @@ export async function POST(request: Request) {
       uploaderStaffProfileId,
     });
     if (!evidence.created) {
+      stage = 'cleanup';
       await deleteUpload(organizationId, storedFilename);
       storedFilename = null;
     }
     return NextResponse.redirect(destination(request, form, 'Proof captured.', 'success'), 303);
   } catch (error) {
-    if (storedFilename && organizationId) {
-      await deleteUpload(organizationId, storedFilename).catch(() => undefined);
+    if (
+      storedFilename &&
+      organizationId &&
+      stage !== 'cleanup' &&
+      !(stage === 'storage' && error instanceof StorageUnavailableError)
+    ) {
+      try {
+        await deleteUpload(organizationId, storedFilename);
+      } catch (cleanupError) {
+        warnEvidenceCaptureFailure('cleanup', cleanupError);
+        return NextResponse.redirect(
+          destination(
+            request,
+            form,
+            'Proof capture failed. Stored file cleanup is incomplete.',
+            'error'
+          ),
+          303
+        );
+      }
     }
     warnEvidenceCaptureFailure(stage, error);
     return NextResponse.redirect(
-      destination(request, form, 'Proof capture failed. Check the file and try again.', 'error'),
+      destination(
+        request,
+        form,
+        stage === 'cleanup'
+          ? 'Proof capture failed. Stored file cleanup is incomplete.'
+          : error instanceof StorageUnavailableError
+            ? 'Proof capture unavailable. Storage is unavailable.'
+            : 'Proof capture failed. Check the file and try again.',
+        'error'
+      ),
       303
     );
   }

@@ -1,3 +1,5 @@
+import { pharmacyCamerasRouter } from './pharmacy-cameras';
+import { pharmacyMarketingRouter } from './pharmacy-marketing';
 import { router } from '../trpc';
 import { dashboardRouter } from './dashboard';
 import { projectsRouter } from './projects';
@@ -119,6 +121,8 @@ export const appRouter = router({
   pharmacySafety: pharmacySafetyRouter,
   pharmacySales: pharmacySalesRouter,
   pharmacyReports: pharmacyReportsRouter,
+  pharmacyCameras: pharmacyCamerasRouter,
+  pharmacyMarketing: pharmacyMarketingRouter,
   pharmacyFinance: pharmacyFinanceRouter,
   pharmacyOnboarding: pharmacyOnboardingRouter,
   pharmacyOrdering: pharmacyOrderingRouter,
