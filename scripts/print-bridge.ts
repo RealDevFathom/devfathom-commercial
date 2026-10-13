@@ -19,6 +19,104 @@ type Transport =
 
 class BridgeError extends Error {}
 
+const TOKEN_FILE_LIMIT = 1024;
+const FILE_TOKEN = /^rdk_[A-Za-z0-9_-]{1,512}$/;
+
+function requirePosixTokenFiles() {
+  if (
+    process.platform === 'win32' ||
+    typeof process.geteuid !== 'function' ||
+    typeof constants.O_NOFOLLOW !== 'number'
+  ) {
+    throw new BridgeError(
+      'Token files require POSIX owner-only permissions. Use PRINT_BRIDGE_TOKEN on this platform.'
+    );
+  }
+}
+
+export async function readPrintBridgeToken(path: string): Promise<string> {
+  requirePosixTokenFiles();
+  try {
+    const handle = await open(
+      path,
+      constants.O_RDONLY | constants.O_NOFOLLOW | constants.O_NONBLOCK
+    );
+    try {
+      const before = await handle.stat();
+      if (
+        !before.isFile() ||
+        before.uid !== process.geteuid!() ||
+        (before.mode & 0o077) !== 0 ||
+        before.size > TOKEN_FILE_LIMIT
+      ) {
+        throw new BridgeError(
+          'Token file must be a small regular file owned by this user with owner-only permissions.'
+        );
+      }
+      const bytes = Buffer.alloc(TOKEN_FILE_LIMIT + 1);
+      let length = 0;
+      while (length < bytes.length) {
+        const result = await handle.read(bytes, length, bytes.length - length, length);
+        if (!result.bytesRead) break;
+        length += result.bytesRead;
+      }
+      const after = await handle.stat();
+      if (
+        length > TOKEN_FILE_LIMIT ||
+        after.size !== before.size ||
+        after.mtimeMs !== before.mtimeMs ||
+        after.ctimeMs !== before.ctimeMs
+      ) {
+        throw new BridgeError('Token file changed or exceeded the size limit.');
+      }
+      const token = bytes.subarray(0, length).toString('utf8').trim();
+      if (!FILE_TOKEN.test(token))
+        throw new BridgeError('Token file does not contain a valid device token.');
+      return token;
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if (error instanceof BridgeError) throw error;
+    throw new BridgeError('Could not securely read PRINT_BRIDGE_TOKEN_FILE.');
+  }
+}
+
+export async function persistPrintBridgeToken(path: string, token: string): Promise<void> {
+  requirePosixTokenFiles();
+  if (token !== token.trim() || !FILE_TOKEN.test(token))
+    throw new BridgeError('Invalid device token.');
+  try {
+    const handle = await open(
+      path,
+      constants.O_WRONLY | constants.O_CREAT | constants.O_EXCL | constants.O_NOFOLLOW,
+      0o600
+    );
+    try {
+      await handle.writeFile(`${token}\n`, 'utf8');
+      await handle.sync();
+    } finally {
+      await handle.close();
+    }
+  } catch (error) {
+    if ((error as NodeJS.ErrnoException)?.code === 'EEXIST') {
+      throw Object.assign(new BridgeError('Token file already exists; nothing was replaced.'), {
+        code: 'EEXIST',
+      });
+    }
+    throw new BridgeError('Could not securely persist the device token.');
+  }
+}
+
+export async function resolvePrintBridgeToken(input: {
+  token?: string;
+  tokenFile?: string;
+}): Promise<string> {
+  if (input.token) return input.token;
+  if (input.tokenFile) return readPrintBridgeToken(input.tokenFile);
+  return '';
+}
+
 /** Parse only explicit targets. No discovery, default printer, or arbitrary file output. */
 export function resolveTransport(printerId: string, platform = process.platform): Transport {
   if (!printerId || printerId.length > 128 || /[\x00-\x20\x7f]/.test(printerId)) {
@@ -421,7 +519,10 @@ if (process.argv[1] && fileURLToPath(import.meta.url) === resolve(process.argv[1
     try {
       await runPrintBridge({
         baseUrl: process.env.PRINT_BRIDGE_BASE_URL ?? '',
-        token: process.env.PRINT_BRIDGE_TOKEN ?? '',
+        token: await resolvePrintBridgeToken({
+          token: process.env.PRINT_BRIDGE_TOKEN,
+          tokenFile: process.env.PRINT_BRIDGE_TOKEN_FILE,
+        }),
         stateDir: process.env.PRINT_BRIDGE_STATE_DIR ?? '',
         allowedPrinterIds,
         signal: controller.signal,
