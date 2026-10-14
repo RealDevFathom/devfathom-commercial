@@ -66,6 +66,7 @@ describe('registered configuration replacement', () => {
         organizationId: 'org',
         branchId: 'branch',
         id: { in: ['printer'] },
+        retiredAt: null,
         bridge: {
           is: {
             organizationId: 'org',
@@ -163,6 +164,7 @@ it('rechecks tenant, branch, address and active bridge for a newly enqueued regi
       organizationId: 'org',
       branchId: 'branch',
       address: route.printerId,
+      retiredAt: null,
       branch: { is: { active: true } },
       bridge: {
         is: {

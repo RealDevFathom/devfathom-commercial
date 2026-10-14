@@ -37,6 +37,7 @@ function registeredPrinterScope(
     organizationId,
     branchId,
     address: route.printerId,
+    retiredAt: null,
     branch: { is: { active: true } },
     bridge: {
       is: { organizationId, branchId, kind: 'PRINT_BRIDGE', status: 'ACTIVE', revokedAt: null },
@@ -166,6 +167,7 @@ export async function replacePrintRoutesInTransaction(
         organizationId,
         branchId: config.branchId,
         id: { in: ids },
+        retiredAt: null,
         bridge: {
           is: {
             organizationId,

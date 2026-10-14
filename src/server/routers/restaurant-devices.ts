@@ -18,11 +18,14 @@ import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import {
   PrinterInventoryError,
   PrinterRenameError,
+  PrinterRetirementError,
   printerRegistrationsSchema,
   printerRenameSchema,
+  printerRetirementSchema,
   publicPrinterSelect,
   registerPrintersForExistingBridge,
   renamePrinterInventory,
+  retirePrinterInventory,
 } from '@/lib/restaurant/printer-inventory';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import {
@@ -188,6 +191,39 @@ export const restaurantDevicesRouter = router({
         return { printer: result.printer, changed: result.changed };
       } catch (error) {
         if (error instanceof PrinterRenameError)
+          throw new TRPCError({ code: error.code, message: error.message });
+        throw error;
+      }
+    }),
+
+  retirePrinter: manageDevicesProcedure
+    .input(printerRetirementSchema)
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
+      assertAuthorizedBranch(authorization, input.branchId);
+      try {
+        const result = await retirePrinterInventory(ctx.db, input);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPrinter',
+          targetId: result.printer.id,
+          targetLabel: result.printer.name,
+          description: result.changed
+            ? 'Retired printer inventory'
+            : 'Printer inventory already retired',
+          metadata: {
+            branchId: result.printer.branchId,
+            bridgeId: result.bridgeId,
+            retiredAt: result.printer.retiredAt.toISOString(),
+            changed: result.changed,
+          },
+        });
+        return { printer: result.printer, changed: result.changed };
+      } catch (error) {
+        if (error instanceof PrinterRetirementError)
           throw new TRPCError({ code: error.code, message: error.message });
         throw error;
       }

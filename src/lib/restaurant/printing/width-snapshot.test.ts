@@ -143,6 +143,7 @@ describe('server-owned new ticket snapshots', () => {
         organizationId: 'org',
         branchId: 'branch',
         address: route.printerId,
+        retiredAt: null,
         branch: { is: { active: true } },
         bridge: {
           is: {

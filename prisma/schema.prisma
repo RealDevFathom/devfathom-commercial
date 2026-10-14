@@ -14530,6 +14530,7 @@ model RestaurantPrinter {
   status         RestaurantPrinterStatus @default(OFFLINE)
   lastSeenAt     DateTime?
   lastError      String?
+  retiredAt      DateTime?
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
   branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_branch_fkey")

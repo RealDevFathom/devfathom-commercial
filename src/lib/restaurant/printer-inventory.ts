@@ -46,6 +46,7 @@ export const publicPrinterSelect = {
   status: true,
   lastSeenAt: true,
   lastError: true,
+  retiredAt: true,
   createdAt: true,
   updatedAt: true,
   bridge: { select: { id: true, name: true, kind: true, status: true, revokedAt: true } },
@@ -179,4 +180,104 @@ export function renamePrinterInventory(db: ScopedDb, value: z.infer<typeof print
       previousName: printer.name,
     };
   });
+}
+
+export const printerRetirementSchema = z
+  .object({ branchId: z.string().min(1), printerId: z.string().min(1) })
+  .strict();
+export class PrinterRetirementError extends Error {
+  constructor(
+    readonly code: 'CONFLICT' | 'FORBIDDEN' | 'NOT_FOUND',
+    message: string
+  ) {
+    super(message);
+  }
+}
+
+/** Monotonic lifecycle only: retain transport, observed health, routes and job history. */
+export function retirePrinterInventory(
+  db: ScopedDb,
+  value: z.infer<typeof printerRetirementSchema>
+) {
+  const input = printerRetirementSchema.parse(value);
+  return db.$transaction(
+    async (tx) => {
+      // A scoped nested transaction reuses its outer transaction and may ignore options.
+      // Verify the actual isolation before any lock, blocker observation or write.
+      const isolation = await tx.$queryRaw<Array<{ isolation: string }>>`
+      SELECT current_setting('transaction_isolation') AS isolation`;
+      if (isolation[0]?.isolation !== 'read committed')
+        throw new PrinterRetirementError(
+          'CONFLICT',
+          'Printer retirement requires a ReadCommitted transaction.'
+        );
+      const branches = await tx.$queryRaw<Array<{ id: string; active: boolean }>>`
+      SELECT id, active FROM restaurant_branches
+      WHERE id = ${input.branchId} AND "organizationId" = current_setting('app.current_organization_id', true)
+      FOR UPDATE`;
+      if (!branches[0]?.active)
+        throw new PrinterRetirementError('FORBIDDEN', 'Active branch not found.');
+      const rows = await tx.$queryRaw<
+        Array<{
+          id: string;
+          organizationId: string;
+          branchId: string;
+          bridgeId: string;
+          name: string;
+          retiredAt: Date | null;
+        }>
+      >`
+      SELECT id, "organizationId", "branchId", "bridgeId", name, "retiredAt" FROM restaurant_printers
+      WHERE id = ${input.printerId} AND "branchId" = ${input.branchId}
+        AND "organizationId" = current_setting('app.current_organization_id', true)
+      FOR UPDATE`;
+      const printer = rows[0];
+      if (!printer)
+        throw new PrinterRetirementError('NOT_FOUND', 'Printer not found in this branch.');
+      const result = (retiredAt: Date, changed: boolean) => ({
+        printer: { id: printer.id, branchId: printer.branchId, name: printer.name, retiredAt },
+        bridgeId: printer.bridgeId,
+        changed,
+      });
+      // A stable repeat is not an assertion that later anomalies do not exist.
+      if (printer.retiredAt !== null) return result(printer.retiredAt, false);
+      const scope = {
+        organizationId: printer.organizationId,
+        branchId: input.branchId,
+        registeredPrinterId: printer.id,
+      };
+      const route = await tx.restaurantPrintRoute.findFirst({ where: scope, select: { id: true } });
+      if (route)
+        throw new PrinterRetirementError(
+          'CONFLICT',
+          'Remove all registered print routes before retiring this printer.'
+        );
+      const job = await tx.restaurantPrintJob.findFirst({
+        where: { ...scope, status: { not: 'PRINTED' } },
+        select: { id: true },
+      });
+      if (job)
+        throw new PrinterRetirementError(
+          'CONFLICT',
+          'Resolve all unfinished registered print jobs before retiring this printer.'
+        );
+      const retiredAt = new Date();
+      const updated = await tx.restaurantPrinter.updateMany({
+        where: {
+          id: printer.id,
+          organizationId: printer.organizationId,
+          branchId: input.branchId,
+          retiredAt: null,
+        },
+        data: { retiredAt },
+      });
+      if (updated.count !== 1)
+        throw new PrinterRetirementError(
+          'CONFLICT',
+          'Printer changed. Refresh and review before retiring.'
+        );
+      return result(retiredAt, true);
+    },
+    { isolationLevel: 'ReadCommitted' }
+  );
 }

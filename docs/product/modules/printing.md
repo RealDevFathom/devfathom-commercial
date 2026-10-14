@@ -388,3 +388,18 @@ All locks belong to the existing outer tenant transaction. A stale higher-isolat
 snapshot cannot silently bypass the current printer locking read. This source dependency
 does not add retirement state or enable retirement writes; database concurrency and
 reader/writer rollout remain unaccepted runtime gates.
+
+
+### Printer retirement backend
+
+The management API now exposes a one-way audited retirement transition with a server-owned
+nullable timestamp. Any registered route (even disabled) or non-PRINTED job blocks the first
+transition. Repeats preserve the original timestamp and report no change. Inventory and
+printed history remain visible. New registered route/job admission and bridge claims exclude
+retired records; stored replay and valid ACK behavior remain unchanged.
+
+The callback verifies actual ReadCommitted isolation and takes branch then printer update
+locks before checking blockers. This source slice includes an additive migration and offline
+generated client, but no migration execution or deployment. Old writers must be stopped or
+replaced before enabling the endpoint in a deployed environment. UI, live concurrency, RLS
+and rollout acceptance remain open.

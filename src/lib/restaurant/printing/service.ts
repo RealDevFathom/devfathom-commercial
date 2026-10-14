@@ -331,6 +331,7 @@ export async function claimNextPrintJob(
           is: {
             branchId,
             bridgeId: deviceId,
+            retiredAt: null,
             branch: { is: { active: true } },
             bridge: {
               is: {

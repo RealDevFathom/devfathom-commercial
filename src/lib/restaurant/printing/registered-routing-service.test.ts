@@ -167,6 +167,7 @@ describe('registered bridge claims', () => {
             is: {
               branchId: 'branch',
               bridgeId: 'bridge',
+              retiredAt: null,
               branch: { is: { active: true } },
               bridge: {
                 is: {

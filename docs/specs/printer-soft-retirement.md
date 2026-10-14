@@ -1,6 +1,6 @@
 # Printer soft-retirement policy and backend admission
 
-Status: reviewed policy. Retirement is not implemented or enabled by this document.
+Status: backend implementation added; source validation does not enable deployment.
 Source baseline: `78f9d68a514e90b1c21989b155e4e683e52317e4`.
 
 ## Meaning and preservation
@@ -60,7 +60,8 @@ response is not permission for an automatic physical retry.
 
 The original baseline only took a branch admission lock for guarded Settings
 requests. The shared locking dependency now covers fresh registered enqueue and
-registered route admission; retirement itself remains unimplemented. Adding a `retiredAt: null` filter alone would leave other enqueue producers able
+registered route admission. The retirement transition below now verifies actual outer
+isolation and holds the corresponding branch/printer update locks. A `retiredAt: null` filter alone would leave other enqueue producers able
 to race retirement. Do not enable a retirement writer until all of the following are true.
 
 - Retirement takes the tenant branch lock, then the printer row lock, both FOR UPDATE,
@@ -164,3 +165,19 @@ mixed-version rollout or physical output. Real concurrent enqueue/route-save/ret
 stale-isolation tests remain a separately authorized database acceptance gate. Reader/writer
 rollout must prevent old writers that ignore retirement from creating new registered work
 before a retirement endpoint is enabled. Source acceptance must state that dependency.
+
+
+## Implemented backend slice
+
+The nullable `retiredAt` field and additive application migration are accompanied by an
+audited `retirePrinter` management mutation. The transaction requests ReadCommitted and
+checks its actual isolation before branch and printer update locks, blockers and the
+conditional lifecycle update. Repeats retain the saved timestamp. Inventory listing keeps
+retired records visible; new registered routing, enqueues and claims exclude them. ACK
+retains the existing token, device, job and lease rules without a retirement filter.
+
+Offline schema generation and mocked source checks are the acceptance scope. No migration
+has been executed. Before deployment enables this mutation, all old registered-job and
+route writers must be replaced or stopped; their ignorance of retirement invalidates the
+locking/eligibility contract. UI retirement controls, live database interleavings, migration
+execution, RLS verification, runtime acceptance and rollout remain separate gates.
