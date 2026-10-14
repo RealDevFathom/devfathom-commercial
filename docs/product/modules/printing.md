@@ -287,3 +287,27 @@ paper output. Server-side money permissions still apply.
 
 Visual/browser, live database/concurrency, connectivity, telemetry, printer retirement,
 paper-width behavior and physical-printer acceptance remain separate gates.
+
+
+### Editing printer names
+
+Devices → Printer inventory can rename an existing printer within an authorized active
+branch. This changes only the inventory label and normal update timestamp. Targets,
+bridge ownership, paper width, telemetry, routes and queued-job snapshots stay intact.
+Unbound printers, OFFLINE telemetry and inactive or revoked bridges do not prevent a
+label correction; renaming does not reactivate or verify the printer.
+
+Each save compares the exact previously observed name under a tenant-scoped row lock.
+Stale names conflict even if the desired name already matches. A no-op returns unchanged.
+Name-value comparison does not detect a change away from and back to the same value.
+
+Conflicts and uncertain responses retain the draft. A dedicated read started after the
+failure supplies a fresh comparison name only after explicit review; no mutation retries
+automatically. Review stays pending across dialog closure and branch navigation in this
+mounted panel. Account changes or page reloads reset this local state. A matching read
+is not proof the earlier request completed; every later save still uses the comparison.
+Confirmed results remain visible if the list refresh fails.
+
+Address/bridge edits, retirement, observed status writes and paper-width output remain
+separate work. Runtime database/concurrency, browser and physical-printer checks remain
+unrun; this source support does not establish those acceptance gates.

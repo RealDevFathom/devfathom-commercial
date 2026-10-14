@@ -15,7 +15,15 @@ import {
   rotateDeviceSecret,
 } from '@/lib/restaurant/devices';
 import { staffHasCapability } from '@/lib/restaurant/job-roles';
-import { PrinterInventoryError, printerRegistrationsSchema, publicPrinterSelect, registerPrintersForExistingBridge } from '@/lib/restaurant/printer-inventory';
+import {
+  PrinterInventoryError,
+  PrinterRenameError,
+  printerRegistrationsSchema,
+  printerRenameSchema,
+  publicPrinterSelect,
+  registerPrintersForExistingBridge,
+  renamePrinterInventory,
+} from '@/lib/restaurant/printer-inventory';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import {
   CommercialLimitError,
@@ -50,20 +58,54 @@ const manageDevicesProcedure = capabilityProcedure('devices:manage');
 export const restaurantDevicesRouter = router({
   /** Issue a one-use enrollment code only while creating a new bridge. */
   initiatePrintBridgeEnrollment: manageDevicesProcedure
-    .input(z.object({ branchId: z.string().min(1), name: z.string().trim().min(1).max(120), printers: printerRegistrationsSchema.optional() }).strict())
+    .input(
+      z
+        .object({
+          branchId: z.string().min(1),
+          name: z.string().trim().min(1).max(120),
+          printers: printerRegistrationsSchema.optional(),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
-      const authorization = await resolveCapabilityBranchAuthorization(ctx.db, ctx.session!.user, 'devices:manage');
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
       assertAuthorizedBranch(authorization, input.branchId);
-      const branch = await ctx.db.restaurantBranch.findFirst({ where: { id: input.branchId, active: true }, select: { id: true } });
+      const branch = await ctx.db.restaurantBranch.findFirst({
+        where: { id: input.branchId, active: true },
+        select: { id: true },
+      });
       if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Active branch not found.' });
       try {
-        const { device, enrollment, printerCount } = await enrollPrintBridgeWithinCommercialLimits(ctx.db, ctx.entitlements.limits, input);
-        annotateAudit(ctx, { targetType: 'RestaurantRegisteredDevice', targetId: device.id, targetLabel: device.name,
-          description: `Enrolled print bridge "${device.name}"`, metadata: { branchId: device.branchId, kind: device.kind, printerCount } });
-        return { device: { id: device.id, name: device.name, branchId: device.branchId, kind: device.kind },
-          enrollmentCode: enrollment.code, expiresAt: enrollment.expiresAt, printerCount };
+        const { device, enrollment, printerCount } = await enrollPrintBridgeWithinCommercialLimits(
+          ctx.db,
+          ctx.entitlements.limits,
+          input
+        );
+        annotateAudit(ctx, {
+          targetType: 'RestaurantRegisteredDevice',
+          targetId: device.id,
+          targetLabel: device.name,
+          description: `Enrolled print bridge "${device.name}"`,
+          metadata: { branchId: device.branchId, kind: device.kind, printerCount },
+        });
+        return {
+          device: {
+            id: device.id,
+            name: device.name,
+            branchId: device.branchId,
+            kind: device.kind,
+          },
+          enrollmentCode: enrollment.code,
+          expiresAt: enrollment.expiresAt,
+          printerCount,
+        };
       } catch (error) {
-        if (error instanceof CommercialLimitError || error instanceof PrinterInventoryError) throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        if (error instanceof CommercialLimitError || error instanceof PrinterInventoryError)
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
         throw error;
       }
     }),
@@ -72,22 +114,81 @@ export const restaurantDevicesRouter = router({
   listPrinters: manageDevicesProcedure
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveCapabilityBranchAuthorization(ctx.db, ctx.session!.user, 'devices:manage');
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
       assertAuthorizedBranch(authorization, input.branchId);
-      return ctx.db.restaurantPrinter.findMany({ where: { branchId: input.branchId }, orderBy: [{ name: 'asc' }, { id: 'asc' }], select: publicPrinterSelect });
+      return ctx.db.restaurantPrinter.findMany({
+        where: { branchId: input.branchId },
+        orderBy: [{ name: 'asc' }, { id: 'asc' }],
+        select: publicPrinterSelect,
+      });
     }),
 
   registerPrinters: manageDevicesProcedure
-    .input(z.object({ branchId: z.string().min(1), bridgeId: z.string().min(1), printers: printerRegistrationsSchema }).strict())
+    .input(
+      z
+        .object({
+          branchId: z.string().min(1),
+          bridgeId: z.string().min(1),
+          printers: printerRegistrationsSchema,
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
-      const authorization = await resolveCapabilityBranchAuthorization(ctx.db, ctx.session!.user, 'devices:manage');
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
       assertAuthorizedBranch(authorization, input.branchId);
       try {
         const registered = await registerPrintersForExistingBridge(ctx.db, input);
-        annotateAudit(ctx, { targetType: 'RestaurantRegisteredDevice', targetId: input.bridgeId, description: 'Registered printer inventory', metadata: { branchId: input.branchId, registered } });
+        annotateAudit(ctx, {
+          targetType: 'RestaurantRegisteredDevice',
+          targetId: input.bridgeId,
+          description: 'Registered printer inventory',
+          metadata: { branchId: input.branchId, registered },
+        });
         return { registered };
       } catch (error) {
-        if (error instanceof PrinterInventoryError) throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        if (error instanceof PrinterInventoryError)
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        throw error;
+      }
+    }),
+
+  renamePrinter: manageDevicesProcedure
+    .input(printerRenameSchema)
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
+      assertAuthorizedBranch(authorization, input.branchId);
+      try {
+        const result = await renamePrinterInventory(ctx.db, input);
+        annotateAudit(ctx, {
+          targetType: 'RestaurantPrinter',
+          targetId: result.printer.id,
+          targetLabel: result.printer.name,
+          description: result.changed
+            ? 'Renamed printer inventory label'
+            : 'Printer inventory label unchanged',
+          metadata: {
+            branchId: result.printer.branchId,
+            bridgeId: result.bridgeId,
+            previousName: result.previousName,
+            changed: result.changed,
+          },
+        });
+        return { printer: result.printer, changed: result.changed };
+      } catch (error) {
+        if (error instanceof PrinterRenameError)
+          throw new TRPCError({ code: error.code, message: error.message });
         throw error;
       }
     }),
