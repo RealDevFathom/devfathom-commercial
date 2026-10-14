@@ -334,3 +334,30 @@ The source migration already defines route-scope uniqueness with `NULLS NOT DIST
 divergent database with duplicate scopes may produce conservative refresh conflicts. Nested
 tenant transactions retain their outer isolation level. Runtime database/RLS/concurrency,
 visual behavior and physical printer output remain separate acceptance gates.
+
+
+### Registered kitchen/bar paper-width snapshots
+
+New registered kitchen and bar jobs derive a validated 58/80 mm width from the same
+tenant/branch/address/active-bridge inventory observation that admits the destination.
+The server persists `ticketPrintSnapshot` inside the job document. Strict public request
+schemas reject this field; direct service callers cannot provide it either. Prior jobs
+replay before inventory lookup and keep their original document and destination.
+
+Only tickets with this saved metadata use width-aware ASCII wrapping: 58 mm maps to
+32 fixed columns and 80 mm to 48. This follows the receipt preview convention and is
+not a claim about a particular printer's printable area. Title, reference, quantity/label
+lines and footer wrap; dividers use the same column count. Claim and acknowledgement
+read the stored snapshot, including the acknowledged byte count, without rereading width.
+
+Historical documents and unregistered jobs without the snapshot retain exact legacy
+bytes. Receipts never receive ticket metadata: saved receipt layouts remain authoritative,
+and plain receipts retain their existing output. Invalid explicit stored metadata is held
+before dispatch; unsupported inventory widths do not silently select a default.
+
+No database migration or generated-client change is required. New readers accept old jobs,
+but older strict readers cannot consume enriched documents and may hold them as invalid.
+Mixed-version deployment or rollback therefore requires a separate reader/writer rollout
+plan before enabling enriched writes. Physical printers, runtime database behavior, and
+future width-edit concurrency remain separate acceptance gates; no historical backfill or
+automatic physical retry is introduced.

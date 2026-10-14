@@ -2,6 +2,25 @@ import 'server-only';
 import type { Prisma } from '@/generated/prisma/client';
 import type { PrintRoute, PrintRoutingConfig } from './contract';
 import { samePrintRoutingConfig } from './routing';
+import { TicketPrintSnapshotSchema } from './contract';
+
+/** Eligibility is identical for availability and server-derived ticket snapshots. */
+function registeredPrinterScope(
+  organizationId: string,
+  branchId: string,
+  route: PrintRoute
+): Prisma.RestaurantPrinterWhereInput {
+  return {
+    id: route.registeredPrinterId ?? undefined,
+    organizationId,
+    branchId,
+    address: route.printerId,
+    branch: { is: { active: true } },
+    bridge: {
+      is: { organizationId, branchId, kind: 'PRINT_BRIDGE', status: 'ACTIVE', revokedAt: null },
+    },
+  };
+}
 
 /** Validate new snapshots only; replayed jobs keep their original registry and target. */
 export async function registeredRouteAvailable(
@@ -11,20 +30,29 @@ export async function registeredRouteAvailable(
   route: PrintRoute
 ) {
   if (!route.registeredPrinterId) return true;
+  return (
+    (await tx.restaurantPrinter.findFirst({
+      where: registeredPrinterScope(organizationId, branchId, route),
+      select: { id: true },
+    })) !== null
+  );
+}
+
+/** A new registered ticket snapshots one eligible inventory observation. */
+export async function registeredRouteTicketSnapshot(
+  tx: Pick<Prisma.TransactionClient, 'restaurantPrinter'>,
+  organizationId: string,
+  branchId: string,
+  route: PrintRoute
+) {
+  if (!route.registeredPrinterId) return null;
   const printer = await tx.restaurantPrinter.findFirst({
-    where: {
-      id: route.registeredPrinterId,
-      organizationId,
-      branchId,
-      address: route.printerId,
-      branch: { is: { active: true } },
-      bridge: {
-        is: { organizationId, branchId, kind: 'PRINT_BRIDGE', status: 'ACTIVE', revokedAt: null },
-      },
-    },
-    select: { id: true },
+    where: registeredPrinterScope(organizationId, branchId, route),
+    select: { id: true, paperWidthMm: true },
   });
-  return printer !== null;
+  if (!printer) return null;
+  const snapshot = TicketPrintSnapshotSchema.safeParse({ paperWidthMm: printer.paperWidthMm });
+  return snapshot.success ? snapshot.data : null;
 }
 
 export class PrintRoutingError extends Error {

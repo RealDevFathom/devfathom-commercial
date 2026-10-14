@@ -14,7 +14,7 @@ export const PrintLineSchema = z
   .object({ quantity: z.number().positive().max(999), label: receiptTextSchema(160).trim().min(1) })
   .strict();
 
-export const PrintDocumentSchema = z
+const PrintDocumentFieldsSchema = z
   .object({
     type: PrintDocumentTypeSchema,
     reference: receiptTextSchema(80).trim().min(1),
@@ -24,12 +24,36 @@ export const PrintDocumentSchema = z
     footer: receiptTextSchema(500).trim().optional(),
     receiptSnapshot: ReceiptPrintSnapshotSchema.optional(),
   })
-  .strict()
+  .strict();
+
+export const PrintDocumentSchema = PrintDocumentFieldsSchema.refine(
+  (document) => !document.receiptSnapshot || document.type === 'RECEIPT',
+  {
+    message: 'Receipt snapshots require a RECEIPT document.',
+    path: ['receiptSnapshot'],
+  }
+);
+export type PrintDocument = z.infer<typeof PrintDocumentSchema>;
+
+/** Server-owned metadata on persisted kitchen/bar documents, never an inbound field. */
+export const TicketPrintSnapshotSchema = z
+  .object({
+    paperWidthMm: z.union([z.literal(58), z.literal(80)]),
+  })
+  .strict();
+export type TicketPrintSnapshot = z.infer<typeof TicketPrintSnapshotSchema>;
+export const StoredPrintDocumentSchema = PrintDocumentFieldsSchema.extend({
+  ticketPrintSnapshot: TicketPrintSnapshotSchema.optional(),
+})
   .refine((document) => !document.receiptSnapshot || document.type === 'RECEIPT', {
     message: 'Receipt snapshots require a RECEIPT document.',
     path: ['receiptSnapshot'],
+  })
+  .refine((document) => !document.ticketPrintSnapshot || document.type !== 'RECEIPT', {
+    message: 'Printer width snapshots require a kitchen or bar ticket.',
+    path: ['ticketPrintSnapshot'],
   });
-export type PrintDocument = z.infer<typeof PrintDocumentSchema>;
+export type StoredPrintDocument = z.infer<typeof StoredPrintDocumentSchema>;
 
 export class RawPrintValidationError extends Error {
   readonly fallback: 'BROWSER_OS' | null;
@@ -49,7 +73,17 @@ export class RawPrintValidationError extends Error {
 export function validateRawPrintDocument(input: unknown): PrintDocument {
   const parsed = PrintDocumentSchema.safeParse(input);
   if (!parsed.success) throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
-  const document = parsed.data;
+  return validateAsciiPrintText(parsed.data);
+}
+
+/** Stored readers accept historical documents and validated server-owned ticket snapshots. */
+export function validateRawStoredPrintDocument(input: unknown): StoredPrintDocument {
+  const parsed = StoredPrintDocumentSchema.safeParse(input);
+  if (!parsed.success) throw new RawPrintValidationError('INVALID_PRINT_DOCUMENT');
+  return validateAsciiPrintText(parsed.data);
+}
+
+function validateAsciiPrintText<T extends PrintDocument>(document: T): T {
   const values = [
     document.title,
     document.reference,

@@ -10,10 +10,19 @@ import type {
 } from './contract';
 import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { PrintDocumentSchema, RawPrintValidationError, validateRawPrintDocument } from './contract';
+import {
+  StoredPrintDocumentSchema,
+  RawPrintValidationError,
+  validateRawPrintDocument,
+  validateRawStoredPrintDocument,
+} from './contract';
 import { renderEscPos } from './esc-pos';
 import { resolvePrintRoute } from './routing';
-import { registeredRouteAvailable, PrintRoutingError } from './registered-routing';
+import {
+  registeredRouteAvailable,
+  registeredRouteTicketSnapshot,
+  PrintRoutingError,
+} from './registered-routing';
 
 const CLAIM_LEASE_MS = 30_000;
 
@@ -22,7 +31,7 @@ type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob' | 'rest
 
 function renderRawDocument(document: unknown): Uint8Array {
   try {
-    return renderEscPos(validateRawPrintDocument(document));
+    return renderEscPos(validateRawStoredPrintDocument(document));
   } catch (error) {
     if (error instanceof RawPrintValidationError) throw error;
     // Never expose receipt contents or parser diagnostics to the bridge/logs.
@@ -144,7 +153,16 @@ export class PrintBridgeService {
     if (!route) return { status: 'NO_PRINTER', retryable: true, replayed: false };
     // Typed callers are not a runtime validation boundary. Validate before any
     // new job is persisted, using the same raw renderer as the claim path.
-    if (!(await registeredRouteAvailable(this.db, organizationId, job.branchId, route))) {
+    const snapshotTicket =
+      !!route.registeredPrinterId &&
+      (job.document.type === 'KITCHEN_TICKET' || job.document.type === 'BAR_TICKET');
+    const ticketPrintSnapshot = snapshotTicket
+      ? await registeredRouteTicketSnapshot(this.db, organizationId, job.branchId, route)
+      : undefined;
+    const available = snapshotTicket
+      ? ticketPrintSnapshot !== null
+      : await registeredRouteAvailable(this.db, organizationId, job.branchId, route);
+    if (!available) {
       if (expectedDestination) {
         throw new PrintRoutingError(
           'REFRESH_REQUIRED',
@@ -153,7 +171,12 @@ export class PrintBridgeService {
       }
       return { status: 'NO_PRINTER', retryable: true, replayed: false };
     }
-    renderRawDocument(job.document);
+    // The public validator remains strict even for direct service callers.
+    const callerDocument = validateRawPrintDocument(job.document);
+    const document = ticketPrintSnapshot
+      ? { ...callerDocument, ticketPrintSnapshot }
+      : callerDocument;
+    renderRawDocument(document);
     await this.db.restaurantPrintJob.create({
       data: {
         organizationId,
@@ -161,7 +184,7 @@ export class PrintBridgeService {
         stationId: job.stationId,
         idempotencyKey: job.idempotencyKey,
         documentType: job.document.type,
-        document: job.document,
+        document,
         printerId: route.printerId,
         registeredPrinterId: route.registeredPrinterId ?? null,
       },
@@ -214,7 +237,7 @@ export class PrintBridgeService {
       });
       return { status: 'NO_PRINTER', retryable: true, replayed: false };
     }
-    const bytes = renderEscPos(job.document);
+    const bytes = renderEscPos(validateRawPrintDocument(job.document));
     const delivery = await this.adapter!.send(route.printerId, bytes);
     if (delivery === 'OFFLINE') {
       await this.db.restaurantPrintJob.update({
@@ -401,7 +424,7 @@ export async function acknowledgePrintJob(
   const now = input.now ?? new Date();
   const age = now.getTime() - current.lastAttemptAt.getTime();
   if (current.status !== 'PENDING' || age < 0 || age >= CLAIM_LEASE_MS) return rejected;
-  const document = PrintDocumentSchema.parse(current.document);
+  const document = StoredPrintDocumentSchema.parse(current.document);
   const updated = await db.restaurantPrintJob.updateMany({
     where: {
       id: input.jobId,
