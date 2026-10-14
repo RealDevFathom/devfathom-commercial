@@ -1100,3 +1100,6 @@
 !src/lib/restaurant/printing/target.ts
 !src/components/restaurant/printer-registration-fields.tsx
 !src/components/restaurant/printer-inventory-panel.tsx
+
+# Compatible registered-printer routing web source.
+!src/lib/restaurant/printing/registered-routing.ts

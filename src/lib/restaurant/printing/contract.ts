@@ -83,6 +83,7 @@ export const PrintRouteSchema = z
     documentType: PrintDocumentTypeSchema,
     stationId: z.string().trim().min(1).max(128).nullable(),
     printerId: z.string().trim().min(1).max(128),
+    registeredPrinterId: z.string().trim().min(1).max(128).nullable().optional(),
     enabled: z.boolean(),
   })
   .strict();

@@ -44,10 +44,19 @@
     },
     "application134-printer-inventory": {
       "kind": "application",
-      "sourceManifest": "prisma/application-source-manifest.json",
+      "sourceManifest": "prisma/application-source-manifests/application134-printer-inventory.json",
       "sourceManifestSha256": "4d56c1ad1a6701b16d31af79916438f4a8c359301ef82486ae2a433cd50d4d34",
       "schemaSha256": "2f700ff8502db706ffbf1100925a90554ee7a830bdd518b21cb500a5850138fb",
       "migrationCount": 134,
+      "generatedCount": 464,
+      "initializerAdmission": false
+    },
+    "application135-registered-printer-routing": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifest.json",
+      "sourceManifestSha256": "ec36e53ce4a6dbd51df5e4333bf52b80c246e2b4bb794381f9ccf9fe97eaae1d",
+      "schemaSha256": "e58e238245f4d3f39f38dc81a5cdb10a2f9a538fd48f00ebac81110b0d5c759e",
+      "migrationCount": 135,
       "generatedCount": 464,
       "initializerAdmission": false
     }

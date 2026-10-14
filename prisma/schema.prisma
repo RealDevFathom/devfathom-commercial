@@ -6602,6 +6602,10 @@ model RestaurantPrintRoute {
   branch  RestaurantBranch          @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
   station RestaurantKitchenStation? @relation(fields: [organizationId, stationId], references: [organizationId, id], onDelete: Cascade)
 
+  registeredPrinterId String?
+  registeredPrinter RestaurantPrinter? @relation(fields: [organizationId, branchId, registeredPrinterId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_print_routes_registered_printer_fkey")
+
+  @@index([organizationId, branchId, registeredPrinterId], map: "restaurant_print_routes_org_branch_registered_printer_idx")
   @@unique([organizationId, branchId, stationId, documentType])
   @@index([organizationId, branchId])
   @@map("restaurant_print_routes")
@@ -6628,6 +6632,10 @@ model RestaurantPrintJob {
 
   branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
 
+  registeredPrinterId String?
+  registeredPrinter RestaurantPrinter? @relation(fields: [organizationId, branchId, registeredPrinterId], references: [organizationId, branchId, id], onDelete: Restrict, onUpdate: NoAction, map: "restaurant_print_jobs_registered_printer_fkey")
+
+  @@index([organizationId, branchId, registeredPrinterId], map: "restaurant_print_jobs_org_branch_registered_printer_idx")
   @@unique([organizationId, branchId, idempotencyKey])
   @@index([organizationId, status, createdAt])
   @@map("restaurant_print_jobs")
@@ -14526,6 +14534,9 @@ model RestaurantPrinter {
   updatedAt      DateTime @updatedAt
   branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_branch_fkey")
   bridge RestaurantRegisteredDevice @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_bridge_fkey")
+  printRoutes RestaurantPrintRoute[]
+  printJobs RestaurantPrintJob[]
+  @@unique([organizationId, branchId, id])
   @@unique([organizationId, id])
   @@index([organizationId, bridgeId])
   @@index([organizationId, branchId])

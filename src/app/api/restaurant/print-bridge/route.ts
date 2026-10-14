@@ -14,6 +14,7 @@ import {
   claimNextPrintJob,
   PrintBridgeService,
 } from '@/lib/restaurant/printing/service';
+import { replacePrintRoutesInTransaction, PrintRoutingError } from '@/lib/restaurant/printing/registered-routing';
 import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
@@ -150,10 +151,11 @@ export async function GET(request: Request) {
         branchId: branch.id,
         routes: configs
           .filter((route) => route.branchId === branch.id)
-          .map(({ documentType, stationId, printerId, enabled }) => ({
+          .map(({ documentType, stationId, printerId, registeredPrinterId, enabled }) => ({
             documentType,
             stationId,
             printerId,
+            registeredPrinterId,
             enabled,
           })),
       },
@@ -176,33 +178,13 @@ export async function PUT(request: Request) {
     return NextResponse.json({ error: 'Invalid print routing configuration.' }, { status: 400 });
   const branchError = await branchAccessError(ctx, parsed.data.branchId);
   if (branchError) return branchError;
-  const stationIds = new Set(
-    (
-      await ctx.db.restaurantKitchenStation.findMany({
-        where: { branchId: parsed.data.branchId, active: true },
-        select: { id: true },
-      })
-    ).map((station) => station.id)
-  );
-  if (parsed.data.routes.some((route) => route.stationId && !stationIds.has(route.stationId))) {
-    return NextResponse.json(
-      { error: 'A print route references a station outside this branch.' },
-      { status: 400 }
-    );
-  }
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
-  await ctx.db.$transaction(async (db) => {
-    await db.restaurantPrintRoute.deleteMany({ where: { branchId: parsed.data.branchId } });
-    if (parsed.data.routes.length) {
-      await db.restaurantPrintRoute.createMany({
-        data: parsed.data.routes.map((route) => ({
-          organizationId,
-          branchId: parsed.data.branchId,
-          ...route,
-        })),
-      });
-    }
-  });
+  try {
+    await ctx.db.$transaction((db) => replacePrintRoutesInTransaction(db, organizationId, parsed.data));
+  } catch (error) {
+    if (!(error instanceof PrintRoutingError)) throw error;
+    return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
+  }
   return NextResponse.json({ mode: 'DEVICE_BRIDGE', config: parsed.data });
 }
 
@@ -227,7 +209,7 @@ export async function POST(request: Request) {
     result = await ctx.db.$transaction(async (db) => {
       const routes = await db.restaurantPrintRoute.findMany({
         where: { branchId: parsed.data.branchId },
-        select: { documentType: true, stationId: true, printerId: true, enabled: true },
+        select: { documentType: true, stationId: true, printerId: true, registeredPrinterId: true, enabled: true },
       });
       return new PrintBridgeService(db).enqueue(
         organizationId,

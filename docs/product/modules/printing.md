@@ -240,3 +240,25 @@ The Devices console can include up to 20 printer targets during new print-bridge
 Inventory loads through management authorization independently of the device directory. Owner changes remount the inventory panel, and obsolete branch responses are discarded. Missing telemetry is shown as **Not reported**. An uncertain registration requires fresh inventory and explicit reconciliation for its original branch and bridge before another registration. A confirmed registration stays confirmed if its subsequent list refresh fails.
 
 This is source-level integration. Browser/visual, live database, concurrency, and physical-printing acceptance remain separate gates. Existing route and job targets retain their address-based meaning.
+
+
+### Registered printer routing compatibility
+
+Print routing accepts an optional nullable `registeredPrinterId` beside the raw-address
+`printerId`. Configuration saves validate the same tenant, active branch, active nonrevoked
+print bridge, and exact registered address before replacing routes in one serialized
+transaction. An older client omitting registry fields receives a refresh conflict when
+registered routes exist; explicit null deliberately selects legacy routing. An empty list
+still clears routes. Initial OFFLINE inventory telemetry does not disable routing.
+
+New queued jobs snapshot both fields; idempotent replays retain the persisted snapshot.
+Only the owning active print bridge can claim a registered job. Ownership is checked before
+the bounded selection and again when holding or claiming it. Raw-only legacy jobs retain
+branch device compatibility. The CLI still receives a raw address and unchanged HMAC claim
+token. Fresh-only dispatch, acknowledgement lease and replay protections are retained.
+Synchronous adapters without authenticated bridge identity reject registered routing,
+including a prior registered job after the configuration changes to a raw-only route.
+
+This is source-level routing support. Settings selection, inventory editing/retirement,
+telemetry writes, paper-width behavior, live database/RLS/concurrency/migration checks,
+and physical printer acceptance remain separate gates.

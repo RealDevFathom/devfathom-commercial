@@ -184,7 +184,7 @@ export async function receiptPrintState(ctx: TerminalContext, receipt: SettledRe
         enabled: true,
       },
       orderBy: { createdAt: 'asc' },
-      select: { printerId: true },
+      select: { printerId: true, registeredPrinterId: true },
     }),
     ctx.db.restaurantPrintJob.findFirst({
       where: {
@@ -201,6 +201,7 @@ export async function receiptPrintState(ctx: TerminalContext, receipt: SettledRe
     registerId: ctx.device.id,
     registerName: ctx.device.name,
     printerId: route?.printerId ?? null,
+    registeredPrinterId: route?.registeredPrinterId ?? null,
     latestJob: latestJob ? { ...latestJob, document: undefined } : null,
     preview: await browserPreview(ctx, receipt, latestJob?.document),
   };
@@ -304,7 +305,7 @@ export async function dispatchReceipt({
       {
         branchId: ctx.device.branchId,
         routes: [
-          { documentType: 'RECEIPT', stationId: null, printerId: state.printerId, enabled: true },
+          { documentType: 'RECEIPT', stationId: null, printerId: state.printerId, registeredPrinterId: state.registeredPrinterId, enabled: true },
         ],
       },
       { branchId: ctx.device.branchId, stationId: null, idempotencyKey, document }

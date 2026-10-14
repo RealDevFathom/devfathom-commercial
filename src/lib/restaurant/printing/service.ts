@@ -7,14 +7,16 @@ import type {
   PrintResult,
   PrintRoutingConfig,
 } from './contract';
+import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { PrintDocumentSchema, RawPrintValidationError, validateRawPrintDocument } from './contract';
 import { renderEscPos } from './esc-pos';
 import { resolvePrintRoute } from './routing';
+import { registeredRouteAvailable } from './registered-routing';
 
 const CLAIM_LEASE_MS = 30_000;
 
-type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob'>;
+type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob' | 'restaurantPrinter'>;
 
 function renderRawDocument(document: unknown): Uint8Array {
   try {
@@ -37,10 +39,15 @@ export class PrintBridgeService {
     this.db = db ?? (adapterOrDb as PrintDb);
   }
 
-  async enqueue(
+  async enqueue(organizationId: string, config: PrintRoutingConfig, job: PrintJob): Promise<PrintEnqueueResult> {
+    return this.enqueueJob(organizationId, config, job, false);
+  }
+
+  private async enqueueJob(
     organizationId: string,
     config: PrintRoutingConfig,
-    job: PrintJob
+    job: PrintJob,
+    synchronous: boolean
   ): Promise<PrintEnqueueResult> {
     if (job.branchId !== config.branchId) {
       return { status: 'NO_PRINTER', retryable: true, replayed: false };
@@ -60,6 +67,9 @@ export class PrintBridgeService {
       },
     };
     const prior = await this.db.restaurantPrintJob.findUnique({ where: key });
+    if (synchronous && (route.registeredPrinterId || prior?.registeredPrinterId)) {
+      throw new Error('Registered printers require authenticated bridge delivery.');
+    }
     if (prior?.status === 'PRINTED') {
       return {
         status: 'PRINTED',
@@ -73,6 +83,9 @@ export class PrintBridgeService {
     }
     // Typed callers are not a runtime validation boundary. Validate before any
     // new job is persisted, using the same raw renderer as the claim path.
+    if (!(await registeredRouteAvailable(this.db, organizationId, job.branchId, route))) {
+      return { status: 'NO_PRINTER', retryable: true, replayed: false };
+    }
     renderRawDocument(job.document);
     await this.db.restaurantPrintJob.create({
       data: {
@@ -83,6 +96,7 @@ export class PrintBridgeService {
         documentType: job.document.type,
         document: job.document,
         printerId: route.printerId,
+        registeredPrinterId: route.registeredPrinterId ?? null,
       },
     });
     return { status: 'QUEUED', printerId: route.printerId, replayed: false };
@@ -101,7 +115,7 @@ export class PrintBridgeService {
         idempotencyKey: job.idempotencyKey,
       },
     };
-    const queued = await this.enqueue(organizationId, config, job);
+    const queued = await this.enqueueJob(organizationId, config, job, true);
     if (queued.status === 'NO_PRINTER') return queued;
     if (queued.status === 'PRINTED') {
       return {
@@ -209,10 +223,26 @@ export async function claimNextPrintJob(
   deviceId: string,
   now = new Date()
 ): Promise<(ClaimedPrintJob & { claimToken: string }) | null> {
+  const ownership = {
+    OR: [
+      { registeredPrinterId: null },
+      {
+        registeredPrinter: {
+          is: {
+            branchId,
+            bridgeId: deviceId,
+            branch: { is: { active: true } },
+            bridge: { is: { id: deviceId, branchId, kind: 'PRINT_BRIDGE', status: 'ACTIVE', revokedAt: null } },
+          },
+        },
+      },
+    ],
+  } satisfies Prisma.RestaurantPrintJobWhereInput;
   const candidates = await db.restaurantPrintJob.findMany({
     where: {
       branchId,
       printerId: { not: null },
+      ...ownership,
       status: 'PENDING',
       attemptCount: 0,
       lastAttemptAt: null,
@@ -234,6 +264,9 @@ export async function claimNextPrintJob(
         where: {
           id: candidate.id,
           branchId,
+          registeredPrinterId: candidate.registeredPrinterId,
+          printerId: candidate.printerId,
+          ...ownership,
           status: 'PENDING',
           attemptCount: 0,
           lastAttemptAt: null,
@@ -247,6 +280,9 @@ export async function claimNextPrintJob(
       where: {
         id: candidate.id,
         branchId,
+        registeredPrinterId: candidate.registeredPrinterId,
+        printerId: candidate.printerId,
+        ...ownership,
         status: 'PENDING',
         attemptCount: 0,
         lastAttemptAt: null,

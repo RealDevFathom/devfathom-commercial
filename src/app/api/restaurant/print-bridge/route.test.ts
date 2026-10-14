@@ -42,6 +42,7 @@ const request = (method: string, body?: unknown, bridge = false) =>
 let db: ReturnType<typeof makeDb>;
 function makeDb() {
   const result = {
+    $queryRaw: vi.fn().mockResolvedValue([{ id: 'branch-b', active: true }]),
     restaurantBranch: {
       findUnique: vi.fn().mockResolvedValue({ id: 'branch-b' }),
       findMany: vi.fn().mockResolvedValue([]),
@@ -164,5 +165,42 @@ describe('print bridge authorization boundary', () => {
     );
     mocks.ack.mockResolvedValue({ acknowledged: false, replayed: false });
     expect((await POST(request('POST', body, true))).status).toBe(404);
+  });
+});
+
+
+describe('registered routing REST compatibility', () => {
+  const route = { documentType: 'RECEIPT', stationId: null, printerId: 'tcp://printer:9100', registeredPrinterId: 'inventory-id', enabled: true };
+  it('returns 409 without mutation when an older client omits registered bindings', async () => {
+    mocks.can.mockResolvedValue(true);
+    db.restaurantPrintRoute.findMany.mockResolvedValue([{ id: 'existing' }]);
+    const legacy = { ...route } as Partial<typeof route>;
+    delete legacy.registeredPrinterId;
+    const response = await PUT(request('PUT', { branchId: 'branch-b', routes: [legacy] }));
+    expect(response.status).toBe(409);
+    expect(await response.json()).toMatchObject({ code: 'REFRESH_REQUIRED' });
+    expect(db.restaurantPrintRoute.deleteMany).not.toHaveBeenCalled();
+  });
+  it('returns 400 before mutation when branch is no longer active', async () => {
+    mocks.can.mockResolvedValue(true);
+    db.$queryRaw.mockResolvedValue([{ id: 'branch-b', active: false }]);
+    const response = await PUT(request('PUT', { branchId: 'branch-b', routes: [] }));
+    expect(response.status).toBe(400);
+    expect(await response.json()).toMatchObject({ code: 'INVALID_ROUTE' });
+    expect(db.restaurantPrintRoute.deleteMany).not.toHaveBeenCalled();
+  });
+  it('returns registered references alongside raw addresses in configuration GET', async () => {
+    mocks.can.mockResolvedValue(true);
+    db.restaurantBranch.findMany.mockResolvedValue([{ id: 'branch-b', name: 'Branch', kitchenStations: [] }]);
+    db.restaurantPrintRoute.findMany.mockResolvedValue([{ ...route, branchId: 'branch-b' }]);
+    const response = await GET(request('GET'));
+    expect((await response.json()).branches[0].config.routes).toEqual([route]);
+  });
+  it('selects and forwards the registered reference for manual enqueue', async () => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+    db.restaurantPrintRoute.findMany.mockResolvedValue([route]);
+    expect((await POST(request('POST', job))).status).toBe(202);
+    expect(db.restaurantPrintRoute.findMany).toHaveBeenCalledWith({ where: { branchId: 'branch-b' }, select: { documentType: true, stationId: true, printerId: true, registeredPrinterId: true, enabled: true } });
+    expect(mocks.enqueue).toHaveBeenCalledWith('org', { branchId: 'branch-b', routes: [route] }, job);
   });
 });
