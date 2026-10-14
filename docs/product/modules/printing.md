@@ -361,3 +361,15 @@ Mixed-version deployment or rollback therefore requires a separate reader/writer
 plan before enabling enriched writes. Physical printers, runtime database behavior, and
 future width-edit concurrency remain separate acceptance gates; no historical backfill or
 automatic physical retry is introduced.
+
+
+### Printer soft-retirement policy
+
+The [soft-retirement policy and backend admission](../../specs/printer-soft-retirement.md)
+defines the next lifecycle slice. It preserves inventory and history, separates retirement
+from ONLINE/OFFLINE telemetry, and blocks retirement on every registered route reference
+or unresolved registered job. Every fresh registered-job producer must participate in the
+reviewed transaction and locking contract before a retirement writer can be enabled.
+
+This checkpoint records policy only. Retirement, restoration and its UI are not implemented;
+existing printing behavior and accepted source evidence remain unchanged.
