@@ -1,0 +1,250 @@
+import { z } from 'zod';
+import { TRPCError } from '@trpc/server';
+import { router, protectedProcedure, hrProcedure, capabilityProcedure } from '../trpc';
+import { can, subjectFromSession } from '@/lib/abac';
+import { annotateAudit } from '../audit';
+import { appUrl, templates } from '@/lib/email';
+import { notify } from '@/lib/notifications';
+
+// Display-ready date label for emails (e.g. "June 30, 2026").
+const dateLabel = (d: Date) =>
+  d.toLocaleDateString('en-US', { month: 'long', day: 'numeric', year: 'numeric' });
+
+export const resignationsRouter = router({
+  // The current user's own resignations, newest first.
+  mine: protectedProcedure.query(async ({ ctx }) => {
+    return ctx.db.resignation.findMany({
+      where: { userId: ctx.session.user.id },
+      select: {
+        id: true,
+        reason: true,
+        proposedLastDay: true,
+        status: true,
+        reviewNote: true,
+        lastWorkingDay: true,
+        reviewedAt: true,
+        createdAt: true,
+        reviewedBy: { select: { name: true } },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }),
+
+  // Submit a resignation. One pending request at a time; on success, HR + admins
+  // are notified (in-app + email). Notification/email failures are best-effort
+  // and never roll back the created resignation.
+  submit: capabilityProcedure('resignation:request')
+    .input(
+      z.object({
+        reason: z.string().min(10).max(2000),
+        proposedLastDay: z.date(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const existingPending = await ctx.db.resignation.findFirst({
+        where: { userId: ctx.session.user.id, status: 'PENDING' },
+        select: { id: true },
+      });
+      if (existingPending) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'You already have a pending resignation.',
+        });
+      }
+
+      const resignation = await ctx.db.resignation.create({
+        data: {
+          userId: ctx.session.user.id,
+          reason: input.reason,
+          proposedLastDay: input.proposedLastDay,
+        },
+      });
+
+      // Best-effort: alert the people who can review it. Never fail the mutation
+      // if reviewer lookup / notification dispatch hiccups — the resignation is
+      // already recorded.
+      try {
+        const reviewers = await ctx.db.user.findMany({
+          where: {
+            role: { in: ['ADMIN', 'HR'] },
+            status: { not: 'INACTIVE' },
+            id: { not: ctx.session.user.id },
+          },
+          select: { id: true },
+        });
+        const employeeName = ctx.session.user.name ?? 'A team member';
+        const proposedLastDayLabel = dateLabel(resignation.proposedLastDay);
+        notify(
+          ctx.db,
+          reviewers.map((r) => r.id),
+          {
+            type: 'resignation_submitted',
+            title: 'Resignation submitted',
+            message: `${employeeName} submitted a resignation (proposed last day ${proposedLastDayLabel}).`,
+            entityType: 'Resignation',
+            entityId: resignation.id,
+            email: () =>
+              templates.resignationSubmitted({
+                employeeName,
+                reason: resignation.reason,
+                proposedLastDayLabel,
+                reviewUrl: `${appUrl()}/hr`,
+              }),
+          }
+        );
+      } catch (err) {
+        console.error('[resignations.submit] reviewer notification failed', err);
+      }
+
+      return resignation;
+    }),
+
+  // Withdraw your own still-pending resignation.
+  withdraw: protectedProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const resignation = await ctx.db.resignation.findUnique({ where: { id: input.id } });
+      if (!resignation) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Resignation not found.' });
+      }
+      if (resignation.userId !== ctx.session.user.id) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'This is not your resignation.' });
+      }
+      if (resignation.status !== 'PENDING') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Only a pending resignation can be withdrawn.',
+        });
+      }
+      return ctx.db.resignation.update({
+        where: { id: input.id },
+        data: { status: 'WITHDRAWN' },
+      });
+    }),
+
+  // Company-wide resignation queue (HR / admin), optionally filtered by status.
+  listAll: capabilityProcedure('resignation:readAll')
+    .input(
+      z
+        .object({
+          status: z.enum(['PENDING', 'APPROVED', 'DECLINED', 'WITHDRAWN']).optional(),
+        })
+        .optional()
+    )
+    .query(async ({ ctx, input }) => {
+      return ctx.db.resignation.findMany({
+        where: input?.status ? { status: input.status } : undefined,
+        include: {
+          user: {
+            select: {
+              id: true,
+              name: true,
+              avatar: true,
+              title: true,
+              department: true,
+              role: true,
+            },
+          },
+          reviewedBy: { select: { id: true, name: true } },
+        },
+        orderBy: { createdAt: 'desc' },
+      });
+    }),
+
+  // Approve or decline a resignation. Resource-level authorization (PENDING, not
+  // your own, HR may not review an admin's) is enforced via the ABAC engine. Does
+  // NOT deactivate the account — offboarding happens separately on the last day.
+  review: hrProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        decision: z.enum(['APPROVED', 'DECLINED']),
+        reviewNote: z.string().max(2000).optional(),
+        lastWorkingDay: z.date().optional(),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const resignation = await ctx.db.resignation.findUnique({
+        where: { id: input.id },
+        include: { user: { select: { id: true, role: true, name: true, email: true } } },
+      });
+      if (!resignation) {
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Resignation not found.' });
+      }
+
+      const allowed = await can(
+        subjectFromSession(ctx.session.user),
+        'resignation:review',
+        {
+          type: 'Resignation',
+          userId: resignation.userId,
+          status: resignation.status,
+          targetRole: resignation.user.role,
+        },
+        { source: 'TRPC', db: ctx.db }
+      );
+      if (!allowed) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission to review this resignation.',
+        });
+      }
+
+      const approved = input.decision === 'APPROVED';
+      const updated = await ctx.db.resignation.update({
+        where: { id: input.id },
+        data: {
+          status: input.decision,
+          reviewedById: ctx.session.user.id,
+          reviewedAt: new Date(),
+          reviewNote: input.reviewNote ?? null,
+          lastWorkingDay: approved ? (input.lastWorkingDay ?? resignation.proposedLastDay) : null,
+        },
+      });
+
+      // IMP-HR-02: off-boarding automation. Once the approved last working day has
+      // arrived (on/before today), deactivate the account. The JWT revalidation
+      // re-reads `status` (~60s), so this also cuts the employee's active sessions
+      // without needing the AUTH-01 token-version column. (A future last day would
+      // be enforced by a scheduled job — not wired here.)
+      if (approved && updated.lastWorkingDay && updated.lastWorkingDay <= new Date()) {
+        await ctx.db.user.update({
+          where: { id: resignation.userId },
+          data: { status: 'INACTIVE' },
+        });
+      }
+
+      annotateAudit(ctx, {
+        targetType: 'Resignation',
+        targetId: updated.id,
+        targetLabel: resignation.user.name,
+        description: `${approved ? 'Approved' : 'Declined'} resignation for ${resignation.user.name}`,
+        changes: { status: { before: resignation.status, after: input.decision } },
+      });
+
+      // Best-effort: let the employee know the outcome (in-app + email).
+      try {
+        notify(ctx.db, [resignation.userId], {
+          type: 'resignation_status',
+          title: `Resignation ${approved ? 'approved' : 'declined'}`,
+          message: `Your resignation has been ${approved ? 'approved' : 'declined'}.`,
+          entityType: 'Resignation',
+          entityId: updated.id,
+          email: (r) =>
+            templates.resignationDecision({
+              recipientName: r.name,
+              decision: input.decision,
+              lastWorkingDayLabel: updated.lastWorkingDay
+                ? dateLabel(updated.lastWorkingDay)
+                : undefined,
+              reviewNote: updated.reviewNote ?? undefined,
+              url: appUrl(),
+            }),
+        });
+      } catch (err) {
+        console.error('[resignations.review] decision notification failed', err);
+      }
+
+      return updated;
+    }),
+});

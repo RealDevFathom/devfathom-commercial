@@ -1,0 +1,73 @@
+{
+  "version": 1,
+  "scope": "Offline source/integrity identities only; no execution, database, image or deployment admission.",
+  "profiles": {
+    "initializer-final127": {
+      "kind": "initializer",
+      "sourcePinsSha256": "b0dd77fcf65f72d8a5662c3f30ce36a7e90b8b2521ea54e84176487cbac8e3b1",
+      "generatedManifestSha256": "7089c0b75ac41abff8a778322e3983ee5368039adb30cbd84c9703207d6091fc",
+      "executableManifestSha256": "90aa8ac8883e7fabcd059fe7a36c7b9b0dc203a5ccc2630be240d9a1347962af",
+      "schemaSha256": "b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827",
+      "sourceCount": 159,
+      "generatedCount": 459,
+      "migrationCount": 127,
+      "executableCount": 1820
+    },
+    "initializer-final127-catalog": {
+      "kind": "initializer",
+      "sourcePinsSha256": "3b801fd6974fa2b774c39255e7bb8fb82f16034539830ddb3f081d1a183d1a16",
+      "generatedManifestSha256": "7089c0b75ac41abff8a778322e3983ee5368039adb30cbd84c9703207d6091fc",
+      "executableManifestSha256": "41cc4c27ca56c356635327145e98c019558e9a87effab80d2bf8efa2b1aaea1c",
+      "schemaSha256": "b07948b1c7fad7da8effc99931765c7b8a9e5d2742f53161a6636b313226d827",
+      "sourceCount": 159,
+      "generatedCount": 459,
+      "migrationCount": 127,
+      "executableCount": 1820
+    },
+    "application132-hospitality-foundation": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifests/application132-hospitality-foundation.json",
+      "sourceManifestSha256": "74525a751a637bdf2867f2c6d4830e5f8fa4be6c138f87f11de42cec0f4f6eb4",
+      "schemaSha256": "19959a5a39484545e1ded91308889c4180e5fbb9ddb7165920309cd61c52e38e",
+      "migrationCount": 132,
+      "generatedCount": 462,
+      "initializerAdmission": false
+    },
+    "application133-print-bridge-enrollment": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifests/application133-print-bridge-enrollment.json",
+      "sourceManifestSha256": "08c719e5fb8a041f615ef11f16b724079b7f7b11d054f9a611de21a0303f30df",
+      "schemaSha256": "2635e3ded4d833b58936e1bde5b24ae87d03000cfb8895aef2066f937e083c8b",
+      "migrationCount": 133,
+      "generatedCount": 463,
+      "initializerAdmission": false
+    },
+    "application134-printer-inventory": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifests/application134-printer-inventory.json",
+      "sourceManifestSha256": "4d56c1ad1a6701b16d31af79916438f4a8c359301ef82486ae2a433cd50d4d34",
+      "schemaSha256": "2f700ff8502db706ffbf1100925a90554ee7a830bdd518b21cb500a5850138fb",
+      "migrationCount": 134,
+      "generatedCount": 464,
+      "initializerAdmission": false
+    },
+    "application135-registered-printer-routing": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifests/application135-registered-printer-routing.json",
+      "sourceManifestSha256": "ec36e53ce4a6dbd51df5e4333bf52b80c246e2b4bb794381f9ccf9fe97eaae1d",
+      "schemaSha256": "e58e238245f4d3f39f38dc81a5cdb10a2f9a538fd48f00ebac81110b0d5c759e",
+      "migrationCount": 135,
+      "generatedCount": 464,
+      "initializerAdmission": false
+    },
+    "application136-printer-soft-retirement": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifest.json",
+      "sourceManifestSha256": "cb9f4db8bf7c848a157bc7aece8a0ad2ef12c64769654f8896d4260c948d5678",
+      "schemaSha256": "26976f03096123b63f68a5bf278781580cb93c0f8b476da7da8ecf6a3aba835c",
+      "migrationCount": 136,
+      "generatedCount": 464,
+      "initializerAdmission": false
+    }
+  }
+}

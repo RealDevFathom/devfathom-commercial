@@ -1,0 +1,44 @@
+{
+  "tests": [
+    "src/lib/restaurant/printer-inventory.test.ts",
+    "src/server/routers/restaurant-printer-inventory.test.ts",
+    "src/lib/restaurant/printer-retirement.test.ts",
+    "src/lib/restaurant/printing/retirement-admission.test.ts",
+    "src/lib/restaurant/printing/registered-routing.test.ts",
+    "src/lib/restaurant/printing/registered-routing-service.test.ts",
+    "src/lib/restaurant/printing/width-snapshot.test.ts",
+    "src/lib/restaurant/printing/registered-locking.test.ts",
+    "src/lib/restaurant/printing/printing.test.ts",
+    "src/lib/restaurant/printing/registered-routing-producers.test.ts",
+    "src/app/api/restaurant/print-bridge/route.test.ts"
+  ],
+  "format_paths": [
+    "src/lib/restaurant/printer-inventory.ts",
+    "src/lib/restaurant/printer-retirement.test.ts",
+    "src/lib/restaurant/printing/registered-routing-service.test.ts",
+    "src/lib/restaurant/printing/registered-routing.test.ts",
+    "src/lib/restaurant/printing/registered-routing.ts",
+    "src/lib/restaurant/printing/retirement-admission.test.ts",
+    "src/lib/restaurant/printing/service.ts",
+    "src/lib/restaurant/printing/width-snapshot.test.ts",
+    "src/server/routers/restaurant-devices.ts",
+    "src/server/routers/restaurant-printer-inventory.test.ts"
+  ],
+  "lint_paths": [
+    "src/lib/restaurant/printer-inventory.ts",
+    "src/lib/restaurant/printer-retirement.test.ts",
+    "src/lib/restaurant/printing/registered-routing-service.test.ts",
+    "src/lib/restaurant/printing/registered-routing.test.ts",
+    "src/lib/restaurant/printing/registered-routing.ts",
+    "src/lib/restaurant/printing/retirement-admission.test.ts",
+    "src/lib/restaurant/printing/service.ts",
+    "src/lib/restaurant/printing/width-snapshot.test.ts",
+    "src/server/routers/restaurant-devices.ts",
+    "src/server/routers/restaurant-printer-inventory.test.ts"
+  ],
+  "static_checks": [
+    "tests/aws-context_test.py",
+    "tests/aws-source-profiles_test.py"
+  ],
+  "scope": "Exact current generic source tests only, mocked dependencies and offline packaging; no DB or held reads."
+}
