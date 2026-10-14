@@ -4875,6 +4875,7 @@ model RestaurantActivationAcknowledgement {
 /// the operational tables (bare RLS-guarded organizationId, no cross-org
 /// aggregation — D09); a partial unique index enforces one default branch per org.
 model RestaurantBranch {
+  printers RestaurantPrinter[]
   cateringCapacities RestaurantCateringBranchCapacity[]
 
   id                    String   @id @default(cuid())
@@ -5425,6 +5426,7 @@ model RestaurantOperatorCredential {
 /// `status`/`revokedAt` are re-checked in the DB on every terminal call so a
 /// revoked device cannot keep operating from a stale client cache.
 model RestaurantRegisteredDevice {
+  printers RestaurantPrinter[]
   printBridgeEnrollmentCodes RestaurantPrintBridgeEnrollmentCode[]
   cateringMoneyEvidence CateringMoneyEvidence[]
 
@@ -14495,4 +14497,37 @@ model RestaurantPrintBridgeEnrollmentCode {
 
   @@index([organizationId, deviceId], map: "restaurant_print_bridge_enrollment_codes_org_device_idx")
   @@map("restaurant_print_bridge_enrollment_codes")
+}
+
+
+// Inventory is separate from address-valued print job/route targets.
+enum RestaurantPrinterConnectionKind {
+  TCP
+  DEVICE_PATH
+  QUEUE
+}
+enum RestaurantPrinterStatus {
+  ONLINE
+  OFFLINE
+}
+model RestaurantPrinter {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  bridgeId       String
+  name           String
+  connectionKind RestaurantPrinterConnectionKind
+  address        String
+  paperWidthMm   Int
+  status         RestaurantPrinterStatus @default(OFFLINE)
+  lastSeenAt     DateTime?
+  lastError      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_branch_fkey")
+  bridge RestaurantRegisteredDevice @relation(fields: [organizationId, branchId, bridgeId], references: [organizationId, branchId, id], onDelete: Cascade, onUpdate: NoAction, map: "restaurant_printers_bridge_fkey")
+  @@unique([organizationId, id])
+  @@index([organizationId, bridgeId])
+  @@index([organizationId, branchId])
+  @@map("restaurant_printers")
 }

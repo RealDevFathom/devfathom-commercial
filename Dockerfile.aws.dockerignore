@@ -1095,3 +1095,6 @@
 !src/app/api/restaurant/print-bridge/enroll/route.ts
 
 !src/components/restaurant/print-bridge-enrollment.tsx
+
+!src/lib/restaurant/printer-inventory.ts
+!src/lib/restaurant/printing/target.ts

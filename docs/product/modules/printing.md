@@ -215,3 +215,20 @@ addresses. Application schema now records this separately from the fixed initial
 Source checks use mocked exchanges and synthetic files. Enrollment migrations, database locking/RLS,
 authenticated browser behavior, native spoolers and physical output still require separately authorized
 runtime acceptance. This source integration does not authorize startup or deployment.
+
+
+## Printer inventory source foundation
+
+Device-management APIs now support optional 1–20 printer entries while creating a new bridge,
+plus explicit registration on an existing active bridge and a management-only branch inventory
+query. Omission preserves enrollment without printers. Device, inventory and enrollment-code
+writes share one transaction; registration on an existing bridge never issues a code or rotates
+its token. Inventory stores branch/bridge ownership, name, explicit target, 58/80 mm width and
+passive status/telemetry fields. New records default to OFFLINE; registration proves no connectivity.
+
+Inventory targets use the same parser as the accepted bridge: explicit TCP, installed local
+queues or supported POSIX /dev/ paths, limited to 128 characters. The captured donor's 500-character
+and arbitrary absolute-path acceptance is preserved as source evidence but is not accepted as
+safe transport behavior. No address-valued job or route ID is converted into a database ID.
+Inventory routing selection, status reporting, update/retirement and UI wiring remain follow-on
+work. Existing device/demo lists and rotation/revocation authorization remain unchanged.

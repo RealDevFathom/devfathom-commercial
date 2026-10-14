@@ -35,11 +35,20 @@
     },
     "application133-print-bridge-enrollment": {
       "kind": "application",
-      "sourceManifest": "prisma/application-source-manifest.json",
+      "sourceManifest": "prisma/application-source-manifests/application133-print-bridge-enrollment.json",
       "sourceManifestSha256": "08c719e5fb8a041f615ef11f16b724079b7f7b11d054f9a611de21a0303f30df",
       "schemaSha256": "2635e3ded4d833b58936e1bde5b24ae87d03000cfb8895aef2066f937e083c8b",
       "migrationCount": 133,
       "generatedCount": 463,
+      "initializerAdmission": false
+    },
+    "application134-printer-inventory": {
+      "kind": "application",
+      "sourceManifest": "prisma/application-source-manifest.json",
+      "sourceManifestSha256": "4d56c1ad1a6701b16d31af79916438f4a8c359301ef82486ae2a433cd50d4d34",
+      "schemaSha256": "2f700ff8502db706ffbf1100925a90554ee7a830bdd518b21cb500a5850138fb",
+      "migrationCount": 134,
+      "generatedCount": 464,
       "initializerAdmission": false
     }
   }

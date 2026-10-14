@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "profile": "application133-print-bridge-enrollment",
+  "profile": "application134-printer-inventory",
   "schema": {
     "path": "prisma/schema.prisma",
-    "sha256": "2635e3ded4d833b58936e1bde5b24ae87d03000cfb8895aef2066f937e083c8b",
-    "bytes": 629991,
+    "sha256": "2f700ff8502db706ffbf1100925a90554ee7a830bdd518b21cb500a5850138fb",
+    "bytes": 631317,
     "mode": "000644"
   },
   "migration_files": [
@@ -807,54 +807,60 @@
       "mode": "000644"
     },
     {
+      "path": "prisma/migrations/20261014010000_printer_inventory_foundation/migration.sql",
+      "sha256": "df6edc856df0df80461f5e2c97ec57a84cf821beeb9c1f93d4fdf328f029053f",
+      "bytes": 2213,
+      "mode": "000644"
+    },
+    {
       "path": "prisma/migrations/migration_lock.toml",
       "sha256": "1db17a8d051aa136110736752c5e1f8b7ed92b6ea8e803112fbbe2497047c210",
       "bytes": 24,
       "mode": "000644"
     }
   ],
-  "sql_count": 133,
+  "sql_count": 134,
   "generated": [
     {
       "path": "src/generated/prisma/browser.ts",
-      "sha256": "1f349de59bca8a2a7c15841189b80ff06c1ef3b8281aab6d8917fb87f5b3bd71",
-      "bytes": 121456,
+      "sha256": "0d19d0bd94de999142cd1427f5d1ef7338e4f51633c0adbc7bad71ba98aed390",
+      "bytes": 121557,
       "mode": "000644"
     },
     {
       "path": "src/generated/prisma/client.ts",
-      "sha256": "8a5051c5825890fedd8084d0c2a18a15b0f09e428d1db64040742f00069e3eb6",
-      "bytes": 122461,
+      "sha256": "29d8ed1d1259c03d83bd554979a62a05901a67c6e1c8b9ce779765ee3fe06246",
+      "bytes": 122562,
       "mode": "000644"
     },
     {
       "path": "src/generated/prisma/commonInputTypes.ts",
-      "sha256": "3dfe91bb5290d919732a316790116b7ba694fd24c93a0d59df8ea771c8eabce9",
-      "bytes": 710652,
+      "sha256": "f662cda0e6cc0cb1b0b653df4fbd141f51c65cdb15885ad978508e59625ae249",
+      "bytes": 715876,
       "mode": "000644"
     },
     {
       "path": "src/generated/prisma/enums.ts",
-      "sha256": "16147fe6e0ef8137df4708371f47123876d8f6c80c783237cca1f79aac84c618",
-      "bytes": 69416,
+      "sha256": "ba0940fa5d4106b80bcd2a6f23e70cbe35bfca1c0f32f6810e22fa6c943bc7b6",
+      "bytes": 69878,
       "mode": "000644"
     },
     {
       "path": "src/generated/prisma/internal/class.ts",
-      "sha256": "99bb3ea8b2a660bdc4834b1d64cc2ce330515ef0479a156d325be5c6f5b7d897",
-      "bytes": 4902167,
+      "sha256": "11b11f3bbe04c0a9cc5b6ea458e4088368a9f4a58ab9bf4541c87c50a935fbf0",
+      "bytes": 4917749,
       "mode": "000644"
     },
     {
       "path": "src/generated/prisma/internal/prismaNamespace.ts",
-      "sha256": "9fcd0d397d39eea2ba817b2a2e03e4c7908fecf467a3d854a535354c2033ed46",
-      "bytes": 1936249,
+      "sha256": "7bf62825c0d28b706a145f0e15a8c3a6ca725f74fa3c8640830a981ee9a14c06",
+      "bytes": 1940922,
       "mode": "000644"
     },
     {
       "path": "src/generated/prisma/internal/prismaNamespaceBrowser.ts",
-      "sha256": "ea2d1802044782008a2bbb050dc223de8072687df024c7009ba8710430a7dd71",
-      "bytes": 268034,
+      "sha256": "480ec1c7e7d004c066b7fd85dac672e904863ad590459616cfcee12ef8dd606c",
+      "bytes": 268603,
       "mode": "000644"
     },
     {
@@ -2515,8 +2521,8 @@
     },
     {
       "path": "src/generated/prisma/models/RestaurantBranch.ts",
-      "sha256": "a95dbae84ec634e056d180b621c27d8224dfbc7b81ab39e5f60d3a8a5d200af6",
-      "bytes": 931970,
+      "sha256": "0193ba66a71edf188ddf82df6b17061b3dabe0a3b9dded1d7284dddc8a754ca2",
+      "bytes": 965868,
       "mode": "000644"
     },
     {
@@ -2994,6 +3000,12 @@
       "mode": "000644"
     },
     {
+      "path": "src/generated/prisma/models/RestaurantPrinter.ts",
+      "sha256": "cf10d78d17ec50161823c93c0b2da3ac6a66f09b5e9c0ec890a4147749c90cf5",
+      "bytes": 79784,
+      "mode": "000644"
+    },
+    {
       "path": "src/generated/prisma/models/RestaurantProduct.ts",
       "sha256": "9c7e0c0964855f753fe8e0ce1b3e8edd91e63c9655c8569648c39e44b07d50bd",
       "bytes": 212394,
@@ -3151,8 +3163,8 @@
     },
     {
       "path": "src/generated/prisma/models/RestaurantRegisteredDevice.ts",
-      "sha256": "40ec55859dfe5ccb0df6ccb86877bbd99cf285a71206b1e1cbd429322b3ca4fb",
-      "bytes": 398302,
+      "sha256": "5717a4822e361013cc4827bde1cd6e8332a8dbe1905d5bc42824e2c722e7ab2f",
+      "bytes": 419702,
       "mode": "000644"
     },
     {
@@ -3589,15 +3601,15 @@
     },
     {
       "path": "src/generated/prisma/models.ts",
-      "sha256": "fe58cab962fdfce52b4cb301abca3ea71f3f2425421d4cb1fe3068eaf02ef273",
-      "bytes": 24119,
+      "sha256": "b249e2d7f410b7ba10bb75d83c9736505351f360031229b6f0ef52244a10361b",
+      "bytes": 24167,
       "mode": "000644"
     }
   ],
-  "generated_count": 463,
+  "generated_count": 464,
   "generation": {
     "prisma": "7.9.1",
-    "schemaSha256": "2635e3ded4d833b58936e1bde5b24ae87d03000cfb8895aef2066f937e083c8b",
+    "schemaSha256": "2f700ff8502db706ffbf1100925a90554ee7a830bdd518b21cb500a5850138fb",
     "tsconfigSha256": "fe18cad2b63960649a2dca17419d25ef3753dae5bf435f07ebf702d0b6ed89dc",
     "packageSha256": "f8d45a6e31167d76ee47dbbacc0754fb4a29b47fb890e992f4f4ea2302b6d9e7",
     "config": "prisma/visibility-codegen.config.ts",
