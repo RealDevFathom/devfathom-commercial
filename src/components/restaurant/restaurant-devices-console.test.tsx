@@ -15,6 +15,8 @@ type RotationOptions = {
 };
 
 const mocks = vi.hoisted(() => ({
+  session: { status: 'authenticated', data: { user: { id: 'admin', organizationId: 'org_1' } } },
+  inventoryProps: [] as { ownerKey: string; refreshVersion: number }[],
   devices: {
     data: [] as unknown[],
     error: null as unknown,
@@ -44,8 +46,9 @@ const mocks = vi.hoisted(() => ({
   invalidateDevices: vi.fn(),
 }));
 
-vi.mock('next-auth/react', () => ({ useSession: () => ({ status: 'authenticated', data: { user: { id: 'admin', organizationId: 'org_1' } } }) }));
-vi.mock('./print-bridge-enrollment', () => ({ PrintBridgeEnrollment: () => null }));
+vi.mock('next-auth/react', () => ({ useSession: () => mocks.session }));
+vi.mock('./print-bridge-enrollment', () => ({ PrintBridgeEnrollment: ({ onCreated }: { onCreated: () => void }) => <button onClick={onCreated}>Complete bridge enrollment</button> }));
+vi.mock('./printer-inventory-panel', () => ({ PrinterInventoryPanel: (props: { ownerKey: string; refreshVersion: number }) => { mocks.inventoryProps.push(props); return null; } }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -145,6 +148,8 @@ function renderConsole(enabled: boolean) {
 describe('Restaurant device security UI', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    mocks.session = { status: 'authenticated', data: { user: { id: 'admin', organizationId: 'org_1' } } };
+    mocks.inventoryProps.length = 0;
     mocks.deviceQueryEnabled.length = 0;
     mocks.approverQueries.length = 0;
     mocks.devices.data = [];
@@ -248,7 +253,22 @@ describe('Restaurant device security UI', () => {
     expect(mocks.enrollmentMutate).not.toHaveBeenCalled();
   });
 
-  it('shows loading instead of a false zero device count', () => {
+  it('scopes printer inventory to the verified owner and refreshes it after enrollment', () => {
+    renderConsole(true);
+    expect(mocks.inventoryProps.at(-1)).toEqual({ ownerKey: 'org_1:admin', refreshVersion: 0 });
+    fireEvent.click(screen.getByRole('button', { name: 'Complete bridge enrollment' }));
+    expect(mocks.inventoryProps.at(-1)).toEqual({ ownerKey: 'org_1:admin', refreshVersion: 1 });
+    expect(mocks.invalidateDevices).toHaveBeenCalledOnce();
+  });
+  it('withholds printer inventory for disabled, mismatched-owner, and denied sessions', () => {
+    const disabled = renderConsole(false); expect(mocks.inventoryProps).toHaveLength(0); disabled.unmount();
+    mocks.session.data.user.organizationId = 'other';
+    const mismatch = renderConsole(true); expect(mocks.inventoryProps).toHaveLength(0); mismatch.unmount();
+    mocks.session.data.user.organizationId = 'org_1'; mocks.devices.error = { data: { code: 'FORBIDDEN' } };
+    renderConsole(true); expect(mocks.inventoryProps).toHaveLength(0);
+  });
+
+  it('shows loading instead of a false zero device count' , () => {
     mocks.devices.isLoading = true;
 
     renderConsole(true);

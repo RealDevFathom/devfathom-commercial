@@ -232,3 +232,11 @@ and arbitrary absolute-path acceptance is preserved as source evidence but is no
 safe transport behavior. No address-valued job or route ID is converted into a database ID.
 Inventory routing selection, status reporting, update/retirement and UI wiring remain follow-on
 work. Existing device/demo lists and rotation/revocation authorization remain unchanged.
+
+### Devices inventory management
+
+The Devices console can include up to 20 printer targets during new print-bridge enrollment or register targets against an existing active bridge in a selected active branch. Zero-printer enrollment remains available. Targets use the accepted TCP, queue, or supported device-path formats; registration does not verify hardware connectivity or configure print routing.
+
+Inventory loads through management authorization independently of the device directory. Owner changes remount the inventory panel, and obsolete branch responses are discarded. Missing telemetry is shown as **Not reported**. An uncertain registration requires fresh inventory and explicit reconciliation for its original branch and bridge before another registration. A confirmed registration stays confirmed if its subsequent list refresh fails.
+
+This is source-level integration. Browser/visual, live database, concurrency, and physical-printing acceptance remain separate gates. Existing route and job targets retain their address-based meaning.

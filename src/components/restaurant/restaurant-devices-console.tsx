@@ -33,6 +33,7 @@ import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from './restaurant-branch-select';
 import { PrintBridgeEnrollment } from './print-bridge-enrollment';
+import { PrinterInventoryPanel } from './printer-inventory-panel';
 
 type Device = inferRouterOutputs<AppRouter>['restaurantDevices']['list'][number];
 type UiError = { message: string; data?: { code?: string } | null };
@@ -77,6 +78,7 @@ export function RestaurantDevicesConsole() {
   });
 
   const [enrollOpen, setEnrollOpen] = useState(false);
+  const [inventoryRevision, setInventoryRevision] = useState(0);
   const [enrollmentKind, setEnrollmentKind] = useState<'POS' | 'KDS'>('POS');
   const [enrollmentBranchId, setEnrollmentBranchId] = useState('');
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
@@ -90,7 +92,10 @@ export function RestaurantDevicesConsole() {
     { enabled: restaurantEnabled && selectedDevice !== null }
   );
 
-  const refreshDevices = () => void utils.restaurantDevices.list.invalidate();
+  const refreshDevices = () => {
+    void utils.restaurantDevices.list.invalidate();
+    setInventoryRevision((value) => value + 1);
+  };
   const stationsQuery = trpc.restaurantFloor.listStations.useQuery(
     { branchId: enrollmentBranchId },
     { enabled: enrollOpen && enrollmentKind === 'KDS' && Boolean(enrollmentBranchId) }
@@ -331,6 +336,8 @@ export function RestaurantDevicesConsole() {
           )}
         </SectionCard>
       )}
+
+      {restaurantEnabled && bridgeOwner && !permissionDenied ? <PrinterInventoryPanel key={bridgeOwner} ownerKey={bridgeOwner} refreshVersion={inventoryRevision} /> : null}
 
       <Dialog
         open={enrollOpen}

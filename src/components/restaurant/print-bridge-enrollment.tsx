@@ -5,6 +5,7 @@ import { Button } from '@/components/ui/button';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import { PrinterRegistrationFields, printerDraftPayload, validPrinterDrafts, type PrinterDraft } from './printer-registration-fields';
 
 type Branch = { id: string; name: string; active: boolean };
 type Result = { ownerKey: string; enrollmentCode: string; expiresAt: Date };
@@ -13,6 +14,8 @@ export function PrintBridgeEnrollment({ ownerKey, branches, onCreated }: { owner
   const [open, setOpen] = useState(false);
   const [name, setName] = useState('');
   const [branchId, setBranchId] = useState('');
+  const [printers, setPrinters] = useState<PrinterDraft[]>([]);
+  const busy = useRef(false);
   const [result, setResult] = useState<Result | null>(null);
   const [pendingOwner, setPendingOwner] = useState<string | null>(null);
   const pending = pendingOwner === ownerKey;
@@ -23,28 +26,28 @@ export function PrintBridgeEnrollment({ ownerKey, branches, onCreated }: { owner
   const mutation = trpc.restaurantDevices.initiatePrintBridgeEnrollment.useMutation({ retry: false, gcTime: 0 });
   useLayoutEffect(() => { owner.current = ownerKey; return () => { generation.current += 1; }; }, [ownerKey]);
   const changeOpen = (next: boolean) => {
-    if (pending) return;
+    if (busy.current) return;
     generation.current += 1;
-    setOpen(next); setName(''); setBranchId(''); setResult(null); mutation.reset();
+    setOpen(next); setName(''); setBranchId(''); setPrinters([]); setResult(null); mutation.reset();
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (pending || failed || !name.trim() || !branches.some((b) => b.id === branchId && b.active)) return;
-    const current = generation.current; setPendingOwner(ownerKey);
+    if (busy.current || failed || !name.trim() || !validPrinterDrafts(printers) || !branches.some((b) => b.id === branchId && b.active)) return;
+    const current = generation.current; busy.current = true; setPendingOwner(ownerKey);
     try {
-      const response = await mutation.mutateAsync({ name: name.trim(), branchId });
+      const response = await mutation.mutateAsync({ name: name.trim(), branchId, ...(printers.length ? { printers: printerDraftPayload(printers) } : {}) });
       if (current === generation.current && owner.current === ownerKey) { setResult({ ...response, ownerKey }); onCreated(); }
     } catch {
       if (current === generation.current && owner.current === ownerKey) setFailedOwner(ownerKey);
     } finally {
-      mutation.reset();
+      busy.current = false; mutation.reset();
       if (current === generation.current && owner.current === ownerKey) setPendingOwner(null);
     }
   };
   return <>
     <Button variant="secondary" className="min-h-11" onClick={() => changeOpen(true)}>Enroll print bridge</Button>
     <Dialog open={open} onOpenChange={changeOpen}>
-      <DialogContent>
+      <DialogContent className="max-h-[85vh] overflow-y-auto">
         <DialogHeader>
           <DialogTitle>Enroll a print bridge</DialogTitle>
           <DialogDescription>Create a dedicated bridge for one branch. Its one-use enrollment code expires in ten minutes.</DialogDescription>
@@ -60,13 +63,14 @@ export function PrintBridgeEnrollment({ ownerKey, branches, onCreated }: { owner
             <Input id="bridge-name" value={name} maxLength={120} required disabled={pending || failed} onChange={(event) => setName(event.target.value)} />
           </div>
           <div className="space-y-2"><label htmlFor="bridge-branch" className="block text-sm font-medium">Branch</label>
-            <select id="bridge-branch" className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm" value={branchId} required disabled={pending || failed} onChange={(event) => setBranchId(event.target.value)}>
+            <select id="bridge-branch" className="h-11 w-full rounded-md border border-input bg-surface-raised px-3 text-sm focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50" value={branchId} required disabled={pending || failed} onChange={(event) => setBranchId(event.target.value)}>
               <option value="">Select a branch</option>{branches.filter((b) => b.active).map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}
             </select>
           </div>
-          {failed ? <div className="space-y-2"><p role="alert" className="text-sm text-danger">Enrollment could not be confirmed. Refresh the device list and ask your administrator to reconcile any newly created bridge before trying again.</p><Button type="button" variant="secondary" onClick={() => { setFailedOwner(null); setName(''); setBranchId(''); mutation.reset(); }}>I have reconciled the device</Button></div> : null}
+          <PrinterRegistrationFields rows={printers} onChange={setPrinters} disabled={pending || failed} />
+          {failed ? <div className="space-y-2"><p role="alert" className="text-sm text-destructive">Enrollment could not be confirmed. Refresh the device list and ask your administrator to reconcile any newly created bridge before trying again.</p><Button type="button" variant="secondary" onClick={() => { setFailedOwner(null); setName(''); setBranchId(''); setPrinters([]); mutation.reset(); }}>I have reconciled the device</Button></div> : null}
           <DialogFooter><Button type="button" variant="secondary" disabled={pending} onClick={() => changeOpen(false)}>Cancel</Button>
-            <Button type="submit" disabled={pending || failed || !name.trim() || !branches.some((b) => b.id === branchId && b.active)}>{pending ? 'Creating…' : 'Create enrollment code'}</Button>
+            <Button type="submit" disabled={pending || failed || !name.trim() || !validPrinterDrafts(printers) || !branches.some((b) => b.id === branchId && b.active)}>{pending ? 'Creating…' : 'Create enrollment code'}</Button>
           </DialogFooter>
         </form>}
       </DialogContent>

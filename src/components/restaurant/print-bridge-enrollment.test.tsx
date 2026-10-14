@@ -49,3 +49,33 @@ it('keeps reconciliation required across closing until explicitly acknowledged',
   expect(screen.getByRole('alert')).toHaveTextContent('reconcile'); expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeDisabled();
   fireEvent.click(screen.getByRole('button', { name: 'I have reconciled the device' })); expect(screen.queryByRole('alert')).not.toBeInTheDocument(); fill(); expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeEnabled(); expect(h.mutate).toHaveBeenCalledOnce();
 });
+
+it('includes optional printer drafts with the new bridge and omits UI row keys', async () => {
+  openForm(); fill(); fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
+  expect(screen.getByRole('button', { name: 'Create enrollment code' })).toBeDisabled();
+  fireEvent.change(screen.getByLabelText('Printer 1 name'), { target: { value: ' Receipt ' } });
+  fireEvent.change(screen.getByLabelText('Printer 1 target'), { target: { value: ' tcp://printer:9100 ' } });
+  fireEvent.change(screen.getByLabelText('Printer 1 paper width'), { target: { value: '58' } });
+  fireEvent.click(screen.getByRole('button', { name: 'Create enrollment code' }));
+  await screen.findByLabelText('One-time enrollment code');
+  expect(h.mutate).toHaveBeenCalledExactlyOnceWith({ name: 'Kitchen host', branchId: 'branch', printers: [{ name: 'Receipt', address: 'tcp://printer:9100', paperWidthMm: 58 }] });
+  fireEvent.click(screen.getByRole('button', { name: 'Done' })); fireEvent.click(screen.getByRole('button', { name: 'Enroll print bridge' }));
+  expect(screen.queryByLabelText('Printer 1 name')).not.toBeInTheDocument();
+});
+it('prevents duplicate same-tick enrollment and freezes printer drafts while submitting', async () => {
+  let resolve!: (value: typeof result) => void; h.mutate.mockImplementation(() => new Promise((done) => { resolve = done; }));
+  openForm(); fill(); const form = screen.getByRole('button', { name: 'Create enrollment code' }).closest('form')!;
+  act(() => { fireEvent.submit(form); fireEvent.submit(form); });
+  expect(h.mutate).toHaveBeenCalledOnce(); expect(screen.getByRole('button', { name: 'Add printer' })).toBeDisabled(); expect(screen.getByRole('button', { name: 'Cancel' })).toBeDisabled();
+  await act(async () => { resolve(result); });
+});
+
+it('keeps an invalid printer target editable without creating an uncertain enrollment', () => {
+  openForm(); fill(); fireEvent.click(screen.getByRole('button', { name: 'Add printer' }));
+  fireEvent.change(screen.getByLabelText('Printer 1 name'), { target: { value: 'Receipt' } });
+  fireEvent.change(screen.getByLabelText('Printer 1 target'), { target: { value: 'https://printer' } });
+  const button = screen.getByRole('button', { name: 'Create enrollment code' }); expect(button).toBeDisabled();
+  fireEvent.submit(button.closest('form')!); expect(h.mutate).not.toHaveBeenCalled(); expect(screen.getByRole('alert')).toHaveTextContent('valid TCP');
+  fireEvent.change(screen.getByLabelText('Printer 1 target'), { target: { value: '/dev/usb/lp0' } });
+  expect(button).toBeEnabled(); expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+});

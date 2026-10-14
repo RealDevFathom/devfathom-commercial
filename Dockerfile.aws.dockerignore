@@ -1098,3 +1098,5 @@
 
 !src/lib/restaurant/printer-inventory.ts
 !src/lib/restaurant/printing/target.ts
+!src/components/restaurant/printer-registration-fields.tsx
+!src/components/restaurant/printer-inventory-panel.tsx
