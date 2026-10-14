@@ -44,6 +44,8 @@ const mocks = vi.hoisted(() => ({
   invalidateDevices: vi.fn(),
 }));
 
+vi.mock('next-auth/react', () => ({ useSession: () => ({ status: 'authenticated', data: { user: { id: 'admin', organizationId: 'org_1' } } }) }));
+vi.mock('./print-bridge-enrollment', () => ({ PrintBridgeEnrollment: () => null }));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {

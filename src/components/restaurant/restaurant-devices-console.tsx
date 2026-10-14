@@ -2,6 +2,7 @@
 
 import { useState, type FormEvent } from 'react';
 import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { toast } from 'sonner';
 
@@ -31,6 +32,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 import { RestaurantBranchSelect } from './restaurant-branch-select';
+import { PrintBridgeEnrollment } from './print-bridge-enrollment';
 
 type Device = inferRouterOutputs<AppRouter>['restaurantDevices']['list'][number];
 type UiError = { message: string; data?: { code?: string } | null };
@@ -58,6 +60,9 @@ function healthTone(health: Device['health']) {
 
 export function RestaurantDevicesConsole() {
   const entitlements = useEntitlements();
+  const { data: session, status: sessionStatus } = useSession();
+  const bridgeOwner = sessionStatus === 'authenticated' && session?.user?.id && session.user.organizationId === entitlements.organizationId
+    ? `${entitlements.organizationId}:${session.user.id}` : null;
   const restaurantModule = entitlements.modules.find((module) => module.key === 'restaurant-core');
   const restaurantEnabled =
     restaurantModule?.enabled ?? entitlements.enabledModules.includes('restaurant-core');
@@ -181,6 +186,12 @@ export function RestaurantDevicesConsole() {
                   Cameras →
                 </Link>
               ) : null}
+              {bridgeOwner ? <PrintBridgeEnrollment
+                key={bridgeOwner}
+                ownerKey={bridgeOwner}
+                branches={branchesQuery.error ? [] : branchesQuery.data ?? []}
+                onCreated={refreshDevices}
+              /> : null}
               <Button
                 className="min-h-11"
                 onClick={() => {

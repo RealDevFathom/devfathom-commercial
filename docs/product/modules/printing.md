@@ -36,7 +36,7 @@ AirPrint-only or vendor-specific printer is not automatically compatible.
 
 ### Device UI / operator contract
 
-Keep the existing `printerId` field (maximum 128 characters). No new server/schema fields:
+Keep the existing `printerId` field (maximum 128 characters). The transport-address field keeps its existing meaning; bridge enrollment uses separate device/code records:
 
 | Transport               | Example printer ID                                                 | Requirements                                                                                        |
 | ----------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------------------- |
@@ -175,3 +175,43 @@ one receipt/KOT, readable layout/code page, cut/feed, disconnect/offline/permiss
 pending OS spool behavior, lost acknowledgement/restart without duplicate output, and recovery.
 No physical printer, native Windows spooler, macOS queue, or browser acceptance is claimed here.
 Receipt designer/UI, shared rendering and other verticals remain their owners' separate lanes.
+
+
+## One-use bridge enrollment
+
+In **Restaurant → Devices**, choose **Enroll print bridge**, name the host, and explicitly select
+its branch. Device-management permission, current branch authorization, and the active registered-device
+limit are checked on the server. The action creates a new PRINT_BRIDGE device and a ten-minute,
+one-use enrollment code. It cannot reissue a code for an existing device or replace manager
+co-authorization for rotation/revocation. Copy the displayed code securely before closing the dialog. A user or organization change clears
+its ownership; results from the prior identity are discarded. If creation is uncertain, closing and
+reopening retains the reconciliation warning. Confirm reconciliation explicitly before creating another device.
+
+On a supported POSIX host, provide `PRINT_BRIDGE_ENROLLMENT_CODE` through trusted local secret
+handling, `PRINT_BRIDGE_BASE_URL`, and a new absolute `PRINT_BRIDGE_TOKEN_FILE` in a private,
+existing directory. Configure the same printer allowlist and persistent attempt-state directory
+as above. Do not paste a real enrollment code or device token into shell history.
+
+Credential precedence is injected `PRINT_BRIDGE_TOKEN`, then an existing valid owner-only token
+file, then enrollment when the selected file is absent. Invalid, unreadable, empty, or symlinked
+files stop before exchange. Enrollment reserves a new mode-0600 file exclusively before its one-use
+HTTPS exchange, rejects redirects, and persists the returned token through the reserved descriptor.
+Later starts reuse that file; remove the enrollment-code environment setting after confirmed setup.
+Windows keeps the injected-token path; this owner-only file enrollment path requires POSIX support.
+`--dry-run` does not read credentials, enroll, or create a token file.
+
+An uncertain exchange is never retried automatically. The reserved file remains, even if empty.
+Keep it, stop the host, and have the administrator reconcile the new device and any outstanding
+print jobs. A response may have been lost after the code was consumed. Use the existing authorized
+rotation/revocation workflow for recovery; do not delete files or retry codes blindly. A complete
+valid token file may be reused after the operator verifies the outcome. Codes, tokens, and hashes
+are excluded from device lists, audit details, and bridge error output.
+
+PRINT_BRIDGE credentials can claim and acknowledge print jobs but cannot create or use terminal
+sessions. Existing POS/KDS printing remains supported. Printer inventory, ownership records and
+printer-ID foreign keys are not part of this source integration: route IDs remain explicit transport
+addresses. Application schema now records this separately from the fixed initializer profile.
+
+Source checks use mocked exchanges and synthetic files. Enrollment migrations, database locking/RLS,
+authenticated browser behavior, native spoolers and physical output still require separately authorized
+runtime acceptance. This source integration does not authorize startup or deployment.
