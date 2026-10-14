@@ -58,8 +58,9 @@ response is not permission for an automatic physical retry.
 
 ## Transaction and admission rule
 
-The current implementation only takes a branch admission lock for guarded Settings
-requests. Adding a `retiredAt: null` filter alone would leave other enqueue producers able
+The original baseline only took a branch admission lock for guarded Settings
+requests. The shared locking dependency now covers fresh registered enqueue and
+registered route admission; retirement itself remains unimplemented. Adding a `retiredAt: null` filter alone would leave other enqueue producers able
 to race retirement. Do not enable a retirement writer until all of the following are true.
 
 - Retirement takes the tenant branch lock, then the printer row lock, both FOR UPDATE,
@@ -116,9 +117,10 @@ The next product slice must admit the complete change together:
   whose behavior is affected. No donor, Pharmacy-held, fixture or database-test payload
   becomes readable or executable merely because it is adjacent.
 
-The current producer map has two direct enqueue sites: manual POST in
+The corrected producer map has three direct enqueue sites: manual POST in
 `src/app/api/restaurant/print-bridge/route.ts` and
-`src/lib/restaurant/kitchen-tickets.ts`. The latter receives its caller's transaction from
+`src/lib/restaurant/kitchen-tickets.ts`, and
+`src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts`. Kitchen tickets receive their caller's transaction from
 send, fire-course and reprint operations in `src/lib/restaurant/orders.ts`.
 
 Web send/fire enters through `src/server/routers/restaurant-orders.ts`; the default tRPC
@@ -127,7 +129,8 @@ context can already own a transaction. Terminal fire and reprint enter through
 `src/app/api/restaurant/orders/fire/route.ts` and
 `src/app/api/restaurant/orders/reprint-kot/route.ts`, then
 `src/lib/restaurant/terminal-orders.ts` and the outer `withTenantDb` call in
-`src/lib/restaurant/terminal-auth.ts`.
+`src/lib/restaurant/terminal-auth.ts`. Receipt dispatch uses `moneyMutationRoute` in
+`src/lib/restaurant/checkout-routes.ts`, which delegates to the same terminal outer transaction.
 
 Only guarded manual HTTP requests explicitly select Read Committed. Order transactions,
 terminal outer transactions and unguarded manual requests omit isolation; the deployed

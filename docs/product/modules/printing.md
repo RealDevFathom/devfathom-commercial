@@ -373,3 +373,18 @@ reviewed transaction and locking contract before a retirement writer can be enab
 
 This checkpoint records policy only. Retirement, restoration and its UI are not implemented;
 existing printing behavior and accepted source evidence remain unchanged.
+
+
+### Registered admission row locking
+
+Every fresh registered job now takes a branch shared lock followed by a scoped printer
+shared lock before its eligibility/width observation and insertion. This includes manual,
+order/course/reprint and receipt producers. Existing early no-route guards and persisted
+replays remain ahead of these locks; raw-only behavior is unchanged. Route saves retain
+their branch update lock and acquire printer locks sequentially in stable ID order.
+Missing rows fail closed and serialization errors propagate without automatic retries.
+
+All locks belong to the existing outer tenant transaction. A stale higher-isolation
+snapshot cannot silently bypass the current printer locking read. This source dependency
+does not add retirement state or enable retirement writes; database concurrency and
+reader/writer rollout remain unaccepted runtime gates.

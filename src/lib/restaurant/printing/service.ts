@@ -151,6 +151,16 @@ export class PrintBridgeService {
       }
     }
     if (!route) return { status: 'NO_PRINTER', retryable: true, replayed: false };
+    if (!expectedDestination && route.registeredPrinterId) {
+      if (!this.db.$queryRaw)
+        throw new Error('Registered printing requires a transaction with row locking.');
+      // Unguarded order/receipt producers participate after prior-job replay too.
+      const branches = await this.db.$queryRaw<Array<{ id: string; active: boolean }>>`
+        SELECT id, active FROM restaurant_branches
+        WHERE "organizationId" = ${organizationId} AND id = ${job.branchId}
+        FOR SHARE`;
+      if (!branches[0]?.active) return { status: 'NO_PRINTER', retryable: true, replayed: false };
+    }
     // Typed callers are not a runtime validation boundary. Validate before any
     // new job is persisted, using the same raw renderer as the claim path.
     const snapshotTicket =

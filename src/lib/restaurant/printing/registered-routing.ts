@@ -4,6 +4,28 @@ import type { PrintRoute, PrintRoutingConfig } from './contract';
 import { samePrintRoutingConfig } from './routing';
 import { TicketPrintSnapshotSchema } from './contract';
 
+type PrinterAdmissionDb = Pick<Prisma.TransactionClient, 'restaurantPrinter'> &
+  Partial<Pick<Prisma.TransactionClient, '$queryRaw'>>;
+
+/** Caller holds the branch lock in the same outer transaction through commit. */
+async function lockRegisteredPrinter(
+  tx: PrinterAdmissionDb,
+  organizationId: string,
+  branchId: string,
+  printerId: string
+) {
+  if (!tx.$queryRaw)
+    throw new Error('Registered printing requires a transaction with row locking.');
+  // This current locking read also rejects stale higher-isolation snapshots.
+  // Never catch serialization failures or fall back to an unlocked observation.
+  const printers = await tx.$queryRaw<Array<{ id: string }>>`
+    SELECT id FROM restaurant_printers
+    WHERE "organizationId" = ${organizationId} AND "branchId" = ${branchId}
+      AND id = ${printerId}
+    FOR SHARE`;
+  return printers[0]?.id === printerId;
+}
+
 /** Eligibility is identical for availability and server-derived ticket snapshots. */
 function registeredPrinterScope(
   organizationId: string,
@@ -24,12 +46,14 @@ function registeredPrinterScope(
 
 /** Validate new snapshots only; replayed jobs keep their original registry and target. */
 export async function registeredRouteAvailable(
-  tx: Pick<Prisma.TransactionClient, 'restaurantPrinter'>,
+  tx: PrinterAdmissionDb,
   organizationId: string,
   branchId: string,
   route: PrintRoute
 ) {
   if (!route.registeredPrinterId) return true;
+  if (!(await lockRegisteredPrinter(tx, organizationId, branchId, route.registeredPrinterId)))
+    return false;
   return (
     (await tx.restaurantPrinter.findFirst({
       where: registeredPrinterScope(organizationId, branchId, route),
@@ -40,12 +64,14 @@ export async function registeredRouteAvailable(
 
 /** A new registered ticket snapshots one eligible inventory observation. */
 export async function registeredRouteTicketSnapshot(
-  tx: Pick<Prisma.TransactionClient, 'restaurantPrinter'>,
+  tx: PrinterAdmissionDb,
   organizationId: string,
   branchId: string,
   route: PrintRoute
 ) {
   if (!route.registeredPrinterId) return null;
+  if (!(await lockRegisteredPrinter(tx, organizationId, branchId, route.registeredPrinterId)))
+    return null;
   const printer = await tx.restaurantPrinter.findFirst({
     where: registeredPrinterScope(organizationId, branchId, route),
     select: { id: true, paperWidthMm: true },
@@ -130,6 +156,11 @@ export async function replacePrintRoutesInTransaction(
     ),
   ];
   if (ids.length) {
+    // Sequential sorted locks give a stable row-lock order, unlike an unordered IN query.
+    for (const id of ids.sort()) {
+      if (!(await lockRegisteredPrinter(tx, organizationId, config.branchId, id)))
+        throw new PrintRoutingError('INVALID_ROUTE', 'A registered printer is unavailable.');
+    }
     const printers = await tx.restaurantPrinter.findMany({
       where: {
         organizationId,

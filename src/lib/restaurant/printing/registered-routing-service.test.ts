@@ -39,7 +39,11 @@ const candidate = {
 function makeDb() {
   return {
     $executeRawUnsafe: vi.fn(),
-    $queryRaw: vi.fn().mockResolvedValue([{ id: 'branch', active: true }]),
+    $queryRaw: vi.fn(async (query: TemplateStringsArray, ...values: unknown[]) =>
+      query.join('').includes('restaurant_printers')
+        ? [{ id: String(values.at(-1)), active: true }]
+        : [{ id: 'branch', active: true }]
+    ),
     restaurantPrintRoute: { findMany: vi.fn().mockResolvedValue([route]) },
     restaurantPrinter: { findFirst: vi.fn().mockResolvedValue({ id: 'inventory-id' }) },
     restaurantPrintJob: {

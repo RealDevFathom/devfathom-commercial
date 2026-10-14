@@ -61,7 +61,11 @@ function makeDb() {
       eligible = value;
     },
     $executeRawUnsafe: vi.fn(),
-    $queryRaw: vi.fn().mockResolvedValue([{ id: 'branch', active: true }]),
+    $queryRaw: vi.fn(async (query: TemplateStringsArray, ...values: unknown[]) =>
+      query.join('').includes('restaurant_printers')
+        ? [{ id: String(values.at(-1)), active: true }]
+        : [{ id: 'branch', active: true }]
+    ),
     restaurantPrintRoute: { findMany: vi.fn().mockResolvedValue([route]) },
     restaurantPrinter: {
       // Projection-aware: selecting only an id cannot accidentally expose width.

@@ -20,7 +20,11 @@ const route: PrintRoute = {
 let db: ReturnType<typeof makeDb>;
 function makeDb() {
   return {
-    $queryRaw: vi.fn().mockResolvedValue([{ id: 'branch', active: true }]),
+    $queryRaw: vi.fn(async (query: TemplateStringsArray, ...values: unknown[]) =>
+      query.join('').includes('restaurant_printers')
+        ? [{ id: String(values.at(-1)), active: true }]
+        : [{ id: 'branch', active: true }]
+    ),
     restaurantKitchenStation: { findMany: vi.fn().mockResolvedValue([{ id: 'station' }]) },
     restaurantPrinter: {
       findMany: vi.fn().mockResolvedValue([{ id: 'printer', address: route.printerId }]),
