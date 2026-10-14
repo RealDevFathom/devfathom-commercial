@@ -24,6 +24,7 @@ vi.mock('@/lib/restaurant/terminal-auth', () => ({
     fn({ device: mocks.device, db: {} }, req),
 }));
 import { GET, POST, PUT } from './route';
+import { PrintRoutingError } from '@/lib/restaurant/printing/registered-routing';
 
 const document = {
   type: 'BAR_TICKET',
@@ -69,7 +70,7 @@ beforeEach(() => {
     requestMeta: { ip: null },
   });
   mocks.can.mockImplementation((_user, action) => action !== 'restaurant:configure');
-  mocks.enqueue.mockResolvedValue({ status: 'QUEUED', replayed: false });
+  mocks.enqueue.mockReset().mockResolvedValue({ status: 'QUEUED', replayed: false });
   mocks.ack.mockResolvedValue({ acknowledged: true, replayed: false });
   mocks.claim.mockResolvedValue({ id: 'job', claimToken: 'a'.repeat(64) });
 });
@@ -168,9 +169,14 @@ describe('print bridge authorization boundary', () => {
   });
 });
 
-
 describe('registered routing REST compatibility', () => {
-  const route = { documentType: 'RECEIPT', stationId: null, printerId: 'tcp://printer:9100', registeredPrinterId: 'inventory-id', enabled: true };
+  const route = {
+    documentType: 'RECEIPT',
+    stationId: null,
+    printerId: 'tcp://printer:9100',
+    registeredPrinterId: 'inventory-id',
+    enabled: true,
+  };
   it('returns 409 without mutation when an older client omits registered bindings', async () => {
     mocks.can.mockResolvedValue(true);
     db.restaurantPrintRoute.findMany.mockResolvedValue([{ id: 'existing' }]);
@@ -191,7 +197,9 @@ describe('registered routing REST compatibility', () => {
   });
   it('returns registered references alongside raw addresses in configuration GET', async () => {
     mocks.can.mockResolvedValue(true);
-    db.restaurantBranch.findMany.mockResolvedValue([{ id: 'branch-b', name: 'Branch', kitchenStations: [] }]);
+    db.restaurantBranch.findMany.mockResolvedValue([
+      { id: 'branch-b', name: 'Branch', kitchenStations: [] },
+    ]);
     db.restaurantPrintRoute.findMany.mockResolvedValue([{ ...route, branchId: 'branch-b' }]);
     const response = await GET(request('GET'));
     expect((await response.json()).branches[0].config.routes).toEqual([route]);
@@ -200,7 +208,91 @@ describe('registered routing REST compatibility', () => {
     db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
     db.restaurantPrintRoute.findMany.mockResolvedValue([route]);
     expect((await POST(request('POST', job))).status).toBe(202);
-    expect(db.restaurantPrintRoute.findMany).toHaveBeenCalledWith({ where: { branchId: 'branch-b' }, select: { documentType: true, stationId: true, printerId: true, registeredPrinterId: true, enabled: true } });
-    expect(mocks.enqueue).toHaveBeenCalledWith('org', { branchId: 'branch-b', routes: [route] }, job);
+    expect(db.restaurantPrintRoute.findMany).toHaveBeenCalledWith({
+      where: { branchId: 'branch-b' },
+      select: {
+        documentType: true,
+        stationId: true,
+        printerId: true,
+        registeredPrinterId: true,
+        enabled: true,
+      },
+    });
+    expect(mocks.enqueue).toHaveBeenCalledWith(
+      'org',
+      { branchId: 'branch-b', routes: [route] },
+      job,
+      undefined
+    );
+  });
+});
+
+describe('guarded routing HTTP boundary', () => {
+  const baseline = { branchId: 'branch-b', routes: [] };
+  const expectedDestination = { printerId: 'raw-printer', registeredPrinterId: null };
+  it('rejects malformed guards before opening a transaction', async () => {
+    mocks.can.mockResolvedValue(true);
+    expect(
+      (
+        await PUT(
+          request('PUT', { ...baseline, expectedConfig: { branchId: 'other', routes: [] } })
+        )
+      ).status
+    ).toBe(400);
+    expect(
+      (await POST(request('POST', { ...job, expectedDestination: { printerId: 'raw-printer' } })))
+        .status
+    ).toBe(400);
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(mocks.enqueue).not.toHaveBeenCalled();
+  });
+  it('compares guarded PUT with ReadCommitted and excludes request metadata from the response', async () => {
+    mocks.can.mockResolvedValue(true);
+    const result = await PUT(request('PUT', { ...baseline, expectedConfig: baseline }));
+    expect(result.status).toBe(200);
+    expect(db.$transaction.mock.calls[0][1]).toEqual({ isolationLevel: 'ReadCommitted' });
+    expect((await result.json()).config).toEqual(baseline);
+  });
+  it('reports a changed baseline as 409 without writing', async () => {
+    mocks.can.mockResolvedValue(true);
+    db.restaurantPrintRoute.findMany.mockResolvedValue([
+      {
+        documentType: 'RECEIPT',
+        stationId: null,
+        printerId: 'other',
+        registeredPrinterId: null,
+        enabled: true,
+      },
+    ]);
+    const result = await PUT(request('PUT', { ...baseline, expectedConfig: baseline }));
+    expect(result.status).toBe(409);
+    expect(await result.json()).toMatchObject({ code: 'REFRESH_REQUIRED' });
+    expect(db.restaurantPrintRoute.deleteMany).not.toHaveBeenCalled();
+  });
+  it('passes the destination to the service and leaves fresh route selection inside its locked transaction', async () => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+    expect((await POST(request('POST', { ...job, expectedDestination }))).status).toBe(202);
+    expect(db.$transaction.mock.calls[0][1]).toEqual({ isolationLevel: 'ReadCommitted' });
+    expect(db.restaurantPrintRoute.findMany).not.toHaveBeenCalled();
+    expect(mocks.enqueue).toHaveBeenCalledWith('org', baseline, job, expectedDestination);
+  });
+  it('maps the service destination conflict to a definite 409', async () => {
+    db.restaurantStaffProfile.findFirst.mockResolvedValue({ id: 'allowed' });
+    mocks.enqueue.mockRejectedValue(
+      new PrintRoutingError('REFRESH_REQUIRED', 'Destination changed')
+    );
+    const result = await POST(request('POST', { ...job, expectedDestination }));
+    expect(result.status).toBe(409);
+    expect(await result.json()).toMatchObject({ code: 'REFRESH_REQUIRED' });
+  });
+  it('preserves default isolation for unguarded HTTP callers', async () => {
+    mocks.can.mockResolvedValue(true);
+    await PUT(request('PUT', baseline));
+    await POST(request('POST', job));
+    expect(db.$transaction.mock.calls.map((call) => call[1])).toEqual([undefined, undefined]);
+  });
+  it('does not let a destination guard bypass branch authorization', async () => {
+    expect((await POST(request('POST', { ...job, expectedDestination }))).status).toBe(403);
+    expect(mocks.enqueue).not.toHaveBeenCalled();
   });
 });

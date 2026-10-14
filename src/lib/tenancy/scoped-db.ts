@@ -1,6 +1,6 @@
 import 'server-only';
 
-import type { PrismaClient } from '@/generated/prisma/client';
+import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { db } from '@/lib/db';
 
 /**
@@ -84,7 +84,12 @@ function exposeNestedTransaction(tx: object): ScopedDb {
 export async function withTenantDb<T>(
   organizationId: string,
   run: (tx: ScopedDb) => Promise<T>,
-  options: { maxWait?: number; timeout?: number; userId?: string } = {}
+  options: {
+    maxWait?: number;
+    timeout?: number;
+    userId?: string;
+    isolationLevel?: Prisma.TransactionIsolationLevel;
+  } = {}
 ): Promise<T> {
   assertOrganizationId(organizationId);
 
@@ -102,6 +107,7 @@ export async function withTenantDb<T>(
     {
       maxWait: options.maxWait ?? 10_000,
       timeout: options.timeout ?? 30_000,
+      ...(options.isolationLevel ? { isolationLevel: options.isolationLevel } : {}),
     }
   );
 }
@@ -141,7 +147,11 @@ export function createTenantDb(organizationId: string, userId?: string): ScopedD
       if (modelKey === '$transaction') {
         return async (
           run: (tx: ScopedDb) => Promise<unknown>,
-          options?: { maxWait?: number; timeout?: number }
+          options?: {
+            maxWait?: number;
+            timeout?: number;
+            isolationLevel?: Prisma.TransactionIsolationLevel;
+          }
         ) => withTenantDb(organizationId, run, { ...options, userId });
       }
 

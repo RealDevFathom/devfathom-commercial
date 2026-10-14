@@ -13,6 +13,10 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Switch } from '@/components/ui/switch';
 import type { PrintRoute, PrintRoutingConfig } from '@/lib/restaurant/printing/contract';
+import {
+  normalizePrintRoutingConfig as normalized,
+  samePrintRoutingConfig as same,
+} from '@/lib/restaurant/printing/routing';
 
 type Branch = {
   id: string;
@@ -36,29 +40,6 @@ const endpoint = '/api/restaurant/print-bridge';
 const selectClass =
   'mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
 const types = ['KITCHEN_TICKET', 'BAR_TICKET', 'RECEIPT'] as const;
-// Match the input contract's trimming and field order without changing raw target meaning.
-const normalized = (config: PrintRoutingConfig): PrintRoutingConfig => ({
-  branchId: config.branchId.trim(),
-  routes: config.routes.map((route) => ({
-    documentType: route.documentType,
-    stationId: route.stationId?.trim() ?? null,
-    printerId: route.printerId.trim(),
-    registeredPrinterId: route.registeredPrinterId?.trim() ?? null,
-    enabled: route.enabled,
-  })),
-});
-function comparable(config: PrintRoutingConfig) {
-  const value = normalized(config);
-  // Different routing scopes may arrive in a different database row order. Keep
-  // relative order within a scope: the first matching route still determines delivery.
-  value.routes.sort((a, b) =>
-    JSON.stringify([a.documentType, a.stationId]).localeCompare(
-      JSON.stringify([b.documentType, b.stationId])
-    )
-  );
-  return JSON.stringify(value);
-}
-const same = (a: PrintRoutingConfig, b: PrintRoutingConfig) => comparable(a) === comparable(b);
 class ReadError extends Error {
   constructor(
     readonly status: number,
@@ -331,7 +312,7 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
       const response = await fetch(endpoint, {
         method: 'PUT',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify(payload),
+        body: JSON.stringify({ ...payload, expectedConfig: baseline }),
       });
       if (!alive.current) return;
       if (!response.ok) {
@@ -421,6 +402,10 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
           branchId: saved.id,
           stationId: null,
           idempotencyKey: attempt.key,
+          expectedDestination: {
+            printerId: route.printerId,
+            registeredPrinterId: route.registeredPrinterId ?? null,
+          },
           document: {
             type: 'RECEIPT',
             reference: attempt.key,
@@ -431,8 +416,24 @@ function PrintRoutingEditor({ ownerKey }: { ownerKey: string }) {
           },
         }),
       });
-      const body = (await response.json()) as { result?: { status: string; printerId?: string } };
+      const body = (await response.json()) as {
+        code?: string;
+        result?: { status: string; printerId?: string };
+      };
       if (!alive.current) return;
+      if (response.status === 409 && body.code === 'REFRESH_REQUIRED') {
+        updateRecord(saved.id, (prior) => ({
+          ...prior,
+          conflict: true,
+          fresh: undefined,
+          error:
+            'Saved printer destination changed. Refresh and review the saved routes before testing again.',
+        }));
+        setTestStatus(
+          'Receipt test was rejected. Refresh and review the saved routes before continuing.'
+        );
+        return;
+      }
       if (!response.ok) throw new Error('Receipt test could not be queued.');
       setTestStatus(
         `${saved.name} · ${body.result?.printerId ?? route.printerId}: ${body.result?.status === 'PRINTED' ? 'Bridge acknowledged delivery' : 'Test request accepted; delivery may still be pending or unavailable'}. Paper output is not confirmed. Repeating this test reuses the same request.`

@@ -86,7 +86,8 @@ let branches: Branch[];
 let fetchMock: ReturnType<typeof vi.fn>;
 async function server(_url: unknown, options?: RequestInit) {
   if (options?.method === 'PUT') {
-    const config = JSON.parse(options.body as string) as PrintRoutingConfig;
+    const parsed = JSON.parse(options.body as string) as PrintRoutingConfig;
+    const config = { branchId: parsed.branchId, routes: parsed.routes };
     branches = branches.map((item) => (item.id === config.branchId ? { ...item, config } : item));
     return response({ config });
   }
@@ -568,5 +569,62 @@ describe('receipt route preflight', () => {
     view.rerender(<PrintRoutingSection />);
     await act(async () => pending.resolve(response({ branches })));
     expect(calls('POST')).toHaveLength(0);
+  });
+});
+
+describe('atomic routing UI guards', () => {
+  it('sends the original full baseline separately from the edited draft', async () => {
+    const extra = { ...receipt('p2'), stationId: 'hot', enabled: false };
+    branches = [branch('A', [receipt(), extra])];
+    const baseline = structuredClone(branches[0].config);
+    render(<PrintRoutingSection />);
+    await ready();
+    fireEvent.change(screen.getByLabelText('Receipts printer ID'), {
+      target: { value: 'queue:///Draft' },
+    });
+    save();
+    await waitFor(() => expect(calls('PUT')).toHaveLength(1));
+    const payload = JSON.parse(calls('PUT')[0][1].body);
+    expect(payload.expectedConfig).toEqual(baseline);
+    expect(payload.routes).toEqual([{ ...receipt(), printerId: 'queue:///Draft' }, extra]);
+  });
+  it.each([null, 'p1'])(
+    'sends the saved address and explicit registry identity %s for receipt tests',
+    async (id) => {
+      branches = [branch('A', [receipt(id)])];
+      render(<PrintRoutingSection />);
+      await ready();
+      fireEvent.click(screen.getByRole('button', { name: 'Test receipt printer' }));
+      await waitFor(() => expect(calls('POST')).toHaveLength(1));
+      expect(JSON.parse(calls('POST')[0][1].body).expectedDestination).toEqual({
+        printerId: target,
+        registeredPrinterId: id,
+      });
+    }
+  );
+  it('requires fresh explicit reconciliation after a server-side conflict and retains the same receipt intent', async () => {
+    fetchMock.mockImplementation((url, options) =>
+      options?.method === 'POST'
+        ? response({ code: 'REFRESH_REQUIRED' }, 409)
+        : server(url, options)
+    );
+    render(<PrintRoutingSection />);
+    await ready();
+    fireEvent.click(screen.getByRole('button', { name: 'Test receipt printer' }));
+    await screen.findByText(/Receipt test was rejected/);
+    expect(screen.queryByText(/Delivery may be uncertain/)).not.toBeInTheDocument();
+    expect(screen.getByRole('button', { name: 'Test receipt printer' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Use saved routes' })).toBeDisabled();
+    expect(calls('POST')).toHaveLength(1);
+    fetchMock.mockImplementation(server);
+    fireEvent.click(screen.getByRole('button', { name: 'Refresh saved routes' }));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Use saved routes' })).toBeEnabled()
+    );
+    expect(calls('POST')).toHaveLength(1);
+    fireEvent.click(screen.getByRole('button', { name: 'Use saved routes' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Test receipt printer' }));
+    await waitFor(() => expect(calls('POST')).toHaveLength(2));
+    expect(calls('POST')[0][1].body).toBe(calls('POST')[1][1].body);
   });
 });

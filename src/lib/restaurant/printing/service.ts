@@ -1,6 +1,7 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
 import type {
   ClaimedPrintJob,
+  ExpectedPrintDestination,
   PrintBridgeAdapter,
   PrintEnqueueResult,
   PrintJob,
@@ -12,11 +13,12 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { PrintDocumentSchema, RawPrintValidationError, validateRawPrintDocument } from './contract';
 import { renderEscPos } from './esc-pos';
 import { resolvePrintRoute } from './routing';
-import { registeredRouteAvailable } from './registered-routing';
+import { registeredRouteAvailable, PrintRoutingError } from './registered-routing';
 
 const CLAIM_LEASE_MS = 30_000;
 
-type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob' | 'restaurantPrinter'>;
+type PrintDb = Pick<ScopedDb, '$executeRawUnsafe' | 'restaurantPrintJob' | 'restaurantPrinter'> &
+  Partial<Pick<ScopedDb, '$queryRaw' | 'restaurantPrintRoute'>>;
 
 function renderRawDocument(document: unknown): Uint8Array {
   try {
@@ -39,21 +41,28 @@ export class PrintBridgeService {
     this.db = db ?? (adapterOrDb as PrintDb);
   }
 
-  async enqueue(organizationId: string, config: PrintRoutingConfig, job: PrintJob): Promise<PrintEnqueueResult> {
-    return this.enqueueJob(organizationId, config, job, false);
+  async enqueue(
+    organizationId: string,
+    config: PrintRoutingConfig,
+    job: PrintJob,
+    expectedDestination?: ExpectedPrintDestination
+  ): Promise<PrintEnqueueResult> {
+    return this.enqueueJob(organizationId, config, job, false, expectedDestination);
   }
 
   private async enqueueJob(
     organizationId: string,
     config: PrintRoutingConfig,
     job: PrintJob,
-    synchronous: boolean
+    synchronous: boolean,
+    expectedDestination?: ExpectedPrintDestination
   ): Promise<PrintEnqueueResult> {
     if (job.branchId !== config.branchId) {
       return { status: 'NO_PRINTER', retryable: true, replayed: false };
     }
-    const route = resolvePrintRoute(config.routes, job);
-    if (!route) return { status: 'NO_PRINTER', retryable: true, replayed: false };
+    let route = expectedDestination ? null : resolvePrintRoute(config.routes, job);
+    if (!expectedDestination && !route)
+      return { status: 'NO_PRINTER', retryable: true, replayed: false };
 
     await this.db.$executeRawUnsafe(
       'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
@@ -67,8 +76,20 @@ export class PrintBridgeService {
       },
     };
     const prior = await this.db.restaurantPrintJob.findUnique({ where: key });
-    if (synchronous && (route.registeredPrinterId || prior?.registeredPrinterId)) {
+    if (synchronous && (route?.registeredPrinterId || prior?.registeredPrinterId)) {
       throw new Error('Registered printers require authenticated bridge delivery.');
+    }
+    const matches = (destination: {
+      printerId: string | null;
+      registeredPrinterId?: string | null;
+    }) =>
+      destination.printerId === expectedDestination!.printerId &&
+      (destination.registeredPrinterId ?? null) === expectedDestination!.registeredPrinterId;
+    if (expectedDestination && prior && !matches(prior)) {
+      throw new PrintRoutingError(
+        'REFRESH_REQUIRED',
+        'This print request belongs to a different destination. Refresh and review the saved routes.'
+      );
     }
     if (prior?.status === 'PRINTED') {
       return {
@@ -79,11 +100,57 @@ export class PrintBridgeService {
       };
     }
     if (prior) {
-      return { status: 'QUEUED', printerId: prior.printerId ?? route.printerId, replayed: true };
+      return {
+        status: 'QUEUED',
+        printerId: prior.printerId ?? route?.printerId ?? expectedDestination!.printerId,
+        replayed: true,
+      };
     }
+    if (expectedDestination) {
+      if (!this.db.$queryRaw || !this.db.restaurantPrintRoute) {
+        throw new Error('Guarded printing requires a transaction with routing access.');
+      }
+      // The HTTP caller requests READ COMMITTED. This lock conflicts with route
+      // replacement and stays held through the outer transaction's commit.
+      const branches = await this.db.$queryRaw<Array<{ id: string; active: boolean }>>`
+        SELECT id, active FROM restaurant_branches
+        WHERE "organizationId" = ${organizationId} AND id = ${job.branchId}
+        FOR SHARE`;
+      if (!branches[0]?.active) {
+        throw new PrintRoutingError(
+          'REFRESH_REQUIRED',
+          'The printer branch is unavailable. Refresh the saved routes.'
+        );
+      }
+      const routes = await this.db.restaurantPrintRoute.findMany({
+        where: { organizationId, branchId: job.branchId },
+        orderBy: { createdAt: 'asc' },
+        select: {
+          documentType: true,
+          stationId: true,
+          printerId: true,
+          registeredPrinterId: true,
+          enabled: true,
+        },
+      });
+      route = resolvePrintRoute(routes, job);
+      if (!route || !matches(route)) {
+        throw new PrintRoutingError(
+          'REFRESH_REQUIRED',
+          'The printer destination changed. Refresh and review the saved routes.'
+        );
+      }
+    }
+    if (!route) return { status: 'NO_PRINTER', retryable: true, replayed: false };
     // Typed callers are not a runtime validation boundary. Validate before any
     // new job is persisted, using the same raw renderer as the claim path.
     if (!(await registeredRouteAvailable(this.db, organizationId, job.branchId, route))) {
+      if (expectedDestination) {
+        throw new PrintRoutingError(
+          'REFRESH_REQUIRED',
+          'The registered printer is unavailable. Refresh the saved routes.'
+        );
+      }
       return { status: 'NO_PRINTER', retryable: true, replayed: false };
     }
     renderRawDocument(job.document);
@@ -232,7 +299,15 @@ export async function claimNextPrintJob(
             branchId,
             bridgeId: deviceId,
             branch: { is: { active: true } },
-            bridge: { is: { id: deviceId, branchId, kind: 'PRINT_BRIDGE', status: 'ACTIVE', revokedAt: null } },
+            bridge: {
+              is: {
+                id: deviceId,
+                branchId,
+                kind: 'PRINT_BRIDGE',
+                status: 'ACTIVE',
+                revokedAt: null,
+              },
+            },
           },
         },
       },

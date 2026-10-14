@@ -4,9 +4,9 @@ import { z } from 'zod';
 
 import { can, subjectFromSession, type Action } from '@/lib/abac';
 import {
-  PrintJobSchema,
+  PrintJobRequestSchema,
   RawPrintValidationError,
-  PrintRoutingConfigSchema,
+  PrintRoutingRequestSchema,
   type PrintDocumentType,
 } from '@/lib/restaurant/printing/contract';
 import {
@@ -14,7 +14,10 @@ import {
   claimNextPrintJob,
   PrintBridgeService,
 } from '@/lib/restaurant/printing/service';
-import { replacePrintRoutesInTransaction, PrintRoutingError } from '@/lib/restaurant/printing/registered-routing';
+import {
+  replacePrintRoutesInTransaction,
+  PrintRoutingError,
+} from '@/lib/restaurant/printing/registered-routing';
 import { withDeviceAuth } from '@/lib/restaurant/terminal-auth';
 import { createTRPCContext, type TRPCContext } from '@/server/trpc';
 import { requireRestaurantBranchScope } from '@/server/restaurant-branch-scope';
@@ -38,39 +41,45 @@ function isBridgeRequest(request: Request) {
   return request.headers.get('authorization')?.startsWith('Bearer rdk_') ?? false;
 }
 
-const bridgeClaim = withDeviceAuth(async (ctx, request) => {
-  const rawWait = new URL(request.url).searchParams.get('wait');
-  const waitSeconds = Math.min(20, Math.max(0, Number.parseInt(rawWait ?? '15', 10) || 0));
-  const deadline = Date.now() + waitSeconds * 1_000;
-  do {
-    const job = await claimNextPrintJob(ctx.db, ctx.device.branchId, ctx.device.id);
-    if (job) return NextResponse.json({ job });
-    if (Date.now() >= deadline || request.signal.aborted) break;
-    await new Promise((resolve) => setTimeout(resolve, 500));
-  } while (true);
-  return new NextResponse(null, { status: 204 });
-}, { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] });
+const bridgeClaim = withDeviceAuth(
+  async (ctx, request) => {
+    const rawWait = new URL(request.url).searchParams.get('wait');
+    const waitSeconds = Math.min(20, Math.max(0, Number.parseInt(rawWait ?? '15', 10) || 0));
+    const deadline = Date.now() + waitSeconds * 1_000;
+    do {
+      const job = await claimNextPrintJob(ctx.db, ctx.device.branchId, ctx.device.id);
+      if (job) return NextResponse.json({ job });
+      if (Date.now() >= deadline || request.signal.aborted) break;
+      await new Promise((resolve) => setTimeout(resolve, 500));
+    } while (true);
+    return new NextResponse(null, { status: 204 });
+  },
+  { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] }
+);
 
-const bridgeAck = withDeviceAuth(async (ctx, request) => {
-  const parsed = bridgeAckBody.safeParse(await request.json().catch(() => null));
-  if (!parsed.success) {
-    return NextResponse.json({ error: 'Invalid print acknowledgement.' }, { status: 400 });
-  }
-  const result = await acknowledgePrintJob(ctx.db, {
-    branchId: ctx.device.branchId,
-    deviceId: ctx.device.id,
-    jobId: parsed.data.jobId,
-    claimToken: parsed.data.claimToken,
-    status: parsed.data.status,
-  });
-  if (!result.acknowledged) {
-    return NextResponse.json({ error: 'Print job not found.' }, { status: 404 });
-  }
-  if (parsed.data.status === 'OFFLINE' && parsed.data.error) {
-    console.warn(`Print bridge reported job ${parsed.data.jobId} offline: ${parsed.data.error}`);
-  }
-  return NextResponse.json(result);
-}, { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] });
+const bridgeAck = withDeviceAuth(
+  async (ctx, request) => {
+    const parsed = bridgeAckBody.safeParse(await request.json().catch(() => null));
+    if (!parsed.success) {
+      return NextResponse.json({ error: 'Invalid print acknowledgement.' }, { status: 400 });
+    }
+    const result = await acknowledgePrintJob(ctx.db, {
+      branchId: ctx.device.branchId,
+      deviceId: ctx.device.id,
+      jobId: parsed.data.jobId,
+      claimToken: parsed.data.claimToken,
+      status: parsed.data.status,
+    });
+    if (!result.acknowledged) {
+      return NextResponse.json({ error: 'Print job not found.' }, { status: 404 });
+    }
+    if (parsed.data.status === 'OFFLINE' && parsed.data.error) {
+      console.warn(`Print bridge reported job ${parsed.data.jobId} offline: ${parsed.data.error}`);
+    }
+    return NextResponse.json(result);
+  },
+  { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] }
+);
 
 function sameOrigin(request: Request) {
   const origin = request.headers.get('origin');
@@ -173,19 +182,26 @@ export async function PUT(request: Request) {
       { status: 403 }
     );
   }
-  const parsed = PrintRoutingConfigSchema.safeParse(await request.json().catch(() => null));
+  const parsed = PrintRoutingRequestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success)
     return NextResponse.json({ error: 'Invalid print routing configuration.' }, { status: 400 });
   const branchError = await branchAccessError(ctx, parsed.data.branchId);
   if (branchError) return branchError;
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
   try {
-    await ctx.db.$transaction((db) => replacePrintRoutesInTransaction(db, organizationId, parsed.data));
+    const { expectedConfig, ...config } = parsed.data;
+    await ctx.db.$transaction(
+      (db) => replacePrintRoutesInTransaction(db, organizationId, config, expectedConfig),
+      expectedConfig ? { isolationLevel: 'ReadCommitted' } : undefined
+    );
   } catch (error) {
     if (!(error instanceof PrintRoutingError)) throw error;
     return NextResponse.json({ error: error.message, code: error.code }, { status: error.status });
   }
-  return NextResponse.json({ mode: 'DEVICE_BRIDGE', config: parsed.data });
+  return NextResponse.json({
+    mode: 'DEVICE_BRIDGE',
+    config: { branchId: parsed.data.branchId, routes: parsed.data.routes },
+  });
 }
 
 export async function POST(request: Request) {
@@ -193,7 +209,7 @@ export async function POST(request: Request) {
   if (!sameOrigin(request)) return NextResponse.json({ error: 'Forbidden.' }, { status: 403 });
   const ctx = await context(request);
   if (!ctx) return NextResponse.json({ error: 'Authentication required.' }, { status: 401 });
-  const parsed = PrintJobSchema.safeParse(await request.json().catch(() => null));
+  const parsed = PrintJobRequestSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return NextResponse.json({ error: 'Invalid print job.' }, { status: 400 });
   if (!(await permitted(ctx, ACTION_FOR_DOCUMENT[parsed.data.document.type]))) {
     return NextResponse.json(
@@ -204,20 +220,39 @@ export async function POST(request: Request) {
   const branchError = await branchAccessError(ctx, parsed.data.branchId);
   if (branchError) return branchError;
   const organizationId = ctx.organization?.id ?? ctx.session.user.organizationId;
+  const { expectedDestination, ...job } = parsed.data;
   let result;
   try {
-    result = await ctx.db.$transaction(async (db) => {
-      const routes = await db.restaurantPrintRoute.findMany({
-        where: { branchId: parsed.data.branchId },
-        select: { documentType: true, stationId: true, printerId: true, registeredPrinterId: true, enabled: true },
-      });
-      return new PrintBridgeService(db).enqueue(
-        organizationId,
-        { branchId: parsed.data.branchId, routes },
-        parsed.data
-      );
-    });
+    result = await ctx.db.$transaction(
+      async (db) => {
+        const routes = expectedDestination
+          ? []
+          : await db.restaurantPrintRoute.findMany({
+              where: { branchId: parsed.data.branchId },
+              select: {
+                documentType: true,
+                stationId: true,
+                printerId: true,
+                registeredPrinterId: true,
+                enabled: true,
+              },
+            });
+        return new PrintBridgeService(db).enqueue(
+          organizationId,
+          { branchId: parsed.data.branchId, routes },
+          job,
+          expectedDestination
+        );
+      },
+      expectedDestination ? { isolationLevel: 'ReadCommitted' } : undefined
+    );
   } catch (error) {
+    if (error instanceof PrintRoutingError) {
+      return NextResponse.json(
+        { error: error.message, code: error.code },
+        { status: error.status }
+      );
+    }
     if (!(error instanceof RawPrintValidationError)) throw error;
     return NextResponse.json(
       {

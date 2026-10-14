@@ -311,3 +311,26 @@ Confirmed results remain visible if the list refresh fails.
 Address/bridge edits, retirement, observed status writes and paper-width output remain
 separate work. Runtime database/concurrency, browser and physical-printer checks remain
 unrun; this source support does not establish those acceptance gates.
+
+
+### Atomic Settings routing expectations
+
+Settings sends its saved `expectedConfig` with routing updates. The server compares the complete
+normalized baseline after locking the tenant branch and rejects stale saves with
+`REFRESH_REQUIRED` (409), before replacing rows. Distinct routing scopes may arrive in a different
+order; relative order within a scope and submitted route order are preserved.
+
+Receipt tests send `expectedDestination` with both the raw printer address and an explicit
+nullable registered printer ID. New guarded jobs take the idempotency lock, lock the active
+branch, and read current routes before comparing the destination and creating a snapshot.
+Guarded HTTP transactions request READ COMMITTED through the tenant facade. A previous job is
+compared against its persisted destination and replayed unchanged, without consulting current
+routes or resending bytes. Settings treats a guard conflict as a definite rejection, retains the
+attempt identity, and requires explicit refresh and review before another attempt.
+
+Callers omitting these optional guards retain their existing behavior. Equality does not detect
+changes away and back, and a destination comparison is not a receipt-content revision check.
+The source migration already defines route-scope uniqueness with `NULLS NOT DISTINCT`; a
+divergent database with duplicate scopes may produce conservative refresh conflicts. Nested
+tenant transactions retain their outer isolation level. Runtime database/RLS/concurrency,
+visual behavior and physical printer output remain separate acceptance gates.

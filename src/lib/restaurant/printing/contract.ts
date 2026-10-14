@@ -107,6 +107,27 @@ export const PrintJobSchema = z
   .strict();
 export type PrintJob = z.infer<typeof PrintJobSchema>;
 
+export const PrintRoutingRequestSchema = PrintRoutingConfigSchema.extend({
+  expectedConfig: PrintRoutingConfigSchema.optional(),
+}).refine(
+  (request) => !request.expectedConfig || request.expectedConfig.branchId === request.branchId,
+  {
+    message: 'Expected routing must belong to the same branch.',
+    path: ['expectedConfig'],
+  }
+);
+
+export const ExpectedPrintDestinationSchema = z
+  .object({
+    printerId: z.string().trim().min(1).max(128),
+    registeredPrinterId: z.string().trim().min(1).max(128).nullable(),
+  })
+  .strict();
+export type ExpectedPrintDestination = z.infer<typeof ExpectedPrintDestinationSchema>;
+export const PrintJobRequestSchema = PrintJobSchema.extend({
+  expectedDestination: ExpectedPrintDestinationSchema.optional(),
+});
+
 export type PrintResult =
   | { status: 'PRINTED'; printerId: string; bytes: number; replayed: boolean }
   | { status: 'OFFLINE' | 'NO_PRINTER'; retryable: true; replayed: boolean };
