@@ -1103,3 +1103,6 @@
 
 # Compatible registered-printer routing web source.
 !src/lib/restaurant/printing/registered-routing.ts
+
+# Settings printer selection component.
+!src/components/restaurant/print-routing-section.tsx

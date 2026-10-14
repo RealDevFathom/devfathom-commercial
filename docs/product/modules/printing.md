@@ -262,3 +262,28 @@ including a prior registered job after the configuration changes to a raw-only r
 This is source-level routing support. Settings selection, inventory editing/retirement,
 telemetry writes, paper-width behavior, live database/RLS/concurrency/migration checks,
 and physical printer acceptance remain separate gates.
+
+
+### Selecting registered printers in Settings
+
+Settings → Printing retains manual raw-address routes and offers registered printers
+when the operator can read device inventory. Choose a printer to save its registry ID
+and exact address. Choose Manual address explicitly to return to legacy routing.
+Unavailable saved bindings remain visible and are never cleared by an inventory error.
+Routing permission and device-inventory permission remain separate.
+
+Edits retain additional station-specific/disabled routes and drafts in other branches.
+The displayed route can be removed explicitly. Saves check a fresh baseline first;
+changed or uncertain outcomes retain the draft for explicit review against freshly
+loaded routes. A successful save stays confirmed when a subsequent refresh fails.
+This browser check does not provide an atomic concurrent-update guarantee.
+
+Receipt setup tests retain an intent for the same owner, branch, registry ID and raw
+address. Retries reuse that intent; changing the registered printer or choosing manual
+routing uses a separate intent. A fresh configuration check before testing requires
+review if the saved destination changed; it cannot prevent a later concurrent change
+between that check and the request. Acceptance or bridge acknowledgment does not confirm
+paper output. Server-side money permissions still apply.
+
+Visual/browser, live database/concurrency, connectivity, telemetry, printer retirement,
+paper-width behavior and physical-printer acceptance remain separate gates.

@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from 'react';
+import { useState } from 'react';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
 import { toast } from 'sonner';
@@ -28,7 +28,6 @@ import {
   Webhook,
   ChevronDown,
   History,
-  Printer,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { PageHeader } from '@/components/ui/page-header';
@@ -46,6 +45,8 @@ import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
+import { PrintRoutingSection } from '@/components/restaurant/print-routing-section';
+export { PrintRoutingSection };
 import { useEntitlements } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -131,7 +132,7 @@ export function SettingsContent() {
       {/* Outbound webhooks (admin only, IMP-REST-03) */}
       {isAdmin && <WebhooksSection />}
 
-      {/* Process-local print bridge simulator (WHA-228). */}
+      {/* Branch routing for authenticated print bridges. */}
       {isAdmin && <PrintRoutingSection />}
 
       <Link
@@ -179,315 +180,6 @@ export function SettingsContent() {
       {/* Leave the company */}
       <ResignationSection />
     </div>
-  );
-}
-
-type PrintingBranch = {
-  id: string;
-  name: string;
-  kitchenStations: Array<{ id: string; name: string }>;
-  config: {
-    branchId: string;
-    routes: Array<{
-      documentType: 'KITCHEN_TICKET' | 'BAR_TICKET' | 'RECEIPT';
-      stationId: string | null;
-      printerId: string;
-      enabled: boolean;
-    }>;
-  };
-};
-
-export function PrintRoutingSection() {
-  const [branches, setBranches] = useState<PrintingBranch[] | null>(null);
-  const [savedBranches, setSavedBranches] = useState<PrintingBranch[]>([]);
-  const [testing, setTesting] = useState(false);
-  const testBusy = useRef(false);
-  const testRequests = useRef(new Map<string, { key: string; createdAt: string }>());
-  const [testStatus, setTestStatus] = useState('');
-  const [branchId, setBranchId] = useState('');
-  const [error, setError] = useState('');
-  const [saving, setSaving] = useState(false);
-
-  const load = async () => {
-    try {
-      const response = await fetch('/api/restaurant/print-bridge');
-      const body = (await response.json()) as { branches?: PrintingBranch[]; error?: string };
-      if (!response.ok) throw new Error(body.error || 'Print routing could not be loaded.');
-      const next = body.branches ?? [];
-      setBranches(next);
-      setSavedBranches(next);
-      setBranchId((current) => current || next[0]?.id || '');
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Print routing could not be loaded.');
-      setBranches([]);
-    }
-  };
-
-  useEffect(() => {
-    let active = true;
-    void fetch('/api/restaurant/print-bridge')
-      .then(async (response) => {
-        const body = (await response.json()) as { branches?: PrintingBranch[]; error?: string };
-        if (!response.ok) throw new Error(body.error || 'Print routing could not be loaded.');
-        return body.branches ?? [];
-      })
-      .then((next) => {
-        if (!active) return;
-        setBranches(next);
-        setSavedBranches(next);
-        setBranchId(next[0]?.id || '');
-      })
-      .catch((cause: unknown) => {
-        if (!active) return;
-        setError(cause instanceof Error ? cause.message : 'Print routing could not be loaded.');
-        setBranches([]);
-      });
-    return () => {
-      active = false;
-    };
-  }, []);
-
-  const selected = branches?.find((branch) => branch.id === branchId);
-  const saved = savedBranches.find((branch) => branch.id === branchId);
-  const savedReceiptRoute = saved?.config.routes.find(
-    (route) => route.documentType === 'RECEIPT' && route.enabled && route.stationId === null
-  );
-  const unsaved = JSON.stringify(saved?.config) !== JSON.stringify(selected?.config);
-  const testReceipt = async () => {
-    if (testBusy.current || !saved || !savedReceiptRoute || unsaved) return;
-    testBusy.current = true;
-    setTesting(true);
-    setTestStatus('');
-    const destination = `${saved.id}:${savedReceiptRoute.printerId}`;
-    let attempt = testRequests.current.get(destination);
-    if (!attempt) {
-      attempt = { key: `receipt-test:${crypto.randomUUID()}`, createdAt: new Date().toISOString() };
-      testRequests.current.set(destination, attempt);
-    }
-    try {
-      const response = await fetch('/api/restaurant/print-bridge', {
-        method: 'POST',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          branchId: saved.id,
-          stationId: null,
-          idempotencyKey: attempt.key,
-          document: {
-            type: 'RECEIPT',
-            reference: attempt.key,
-            title: 'RECEIPT PRINTER TEST',
-            createdAt: attempt.createdAt,
-            lines: [{ quantity: 1, label: 'Setup test - not a sale or payment' }],
-            footer: 'Confirm this test at the selected printer. No financial transaction.',
-          },
-        }),
-      });
-      const body = (await response.json()) as {
-        error?: string;
-        result?: { status: string; printerId?: string };
-      };
-      if (!response.ok) throw new Error(body.error ?? 'Receipt test could not be queued.');
-      setTestStatus(
-        `${saved.name} · ${body.result?.printerId ?? savedReceiptRoute.printerId}: ${body.result?.status === 'PRINTED' ? 'Bridge acknowledged delivery' : 'Test request accepted; delivery may still be pending or unavailable'}. Paper output is not confirmed. Repeating this test reuses the same request.`
-      );
-    } catch (cause) {
-      setTestStatus(
-        `${cause instanceof Error ? cause.message : 'Receipt test failed.'} Delivery may be uncertain. Retry uses the same request.`
-      );
-    } finally {
-      testBusy.current = false;
-      setTesting(false);
-    }
-  };
-  const routeFor = (type: PrintingBranch['config']['routes'][number]['documentType']) =>
-    selected?.config.routes.find((route) => route.documentType === type) ?? {
-      documentType: type,
-      stationId: null,
-      printerId: '',
-      enabled: false,
-    };
-  const updateRoute = (
-    type: PrintingBranch['config']['routes'][number]['documentType'],
-    patch: Partial<PrintingBranch['config']['routes'][number]>
-  ) => {
-    setBranches(
-      (current) =>
-        current?.map((branch) => {
-          if (branch.id !== branchId) return branch;
-          const index = branch.config.routes.findIndex((route) => route.documentType === type);
-          const routes = [...branch.config.routes];
-          if (index === -1) routes.push({ ...routeFor(type), ...patch });
-          else routes[index] = { ...routes[index], ...patch };
-          return {
-            ...branch,
-            config: { ...branch.config, routes },
-          };
-        }) ?? null
-    );
-  };
-  const save = async () => {
-    if (!selected) return;
-    setSaving(true);
-    setError('');
-    try {
-      const response = await fetch('/api/restaurant/print-bridge', {
-        method: 'PUT',
-        headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({
-          ...selected.config,
-          routes: selected.config.routes.filter((route) => route.printerId.trim()),
-        }),
-      });
-      const body = (await response.json()) as { error?: string };
-      if (!response.ok) throw new Error(body.error || 'Print routing could not be saved.');
-      toast.success('Print routes saved.');
-      await load();
-    } catch (cause) {
-      setError(cause instanceof Error ? cause.message : 'Print routing could not be saved.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Card className="border-border/60">
-      <CardHeader className="pb-3">
-        <CardTitle className="flex items-center gap-2 text-[15px] font-semibold text-foreground">
-          <span className="flex h-6 w-6 items-center justify-center rounded-md bg-warning/10">
-            <Printer className="h-3.5 w-3.5 text-warning" />
-          </span>
-          Printing
-        </CardTitle>
-        <p className="mt-1 text-xs text-muted-foreground">
-          A kitchen printer (KOT) prints paper tickets; a kitchen display (KDS) shows the same
-          station queue on screen, and each station may use either, both, or neither.
-        </p>
-      </CardHeader>
-      <CardContent className="space-y-4">
-        {error && (
-          <p
-            role="alert"
-            className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
-          >
-            {error}
-          </p>
-        )}
-        {branches === null ? (
-          <p aria-live="polite" className="text-sm text-muted-foreground">
-            Loading print routes…
-          </p>
-        ) : branches.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            No active restaurant branches are available.
-          </p>
-        ) : (
-          <>
-            <label className="block text-xs font-medium text-foreground">
-              Branch
-              <select
-                value={branchId}
-                onChange={(event) => {
-                  setBranchId(event.target.value);
-                  setTestStatus('');
-                }}
-                disabled={testing || saving}
-                className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                {branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
-              </select>
-            </label>
-            {(['KITCHEN_TICKET', 'BAR_TICKET', 'RECEIPT'] as const).map((type) => {
-              const route = routeFor(type);
-              const label =
-                type === 'KITCHEN_TICKET'
-                  ? 'Kitchen printer (KOT)'
-                  : type === 'BAR_TICKET'
-                    ? 'Bar tickets'
-                    : 'Receipts';
-              return (
-                <fieldset key={type} className="rounded-2xl border border-border/60 p-4">
-                  <legend className="px-1 text-sm font-semibold text-foreground">{label}</legend>
-                  <div className="grid gap-3 sm:grid-cols-[1fr_1fr_auto] sm:items-end">
-                    <label className="text-xs font-medium text-foreground">
-                      Station
-                      <select
-                        aria-label={`${label} station`}
-                        value={route.stationId ?? ''}
-                        onChange={(event) =>
-                          updateRoute(type, { stationId: event.target.value || null })
-                        }
-                        className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                      >
-                        <option value="">Any station</option>
-                        {selected?.kitchenStations.map((station) => (
-                          <option key={station.id} value={station.id}>
-                            {station.name}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <label className="text-xs font-medium text-foreground">
-                      Printer ID
-                      <Input
-                        aria-label={`${label} printer ID`}
-                        value={route.printerId}
-                        onChange={(event) => updateRoute(type, { printerId: event.target.value })}
-                        placeholder="tcp://192.168.1.50:9100"
-                        className="mt-1 min-h-11"
-                      />
-                    </label>
-                    <label className="flex min-h-11 items-center gap-2 text-xs font-medium text-foreground">
-                      <Switch
-                        checked={route.enabled}
-                        onCheckedChange={(enabled) => updateRoute(type, { enabled })}
-                        aria-label={`Enable ${label.toLowerCase()}`}
-                      />{' '}
-                      Enabled
-                    </label>
-                  </div>
-                </fieldset>
-              );
-            })}
-            <p className="text-sm text-text-muted">
-              POS receipts use the enabled Receipts route with Any station for the selected branch.
-              Printer IDs must match an explicitly configured destination on the bridge host. Save
-              changes before testing.
-            </p>
-            <p className="text-xs text-text-muted">
-              Use a supported modern Windows or macOS host. Windows 98, Vista, and 7 cannot run the
-              modern browser/Node stack; use a supported host and a printer driver or connection
-              validated for that host.
-            </p>
-            <div className="flex flex-wrap justify-end gap-2">
-              <Button
-                variant="outline"
-                className="min-h-11"
-                onClick={() => void testReceipt()}
-                disabled={testing || saving || unsaved || !savedReceiptRoute}
-              >
-                {testing ? 'Requesting test…' : 'Test receipt printer'}
-              </Button>
-              <Button
-                className="min-h-11"
-                onClick={() => void save()}
-                disabled={saving || testing || !selected}
-              >
-                {saving && <Loader2 className="h-4 w-4 animate-spin" />} Save print routes
-              </Button>
-            </div>
-            {testStatus ? (
-              <p role="status" className="break-words text-sm text-text-body">
-                {testStatus}
-              </p>
-            ) : null}
-          </>
-        )}
-      </CardContent>
-    </Card>
   );
 }
 
