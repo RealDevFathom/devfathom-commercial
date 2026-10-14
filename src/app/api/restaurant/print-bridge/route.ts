@@ -48,7 +48,7 @@ const bridgeClaim = withDeviceAuth(async (ctx, request) => {
     await new Promise((resolve) => setTimeout(resolve, 500));
   } while (true);
   return new NextResponse(null, { status: 204 });
-});
+}, { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] });
 
 const bridgeAck = withDeviceAuth(async (ctx, request) => {
   const parsed = bridgeAckBody.safeParse(await request.json().catch(() => null));
@@ -69,7 +69,7 @@ const bridgeAck = withDeviceAuth(async (ctx, request) => {
     console.warn(`Print bridge reported job ${parsed.data.jobId} offline: ${parsed.data.error}`);
   }
   return NextResponse.json(result);
-});
+}, { allowedDeviceKinds: ['POS', 'KDS', 'PRINT_BRIDGE'] });
 
 function sameOrigin(request: Request) {
   const origin = request.headers.get('origin');

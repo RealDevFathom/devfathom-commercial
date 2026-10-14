@@ -10,6 +10,7 @@ import {
 } from '@/lib/entitlement-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { enrollDevice } from './devices';
+import { issuePrintBridgeEnrollmentCode } from './print-bridge-enrollment';
 import {
   createStaffProfile,
   setStaffProfileStatus,
@@ -79,7 +80,7 @@ function limitReached(label: string, limit: number): never {
 export type CommercialDeviceInput = {
   branchId: string;
   name: string;
-  kind?: 'POS' | 'KDS';
+  kind?: 'POS' | 'KDS' | 'PRINT_BRIDGE';
   stationId?: string | null;
 };
 
@@ -170,5 +171,21 @@ export async function setStaffProfileStatusWithinCommercialLimit(
     });
     if (current?.status !== 'ACTIVE') await assertOperatorCapacity(scopedTx, operatorsMax);
     return setStaffProfileStatus(scopedTx, id, status);
+  });
+}
+
+/** New bridges consume the registered-device allowance, never the POS-terminal allowance. */
+export async function enrollPrintBridgeWithinCommercialLimits(
+  db: ScopedDb, limits: Readonly<Record<string, number>>, input: { branchId: string; name: string }
+) {
+  const maximum = configuredLimit(limits, POS_REGISTERED_DEVICES_LIMIT);
+  return db.$transaction(async (tx) => {
+    await lockOrganization(tx);
+    const count = await tx.restaurantRegisteredDevice.count({ where: { status: 'ACTIVE' } });
+    if (count >= maximum) limitReached('registered device', maximum);
+    const { device } = await enrollDevice(transactionScopedDb(db, tx), { ...input, kind: 'PRINT_BRIDGE', stationId: null });
+    // Use the actual transaction delegate, not the outer client's proxy fallback.
+    const enrollment = await issuePrintBridgeEnrollmentCode(tx, device.id);
+    return { device, enrollment };
   });
 }

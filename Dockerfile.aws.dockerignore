@@ -1090,3 +1090,6 @@
 !src/app/(app)/hotel/settings/property/page.tsx
 !src/components/hotel/extras-catalog.tsx
 !src/components/hotel/property-settings-form.tsx
+
+!src/lib/restaurant/print-bridge-enrollment.ts
+!src/app/api/restaurant/print-bridge/enroll/route.ts

@@ -377,7 +377,7 @@ export function withDeviceAuth<T extends unknown[]>(
     request: Request,
     ...args: T
   ) => Promise<Response> | Response,
-  options: TerminalRouteOptions = {}
+  options: TerminalRouteOptions & { allowedDeviceKinds?: readonly RestaurantRegisteredDevice['kind'][] } = {}
 ) {
   return async (request: Request, ...args: T): Promise<Response> => {
     const auth = await authenticateDevice(request);
@@ -391,6 +391,9 @@ export function withDeviceAuth<T extends unknown[]>(
         });
         if (!device || !isDeviceUsable(device)) {
           return forbidden('This device has been revoked.');
+        }
+        if (!(options.allowedDeviceKinds ?? ['POS', 'KDS']).includes(device.kind)) {
+          return forbidden('This device cannot use this terminal endpoint.');
         }
         if (!(await demoDeviceActorMatches(db, auth.demoActor, device))) {
           return forbidden('Demo device does not belong to this persona.');
@@ -455,6 +458,8 @@ export function withTerminalAuth<T extends unknown[]>(
           resolveSessionByToken(db, sessionToken),
         ]);
         if (!device) return forbidden('This device has been revoked.');
+        if (device.kind !== 'POS' && device.kind !== 'KDS')
+          return forbidden('This device cannot use a terminal session.');
         if (!session)
           return unauthorized('Terminal session is no longer valid; re-establish the session.');
         if (

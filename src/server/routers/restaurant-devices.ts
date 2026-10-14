@@ -19,6 +19,7 @@ import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
 import {
   CommercialLimitError,
   enrollDeviceWithinCommercialLimits,
+  enrollPrintBridgeWithinCommercialLimits,
 } from '@/lib/restaurant/commercial-limits';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -46,6 +47,26 @@ const manageDevicesProcedure = capabilityProcedure('devices:manage');
  * never persisted or echoed again; no procedure ever returns `deviceSecretHash`.
  */
 export const restaurantDevicesRouter = router({
+  /** Issue a one-use enrollment code only while creating a new bridge. */
+  initiatePrintBridgeEnrollment: manageDevicesProcedure
+    .input(z.object({ branchId: z.string().min(1), name: z.string().trim().min(1).max(120) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveCapabilityBranchAuthorization(ctx.db, ctx.session!.user, 'devices:manage');
+      assertAuthorizedBranch(authorization, input.branchId);
+      const branch = await ctx.db.restaurantBranch.findFirst({ where: { id: input.branchId, active: true }, select: { id: true } });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Active branch not found.' });
+      try {
+        const { device, enrollment } = await enrollPrintBridgeWithinCommercialLimits(ctx.db, ctx.entitlements.limits, input);
+        annotateAudit(ctx, { targetType: 'RestaurantRegisteredDevice', targetId: device.id, targetLabel: device.name,
+          description: `Enrolled print bridge "${device.name}"`, metadata: { branchId: device.branchId, kind: device.kind } });
+        return { device: { id: device.id, name: device.name, branchId: device.branchId, kind: device.kind },
+          enrollmentCode: enrollment.code, expiresAt: enrollment.expiresAt };
+      } catch (error) {
+        if (error instanceof CommercialLimitError) throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        throw error;
+      }
+    }),
+
   /** List registered devices with derived operational health (no secret material). */
   list: auditedProtectedProcedure.query(async ({ ctx }) => {
     let authorization = await resolveDemoDirectoryScope(ctx, 'devices', demoDirectoryPolicy);
