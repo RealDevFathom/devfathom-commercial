@@ -296,3 +296,12 @@ cap reservation ledger <------------------------------------+
 ```
 
 Implementation ordering follows the arrows. Offline enablement depends on the same canonical evaluator running in client-safe form plus server parity fixtures; capped promotion enablement additionally depends on the reservation ledger and concurrency battery.
+
+
+## Bounded draft bundle authoring (000w)
+
+The owner/admin Offers editor supports 1–20 ordered `BUNDLE_PRICE` components. Each component has a positive integral quantity and product alternatives, category alternatives, or both. A component matches either alternative set. Rows can be added, removed, and moved; their order matters to the existing greedy evaluator. The editor preserves saved selection order and duplicate membership on unchanged and name-only saves. Changing a target type clears only incompatible targeting selections. Temporary benefit-type changes retain the in-progress bundle rows; saving another benefit type explicitly removes bundle components.
+
+Editing remains limited to the latest automatic draft, with the displayed version ID, rule hash, and update time checked again by the transactional write. Component variants, malformed or noncontiguous ordinals, empty alternatives, oversized components, and stored benefit/name/currency values the editor cannot preserve remain read-only. Existing approval, publication, advanced activation, and global-cap restrictions continue to apply. Picker references are checked in the current workspace before any write; components are replaced within the guarded version update and an audit event records the resulting rule hash.
+
+This increment does not publish or activate offers in checkout. Source-level tests exercise authoring, optimistic concurrency, synthetic evaluation, and snapshot replay. They do not establish live database behavior, visual acceptance, or POS rollout. The broader publication and operational contracts elsewhere in this specification remain separate integration work.

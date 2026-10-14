@@ -85,33 +85,51 @@ function decimal(value: string | null) {
 }
 
 function validateRuleShape(rule: OfferRuleInput) {
-  const invalid = (message: string): never => { throw new TRPCError({ code: 'BAD_REQUEST', message }); };
-  try { new Intl.DateTimeFormat('en', { timeZone: rule.timezone }); }
-  catch { invalid('Choose a valid timezone.'); }
-  if ((rule.startMinute === null) !== (rule.endMinute === null)) invalid('Provide both daily window endpoints.');
-  if ((rule.targetKind === 'ITEM' && rule.targetCategoryIds.length) ||
-      (rule.targetKind === 'CATEGORY' && (rule.targetProductIds.length || rule.targetVariantIds.length)) ||
-      (rule.targetKind === 'ORDER' && (rule.targetProductIds.length || rule.targetVariantIds.length || rule.targetCategoryIds.length))) {
+  const invalid = (message: string): never => {
+    throw new TRPCError({ code: 'BAD_REQUEST', message });
+  };
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: rule.timezone });
+  } catch {
+    invalid('Choose a valid timezone.');
+  }
+  if ((rule.startMinute === null) !== (rule.endMinute === null))
+    invalid('Provide both daily window endpoints.');
+  if (
+    (rule.targetKind === 'ITEM' && rule.targetCategoryIds.length) ||
+    (rule.targetKind === 'CATEGORY' &&
+      (rule.targetProductIds.length || rule.targetVariantIds.length)) ||
+    (rule.targetKind === 'ORDER' &&
+      (rule.targetProductIds.length ||
+        rule.targetVariantIds.length ||
+        rule.targetCategoryIds.length))
+  ) {
     invalid('Selected records must match the target type.');
   }
   const percent = rule.benefitKind.includes('PERCENT');
-  const amount = ['AMOUNT_OFF', 'FIXED_PRICE', 'BUY_X_GET_Y_AMOUNT', 'BUNDLE_PRICE'].includes(rule.benefitKind);
+  const amount = ['AMOUNT_OFF', 'FIXED_PRICE', 'BUY_X_GET_Y_AMOUNT', 'BUNDLE_PRICE'].includes(
+    rule.benefitKind
+  );
   const buyGet = rule.benefitKind.startsWith('BUY_X_GET_Y');
-  if ((!percent && rule.benefitBasisPoints !== null) || (!amount && rule.benefitAmount !== null) ||
-      (!buyGet && (rule.buyQuantity !== null || rule.getQuantity !== null))) {
+  if (
+    (!percent && rule.benefitBasisPoints !== null) ||
+    (!amount && rule.benefitAmount !== null) ||
+    (!buyGet && (rule.buyQuantity !== null || rule.getQuantity !== null))
+  ) {
     invalid('Benefit operands must match the benefit type.');
   }
-  if ((rule.benefitKind !== 'BUNDLE_PRICE' && rule.components.length) ||
-      rule.components.some((component) => !component.productIds.length && !component.categoryIds.length)) {
+  if (
+    (rule.benefitKind !== 'BUNDLE_PRICE' && rule.components.length) ||
+    rule.components.some(
+      (component) => !component.productIds.length && !component.categoryIds.length
+    )
+  ) {
     invalid('Bundle components must contain product or category records.');
   }
 
   if (rule.effectiveTo && rule.effectiveTo <= rule.effectiveFrom)
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'End time must be after start time.' });
-  if (
-    rule.targetKind === 'ITEM' &&
-    rule.targetProductIds.length === 0
-  )
+  if (rule.targetKind === 'ITEM' && rule.targetProductIds.length === 0)
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose at least one item.' });
   if (rule.targetKind === 'CATEGORY' && rule.targetCategoryIds.length === 0)
     throw new TRPCError({ code: 'BAD_REQUEST', message: 'Choose at least one category.' });
@@ -218,26 +236,105 @@ function buildRule(params: {
 
 type Draft = Prisma.RestaurantPromotionVersionGetPayload<{ include: { components: true } }>;
 
-function editRestriction(draft: Draft | undefined): string | null {
+const editableOperandsSchema = offerRuleSchema.pick({
+  benefitKind: true,
+  benefitBasisPoints: true,
+  benefitAmount: true,
+  buyQuantity: true,
+  getQuantity: true,
+});
+
+// Do not silently repair a stored rule when an operator edits another field.
+function hasRepresentableStoredValues(draft: Draft, name: string) {
+  const parsedName = createOfferSchema.shape.name.safeParse(name);
+  const parsedCurrency = offerRuleSchema.shape.currency.safeParse(draft.currency);
+  if (
+    !parsedName.success ||
+    parsedName.data !== name ||
+    /[\r\n]/.test(name) ||
+    !parsedCurrency.success ||
+    parsedCurrency.data !== draft.currency
+  )
+    return false;
+  const parsed = editableOperandsSchema.safeParse({
+    benefitKind: draft.benefitKind,
+    benefitBasisPoints: draft.benefitBasisPoints,
+    benefitAmount: draft.benefitAmount?.toString() ?? null,
+    buyQuantity: draft.buyQuantity,
+    getQuantity: draft.getQuantity,
+  });
+  if (!parsed.success) return false;
+  const value = parsed.data;
+  const percent = value.benefitKind.includes('PERCENT');
+  const amount = ['AMOUNT_OFF', 'FIXED_PRICE', 'BUY_X_GET_Y_AMOUNT', 'BUNDLE_PRICE'].includes(
+    value.benefitKind
+  );
+  const buyGet = value.benefitKind.startsWith('BUY_X_GET_Y');
+  return (
+    (percent ? value.benefitBasisPoints !== null : value.benefitBasisPoints === null) &&
+    (amount ? value.benefitAmount !== null : value.benefitAmount === null) &&
+    (buyGet
+      ? value.buyQuantity !== null && value.getQuantity !== null
+      : value.buyQuantity === null && value.getQuantity === null)
+  );
+}
+
+function editRestriction(draft: Draft | undefined, name: string): string | null {
   if (!draft || draft.status !== 'DRAFT') return 'Only the latest draft can be edited.';
-  if (draft.activationMode !== 'AUTOMATIC' || draft.requiresCoAuthorization ||
-      [draft.couponCodeHash, draft.requiredPermission, draft.approvedByStaffId,
-       draft.approvalReference, draft.customerSegmentRef, draft.globalCap,
-       draft.perCustomerCap, draft.budgetAmount, draft.publishedAt,
-       draft.supersededAt].some((value) => value !== null)) {
+  if (
+    draft.activationMode !== 'AUTOMATIC' ||
+    draft.requiresCoAuthorization ||
+    [
+      draft.couponCodeHash,
+      draft.requiredPermission,
+      draft.approvedByStaffId,
+      draft.approvalReference,
+      draft.customerSegmentRef,
+      draft.globalCap,
+      draft.perCustomerCap,
+      draft.budgetAmount,
+      draft.publishedAt,
+      draft.supersededAt,
+    ].some((value) => value !== null)
+  ) {
     return 'This offer has advanced rules or approval evidence and is read-only here.';
   }
-  if ((draft.targetKind === 'ORDER' && (draft.targetProductIds.length || draft.targetVariantIds.length || draft.targetCategoryIds.length)) ||
-      (draft.targetKind === 'ITEM' && draft.targetCategoryIds.length) ||
-      (draft.targetKind === 'CATEGORY' && (draft.targetProductIds.length || draft.targetVariantIds.length))) {
+  if (
+    (draft.targetKind === 'ORDER' &&
+      (draft.targetProductIds.length ||
+        draft.targetVariantIds.length ||
+        draft.targetCategoryIds.length)) ||
+    (draft.targetKind === 'ITEM' &&
+      (!draft.targetProductIds.length || draft.targetCategoryIds.length)) ||
+    (draft.targetKind === 'CATEGORY' &&
+      (!draft.targetCategoryIds.length ||
+        draft.targetProductIds.length ||
+        draft.targetVariantIds.length))
+  ) {
     return 'This offer has additional targeting rules and is read-only here.';
   }
   const components = draft.components;
-  if (draft.benefitKind === 'BUNDLE_PRICE' ?
-      components.length !== 1 || components[0].ordinal !== 0 ||
-      !components[0].productIds.length || components[0].categoryIds.length > 0 ||
-      components[0].variantIds.length > 0 : components.length > 0) {
+  if (
+    draft.benefitKind === 'BUNDLE_PRICE'
+      ? components.length < 1 ||
+        components.length > 20 ||
+        components.some(
+          (component, index) =>
+            component.ordinal !== index ||
+            component.variantIds.length > 0 ||
+            (!component.productIds.length && !component.categoryIds.length) ||
+            !componentSchema.safeParse({
+              productIds: component.productIds,
+              categoryIds: component.categoryIds,
+              quantity: component.quantity,
+            }).success
+        )
+      : components.length > 0
+  ) {
     return 'This bundle uses advanced components and is read-only here.';
+  }
+  if (!hasRepresentableStoredValues(draft, name)) {
+    return 'This offer has stored values this editor cannot preserve and is read-only here.';
   }
   return null;
 }
@@ -313,7 +410,7 @@ export const restaurantPromotionsRouter = router({
 
     return promotions.map((promotion) => ({
       ...promotion,
-      editRestriction: editRestriction(promotion.versions[0]),
+      editRestriction: editRestriction(promotion.versions[0], promotion.name),
       latestVersion: promotion.versions[0]
         ? {
             ...promotion.versions[0],
@@ -429,17 +526,27 @@ export const restaurantPromotionsRouter = router({
       const promotion = await ctx.db.restaurantPromotion.findFirst({
         where: { id: input.promotionId, status: 'ACTIVE' },
         include: {
-          versions: { orderBy: { versionNumber: 'desc' }, take: 1, include: { components: { orderBy: { ordinal: 'asc' } } } },
+          versions: {
+            orderBy: { versionNumber: 'desc' },
+            take: 1,
+            include: { components: { orderBy: { ordinal: 'asc' } } },
+          },
         },
       });
       const draft = promotion?.versions[0];
       if (!promotion || !draft)
         throw new TRPCError({ code: 'NOT_FOUND', message: 'Editable offer draft not found.' });
-      if (draft.id !== input.expectedVersionId || draft.ruleHash !== input.expectedRuleHash ||
-          draft.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()) {
-        throw new TRPCError({ code: 'CONFLICT', message: 'The offer changed. Reload before editing.' });
+      if (
+        draft.id !== input.expectedVersionId ||
+        draft.ruleHash !== input.expectedRuleHash ||
+        draft.updatedAt.getTime() !== input.expectedUpdatedAt.getTime()
+      ) {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'The offer changed. Reload before editing.',
+        });
       }
-      const restriction = editRestriction(draft);
+      const restriction = editRestriction(draft, promotion.name);
       if (restriction) throw new TRPCError({ code: 'CONFLICT', message: restriction });
       const rule = buildRule({
         promotionId: promotion.id,
@@ -450,27 +557,37 @@ export const restaurantPromotionsRouter = router({
       });
       return ctx.db.$transaction(async (tx) => {
         // A concurrent publication or edit must not mutate a previously read draft.
-        const version = await tx.restaurantPromotionVersion.update({
-          where: { id: draft.id, status: 'DRAFT', ruleHash: draft.ruleHash,
-            updatedAt: draft.updatedAt, promotion: { status: 'ACTIVE' } },
-          data: {
-            ...versionData(rule),
-            components: {
-              deleteMany: {},
-              create: rule.components.map((component) => ({
-                ...component,
-                productIds: [...component.productIds],
-                categoryIds: [...component.categoryIds],
-                variantIds: [],
-              })),
+        const version = await tx.restaurantPromotionVersion
+          .update({
+            where: {
+              id: draft.id,
+              status: 'DRAFT',
+              ruleHash: draft.ruleHash,
+              updatedAt: draft.updatedAt,
+              promotion: { status: 'ACTIVE' },
             },
-          },
-        }).catch((error: unknown) => {
-          if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
-            throw new TRPCError({ code: 'CONFLICT', message: 'The offer changed. Reload before editing.' });
-          }
-          throw error;
-        });
+            data: {
+              ...versionData(rule),
+              components: {
+                deleteMany: {},
+                create: rule.components.map((component) => ({
+                  ...component,
+                  productIds: [...component.productIds],
+                  categoryIds: [...component.categoryIds],
+                  variantIds: [],
+                })),
+              },
+            },
+          })
+          .catch((error: unknown) => {
+            if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2025') {
+              throw new TRPCError({
+                code: 'CONFLICT',
+                message: 'The offer changed. Reload before editing.',
+              });
+            }
+            throw error;
+          });
         await tx.restaurantPromotion.update({
           where: { id: promotion.id, status: 'ACTIVE' },
           data: { name: input.name },

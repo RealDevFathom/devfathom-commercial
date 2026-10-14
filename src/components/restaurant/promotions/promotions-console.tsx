@@ -2,7 +2,7 @@
 
 import type { inferRouterOutputs } from '@trpc/server';
 import { Plus, RefreshCw } from 'lucide-react';
-import { useState, type FormEvent, type ReactNode } from 'react';
+import { useRef, useState, type ChangeEvent, type FormEvent, type ReactNode } from 'react';
 import { toast } from 'sonner';
 
 import { Button } from '@/components/ui/button';
@@ -75,8 +75,26 @@ function nullableNumber(data: FormData, name: string) {
   return raw ? Number(raw) : null;
 }
 
-function ids(data: FormData, name: string) {
-  return data.getAll(name).map(String).filter(Boolean);
+type SelectionName =
+  | 'targetProductIds'
+  | 'targetVariantIds'
+  | 'targetCategoryIds'
+  | 'allowedBranchIds'
+  | 'allowedChannels';
+type BundleRow = { key: number; productIds: string[]; categoryIds: string[]; quantity: string };
+
+function selectedIds(select: HTMLSelectElement) {
+  return Array.from(select.selectedOptions, (option) => option.value);
+}
+
+// Keep stored order and multiplicity for surviving selections; append only new IDs.
+function orderedSelection(previous: string[], selected: string[]) {
+  const membership = new Set(selected);
+  const existing = new Set(previous);
+  return [
+    ...previous.filter((id) => membership.has(id)),
+    ...selected.filter((id) => !existing.has(id)),
+  ];
 }
 
 function dateInput(date: Date | string | null | undefined) {
@@ -96,11 +114,17 @@ function unavailableSelections(offer: Offer, options: PickerOptions | undefined)
   const variants = new Set(options.products.flatMap((item) => item.variants.map((v) => v.id)));
   const categories = new Set(options.categories.map((item) => item.id));
   const branches = new Set(options.branches.map((item) => item.id));
-  return version.targetProductIds.some((id) => !products.has(id)) ||
+  return (
+    version.targetProductIds.some((id) => !products.has(id)) ||
     version.targetVariantIds.some((id) => !variants.has(id)) ||
     version.targetCategoryIds.some((id) => !categories.has(id)) ||
     version.allowedBranchIds.some((id) => !branches.has(id)) ||
-    version.components.some((component) => component.productIds.some((id) => !products.has(id)));
+    version.components.some(
+      (component) =>
+        component.productIds.some((id) => !products.has(id)) ||
+        component.categoryIds.some((id) => !categories.has(id))
+    )
+  );
 }
 
 function offerBenefit(offer: Offer) {
@@ -161,10 +185,77 @@ function OfferEditor({
     version?.benefitKind ?? 'PERCENT_OFF'
   );
   const [targetKind, setTargetKind] = useState(version?.targetKind ?? 'ORDER');
+  const [selections, setSelections] = useState<Record<SelectionName, string[]>>(() => ({
+    targetProductIds: [...(version?.targetProductIds ?? [])],
+    targetVariantIds: [...(version?.targetVariantIds ?? [])],
+    targetCategoryIds: [...(version?.targetCategoryIds ?? [])],
+    allowedBranchIds: [...(version?.allowedBranchIds ?? [])],
+    allowedChannels: [...(version?.allowedChannels ?? [])],
+  }));
+  const [bundleRows, setBundleRows] = useState<BundleRow[]>(() =>
+    (version?.components.length
+      ? version.components
+      : [{ productIds: [], categoryIds: [], quantity: 1 }]
+    ).map((component, key) => ({
+      key,
+      productIds: [...component.productIds],
+      categoryIds: [...component.categoryIds],
+      quantity: String(component.quantity),
+    }))
+  );
+  const nextRowKey = useRef(bundleRows.length);
   const [formError, setFormError] = useState('');
   const create = trpc.restaurantPromotions.createOffer.useMutation();
   const edit = trpc.restaurantPromotions.editOffer.useMutation();
   const pending = create.isPending || edit.isPending;
+  const selectionProps = (name: SelectionName) => ({
+    value: selections[name],
+    onChange: (event: ChangeEvent<HTMLSelectElement>) => {
+      const selected = selectedIds(event.currentTarget);
+      setSelections((previous) => ({
+        ...previous,
+        [name]: orderedSelection(previous[name], selected),
+      }));
+    },
+  });
+  const changeTarget = (next: typeof targetKind) => {
+    if (next === targetKind) return;
+    setTargetKind(next);
+    setSelections((previous) => ({
+      ...previous,
+      targetProductIds: next === 'ITEM' ? previous.targetProductIds : [],
+      targetVariantIds: next === 'ITEM' ? previous.targetVariantIds : [],
+      targetCategoryIds: next === 'CATEGORY' ? previous.targetCategoryIds : [],
+    }));
+  };
+  const selectAlternatives = (
+    key: number,
+    field: 'productIds' | 'categoryIds',
+    selected: string[]
+  ) =>
+    setBundleRows((rows) =>
+      rows.map((row) =>
+        row.key === key ? { ...row, [field]: orderedSelection(row[field], selected) } : row
+      )
+    );
+  const addRow = () => {
+    const row: BundleRow = {
+      key: nextRowKey.current++,
+      productIds: [],
+      categoryIds: [],
+      quantity: '1',
+    };
+    setBundleRows((rows) => (rows.length < 20 ? [...rows, row] : rows));
+  };
+  const moveRow = (key: number, direction: -1 | 1) =>
+    setBundleRows((rows) => {
+      const from = rows.findIndex((row) => row.key === key);
+      const to = from + direction;
+      if (from < 0 || to < 0 || to >= rows.length) return rows;
+      const next = [...rows];
+      [next[from], next[to]] = [next[to], next[from]];
+      return next;
+    });
   const amountBenefit = [
     'AMOUNT_OFF',
     'FIXED_PRICE',
@@ -175,23 +266,47 @@ function OfferEditor({
 
   const submit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
+    if (pending) return;
     const data = new FormData(event.currentTarget);
-    const bundleProductIds = ids(data, 'bundleProductIds');
+    const components = bundleRows.map((row) => ({
+      productIds: [...row.productIds],
+      categoryIds: [...row.categoryIds],
+      quantity: Number(row.quantity),
+    }));
+    if (
+      benefitKind === 'BUNDLE_PRICE' &&
+      (components.length < 1 ||
+        components.length > 20 ||
+        components.some(
+          (component) =>
+            !Number.isInteger(component.quantity) ||
+            component.quantity <= 0 ||
+            component.productIds.length + component.categoryIds.length === 0
+        ))
+    ) {
+      setFormError(
+        'Add 1–20 bundle components. Each needs product or category alternatives and a positive whole-number quantity.'
+      );
+      return;
+    }
+    setFormError('');
     const rule = {
       effectiveFrom: dateValue(value(data, 'effectiveFrom'), version?.effectiveFrom),
-      effectiveTo: value(data, 'effectiveTo') ? dateValue(value(data, 'effectiveTo'), version?.effectiveTo) : null,
+      effectiveTo: value(data, 'effectiveTo')
+        ? dateValue(value(data, 'effectiveTo'), version?.effectiveTo)
+        : null,
       timezone: value(data, 'timezone'),
       dayMask: version?.dayMask ?? 127,
       startMinute: version?.startMinute ?? null,
       endMinute: version?.endMinute ?? null,
       targetKind,
-      targetProductIds: ids(data, 'targetProductIds'),
-      targetVariantIds: ids(data, 'targetVariantIds'),
-      targetCategoryIds: ids(data, 'targetCategoryIds'),
+      targetProductIds: selections.targetProductIds,
+      targetVariantIds: selections.targetVariantIds,
+      targetCategoryIds: selections.targetCategoryIds,
       includeDescendants: version?.includeDescendants ?? false,
       componentTargeting: version?.componentTargeting ?? false,
-      allowedBranchIds: ids(data, 'allowedBranchIds'),
-      allowedChannels: ids(data, 'allowedChannels') as Array<'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'>,
+      allowedBranchIds: selections.allowedBranchIds,
+      allowedChannels: selections.allowedChannels as Array<'DINE_IN' | 'TAKEAWAY' | 'DELIVERY'>,
       benefitKind,
       benefitBasisPoints: benefitKind.includes('PERCENT')
         ? Math.round(Number(value(data, 'percentage')) * 100)
@@ -204,16 +319,7 @@ function OfferEditor({
       minimumQuantity: nullableNumber(data, 'minimumQuantity'),
       minimumAmount: value(data, 'minimumAmount') || null,
       maxBenefitAmount: version?.maxBenefitAmount ?? null,
-      components:
-        benefitKind === 'BUNDLE_PRICE' && bundleProductIds.length
-          ? [
-              {
-                productIds: bundleProductIds,
-                categoryIds: [],
-                quantity: Number(value(data, 'bundleQuantity') || 1),
-              },
-            ]
-          : [],
+      components: benefitKind === 'BUNDLE_PRICE' ? components : [],
       priority: version?.priority ?? 0,
       stackingGroup: version?.stackingGroup ?? '',
       stackingMode: version?.stackingMode ?? 'STACKABLE',
@@ -229,9 +335,14 @@ function OfferEditor({
     const fail = (error: { message: string }) => setFormError(error.message);
     if (editor.offer)
       edit.mutate(
-        { promotionId: editor.offer.id, expectedVersionId: version!.id,
-          expectedRuleHash: version!.ruleHash, expectedUpdatedAt: new Date(version!.updatedAt),
-          name: value(data, 'name'), rule },
+        {
+          promotionId: editor.offer.id,
+          expectedVersionId: version!.id,
+          expectedRuleHash: version!.ruleHash,
+          expectedUpdatedAt: new Date(version!.updatedAt),
+          name: value(data, 'name'),
+          rule,
+        },
         { onSuccess: done, onError: fail }
       );
     else
@@ -251,318 +362,410 @@ function OfferEditor({
             pickers.
           </DialogDescription>
         </DialogHeader>
-        <form onSubmit={submit} className="space-y-6">
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Offer name">
-              <Input
-                className="h-11"
-                name="name"
-                required
-                defaultValue={editor.offer?.name ?? ''}
-              />
-            </Field>
-            <Field label="Offer code" detail="Stable after creation.">
-              <Input
-                className="h-11 uppercase"
-                name="code"
-                required
-                disabled={Boolean(editor.offer)}
-                defaultValue={editor.offer?.code ?? ''}
-                pattern="[A-Za-z0-9_-]+"
-              />
-            </Field>
-            <Field label="Starts (UTC)">
-              <Input
-                className="h-11"
-                type="datetime-local"
-                name="effectiveFrom"
-                required
-                defaultValue={dateInput(version?.effectiveFrom) || dateInput(new Date())}
-              />
-            </Field>
-            <Field label="Ends (UTC)" detail="Leave empty for an ongoing offer.">
-              <Input
-                className="h-11"
-                type="datetime-local"
-                name="effectiveTo"
-                defaultValue={dateInput(version?.effectiveTo)}
-              />
-            </Field>
-            <Field label="Timezone">
-              <select
-                className={selectClass}
-                name="timezone"
-                required
-                defaultValue={version?.timezone ?? options.branches[0]?.timezone ?? 'UTC'}
-              >
-                {[...new Set(['UTC', ...(version?.timezone ? [version.timezone] : []), ...options.branches.map((branch) => branch.timezone)])].map(
-                  (timezone) => (
-                    <option key={timezone}>{timezone}</option>
-                  )
-                )}
-              </select>
-            </Field>
-            <Field label="Currency">
-              <Input
-                className="h-11 uppercase"
-                name="currency"
-                maxLength={3}
-                required
-                defaultValue={version?.currency ?? 'PKR'}
-              />
-            </Field>
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Benefit type">
-              <select
-                className={selectClass}
-                name="benefitKind"
-                value={benefitKind}
-                onChange={(event) => setBenefitKind(event.target.value as BenefitKind)}
-              >
-                {[
-                  'PERCENT_OFF',
-                  'AMOUNT_OFF',
-                  'FIXED_PRICE',
-                  'BUY_X_GET_Y_PERCENT',
-                  'BUY_X_GET_Y_AMOUNT',
-                  'BUY_X_GET_Y_FREE',
-                  'BUNDLE_PRICE',
-                ].map((kind) => (
-                  <option key={kind} value={kind}>
-                    {kind.replaceAll('_', ' ')}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            <Field label="Application basis">
-              <select
-                className={selectClass}
-                name="applicationBasis"
-                defaultValue={version?.applicationBasis ?? 'ORDER'}
-              >
-                <option value="ORDER">Order</option>
-                <option value="LINE">Line</option>
-                <option value="UNIT">Unit</option>
-              </select>
-            </Field>
-            {benefitKind.includes('PERCENT') ? (
-              <Field label="Percentage">
+        <form onSubmit={submit}>
+          <fieldset disabled={pending} className="min-w-0 space-y-6">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Offer name">
                 <Input
                   className="h-11"
-                  name="percentage"
-                  type="number"
-                  min="0.01"
-                  max="100"
-                  step="0.01"
+                  name="name"
                   required
-                  defaultValue={version?.benefitBasisPoints ? version.benefitBasisPoints / 100 : 10}
+                  defaultValue={editor.offer?.name ?? ''}
                 />
               </Field>
-            ) : null}
-            {amountBenefit ? (
-              <Field label="Benefit amount">
+              <Field label="Offer code" detail="Stable after creation.">
+                <Input
+                  className="h-11 uppercase"
+                  name="code"
+                  required
+                  disabled={Boolean(editor.offer)}
+                  defaultValue={editor.offer?.code ?? ''}
+                  pattern="[A-Za-z0-9_-]+"
+                />
+              </Field>
+              <Field label="Starts (UTC)">
                 <Input
                   className="h-11"
-                  name="benefitAmount"
-                  inputMode="decimal"
-                  pattern="\d+(\.\d{1,2})?"
+                  type="datetime-local"
+                  name="effectiveFrom"
                   required
-                  defaultValue={version?.benefitAmount ?? ''}
+                  defaultValue={dateInput(version?.effectiveFrom) || dateInput(new Date())}
                 />
               </Field>
-            ) : null}
-            {buyGet ? (
-              <>
-                <Field label="Buy quantity">
-                  <Input
-                    className="h-11"
-                    name="buyQuantity"
-                    type="number"
-                    min="1"
-                    required
-                    defaultValue={version?.buyQuantity ?? 2}
-                  />
-                </Field>
-                <Field label="Get quantity">
-                  <Input
-                    className="h-11"
-                    name="getQuantity"
-                    type="number"
-                    min="1"
-                    required
-                    defaultValue={version?.getQuantity ?? 1}
-                  />
-                </Field>
-              </>
-            ) : null}
-          </div>
-
-          <div className="grid gap-4 sm:grid-cols-2">
-            <Field label="Target type">
-              <select
-                className={selectClass}
-                value={targetKind}
-                onChange={(event) => setTargetKind(event.target.value as typeof targetKind)}
-              >
-                <option value="ORDER">Whole order</option>
-                <option value="ITEM">Selected items</option>
-                <option value="CATEGORY">Selected categories</option>
-              </select>
-            </Field>
-            <Field label="Branches" detail="No selection means every branch.">
-              <select
-                className={selectClass}
-                name="allowedBranchIds"
-                multiple
-                defaultValue={version?.allowedBranchIds}
-              >
-                {options.branches.map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
-              </select>
-            </Field>
-            {targetKind === 'ITEM' ? (
-              <>
-                <Field label="Products">
-                  <select
-                    className={selectClass}
-                    name="targetProductIds"
-                    multiple
-                    defaultValue={version?.targetProductIds}
-                  >
-                    {options.products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name}
-                      </option>
-                    ))}
-                  </select>
-                </Field>
-                <Field label="Variants">
-                  <select
-                    className={selectClass}
-                    name="targetVariantIds"
-                    multiple
-                    defaultValue={version?.targetVariantIds}
-                  >
-                    {options.products.flatMap((product) =>
-                      product.variants.map((variant) => (
-                        <option key={variant.id} value={variant.id}>
-                          {product.name} · {variant.name}
-                        </option>
-                      ))
-                    )}
-                  </select>
-                </Field>
-              </>
-            ) : null}
-            {targetKind === 'CATEGORY' ? (
-              <Field label="Categories">
+              <Field label="Ends (UTC)" detail="Leave empty for an ongoing offer.">
+                <Input
+                  className="h-11"
+                  type="datetime-local"
+                  name="effectiveTo"
+                  defaultValue={dateInput(version?.effectiveTo)}
+                />
+              </Field>
+              <Field label="Timezone">
                 <select
                   className={selectClass}
-                  name="targetCategoryIds"
-                  multiple
-                  defaultValue={version?.targetCategoryIds}
+                  name="timezone"
+                  required
+                  defaultValue={version?.timezone ?? options.branches[0]?.timezone ?? 'UTC'}
                 >
-                  {options.categories.map((category) => (
-                    <option key={category.id} value={category.id}>
-                      {category.name}
+                  {[
+                    ...new Set([
+                      'UTC',
+                      ...(version?.timezone ? [version.timezone] : []),
+                      ...options.branches.map((branch) => branch.timezone),
+                    ]),
+                  ].map((timezone) => (
+                    <option key={timezone}>{timezone}</option>
+                  ))}
+                </select>
+              </Field>
+              <Field label="Currency">
+                <Input
+                  className="h-11 uppercase"
+                  name="currency"
+                  maxLength={3}
+                  required
+                  defaultValue={version?.currency ?? 'PKR'}
+                />
+              </Field>
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Benefit type">
+                <select
+                  className={selectClass}
+                  name="benefitKind"
+                  value={benefitKind}
+                  onChange={(event) => setBenefitKind(event.target.value as BenefitKind)}
+                >
+                  {[
+                    'PERCENT_OFF',
+                    'AMOUNT_OFF',
+                    'FIXED_PRICE',
+                    'BUY_X_GET_Y_PERCENT',
+                    'BUY_X_GET_Y_AMOUNT',
+                    'BUY_X_GET_Y_FREE',
+                    'BUNDLE_PRICE',
+                  ].map((kind) => (
+                    <option key={kind} value={kind}>
+                      {kind.replaceAll('_', ' ')}
                     </option>
                   ))}
                 </select>
               </Field>
-            ) : null}
-            <Field label="Channels">
-              <select
-                className={selectClass}
-                name="allowedChannels"
-                multiple
-                defaultValue={version?.allowedChannels}
-              >
-                <option value="DINE_IN">Dine in</option>
-                <option value="TAKEAWAY">Takeaway</option>
-                <option value="DELIVERY">Delivery</option>
-              </select>
-            </Field>
-            <Field label="Offline policy">
-              <select
-                className={selectClass}
-                name="offlinePolicy"
-                defaultValue={version?.offlinePolicy ?? 'ALLOW'}
-              >
-                <option value="ALLOW">Available offline</option>
-                <option value="ONLINE_ONLY">Online only</option>
-              </select>
-            </Field>
-            <Field label="Minimum quantity">
-              <Input
-                className="h-11"
-                name="minimumQuantity"
-                type="number"
-                min="1"
-                defaultValue={version?.minimumQuantity ?? ''}
-              />
-            </Field>
-            <Field label="Minimum amount">
-              <Input
-                className="h-11"
-                name="minimumAmount"
-                inputMode="decimal"
-                pattern="\d+(\.\d{1,2})?"
-                defaultValue={version?.minimumAmount ?? ''}
-              />
-            </Field>
-            {benefitKind === 'BUNDLE_PRICE' ? (
-              <>
-                <Field
-                  label="Bundle products"
-                  detail="Choose the alternatives accepted by this bundle component."
+              <Field label="Application basis">
+                <select
+                  className={selectClass}
+                  name="applicationBasis"
+                  defaultValue={version?.applicationBasis ?? 'ORDER'}
                 >
+                  <option value="ORDER">Order</option>
+                  <option value="LINE">Line</option>
+                  <option value="UNIT">Unit</option>
+                </select>
+              </Field>
+              {benefitKind.includes('PERCENT') ? (
+                <Field label="Percentage">
+                  <Input
+                    className="h-11"
+                    name="percentage"
+                    type="number"
+                    min="0.01"
+                    max="100"
+                    step="0.01"
+                    required
+                    defaultValue={
+                      version?.benefitBasisPoints ? version.benefitBasisPoints / 100 : 10
+                    }
+                  />
+                </Field>
+              ) : null}
+              {amountBenefit ? (
+                <Field label="Benefit amount">
+                  <Input
+                    className="h-11"
+                    name="benefitAmount"
+                    inputMode="decimal"
+                    pattern="\d+(\.\d{1,2})?"
+                    required
+                    defaultValue={version?.benefitAmount ?? ''}
+                  />
+                </Field>
+              ) : null}
+              {buyGet ? (
+                <>
+                  <Field label="Buy quantity">
+                    <Input
+                      className="h-11"
+                      name="buyQuantity"
+                      type="number"
+                      min="1"
+                      required
+                      defaultValue={version?.buyQuantity ?? 2}
+                    />
+                  </Field>
+                  <Field label="Get quantity">
+                    <Input
+                      className="h-11"
+                      name="getQuantity"
+                      type="number"
+                      min="1"
+                      required
+                      defaultValue={version?.getQuantity ?? 1}
+                    />
+                  </Field>
+                </>
+              ) : null}
+            </div>
+
+            <div className="grid gap-4 sm:grid-cols-2">
+              <Field label="Target type">
+                <select
+                  className={selectClass}
+                  value={targetKind}
+                  onChange={(event) => changeTarget(event.target.value as typeof targetKind)}
+                >
+                  <option value="ORDER">Whole order</option>
+                  <option value="ITEM">Selected items</option>
+                  <option value="CATEGORY">Selected categories</option>
+                </select>
+              </Field>
+              <Field label="Branches" detail="No selection means every branch.">
+                <select
+                  className={selectClass}
+                  name="allowedBranchIds"
+                  multiple
+                  {...selectionProps('allowedBranchIds')}
+                >
+                  {options.branches.map((branch) => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              </Field>
+              {targetKind === 'ITEM' ? (
+                <>
+                  <Field label="Products">
+                    <select
+                      className={selectClass}
+                      name="targetProductIds"
+                      multiple
+                      {...selectionProps('targetProductIds')}
+                    >
+                      {options.products.map((product) => (
+                        <option key={product.id} value={product.id}>
+                          {product.name}
+                        </option>
+                      ))}
+                    </select>
+                  </Field>
+                  <Field label="Variants">
+                    <select
+                      className={selectClass}
+                      name="targetVariantIds"
+                      multiple
+                      {...selectionProps('targetVariantIds')}
+                    >
+                      {options.products.flatMap((product) =>
+                        product.variants.map((variant) => (
+                          <option key={variant.id} value={variant.id}>
+                            {product.name} · {variant.name}
+                          </option>
+                        ))
+                      )}
+                    </select>
+                  </Field>
+                </>
+              ) : null}
+              {targetKind === 'CATEGORY' ? (
+                <Field label="Categories">
                   <select
                     className={selectClass}
-                    name="bundleProductIds"
+                    name="targetCategoryIds"
                     multiple
-                    defaultValue={version?.components[0]?.productIds ?? []}
+                    {...selectionProps('targetCategoryIds')}
                   >
-                    {options.products.map((product) => (
-                      <option key={product.id} value={product.id}>
-                        {product.name}
+                    {options.categories.map((category) => (
+                      <option key={category.id} value={category.id}>
+                        {category.name}
                       </option>
                     ))}
                   </select>
                 </Field>
-                <Field label="Required bundle quantity">
-                  <Input
-                    className="h-11"
-                    name="bundleQuantity"
-                    type="number"
-                    min="1"
-                    required
-                    defaultValue={version?.components[0]?.quantity ?? 1}
-                  />
-                </Field>
-              </>
+              ) : null}
+              <Field label="Channels">
+                <select
+                  className={selectClass}
+                  name="allowedChannels"
+                  multiple
+                  {...selectionProps('allowedChannels')}
+                >
+                  <option value="DINE_IN">Dine in</option>
+                  <option value="TAKEAWAY">Takeaway</option>
+                  <option value="DELIVERY">Delivery</option>
+                </select>
+              </Field>
+              <Field label="Offline policy">
+                <select
+                  className={selectClass}
+                  name="offlinePolicy"
+                  defaultValue={version?.offlinePolicy ?? 'ALLOW'}
+                >
+                  <option value="ALLOW">Available offline</option>
+                  <option value="ONLINE_ONLY">Online only</option>
+                </select>
+              </Field>
+              <Field label="Minimum quantity">
+                <Input
+                  className="h-11"
+                  name="minimumQuantity"
+                  type="number"
+                  min="1"
+                  defaultValue={version?.minimumQuantity ?? ''}
+                />
+              </Field>
+              <Field label="Minimum amount">
+                <Input
+                  className="h-11"
+                  name="minimumAmount"
+                  inputMode="decimal"
+                  pattern="\d+(\.\d{1,2})?"
+                  defaultValue={version?.minimumAmount ?? ''}
+                />
+              </Field>
+              {benefitKind === 'BUNDLE_PRICE' ? (
+                <div className="min-w-0 space-y-4 sm:col-span-2">
+                  <p className="text-sm text-text-muted">
+                    Each quantity can be satisfied by any selected product or category. Components
+                    are matched in the order shown.
+                  </p>
+                  {bundleRows.map((row, index) => (
+                    <fieldset
+                      key={row.key}
+                      className="min-w-0 space-y-4 rounded-[var(--radius-md)] border border-border-default p-4"
+                    >
+                      <legend className={labelClass}>Bundle component {index + 1}</legend>
+                      <div className="grid min-w-0 gap-4 sm:grid-cols-2">
+                        <Field label="Product alternatives">
+                          <select
+                            className={selectClass}
+                            multiple
+                            value={row.productIds}
+                            onChange={(event) =>
+                              selectAlternatives(
+                                row.key,
+                                'productIds',
+                                selectedIds(event.currentTarget)
+                              )
+                            }
+                          >
+                            {options.products.map((product) => (
+                              <option key={product.id} value={product.id}>
+                                {product.name}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Category alternatives">
+                          <select
+                            className={selectClass}
+                            multiple
+                            value={row.categoryIds}
+                            onChange={(event) =>
+                              selectAlternatives(
+                                row.key,
+                                'categoryIds',
+                                selectedIds(event.currentTarget)
+                              )
+                            }
+                          >
+                            {options.categories.map((category) => (
+                              <option key={category.id} value={category.id}>
+                                {category.name}
+                              </option>
+                            ))}
+                          </select>
+                        </Field>
+                        <Field label="Required quantity">
+                          <Input
+                            className="h-11"
+                            type="number"
+                            min="1"
+                            step="1"
+                            required
+                            value={row.quantity}
+                            onChange={(event) => {
+                              const quantity = event.currentTarget.value;
+                              setBundleRows((rows) =>
+                                rows.map((item) =>
+                                  item.key === row.key ? { ...item, quantity } : item
+                                )
+                              );
+                            }}
+                          />
+                        </Field>
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={index === 0}
+                          aria-label={`Move component ${index + 1} up`}
+                          onClick={() => moveRow(row.key, -1)}
+                        >
+                          Move up
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={index === bundleRows.length - 1}
+                          aria-label={`Move component ${index + 1} down`}
+                          onClick={() => moveRow(row.key, 1)}
+                        >
+                          Move down
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          aria-label={`Remove component ${index + 1}`}
+                          onClick={() =>
+                            setBundleRows((rows) => rows.filter((item) => item.key !== row.key))
+                          }
+                        >
+                          Remove
+                        </Button>
+                      </div>
+                    </fieldset>
+                  ))}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    disabled={bundleRows.length >= 20}
+                    onClick={addRow}
+                  >
+                    Add component
+                  </Button>
+                  <p className="text-xs text-text-muted">{bundleRows.length} of 20 components</p>
+                </div>
+              ) : null}
+            </div>
+            {formError ? (
+              <p
+                role="alert"
+                className="rounded-[var(--radius-sm)] bg-destructive/10 px-4 py-3 text-sm text-destructive"
+              >
+                {formError}
+              </p>
             ) : null}
-          </div>
-          {formError ? (
-            <p
-              role="alert"
-              className="rounded-[var(--radius-sm)] bg-destructive/10 px-4 py-3 text-sm text-destructive"
-            >
-              {formError}
-            </p>
-          ) : null}
-          <DialogFooter className="mx-0 mb-0">
-            <Button type="button" variant="outline" onClick={onClose}>
-              Cancel
-            </Button>
-            <Button type="submit" disabled={pending}>
-              {pending ? 'Saving…' : editor.offer ? 'Save changes' : 'Create offer'}
-            </Button>
-          </DialogFooter>
+            <DialogFooter className="mx-0 mb-0">
+              <Button type="button" variant="outline" onClick={onClose}>
+                Cancel
+              </Button>
+              <Button type="submit" disabled={pending}>
+                {pending ? 'Saving…' : editor.offer ? 'Save changes' : 'Create offer'}
+              </Button>
+            </DialogFooter>
+          </fieldset>
         </form>
       </DialogContent>
     </Dialog>
@@ -593,8 +796,13 @@ export function PromotionsConsole() {
     errorCode(optionsQuery.error) === 'FORBIDDEN' ||
     errorCode(offersQuery.error) === 'UNAUTHORIZED' ||
     errorCode(optionsQuery.error) === 'UNAUTHORIZED';
-  const canAuthor = Boolean(optionsQuery.data) && !forbidden &&
-    !offersQuery.isLoading && !optionsQuery.isLoading && !offersQuery.isError && !optionsQuery.isError;
+  const canAuthor =
+    Boolean(optionsQuery.data) &&
+    !forbidden &&
+    !offersQuery.isLoading &&
+    !optionsQuery.isLoading &&
+    !offersQuery.isError &&
+    !optionsQuery.isError;
   const reload = () => {
     void offersQuery.refetch();
     void optionsQuery.refetch();
@@ -611,11 +819,7 @@ export function PromotionsConsole() {
         heading="Offers"
         description="Compose, review, and disable checkout promotions from named catalog and branch records."
         actions={
-          <Button
-            size="lg"
-            onClick={() => setEditor({ offer: null })}
-            disabled={!canAuthor}
-          >
+          <Button size="lg" onClick={() => setEditor({ offer: null })} disabled={!canAuthor}>
             <Plus />
             Create offer
           </Button>
@@ -729,15 +933,21 @@ export function PromotionsConsole() {
                 </div>
                 {selected.editRestriction || unavailableSelections(selected, optionsQuery.data) ? (
                   <p className="text-sm text-text-muted">
-                    {selected.editRestriction ?? 'Some selected records are unavailable. This offer is read-only here.'}
+                    {selected.editRestriction ??
+                      'Some selected records are unavailable. This offer is read-only here.'}
                   </p>
                 ) : null}
                 <div className="flex flex-wrap gap-2">
                   <Button
                     variant="outline"
-                    disabled={!canAuthor || !selected.latestVersion || selected.latestVersion.status !== 'DRAFT' ||
-                      selected.status !== 'ACTIVE' || Boolean(selected.editRestriction) ||
-                      unavailableSelections(selected, optionsQuery.data)}
+                    disabled={
+                      !canAuthor ||
+                      !selected.latestVersion ||
+                      selected.latestVersion.status !== 'DRAFT' ||
+                      selected.status !== 'ACTIVE' ||
+                      Boolean(selected.editRestriction) ||
+                      unavailableSelections(selected, optionsQuery.data)
+                    }
                     onClick={() => setEditor({ offer: selected })}
                   >
                     Edit draft
@@ -745,7 +955,11 @@ export function PromotionsConsole() {
                   <Button
                     variant="destructive"
                     disabled={selected.status !== 'ACTIVE'}
-                    onClick={() => { setDisableError(''); setDisableReason(''); setDisableOffer(selected); }}
+                    onClick={() => {
+                      setDisableError('');
+                      setDisableReason('');
+                      setDisableOffer(selected);
+                    }}
                   >
                     Disable offer
                   </Button>
@@ -774,9 +988,18 @@ export function PromotionsConsole() {
               </DialogDescription>
             </DialogHeader>
             <Field label="Reason for disabling">
-              <Input value={disableReason} onChange={(event) => setDisableReason(event.target.value)} minLength={3} maxLength={500} />
+              <Input
+                value={disableReason}
+                onChange={(event) => setDisableReason(event.target.value)}
+                minLength={3}
+                maxLength={500}
+              />
             </Field>
-            {disableError ? <p role="alert" className="text-sm text-destructive">{disableError}</p> : null}
+            {disableError ? (
+              <p role="alert" className="text-sm text-destructive">
+                {disableError}
+              </p>
+            ) : null}
             <DialogFooter showCloseButton>
               <Button
                 variant="destructive"
