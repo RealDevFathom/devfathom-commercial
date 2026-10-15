@@ -8,7 +8,7 @@ import { BlockList, isIP } from 'node:net';
 import { z } from 'zod';
 
 import { decryptSecret } from '@/lib/secret-crypto';
-import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
+import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
 import {
   OutboxConsumerRegistry,
   restaurantOutboxConsumers,

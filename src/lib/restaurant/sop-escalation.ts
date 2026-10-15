@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
+import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers-core';
 import { appendNotificationRequest } from '@/lib/restaurant/notification-fanout';
 import {
   notificationRequestId,

@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers';
+import type { RestaurantJobContext } from '@/lib/restaurant/job-handlers-core';
 
 /**
  * M7-L4 / §11.5 — SOP late/missed sweep: scheduler handler.

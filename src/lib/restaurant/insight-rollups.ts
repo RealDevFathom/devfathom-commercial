@@ -8,7 +8,7 @@ import { businessDateToUtcDate } from './business-date';
 import { foldExpectedCash, type FoldableMovement } from './drawer-sessions';
 import { add, multiply, roundMoney, sub, sum, ZERO } from './money';
 import { enqueue, SchedulerError } from './scheduler';
-import type { RestaurantJobHandler } from './job-handlers';
+import type { RestaurantJobHandler } from './job-handlers-core';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
