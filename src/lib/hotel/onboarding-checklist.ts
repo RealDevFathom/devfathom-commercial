@@ -20,6 +20,7 @@
  * regulated pharmacy surface.
  */
 import type { PrismaClient } from '@/generated/prisma/client';
+import { isValidHotelTimezone } from '@/lib/hotel/property';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
 export type HotelOnboardingItemKey =
@@ -205,7 +206,8 @@ export function hotelEvidence(
       nonEmpty(property.name) &&
       nonEmpty(property.addressLine) &&
       nonEmpty(property.city) &&
-      nonEmpty(property.timezone) &&
+      // A stored zone the runtime cannot use is not a recorded fact.
+      isValidHotelTimezone(property.timezone) &&
       nonEmpty(property.checkInTime) &&
       nonEmpty(property.checkOutTime)
     ),
