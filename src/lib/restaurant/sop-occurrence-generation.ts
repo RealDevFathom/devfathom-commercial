@@ -5,7 +5,7 @@ import { createHash } from 'node:crypto';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
+import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
 import { businessDateToUtcDate, resolveBusinessDate } from '@/lib/restaurant/business-date';
 import { enumerateOccurrences } from '@/lib/restaurant/sop-recurrence';
 import {

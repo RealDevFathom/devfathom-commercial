@@ -2,7 +2,7 @@ import 'server-only';
 
 import { z } from 'zod';
 
-import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
+import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export const LOYALTY_EXPIRY_JOB = 'loyalty.expirePoints';

@@ -9,7 +9,10 @@ import {
   createVariant,
   ensureDefaultBrand,
 } from '@/lib/restaurant/catalog';
-import type { RestaurantJobContext, RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
+import type {
+  RestaurantJobContext,
+  RestaurantJobHandler,
+} from '@/lib/restaurant/job-handlers-core';
 import {
   LOW_CONFIDENCE_THRESHOLD,
   MenuExtractionError,

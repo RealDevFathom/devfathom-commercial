@@ -351,6 +351,39 @@ describe('Hotel mutation concurrency contracts', () => {
       })
     );
   });
+  it.each([
+    ['an unknown zone', 'Mars/Phobos'],
+    ['free text', 'not a timezone'],
+    ['a blank zone', '   '],
+    ['a null zone', null],
+    ['a missing zone', undefined],
+  ])('refuses %s before any lock, scope check or write', async (_label, timezone) => {
+    await expect(caller().update({ ...propertyInput, timezone } as never)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(mocks.scope).not.toHaveBeenCalled();
+    expect(db.hotelProperty.findFirst).not.toHaveBeenCalled();
+    expect(db.hotelProperty.updateMany).not.toHaveBeenCalled();
+  });
+  it('reports an unknown zone on the timezone field', async () => {
+    const unknownZone = { ...propertyInput, timezone: 'Mars/Phobos' };
+    await expect(caller().update(unknownZone)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      cause: {
+        issues: expect.arrayContaining([
+          expect.objectContaining({ path: ['timezone'], message: 'Choose a valid IANA timezone.' }),
+        ]),
+      },
+    });
+  });
+  it('writes a trimmed valid zone through the locked revision update', async () => {
+    await caller().update({ ...propertyInput, timezone: '  America/New_York  ' });
+    expect(db.hotelProperty.updateMany).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ timezone: 'America/New_York' }) })
+    );
+  });
   it('prevents a stale extra edit from undoing a later retirement', async () => {
     const stored = { active: false, updatedAt: new Date(version.getTime() + 1) };
     db.hotelExtra.updateMany.mockImplementation(

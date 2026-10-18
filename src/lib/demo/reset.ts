@@ -27,6 +27,17 @@ const RESTAURANT_RESET_TABLES = [
   'restaurant_camera_stream_grants',
   'restaurant_cameras',
   'restaurant_categories',
+  'restaurant_catering_branch_capacity',
+  'restaurant_catering_commands',
+  'restaurant_catering_deliveries',
+  'restaurant_catering_dispositions',
+  'restaurant_catering_events',
+  'restaurant_catering_extra_costs',
+  'restaurant_catering_money_evidence',
+  'restaurant_catering_order_lines',
+  'restaurant_catering_orders',
+  'restaurant_catering_quote_approvals',
+  'restaurant_catering_quote_revisions',
   'restaurant_co_authorizations',
   'restaurant_combo_component_groups',
   'restaurant_combo_component_options',
@@ -45,6 +56,11 @@ const RESTAURANT_RESET_TABLES = [
   'restaurant_drawer_sessions',
   'restaurant_event_outbox',
   'restaurant_floors',
+  'restaurant_growth_attempts',
+  'restaurant_growth_drafts',
+  'restaurant_growth_fixtures',
+  'restaurant_growth_receipt_events',
+  'restaurant_growth_reviews',
   'restaurant_ingredient_allergens',
   'restaurant_ingredients',
   'restaurant_insight_daily_rollups',
@@ -181,6 +197,49 @@ const SPECIAL_TABLES = new Set<string>([
   'restaurant_staff_profiles',
 ]);
 
+const BRANCH_SCOPED_RESET_TABLES = new Set<string>([
+  'restaurant_growth_attempts',
+  'restaurant_growth_drafts',
+  'restaurant_growth_fixtures',
+  'restaurant_growth_receipt_events',
+  'restaurant_growth_reviews',
+]);
+
+// Clear mutable catering headers before deleting quotes; the growth FK remains
+// enforced at transaction commit. No other dependency cycle is exempted.
+const RESET_CYCLE_LINKS = [
+  {
+    constraintName: 'catering_approved_quote_fk',
+    tableName: 'restaurant_catering_orders',
+    parentTable: 'restaurant_catering_quote_revisions',
+    columns: ['organizationId', 'id', 'approvedQuoteRevisionId'],
+    parentColumns: ['organizationId', 'orderId', 'id'],
+    deleteAction: 'r',
+    deferrable: false,
+    initiallyDeferred: false,
+  },
+  {
+    constraintName: 'catering_confirmed_quote_fk',
+    tableName: 'restaurant_catering_orders',
+    parentTable: 'restaurant_catering_quote_revisions',
+    columns: ['organizationId', 'id', 'confirmedQuoteRevisionId'],
+    parentColumns: ['organizationId', 'orderId', 'id'],
+    deleteAction: 'r',
+    deferrable: false,
+    initiallyDeferred: false,
+  },
+  {
+    constraintName: 'restaurant_growth_draft_fk',
+    tableName: 'restaurant_growth_reviews',
+    parentTable: 'restaurant_growth_drafts',
+    columns: ['organizationId', 'branchId', 'draftId'],
+    parentColumns: ['organizationId', 'branchId', 'id'],
+    deleteAction: 'a',
+    deferrable: true,
+    initiallyDeferred: true,
+  },
+] as const;
+
 type LockedOrganization = {
   id: string;
   slug: string;
@@ -192,7 +251,16 @@ type LockedOrganization = {
 };
 
 type StaffIdentity = { id: string; userId: string | null; email: string | null; status: string };
-type ForeignKey = { tableName: string; parentTable: string | null; deleteAction: string | null };
+type ForeignKey = {
+  tableName: string;
+  parentTable: string | null;
+  deleteAction: string | null;
+  constraintName: string | null;
+  columns: string[];
+  parentColumns: string[];
+  deferrable: boolean | null;
+  initiallyDeferred: boolean | null;
+};
 type Residual = { tableName: string; count: number };
 
 function identityForOrganization(organizationId: string): DemoSeatIdentity {
@@ -359,12 +427,26 @@ async function preservedStaffIds(
   return [managers[0]!.id, approvers[0]!.id, ...personas.map((profile) => profile.id)];
 }
 
+function matchesCycleLink(row: ForeignKey, link: (typeof RESET_CYCLE_LINKS)[number]): boolean {
+  return (
+    row.constraintName === link.constraintName &&
+    row.tableName === link.tableName &&
+    row.parentTable === link.parentTable &&
+    row.columns?.join(',') === link.columns.join(',') &&
+    row.parentColumns?.join(',') === link.parentColumns.join(',') &&
+    row.deleteAction === link.deleteAction &&
+    row.deferrable === link.deferrable &&
+    row.initiallyDeferred === link.initiallyDeferred
+  );
+}
+
 function deletionOrder(rows: ForeignKey[]): string[] {
   const remaining = new Set<string>(RESTAURANT_RESET_TABLES);
   const parents = new Map<string, Set<string>>(
     [...remaining].map((table) => [table, new Set<string>()])
   );
   for (const row of rows) {
+    if (RESET_CYCLE_LINKS.some((link) => matchesCycleLink(row, link))) continue;
     if (
       row.parentTable &&
       row.parentTable !== row.tableName &&
@@ -399,7 +481,24 @@ async function loadDeletionOrder(db: ScopedDb): Promise<string[]> {
     `WITH allowed("tableName") AS (VALUES ${values})
      SELECT allowed."tableName" AS "tableName",
             parent.relname AS "parentTable",
-            constraint_row.confdeltype::text AS "deleteAction"
+            constraint_row.confdeltype::text AS "deleteAction",
+            constraint_row.conname AS "constraintName",
+            constraint_row.condeferrable AS deferrable,
+            constraint_row.condeferred AS "initiallyDeferred",
+            ARRAY(
+              SELECT attribute.attname::text
+                FROM unnest(constraint_row.conkey) WITH ORDINALITY AS fk_key(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = child.oid AND attribute.attnum = fk_key.attnum
+               ORDER BY fk_key.position
+            ) AS columns,
+            ARRAY(
+              SELECT attribute.attname::text
+                FROM unnest(constraint_row.confkey) WITH ORDINALITY AS fk_key(attnum, position)
+                JOIN pg_attribute AS attribute
+                  ON attribute.attrelid = parent.oid AND attribute.attnum = fk_key.attnum
+               ORDER BY fk_key.position
+            ) AS "parentColumns"
        FROM allowed
        JOIN pg_class AS child
          ON child.relname = allowed."tableName"
@@ -412,6 +511,12 @@ async function loadDeletionOrder(db: ScopedDb): Promise<string[]> {
   const missing = RESTAURANT_RESET_TABLES.filter((table) => !present.has(table));
   if (missing.length) {
     throw new Error(`Restaurant demo reset table allowlist is out of sync: ${missing.join(', ')}`);
+  }
+  for (const link of RESET_CYCLE_LINKS) {
+    const matches = rows.filter((row) => row.constraintName === link.constraintName);
+    if (matches.length !== 1 || !matchesCycleLink(matches[0]!, link)) {
+      throw new Error(`Restaurant demo reset requires the reviewed FK: ${link.constraintName}`);
+    }
   }
   return deletionOrder(rows);
 }
@@ -439,8 +544,69 @@ async function clearRestaurantData(
     ...personaStaffProfileIds,
   ];
   const order = await loadDeletionOrder(db);
+  const [scope] = await db.$queryRawUnsafe<
+    Array<{ currentBranchId: string | null; compatibilityReady: boolean }>
+  >(
+    `SELECT current_setting('app.current_branch_id', true) AS "currentBranchId",
+            pg_catalog.to_regprocedure('public.restaurant_demo_reset_compatibility_allowed(text)')
+              IS NOT NULL AS "compatibilityReady"`
+  );
+  if (!scope?.compatibilityReady) {
+    throw new Error('Restaurant demo reset compatibility migration must be applied first.');
+  }
+  const branches = await db.$queryRawUnsafe<Array<{ id: string }>>(
+    `SELECT id FROM restaurant_branches WHERE "organizationId" = $1 ORDER BY id`,
+    identity.organizationId
+  );
+  await guardedDelete(
+    db,
+    identity,
+    `UPDATE restaurant_catering_orders
+        SET "approvedQuoteRevisionId" = NULL, "confirmedQuoteRevisionId" = NULL
+      WHERE "organizationId" = $1
+        AND ("approvedQuoteRevisionId" IS NOT NULL OR "confirmedQuoteRevisionId" IS NOT NULL)`,
+    identity.organizationId
+  );
+  const [headers] = await db.$queryRawUnsafe<Array<{ count: number }>>(
+    `SELECT count(*)::int AS count FROM restaurant_catering_orders
+      WHERE "organizationId" = $1
+        AND ("approvedQuoteRevisionId" IS NOT NULL OR "confirmedQuoteRevisionId" IS NOT NULL)`,
+    identity.organizationId
+  );
+  if (!headers || Number(headers.count) !== 0) {
+    throw new Error('Restaurant demo reset could not clear catering quote header references.');
+  }
+  // This FK is already DEFERRABLE INITIALLY DEFERRED; it is still checked at commit.
+  await db.$executeRawUnsafe('SET CONSTRAINTS "restaurant_growth_draft_fk" DEFERRED');
   for (const table of order) {
-    if (table === 'restaurant_job_executions') {
+    if (BRANCH_SCOPED_RESET_TABLES.has(table)) {
+      for (const branch of branches) {
+        await db.$queryRawUnsafe(`SELECT set_config('app.current_branch_id', $1, true)`, branch.id);
+        try {
+          await guardedDelete(
+            db,
+            identity,
+            `DELETE FROM ${quoteIdentifier(table)} WHERE "organizationId" = $1 AND "branchId" = $2`,
+            identity.organizationId,
+            branch.id
+          );
+          const [residual] = await db.$queryRawUnsafe<Array<{ count: number }>>(
+            `SELECT count(*)::int AS count FROM ${quoteIdentifier(table)}
+              WHERE "organizationId" = $1 AND "branchId" = $2`,
+            identity.organizationId,
+            branch.id
+          );
+          if (!residual || Number(residual.count) !== 0) {
+            throw new Error(`Restaurant demo reset left branch rows behind: ${table}`);
+          }
+        } finally {
+          await db.$queryRawUnsafe(
+            `SELECT set_config('app.current_branch_id', $1, true)`,
+            scope.currentBranchId ?? ''
+          );
+        }
+      }
+    } else if (table === 'restaurant_job_executions') {
       await guardedDelete(
         db,
         identity,
@@ -491,7 +657,9 @@ async function clearRestaurantData(
     }
   }
 
-  const genericTables = RESTAURANT_RESET_TABLES.filter((table) => !SPECIAL_TABLES.has(table));
+  const genericTables = RESTAURANT_RESET_TABLES.filter(
+    (table) => !SPECIAL_TABLES.has(table) && !BRANCH_SCOPED_RESET_TABLES.has(table)
+  );
   const residuals = await db.$queryRawUnsafe<Residual[]>(
     genericTables
       .map(
@@ -553,14 +721,17 @@ export async function resetDemoSeatInTransaction(
     `SELECT set_config('app.demo_reset_organization_id', $1, true)`,
     identity.organizationId
   );
-  await clearRestaurantData(
-    db,
-    identity,
-    managerStaffProfileId,
-    approverStaffProfileId,
-    personaStaffProfileIds
-  );
-  await db.$queryRawUnsafe(`SELECT set_config('app.demo_reset_organization_id', '', true)`);
+  try {
+    await clearRestaurantData(
+      db,
+      identity,
+      managerStaffProfileId,
+      approverStaffProfileId,
+      personaStaffProfileIds
+    );
+  } finally {
+    await db.$queryRawUnsafe(`SELECT set_config('app.demo_reset_organization_id', '', true)`);
+  }
 
   const result = await rebuildDemoRestaurantSeatInTransaction(db, {
     identity,

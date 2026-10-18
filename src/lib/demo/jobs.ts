@@ -127,8 +127,9 @@ export async function processDueDemoResetJobs(
   input: ProcessDueDemoResetJobsInput = {}
 ): Promise<ProcessDueDemoResetJobsResult> {
   if (!isDemoEnabled()) throw new Error('Restaurant demo is disabled.');
-  const now = input.now ?? new Date();
-  assertValidDate(now);
+  const fixedNow = input.now;
+  const clock = () => fixedNow ?? new Date();
+  assertValidDate(clock());
   const seatCount = getDemoSeatCount();
   const maxJobs = input.maxJobs ?? seatCount;
   if (!Number.isInteger(maxJobs) || maxJobs < 1 || maxJobs > seatCount) {
@@ -167,7 +168,7 @@ export async function processDueDemoResetJobs(
     result.recovered += await runScoped(async (db) => {
       await assertSharedRestaurantDemo(db, organization.id);
       return recoverStaleJobs(db, {
-        now,
+        now: clock(),
         leaseMs: DEMO_RESET_LEASE_MS,
         jobType: DEMO_RESET_JOB_TYPE,
       });
@@ -176,7 +177,7 @@ export async function processDueDemoResetJobs(
       runScoped,
       workerId,
       jobType: DEMO_RESET_JOB_TYPE,
-      clock: () => now,
+      clock,
       maxJobs: maxJobs - result.jobs.claimed,
       handler: (job) => runScoped((db) => demoResetJobHandler({ db, job })),
     });

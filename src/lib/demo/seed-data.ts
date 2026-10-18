@@ -13,7 +13,6 @@ export const DEMO_CURRENCY = 'PKR';
 export type DemoBaseUnit = 'kg' | 'litre' | 'piece';
 export type DemoRecipeUnit = 'g' | 'ml' | 'piece';
 
-
 interface DemoTable {
   id: string;
   name: string;
