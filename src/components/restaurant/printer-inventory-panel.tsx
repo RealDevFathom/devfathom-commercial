@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
+import { useCallback, useEffect, useLayoutEffect, useRef, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -41,7 +41,7 @@ type Directory =
       error?: never;
     }
   | { ownerKey: string; attempt: number; error: true; branches?: never };
-type Inventory = { ownerKey: string; branchId: string; revision: string } & (
+type Inventory = { ownerKey: string; branchId: string; revision: string; readEpoch: number } & (
   | { error: 'permission' | 'read'; printers?: never; devices?: never }
   | {
       error?: never;
@@ -71,6 +71,28 @@ type RenameDraft = {
     freshName?: string;
   };
 };
+type RetirementDraft = {
+  ownerKey: string;
+  branchId: string;
+  branchName: string;
+  printerId: string;
+  printerName: string;
+  address: string;
+  readEpoch: number;
+  revision: string;
+};
+type RetirementIssue = RetirementDraft & {
+  reason: 'conflict' | 'error' | 'uncertain';
+  afterReadEpoch: number;
+};
+type RetirementReceipt = {
+  ownerKey: string;
+  branchId: string;
+  printerId: string;
+  name: string;
+  retiredAt: Outputs['restaurantDevices']['retirePrinter']['printer']['retiredAt'];
+  changed: boolean;
+};
 function permissionError(error: unknown) {
   const code = (error as { data?: { code?: string } } | null)?.data?.code;
   return code === 'FORBIDDEN' || code === 'UNAUTHORIZED';
@@ -86,7 +108,7 @@ export function PrinterInventoryPanel({
   const client = trpc.useUtils().client;
   const owner = useRef(ownerKey);
   const generation = useRef(0);
-  const busy = useRef(false);
+  const busy = useRef<symbol | null>(null);
   const [directory, setDirectory] = useState<Directory | null>(null);
   const [directoryRetry, setDirectoryRetry] = useState(0);
   const [branchId, setBranchId] = useState('');
@@ -95,7 +117,9 @@ export function PrinterInventoryPanel({
   const [openOwner, setOpenOwner] = useState<string | null>(null);
   const [bridgeId, setBridgeId] = useState('');
   const [rows, setRows] = useState<PrinterDraft[]>([]);
-  const [pendingOwner, setPendingOwner] = useState<string | null>(null);
+  const [pendingOwner, setPendingOwner] = useState<{ ownerKey: string; operation: symbol } | null>(
+    null
+  );
   const [uncertain, setUncertain] = useState<Command | null>(null);
   const [receipt, setReceipt] = useState<{
     ownerKey: string;
@@ -110,15 +134,28 @@ export function PrinterInventoryPanel({
     name: string;
     changed: boolean;
   } | null>(null);
+  const [retirementDraft, setRetirementDraft] = useState<RetirementDraft | null>(null);
+  const [retirementIssue, setRetirementIssue] = useState<RetirementIssue | null>(null);
+  const [retirementReceipt, setRetirementReceipt] = useState<RetirementReceipt | null>(null);
   const [deniedBranch, setDeniedBranch] = useState<{ ownerKey: string; branchId: string } | null>(
     null
   );
   const renameReadAttempt = useRef(0);
   const inventoryReadEpoch = useRef(0);
+  const permissionEpoch = useRef(0);
   const inventoryReadBranch = useRef('');
-  const renderedInventoryEpoch = inventoryReadEpoch.current;
+  const [renderedInventoryEpoch, setRenderedInventoryEpoch] = useState(0);
+  const bumpInventoryReadEpoch = useCallback(() => {
+    const next = ++inventoryReadEpoch.current;
+    setRenderedInventoryEpoch(next);
+    return next;
+  }, []);
   const renameReviewGate = useRef<string | null>(null);
   const renameMutation = trpc.restaurantDevices.renamePrinter.useMutation({
+    retry: false,
+    gcTime: 0,
+  });
+  const retirementMutation = trpc.restaurantDevices.retirePrinter.useMutation({
     retry: false,
     gcTime: 0,
   });
@@ -158,7 +195,7 @@ export function PrinterInventoryPanel({
       return () => {
         current = false;
       };
-    const requestEpoch = ++inventoryReadEpoch.current;
+    const requestEpoch = bumpInventoryReadEpoch();
     inventoryReadBranch.current = branchId;
     void Promise.all([
       client.restaurantDevices.listPrinters.query({ branchId }),
@@ -166,25 +203,39 @@ export function PrinterInventoryPanel({
     ])
       .then(([printers, devices]) => {
         if (current && owner.current === ownerKey && requestEpoch === inventoryReadEpoch.current) {
-          setInventory({ ownerKey, branchId, revision, printers, devices });
+          setInventory({
+            ownerKey,
+            branchId,
+            revision,
+            readEpoch: requestEpoch,
+            printers,
+            devices,
+          });
           setDeniedBranch((prior) =>
             prior?.ownerKey === ownerKey && prior.branchId === branchId ? null : prior
           );
         }
       })
       .catch((error: unknown) => {
-        if (current && owner.current === ownerKey && requestEpoch === inventoryReadEpoch.current)
+        if (current && owner.current === ownerKey && requestEpoch === inventoryReadEpoch.current) {
+          if (permissionError(error)) {
+            permissionEpoch.current += 1;
+            bumpInventoryReadEpoch();
+            setDeniedBranch({ ownerKey, branchId });
+          }
           setInventory({
             ownerKey,
             branchId,
             revision,
+            readEpoch: requestEpoch,
             error: permissionError(error) ? 'permission' : 'read',
           });
+        }
       });
     return () => {
       current = false;
     };
-  }, [client, ownerKey, branchId, activeBranch, revision]);
+  }, [client, ownerKey, branchId, activeBranch, revision, bumpInventoryReadEpoch]);
   const loaded =
     inventory?.ownerKey === ownerKey &&
     inventory.branchId === branchId &&
@@ -196,6 +247,20 @@ export function PrinterInventoryPanel({
   const ready = loaded?.printers !== undefined && !accessDenied;
   const ownedRename = renameDraft?.ownerKey === ownerKey ? renameDraft : null;
   const renameNeedsReview = !!ownedRename?.review;
+  const ownedRetirementDraft =
+    retirementDraft?.ownerKey === ownerKey &&
+    retirementDraft.branchId === branchId &&
+    retirementDraft.readEpoch === renderedInventoryEpoch &&
+    retirementDraft.revision === revision &&
+    !accessDenied
+      ? retirementDraft
+      : null;
+  const ownedRetirementIssue = retirementIssue?.ownerKey === ownerKey ? retirementIssue : null;
+  const retirementReviewed =
+    !!ownedRetirementIssue &&
+    ready &&
+    branchId === ownedRetirementIssue.branchId &&
+    (loaded?.readEpoch ?? 0) > ownedRetirementIssue.afterReadEpoch;
   const bridges = ready
     ? loaded.devices.filter(
         (device) =>
@@ -205,7 +270,7 @@ export function PrinterInventoryPanel({
           device.revokedAt === null
       )
     : [];
-  const pending = pendingOwner === ownerKey;
+  const pending = pendingOwner?.ownerKey === ownerKey;
   const needsReconciliation = uncertain?.ownerKey === ownerKey;
   const changeBranch = (next: string) => {
     if (busy.current) return;
@@ -215,6 +280,7 @@ export function PrinterInventoryPanel({
     setRows([]);
     setOpenOwner(null);
     setRenameOpen(null);
+    setRetirementDraft(null);
     if (!renameNeedsReview) setRenameDraft(null);
   };
   const submit = async (event: FormEvent<HTMLFormElement>) => {
@@ -224,6 +290,7 @@ export function PrinterInventoryPanel({
       renderedInventoryEpoch !== inventoryReadEpoch.current ||
       needsReconciliation ||
       renameReviewGate.current === ownerKey ||
+      ownedRetirementIssue ||
       !ready ||
       !rows.length ||
       !validPrinterDrafts(rows) ||
@@ -238,8 +305,9 @@ export function PrinterInventoryPanel({
       bridgeName: bridges.find((bridge) => bridge.id === bridgeId)!.name,
     };
     const current = generation.current;
-    busy.current = true;
-    setPendingOwner(ownerKey);
+    const operation = Symbol();
+    busy.current = operation;
+    setPendingOwner({ ownerKey, operation });
     setReceipt(null);
     try {
       const result = await mutation.mutateAsync({
@@ -261,10 +329,11 @@ export function PrinterInventoryPanel({
         setReload((value) => value + 1);
       }
     } finally {
-      busy.current = false;
-      mutation.reset();
-      if (current === generation.current && owner.current === command.ownerKey)
-        setPendingOwner(null);
+      if (busy.current === operation) {
+        busy.current = null;
+        mutation.reset();
+        setPendingOwner((prior) => (prior?.operation === operation ? null : prior));
+      }
     }
   };
   const updateRename = (command: RenameDraft, change: (draft: RenameDraft) => RenameDraft) =>
@@ -309,7 +378,7 @@ export function PrinterInventoryPanel({
       )
         return;
       if (permissionError(error)) {
-        if (inventoryReadBranch.current === command.branchId) inventoryReadEpoch.current += 1;
+        if (inventoryReadBranch.current === command.branchId) bumpInventoryReadEpoch();
         setDeniedBranch({ ownerKey: command.ownerKey, branchId: command.branchId });
       }
       updateRename(command, (draft) => ({
@@ -324,6 +393,7 @@ export function PrinterInventoryPanel({
       renderedInventoryEpoch !== inventoryReadEpoch.current ||
       renameReviewGate.current === ownerKey ||
       needsReconciliation ||
+      ownedRetirementIssue ||
       !ready ||
       printer.branchId !== branchId
     )
@@ -353,7 +423,7 @@ export function PrinterInventoryPanel({
     )
       return;
     // Release only after a successful dedicated observation, then invalidate the old table.
-    inventoryReadEpoch.current += 1;
+    bumpInventoryReadEpoch();
     renameReadAttempt.current += 1;
     renameReviewGate.current = null;
     setRenameDraft(null);
@@ -395,6 +465,7 @@ export function PrinterInventoryPanel({
       ownedRename.review ||
       !ready ||
       needsReconciliation ||
+      ownedRetirementIssue ||
       ownedRename.branchId !== branchId ||
       !ownedRename.name.trim() ||
       ownedRename.name.trim().length > 120
@@ -402,8 +473,9 @@ export function PrinterInventoryPanel({
       return;
     const command = { ...ownedRename, name: ownedRename.name.trim() };
     const current = generation.current;
-    busy.current = true;
-    setPendingOwner(ownerKey);
+    const operation = Symbol();
+    busy.current = operation;
+    setPendingOwner({ ownerKey, operation });
     setRenameReceipt(null);
     updateRename(command, (draft) => ({ ...draft, error: undefined }));
     try {
@@ -433,7 +505,7 @@ export function PrinterInventoryPanel({
             'Name was not saved. Check your access and the current printer, then review the draft.',
         }));
         if (permissionError(error)) {
-          if (inventoryReadBranch.current === command.branchId) inventoryReadEpoch.current += 1;
+          if (inventoryReadBranch.current === command.branchId) bumpInventoryReadEpoch();
           setDeniedBranch({ ownerKey: command.ownerKey, branchId: command.branchId });
           setRenameOpen(null);
         }
@@ -447,18 +519,125 @@ export function PrinterInventoryPanel({
         void readRenameBaseline(command);
       }
     } finally {
-      busy.current = false;
-      renameMutation.reset();
-      if (owner.current === command.ownerKey && current === generation.current)
-        setPendingOwner(null);
+      if (busy.current === operation) {
+        busy.current = null;
+        renameMutation.reset();
+        setPendingOwner((prior) => (prior?.operation === operation ? null : prior));
+      }
+    }
+  };
+  const openRetirement = (printer: Outputs['restaurantDevices']['listPrinters'][number]) => {
+    if (
+      busy.current ||
+      renderedInventoryEpoch !== inventoryReadEpoch.current ||
+      renameReviewGate.current === ownerKey ||
+      needsReconciliation ||
+      ownedRetirementIssue ||
+      !ready ||
+      printer.branchId !== branchId ||
+      printer.retiredAt !== null
+    )
+      return;
+    setRetirementDraft({
+      ownerKey,
+      branchId,
+      branchName: branches.find((branch) => branch.id === branchId)!.name,
+      printerId: printer.id,
+      printerName: printer.name,
+      address: printer.address,
+      readEpoch: inventoryReadEpoch.current,
+      revision,
+    });
+    retirementMutation.reset();
+  };
+  const submitRetirement = async (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    if (
+      busy.current ||
+      renderedInventoryEpoch !== inventoryReadEpoch.current ||
+      renameReviewGate.current === ownerKey ||
+      needsReconciliation ||
+      ownedRetirementIssue ||
+      !ready ||
+      !ownedRetirementDraft ||
+      !loaded?.printers?.some(
+        (printer) =>
+          printer.id === ownedRetirementDraft.printerId &&
+          printer.branchId === ownedRetirementDraft.branchId &&
+          printer.retiredAt === null
+      )
+    )
+      return;
+    const command = ownedRetirementDraft;
+    const current = generation.current;
+    const authorizedAt = permissionEpoch.current;
+    const operation = Symbol();
+    busy.current = operation;
+    setPendingOwner({ ownerKey, operation });
+    setRetirementReceipt(null);
+    const stillCurrent = () =>
+      owner.current === command.ownerKey &&
+      current === generation.current &&
+      inventoryReadBranch.current === command.branchId &&
+      permissionEpoch.current === authorizedAt;
+    try {
+      const result = await retirementMutation.mutateAsync({
+        branchId: command.branchId,
+        printerId: command.printerId,
+      });
+      if (!stillCurrent()) return;
+      if (result.printer.id !== command.printerId || result.printer.branchId !== command.branchId) {
+        setRetirementIssue({
+          ...command,
+          reason: 'uncertain',
+          afterReadEpoch: inventoryReadEpoch.current,
+        });
+      } else {
+        setRetirementReceipt({
+          ownerKey: command.ownerKey,
+          branchId: command.branchId,
+          printerId: result.printer.id,
+          name: result.printer.name,
+          retiredAt: result.printer.retiredAt,
+          changed: result.changed,
+        });
+      }
+      setRetirementDraft(null);
+      setReload((value) => value + 1);
+    } catch (error) {
+      if (!stillCurrent()) return;
+      if (permissionError(error)) {
+        bumpInventoryReadEpoch();
+        setDeniedBranch({ ownerKey: command.ownerKey, branchId: command.branchId });
+      } else {
+        const code = (error as { data?: { code?: string } } | null)?.data?.code;
+        setRetirementIssue({
+          ...command,
+          afterReadEpoch: inventoryReadEpoch.current,
+          reason:
+            code === 'CONFLICT'
+              ? 'conflict'
+              : code === 'NOT_FOUND' || code === 'BAD_REQUEST'
+                ? 'error'
+                : 'uncertain',
+        });
+        setReload((value) => value + 1);
+      }
+      setRetirementDraft(null);
+    } finally {
+      if (busy.current === operation) {
+        busy.current = null;
+        retirementMutation.reset();
+        setPendingOwner((prior) => (prior?.operation === operation ? null : prior));
+      }
     }
   };
   return (
     <SectionCard title="Printer inventory" titleLevel={2}>
       <div className="space-y-4">
         <p className="text-sm text-text-muted">
-          Manage registered targets for a branch. Inventory status does not verify connectivity or
-          configure print routing.
+          Manage registered targets for a branch. Observed health does not verify connectivity;
+          retirement separately ends eligibility for new registered routing and jobs.
         </p>
         <div className="flex flex-wrap items-end gap-3">
           <div className="min-w-48 flex-1 space-y-1">
@@ -491,10 +670,15 @@ export function PrinterInventoryPanel({
             type="button"
             className="min-h-11"
             disabled={
-              !ready || pending || needsReconciliation || renameNeedsReview || !bridges.length
+              !ready ||
+              pending ||
+              needsReconciliation ||
+              renameNeedsReview ||
+              !!ownedRetirementIssue ||
+              !bridges.length
             }
             onClick={() => {
-              if (!busy.current && renameReviewGate.current !== ownerKey) {
+              if (!busy.current && renameReviewGate.current !== ownerKey && !ownedRetirementIssue) {
                 setBridgeId('');
                 setRows([]);
                 setOpenOwner(ownerKey);
@@ -551,6 +735,40 @@ export function PrinterInventoryPanel({
             This result is confirmed even if the list needs refreshing.
           </p>
         ) : null}
+        {retirementReceipt?.ownerKey === ownerKey && retirementReceipt.branchId === branchId ? (
+          <p role="status" className="text-sm text-success">
+            {retirementReceipt.changed
+              ? `Retired ${retirementReceipt.name}.`
+              : `${retirementReceipt.name} was already retired.`}{' '}
+            Saved retirement time:{' '}
+            <time dateTime={new Date(retirementReceipt.retiredAt).toISOString()}>
+              {new Date(retirementReceipt.retiredAt).toLocaleString()}
+            </time>
+            . This server result is confirmed even if the list needs refreshing.
+          </p>
+        ) : null}
+        {ownedRetirementIssue ? (
+          <div role="alert" className="space-y-2 text-sm text-destructive">
+            <p>
+              {ownedRetirementIssue.reason === 'conflict'
+                ? `Retirement of ${ownedRetirementIssue.printerName} in ${ownedRetirementIssue.branchName} could not proceed because the server reported a conflict. No retirement was saved by this request. Refresh inventory and review related routes or jobs if needed.`
+                : ownedRetirementIssue.reason === 'error'
+                  ? `${ownedRetirementIssue.printerName} in ${ownedRetirementIssue.branchName} could not be retired. Check the exact branch and printer in fresh inventory.`
+                  : `Retirement outcome is uncertain for ${ownedRetirementIssue.printerName} in ${ownedRetirementIssue.branchName}. A fresh inventory observation does not confirm whether this request completed.`}{' '}
+              No retirement request will be sent automatically.
+            </p>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={pending || !retirementReviewed}
+              onClick={() => {
+                if (!busy.current && retirementReviewed) setRetirementIssue(null);
+              }}
+            >
+              I reviewed the current inventory
+            </Button>
+          </div>
+        ) : null}
         {renameNeedsReview ? (
           <div role="alert" className="space-y-2 text-sm text-destructive">
             <p>
@@ -599,59 +817,105 @@ export function PrinterInventoryPanel({
             ) : null}
             {loaded.printers.length ? (
               <div className="overflow-x-auto">
-                <Table className="min-w-[720px]">
+                <Table className="min-w-[920px]">
                   <TableHeader>
                     <TableRow>
                       <TableHead>Name</TableHead>
                       <TableHead>Bridge</TableHead>
                       <TableHead>Target</TableHead>
                       <TableHead>Paper</TableHead>
-                      <TableHead>Status</TableHead>
+                      <TableHead>Health</TableHead>
                       <TableHead>Last seen</TableHead>
+                      <TableHead>Lifecycle</TableHead>
                       <TableHead>Actions</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {loaded.printers.map((printer) => (
-                      <TableRow key={printer.id}>
-                        <TableCell>{printer.name}</TableCell>
-                        <TableCell>{printer.bridge.name}</TableCell>
-                        <TableCell className="font-mono text-xs">{printer.address}</TableCell>
-                        <TableCell>{printer.paperWidthMm} mm</TableCell>
-                        <TableCell>
-                          <StatusPill
-                            status={printer.lastSeenAt ? printer.status : 'Not reported'}
-                            tone={
-                              printer.lastSeenAt && printer.status === 'ONLINE'
-                                ? 'success'
-                                : 'neutral'
-                            }
-                          />
-                        </TableCell>
-                        <TableCell>
-                          {printer.lastSeenAt
-                            ? new Date(printer.lastSeenAt).toLocaleString()
-                            : 'Not reported'}
-                        </TableCell>
-                        <TableCell>
-                          <Button
-                            type="button"
-                            variant="outline"
-                            className="min-h-11"
-                            aria-label={`Rename ${printer.name}`}
-                            disabled={
-                              pending ||
-                              needsReconciliation ||
-                              renameNeedsReview ||
-                              printer.branchId !== branchId
-                            }
-                            onClick={() => openRename(printer)}
-                          >
-                            Rename
-                          </Button>
-                        </TableCell>
-                      </TableRow>
-                    ))}
+                    {loaded.printers.map((printer) => {
+                      const retiredAt =
+                        printer.retiredAt ??
+                        (retirementReceipt?.ownerKey === ownerKey &&
+                        retirementReceipt.branchId === branchId &&
+                        retirementReceipt.printerId === printer.id
+                          ? retirementReceipt.retiredAt
+                          : null);
+                      return (
+                        <TableRow key={printer.id}>
+                          <TableCell>{printer.name}</TableCell>
+                          <TableCell>{printer.bridge.name}</TableCell>
+                          <TableCell className="font-mono text-xs">{printer.address}</TableCell>
+                          <TableCell>{printer.paperWidthMm} mm</TableCell>
+                          <TableCell>
+                            <StatusPill
+                              status={printer.lastSeenAt ? printer.status : 'Not reported'}
+                              tone={
+                                printer.lastSeenAt && printer.status === 'ONLINE'
+                                  ? 'success'
+                                  : 'neutral'
+                              }
+                            />
+                          </TableCell>
+                          <TableCell>
+                            {printer.lastSeenAt
+                              ? new Date(printer.lastSeenAt).toLocaleString()
+                              : 'Not reported'}
+                          </TableCell>
+                          <TableCell>
+                            {retiredAt ? (
+                              <div className="space-y-1">
+                                <StatusPill status="Retired" tone="neutral" />
+                                <time
+                                  className="block text-xs text-text-muted"
+                                  dateTime={new Date(retiredAt).toISOString()}
+                                >
+                                  {new Date(retiredAt).toLocaleString()}
+                                </time>
+                              </div>
+                            ) : (
+                              <StatusPill status="Not retired" tone="neutral" />
+                            )}
+                          </TableCell>
+                          <TableCell>
+                            <div className="flex flex-wrap gap-2">
+                              <Button
+                                type="button"
+                                variant="outline"
+                                className="min-h-11"
+                                aria-label={`Rename ${printer.name}`}
+                                disabled={
+                                  pending ||
+                                  needsReconciliation ||
+                                  renameNeedsReview ||
+                                  !!ownedRetirementIssue ||
+                                  printer.branchId !== branchId
+                                }
+                                onClick={() => openRename(printer)}
+                              >
+                                Rename
+                              </Button>
+                              {retiredAt === null ? (
+                                <Button
+                                  type="button"
+                                  variant="destructive"
+                                  className="min-h-11"
+                                  aria-label={`Retire ${printer.name}`}
+                                  disabled={
+                                    pending ||
+                                    needsReconciliation ||
+                                    renameNeedsReview ||
+                                    !!ownedRetirementIssue ||
+                                    printer.branchId !== branchId
+                                  }
+                                  onClick={() => openRetirement(printer)}
+                                >
+                                  Retire
+                                </Button>
+                              ) : null}
+                            </div>
+                          </TableCell>
+                        </TableRow>
+                      );
+                    })}
                   </TableBody>
                 </Table>
               </div>
@@ -661,6 +925,52 @@ export function PrinterInventoryPanel({
           </>
         ) : null}
       </div>
+      <Dialog
+        open={!!ownedRetirementDraft}
+        onOpenChange={(open) => {
+          if (!open && !busy.current) setRetirementDraft(null);
+        }}
+      >
+        <DialogContent className="max-h-[85vh] overflow-y-auto" showCloseButton={!pending}>
+          <DialogHeader>
+            <DialogTitle>Retire printer</DialogTitle>
+            <DialogDescription>
+              Retire {ownedRetirementDraft?.printerName} in {ownedRetirementDraft?.branchName}. This
+              ends eligibility for new registered routing and jobs. Existing routes, jobs, and
+              telemetry stay in place. Retirement does not confirm or stop physical output.
+            </DialogDescription>
+          </DialogHeader>
+          {ownedRetirementDraft ? (
+            <form onSubmit={submitRetirement} className="space-y-4">
+              <p className="text-sm">
+                Branch: <strong>{ownedRetirementDraft.branchName}</strong>
+                <br />
+                Printer: <strong>{ownedRetirementDraft.printerName}</strong>
+                <br />
+                Target: <span className="font-mono text-xs">{ownedRetirementDraft.address}</span>
+                <br />
+                Inventory ID:{' '}
+                <span className="font-mono text-xs">{ownedRetirementDraft.printerId}</span>
+              </p>
+              <DialogFooter>
+                <Button
+                  type="button"
+                  variant="secondary"
+                  disabled={pending}
+                  onClick={() => {
+                    if (!busy.current) setRetirementDraft(null);
+                  }}
+                >
+                  Cancel retirement
+                </Button>
+                <Button type="submit" variant="destructive" disabled={pending || !ready}>
+                  {pending ? 'Retiring…' : 'Confirm retirement'}
+                </Button>
+              </DialogFooter>
+            </form>
+          ) : null}
+        </DialogContent>
+      </Dialog>
       <Dialog
         open={
           !!ownedRename &&
@@ -787,6 +1097,7 @@ export function PrinterInventoryPanel({
                     renameNeedsReview ||
                     !ready ||
                     needsReconciliation ||
+                    !!ownedRetirementIssue ||
                     !ownedRename.name.trim() ||
                     ownedRename.name.trim().length > 120
                   }
@@ -850,6 +1161,7 @@ export function PrinterInventoryPanel({
                 disabled={
                   pending ||
                   needsReconciliation ||
+                  !!ownedRetirementIssue ||
                   !ready ||
                   !rows.length ||
                   !validPrinterDrafts(rows) ||
