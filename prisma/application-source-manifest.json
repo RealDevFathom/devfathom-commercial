@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "profile": "application136-printer-soft-retirement",
+  "profile": "application137-demo-reset-compatibility",
   "schema": {
     "path": "prisma/schema.prisma",
     "sha256": "26976f03096123b63f68a5bf278781580cb93c0f8b476da7da8ecf6a3aba835c",
@@ -825,13 +825,19 @@
       "mode": "000644"
     },
     {
+      "path": "prisma/migrations/20261018000000_restaurant_demo_reset_compatibility/migration.sql",
+      "sha256": "ffd8c623b70dc53b7d9e1812e594b7097a45305af28fb340d7634f4e1c6a89af",
+      "bytes": 2519,
+      "mode": "000644"
+    },
+    {
       "path": "prisma/migrations/migration_lock.toml",
       "sha256": "1db17a8d051aa136110736752c5e1f8b7ed92b6ea8e803112fbbe2497047c210",
       "bytes": 24,
       "mode": "000644"
     }
   ],
-  "sql_count": 136,
+  "sql_count": 137,
   "generated": [
     {
       "path": "src/generated/prisma/browser.ts",
