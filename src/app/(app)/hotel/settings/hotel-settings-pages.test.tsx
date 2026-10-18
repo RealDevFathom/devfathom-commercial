@@ -18,7 +18,7 @@ beforeEach(() => {
 afterEach(cleanup);
 describe('Explicit Hotel settings property selection', () => {
   it.each([{ name: 'property', page: PropertyPage },{ name: 'extras', page: ExtrasPage }])('$name never selects a default', async ({ page }) => {
-    render(await page()); expect(screen.getByRole('combobox', { name: 'Property' })).toHaveValue('');
+    render(await page({})); expect(screen.getByRole('combobox', { name: 'Property' })).toHaveValue('');
     expect(h.select).not.toHaveBeenCalled(); expect(h.get).not.toHaveBeenCalled(); expect(h.list).not.toHaveBeenCalled();
   });
   it.each([{ name: 'property', page: PropertyPage, read: 'get' },{ name: 'extras', page: ExtrasPage, read: 'list' }])('$name rechecks selected access before reading', async ({ page, read }) => {
