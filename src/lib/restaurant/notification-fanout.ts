@@ -3,7 +3,7 @@ import 'server-only';
 import { createHash } from 'node:crypto';
 
 import type { Prisma } from '@/generated/prisma/client';
-import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
+import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
 import { OUTBOX_STATUS } from '@/lib/restaurant/outbox';
 import {
   OutboxConsumerRegistry,

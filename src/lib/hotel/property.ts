@@ -76,6 +76,25 @@ export const hotelPropertyModeInput = z.object({
 });
 
 /**
+ * Is `value` a timezone this runtime's `Intl` accepts? Pure and non-throwing, so
+ * the update contract and the activation evidence apply one rule. The value is
+ * probed exactly as given — the update contract trims before it gets here, and
+ * a stored zone is judged as stored. Nothing is aliased, canonicalized or
+ * defaulted: an unknown or missing zone is simply not a recorded fact. Same
+ * probe as the platform command contract, kept here so Hotel code does not
+ * import platform code.
+ */
+export function isValidHotelTimezone(value: unknown): value is string {
+  if (typeof value !== 'string' || value.length === 0) return false;
+  try {
+    new Intl.DateTimeFormat('en', { timeZone: value }).format();
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
  * PROP-01's editable facts. `mode` is deliberately absent: it moves through
  * `modes.set`, which is its own audited decision rather than one field of a
  * settings save.
@@ -84,7 +103,12 @@ export const hotelPropertyUpdateInput = z.object({
   name: z.string().trim().min(2).max(160),
   addressLine: z.string().trim().min(1).max(300),
   city: z.string().trim().min(1).max(120),
-  timezone: z.string().trim().min(1).max(100),
+  timezone: z
+    .string()
+    .trim()
+    .min(1)
+    .max(100)
+    .refine((value) => isValidHotelTimezone(value), 'Choose a valid IANA timezone.'),
   starCategory: z.coerce.number().int().min(1).max(7).nullable().optional(),
   checkInTime: time24,
   checkOutTime: time24,

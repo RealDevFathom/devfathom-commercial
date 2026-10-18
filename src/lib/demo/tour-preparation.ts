@@ -36,6 +36,11 @@ function isEnabled(element: Element): element is HTMLElement {
 export function isVisibleDemoElement(element: Element | null): element is HTMLElement {
   if (!(element instanceof HTMLElement)) return false;
   if (element.closest('[hidden], [aria-hidden="true"]')) return false;
+  for (let ancestor = element.parentElement; ancestor; ancestor = ancestor.parentElement) {
+    if (ancestor.ownerDocument.defaultView?.getComputedStyle(ancestor).display === 'none') {
+      return false;
+    }
+  }
   const style = element.ownerDocument.defaultView?.getComputedStyle(element);
   return (
     style?.display !== 'none' && style?.visibility !== 'hidden' && style?.visibility !== 'collapse'

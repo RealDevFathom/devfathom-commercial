@@ -7,7 +7,7 @@ import {
   type RestaurantWebhookInbox,
   type RestaurantWebhookVerificationStatus,
 } from '@/generated/prisma/client';
-import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers';
+import type { RestaurantJobHandler } from '@/lib/restaurant/job-handlers-core';
 import { enqueue } from '@/lib/restaurant/scheduler';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/terminal-payments';

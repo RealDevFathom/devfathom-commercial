@@ -47,6 +47,13 @@ async function runInTenantScope<T>(
   organizationId: string,
   run: () => Promise<T>
 ): Promise<T> {
+  const [previousScope] = await db.$queryRawUnsafe<
+    { organizationId: string | null; isPlatformAdmin: string | null }[]
+  >(
+    `SELECT current_setting('app.current_organization_id', true) AS "organizationId",
+            current_setting('app.is_platform_admin', true) AS "isPlatformAdmin"`
+  );
+  if (!previousScope) throw new Error('The current demo bootstrap database scope is required.');
   await db.$queryRawUnsafe(
     `SELECT set_config('app.current_organization_id', $1, true),
             set_config('app.is_platform_admin', 'false', true)`,
@@ -56,8 +63,10 @@ async function runInTenantScope<T>(
     return await run();
   } finally {
     await db.$queryRawUnsafe(
-      `SELECT set_config('app.current_organization_id', '', true),
-              set_config('app.is_platform_admin', 'true', true)`
+      `SELECT set_config('app.current_organization_id', $1, true),
+              set_config('app.is_platform_admin', $2, true)`,
+      previousScope.organizationId ?? '',
+      previousScope.isPlatformAdmin ?? 'false'
     );
   }
 }

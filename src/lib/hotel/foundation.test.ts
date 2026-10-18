@@ -5,7 +5,12 @@ import * as catalog from '@/lib/vertical-catalog';
 import { MODULE_CATALOG } from '@/lib/module-catalog';
 import { POLICIES, type Action } from '@/lib/abac/policies';
 import { syncPlatformCatalog } from '../../../prisma/catalog-sync';
-import { defaultBookingEngineSlug, bookingEngineSlug } from './property';
+import {
+  defaultBookingEngineSlug,
+  bookingEngineSlug,
+  hotelPropertyUpdateInput,
+  isValidHotelTimezone,
+} from './property';
 import {
   evaluateHotelReadiness,
   evaluateHotelOnboarding,
@@ -188,5 +193,80 @@ describe('hotel activation evidence', () => {
     await expect(evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1')).rejects.toThrow(
       'unavailable'
     );
+  });
+});
+
+describe('hotel property timezone', () => {
+  const facts = {
+    name: 'Example Hotel',
+    addressLine: 'Synthetic street',
+    city: 'Lahore',
+    timezone: 'Asia/Karachi',
+    checkInTime: '14:00',
+    checkOutTime: '12:00',
+    auditTime: '03:00',
+    currency: 'PKR',
+    languages: ['en'],
+    bookingEngineSlug: 'example-hotel',
+  };
+  const zoneIssue = expect.objectContaining({
+    path: ['timezone'],
+    message: 'Choose a valid IANA timezone.',
+  });
+
+  // UTC, a zone without daylight saving time and one with it.
+  it.each(['UTC', 'Asia/Karachi', 'America/New_York'])('accepts %s', (zone) => {
+    expect(isValidHotelTimezone(zone)).toBe(true);
+    expect(hotelPropertyUpdateInput.parse({ ...facts, timezone: zone }).timezone).toBe(zone);
+  });
+  it('trims a valid zone before it is checked and stored', () => {
+    const parsed = hotelPropertyUpdateInput.parse({ ...facts, timezone: '  America/New_York  ' });
+    expect(parsed.timezone).toBe('America/New_York');
+  });
+  it.each(['Mars/Phobos', 'Asia/Atlantis', 'not a timezone'])(
+    'refuses the unknown zone %s on the timezone field',
+    (zone) => {
+      expect(isValidHotelTimezone(zone)).toBe(false);
+      const result = hotelPropertyUpdateInput.safeParse({ ...facts, timezone: zone });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toEqual(expect.arrayContaining([zoneIssue]));
+    }
+  );
+  it.each([
+    ['blank', ''],
+    ['whitespace-only', '   '],
+    ['null', null],
+    ['missing', undefined],
+  ])('keeps a %s timezone invalid, with no UTC fallback', (_label, zone) => {
+    expect(isValidHotelTimezone(zone)).toBe(false);
+    const result = hotelPropertyUpdateInput.safeParse({ ...facts, timezone: zone });
+    expect(result.success).toBe(false);
+    expect(result.error?.issues.some((issue) => issue.path[0] === 'timezone')).toBe(true);
+  });
+  it('keeps the existing 100-character limit', () => {
+    const result = hotelPropertyUpdateInput.safeParse({ ...facts, timezone: 'x'.repeat(101) });
+    expect(result.error?.issues).toEqual(
+      expect.arrayContaining([expect.objectContaining({ path: ['timezone'], code: 'too_big' })])
+    );
+  });
+  it('counts property facts only for a stored zone the runtime accepts', () => {
+    for (const zone of ['UTC', 'Asia/Karachi', 'America/New_York'])
+      expect(hotelEvidence({ ...property, timezone: zone }, 15, 15, 1).PROPERTY_FACTS).toBe(true);
+    for (const zone of ['Mars/Phobos', 'not a timezone', '', '   ', null]) {
+      const evidence = hotelEvidence({ ...property, timezone: zone }, 15, 15, 1);
+      expect(evidence.PROPERTY_FACTS).toBe(false);
+      const blocking = evaluateHotelOnboarding('org_1', evidence).blocking.map((item) => item.key);
+      expect(blocking).toEqual(['PROPERTY_FACTS']);
+    }
+    expect(hotelEvidence(null, 15, 15, 1).PROPERTY_FACTS).toBe(false);
+  });
+  it('keeps readiness non-throwing and blocking when the stored zone is unknown', async () => {
+    const db = {
+      hotelProperty: { findFirst: vi.fn(async () => ({ ...property, timezone: 'Mars/Phobos' })) },
+      organizationRole: { count: vi.fn(async () => 15) },
+    };
+    const result = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
+    expect(result.ready).toBe(false);
+    expect(result.blocking.map((item) => item.key)).toEqual(['PROPERTY_FACTS', 'ROOM_TYPES']);
   });
 });

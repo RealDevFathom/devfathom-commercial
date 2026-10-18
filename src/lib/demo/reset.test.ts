@@ -25,6 +25,10 @@ const RESET_POLICY_FOLLOWUP_MIGRATION = resolve(
   process.cwd(),
   'prisma/migrations/20260905100000_restaurant_demo_reset_delete_rls/migration.sql'
 );
+const RESET_COMPATIBILITY_MIGRATION = resolve(
+  process.cwd(),
+  'prisma/migrations/20261018000000_restaurant_demo_reset_compatibility/migration.sql'
+);
 const REMAINING_DELETE_POLICY_TABLES = [
   'restaurant_daily_close_tender_totals',
   'restaurant_daily_closes',
@@ -42,6 +46,38 @@ const REMAINING_DELETE_POLICY_TABLES = [
   'restaurant_tax_refund_allocations',
   'restaurant_tenders',
   'restaurant_terminal_reconciliations',
+] as const;
+const RESET_CYCLE_FOREIGN_KEYS = [
+  {
+    constraintName: 'catering_approved_quote_fk',
+    tableName: 'restaurant_catering_orders',
+    parentTable: 'restaurant_catering_quote_revisions',
+    columns: ['organizationId', 'id', 'approvedQuoteRevisionId'],
+    parentColumns: ['organizationId', 'orderId', 'id'],
+    deleteAction: 'r',
+    deferrable: false,
+    initiallyDeferred: false,
+  },
+  {
+    constraintName: 'catering_confirmed_quote_fk',
+    tableName: 'restaurant_catering_orders',
+    parentTable: 'restaurant_catering_quote_revisions',
+    columns: ['organizationId', 'id', 'confirmedQuoteRevisionId'],
+    parentColumns: ['organizationId', 'orderId', 'id'],
+    deleteAction: 'r',
+    deferrable: false,
+    initiallyDeferred: false,
+  },
+  {
+    constraintName: 'restaurant_growth_draft_fk',
+    tableName: 'restaurant_growth_reviews',
+    parentTable: 'restaurant_growth_drafts',
+    columns: ['organizationId', 'branchId', 'draftId'],
+    parentColumns: ['organizationId', 'branchId', 'id'],
+    deleteAction: 'a',
+    deferrable: true,
+    initiallyDeferred: true,
+  },
 ] as const;
 
 function fakeDb(
@@ -84,7 +120,7 @@ function fakeDb(
     ...organization,
   };
 
-  const query = vi.fn(async (sql: string) => {
+  const query = vi.fn(async (sql: string, ...parameters: unknown[]) => {
     if (sql.includes('FOR UPDATE OF organization')) return [locked];
     if (sql.includes('SELECT id, email FROM users')) {
       return [
@@ -108,9 +144,22 @@ function fakeDb(
           parentTable: null,
           deleteAction: null,
         })),
+        ...RESET_CYCLE_FOREIGN_KEYS,
         ...foreignKeys,
       ];
     }
+    if (sql.includes("current_setting('app.current_branch_id'")) {
+      return [{ currentBranchId: 'branch_original', compatibilityReady: true }];
+    }
+    if (sql.includes('SELECT id FROM restaurant_branches')) return [{ id: 'branch_demo_1' }];
+    if (sql.includes("set_config('app.current_branch_id'")) {
+      events.push(parameters[0] === 'branch_original' ? 'branch:restore' : 'branch:set');
+      return [{}];
+    }
+    if (sql.includes('count(*)') && sql.includes('FROM restaurant_catering_orders')) {
+      return [{ count: 0 }];
+    }
+    if (sql.includes('count(*)') && sql.includes('restaurant_growth_')) return [{ count: 0 }];
     if (sql.includes('SELECT COALESCE(')) return [{ allowed: true }];
     if (sql.includes("set_config('app.demo_reset_organization_id', $1")) {
       events.push('guc:set');
@@ -132,6 +181,8 @@ function fakeDb(
     throw new Error(`Unexpected query: ${sql.slice(0, 80)}`);
   });
   const execute = vi.fn(async (sql: string, ...parameters: unknown[]) => {
+    if (sql.startsWith('SET CONSTRAINTS')) return 0;
+    if (sql.startsWith('UPDATE restaurant_catering_orders')) return 0;
     if (sql.startsWith('DELETE')) {
       events.push('delete');
       deletes.push({ sql, parameters });
@@ -163,10 +214,13 @@ beforeEach(() => {
 });
 
 describe('resetDemoSeatInTransaction', () => {
-  it('pins exactly 34 named DELETE policies and their approved predicate across all migrations', () => {
+  it('pins exactly 34 legacy named DELETE policies and their approved predicate', () => {
     const migrations = resolve(process.cwd(), 'prisma/migrations');
     const sql = readdirSync(migrations, { withFileTypes: true })
-      .filter((entry) => entry.isDirectory())
+      .filter(
+        (entry) =>
+          entry.isDirectory() && entry.name !== '20261018000000_restaurant_demo_reset_compatibility'
+      )
       .sort((a, b) => a.name.localeCompare(b.name))
       .map((entry) => readFileSync(resolve(migrations, entry.name, 'migration.sql'), 'utf8'))
       .join('\n')
@@ -209,6 +263,26 @@ describe('resetDemoSeatInTransaction', () => {
             `CREATE POLICY "restaurant_demo_reset_delete" ON "${table}" FOR DELETE USING (public.restaurant_demo_reset_allowed("organizationId"));`
         )
         .sort()
+    );
+  });
+
+  it('pins compatibility DELETE policies to the seven reviewed catering tables', () => {
+    const sql = readFileSync(RESET_COMPATIBILITY_MIGRATION, 'utf8');
+    const tableList = sql.match(/FOREACH table_name IN ARRAY ARRAY\[([\s\S]*?)\] LOOP/);
+    const tables = [...(tableList?.[1] ?? '').matchAll(/'([^']+)'/g)].map((match) => match[1]);
+
+    expect(tables).toEqual([
+      'restaurant_catering_events',
+      'restaurant_catering_branch_capacity',
+      'restaurant_catering_quote_revisions',
+      'restaurant_catering_quote_approvals',
+      'restaurant_catering_dispositions',
+      'restaurant_catering_commands',
+      'restaurant_catering_money_evidence',
+    ]);
+    expect(sql.match(/\brestaurant_demo_reset_delete\b/g)).toHaveLength(1);
+    expect(sql).toContain(
+      'CREATE POLICY restaurant_demo_reset_delete ON public.%I FOR DELETE USING (public.restaurant_demo_reset_compatibility_allowed("organizationId"))'
     );
   });
 
@@ -292,7 +366,9 @@ describe('resetDemoSeatInTransaction', () => {
     ).toBe(false);
     expect(
       fake.query.mock.calls.filter(([sql]) => String(sql).includes('SELECT COALESCE('))
-    ).toHaveLength(fake.deletes.length);
+    ).toHaveLength(fake.deletes.length + 1);
+    expect(fake.events.filter((event) => event === 'branch:set')).toHaveLength(5);
+    expect(fake.events.filter((event) => event === 'branch:restore')).toHaveLength(5);
     expect(fake.events.indexOf('guc:clear')).toBeLessThan(fake.events.indexOf('rebuild'));
     expect(fake.events.indexOf('rebuild')).toBeLessThan(fake.events.indexOf('last-reset'));
   });

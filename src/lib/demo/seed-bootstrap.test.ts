@@ -92,7 +92,11 @@ function defaultManager(overrides: Record<string, unknown> = {}) {
 
 function createDb(state: State): ScopedDb {
   return {
-    $queryRawUnsafe: vi.fn(async () => [{ set_config: '' }]),
+    $queryRawUnsafe: vi.fn(async (sql: string) =>
+      sql.includes("current_setting('app.current_organization_id'")
+        ? [{ organizationId: 'outer_org', isPlatformAdmin: 'true' }]
+        : [{ set_config: '' }]
+    ),
     organization: { findUnique: vi.fn(async () => state.organization) },
     user: { findUnique: vi.fn(async () => state.manager) },
     restaurantStaffProfile: {
@@ -186,7 +190,12 @@ describe('provisionDemoRestaurantSeatInTransaction', () => {
     expect(JSON.stringify(mocks.issueCredential.mock.calls)).not.toContain(
       'focused-demo-bootstrap-test-secret'
     );
-    expect(db.$queryRawUnsafe).toHaveBeenCalledTimes(2);
+    expect(db.$queryRawUnsafe).toHaveBeenCalledTimes(3);
+    expect(db.$queryRawUnsafe).toHaveBeenLastCalledWith(
+      expect.stringContaining("set_config('app.current_organization_id', $1, true)"),
+      'outer_org',
+      'true'
+    );
   });
 
   it('preserves generated staff, role, and credential IDs on rerun', async () => {

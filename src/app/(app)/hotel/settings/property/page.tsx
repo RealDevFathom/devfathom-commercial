@@ -22,7 +22,7 @@ export default async function HotelPropertySettingsPage({
   searchParams,
 }: {
   searchParams?: Promise<{ branchId?: string | string[] }>;
-} = {}) {
+}) {
   let view:
     | { kind: 'choices'; properties: { branchId: string; name: string }[] }
     | { kind: 'settings'; props: Parameters<typeof HotelPropertySettingsForm>[0] }

@@ -3,7 +3,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({ isDemoTenant: vi.fn() }));
 
 vi.mock('server-only', () => ({}));
-vi.mock('@/lib/demo/isolation', () => ({ isDemoTenant: mocks.isDemoTenant }));
+vi.mock('@/lib/tenancy/demo-isolation', () => ({ isDemoTenant: mocks.isDemoTenant }));
 
 import { createMenuImportExtractHandler } from './menu-import';
 
