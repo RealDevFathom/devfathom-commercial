@@ -371,8 +371,8 @@ from ONLINE/OFFLINE telemetry, and blocks retirement on every registered route r
 or unresolved registered job. Every fresh registered-job producer must participate in the
 reviewed transaction and locking contract before a retirement writer can be enabled.
 
-This checkpoint records policy only. Retirement, restoration and its UI are not implemented;
-existing printing behavior and accepted source evidence remain unchanged.
+This was a policy-only checkpoint before the backend and inventory UI slices. The one-way
+retirement path is now present in source; restoration remains outside this contract.
 
 
 ### Registered admission row locking
@@ -401,5 +401,8 @@ retired records; stored replay and valid ACK behavior remain unchanged.
 The callback verifies actual ReadCommitted isolation and takes branch then printer update
 locks before checking blockers. This source slice includes an additive migration and offline
 generated client, but no migration execution or deployment. Old writers must be stopped or
-replaced before enabling the endpoint in a deployed environment. UI, live concurrency, RLS
-and rollout acceptance remain open.
+replaced before enabling the endpoint in a deployed environment. The inventory panel now
+provides branch/printer confirmation, retained server-timestamp receipts and a fresh-read
+acknowledgement path for unresolved outcomes. Its synthetic tests do not establish visual
+or browser behavior. Live concurrency/RLS, migration execution, runtime behavior, physical
+output and old-writer rollout acceptance remain open.
