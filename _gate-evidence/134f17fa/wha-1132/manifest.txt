@@ -1,0 +1,41 @@
+WHA-1210 / WHA-1132 CORRECTION GATE MANIFEST
+
+status: FAIL
+head: 134f17fa15dc6cb3733f1368dcff54b1faf47a7d
+branch: WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se
+evidence_root: _gate-evidence/134f17fa/wha-1132
+prior_evidence_inspected: /Users/Saad/Developer/paperclip-worktrees/_gate-evidence/b59f39a8/wha-1132
+prior_false_manifest_removed: yes
+product_or_test_edits: none
+
+dependency_copy: cp -Rc from WHA-1116 candidate; exit 0
+prisma_generate: exit 0; Prisma Client 7.9.1
+postgresql_version: 16.15
+postgresql_endpoint: 127.0.0.1:55593
+fresh_cluster: yes
+database_owner: gate_owner (non-superuser, NOBYPASSRLS)
+runtime_role: gate_runtime (non-superuser, NOBYPASSRLS)
+database_urls: restaurant, platform, agency all TCP URLs on 127.0.0.1:55593
+restaurant_restoration_db: RESTAURANT_E2E_RESTORATION_DB=1
+build: PASS; NEXT_BUILD_EXIT=0; BUILD_ID=n4IQF8HUedODCEu4fMOvx
+execution: one strict-serial substantive pass via 21-run-all-lanes.sh invoking 02, 03, 05; retries 0
+
+restaurant: FAIL; expected/passed=14; unexpected=1; skipped=0; total=15
+platform: FAIL; expected/passed=7; unexpected=2; skipped/did-not-run=3; total=12; discovered files=5
+agency: PASS; expected/passed=8; unexpected=0; skipped=0; total=8
+required_counts_verdict: FAIL (unexpected and skipped are not zero)
+
+exact_first_failure: tests/e2e/restaurant-pos-kds.spec.ts:224:28 — expect(preview.totals).toMatchObject expected grossSales="28.00" and netSales="28.00"; received grossSales="0.00" and netSales="0.00".
+first_failure_test: restaurant POS and KDS core flow › shift, order, KOT, KDS, split tender, drawer and close ledgers reconcile
+first_failure_screenshot_1: artifacts/restaurant/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/test-failed-1.png
+first_failure_screenshot_2: artifacts/restaurant/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/test-failed-2.png
+first_failure_trace: artifacts/restaurant/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/trace.zip
+first_failure_video: artifacts/restaurant/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/video.webm
+
+platform_failure_1: platform-control-plane-pharmacy-lifecycle.spec.ts:217:5 — pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+platform_failure_2: platform-control-plane.spec.ts:251:64 — expected visible text "Use 24-hour time, e.g. 09:30"; element not found within 5000ms
+platform_failure_artifacts: artifacts/platform/
+
+cluster_stop: exit 0
+port_55593_final_listener: absent
+reruns: none

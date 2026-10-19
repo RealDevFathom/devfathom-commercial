@@ -1,0 +1,827 @@
+{
+  "config": {
+    "argv": [
+      "/Users/Saad/.hermes/node/bin/node",
+      "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/node_modules/.bin/playwright",
+      "test",
+      "--config=playwright.restaurant-integrated.config.ts",
+      "--reporter=list,json"
+    ],
+    "configFile": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/playwright.restaurant-integrated.config.ts",
+    "rootDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-global-setup.ts",
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/test-results/restaurant-integrated",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "restaurant-integrated-serial",
+        "name": "restaurant-integrated-serial",
+        "testDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e",
+        "testIgnore": [
+          "platform-control-plane*.spec.ts"
+        ],
+        "testMatch": [
+          "restaurant-controls-final.spec.ts",
+          "restaurant-integrated.spec.ts",
+          "restaurant-lifecycles-final.spec.ts",
+          "restaurant-pos-kds.spec.ts",
+          "restaurant-pos-kds-resilience.spec.ts",
+          "restaurant-delivery.spec.ts"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "list"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.0",
+    "workers": 1,
+    "webServer": {
+      "command": "bunx next start --port 4319",
+      "url": "http://127.0.0.1:4319",
+      "reuseExistingServer": false,
+      "timeout": 120000,
+      "env": {
+        "AUTH_SECRET": "fa439c04eb91ff36d31ed76e584e444dba3928c262d883b98b8294a400b715de3c709a44106811e3b783241e27285cfa",
+        "AUTH_TRUST_HOST": "true",
+        "DATABASE_URL": "postgresql://gate_runtime@127.0.0.1:55593/restaurant_e2e_gate",
+        "RESTAURANT_INTEGRATED_E2E": "1"
+      }
+    }
+  },
+  "suites": [
+    {
+      "title": "restaurant-controls-final.spec.ts",
+      "file": "restaurant-controls-final.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "Finance is readable by the owner and denied to an authenticated assigned-branch operator",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 3300,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:20:43.188Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1f1e323a13aa04e0679b-846fe1490062694007b3",
+          "file": "restaurant-controls-final.spec.ts",
+          "line": 20,
+          "column": 5
+        },
+        {
+          "title": "a newly opened drawer survives reload and lock recovery while a foreign device fails closed",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2386,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:20:46.580Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1f1e323a13aa04e0679b-98032219426a097f3d6a",
+          "file": "restaurant-controls-final.spec.ts",
+          "line": 53,
+          "column": 5
+        },
+        {
+          "title": "branch controls use readable codes and enforce duplicate, limit, and deactivation guards",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1996,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:20:48.972Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1f1e323a13aa04e0679b-f5d26285611257756f3a",
+          "file": "restaurant-controls-final.spec.ts",
+          "line": 156,
+          "column": 5
+        },
+        {
+          "title": "Pakistan profiles and the CASH preview render exact rounding",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 1388,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:20:50.975Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1f1e323a13aa04e0679b-61a6450b844379e1cd36",
+          "file": "restaurant-controls-final.spec.ts",
+          "line": 191,
+          "column": 5
+        },
+        {
+          "title": "dashboard date and visibility preferences persist and reports render the selected export link",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 6848,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:20:52.370Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1f1e323a13aa04e0679b-a8401a7f76977c20ee40",
+          "file": "restaurant-controls-final.spec.ts",
+          "line": 201,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "restaurant-delivery.spec.ts",
+      "file": "restaurant-delivery.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "direct delivery authorization, COD/PREPAID handoff and fee reporting remain integrated",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [
+                {
+                  "type": "slow",
+                  "location": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-delivery.spec.ts",
+                    "line": 290,
+                    "column": 8
+                  }
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 41770,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:20:59.305Z",
+                  "annotations": [
+                    {
+                      "type": "slow",
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-delivery.spec.ts",
+                        "line": 290,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "1a2cd4adadbc3f5fb360-c081d43fae4170ed78bc",
+          "file": "restaurant-delivery.spec.ts",
+          "line": 285,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "restaurant-integrated.spec.ts",
+      "file": "restaurant-integrated.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "runtime observer ignores only aborted successful RSC fetches",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 4,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:21:41.122Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "39cde4e2f451974755d8-fa9b58d6603c81218122",
+          "file": "restaurant-integrated.spec.ts",
+          "line": 61,
+          "column": 5
+        },
+        {
+          "title": "integrated restaurant route matrix remains tenant-safe and browser-clean",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [
+                {
+                  "type": "slow",
+                  "location": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-integrated.spec.ts",
+                    "line": 81,
+                    "column": 8
+                  }
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 9963,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:21:41.137Z",
+                  "annotations": [
+                    {
+                      "type": "slow",
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-integrated.spec.ts",
+                        "line": 81,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "39cde4e2f451974755d8-7533918c0031d8bbe785",
+          "file": "restaurant-integrated.spec.ts",
+          "line": 78,
+          "column": 5
+        },
+        {
+          "title": "fixture publishes named order inputs and explicit pending UI seams",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [
+                {
+                  "type": "pending-service-charge-ui",
+                  "description": "service-policy-pending-integration"
+                },
+                {
+                  "type": "refund-request-api-seam",
+                  "description": "refund-evidence-derived-from-settled-bill"
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 2564,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:21:51.122Z",
+                  "annotations": [
+                    {
+                      "type": "pending-service-charge-ui",
+                      "description": "service-policy-pending-integration"
+                    },
+                    {
+                      "type": "refund-request-api-seam",
+                      "description": "refund-evidence-derived-from-settled-bill"
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "39cde4e2f451974755d8-8baa912e399853e5f95e",
+          "file": "restaurant-integrated.spec.ts",
+          "line": 127,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "restaurant-lifecycles-final.spec.ts",
+      "file": "restaurant-lifecycles-final.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "real menu image is extracted, reviewed, and imported as priced drafts",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [
+                {
+                  "type": "slow",
+                  "location": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-lifecycles-final.spec.ts",
+                    "line": 91,
+                    "column": 8
+                  }
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 29917,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:21:53.764Z",
+                  "annotations": [
+                    {
+                      "type": "slow",
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-lifecycles-final.spec.ts",
+                        "line": 91,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "77873bac4f7adc0d579d-528df0acf3c17e8867e9",
+          "file": "restaurant-lifecycles-final.spec.ts",
+          "line": 90,
+          "column": 5
+        },
+        {
+          "title": "POS preserves an offline order and denies connected-only submission until exactly-once replay",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [
+                {
+                  "type": "slow",
+                  "location": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-lifecycles-final.spec.ts",
+                    "line": 150,
+                    "column": 8
+                  }
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "restaurant-integrated-serial",
+              "projectName": "restaurant-integrated-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "passed",
+                  "duration": 7416,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-02T23:22:23.700Z",
+                  "annotations": [
+                    {
+                      "type": "slow",
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-lifecycles-final.spec.ts",
+                        "line": 150,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "attachments": []
+                }
+              ],
+              "status": "expected"
+            }
+          ],
+          "id": "77873bac4f7adc0d579d-085606871a0f8867dcf1",
+          "file": "restaurant-lifecycles-final.spec.ts",
+          "line": 147,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "restaurant-pos-kds-resilience.spec.ts",
+      "file": "restaurant-pos-kds-resilience.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "restaurant browser resilience",
+          "file": "restaurant-pos-kds-resilience.spec.ts",
+          "line": 44,
+          "column": 6,
+          "specs": [
+            {
+              "title": "KDS keeps stale state offline, reconnects, and refreshes server 86 availability",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "restaurant-integrated-serial",
+                  "projectName": "restaurant-integrated-serial",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 5070,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-02T23:22:31.175Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "ffa404762447d77bf24c-bc6223449f643b4d9f24",
+              "file": "restaurant-pos-kds-resilience.spec.ts",
+              "line": 45,
+              "column": 7
+            },
+            {
+              "title": "a dropped KDS mutation retries with the same idempotency key exactly once",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "restaurant-integrated-serial",
+                  "projectName": "restaurant-integrated-serial",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 10730,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-02T23:22:36.259Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "ffa404762447d77bf24c-d64d3afb6a50330de11b",
+              "file": "restaurant-pos-kds-resilience.spec.ts",
+              "line": 91,
+              "column": 7
+            },
+            {
+              "title": "gap response forces a bounded full queue review before accepting the next cursor",
+              "ok": true,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 30000,
+                  "annotations": [],
+                  "expectedStatus": "passed",
+                  "projectId": "restaurant-integrated-serial",
+                  "projectName": "restaurant-integrated-serial",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "passed",
+                      "duration": 1587,
+                      "errors": [],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-02T23:22:46.998Z",
+                      "annotations": [],
+                      "attachments": []
+                    }
+                  ],
+                  "status": "expected"
+                }
+              ],
+              "id": "ffa404762447d77bf24c-7b8f7bd9a1697bb3d4c4",
+              "file": "restaurant-pos-kds-resilience.spec.ts",
+              "line": 126,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    },
+    {
+      "title": "restaurant-pos-kds.spec.ts",
+      "file": "restaurant-pos-kds.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [],
+      "suites": [
+        {
+          "title": "restaurant POS and KDS core flow",
+          "file": "restaurant-pos-kds.spec.ts",
+          "line": 54,
+          "column": 6,
+          "specs": [
+            {
+              "title": "shift, order, KOT, KDS, split tender, drawer and close ledgers reconcile",
+              "ok": false,
+              "tags": [],
+              "tests": [
+                {
+                  "timeout": 90000,
+                  "annotations": [
+                    {
+                      "type": "slow",
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-pos-kds.spec.ts",
+                        "line": 61,
+                        "column": 10
+                      }
+                    }
+                  ],
+                  "expectedStatus": "passed",
+                  "projectId": "restaurant-integrated-serial",
+                  "projectName": "restaurant-integrated-serial",
+                  "results": [
+                    {
+                      "workerIndex": 0,
+                      "parallelIndex": 0,
+                      "status": "failed",
+                      "duration": 5978,
+                      "error": {
+                        "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoMatchObject\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m\n\n\u001b[32m- Expected  - 2\u001b[39m\n\u001b[31m+ Received  + 2\u001b[39m\n\n\u001b[2m  Object {\u001b[22m\n\u001b[32m-   \"grossSales\": \"28.00\",\u001b[39m\n\u001b[32m-   \"netSales\": \"28.00\",\u001b[39m\n\u001b[31m+   \"grossSales\": \"0.00\",\u001b[39m\n\u001b[31m+   \"netSales\": \"0.00\",\u001b[39m\n\u001b[2m  }\u001b[22m",
+                        "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoMatchObject\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m\n\n\u001b[32m- Expected  - 2\u001b[39m\n\u001b[31m+ Received  + 2\u001b[39m\n\n\u001b[2m  Object {\u001b[22m\n\u001b[32m-   \"grossSales\": \"28.00\",\u001b[39m\n\u001b[32m-   \"netSales\": \"28.00\",\u001b[39m\n\u001b[31m+   \"grossSales\": \"0.00\",\u001b[39m\n\u001b[31m+   \"netSales\": \"0.00\",\u001b[39m\n\u001b[2m  }\u001b[22m\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-pos-kds.spec.ts:224:28",
+                        "location": {
+                          "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-pos-kds.spec.ts",
+                          "column": 28,
+                          "line": 224
+                        },
+                        "snippet": "  222 |     expect(previewResponse.status()).toBe(200);\n  223 |     const preview = await previewResponse.json();\n> 224 |     expect(preview.totals).toMatchObject({\n      |                            ^\n  225 |       grossSales: fixture.expected.twoItemTotal,\n  226 |       netSales: fixture.expected.twoItemTotal,\n  227 |     });"
+                      },
+                      "errors": [
+                        {
+                          "location": {
+                            "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-pos-kds.spec.ts",
+                            "column": 28,
+                            "line": 224
+                          },
+                          "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mreceived\u001b[39m\u001b[2m).\u001b[22mtoMatchObject\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m\n\n\u001b[32m- Expected  - 2\u001b[39m\n\u001b[31m+ Received  + 2\u001b[39m\n\n\u001b[2m  Object {\u001b[22m\n\u001b[32m-   \"grossSales\": \"28.00\",\u001b[39m\n\u001b[32m-   \"netSales\": \"28.00\",\u001b[39m\n\u001b[31m+   \"grossSales\": \"0.00\",\u001b[39m\n\u001b[31m+   \"netSales\": \"0.00\",\u001b[39m\n\u001b[2m  }\u001b[22m\n\n  222 |     expect(previewResponse.status()).toBe(200);\n  223 |     const preview = await previewResponse.json();\n> 224 |     expect(preview.totals).toMatchObject({\n      |                            ^\n  225 |       grossSales: fixture.expected.twoItemTotal,\n  226 |       netSales: fixture.expected.twoItemTotal,\n  227 |     });\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-pos-kds.spec.ts:224:28"
+                        }
+                      ],
+                      "stdout": [],
+                      "stderr": [],
+                      "retry": 0,
+                      "startTime": "2026-09-02T23:22:48.619Z",
+                      "annotations": [
+                        {
+                          "type": "slow",
+                          "location": {
+                            "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-pos-kds.spec.ts",
+                            "line": 61,
+                            "column": 10
+                          }
+                        }
+                      ],
+                      "attachments": [
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/test-results/restaurant-integrated/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/test-failed-1.png"
+                        },
+                        {
+                          "name": "video",
+                          "contentType": "video/webm",
+                          "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/test-results/restaurant-integrated/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/video.webm"
+                        },
+                        {
+                          "name": "screenshot",
+                          "contentType": "image/png",
+                          "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/test-results/restaurant-integrated/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/test-failed-2.png"
+                        },
+                        {
+                          "name": "error-context",
+                          "contentType": "text/markdown",
+                          "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/test-results/restaurant-integrated/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/error-context.md"
+                        },
+                        {
+                          "name": "trace",
+                          "contentType": "application/zip",
+                          "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/test-results/restaurant-integrated/restaurant-pos-kds-restaur-46060-and-close-ledgers-reconcile-restaurant-integrated-serial/trace.zip"
+                        }
+                      ],
+                      "errorLocation": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/restaurant-pos-kds.spec.ts",
+                        "column": 28,
+                        "line": 224
+                      }
+                    }
+                  ],
+                  "status": "unexpected"
+                }
+              ],
+              "id": "99dc28d8d437abc9401f-609d63471fd50eecd2e2",
+              "file": "restaurant-pos-kds.spec.ts",
+              "line": 55,
+              "column": 7
+            }
+          ]
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-02T23:20:39.283Z",
+    "duration": 135958.595,
+    "expected": 14,
+    "skipped": 0,
+    "unexpected": 1,
+    "flaky": 0
+  }
+}

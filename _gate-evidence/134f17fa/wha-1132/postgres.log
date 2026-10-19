@@ -1,0 +1,31 @@
+2026-09-03 04:15:39.162 PKT [80499] LOG:  starting PostgreSQL 16.15 (Homebrew) on aarch64-apple-darwin25.6.0, compiled by Apple clang version 21.0.0 (clang-2100.1.1.101), 64-bit
+2026-09-03 04:15:39.163 PKT [80499] LOG:  listening on IPv4 address "127.0.0.1", port 55593
+2026-09-03 04:15:39.163 PKT [80499] LOG:  listening on Unix socket "/Users/Saad/devfathom-gates/134f17fa/browser/socket/.s.PGSQL.55593"
+2026-09-03 04:15:39.166 PKT [80502] LOG:  database system was shut down at 2026-09-03 04:15:39 PKT
+2026-09-03 04:15:39.169 PKT [80499] LOG:  database system is ready to accept connections
+2026-09-03 04:18:04.140 PKT [3401] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-03 04:18:04.221 PKT [3401] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-03 04:18:18.209 PKT [6097] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-03 04:18:18.283 PKT [6097] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-03 04:18:32.014 PKT [6310] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-03 04:18:32.089 PKT [6310] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-03 04:20:39.304 PKT [80500] LOG:  checkpoint starting: time
+2026-09-03 04:23:31.614 PKT [35812] ERROR:  pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+2026-09-03 04:23:31.614 PKT [35812] CONTEXT:  PL/pgSQL function pharmacy_reject_regulatory_rewrite() line 10 at RAISE
+2026-09-03 04:23:31.614 PKT [35812] STATEMENT:  UPDATE pharmacy_branch_regulatory_profiles SET "effectiveTo"='2026-09-02T01:00:00.000Z' WHERE id='e2e_pharmacy_profile_provisional'
+2026-09-03 04:23:47.685 PKT [34626] ERROR:  forced e2e rollback
+2026-09-03 04:23:47.685 PKT [34626] CONTEXT:  PL/pgSQL function e2e_force_setting_rollback() line 1 at RAISE
+2026-09-03 04:23:47.685 PKT [34626] STATEMENT:  INSERT INTO "public"."platform_settings" ("id","key","category","value","sensitive","updatedById","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT ("key") DO UPDATE SET "category" = $9, "value" = $10, "sensitive" = $11, "updatedById" = $12, "updatedAt" = $13 WHERE ("public"."platform_settings"."key" = $14 AND 1=1) RETURNING "public"."platform_settings"."id", "public"."platform_settings"."key", "public"."platform_settings"."category", "public"."platform_settings"."value", "public"."platform_settings"."description", "public"."platform_settings"."sensitive", "public"."platform_settings"."updatedById", "public"."platform_settings"."createdAt", "public"."platform_settings"."updatedAt"
+2026-09-03 04:23:47.780 PKT [34626] ERROR:  forced e2e rollback
+2026-09-03 04:23:47.780 PKT [34626] CONTEXT:  PL/pgSQL function e2e_force_setting_rollback() line 1 at RAISE
+2026-09-03 04:23:47.780 PKT [34626] STATEMENT:  INSERT INTO "public"."platform_settings" ("id","key","category","value","sensitive","updatedById","createdAt","updatedAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT ("key") DO UPDATE SET "category" = $9, "value" = $10, "sensitive" = $11, "updatedById" = $12, "updatedAt" = $13 WHERE ("public"."platform_settings"."key" = $14 AND 1=1) RETURNING "public"."platform_settings"."id", "public"."platform_settings"."key", "public"."platform_settings"."category", "public"."platform_settings"."value", "public"."platform_settings"."description", "public"."platform_settings"."sensitive", "public"."platform_settings"."updatedById", "public"."platform_settings"."createdAt", "public"."platform_settings"."updatedAt"
+2026-09-03 04:23:47.788 PKT [34626] ERROR:  duplicate key value violates unique constraint "platform_audit_logs_pkey"
+2026-09-03 04:23:47.788 PKT [34626] STATEMENT:  INSERT INTO "public"."platform_audit_logs" ("id","actorPlatformUserId","action","targetType","metadata","requestId","reason","success","error","createdAt") VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) RETURNING "public"."platform_audit_logs"."id", "public"."platform_audit_logs"."organizationId", "public"."platform_audit_logs"."actorPlatformUserId", "public"."platform_audit_logs"."actorTenantUserId", "public"."platform_audit_logs"."action", "public"."platform_audit_logs"."targetType", "public"."platform_audit_logs"."targetId", "public"."platform_audit_logs"."before", "public"."platform_audit_logs"."after", "public"."platform_audit_logs"."metadata", "public"."platform_audit_logs"."requestId", "public"."platform_audit_logs"."reason", "public"."platform_audit_logs"."success", "public"."platform_audit_logs"."error", "public"."platform_audit_logs"."ip", "public"."platform_audit_logs"."userAgent", "public"."platform_audit_logs"."createdAt"
+2026-09-03 04:25:06.498 PKT [80499] LOG:  received fast shutdown request
+2026-09-03 04:25:06.498 PKT [80499] LOG:  aborting any active transactions
+2026-09-03 04:25:06.501 PKT [80499] LOG:  background worker "logical replication launcher" (PID 80505) exited with exit code 1
+2026-09-03 04:25:06.862 PKT [80500] LOG:  checkpoint complete: wrote 8905 buffers (54.4%); 0 WAL file(s) added, 0 removed, 5 recycled; write=267.206 s, sync=0.342 s, total=267.561 s; sync files=9430, longest=0.002 s, average=0.001 s; distance=77731 kB, estimate=77731 kB; lsn=0/6271AF8, redo lsn=0/61066C8
+2026-09-03 04:25:06.864 PKT [80500] LOG:  shutting down
+2026-09-03 04:25:06.865 PKT [80500] LOG:  checkpoint starting: shutdown immediate
+2026-09-03 04:25:06.984 PKT [80500] LOG:  checkpoint complete: wrote 774 buffers (4.7%); 0 WAL file(s) added, 0 removed, 0 recycled; write=0.084 s, sync=0.036 s, total=0.120 s; sync files=416, longest=0.001 s, average=0.001 s; distance=1453 kB, estimate=70103 kB; lsn=0/6271B70, redo lsn=0/6271B70
+2026-09-03 04:25:07.006 PKT [80499] LOG:  database system is shut down

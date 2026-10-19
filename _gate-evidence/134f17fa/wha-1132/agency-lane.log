@@ -1,0 +1,22 @@
+Agency E2E database preflight passed.
+Agency E2E fixture restored for org_agency_e2e_owned.
+Agency E2E fixture restored for org_agency_e2e_owned.
+[WebServer] (node:38780) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] ⚠ "next start" does not work with "output: standalone" configuration. Use "node .next/standalone/server.js" instead.
+
+Running 8 tests using 1 worker
+
+(node:38828) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓  1 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:22:5 › onboarding selection and dashboard navigation retain the Agency tenant (4.3s)
+  ✓  2 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:41:5 › clients expose owned tenant data and a working search state (2.2s)
+  ✓  3 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:50:5 › projects and tasks resolve the exact owned board (2.7s)
+  ✓  4 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:61:5 › team and custom roles are visible to the Agency administrator (3.2s)
+  ✓  5 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:75:5 › meetings expose only the owned scheduled meeting (3.0s)
+  ✓  6 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:82:5 › finance exposes the owned transaction and invoice surface (3.3s)
+  ✓  7 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:92:5 › Insights and reports calculate from the owned Agency work state (1.8s)
+  ✓  8 [agency-acceptance-serial] › tests/agency-e2e/agency-acceptance.spec.ts:102:5 › disabled integrations are honest and Restaurant-only surfaces do not leak (2.1s)
+
+  8 passed (26.8s)
+AGENCY_LANE_EXIT=0
