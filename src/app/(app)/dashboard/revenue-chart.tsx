@@ -55,7 +55,7 @@ export function RevenueChart() {
 
   if (isLoading) {
     return (
-      <Card className="border-border/60">
+      <Card className="studio-panel border-border/60">
         <CardHeader className="pb-2">
           <Skeleton className="h-5 w-40" />
         </CardHeader>
@@ -77,12 +77,12 @@ export function RevenueChart() {
   const totalProfit = data.reduce((sum, d) => sum + d.profit, 0);
 
   return (
-    <Card className="border-border/60">
+    <Card className="studio-panel studio-revenue-card border-border/60">
       <CardHeader className="pb-2">
         <div className="flex items-center justify-between">
           <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
-              <TrendingUp className="h-3.5 w-3.5 text-primary" />
+            <div className="studio-section-icon">
+              <TrendingUp className="h-3.5 w-3.5 text-accent-brand" />
             </div>
             Revenue Overview
           </CardTitle>
@@ -96,7 +96,7 @@ export function RevenueChart() {
                     className={cn(
                       'rounded-md px-2 py-0.5 text-[11px] font-semibold transition-colors',
                       selected === c
-                        ? 'bg-primary text-white'
+                        ? 'bg-foreground text-background'
                         : 'text-muted-foreground hover:text-foreground'
                     )}
                   >
@@ -106,7 +106,7 @@ export function RevenueChart() {
               </div>
             )}
             <div className="flex items-center gap-1.5">
-              <div className="h-2 w-2 rounded-full bg-primary" />
+              <div className="h-2 w-2 rounded-full bg-accent-brand" />
               <span className="text-xs text-muted-foreground">Income</span>
             </div>
             <div className="flex items-center gap-1.5">
@@ -136,8 +136,8 @@ export function RevenueChart() {
             <AreaChart data={data} margin={{ top: 8, right: 8, left: -20, bottom: 0 }}>
               <defs>
                 <linearGradient id="incomeGradient" x1="0" y1="0" x2="0" y2="1">
-                  <stop offset="0%" stopColor="var(--primary)" stopOpacity={0.22} />
-                  <stop offset="100%" stopColor="var(--primary)" stopOpacity={0} />
+                  <stop offset="0%" stopColor="var(--accent-brand)" stopOpacity={0.26} />
+                  <stop offset="100%" stopColor="var(--accent-brand)" stopOpacity={0} />
                 </linearGradient>
                 <linearGradient id="expenseGradient" x1="0" y1="0" x2="0" y2="1">
                   <stop offset="0%" stopColor="var(--muted-foreground)" stopOpacity={0.12} />
@@ -167,11 +167,16 @@ export function RevenueChart() {
               <Area
                 type="monotone"
                 dataKey="income"
-                stroke="var(--primary)"
+                stroke="var(--accent-brand)"
                 strokeWidth={2.5}
                 fill="url(#incomeGradient)"
                 dot={false}
-                activeDot={{ r: 5, fill: 'var(--primary)', strokeWidth: 2, stroke: 'var(--card)' }}
+                activeDot={{
+                  r: 5,
+                  fill: 'var(--accent-brand)',
+                  strokeWidth: 2,
+                  stroke: 'var(--card)',
+                }}
               />
               <Area
                 type="monotone"

@@ -1,0 +1,21 @@
+{
+  "name": "devfathom-marketing-video",
+  "version": "1.0.0",
+  "private": true,
+  "scripts": {
+    "studio": "remotion studio src/index.ts",
+    "still": "remotion still src/index.ts DevFathomFilm out/poster.png --frame=650",
+    "render": "remotion render src/index.ts DevFathomFilm out/devfathom-hub-film.mp4 --codec=h264 --crf=16 --pixel-format=yuv420p",
+    "render:ten": "node scripts/render-ten.mjs",
+    "audio": "node scripts/generate-audio.mjs"
+  },
+  "dependencies": {
+    "@fontsource/ibm-plex-sans": "^5.2.8",
+    "@fontsource/oxanium": "^5.2.8",
+    "@remotion/cli": "^4.0.488",
+    "@remotion/media": "^4.0.488",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "^4.0.488"
+  }
+}

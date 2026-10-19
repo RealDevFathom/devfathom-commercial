@@ -20,18 +20,21 @@ import {
   X,
   Loader2,
   SlidersHorizontal,
+  ArrowRight,
+  CalendarDays,
+  Sparkles,
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { Skeleton } from '@/components/ui/skeleton';
 import { TimePicker } from '@/components/ui/time-picker';
-import { PageHeader } from '@/components/ui/page-header';
 import { Stat } from '@/components/ui/stat';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
 import { RevenueChart } from './revenue-chart';
 import { moneyListLabel, diffByCurrency } from '@/lib/finance/currency';
+import { useAssistant } from '@/lib/assistant-store';
 
 /* ============================================
    Next Meeting Countdown — real data
@@ -133,7 +136,7 @@ function NextMeetingBanner() {
   // No meeting — show schedule button
   if (!meeting && !showCreate) {
     return (
-      <div className="flex items-center justify-between rounded-2xl border border-dashed border-border bg-card/50 p-4 sm:p-5">
+      <div className="studio-meeting-card flex items-center justify-between border border-dashed border-border bg-card/50 p-4 sm:p-5">
         <div className="flex items-center gap-4">
           <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-xl bg-primary/10">
             <Video className="h-5 w-5 text-primary" />
@@ -145,7 +148,7 @@ function NextMeetingBanner() {
         </div>
         <button
           onClick={() => setShowCreate(true)}
-          className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98]"
+          className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2.5 text-sm font-semibold text-primary-foreground transition-all hover:bg-primary-hover active:scale-[0.98]"
         >
           <Plus className="h-4 w-4" /> Schedule
         </button>
@@ -156,7 +159,7 @@ function NextMeetingBanner() {
   // Create meeting form
   if (showCreate) {
     return (
-      <div className="rounded-2xl border border-primary/20 bg-card p-5 space-y-4">
+      <div className="studio-meeting-card space-y-4 border border-primary/20 bg-card p-5">
         <div className="flex items-center justify-between">
           <h3 className="text-sm font-semibold text-foreground flex items-center gap-2">
             <Video className="h-4 w-4 text-primary" /> Schedule Meeting
@@ -279,7 +282,7 @@ function NextMeetingBanner() {
           <button
             onClick={handleCreate}
             disabled={!title.trim() || !date || !startTime || !endTime || createMeeting.isPending}
-            className="flex items-center gap-1.5 rounded-xl bg-primary px-4 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
+            className="flex items-center gap-1.5 rounded-full bg-primary px-4 py-2 text-xs font-semibold text-primary-foreground transition-colors hover:bg-primary-hover disabled:opacity-40"
           >
             {createMeeting.isPending ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : null}{' '}
             Schedule
@@ -292,7 +295,7 @@ function NextMeetingBanner() {
   return (
     <div
       className={cn(
-        'flex items-center justify-between rounded-2xl border p-4 sm:p-5 transition-colors',
+        'studio-meeting-card flex items-center justify-between border p-4 transition-colors sm:p-5',
         isLive ? 'border-emerald-500/30 bg-emerald-500/5' : 'border-border/60 bg-card'
       )}
     >
@@ -321,7 +324,7 @@ function NextMeetingBanner() {
               <>Next meeting</>
             )}
             {meeting!.recurrence && (
-              <span className="ml-1 rounded-md bg-violet-500/10 px-1.5 py-0.5 text-[10px] font-medium text-violet-500">
+              <span className="ml-1 rounded-full bg-accent-brand/10 px-1.5 py-0.5 text-[10px] font-medium text-accent-brand">
                 {meeting!.recurrence}
               </span>
             )}
@@ -350,7 +353,7 @@ function NextMeetingBanner() {
               'rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all active:scale-[0.98]',
               isLive
                 ? 'bg-emerald-500 hover:bg-emerald-600 hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.5)]'
-                : 'bg-primary hover:bg-[#0C2E2C]'
+                : 'bg-primary hover:bg-primary-hover'
             )}
           >
             {isLive ? 'Join now' : 'Join'}
@@ -362,7 +365,7 @@ function NextMeetingBanner() {
               'rounded-xl px-5 py-2.5 text-sm font-semibold text-white transition-all active:scale-[0.98]',
               isLive
                 ? 'bg-emerald-500 hover:bg-emerald-600 hover:shadow-[0_0_20px_-5px_rgba(16,185,129,0.5)]'
-                : 'bg-primary hover:bg-[#0C2E2C]'
+                : 'bg-primary hover:bg-primary-hover'
             )}
           >
             View
@@ -516,8 +519,10 @@ function KPICard({
   const deltaDirection = trend === 'up' ? 'up' : trend === 'down' ? 'down' : 'flat';
 
   return (
-    <div className="fieldbook-kpi bg-card p-5 pt-6">
-      <Icon aria-hidden className="absolute right-5 top-6 h-4 w-4 text-text-muted" />
+    <div className="studio-kpi-card bg-card p-5 sm:p-6">
+      <span className="studio-kpi-icon">
+        <Icon aria-hidden className="h-4 w-4" />
+      </span>
       <Stat
         className="pr-8"
         label={title}
@@ -536,16 +541,16 @@ function KPICard({
    ============================================ */
 const TASK_PRIORITY_CONFIG: Record<string, { color: string; label: string }> = {
   URGENT: { color: 'text-red-500', label: 'Urgent' },
-  HIGH: { color: 'text-primary', label: 'High' },
+  HIGH: { color: 'text-accent-brand', label: 'High' },
   MEDIUM: { color: 'text-amber-500', label: 'Medium' },
   LOW: { color: 'text-muted-foreground', label: 'Low' },
 };
 
 const TASK_COLUMN_CONFIG: Record<string, string> = {
   Backlog: 'bg-muted text-muted-foreground',
-  'To Do': 'bg-blue-500/10 text-blue-500',
-  'In Progress': 'bg-primary/10 text-primary',
-  Review: 'bg-violet-500/10 text-violet-500',
+  'To Do': 'bg-muted text-foreground',
+  'In Progress': 'bg-accent-brand/10 text-accent-brand',
+  Review: 'bg-foreground/10 text-foreground',
 };
 
 function TaskItem({
@@ -608,10 +613,10 @@ function TaskItem({
    ============================================ */
 const ACTIVITY_COLORS: Record<string, string> = {
   task_completed: 'bg-emerald-500',
-  invoice_sent: 'bg-blue-500',
-  invoice_paid: 'bg-blue-500',
-  contract_created: 'bg-violet-500',
-  contract_updated: 'bg-violet-500',
+  invoice_sent: 'bg-accent-brand',
+  invoice_paid: 'bg-foreground',
+  contract_created: 'bg-amber-500',
+  contract_updated: 'bg-amber-500',
   project_created: 'bg-primary',
   project_updated: 'bg-primary',
 };
@@ -667,7 +672,7 @@ const PROJECT_STATUS_CONFIG: Record<string, { bg: string; dot: string }> = {
     bg: 'bg-emerald-500/10 text-emerald-600 dark:text-emerald-400',
     dot: 'bg-emerald-500',
   },
-  IN_DEVELOPMENT: { bg: 'bg-blue-500/10 text-blue-600 dark:text-blue-400', dot: 'bg-blue-500' },
+  IN_DEVELOPMENT: { bg: 'bg-accent-brand/10 text-accent-brand', dot: 'bg-accent-brand' },
   ON_HOLD: { bg: 'bg-amber-500/10 text-amber-600 dark:text-amber-400', dot: 'bg-amber-500' },
   COMPLETED: { bg: 'bg-muted text-muted-foreground', dot: 'bg-muted-foreground' },
 };
@@ -688,7 +693,7 @@ function ProjectCard({
 
   return (
     <Link href={`/projects/${project.id}`}>
-      <Card className="group border-border/60 transition-all duration-200 hover:border-border hover:shadow-lg hover:shadow-black/5 dark:hover:shadow-black/20 hover:-translate-y-0.5 cursor-pointer">
+      <Card className="studio-project-card group cursor-pointer border-border/60 transition-all duration-200 hover:-translate-y-0.5 hover:border-border-strong hover:shadow-md">
         <CardContent className="p-5">
           <div className="flex items-start justify-between gap-3">
             <div className="space-y-1 min-w-0">
@@ -812,7 +817,7 @@ function DashboardSkeleton() {
         ))}
       </div>
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
-        <Card className="lg:col-span-3 border-border/60">
+        <Card className="studio-panel lg:col-span-3 border-border/60">
           <CardContent className="p-6">
             {Array.from({ length: 5 }).map((_, i) => (
               <div key={i} className="flex items-center gap-3 py-3">
@@ -860,6 +865,7 @@ const DASHBOARD_WIDGETS = [
    ============================================ */
 export function DashboardContent() {
   const { data: session } = useSession();
+  const openAssistant = useAssistant((state) => state.setOpen);
   const utils = trpc.useUtils();
   const stats = trpc.dashboard.getStats.useQuery();
   const activity = trpc.dashboard.getRecentActivity.useQuery();
@@ -888,9 +894,7 @@ export function DashboardContent() {
   const hiddenWidgets = prefs.data?.hiddenWidgets ?? [];
   const isHidden = (key: string) => hiddenWidgets.includes(key);
   const toggleWidget = (key: string) => {
-    const next = isHidden(key)
-      ? hiddenWidgets.filter((k) => k !== key)
-      : [...hiddenWidgets, key];
+    const next = isHidden(key) ? hiddenWidgets.filter((k) => k !== key) : [...hiddenWidgets, key];
     updatePrefs.mutate({ hiddenWidgets: next });
   };
 
@@ -898,52 +902,71 @@ export function DashboardContent() {
 
   const isAdmin = stats.data?.isAdmin;
   const greeting = getGreeting();
+  const firstName = session?.user?.name?.split(' ')[0] ?? 'there';
 
   return (
-    <div className="fieldbook-dashboard space-y-7">
-      <PageHeader
-        eyebrow="DESK / TODAY"
-        heading={
-          <>
-            {greeting}, {session?.user?.name?.split(' ')[0]}
-          </>
-        }
-        description="Your delivery signals, open work, and next decisions in one place."
-        actions={
-          <div className="hidden shrink-0 border-l border-border-default pl-5 sm:flex sm:flex-col sm:items-end">
-            <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.16em] text-text-muted">
-              Field note / {format(new Date(), 'MMM yyyy')}
+    <div className="studio-dashboard space-y-4 sm:space-y-5">
+      <section className="studio-command-grid" aria-labelledby="dashboard-greeting">
+        <div className="studio-date-panel">
+          <span className="studio-date-number">{format(new Date(), 'd')}</span>
+          <div>
+            <span className="block text-xs font-semibold uppercase tracking-[0.14em] text-muted-foreground">
+              {format(new Date(), 'EEEE')}
             </span>
-            <div className="mt-1 flex items-baseline gap-2">
-              <span className="font-display text-3xl font-semibold tracking-[-0.06em] text-primary leading-none">
-                {format(new Date(), 'EEE')}
-              </span>
-              <span className="font-display text-3xl font-semibold tracking-[-0.06em] text-foreground leading-none">
-                {format(new Date(), 'd')}
-              </span>
-            </div>
+            <span className="mt-1 block text-sm text-foreground">
+              {format(new Date(), 'MMMM yyyy')}
+            </span>
           </div>
-        }
-      />
+          <CalendarDays className="ml-auto h-5 w-5 text-accent-brand" aria-hidden />
+        </div>
 
-      {/* Customize widgets (IMP-DASH-02) */}
-      <div className="flex justify-end">
+        <div className="studio-greeting-panel">
+          <div className="min-w-0">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent-brand">
+              Your operating view
+            </p>
+            <h1
+              id="dashboard-greeting"
+              className="mt-2 text-[clamp(2rem,4.1vw,4.8rem)] font-medium leading-[0.94] tracking-[-0.065em] text-foreground"
+            >
+              {greeting}, {firstName}.
+            </h1>
+            <p className="mt-3 max-w-2xl text-sm text-muted-foreground sm:text-base">
+              Delivery signals, open work, and the decisions that need you today.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => openAssistant(true)}
+            className="studio-prompt-button"
+          >
+            <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-brand text-white">
+              <Sparkles className="h-4 w-4" aria-hidden />
+            </span>
+            <span className="min-w-0 flex-1 text-left">
+              <span className="block text-xs text-muted-foreground">Need a hand?</span>
+              <span className="block truncate text-sm font-semibold text-foreground">
+                Ask Fathom anything
+              </span>
+            </span>
+            <ArrowRight className="h-4 w-4 shrink-0 text-muted-foreground" aria-hidden />
+          </button>
+        </div>
+
         <button
           type="button"
           onClick={() => setShowCustomize((v) => !v)}
           aria-expanded={showCustomize}
-          className={cn(
-            'inline-flex min-h-10 items-center gap-1.5 rounded-[3px] border px-3 text-xs font-semibold transition-colors',
-            showCustomize
-              ? 'border-primary bg-primary text-primary-foreground'
-              : 'border-border-default bg-card text-muted-foreground hover:border-primary/50 hover:text-foreground'
-          )}
+          className={cn('studio-customize-button', showCustomize && 'is-active')}
         >
-          <SlidersHorizontal className="h-3.5 w-3.5" /> Customize
+          <SlidersHorizontal className="h-4 w-4" />
+          <span>Arrange</span>
         </button>
-      </div>
+      </section>
+
+      {/* Customize widgets (IMP-DASH-02) */}
       {showCustomize && (
-        <Card className="border-border/60">
+        <Card className="studio-panel border-border/60">
           <CardContent className="p-4">
             <p className="mb-3 text-xs font-medium text-muted-foreground">Show widgets</p>
             <div className="flex flex-wrap gap-x-6 gap-y-2.5">
@@ -972,7 +995,7 @@ export function DashboardContent() {
       {/* KPI Cards */}
       <div
         className={cn(
-          'grid grid-cols-1 gap-px overflow-hidden rounded-[4px] border border-border-default bg-border-default shadow-[0_12px_24px_-28px_rgba(12,29,48,0.72)]',
+          'studio-kpi-grid grid grid-cols-1 gap-3 sm:gap-4',
           isAdmin ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'
         )}
       >
@@ -1033,100 +1056,102 @@ export function DashboardContent() {
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
         {/* My Tasks */}
         {!isHidden('myTasks') && (
-        <Card className="lg:col-span-3 border-border/60">
-          <CardHeader className="pb-2">
-            <div className="flex items-center justify-between">
-              <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
-                <div className="flex h-6 w-6 items-center justify-center rounded-md bg-primary/10">
-                  <CheckCircle2 className="h-3.5 w-3.5 text-primary" />
-                </div>
-                My Tasks
-              </CardTitle>
-              {myTasks.data && myTasks.data.length > 0 && (
-                <span className="text-xs text-muted-foreground">{myTasks.data.length} open</span>
-              )}
-            </div>
-          </CardHeader>
-          <CardContent className="px-6 pb-6">
-            <div className="divide-y divide-border/60">
-              {myTasks.isLoading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 py-3">
-                    <Skeleton className="h-4 w-4 rounded-full" />
-                    <div className="flex-1 space-y-1.5">
-                      <Skeleton className="h-4 w-48" />
-                      <Skeleton className="h-3 w-32" />
-                    </div>
+          <Card className="lg:col-span-3 border-border/60">
+            <CardHeader className="pb-2">
+              <div className="flex items-center justify-between">
+                <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+                  <div className="studio-section-icon">
+                    <CheckCircle2 className="h-3.5 w-3.5 text-accent-brand" />
                   </div>
-                ))
-              ) : myTasks.data?.length ? (
-                myTasks.data.map(
-                  (task: {
-                    id: string;
-                    title: string;
-                    priority: string;
-                    dueDate: Date | null;
-                    column: { name: string; board: { id: string; projectId: string } };
-                    labels: Array<{ label: { id: string; name: string; color: string } }>;
-                    assignees: Array<{ user: { id: string; name: string; avatar: string | null } }>;
-                    _count: { comments: number; checklists: number };
-                  }) => <TaskItem key={task.id} task={task} />
-                )
-              ) : (
-                <div className="py-12 text-center">
-                  <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-500/20" />
-                  <p className="mt-3 text-sm font-medium text-foreground">All caught up</p>
-                  <p className="mt-1 text-xs text-muted-foreground">
-                    No tasks assigned to you right now
-                  </p>
-                </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                  My Tasks
+                </CardTitle>
+                {myTasks.data && myTasks.data.length > 0 && (
+                  <span className="text-xs text-muted-foreground">{myTasks.data.length} open</span>
+                )}
+              </div>
+            </CardHeader>
+            <CardContent className="px-6 pb-6">
+              <div className="divide-y divide-border/60">
+                {myTasks.isLoading ? (
+                  Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-3 py-3">
+                      <Skeleton className="h-4 w-4 rounded-full" />
+                      <div className="flex-1 space-y-1.5">
+                        <Skeleton className="h-4 w-48" />
+                        <Skeleton className="h-3 w-32" />
+                      </div>
+                    </div>
+                  ))
+                ) : myTasks.data?.length ? (
+                  myTasks.data.map(
+                    (task: {
+                      id: string;
+                      title: string;
+                      priority: string;
+                      dueDate: Date | null;
+                      column: { name: string; board: { id: string; projectId: string } };
+                      labels: Array<{ label: { id: string; name: string; color: string } }>;
+                      assignees: Array<{
+                        user: { id: string; name: string; avatar: string | null };
+                      }>;
+                      _count: { comments: number; checklists: number };
+                    }) => <TaskItem key={task.id} task={task} />
+                  )
+                ) : (
+                  <div className="py-12 text-center">
+                    <CheckCircle2 className="mx-auto h-10 w-10 text-emerald-500/20" />
+                    <p className="mt-3 text-sm font-medium text-foreground">All caught up</p>
+                    <p className="mt-1 text-xs text-muted-foreground">
+                      No tasks assigned to you right now
+                    </p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Upcoming Deadlines */}
         {!isHidden('deadlines') && (
-        <Card className="lg:col-span-2 border-border/60">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
-              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-amber-500/10">
-                <Clock className="h-3.5 w-3.5 text-amber-500" />
-              </div>
-              Upcoming Deadlines
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-6 pb-6">
-            <div className="divide-y divide-border/60">
-              {deadlines.isLoading ? (
-                Array.from({ length: 3 }).map((_, i) => (
-                  <div key={i} className="flex items-center gap-3 py-3">
-                    <Skeleton className="h-10 w-10 rounded-xl" />
-                    <div className="flex-1 space-y-1.5">
-                      <Skeleton className="h-4 w-36" />
-                      <Skeleton className="h-3 w-24" />
-                    </div>
-                  </div>
-                ))
-              ) : deadlines.data?.length ? (
-                deadlines.data.map(
-                  (milestone: {
-                    id: string;
-                    name: string;
-                    dueDate: Date;
-                    project: { id: string; name: string; status: string };
-                  }) => <DeadlineItem key={milestone.id} milestone={milestone} />
-                )
-              ) : (
-                <div className="py-12 text-center">
-                  <Clock className="mx-auto h-10 w-10 text-muted-foreground/20" />
-                  <p className="mt-3 text-sm text-muted-foreground">No upcoming deadlines</p>
+          <Card className="studio-panel lg:col-span-2 border-border/60">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+                <div className="studio-section-icon">
+                  <Clock className="h-3.5 w-3.5 text-amber-500" />
                 </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                Upcoming Deadlines
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-6 pb-6">
+              <div className="divide-y divide-border/60">
+                {deadlines.isLoading ? (
+                  Array.from({ length: 3 }).map((_, i) => (
+                    <div key={i} className="flex items-center gap-3 py-3">
+                      <Skeleton className="h-10 w-10 rounded-xl" />
+                      <div className="flex-1 space-y-1.5">
+                        <Skeleton className="h-4 w-36" />
+                        <Skeleton className="h-3 w-24" />
+                      </div>
+                    </div>
+                  ))
+                ) : deadlines.data?.length ? (
+                  deadlines.data.map(
+                    (milestone: {
+                      id: string;
+                      name: string;
+                      dueDate: Date;
+                      project: { id: string; name: string; status: string };
+                    }) => <DeadlineItem key={milestone.id} milestone={milestone} />
+                  )
+                ) : (
+                  <div className="py-12 text-center">
+                    <Clock className="mx-auto h-10 w-10 text-muted-foreground/20" />
+                    <p className="mt-3 text-sm text-muted-foreground">No upcoming deadlines</p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         )}
       </div>
 
@@ -1134,97 +1159,97 @@ export function DashboardContent() {
       <div className="grid grid-cols-1 gap-5 lg:grid-cols-5">
         {/* Recent Activity */}
         {!isHidden('activity') && (
-        <Card className="lg:col-span-2 border-border/60">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
-              <div className="flex h-6 w-6 items-center justify-center rounded-md bg-blue-500/10">
-                <Activity className="h-3.5 w-3.5 text-blue-500" />
-              </div>
-              Activity
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="px-6 pb-6">
-            <div className="divide-y divide-border/60">
-              {activity.isLoading ? (
-                Array.from({ length: 4 }).map((_, i) => (
-                  <div key={i} className="flex items-start gap-3 py-3">
-                    <Skeleton className="h-8 w-8 rounded-full" />
-                    <div className="flex-1 space-y-1.5">
-                      <Skeleton className="h-4 w-40" />
-                      <Skeleton className="h-3 w-52" />
-                    </div>
-                  </div>
-                ))
-              ) : activity.data?.length ? (
-                activity.data
-                  .slice(0, 6)
-                  .map(
-                    (item: {
-                      id: string;
-                      type: string;
-                      message: string;
-                      createdAt: Date;
-                      user: { id: string; name: string; avatar: string | null; title: string };
-                    }) => <ActivityItem key={item.id} activity={item} />
-                  )
-              ) : (
-                <div className="py-12 text-center">
-                  <Activity className="mx-auto h-10 w-10 text-muted-foreground/20" />
-                  <p className="mt-3 text-sm text-muted-foreground">No recent activity</p>
+          <Card className="studio-panel lg:col-span-2 border-border/60">
+            <CardHeader className="pb-2">
+              <CardTitle className="text-[15px] font-semibold flex items-center gap-2 text-foreground">
+                <div className="studio-section-icon">
+                  <Activity className="h-3.5 w-3.5 text-accent-brand" />
                 </div>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                Activity
+              </CardTitle>
+            </CardHeader>
+            <CardContent className="px-6 pb-6">
+              <div className="divide-y divide-border/60">
+                {activity.isLoading ? (
+                  Array.from({ length: 4 }).map((_, i) => (
+                    <div key={i} className="flex items-start gap-3 py-3">
+                      <Skeleton className="h-8 w-8 rounded-full" />
+                      <div className="flex-1 space-y-1.5">
+                        <Skeleton className="h-4 w-40" />
+                        <Skeleton className="h-3 w-52" />
+                      </div>
+                    </div>
+                  ))
+                ) : activity.data?.length ? (
+                  activity.data
+                    .slice(0, 6)
+                    .map(
+                      (item: {
+                        id: string;
+                        type: string;
+                        message: string;
+                        createdAt: Date;
+                        user: { id: string; name: string; avatar: string | null; title: string };
+                      }) => <ActivityItem key={item.id} activity={item} />
+                    )
+                ) : (
+                  <div className="py-12 text-center">
+                    <Activity className="mx-auto h-10 w-10 text-muted-foreground/20" />
+                    <p className="mt-3 text-sm text-muted-foreground">No recent activity</p>
+                  </div>
+                )}
+              </div>
+            </CardContent>
+          </Card>
         )}
 
         {/* Active Projects */}
         {!isHidden('projects') && (
-        <div className="lg:col-span-3">
-          <h2 className="font-display text-[15px] font-semibold text-foreground mb-4 flex items-center gap-2">
-            <div className="flex h-6 w-6 items-center justify-center rounded-md bg-emerald-500/10">
-              <FolderKanban className="h-3.5 w-3.5 text-emerald-500" />
-            </div>
-            Active Projects
-          </h2>
-          <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
-            {projects.isLoading ? (
-              Array.from({ length: 4 }).map((_, i) => (
-                <Card key={i} className="border-border/60">
-                  <CardContent className="p-5">
-                    <Skeleton className="h-5 w-36 mb-2" />
-                    <Skeleton className="h-3 w-24 mb-5" />
-                    <div className="flex -space-x-2">
-                      {Array.from({ length: 3 }).map((_, j) => (
-                        <Skeleton key={j} className="h-7 w-7 rounded-full" />
-                      ))}
-                    </div>
+          <div className="lg:col-span-3">
+            <h2 className="mb-4 flex items-center gap-2 px-1 font-display text-[15px] font-semibold text-foreground">
+              <div className="studio-section-icon">
+                <FolderKanban className="h-3.5 w-3.5 text-accent-brand" />
+              </div>
+              Active Projects
+            </h2>
+            <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
+              {projects.isLoading ? (
+                Array.from({ length: 4 }).map((_, i) => (
+                  <Card key={i} className="border-border/60">
+                    <CardContent className="p-5">
+                      <Skeleton className="h-5 w-36 mb-2" />
+                      <Skeleton className="h-3 w-24 mb-5" />
+                      <div className="flex -space-x-2">
+                        {Array.from({ length: 3 }).map((_, j) => (
+                          <Skeleton key={j} className="h-7 w-7 rounded-full" />
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))
+              ) : projects.data?.length ? (
+                projects.data
+                  .slice(0, 4)
+                  .map(
+                    (project: {
+                      id: string;
+                      name: string;
+                      status: string;
+                      type: string;
+                      client: { id: string; name: string } | null;
+                      members: Array<{ user: { id: string; name: string; avatar: string | null } }>;
+                    }) => <ProjectCard key={project.id} project={project} />
+                  )
+              ) : (
+                <Card className="col-span-full border-border/60">
+                  <CardContent className="py-12 text-center">
+                    <FolderKanban className="mx-auto h-10 w-10 text-muted-foreground/20" />
+                    <p className="mt-3 text-sm text-muted-foreground">No active projects yet</p>
                   </CardContent>
                 </Card>
-              ))
-            ) : projects.data?.length ? (
-              projects.data
-                .slice(0, 4)
-                .map(
-                  (project: {
-                    id: string;
-                    name: string;
-                    status: string;
-                    type: string;
-                    client: { id: string; name: string } | null;
-                    members: Array<{ user: { id: string; name: string; avatar: string | null } }>;
-                  }) => <ProjectCard key={project.id} project={project} />
-                )
-            ) : (
-              <Card className="col-span-full border-border/60">
-                <CardContent className="py-12 text-center">
-                  <FolderKanban className="mx-auto h-10 w-10 text-muted-foreground/20" />
-                  <p className="mt-3 text-sm text-muted-foreground">No active projects yet</p>
-                </CardContent>
-              </Card>
-            )}
+              )}
+            </div>
           </div>
-        </div>
         )}
       </div>
     </div>

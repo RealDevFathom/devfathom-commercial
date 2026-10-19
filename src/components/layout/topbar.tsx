@@ -22,6 +22,7 @@ import {
   Users as UsersIcon,
   Loader2,
   Sparkles,
+  Plus,
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
 import { cn } from '@/lib/utils';
@@ -30,6 +31,7 @@ import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
+import { FathomMark } from '@/components/brand/logo';
 // Badge unused after notification refactor
 import {
   DropdownMenu,
@@ -50,6 +52,10 @@ const CommandGroup = dynamic(() => import('@/components/ui/command').then((m) =>
 const CommandInput = dynamic(() => import('@/components/ui/command').then((m) => m.CommandInput));
 const CommandItem = dynamic(() => import('@/components/ui/command').then((m) => m.CommandItem));
 const CommandList = dynamic(() => import('@/components/ui/command').then((m) => m.CommandList));
+
+// Warm the shared cmdk chunk before the first click. The palette stays lazily
+// rendered, but opening it no longer has to wait on a cold network request.
+const preloadCommandPalette = () => import('@/components/ui/command');
 
 const routeLabels: Record<string, string> = {
   '/dashboard': 'Dashboard',
@@ -80,8 +86,8 @@ const subscribeToHydration = () => () => {};
 
 export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
   const [commandOpen, setCommandOpen] = useState(false);
-  // Mount the (lazily-imported) palette once it has first been opened, then
-  // keep it mounted so cmdk's chunk is fetched only on first ⌘K.
+  // Mount the lazily-rendered palette once it has first been opened, then keep
+  // it mounted so subsequent opens are immediate.
   const [commandLoaded, setCommandLoaded] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
@@ -99,14 +105,24 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
     () => false
   );
 
-  // Debounce search input
+  // Warm the palette once the browser has finished the initial render. Pointer
+  // and keyboard intent below also starts this preload for very early opens.
   useEffect(() => {
-    const t = setTimeout(() => setDebouncedSearch(searchInput.trim()), 200);
+    const timer = window.setTimeout(() => {
+      void preloadCommandPalette();
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, []);
+
+  // Keep requests controlled without making the interface feel sluggish.
+  useEffect(() => {
+    const t = window.setTimeout(() => setDebouncedSearch(searchInput.trim()), 100);
     return () => clearTimeout(t);
   }, [searchInput]);
 
   const handleCommandOpenChange = useCallback((open: boolean) => {
     if (open) {
+      void preloadCommandPalette();
       setCommandLoaded(true);
       setCommandOpen(true);
     } else {
@@ -167,29 +183,54 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
 
   return (
     <>
-      <header className="fieldbook-topbar sticky top-0 z-30 flex h-20 items-center gap-3 border-b border-border-default bg-background/92 px-4 backdrop-blur-xl sm:px-7">
+      <header className="studio-topbar sticky top-0 z-30 flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card/94 px-4 backdrop-blur-xl sm:px-6 xl:px-8">
         {/* Mobile menu button */}
         {onMenuClick && (
           <button
             onClick={onMenuClick}
-            className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring lg:hidden"
+            className="studio-icon-button lg:hidden"
             aria-label="Open menu"
           >
             <Menu className="h-5 w-5" />
           </button>
         )}
 
-        <div className="hidden items-center gap-3 border-r border-border-default pr-5 sm:flex">
-          <span className="font-mono text-[10px] font-semibold uppercase tracking-[0.2em] text-primary">
-            Fieldbook
+        <Link
+          href="/dashboard"
+          className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
+          <FathomMark className="h-10 w-10" variant="brand" />
+          <div className="hidden leading-tight sm:block">
+            <span className="block text-sm font-semibold tracking-[-0.03em] text-foreground">
+              DevFathom
+            </span>
+            <span className="block text-xs text-muted-foreground">Company workspace</span>
+          </div>
+        </Link>
+
+        <div className="hidden h-8 w-px bg-border-subtle md:block" />
+
+        <Link
+          href="/projects"
+          className="studio-icon-button hidden md:flex"
+          aria-label="Open projects"
+        >
+          <Plus className="h-4 w-4" />
+        </Link>
+
+        <div className="hidden min-w-0 md:block">
+          <span className="block text-xs font-medium text-foreground">
+            {session?.user?.name ?? 'Workspace'}
           </span>
-          <span aria-hidden className="h-1.5 w-1.5 bg-accent-brand" />
+          <span className="block max-w-36 truncate text-[11px] text-muted-foreground">
+            {session?.user?.title ?? 'Team member'}
+          </span>
         </div>
 
         {/* Breadcrumbs */}
         <nav
           aria-label="Breadcrumb"
-          className="flex min-w-0 items-center gap-1 overflow-hidden text-sm"
+          className="ml-2 hidden min-w-0 items-center gap-1 overflow-hidden border-l border-border-subtle pl-4 text-xs xl:flex"
         >
           {breadcrumbs.map((crumb, i) => (
             <div key={crumb.href} className="flex min-w-0 items-center gap-1">
@@ -222,31 +263,35 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* Search */}
           <button
             onClick={() => handleCommandOpenChange(true)}
-            className="flex h-10 w-10 items-center justify-center gap-2 rounded-[3px] border border-border-default bg-card text-sm text-muted-foreground transition-colors hover:border-primary/50 hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring sm:w-52 sm:justify-start sm:px-3 xl:w-72"
+            onPointerEnter={() => void preloadCommandPalette()}
+            onFocus={() => void preloadCommandPalette()}
+            className="studio-search"
             aria-label="Search company hub"
           >
-            <Search className="h-4 w-4" />
-            <span className="hidden flex-1 text-left sm:block">Search company hub</span>
-            <kbd className="pointer-events-none hidden h-5 select-none items-center gap-1 rounded-sm border border-border bg-background px-1.5 font-mono text-[10px] font-medium text-muted-foreground lg:inline-flex">
-              <span className="text-xs">⌘</span>K
+            <Search className="h-4 w-4 shrink-0" />
+            <span className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block">
+              Search workspace
+            </span>
+            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-muted-foreground/70 xl:inline-flex">
+              ⌘K
             </kbd>
           </button>
 
           {/* AI assistant */}
           <button
             onClick={() => openAssistant(true)}
-            className="flex h-10 items-center gap-1.5 rounded-[3px] border border-border-default bg-card px-3 text-foreground transition-colors hover:border-primary/50 hover:bg-primary/5 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            className="studio-assistant-button"
             aria-label="Open AI assistant"
           >
             <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
-            <span className="hidden text-xs font-medium sm:inline">Ask AI</span>
+            <span className="hidden text-xs font-semibold lg:inline">Ask Fathom</span>
           </button>
 
           {/* Dark mode toggle */}
           {mounted && (
             <button
               onClick={() => setTheme(theme === 'dark' ? 'light' : 'dark')}
-              className="flex h-10 w-10 items-center justify-center rounded-[3px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              className="studio-icon-button hidden sm:flex"
               aria-label={theme === 'dark' ? 'Use light theme' : 'Use dark theme'}
             >
               {theme === 'dark' ? (
@@ -263,19 +308,13 @@ export function Topbar({ onMenuClick }: { onMenuClick?: () => void } = {}) {
           {/* User dropdown */}
           {session?.user && (
             <DropdownMenu>
-              <DropdownMenuTrigger
-                aria-label="Open account menu"
-                className="flex items-center gap-2 rounded-md p-1 transition-colors hover:bg-muted focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              >
-                <Avatar className="h-7 w-7">
+              <DropdownMenuTrigger aria-label="Open account menu" className="studio-avatar-button">
+                <Avatar className="h-8 w-8">
                   <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
                   <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
                     {getInitials(session.user.name)}
                   </AvatarFallback>
                 </Avatar>
-                <span className="hidden max-w-28 truncate pr-1 text-xs font-medium xl:block">
-                  {session.user.name}
-                </span>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end" className="w-56">
                 <div className="px-2 py-2">

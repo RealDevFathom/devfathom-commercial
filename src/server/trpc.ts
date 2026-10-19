@@ -1,4 +1,5 @@
 import { initTRPC, TRPCError } from '@trpc/server';
+import type { Session } from 'next-auth';
 import superjson from 'superjson';
 import { auth } from '@/lib/auth';
 import { db } from '@/lib/db';
@@ -15,8 +16,11 @@ import {
  * it with no args. We capture request metadata (IP, user-agent) when present so
  * the audit layer can record *where* an action came from.
  */
-export const createTRPCContext = async (opts?: { req?: Request }) => {
-  const session = await auth();
+export const createTRPCContext = async (opts?: { req?: Request; session?: Session | null }) => {
+  // Route adapters can execute their context factory after Next's request
+  // AsyncLocalStorage scope has been released. When the route already resolved
+  // the session, use it instead of calling auth() again outside request scope.
+  const session = opts && 'session' in opts ? opts.session : await auth();
   const headers = opts?.req?.headers ?? null;
 
   return {
@@ -136,7 +140,10 @@ function requireCapability(action: Action) {
       ip: ctx.requestMeta.ip,
     });
     if (!allowed) {
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'You do not have permission for this action.' });
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
     }
     return next({ ctx: { ...ctx, session: ctx.session } });
   });

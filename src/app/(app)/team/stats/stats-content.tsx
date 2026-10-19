@@ -79,20 +79,21 @@ export function TeamStatsContent() {
 
   if (stats.isLoading) return <StatsSkeleton />;
 
-  if (stats.isError) {
+  if (stats.isError || !stats.data) {
     return (
       <div className="flex flex-col items-center justify-center py-20 text-center animate-fade-in">
         <AlertCircle className="h-12 w-12 text-muted-foreground/30" />
         <h3 className="mt-4 font-display text-lg font-semibold text-foreground">
           Unable to load team stats
         </h3>
-        <p className="mt-1 text-sm text-muted-foreground">{stats.error.message}</p>
+        <p className="mt-1 text-sm text-muted-foreground">
+          {stats.error?.message ?? 'The server returned no team statistics.'}
+        </p>
       </div>
     );
   }
 
-  const data = stats.data!;
-  const { members, alerts, velocity, leaderboards, totals } = data;
+  const { members, alerts, velocity, leaderboards, totals } = stats.data;
 
   const weekDelta = totals.teamCompletedThisWeek - totals.teamCompletedLastWeek;
   const weekDeltaPct =
@@ -670,9 +671,7 @@ function MemberStatsCard({
               <p className="text-sm font-semibold text-foreground truncate group-hover:text-primary transition-colors">
                 {stats.name}
               </p>
-              <p className="text-[11px] text-muted-foreground truncate">
-                {stats.title || ' '}
-              </p>
+              <p className="text-[11px] text-muted-foreground truncate">{stats.title || ' '}</p>
             </div>
             <div
               className={cn(
