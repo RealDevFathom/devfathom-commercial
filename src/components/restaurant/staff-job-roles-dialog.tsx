@@ -162,13 +162,16 @@ export function StaffJobRolesDialog({
     snapshot.branchId === currentScope.current.branchId;
 
   const save = trpc.restaurantStaff.setStaffAccess.useMutation({
-    onSuccess: (result) => {
+    onSuccess: async (result) => {
       const snapshot = submitted.current;
-      submitted.current = null;
       if (!snapshot) return;
       const variables = { staffProfileId: snapshot.staffProfileId, branchId: snapshot.branchId };
-      void utils.restaurantStaff.listStaffJobRoles.invalidate(variables);
-      void utils.restaurantStaff.resolveStaffCapabilities.invalidate(variables);
+      // Keep the submitted role draft and latch until the committed base has refreshed.
+      await Promise.all([
+        utils.restaurantStaff.listStaffJobRoles.invalidate(variables),
+        utils.restaurantStaff.resolveStaffCapabilities.invalidate(variables),
+      ]);
+      submitted.current = null;
       if (!isCurrentScope(snapshot)) return;
       setPendingRoles((current) => (current === snapshot.roles ? null : current));
       setPendingOverrides((current) => {

@@ -6,7 +6,11 @@ import type { EntitlementView } from '@/lib/module-catalog';
 type IssueOptions = { onError?: (error: { message: string }) => void };
 type IssueCallOptions = { onSettled?: () => void };
 type MutationOptions = {
-  onSuccess?: (result: { granted: string[]; revoked: string[]; overrides?: unknown[] }) => void;
+  onSuccess?: (result: {
+    granted: string[];
+    revoked: string[];
+    overrides?: unknown[];
+  }) => void | Promise<void>;
   onError?: (error: { message: string }) => void;
 };
 
@@ -48,6 +52,8 @@ const mocks = vi.hoisted(() => ({
   seedRoles: vi.fn(),
   /** Job roles the dialog's `listJobRoles` query answers with. */
   jobRoles: [] as unknown[],
+  heldRoles: [] as { jobRole: { id: string } }[],
+  extraBranches: [] as { id: string; name: string; active: boolean; isDefault: boolean }[],
   /** The committed override state the staged changes sit on top of. */
   access: {
     data: { capabilities: [], inherited: [], allowed: [] as string[], denied: [] as string[] },
@@ -93,7 +99,10 @@ vi.mock('@/lib/trpc', () => ({
       },
       listBranches: {
         useQuery: () => ({
-          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          data: [
+            { id: 'branch_1', name: 'Downtown', active: true, isDefault: true },
+            ...mocks.extraBranches,
+          ],
           error: null,
           isLoading: false,
         }),
@@ -104,7 +113,7 @@ vi.mock('@/lib/trpc', () => ({
       listJobRoles: {
         useQuery: () => ({ data: mocks.jobRoles, error: null, isLoading: false }),
       },
-      listStaffJobRoles: { useQuery: () => ({ data: [], isLoading: false }) },
+      listStaffJobRoles: { useQuery: () => ({ data: mocks.heldRoles, isLoading: false }) },
       listStaffJobRoleAudit: { useQuery: () => ({ data: [], isLoading: false }) },
       resolveStaffCapabilities: { useQuery: () => mocks.access },
       // WHA-1181 (7)/(8): the dialog commits role selection AND staged direct /
@@ -334,6 +343,9 @@ describe('Restaurant staff role profiles', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.roleSaveOptions = undefined;
+    mocks.heldRoles = [];
+    mocks.extraBranches = [];
+    mocks.invalidate.mockReset();
     mocks.jobRoles = JOB_ROLES;
     mocks.access = {
       data: { capabilities: [], inherited: [], allowed: [], denied: [] },
@@ -374,7 +386,7 @@ describe('Restaurant staff role profiles', () => {
     expect(mocks.roleSave).toHaveBeenCalledTimes(1);
   });
 
-  it('edits made after submit survive the first success', () => {
+  it('edits made after submit survive the first success', async () => {
     openProfile();
     fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
     const discount = screen.getByText('orders:discount').parentElement!;
@@ -382,7 +394,9 @@ describe('Restaurant staff role profiles', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Save 2 changes' }));
     fireEvent.click(screen.getByRole('button', { name: /Server/ }));
     fireEvent.click(within(discount).getByRole('button', { name: 'Deny' }));
-    act(() => mocks.roleSaveOptions?.onSuccess?.({ granted: [], revoked: [], overrides: [] }));
+    await act(async () => {
+      await mocks.roleSaveOptions?.onSuccess?.({ granted: [], revoked: [], overrides: [] });
+    });
     expect(screen.getByRole('button', { name: /Server/ })).toHaveAttribute('aria-pressed', 'true');
     expect(discount).toHaveAttribute('data-pending', 'true');
     fireEvent.click(screen.getByRole('button', { name: 'Save 2 changes' }));
@@ -390,6 +404,115 @@ describe('Restaurant staff role profiles', () => {
     expect(mocks.roleSave.mock.calls[1]![0].overrides).toContainEqual({
       capability: 'orders:discount',
       effect: 'DENY',
+    });
+  });
+
+  it('blocks override-only resave until delayed refetch preserves Cashier and converges', async () => {
+    let finishRefetch!: () => void;
+    const refetch = new Promise<void>((resolve) => {
+      finishRefetch = resolve;
+    });
+    mocks.invalidate.mockReturnValue(refetch);
+    openProfile();
+    fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
+    const discount = screen.getByText('orders:discount').parentElement!;
+    fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 changes' }));
+    fireEvent.click(within(discount).getByRole('button', { name: 'Deny' }));
+    let success: void | Promise<void>;
+    act(() => {
+      success = mocks.roleSaveOptions?.onSuccess?.({
+        granted: ['cashier'],
+        revoked: [],
+        overrides: [],
+      });
+    });
+    expect(mocks.heldRoles).toEqual([]);
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 changes' }));
+    expect(mocks.roleSave).toHaveBeenCalledTimes(1);
+    expect(screen.getByRole('button', { name: /Cashier/ })).toHaveAttribute('aria-pressed', 'true');
+    await act(async () => {
+      mocks.heldRoles = [{ jobRole: { id: 'cashier' } }];
+      mocks.access.data.allowed = ['orders:discount'];
+      finishRefetch();
+      await success;
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save 1 change' }));
+    expect(mocks.roleSave).toHaveBeenNthCalledWith(2, {
+      staffProfileId: 'staff_1',
+      branchId: 'branch_1',
+      jobRoleIds: ['cashier'],
+      overrides: [{ capability: 'orders:discount', effect: 'DENY' }],
+    });
+    expect(mocks.invalidate).toHaveBeenNthCalledWith(1, {
+      staffProfileId: 'staff_1',
+      branchId: 'branch_1',
+    });
+    expect(mocks.invalidate).toHaveBeenNthCalledWith(2, {
+      staffProfileId: 'staff_1',
+      branchId: 'branch_1',
+    });
+    await act(async () => {
+      mocks.access.data = {
+        capabilities: [],
+        inherited: [],
+        allowed: [],
+        denied: ['orders:discount'],
+      };
+      await mocks.roleSaveOptions?.onSuccess?.({ granted: [], revoked: [], overrides: [] });
+    });
+    expect(screen.getByRole('button', { name: 'Save role profiles' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: /Cashier/ })).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('delayed success invalidates its submitted branch without clearing the new branch draft', async () => {
+    mocks.extraBranches = [{ id: 'branch_2', name: 'Uptown', active: true, isDefault: false }];
+    let finishRefetch!: () => void;
+    mocks.invalidate.mockReturnValue(
+      new Promise<void>((resolve) => {
+        finishRefetch = resolve;
+      })
+    );
+    openProfile();
+    fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
+    fireEvent.click(screen.getByRole('button', { name: 'Save 1 change' }));
+    let success: void | Promise<void>;
+    act(() => {
+      success = mocks.roleSaveOptions?.onSuccess?.({
+        granted: ['cashier'],
+        revoked: [],
+        overrides: [],
+      });
+    });
+    fireEvent.change(within(screen.getByRole('dialog')).getByRole('combobox', { name: 'Branch' }), {
+      target: { value: 'branch_2' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: /Server/ }));
+    const discount = screen.getByText('orders:discount').parentElement!;
+    fireEvent.click(within(discount).getByRole('button', { name: 'Deny' }));
+    await act(async () => {
+      finishRefetch();
+      await success;
+    });
+    expect(screen.getByRole('button', { name: /Cashier/ })).toHaveAttribute(
+      'aria-pressed',
+      'false'
+    );
+    expect(screen.getByRole('button', { name: /Server/ })).toHaveAttribute('aria-pressed', 'true');
+    expect(mocks.invalidate).toHaveBeenNthCalledWith(1, {
+      staffProfileId: 'staff_1',
+      branchId: 'branch_1',
+    });
+    expect(mocks.invalidate).toHaveBeenNthCalledWith(2, {
+      staffProfileId: 'staff_1',
+      branchId: 'branch_1',
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Save 2 changes' }));
+    expect(mocks.roleSave).toHaveBeenNthCalledWith(2, {
+      staffProfileId: 'staff_1',
+      branchId: 'branch_2',
+      jobRoleIds: ['server'],
+      overrides: [{ capability: 'orders:discount', effect: 'DENY' }],
     });
   });
 
