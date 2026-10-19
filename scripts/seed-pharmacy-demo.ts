@@ -936,6 +936,10 @@ type DraftReceipt = {
   requestHash: string;
   planDigest: string;
   references: RetainedRow[];
+  /** Post-apply re-observation of the same references, retained inside the owning
+   * transaction. Absent on receipts written before this field existed and on the
+   * draft-only path, which both fall back to the pre-apply `references`. */
+  referencesAfter?: RetainedRow[];
   rows: RetainedRow[];
   integrated?: {
     beforeRows: RetainedRow[];
@@ -943,6 +947,21 @@ type DraftReceipt = {
     result: Awaited<ReturnType<typeof executeIntegrated>>;
   };
 };
+
+/** Replay drift guard. The baseline is what the committed transaction actually left
+ * behind, because the apply's own reviewed services legitimately stamp reference rows
+ * (receiving sets PackLevel."referencedAt" through a product trigger). Nothing is
+ * excluded from the hash, so any later third-party edit to any reference scalar —
+ * including clearing a stamp the database does not freeze — still refuses. */
+export function requireUnchangedReferences(
+  prior: { references: RetainedRow[]; referencesAfter?: RetainedRow[] },
+  observed: RetainedRow[]
+): void {
+  requireFact(
+    canonical(prior.referencesAfter ?? prior.references) === canonical(observed),
+    'CHANGED_REFERENCE'
+  );
+}
 
 async function openHistory(
   target: DisposablePharmacyTarget,
@@ -1382,8 +1401,7 @@ export async function runDisposablePharmacyDraft(
           ? await integratedPrerequisites(tx, request, namespace)
           : undefined;
         if (prerequisites) references.push(prerequisites.reference);
-        if (prior)
-          requireFact(canonical(prior.references) === canonical(references), 'CHANGED_REFERENCE');
+        if (prior) requireUnchangedReferences(prior, references);
         // Fresh receipt planning is forbidden on replay: the original receipt is now POSTED.
         const integratedPlan =
           prerequisites && !prior
@@ -1465,6 +1483,16 @@ export async function runDisposablePharmacyDraft(
           integratedPlan && prerequisites
             ? await executeIntegrated(tx, request, integratedPlan, prerequisites)
             : undefined;
+        // Re-read the same references this transaction just wrote through, so replay
+        // compares against reality instead of the pre-write observation. `planDigest`
+        // above still binds the dry-run's pre-apply `references`, so a tamper between
+        // review and apply is still caught by REVIEWED_DIGEST_MISMATCH.
+        const referencesAfter = integratedResult
+          ? [
+              ...(await draftReferences(tx, request)),
+              (await integratedPrerequisites(tx, request, namespace)).reference,
+            ]
+          : undefined;
         const receipt: DraftReceipt = {
           version: SQL_VERSION,
           namespace,
@@ -1472,6 +1500,7 @@ export async function runDisposablePharmacyDraft(
           requestHash,
           planDigest,
           references,
+          ...(referencesAfter ? { referencesAfter } : {}),
           rows: [
             { model: 'PharmacyPurchaseOrder', id: order.id, hash: pharmacyScalarHash(order) },
             ...lines.map((row) => ({

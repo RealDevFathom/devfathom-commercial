@@ -710,3 +710,63 @@ LAN/Azure apply remains disabled; clinical, Rx, controlled, fiscal, provider,
 consent, outreach and mature retention coverage remain UNSEEDED/OWNER-INPUT.
 No live writes, authentication changes, provisioning, push, merge or deployment.
 Source-only recovery needs no database rollback; preserve other workers' files.
+
+## Replay reference baseline correction (2026-09-15, WHA-1388)
+
+Root-only correction of the known integrated replay defect. Owned edit set:
+`scripts/seed-pharmacy-demo.ts`, `scripts/seed-pharmacy-demo.test.ts` and this
+manifest. No helper, contract, verifier, product, schema, migration, policy or
+fixture file was changed.
+
+### Defect
+
+`receiveLot` inserts a `pharmacy_inventory_lots` row; the unchanged product
+trigger `pharmacy_inventory_lot_references_pack`
+(`prisma/migrations/20260902130000_pharmacy_batch_stock_ledger/migration.sql`)
+then stamps `pharmacy_pack_levels."referencedAt"`. `draftReferences` reads that
+whole row and `pharmacyScalarHash` covers every scalar, so the receipt retained a
+**pre-write** `PackLevel` hash. The first replay after the first integrated apply
+re-read the **post-write** row and refused with `CHANGED_REFERENCE`. The guard was
+correct; the stored baseline was not. Diagnosis: WHA-1408 comment
+`0a2758a7-ea34-4ccc-9155-25bfdde61d9d`, option A.
+
+### Correction
+
+- `DraftReceipt` gains optional `referencesAfter: RetainedRow[]`.
+- After `executeIntegrated` and **inside the same owning transaction**, the same two
+  readers (`draftReferences`, then `integratedPrerequisites().reference`) run again
+  and their result is retained on the receipt.
+- The replay comparison moves into exported `requireUnchangedReferences(prior,
+observed)`, which compares against `prior.referencesAfter ?? prior.references`.
+
+Invariants preserved. `planDigest` still binds the **pre-apply** `references`, so a
+tamper between review and apply is still caught by `REVIEWED_DIGEST_MISMATCH`.
+Nothing is excluded from any hash — there is no field or column allowlist — so a
+later operator edit to any reference scalar still refuses, including clearing
+`referencedAt`, which `pharmacy_pack_conversion_immutable` does not freeze.
+Receipts written before this field exists, and every draft-only receipt, carry no
+`referencesAfter` and fall back to their original `references` baseline unchanged.
+
+### Focused check (no database, no cluster)
+
+`bun --no-env-file --conditions=react-server test scripts/seed-pharmacy-demo.test.ts`
+→ **62 passed, 0 failed**. Four new cases: the product-owned stamp is visible to the
+reference hash; replay accepts the retained post-apply observation and rejects the
+stale pre-apply one; genuine drift after the stamp still refuses (changed
+`unitsPerParent`, cleared `referencedAt`, re-stamped instant); draft-only and
+pre-existing receipts keep their original baseline.
+
+Non-vacuity control: with only `prior.referencesAfter ?? prior.references` reverted
+to `prior.references` in a scratch copy, the post-apply case fails with exactly
+`PharmacyDemoRefusal: CHANGED_REFERENCE` — the retained `Xm9Z5K` failure — and the
+file is restored. Mocked row shapes only; the cluster proof is the integrated
+verifier case, not this file.
+
+Scoped gates, exit 0 each: scoped `tsc --noEmit`, scoped `eslint`, `prettier
+--check`, `git diff --check`.
+
+### Known limit at this revision
+
+The WHA-1437 valuation and WHA-1438 refund components accepted on those issues are
+**not** the bytes present in this lane, and importing them is outside this lease's
+ownership. See the WHA-1388 evidence comment for the exact blob identities.
