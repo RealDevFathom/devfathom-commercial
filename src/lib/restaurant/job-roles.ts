@@ -430,6 +430,72 @@ export async function setStaffJobRoles(db: ScopedDb, input: SetStaffJobRolesInpu
   return { granted: granted.sort(), revoked: revoked.sort() };
 }
 
+export type StaffAccessOverrideChange = {
+  capability: string;
+  /** `null` CLEARS the override so the person falls back to their roles. */
+  effect: StaffCapabilityEffect | null;
+};
+
+export type SetStaffAccessInput = {
+  staffProfileId: string;
+  branchId: string;
+  jobRoleIds: readonly string[];
+  overrides: readonly StaffAccessOverrideChange[];
+  actorStaffProfileId?: string | null;
+};
+
+/**
+ * WHA-1181 — the admin console's ONE commit: this person's roles AND their
+ * per-capability overrides at one branch, applied together.
+ *
+ * WHY BOTH IN ONE CALL. The console used to save roles with
+ * {@link setStaffJobRoles} while every Direct/Deny click fired its own
+ * round-trip. That made "Save role profiles" a partial commit (it covered the
+ * role selection only, and was therefore permanently disabled for an
+ * organization with no roles), and it made an operator's intent — "give her
+ * cashier, but not refunds" — reach the database as two independently failing
+ * writes with a window in between where she had one and not the other.
+ *
+ * ORDER IS ROLES THEN OVERRIDES, and it matters. Overrides are the subtractive
+ * layer (module header: `effective = (roles ∪ ALLOW) \ DENY`), so applying them
+ * after the role change means a DENY saved in the same commit as the role that
+ * grants it lands on top, never underneath. The reverse order would leave the
+ * capability briefly effective.
+ *
+ * Everything underneath is the existing idempotent, individually-audited path —
+ * this adds no new write, no new audit shape, and no new precedence rule. A
+ * caller inside a transaction gets all-or-nothing; the router runs it in one.
+ */
+export async function setStaffAccess(db: ScopedDb, input: SetStaffAccessInput) {
+  const roles = await setStaffJobRoles(db, {
+    staffProfileId: input.staffProfileId,
+    branchId: input.branchId,
+    jobRoleIds: input.jobRoleIds,
+    actorStaffProfileId: input.actorStaffProfileId,
+  });
+
+  const applied: StaffAccessOverrideChange[] = [];
+  for (const override of input.overrides) {
+    const result = override.effect
+      ? await setStaffCapabilityOverride(db, {
+          staffProfileId: input.staffProfileId,
+          branchId: input.branchId,
+          capability: override.capability,
+          effect: override.effect,
+          actorStaffProfileId: input.actorStaffProfileId,
+        })
+      : await clearStaffCapabilityOverride(db, {
+          staffProfileId: input.staffProfileId,
+          branchId: input.branchId,
+          capability: override.capability,
+          actorStaffProfileId: input.actorStaffProfileId,
+        });
+    if (result.changed) applied.push(override);
+  }
+
+  return { ...roles, overrides: applied };
+}
+
 /** Every role this person holds, optionally narrowed to one branch. */
 export function listStaffJobRoles(
   db: ScopedDb,

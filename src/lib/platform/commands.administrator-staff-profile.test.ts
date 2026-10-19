@@ -16,11 +16,24 @@ vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn() }));
 vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   withPlatformDb: vi.fn(async (run: (db: unknown) => Promise<unknown>) => run(platformDb)),
+  // The real helper installs `app.current_organization_id` so the tenant tables'
+  // column DEFAULT resolves; the id it installs is asserted separately against
+  // the real implementation. Here it only has to pass the db through.
+  withOrganizationDefaults: vi.fn(
+    async (tx: unknown, organizationId: string, run: (db: unknown) => Promise<unknown>) => {
+      organizationDefaults.push(organizationId);
+      return run(tx);
+    }
+  ),
 }));
 
 /** Rows the command layer wrote, keyed by model, in call order. */
 const staffProfiles: Record<string, unknown>[] = [];
 const auditRecords: Record<string, unknown>[] = [];
+const jobRoles: Record<string, unknown>[] = [];
+const jobRoleHoldings: Record<string, unknown>[] = [];
+const stations: Record<string, unknown>[] = [];
+const organizationDefaults: string[] = [];
 
 function passthrough(prefix: string) {
   return vi.fn(async (args: { data?: unknown }) => ({
@@ -37,6 +50,14 @@ const state = {
   organizationVertical: 'RESTAURANT',
   organizationStatus: 'ONBOARDING',
   administrators: [{ id: 'user_admin', name: 'Restaurant Owner', email: 'owner@example.test' }],
+  /** Job-role keys the fake database already holds. */
+  existingJobRoleKeys: [] as string[],
+  /** Whether the seeded `owner` role is active (an operator may deactivate it). */
+  ownerRoleActive: true,
+  /** Branch ids that already own at least one kitchen station. */
+  branchesWithStations: [] as string[],
+  /** Branches the provisioning pass iterates. */
+  branches: [{ id: 'branch_default' }],
 };
 
 // The activation preflight (§9 Step 7) has to pass before the transition runs at
@@ -94,19 +115,76 @@ const platformDb = {
   restaurantBranch: {
     create: vi.fn(async () => ({ id: 'branch_default' })),
     findFirst: vi.fn(async () => state.branch),
-    findMany: vi.fn(async () => [
-      {
-        id: 'branch_default',
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
+    // The activation preflight asks for DEFAULT branches (and requires exactly
+    // one); the provisioning pass asks for every ACTIVE branch. Honour the
+    // filter so a second branch cannot accidentally fail the preflight.
+    findMany: vi.fn(async ({ where }: { where?: { isDefault?: boolean } } = {}) =>
+      (where?.isDefault ? state.branches.slice(0, 1) : state.branches).map((branch) => ({
+        ...branch,
         name: 'Gulberg Flagship',
         address: '42 Main Boulevard, Lahore',
         timezone: 'Asia/Karachi',
         businessDayCutoff: '04:30',
-      },
-    ]),
-    count: vi.fn(async () => 1),
+      }))
+    ),
+    count: vi.fn(async () => state.branches.length),
+  },
+  restaurantJobRole: {
+    findMany: vi.fn(async () => state.existingJobRoleKeys.map((key) => ({ key }))),
+    findFirst: vi.fn(async ({ where }: { where: { key?: string } }) =>
+      where.key === 'owner' && state.existingJobRoleKeys.includes('owner')
+        ? { id: 'jobrole_owner', active: state.ownerRoleActive }
+        : null
+    ),
+    // `grantJobRole` re-reads the role by id before writing the holding.
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) =>
+      where.id === 'jobrole_owner'
+        ? { id: 'jobrole_owner', key: 'owner', active: state.ownerRoleActive }
+        : null
+    ),
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      jobRoles.push(data);
+      state.existingJobRoleKeys.push(data.key as string);
+      return { id: `jobrole_${data.key as string}`, key: data.key, capabilities: [] };
+    }),
+  },
+  restaurantStaffJobRole: {
+    findUnique: vi.fn(async ({ where }: { where: Record<string, Record<string, string>> }) => {
+      const key = where.staffProfileId_jobRoleId_branchId!;
+      return jobRoleHoldings.some(
+        (holding) =>
+          holding.staffProfileId === key.staffProfileId &&
+          holding.jobRoleId === key.jobRoleId &&
+          holding.branchId === key.branchId
+      )
+        ? { id: 'holding_existing' }
+        : null;
+    }),
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      jobRoleHoldings.push(data);
+      return { id: `holding_${jobRoleHoldings.length}` };
+    }),
+  },
+  restaurantStaffJobRoleAudit: { create: passthrough('jobRoleAudit') },
+  restaurantKitchenStation: {
+    findFirst: vi.fn(async ({ where }: { where: { branchId: string } }) =>
+      state.branchesWithStations.includes(where.branchId) ? { id: 'station_existing' } : null
+    ),
+    create: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
+      stations.push(data);
+      state.branchesWithStations.push(data.branchId as string);
+      return {
+        id: `station_${stations.length}`,
+        name: data.name as string,
+        branchId: data.branchId as string,
+      };
+    }),
   },
   restaurantBranchAssignment: { create: passthrough('assignment') },
   restaurantStaffProfile: {
+    // `grantJobRole` asserts both the staff profile and the branch are in scope.
+    findUnique: vi.fn(async ({ where }: { where: { id: string } }) => ({ id: where.id })),
     findFirst: vi.fn(async ({ where }: { where: { userId?: string; email?: string } }) => {
       if (where.userId) return state.existingByUserId.get(where.userId) ?? null;
       return null; // no directory email clash
@@ -143,6 +221,7 @@ const platformDb = {
 };
 
 import { executePlatformCommand } from './commands';
+import { RESTAURANT_JOB_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 const actor = { id: 'op_1', role: 'SUPER_ADMIN' } as never;
 const request = new Request('https://admin.devfathom.com/api/platform/control', { method: 'POST' });
@@ -184,6 +263,10 @@ beforeEach(() => {
   vi.clearAllMocks();
   staffProfiles.length = 0;
   auditRecords.length = 0;
+  jobRoles.length = 0;
+  jobRoleHoldings.length = 0;
+  stations.length = 0;
+  organizationDefaults.length = 0;
   state.existingByUserId = new Map();
   state.branch = { id: 'branch_default' };
   state.packageVertical = 'RESTAURANT';
@@ -192,6 +275,10 @@ beforeEach(() => {
   state.administrators = [
     { id: 'user_admin', name: 'Restaurant Owner', email: 'owner@example.test' },
   ];
+  state.existingJobRoleKeys = [];
+  state.ownerRoleActive = true;
+  state.branchesWithStations = [];
+  state.branches = [{ id: 'branch_default' }];
 });
 
 describe('restaurant administrator staff profile at the platform entry points', () => {
@@ -242,6 +329,17 @@ describe('restaurant administrator staff profile at the platform entry points', 
         userId: 'user_admin',
       },
     ]);
+    expect(audited.restaurantProvisioning).toMatchObject({
+      administrators: [
+        {
+          created: true,
+          staffProfileId: 'staff_1',
+          primaryBranchId: 'branch_default',
+          userId: 'user_admin',
+          roleProfileGranted: true,
+        },
+      ],
+    });
   });
 
   it('is idempotent across both entry points and across repeated activations', async () => {
@@ -259,6 +357,11 @@ describe('restaurant administrator staff profile at the platform entry points', 
 
     expect(staffProfiles).toHaveLength(1);
     expect(platformDb.restaurantStaffProfile.create).toHaveBeenCalledOnce();
+    // Every concern converges: no second profile, no duplicate job roles, no
+    // second holding, and no extra station on the branch that already has one.
+    expect(jobRoles).toHaveLength(RESTAURANT_JOB_ROLE_TEMPLATES.length);
+    expect(jobRoleHoldings).toHaveLength(1);
+    expect(stations).toHaveLength(1);
     const audited = auditRecords.at(-1)?.after as Record<string, unknown>;
     expect(audited.restaurantAdministratorStaffProfiles).toEqual([
       {
@@ -268,6 +371,116 @@ describe('restaurant administrator staff profile at the platform entry points', 
         userId: 'user_admin',
       },
     ]);
+    expect(audited.restaurantProvisioning).toEqual({
+      administrators: [
+        {
+          created: false,
+          staffProfileId: 'staff_1',
+          primaryBranchId: 'branch_default',
+          userId: 'user_admin',
+          roleProfileGranted: false,
+        },
+      ],
+      jobRolesCreated: [],
+      stationsCreated: [],
+    });
+  });
+
+  // ── WHA-1181 (5): role profiles, and access INHERITED rather than direct ────
+
+  it('organization.create seeds the vertical job-role profiles and gives the administrator the owner role', async () => {
+    await executePlatformCommand(
+      actor,
+      'organization.create',
+      createPayload('RESTAURANT'),
+      request
+    );
+
+    expect(jobRoles.map((role) => role.key)).toEqual(
+      RESTAURANT_JOB_ROLE_TEMPLATES.map((template) => template.key)
+    );
+    // The owner template carries the enumerated capability set, so everything
+    // the administrator can do resolves through a role — not as a direct
+    // exception granted one capability at a time.
+    const owner = jobRoles.find((role) => role.key === 'owner');
+    expect(owner).toMatchObject({ isSystem: true });
+    expect(jobRoleHoldings).toEqual([
+      {
+        staffProfileId: 'staff_1',
+        jobRoleId: 'jobrole_owner',
+        branchId: 'branch_default',
+        grantedByStaffId: null,
+      },
+    ]);
+  });
+
+  it('activation seeds only the job roles an organization is missing', async () => {
+    state.existingJobRoleKeys = ['cashier', 'owner'];
+
+    await executePlatformCommand(actor, 'organization.transition', activatePayload, request);
+
+    const created = jobRoles.map((role) => role.key);
+    expect(created).not.toContain('cashier');
+    expect(created).not.toContain('owner');
+    expect(created).toHaveLength(RESTAURANT_JOB_ROLE_TEMPLATES.length - 2);
+    // The pre-existing `owner` row is the one granted — a re-seed must never
+    // duplicate it, and the grant must find it by key.
+    expect(jobRoleHoldings).toHaveLength(1);
+  });
+
+  it('grants no role when an operator has deactivated the owner role', async () => {
+    state.existingJobRoleKeys = ['owner'];
+    state.ownerRoleActive = false;
+
+    await executePlatformCommand(actor, 'organization.transition', activatePayload, request);
+
+    // Reactivating a role somebody switched off is a privilege change, not a
+    // repair. The staff profile is still created; only the holding is skipped.
+    expect(staffProfiles).toHaveLength(1);
+    expect(jobRoleHoldings).toEqual([]);
+    const audited = auditRecords.at(-1)?.after as Record<string, unknown>;
+    expect(
+      (audited.restaurantProvisioning as { administrators: { roleProfileGranted: boolean }[] })
+        .administrators[0]!.roleProfileGranted
+    ).toBe(false);
+  });
+
+  it('names the tenant so the seeded rows inherit its organization id', async () => {
+    await executePlatformCommand(actor, 'organization.transition', activatePayload, request);
+
+    // The reused domain writers let `organizationId` fall to its schema default,
+    // which reads a GUC the platform control plane deliberately blanks. Without
+    // this the seeded roles and stations would belong to no organization.
+    expect(organizationDefaults).toEqual(['org_new']);
+  });
+
+  // ── WHA-1181 (9a): the default KDS station ─────────────────────────────────
+
+  it('gives every branch a default Kitchen station at activation', async () => {
+    state.branches = [{ id: 'branch_default' }, { id: 'branch_second' }];
+
+    await executePlatformCommand(actor, 'organization.transition', activatePayload, request);
+
+    expect(stations).toEqual([
+      { branchId: 'branch_default', name: 'Kitchen', isDefault: true },
+      { branchId: 'branch_second', name: 'Kitchen', isDefault: true },
+    ]);
+    const audited = auditRecords.at(-1)?.after as Record<string, unknown>;
+    expect(
+      (audited.restaurantProvisioning as { stationsCreated: { branchId: string }[] })
+        .stationsCreated
+    ).toHaveLength(2);
+  });
+
+  it('leaves a branch that already has stations alone', async () => {
+    state.branches = [{ id: 'branch_default' }, { id: 'branch_second' }];
+    state.branchesWithStations = ['branch_default'];
+
+    await executePlatformCommand(actor, 'organization.transition', activatePayload, request);
+
+    // A branch with "Grill" and "Bar" is already working; adding a "Kitchen"
+    // nobody asked for would start routing tickets to an unwatched screen.
+    expect(stations).toEqual([{ branchId: 'branch_second', name: 'Kitchen', isDefault: true }]);
   });
 
   it('covers every administrator, not only the bootstrap one', async () => {
@@ -295,6 +508,9 @@ describe('restaurant administrator staff profile at the platform entry points', 
     expect(staffProfiles).toEqual([]);
     expect(platformDb.user.findMany).not.toHaveBeenCalled();
     expect(auditRecords.at(-1)?.after).not.toHaveProperty('restaurantAdministratorStaffProfiles');
+    expect(jobRoles).toEqual([]);
+    expect(stations).toEqual([]);
+    expect(auditRecords.at(-1)?.after).not.toHaveProperty('restaurantProvisioning');
   });
 
   it('writes no restaurant profile on a non-activating transition', async () => {

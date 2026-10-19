@@ -44,11 +44,15 @@ import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-c
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 import { defaultBookingEngineSlug } from '@/lib/hotel/property';
-import { deactivateHotelProperty, reactivateHotelProperty, recoverHotelPropertyManager } from '@/lib/platform/hotel-property-maintenance';
 import {
-  ensureAdministratorStaffProfile,
-  type AdministratorStaffProfileResult,
-} from '@/lib/restaurant/administrator-staff-profile';
+  deactivateHotelProperty,
+  reactivateHotelProperty,
+  recoverHotelPropertyManager,
+} from '@/lib/platform/hotel-property-maintenance';
+import {
+  provisionRestaurantOrganization,
+  type RestaurantProvisioningResult,
+} from '@/lib/restaurant/organization-provisioning';
 
 const id = z
   .string()
@@ -912,11 +916,9 @@ async function bootstrapOrganization(
     // `RestaurantStaffProfile` every restaurant procedure resolves them to, so
     // the workspace nav rendered while notifications answered 403. Created here,
     // beside the branch it points at.
-    await ensureAdministratorStaffProfile(db, {
+    await provisionRestaurantOrganization(db, {
       organizationId: organization.id,
-      userId: admin.id,
-      displayName: admin.name,
-      email: admin.email,
+      administrators: [{ id: admin.id, name: admin.name, email: admin.email }],
     });
   }
   // WHA-1206 — a pharmacy is branch-first too, and nothing else creates its
@@ -1340,10 +1342,10 @@ export async function activateDemoRestaurantOrganizationInTransaction(
     now,
     'shared-platform-demo',
     demoSharedDeploymentOrigin(
-        organization,
-        process.env.AUTH_URL || process.env.NEXTAUTH_URL,
-        process.env.SHARED_APP_HOSTS
-      )
+      organization,
+      process.env.AUTH_URL || process.env.NEXTAUTH_URL,
+      process.env.SHARED_APP_HOSTS
+    )
   );
   await assertActivationReady(db, identity.organizationId);
   if (organization.status === 'ACTIVE') return;
@@ -1655,13 +1657,13 @@ async function runCommand(
         },
       });
       // WHA-1181 — activation is the moment a RESTAURANT organization's people
-      // start using the workspace, so every administrator must hold the staff
-      // profile the restaurant procedures resolve them to. The helper is
-      // idempotent, so this both covers an administrator added after onboarding
-      // and repairs an organization created before the onboarding fix above.
-      const administratorStaffProfiles: (AdministratorStaffProfileResult & {
-        userId: string;
-      })[] = [];
+      // start using the workspace, so everything those surfaces read must exist:
+      // every administrator's staff profile (without which the procedures answer
+      // 403), the floor role profiles their capabilities are inherited from, and
+      // each branch's default kitchen station. The path is idempotent, so this
+      // both covers an administrator added after onboarding and repairs an
+      // organization created before the onboarding fix above.
+      let restaurantProvisioning: RestaurantProvisioningResult | null = null;
       if (input.status === 'ACTIVE' && before.vertical === 'RESTAURANT') {
         const administrators = await db.user.findMany({
           where: {
@@ -1672,15 +1674,10 @@ async function runCommand(
           select: { id: true, name: true, email: true },
           orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         });
-        for (const administrator of administrators) {
-          const profile = await ensureAdministratorStaffProfile(db, {
-            organizationId: input.id,
-            userId: administrator.id,
-            displayName: administrator.name,
-            email: administrator.email,
-          });
-          administratorStaffProfiles.push({ ...profile, userId: administrator.id });
-        }
+        restaurantProvisioning = await provisionRestaurantOrganization(db, {
+          organizationId: input.id,
+          administrators,
+        });
       }
       if (
         input.status === 'SUSPENDED' ||
@@ -1714,12 +1711,21 @@ async function runCommand(
         targetId: input.id,
         organizationId: input.id,
         auditBefore: { status: before.status },
-        // The command response keeps its established shape; only the audit
-        // record carries the staff profiles activation provisioned, so the
-        // ledger can answer "who was linked, and when".
+        // Preserve the response and legacy profile projection alongside provisioning audit.
         data: organization,
-        audit: administratorStaffProfiles.length
-          ? { ...organization, restaurantAdministratorStaffProfiles: administratorStaffProfiles }
+        audit: restaurantProvisioning
+          ? {
+              ...organization,
+              restaurantProvisioning,
+              restaurantAdministratorStaffProfiles: restaurantProvisioning.administrators.map(
+                ({ created, staffProfileId, primaryBranchId, userId }) => ({
+                  created,
+                  staffProfileId,
+                  primaryBranchId,
+                  userId,
+                })
+              ),
+            }
           : organization,
       };
     }

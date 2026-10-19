@@ -1,4 +1,4 @@
-import { fireEvent, render, screen, waitFor } from '@testing-library/react';
+import { act, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -12,6 +12,12 @@ type EnrollmentOptions = {
 
 type RotationOptions = {
   onSuccess?: (result: { secret: string }) => void;
+};
+
+type UiError = { message: string; data?: { code?: string } | null };
+
+type StationOptions = {
+  onSuccess?: (result: { id: string; name: string; branchId: string }) => void;
 };
 
 const mocks = vi.hoisted(() => ({
@@ -44,15 +50,37 @@ const mocks = vi.hoisted(() => ({
   rotateMutate: vi.fn(),
   rotateReset: vi.fn(),
   invalidateDevices: vi.fn(),
+  invalidateStations: vi.fn(),
+  // WHA-1181 (9): a new organization has no KDS station, which is the state the
+  // enrollment dialog used to dead-end on.
+  stations: {
+    data: [] as { id: string; name: string; active: boolean }[],
+    error: null as UiError | null,
+    isLoading: false,
+  },
+  createStation: vi.fn(),
+  stationOptions: undefined as StationOptions | undefined,
 }));
 
 vi.mock('next-auth/react', () => ({ useSession: () => mocks.session }));
-vi.mock('./print-bridge-enrollment', () => ({ PrintBridgeEnrollment: ({ onCreated }: { onCreated: () => void }) => <button onClick={onCreated}>Complete bridge enrollment</button> }));
-vi.mock('./printer-inventory-panel', () => ({ PrinterInventoryPanel: (props: { ownerKey: string; refreshVersion: number }) => { mocks.inventoryProps.push(props); return null; } }));
+vi.mock('./print-bridge-enrollment', () => ({
+  PrintBridgeEnrollment: ({ onCreated }: { onCreated: () => void }) => (
+    <button onClick={onCreated}>Complete bridge enrollment</button>
+  ),
+}));
+vi.mock('./printer-inventory-panel', () => ({
+  PrinterInventoryPanel: (props: { ownerKey: string; refreshVersion: number }) => {
+    mocks.inventoryProps.push(props);
+    return null;
+  },
+}));
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
-    useUtils: () => ({ restaurantDevices: { list: { invalidate: mocks.invalidateDevices } } }),
+    useUtils: () => ({
+      restaurantDevices: { list: { invalidate: mocks.invalidateDevices } },
+      restaurantFloor: { listStations: { invalidate: mocks.invalidateStations } },
+    }),
     restaurantDevices: {
       list: {
         useQuery: (_input: undefined, options: { enabled: boolean }) => {
@@ -107,8 +135,12 @@ vi.mock('@/lib/trpc', () => ({
       },
     },
     restaurantFloor: {
-      listStations: {
-        useQuery: () => ({ data: [], error: null, isLoading: false }),
+      listStations: { useQuery: () => mocks.stations },
+      createStation: {
+        useMutation: (options: StationOptions) => {
+          mocks.stationOptions = options;
+          return { mutate: mocks.createStation, isPending: false, error: null };
+        },
       },
     },
   },
@@ -148,7 +180,10 @@ function renderConsole(enabled: boolean) {
 describe('Restaurant device security UI', () => {
   beforeEach(() => {
     vi.clearAllMocks();
-    mocks.session = { status: 'authenticated', data: { user: { id: 'admin', organizationId: 'org_1' } } };
+    mocks.session = {
+      status: 'authenticated',
+      data: { user: { id: 'admin', organizationId: 'org_1' } },
+    };
     mocks.inventoryProps.length = 0;
     mocks.deviceQueryEnabled.length = 0;
     mocks.approverQueries.length = 0;
@@ -172,6 +207,8 @@ describe('Restaurant device security UI', () => {
       mocks.rotationOptions?.onSuccess?.({ secret: 'rdk_rotated_once' });
       options?.onSettled?.();
     });
+    mocks.stations = { data: [], error: null, isLoading: false };
+    mocks.stationOptions = undefined;
   });
 
   it('gates queries, clears submitted co-auth secrets, and forgets closed enrollment secrets', () => {
@@ -261,14 +298,20 @@ describe('Restaurant device security UI', () => {
     expect(mocks.invalidateDevices).toHaveBeenCalledOnce();
   });
   it('withholds printer inventory for disabled, mismatched-owner, and denied sessions', () => {
-    const disabled = renderConsole(false); expect(mocks.inventoryProps).toHaveLength(0); disabled.unmount();
+    const disabled = renderConsole(false);
+    expect(mocks.inventoryProps).toHaveLength(0);
+    disabled.unmount();
     mocks.session.data.user.organizationId = 'other';
-    const mismatch = renderConsole(true); expect(mocks.inventoryProps).toHaveLength(0); mismatch.unmount();
-    mocks.session.data.user.organizationId = 'org_1'; mocks.devices.error = { data: { code: 'FORBIDDEN' } };
-    renderConsole(true); expect(mocks.inventoryProps).toHaveLength(0);
+    const mismatch = renderConsole(true);
+    expect(mocks.inventoryProps).toHaveLength(0);
+    mismatch.unmount();
+    mocks.session.data.user.organizationId = 'org_1';
+    mocks.devices.error = { data: { code: 'FORBIDDEN' } };
+    renderConsole(true);
+    expect(mocks.inventoryProps).toHaveLength(0);
   });
 
-  it('shows loading instead of a false zero device count' , () => {
+  it('shows loading instead of a false zero device count', () => {
     mocks.devices.isLoading = true;
 
     renderConsole(true);
@@ -368,5 +411,93 @@ describe('Restaurant device security UI', () => {
       'Eligible approvers could not be loaded for this device.'
     );
     expect(screen.getByRole('button', { name: 'Confirm rotation' })).toBeDisabled();
+  });
+
+  // ── WHA-1181 (9b): the kitchen-display enrollment dead end ─────────────────
+
+  function openKdsEnrollment() {
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Enroll device' }));
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Device kind'), { target: { value: 'KDS' } });
+  }
+
+  it('shows the station field only for a kitchen display', () => {
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Enroll device' }));
+
+    // A POS register has no station to pick, so the field must not be there at
+    // all — not merely disabled.
+    expect(screen.queryByText('KDS station')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Device kind'), { target: { value: 'KDS' } });
+    expect(screen.getByText('KDS station')).toBeInTheDocument();
+  });
+
+  it('explains what a station is and creates one inline when the branch has none', () => {
+    openKdsEnrollment();
+
+    expect(
+      screen.getByText(
+        'This branch has no KDS station yet. A KDS station is a kitchen screen that receives tickets — e.g. Kitchen, Grill, Bar.'
+      )
+    ).toBeInTheDocument();
+    // No empty required select to dead-end on.
+    expect(screen.queryByRole('combobox', { name: 'KDS station' })).not.toBeInTheDocument();
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create station' }));
+    expect(mocks.createStation).toHaveBeenCalledWith({ branchId: 'branch_1', name: 'Kitchen' });
+  });
+
+  it('selects the station it just created so enrollment can proceed', () => {
+    openKdsEnrollment();
+    mocks.stations.data = [{ id: 'station_new', name: 'Kitchen', active: true }];
+
+    fireEvent.click(screen.getByRole('button', { name: 'Create station' }));
+    act(() =>
+      mocks.stationOptions?.onSuccess?.({
+        id: 'station_new',
+        name: 'Kitchen',
+        branchId: 'branch_1',
+      })
+    );
+
+    expect(screen.getByRole('combobox', { name: 'KDS station' })).toHaveValue('station_new');
+  });
+
+  it('says the POS module is missing rather than claiming the branch has no station', () => {
+    // Kitchen stations live behind Restaurant POS, so an organization without it
+    // gets FORBIDDEN from `listStations`. Rendering the empty state there would
+    // point the operator at a Create action that fails for the same reason —
+    // the same kind of dead end this whole item is about.
+    mocks.stations = {
+      data: [],
+      error: { message: 'Forbidden', data: { code: 'FORBIDDEN' } },
+      isLoading: false,
+    };
+    openKdsEnrollment();
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Kitchen displays need the Restaurant POS module.'
+    );
+    expect(screen.queryByRole('button', { name: 'Create station' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/This branch has no KDS station yet/)).not.toBeInTheDocument();
+  });
+
+  it('reports a missing station itself rather than through the browser tooltip', () => {
+    mocks.stations.data = [{ id: 'station_grill', name: 'Grill', active: true }];
+    openKdsEnrollment();
+
+    const select = screen.getByRole('combobox', { name: 'KDS station' });
+    // The native constraint is gone; the form owns the message.
+    expect(select).not.toBeRequired();
+    fireEvent.submit(select.closest('form')!);
+
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      'Choose the KDS station this display shows tickets for.'
+    );
+    expect(select).toHaveAttribute('aria-invalid', 'true');
+
+    fireEvent.change(select, { target: { value: 'station_grill' } });
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
   });
 });

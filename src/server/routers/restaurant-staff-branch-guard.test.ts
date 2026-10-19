@@ -18,6 +18,8 @@ describe('Restaurant staff branch guard coverage', () => {
     'revokeCredential',
     'listStaffJobRoles',
     'setStaffJobRoles',
+    'setStaffAccess',
+    'provisionMyProfile',
     'listStaffJobRoleAudit',
     'setStaffCapabilityOverride',
     'clearStaffCapabilityOverride',

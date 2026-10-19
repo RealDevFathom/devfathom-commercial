@@ -6,7 +6,7 @@ import { annotateAudit } from '../audit';
 import { StaffProfileError } from '@/lib/restaurant/staff';
 import { demoDirectoryPolicy } from '@/lib/demo/directory-access';
 import { resolveDemoDirectoryScope } from '@/lib/restaurant/staff-branch-authorization';
-import { ensureAdministratorStaffProfile } from '@/lib/restaurant/administrator-staff-profile';
+import { provisionRestaurantOrganization } from '@/lib/restaurant/organization-provisioning';
 import {
   CommercialLimitError,
   createStaffProfileWithinCommercialLimit,
@@ -33,6 +33,7 @@ import {
   listStaffJobRoles,
   resolveStaffCapabilityDecision,
   setJobRoleCapabilities,
+  setStaffAccess,
   setStaffCapabilityOverride,
   setStaffJobRoles,
   updateJobRole,
@@ -159,19 +160,38 @@ export const restaurantStaffRouter = router({
    */
   provisionMyProfile: staffProcedure.mutation(async ({ ctx }) => {
     const user = ctx.session!.user;
-    const result = await ensureAdministratorStaffProfile(ctx.db, {
-      organizationId: user.organizationId,
-      userId: user.id,
-      displayName: user.name,
-      email: user.email,
+    const organizationId = workspaceOrganizationId(ctx);
+    if (user.role !== 'ADMIN' || organizationId !== user.organizationId) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'Organization administrator access required.',
+      });
+    }
+    assertOrganizationWide(await resolveStaffBranchAuthorization(ctx.db, user));
+    const provisioning = await provisionRestaurantOrganization(ctx.db, {
+      organizationId,
+      administrators: [{ id: user.id, name: user.name, email: user.email }],
     });
-    if (result.created) {
+    const result = provisioning.administrators[0]!;
+    const repaired =
+      result.created ||
+      result.roleProfileGranted ||
+      provisioning.jobRolesCreated.length > 0 ||
+      provisioning.stationsCreated.length > 0;
+    if (repaired) {
       annotateAudit(ctx, {
         targetType: 'RestaurantStaffProfile',
         targetId: result.staffProfileId,
         targetLabel: user.name,
-        description: 'Created the organization administrator’s own restaurant staff profile',
-        metadata: { primaryBranchId: result.primaryBranchId, selfProvisioned: true },
+        description: 'Provisioned the organization administrator’s own restaurant staff profile',
+        metadata: {
+          primaryBranchId: result.primaryBranchId,
+          selfProvisioned: true,
+          profileCreated: result.created,
+          roleProfileGranted: result.roleProfileGranted,
+          jobRolesCreated: provisioning.jobRolesCreated,
+          stationsCreated: provisioning.stationsCreated.map((station) => station.stationId),
+        },
       });
     }
     return result;
@@ -673,6 +693,66 @@ export const restaurantStaffRouter = router({
             targetId: input.staffProfileId,
             description: `Job roles updated at branch ${input.branchId}: +${result.granted.length} / -${result.revoked.length}`,
             metadata: { granted: result.granted, revoked: result.revoked },
+          });
+        }
+        return result;
+      } catch (err) {
+        mapJobRoleError(err);
+      }
+    }),
+
+  /**
+   * WHA-1181 — the role-profile dialog's single commit. `jobRoleIds` is the
+   * COMPLETE desired role set at this branch (as {@link setStaffJobRoles}), and
+   * `overrides` carries only the capabilities the operator actually touched — a
+   * `null` effect clears one. Both land in the router's one transaction, so a
+   * failed override never leaves the role half of the operator's intent applied.
+   */
+  setStaffAccess: staffProcedure
+    .input(
+      z
+        .object({
+          staffProfileId: z.string(),
+          branchId: z.string(),
+          jobRoleIds: z.array(z.string()).max(64),
+          overrides: z
+            .array(
+              z
+                .object({
+                  capability: z.string().min(1).max(120),
+                  effect: z.enum(['ALLOW', 'DENY']).nullable(),
+                })
+                .strict()
+            )
+            // The console's "Grant all as direct exceptions" stages one entry per
+            // capability in the vertical catalog, so the cap has to clear it.
+            .max(500)
+            .default([]),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      try {
+        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        assertAuthorizedBranch(authorization, input.branchId);
+        await assertStaffProfileExists(ctx.db, input.staffProfileId);
+        const result = await setStaffAccess(ctx.db, {
+          staffProfileId: input.staffProfileId,
+          branchId: input.branchId,
+          jobRoleIds: input.jobRoleIds,
+          overrides: input.overrides,
+          actorStaffProfileId: authorization.actorStaffProfileId,
+        });
+        if (result.granted.length || result.revoked.length || result.overrides.length) {
+          annotateAudit(ctx, {
+            targetType: 'RestaurantStaffProfile',
+            targetId: input.staffProfileId,
+            description: `Access updated at branch ${input.branchId}: roles +${result.granted.length} / -${result.revoked.length}, ${result.overrides.length} capability override(s)`,
+            metadata: {
+              granted: result.granted,
+              revoked: result.revoked,
+              overrides: result.overrides,
+            },
           });
         }
         return result;
