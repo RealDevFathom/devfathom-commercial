@@ -13775,8 +13775,50 @@ model HotelProperty {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  mealPlans HotelMealPlan[]
+
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
   @@index([organizationId, active], map: "hotel_properties_org_active_idx")
   @@map("hotel_properties")
+}
+
+/// MEAL-01 (`05-data-model` §1.2). The meal plans a property sells: EP, CP, MAP,
+/// AP and any custom plan it invents. A rate plan will carry exactly one of
+/// these (H1-08), and a reservation freezes a copy of the one it was sold under,
+/// which is why this row may be edited in place — "changing a meal plan never
+/// changes a confirmed reservation" is a property of that snapshot.
+///
+/// `code` is text, not an enum: the pack's list ends in "custom", and an enum
+/// would need a migration for every property that names its own plan. The
+/// standard four are data in `src/lib/hotel/meal-plans.ts`.
+model HotelMealPlan {
+  id             String  @id @default(cuid())
+  organizationId String  @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  /// The property, which in hospitality is the branch (`hotel_properties`).
+  branchId       String
+  /// EP / CP / MAP / AP or the property's own. Uppercase, unique per property.
+  code           String
+  name           String
+  /// The pack's `name_ur`. Null while a custom plan has no Urdu name; never an
+  /// empty string, which would read as a translation that exists.
+  nameUr         String?
+  /// `[{ meal, outlets[], cutoff_time, per_person }]` — the pack's shape, in the
+  /// pack's spelling, because this document is copied verbatim into the
+  /// reservation's meal snapshot and pushed to channel managers. Every column of
+  /// this schema is camelCase; everything *inside* a hotel JSONB document is
+  /// snake_case, so a snapshot is a literal copy and never a re-spelling.
+  /// The database validates the shape (`hotel_meal_plan_meals_valid`).
+  meals          Json    @default("[]")
+  active         Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Cascade)
+
+  @@unique([organizationId, id], map: "hotel_meal_plans_org_id_key")
+  @@unique([organizationId, branchId, code], map: "hotel_meal_plans_org_branch_code_key")
+  @@index([organizationId, branchId, active], map: "hotel_meal_plans_org_branch_active_idx")
+  @@map("hotel_meal_plans")
 }

@@ -274,12 +274,13 @@ const PHARMACY_CUSTOMER_ORDERING_TABLES = [
   'pharmacy_customer_order_events',
 ] as const;
 
-// H1-01 (WHA-1415) registers the hospitality vertical's first tenant table here.
-// Re-derived from `prisma/schema.prisma`: `hotel_properties` is the only table
-// with the `hotel_` prefix in this build, and the assertion below is a closed
-// world over that prefix — a later hotel lane that adds a table without listing
-// it fails this pin deliberately.
-const HOSPITALITY_TABLES = ['hotel_properties'] as const;
+// H1-01 (WHA-1415) registers the hospitality vertical's first tenant table here;
+// H1-07 (WHA-1421) adds `hotel_meal_plans`. Re-derived from
+// `prisma/schema.prisma`: those two are the only models mapped to a `hotel_`
+// table in this build, and the assertion below is a closed world over that
+// prefix — a later hotel lane that adds a table without listing it fails this
+// pin deliberately.
+const HOSPITALITY_TABLES = ['hotel_meal_plans', 'hotel_properties'] as const;
 
 const M3_COLUMNS = {
   restaurant_brands: [

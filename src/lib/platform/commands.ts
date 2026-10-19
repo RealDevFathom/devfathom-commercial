@@ -38,6 +38,7 @@ import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
+import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
 import { defaultBookingEngineSlug } from '@/lib/hotel/property';
 import {
   ensureAdministratorStaffProfile,
@@ -834,7 +835,7 @@ async function bootstrapOrganization(
   // fills them in on the property settings page; pre-seeding them here would be
   // exactly the "seed data fakes readiness" move the checklist exists to refuse.
   if (input.vertical === 'HOSPITALITY') {
-    await db.hotelProperty.create({
+    const property = await db.hotelProperty.create({
       data: {
         organizationId: organization.id,
         name: input.firstBranchName!,
@@ -846,6 +847,23 @@ async function bootstrapOrganization(
         // about DevFathom's contract, not about what a guest is charged.
         bookingEngineSlug: defaultBookingEngineSlug(input.slug, input.firstBranchName!),
       },
+    });
+    // H1-07 / MEAL-01 — the property's meal plans (H-D15). Unlike the tax profile
+    // above, these are not a readiness claim: EP and CP are the industry's own
+    // meaning of "room only" and "bed & breakfast", and MAP and AP are created
+    // inactive so a property that starts selling half board enables a plan rather
+    // than inventing one. What they cover — outlets, cut-off times — is left
+    // empty for the operator, so nothing here fakes configuration.
+    await db.hotelMealPlan.createMany({
+      data: DEFAULT_HOTEL_MEAL_PLANS.map((plan) => ({
+        organizationId: organization.id,
+        branchId: property.branchId,
+        code: plan.code,
+        name: plan.name,
+        nameUr: plan.nameUr,
+        meals: plan.meals,
+        active: plan.active,
+      })),
     });
   }
   // §9 Step 6 — instantiate the vertical's role templates from the catalog.
