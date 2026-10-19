@@ -37,6 +37,7 @@ const mocks = vi.hoisted(() => ({
   rotationOptions: undefined as RotationOptions | undefined,
   enrollmentMutate: vi.fn(),
   enrollmentReset: vi.fn(),
+  bridgeMutate: vi.fn(),
   revokeMutate: vi.fn(),
   revokeReset: vi.fn(),
   rotateMutate: vi.fn(),
@@ -71,6 +72,13 @@ vi.mock('@/lib/trpc', () => ({
             error: null,
           };
         },
+      },
+      initiatePrintBridge: {
+        useMutation: () => ({
+          mutate: mocks.bridgeMutate,
+          isPending: false,
+          error: null,
+        }),
       },
       revoke: {
         useMutation: () => ({
@@ -241,6 +249,10 @@ describe('Restaurant device security UI', () => {
       'action',
       '/api/restaurant/devices/browser-enroll'
     );
+    const deviceKind = screen.getByLabelText('Device kind') as HTMLSelectElement;
+    const deviceKindOptions = Array.from(deviceKind.options, (option) => option.textContent);
+    expect(deviceKindOptions).toEqual(['POS register', 'Kitchen display']);
+    expect(deviceKindOptions).not.toContain('Print bridge');
     expect(confirmation).toBeChecked();
     expect(document.body.textContent).not.toContain('rdk_');
     expect(mocks.enrollmentMutate).not.toHaveBeenCalled();
@@ -253,6 +265,49 @@ describe('Restaurant device security UI', () => {
 
     expect(screen.getByRole('heading', { level: 3, name: 'Loading devices…' })).toBeInTheDocument();
     expect(screen.queryByRole('heading', { level: 3, name: '0 devices' })).not.toBeInTheDocument();
+  });
+
+  it('adds and removes printers and submits a dynamic bridge printer list', () => {
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add print bridge' }));
+    fireEvent.change(screen.getByLabelText('Bridge name'), { target: { value: 'Kitchen bridge' } });
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    fireEvent.change(screen.getByLabelText('Printer name'), { target: { value: 'Hot line' } });
+    fireEvent.change(screen.getByLabelText('TCP address or absolute USB/serial path'), {
+      target: { value: 'tcp://192.168.1.50:9100' },
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Add another printer' }));
+    const names = screen.getAllByLabelText('Printer name');
+    const addresses = screen.getAllByLabelText('TCP address or absolute USB/serial path');
+    const widths = screen.getAllByLabelText('Paper width');
+    fireEvent.change(names[1], { target: { value: 'Expo' } });
+    fireEvent.change(addresses[1], { target: { value: '/dev/usb/lp0' } });
+    fireEvent.change(widths[1], { target: { value: '58' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Add print bridge' }));
+
+    expect(mocks.bridgeMutate).toHaveBeenCalledWith({
+      branchId: 'branch_1',
+      name: 'Kitchen bridge',
+      printers: [
+        { name: 'Hot line', address: 'tcp://192.168.1.50:9100', paperWidthMm: 80 },
+        { name: 'Expo', address: '/dev/usb/lp0', paperWidthMm: 58 },
+      ],
+    });
+
+    fireEvent.click(screen.getByRole('button', { name: 'Remove printer 2' }));
+    expect(screen.getAllByLabelText('Printer name')).toHaveLength(1);
+    expect(screen.queryByRole('button', { name: 'Remove printer 1' })).not.toBeInTheDocument();
+  });
+
+  it('caps a bridge at twenty printers', () => {
+    renderConsole(true);
+    fireEvent.click(screen.getByRole('button', { name: 'Add print bridge' }));
+    const addPrinter = screen.getByRole('button', { name: 'Add another printer' });
+    for (let count = 1; count < 20; count += 1) fireEvent.click(addPrinter);
+
+    expect(screen.getAllByLabelText('Printer name')).toHaveLength(20);
+    expect(addPrinter).toBeDisabled();
   });
 
   it('confirms a friendly device and exposes the rotated secret in an accessible one-time state', async () => {

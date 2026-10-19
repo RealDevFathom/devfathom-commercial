@@ -59,6 +59,7 @@ export type PrintEnqueueResult =
 export type ClaimedPrintJob = {
   id: string;
   printerId: string;
+  address: string;
   documentType: PrintDocumentType;
   bytes: string;
 };
