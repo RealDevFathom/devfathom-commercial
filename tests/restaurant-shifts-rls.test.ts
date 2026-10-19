@@ -284,6 +284,51 @@ describeIfDatabase('restaurant_shifts isolation probes (real PostgreSQL)', () =>
     );
   });
 
+  it('hides cross-tenant break and swap rows and refuses their mutation', async () => {
+    const breaks = await client!.query<{ id: string }>(
+      `SELECT "id" FROM "restaurant_shift_breaks" WHERE "id" IN ($1, $2)`,
+      [ids.breakA, ids.breakB]
+    );
+    const swaps = await client!.query<{ id: string }>(
+      `SELECT "id" FROM "restaurant_shift_swap_requests" WHERE "id" IN ($1, $2)`,
+      [ids.swapA, ids.swapB]
+    );
+    expect(breaks.rows).toEqual([{ id: ids.breakA }]);
+    expect(swaps.rows).toEqual([{ id: ids.swapA }]);
+    expect(
+      (
+        await client!.query(
+          `UPDATE "restaurant_shift_breaks" SET "endedAt" = now() WHERE "id" = $1`,
+          [ids.breakB]
+        )
+      ).rowCount
+    ).toBe(0);
+    expect(
+      (
+        await client!.query(`DELETE FROM "restaurant_shift_swap_requests" WHERE "id" = $1`, [
+          ids.swapB,
+        ])
+      ).rowCount
+    ).toBe(0);
+  });
+
+  it('refuses cross-tenant shift parents even under platform scope', async () => {
+    await client!.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    try {
+      await expectDatabaseError('23503', async () => {
+        await client!.query(
+          `INSERT INTO "restaurant_shift_breaks" ("id", "organizationId", "shiftId", "updatedAt")
+           VALUES ($1, $2, $3, CURRENT_TIMESTAMP)`,
+          [`wrong_parent_${suffix}`, ids.orgA, ids.rowB]
+        );
+        await client!.query('SET CONSTRAINTS ALL IMMEDIATE');
+      });
+    } finally {
+      await client!.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
+      await client!.query(`SELECT set_config('app.current_organization_id', $1, true)`, [ids.orgA]);
+    }
+  });
+
   it('hides tenant B rows and refuses to update or delete them', async () => {
     const visible = await client!.query<{ id: string; organizationId: string }>(
       `SELECT "id", "organizationId" FROM "restaurant_shifts" WHERE "id" IN ($1, $2)`,
