@@ -19,6 +19,7 @@ const M8_TABLES = [
   'restaurant_loyalty_program_versions',
   'restaurant_loyalty_accounts',
   'restaurant_loyalty_points_entries',
+  'restaurant_insight_loyalty_liability_rollups',
   'restaurant_insight_daily_rollups',
   'restaurant_insight_item_mix_rollups',
   'restaurant_labour_cost_facts',
@@ -52,6 +53,8 @@ const ids = {
   accountB: `m8_account_b_${suffix}`,
   pointsA: `m8_points_a_${suffix}`,
   pointsB: `m8_points_b_${suffix}`,
+  liabilityA: `m8_liability_a_${suffix}`,
+  liabilityB: `m8_liability_b_${suffix}`,
   dailyA: `m8_daily_a_${suffix}`,
   dailyB: `m8_daily_b_${suffix}`,
   itemA: `m8_item_a_${suffix}`,
@@ -70,6 +73,7 @@ const rowIds: Record<(typeof M8_TABLES)[number], [string, string]> = {
   restaurant_loyalty_program_versions: [ids.programA, ids.programB],
   restaurant_loyalty_accounts: [ids.accountA, ids.accountB],
   restaurant_loyalty_points_entries: [ids.pointsA, ids.pointsB],
+  restaurant_insight_loyalty_liability_rollups: [ids.liabilityA, ids.liabilityB],
   restaurant_insight_daily_rollups: [ids.dailyA, ids.dailyB],
   restaurant_insight_item_mix_rollups: [ids.itemA, ids.itemB],
   restaurant_labour_cost_facts: [ids.labourA, ids.labourB],
@@ -234,20 +238,31 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       ]
     );
     await client!.query(
-      `INSERT INTO "restaurant_insight_daily_rollups" (
-        "id", "organizationId", "branchId", "businessDate", "sourceDailyCloseId", "updatedAt"
+      `INSERT INTO "restaurant_insight_loyalty_liability_rollups" (
+        "id", "organizationId", "businessDate", "liability", "updatedAt"
       ) VALUES
-        ($1, $2, $3, DATE '2030-01-01', $4, CURRENT_TIMESTAMP),
-        ($5, $6, $7, DATE '2030-01-01', $8, CURRENT_TIMESTAMP)`,
+        ($1, $2, DATE '2030-01-01', 1.25, CURRENT_TIMESTAMP),
+        ($3, $4, DATE '2030-01-01', 2.50, CURRENT_TIMESTAMP)`,
+      [ids.liabilityA, ids.orgA, ids.liabilityB, ids.orgB]
+    );
+    await client!.query(
+      `INSERT INTO "restaurant_insight_daily_rollups" (
+        "id", "organizationId", "branchId", "businessDate", "sourceDailyCloseId",
+        "loyaltyLiabilityRollupId", "updatedAt"
+      ) VALUES
+        ($1, $2, $3, DATE '2030-01-01', $4, $5, CURRENT_TIMESTAMP),
+        ($6, $7, $8, DATE '2030-01-01', $9, $10, CURRENT_TIMESTAMP)`,
       [
         ids.dailyA,
         ids.orgA,
         `m8_branch_a_${suffix}`,
         `m8_close_a_${suffix}`,
+        ids.liabilityA,
         ids.dailyB,
         ids.orgB,
         `m8_branch_b_${suffix}`,
         `m8_close_b_${suffix}`,
+        ids.liabilityB,
       ]
     );
     await client!.query(
@@ -312,7 +327,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
     await client.end();
   });
 
-  it('proves unprivileged NOBYPASSRLS role and exact policy metadata on all 12 tables', async () => {
+  it('proves unprivileged NOBYPASSRLS role and exact policy metadata on all M8 tables', async () => {
     expect(
       (
         await client!.query<{ rolsuper: boolean; rolbypassrls: boolean }>(
@@ -331,7 +346,7 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
       `SELECT table_row.relname AS table_name,
               table_row.relrowsecurity AS enabled,
               table_row.relforcerowsecurity AS forced,
-              array_agg(DISTINCT policy_row.polcmd ORDER BY policy_row.polcmd) AS commands
+              array_agg(DISTINCT policy_row.polcmd::text ORDER BY policy_row.polcmd::text) AS commands
          FROM pg_catalog.pg_class table_row
          JOIN pg_catalog.pg_namespace namespace_row ON namespace_row.oid = table_row.relnamespace
          JOIN pg_catalog.pg_policy policy_row ON policy_row.polrelid = table_row.oid
@@ -399,6 +414,18 @@ describeIfDatabase('M8 cross-tenant RLS probes (real PostgreSQL)', () => {
         )
       ).rows
     ).toEqual([{ id: customerId, organizationId: ids.orgA }]);
+  });
+
+  it('rejects a cross-tenant daily-to-liability composite reference', async () => {
+    await expectDatabaseError('23503', async () => {
+      await client!.query(
+        `UPDATE "restaurant_insight_daily_rollups"
+            SET "loyaltyLiabilityRollupId" = $1
+          WHERE "id" = $2`,
+        [ids.liabilityB, ids.dailyA]
+      );
+      await client!.query(`SET CONSTRAINTS "tenant_insight_daily_loyalty_fact_fk" IMMEDIATE`);
+    });
   });
 
   it('enforces normalized EMAIL and PHONE uniqueness per organization only', async () => {
