@@ -145,8 +145,12 @@ owned output with verified realpaths, using existing dependencies. Preserve acce
 application and initializer records separately. No service, credential, runtime database,
 network, deployment or cleanup action is part of source admission.
 
-Inventory UI, confirmation/reconciliation interactions and visual QA are a later explicitly
-admitted slice. A backend contract is not permission to add an unreviewed retirement button.
+The reviewed inventory UI keeps retired rows visible with lifecycle separate from observed
+health. It requires branch- and printer-specific confirmation before one guarded retirement
+mutation, retains confirmed server timestamps through list-refresh failure, and reports
+conflict or uncertain outcomes without automatic retry. Registration, rename and another
+retirement stay blocked until a fresh authorized post-outcome inventory read and operator
+acknowledgement. Visual and browser QA remain open.
 
 ## Required focused proof before source acceptance
 
@@ -179,5 +183,7 @@ retains the existing token, device, job and lease rules without a retirement fil
 Offline schema generation and mocked source checks are the acceptance scope. No migration
 has been executed. Before deployment enables this mutation, all old registered-job and
 route writers must be replaced or stopped; their ignorance of retirement invalidates the
-locking/eligibility contract. UI retirement controls, live database interleavings, migration
-execution, RLS verification, runtime acceptance and rollout remain separate gates.
+locking/eligibility contract. The inventory panel has 60 passing synthetic tests for
+confirmation, receipts and reconciliation; these do not establish visual or browser behavior.
+Live database interleavings, migration execution, RLS verification, runtime acceptance,
+old-writer rollout and physical output remain separate gates.
