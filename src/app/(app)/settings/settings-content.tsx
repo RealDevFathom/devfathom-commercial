@@ -179,6 +179,12 @@ type PrintingBranch = {
   id: string;
   name: string;
   kitchenStations: Array<{ id: string; name: string }>;
+  printers: Array<{
+    id: string;
+    name: string;
+    status: 'ONLINE' | 'OFFLINE';
+    bridge: { name: string; lastSeenAt: string | null };
+  }>;
   config: {
     branchId: string;
     routes: Array<{
@@ -359,14 +365,20 @@ export function PrintRoutingSection() {
                       </select>
                     </label>
                     <label className="text-xs font-medium text-foreground">
-                      Printer ID
-                      <Input
+                      Printer
+                      <select
                         aria-label={`${label} printer ID`}
                         value={route.printerId}
                         onChange={(event) => updateRoute(type, { printerId: event.target.value })}
-                        placeholder="tcp://192.168.1.50:9100"
-                        className="mt-1 min-h-11"
-                      />
+                        className="mt-1 min-h-11 w-full rounded-xl border border-border bg-background px-3 text-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                      >
+                        <option value="">Select printer</option>
+                        {selected?.printers?.map((printer) => (
+                          <option key={printer.id} value={printer.id}>
+                            {printer.name} · {printer.bridge.name} · {printer.status}
+                          </option>
+                        ))}
+                      </select>
                     </label>
                     <label className="flex min-h-11 items-center gap-2 text-xs font-medium text-foreground">
                       <Switch

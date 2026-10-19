@@ -34,6 +34,7 @@ import { RestaurantBranchSelect } from './restaurant-branch-select';
 
 type Device = inferRouterOutputs<AppRouter>['restaurantDevices']['list'][number];
 type UiError = { message: string; data?: { code?: string } | null };
+type PrinterDraft = { id: number; name: string; address: string; paperWidthMm: 58 | 80 };
 
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
@@ -72,6 +73,11 @@ export function RestaurantDevicesConsole() {
   });
 
   const [enrollOpen, setEnrollOpen] = useState(false);
+  const [bridgeOpen, setBridgeOpen] = useState(false);
+  const [bridgePrinters, setBridgePrinters] = useState<PrinterDraft[]>([
+    { id: 1, name: '', address: '', paperWidthMm: 80 },
+  ]);
+  const [nextPrinterId, setNextPrinterId] = useState(2);
   const [enrollmentKind, setEnrollmentKind] = useState<'POS' | 'KDS'>('POS');
   const [enrollmentBranchId, setEnrollmentBranchId] = useState('');
   const [selectedDevice, setSelectedDevice] = useState<Device | null>(null);
@@ -80,6 +86,11 @@ export function RestaurantDevicesConsole() {
   const [oneTimeDeviceName, setOneTimeDeviceName] = useState<string | null>(null);
   const [copyStatus, setCopyStatus] = useState<'idle' | 'copied' | 'error'>('idle');
   const [coAuthError, setCoAuthError] = useState('');
+  const [bridgeCode, setBridgeCode] = useState<{
+    code: string;
+    expiresAt: Date;
+    name: string;
+  } | null>(null);
   const approversQuery = trpc.restaurantDevices.listApprovers.useQuery(
     { deviceId: selectedDevice?.id ?? '' },
     { enabled: restaurantEnabled && selectedDevice !== null }
@@ -117,6 +128,39 @@ export function RestaurantDevicesConsole() {
       toast.error(error.message);
     },
   });
+  const addBridge = trpc.restaurantDevices.initiatePrintBridge.useMutation({
+    onSuccess: (result) => {
+      setBridgeOpen(false);
+      setBridgeCode({
+        code: result.enrollmentCode,
+        expiresAt: new Date(result.expiresAt),
+        name: result.device.name,
+      });
+      refreshDevices();
+      toast.success('Print bridge added. Copy its enrollment code now.');
+    },
+    onError: (error) => toast.error(error.message),
+  });
+
+  const submitBridge = (event: FormEvent<HTMLFormElement>) => {
+    event.preventDefault();
+    const data = new FormData(event.currentTarget);
+    addBridge.mutate({
+      branchId: formText(data, 'branchId'),
+      name: formText(data, 'name'),
+      printers: bridgePrinters.map(({ name, address, paperWidthMm }) => ({
+        name: name.trim(),
+        address: address.trim(),
+        paperWidthMm,
+      })),
+    });
+  };
+
+  const updateBridgePrinter = (id: number, update: Partial<Omit<PrinterDraft, 'id'>>) => {
+    setBridgePrinters((printers) =>
+      printers.map((printer) => (printer.id === id ? { ...printer, ...update } : printer))
+    );
+  };
 
   const actingStaff = approversQuery.data?.actingStaff ?? null;
   const approvers = approversQuery.data?.approvers ?? [];
@@ -184,6 +228,17 @@ export function RestaurantDevicesConsole() {
                 }}
               >
                 Enroll device
+              </Button>
+              <Button
+                variant="secondary"
+                className="min-h-11"
+                onClick={() => {
+                  setBridgePrinters([{ id: 1, name: '', address: '', paperWidthMm: 80 }]);
+                  setNextPrinterId(2);
+                  setBridgeOpen(true);
+                }}
+              >
+                Add print bridge
               </Button>
             </div>
           ) : null
@@ -254,6 +309,20 @@ export function RestaurantDevicesConsole() {
                   <TableRow key={device.id}>
                     <TableCell>
                       <span className="block font-medium text-text-strong">{device.name}</span>
+                      {device.kind === 'PRINT_BRIDGE'
+                        ? device.printers.map((printer) => (
+                            <span
+                              key={printer.id}
+                              className="mt-1 flex flex-wrap items-center gap-2 text-xs text-text-muted"
+                            >
+                              {printer.name} · {printer.address} · {printer.paperWidthMm}mm
+                              <StatusPill
+                                status={printer.status}
+                                tone={printer.status === 'ONLINE' ? 'success' : 'warning'}
+                              />
+                            </span>
+                          ))
+                        : null}
                     </TableCell>
                     <TableCell className="text-text-strong">{device.branch.name}</TableCell>
                     <TableCell className="text-text-strong">{device.kind}</TableCell>
@@ -415,6 +484,160 @@ export function RestaurantDevicesConsole() {
               </Button>
             </DialogFooter>
           </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={bridgeOpen} onOpenChange={setBridgeOpen}>
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Add print bridge</DialogTitle>
+            <DialogDescription>
+              Register a bridge runtime and one to twenty ESC/POS printers. The enrollment code
+              expires after 10 minutes and works once.
+            </DialogDescription>
+          </DialogHeader>
+          <form className="space-y-4" onSubmit={submitBridge}>
+            <label className="space-y-1.5">
+              <span className={labelClass}>Bridge name</span>
+              <Input name="name" required maxLength={120} className="h-11" />
+            </label>
+            <div className="space-y-1.5">
+              <label htmlFor="bridge-branch-id" className={labelClass}>
+                Branch
+              </label>
+              <RestaurantBranchSelect
+                id="bridge-branch-id"
+                name="branchId"
+                required
+                branches={branchesQuery.data ?? []}
+                loading={branchesQuery.isLoading}
+                error={Boolean(branchesQuery.error)}
+              />
+            </div>
+            <div className="max-h-[45vh] space-y-3 overflow-y-auto pr-1">
+              {bridgePrinters.map((printer, index) => (
+                <div key={printer.id} className="space-y-3 rounded-md border border-border p-3">
+                  <div className="flex items-center justify-between gap-3">
+                    <p className={labelClass}>Printer {index + 1}</p>
+                    {bridgePrinters.length > 1 ? (
+                      <Button
+                        type="button"
+                        size="sm"
+                        variant="ghost"
+                        onClick={() =>
+                          setBridgePrinters((printers) =>
+                            printers.filter((candidate) => candidate.id !== printer.id)
+                          )
+                        }
+                        aria-label={`Remove printer ${index + 1}`}
+                      >
+                        Remove
+                      </Button>
+                    ) : null}
+                  </div>
+                  <label className="space-y-1.5">
+                    <span className={labelClass}>Printer name</span>
+                    <Input
+                      required
+                      maxLength={120}
+                      className="h-11"
+                      value={printer.name}
+                      onChange={(event) =>
+                        updateBridgePrinter(printer.id, { name: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className={labelClass}>TCP address or absolute USB/serial path</span>
+                    <Input
+                      required
+                      placeholder="tcp://192.168.1.50:9100 or /dev/usb/lp0"
+                      className="h-11"
+                      value={printer.address}
+                      onChange={(event) =>
+                        updateBridgePrinter(printer.id, { address: event.target.value })
+                      }
+                    />
+                  </label>
+                  <label className="space-y-1.5">
+                    <span className={labelClass}>Paper width</span>
+                    <select
+                      className={selectClass}
+                      value={printer.paperWidthMm}
+                      onChange={(event) =>
+                        updateBridgePrinter(printer.id, {
+                          paperWidthMm: Number(event.target.value) as 58 | 80,
+                        })
+                      }
+                    >
+                      <option value="58">58 mm</option>
+                      <option value="80">80 mm</option>
+                    </select>
+                  </label>
+                </div>
+              ))}
+            </div>
+            <Button
+              type="button"
+              variant="secondary"
+              disabled={bridgePrinters.length >= 20}
+              onClick={() => {
+                setBridgePrinters((printers) => [
+                  ...printers,
+                  { id: nextPrinterId, name: '', address: '', paperWidthMm: 80 },
+                ]);
+                setNextPrinterId((id) => id + 1);
+              }}
+            >
+              Add another printer
+            </Button>
+            <DialogFooter>
+              <Button
+                type="button"
+                variant="outline"
+                onClick={() => setBridgeOpen(false)}
+                disabled={addBridge.isPending}
+              >
+                Cancel
+              </Button>
+              <Button type="submit" disabled={addBridge.isPending}>
+                {addBridge.isPending ? 'Adding…' : 'Add print bridge'}
+              </Button>
+            </DialogFooter>
+          </form>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={bridgeCode !== null}
+        onOpenChange={(open) => {
+          if (!open) setBridgeCode(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Enroll {bridgeCode?.name ?? 'print bridge'}</DialogTitle>
+            <DialogDescription>
+              Copy code now. It expires at{' '}
+              {bridgeCode ? dateFormat.format(bridgeCode.expiresAt) : ''} and becomes invalid after
+              first exchange.
+            </DialogDescription>
+          </DialogHeader>
+          <Input
+            readOnly
+            value={bridgeCode?.code ?? ''}
+            className="h-11 font-mono"
+            onFocus={(event) => event.currentTarget.select()}
+          />
+          <p className="text-sm text-text-muted">
+            The runtime must receive `PRINT_BRIDGE_ENROLLMENT_CODE` and `PRINT_BRIDGE_TOKEN_FILE`.
+            It stores the token in that owner-only file and never displays the token.
+          </p>
+          <DialogFooter>
+            <Button type="button" onClick={() => setBridgeCode(null)}>
+              Done
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

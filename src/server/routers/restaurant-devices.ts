@@ -13,6 +13,7 @@ import {
 } from '@/lib/restaurant/devices';
 import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import { authenticateOperator } from '@/lib/restaurant/terminal-auth';
+import { issuePrintBridgeEnrollmentCode } from '@/lib/restaurant/print-bridge-enrollment';
 import {
   CommercialLimitError,
   enrollDeviceWithinCommercialLimits,
@@ -54,7 +55,21 @@ export const restaurantDevicesRouter = router({
     const devices = await ctx.db.restaurantRegisteredDevice.findMany({
       where: { branchId: { in: authorization.branchIds } },
       orderBy: { createdAt: 'desc' },
-      include: { branch: { select: { id: true, name: true } } },
+      include: {
+        branch: { select: { id: true, name: true } },
+        printers: {
+          select: {
+            id: true,
+            name: true,
+            address: true,
+            paperWidthMm: true,
+            status: true,
+            lastSeenAt: true,
+            lastError: true,
+          },
+          orderBy: { createdAt: 'asc' },
+        },
+      },
     });
     return devices.map((device) => ({
       id: device.id,
@@ -67,8 +82,95 @@ export const restaurantDevicesRouter = router({
       revokedAt: device.revokedAt,
       createdAt: device.createdAt,
       health: deviceHealth(device, now),
+      printers: device.printers,
     }));
   }),
+
+  initiatePrintBridge: manageDevicesProcedure
+    .input(
+      z.object({
+        branchId: z.string().min(1),
+        name: z.string().trim().min(1).max(120),
+        printers: z
+          .array(
+            z.object({
+              name: z.string().trim().min(1).max(120),
+              address: z.string().trim().min(1).max(500),
+              paperWidthMm: z.union([z.literal(58), z.literal(80)]),
+            })
+          )
+          .min(1)
+          .max(20),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const authorization = await resolveCapabilityBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        'devices:manage'
+      );
+      assertAuthorizedBranch(authorization, input.branchId);
+      const branch = await ctx.db.restaurantBranch.findUnique({
+        where: { id: input.branchId },
+        select: { id: true },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      for (const printer of input.printers) {
+        const tcp = /^tcp:\/\/[^/:\s]+:\d{1,5}$/.test(printer.address);
+        const path = printer.address.startsWith('/') && !printer.address.includes('\0');
+        if (!tcp && !path)
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Printer connection must be tcp://host:port or an absolute device path.',
+          });
+      }
+      try {
+        return await ctx.db.$transaction(async (db) => {
+          const scopedDb = db as unknown as ScopedDb;
+          const { device } = await enrollDeviceWithinCommercialLimits(
+            scopedDb,
+            ctx.entitlements.limits,
+            {
+              branchId: input.branchId,
+              name: input.name,
+              kind: 'PRINT_BRIDGE',
+            }
+          );
+          await db.restaurantPrinter.createMany({
+            data: input.printers.map((printer) => ({
+              branchId: input.branchId,
+              bridgeId: device.id,
+              name: printer.name,
+              connectionKind: printer.address.startsWith('tcp://') ? 'TCP' : 'DEVICE_PATH',
+              address: printer.address,
+              paperWidthMm: printer.paperWidthMm,
+            })),
+          });
+          const enrollment = await issuePrintBridgeEnrollmentCode(scopedDb, device.id);
+          annotateAudit(ctx, {
+            targetType: 'RestaurantRegisteredDevice',
+            targetId: device.id,
+            targetLabel: device.name,
+            description: `Added print bridge "${device.name}"`,
+            metadata: { branchId: input.branchId },
+          });
+          return {
+            device: {
+              id: device.id,
+              name: device.name,
+              branchId: device.branchId,
+              kind: device.kind,
+            },
+            enrollmentCode: enrollment.code,
+            expiresAt: enrollment.expiresAt,
+          };
+        });
+      } catch (error) {
+        if (error instanceof CommercialLimitError)
+          throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
+        throw error;
+      }
+    }),
 
   /** Minimal co-authorization directory for one authorized device branch. */
   listApprovers: manageDevicesProcedure

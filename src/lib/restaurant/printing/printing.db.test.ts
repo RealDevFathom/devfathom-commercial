@@ -17,12 +17,15 @@ const orgA = `org_print_a_${suffix}`;
 const orgB = `org_print_b_${suffix}`;
 const branchA = `branch_print_a_${suffix}`;
 const branchB = `branch_print_b_${suffix}`;
+const bridgeA = `bridge_print_a_${suffix}`;
+const printerA = `printer_print_a_${suffix}`;
+const bridgeB = `bridge_print_b_${suffix}`;
 
 let tenancy: typeof import('@/lib/tenancy/scoped-db');
 
 const config: PrintRoutingConfig = {
   branchId: branchA,
-  routes: [{ documentType: 'BAR_TICKET', stationId: null, printerId: 'printer-a', enabled: true }],
+  routes: [{ documentType: 'BAR_TICKET', stationId: null, printerId: printerA, enabled: true }],
 };
 const job: PrintJob = {
   branchId: branchA,
@@ -53,6 +56,40 @@ describeIfDatabase('durable print bridge', () => {
     await tenancy.withTenantDb(orgA, (db) =>
       db.restaurantBranch.create({ data: { id: branchA, organizationId: orgA, name: 'A' } })
     );
+    await tenancy.withTenantDb(orgA, async (db) => {
+      await db.restaurantRegisteredDevice.create({
+        data: {
+          id: bridgeA,
+          organizationId: orgA,
+          branchId: branchA,
+          name: 'Bridge A',
+          kind: 'PRINT_BRIDGE',
+          deviceSecretHash: `hash_${suffix}`,
+        },
+      });
+      await db.restaurantRegisteredDevice.create({
+        data: {
+          id: bridgeB,
+          organizationId: orgA,
+          branchId: branchA,
+          name: 'Bridge B',
+          kind: 'PRINT_BRIDGE',
+          deviceSecretHash: `hash_b_${suffix}`,
+        },
+      });
+      await db.restaurantPrinter.create({
+        data: {
+          id: printerA,
+          organizationId: orgA,
+          branchId: branchA,
+          bridgeId: bridgeA,
+          name: 'Printer A',
+          connectionKind: 'DEVICE_PATH',
+          address: '/dev/null',
+          paperWidthMm: 80,
+        },
+      });
+    });
     await tenancy.withTenantDb(orgB, (db) =>
       db.restaurantBranch.create({ data: { id: branchB, organizationId: orgB, name: 'B' } })
     );
@@ -79,6 +116,56 @@ describeIfDatabase('durable print bridge', () => {
     );
   });
 
+  it('expires enrollment codes and consumes a valid code once', async () => {
+    const { issuePrintBridgeEnrollmentCode, exchangePrintBridgeEnrollmentCode } =
+      await import('../print-bridge-enrollment');
+    const issuedAt = new Date('2026-09-02T10:00:00.000Z');
+    const expired = await tenancy.withTenantDb(orgA, (db) =>
+      issuePrintBridgeEnrollmentCode(db, bridgeA, issuedAt)
+    );
+    await expect(
+      exchangePrintBridgeEnrollmentCode(expired.code, new Date('2026-09-02T10:11:00.000Z'))
+    ).resolves.toBeNull();
+    const valid = await tenancy.withTenantDb(orgA, (db) =>
+      issuePrintBridgeEnrollmentCode(db, bridgeA, issuedAt)
+    );
+    const exchanged = await exchangePrintBridgeEnrollmentCode(
+      valid.code,
+      new Date('2026-09-02T10:01:00.000Z')
+    );
+    expect(exchanged?.token).toMatch(/^rdk_/);
+    await expect(
+      tenancy.withTenantDb(orgA, (db) =>
+        db.restaurantRegisteredDevice.findUniqueOrThrow({ where: { id: bridgeA } })
+      )
+    ).resolves.toMatchObject({ lastSeenAt: new Date('2026-09-02T10:01:00.000Z') });
+    await expect(
+      exchangePrintBridgeEnrollmentCode(valid.code, new Date('2026-09-02T10:02:00.000Z'))
+    ).resolves.toBeNull();
+  });
+
+  it('records bridge-routed printer OFFLINE status and error text', async () => {
+    const offlineJob = { ...job, idempotencyKey: `bridge-offline-${suffix}` };
+    await tenancy.withTenantDb(orgA, (db) =>
+      new PrintBridgeService(db).enqueue(orgA, config, offlineJob)
+    );
+    const claimed = await tenancy.withTenantDb(orgA, (db) => claimNextPrintJob(db, bridgeA));
+    expect(claimed).not.toBeNull();
+    await tenancy.withTenantDb(orgA, (db) =>
+      acknowledgePrintJob(db, {
+        bridgeId: bridgeA,
+        jobId: claimed!.id,
+        status: 'OFFLINE',
+        error: 'ECONNREFUSED',
+      })
+    );
+    await expect(
+      tenancy.withTenantDb(orgA, (db) =>
+        db.restaurantPrinter.findUniqueOrThrow({ where: { id: printerA } })
+      )
+    ).resolves.toMatchObject({ status: 'OFFLINE', lastError: 'ECONNREFUSED' });
+  });
+
   it('survives service restart and concurrent replay without duplicate delivery', async () => {
     const adapter = new SimulatedPrintBridgeAdapter();
     const submit = () =>
@@ -95,13 +182,13 @@ describeIfDatabase('durable print bridge', () => {
   it('persists offline retry state and prints once after recovery', async () => {
     const adapter = new SimulatedPrintBridgeAdapter();
     const retryJob = { ...job, idempotencyKey: `offline-retry-${suffix}` };
-    adapter.setOffline('printer-a', true);
+    adapter.setOffline(printerA, true);
     await expect(
       tenancy.withTenantDb(orgA, (db) =>
         new PrintBridgeService(adapter, db).submit(orgA, config, retryJob)
       )
     ).resolves.toMatchObject({ status: 'OFFLINE' });
-    adapter.setOffline('printer-a', false);
+    adapter.setOffline(printerA, false);
     await expect(
       tenancy.withTenantDb(orgA, (db) =>
         new PrintBridgeService(adapter, db).submit(orgA, config, retryJob)
@@ -142,22 +229,31 @@ describeIfDatabase('durable print bridge', () => {
           {
             documentType: 'BAR_TICKET',
             stationId: null,
-            printerId: `tcp://127.0.0.1:${address.port}`,
+            printerId: printerA,
             enabled: true,
           },
         ],
       };
       const tcpJob = { ...job, idempotencyKey: `fake-tcp-${suffix}` };
       await tenancy.withTenantDb(orgA, (db) =>
+        db.restaurantPrinter.update({
+          where: { id: printerA },
+          data: { connectionKind: 'TCP', address: `tcp://127.0.0.1:${address.port}` },
+        })
+      );
+      await tenancy.withTenantDb(orgA, (db) =>
         new PrintBridgeService(db).enqueue(orgA, tcpConfig, tcpJob)
       );
-      const claimed = await tenancy.withTenantDb(orgA, (db) => claimNextPrintJob(db, branchA));
+      const claimed = await tenancy.withTenantDb(orgA, (db) => claimNextPrintJob(db, bridgeA));
       expect(claimed).not.toBeNull();
-      await writeToPrinter(claimed!.printerId, Buffer.from(claimed!.bytes, 'base64'));
+      await expect(
+        tenancy.withTenantDb(orgA, (db) => claimNextPrintJob(db, bridgeB))
+      ).resolves.toBeNull();
+      await writeToPrinter(claimed!.address, Buffer.from(claimed!.bytes, 'base64'));
       expect((await received).includes(Buffer.from('Soda'))).toBe(true);
       await expect(
         tenancy.withTenantDb(orgA, (db) =>
-          acknowledgePrintJob(db, { branchId: branchA, jobId: claimed!.id, status: 'PRINTED' })
+          acknowledgePrintJob(db, { bridgeId: bridgeA, jobId: claimed!.id, status: 'PRINTED' })
         )
       ).resolves.toEqual({ acknowledged: true, replayed: false });
       await expect(
@@ -165,6 +261,11 @@ describeIfDatabase('durable print bridge', () => {
           db.restaurantPrintJob.findUniqueOrThrow({ where: { id: claimed!.id } })
         )
       ).resolves.toMatchObject({ status: 'PRINTED', attemptCount: 1 });
+      await expect(
+        tenancy.withTenantDb(orgA, (db) =>
+          db.restaurantPrinter.findUniqueOrThrow({ where: { id: printerA } })
+        )
+      ).resolves.toMatchObject({ status: 'ONLINE', lastError: null });
     } finally {
       server.close();
       await once(server, 'close');

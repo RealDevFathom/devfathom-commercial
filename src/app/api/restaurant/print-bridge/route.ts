@@ -34,11 +34,13 @@ function isBridgeRequest(request: Request) {
 }
 
 const bridgeClaim = withDeviceAuth(async (ctx, request) => {
+  if (ctx.device.kind !== 'PRINT_BRIDGE')
+    return NextResponse.json({ error: 'Print bridge device required.' }, { status: 403 });
   const rawWait = new URL(request.url).searchParams.get('wait');
   const waitSeconds = Math.min(20, Math.max(0, Number.parseInt(rawWait ?? '15', 10) || 0));
   const deadline = Date.now() + waitSeconds * 1_000;
   do {
-    const job = await claimNextPrintJob(ctx.db, ctx.device.branchId);
+    const job = await claimNextPrintJob(ctx.db, ctx.device.id);
     if (job) return NextResponse.json({ job });
     if (Date.now() >= deadline || request.signal.aborted) break;
     await new Promise((resolve) => setTimeout(resolve, 500));
@@ -47,14 +49,17 @@ const bridgeClaim = withDeviceAuth(async (ctx, request) => {
 });
 
 const bridgeAck = withDeviceAuth(async (ctx, request) => {
+  if (ctx.device.kind !== 'PRINT_BRIDGE')
+    return NextResponse.json({ error: 'Print bridge device required.' }, { status: 403 });
   const parsed = bridgeAckBody.safeParse(await request.json().catch(() => null));
   if (!parsed.success) {
     return NextResponse.json({ error: 'Invalid print acknowledgement.' }, { status: 400 });
   }
   const result = await acknowledgePrintJob(ctx.db, {
-    branchId: ctx.device.branchId,
+    bridgeId: ctx.device.id,
     jobId: parsed.data.jobId,
     status: parsed.data.status,
+    error: parsed.data.error,
   });
   if (!result.acknowledged) {
     return NextResponse.json({ error: 'Print job not found.' }, { status: 404 });
@@ -112,6 +117,15 @@ export async function GET(request: Request) {
       id: true,
       name: true,
       kitchenStations: { where: { active: true }, select: { id: true, name: true } },
+      printers: {
+        select: {
+          id: true,
+          name: true,
+          status: true,
+          bridge: { select: { name: true, lastSeenAt: true } },
+        },
+        orderBy: { name: 'asc' },
+      },
     },
   });
   const configs = await ctx.db.restaurantPrintRoute.findMany({
@@ -164,6 +178,20 @@ export async function PUT(request: Request) {
   if (parsed.data.routes.some((route) => route.stationId && !stationIds.has(route.stationId))) {
     return NextResponse.json(
       { error: 'A print route references a station outside this branch.' },
+      { status: 400 }
+    );
+  }
+  const printerIds = new Set(
+    (
+      await ctx.db.restaurantPrinter.findMany({
+        where: { branchId: parsed.data.branchId },
+        select: { id: true },
+      })
+    ).map((printer) => printer.id)
+  );
+  if (parsed.data.routes.some((route) => !printerIds.has(route.printerId))) {
+    return NextResponse.json(
+      { error: 'A print route references a printer outside this branch.' },
       { status: 400 }
     );
   }

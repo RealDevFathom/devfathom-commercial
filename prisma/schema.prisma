@@ -3532,6 +3532,7 @@ model RestaurantBranch {
   terminalProviderConfigs     RestaurantTerminalProviderConfig[]
   terminalReconciliations     RestaurantTerminalReconciliation[]
   printRoutes                 RestaurantPrintRoute[]
+  printers                    RestaurantPrinter[]
   printJobs                   RestaurantPrintJob[]
   deliveryZones               RestaurantDeliveryZone[]
   deliveryFulfillments        RestaurantDeliveryFulfillment[]
@@ -4006,30 +4007,32 @@ model RestaurantRegisteredDevice {
   createdAt        DateTime                         @default(now())
   updatedAt        DateTime                         @updatedAt
 
-  branch                    RestaurantBranch                    @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  station                   RestaurantKitchenStation?           @relation(fields: [stationId], references: [id], onDelete: SetNull)
-  credentials               RestaurantOperatorCredential[]
-  terminalSessions          RestaurantTerminalSession[]
-  coAuthorizations          RestaurantCoAuthorization[]
+  branch                     RestaurantBranch                      @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  station                    RestaurantKitchenStation?             @relation(fields: [stationId], references: [id], onDelete: SetNull)
+  credentials                RestaurantOperatorCredential[]
+  terminalSessions           RestaurantTerminalSession[]
+  coAuthorizations           RestaurantCoAuthorization[]
   // M4-L1: orders opened from this terminal, order events attributed to it, and
   // the device-scoped idempotency keys guarding its command replays (C7).
-  ordersOpened              RestaurantOrder[]                   @relation("OrderOpeningDevice")
-  actedOrderEvents          RestaurantOrderEvent[]              @relation("OrderEventActorDevice")
-  idempotencyKeys           RestaurantOrderIdempotencyKey[]
-  bills                     RestaurantBill[]
-  payments                  RestaurantPayment[]
-  tenders                   RestaurantTender[]
-  terminalProviderConfigs   RestaurantTerminalProviderConfig[]
-  refunds                   RestaurantRefund[]
-  drawerSessions            RestaurantDrawerSession[]
-  drawerMovements           RestaurantDrawerMovement[]
-  dailyCloses               RestaurantDailyClose[]
-  moneyIdempotencyKeys      RestaurantMoneyIdempotencyKey[]
+  ordersOpened               RestaurantOrder[]                     @relation("OrderOpeningDevice")
+  actedOrderEvents           RestaurantOrderEvent[]                @relation("OrderEventActorDevice")
+  idempotencyKeys            RestaurantOrderIdempotencyKey[]
+  bills                      RestaurantBill[]
+  payments                   RestaurantPayment[]
+  tenders                    RestaurantTender[]
+  terminalProviderConfigs    RestaurantTerminalProviderConfig[]
+  refunds                    RestaurantRefund[]
+  drawerSessions             RestaurantDrawerSession[]
+  drawerMovements            RestaurantDrawerMovement[]
+  dailyCloses                RestaurantDailyClose[]
+  moneyIdempotencyKeys       RestaurantMoneyIdempotencyKey[]
   // M6-L1: terminal-attributed inventory movements/receipts and the separate
   // inventory idempotency-key replay domain (all nullable device refs).
-  stockMovements            RestaurantStockMovement[]
-  inventoryPurchaseReceipts RestaurantPurchaseReceipt[]
-  inventoryIdempotencyKeys  RestaurantInventoryIdempotencyKey[]
+  stockMovements             RestaurantStockMovement[]
+  inventoryPurchaseReceipts  RestaurantPurchaseReceipt[]
+  inventoryIdempotencyKeys   RestaurantInventoryIdempotencyKey[]
+  printBridgeEnrollmentCodes RestaurantPrintBridgeEnrollmentCode[]
+  printers                   RestaurantPrinter[]
 
   @@unique([organizationId, id])
   @@index([organizationId])
@@ -4993,6 +4996,7 @@ enum RestaurantOutboxStatus {
 enum RestaurantDeviceKind {
   POS
   KDS
+  PRINT_BRIDGE
 }
 
 /// M4/§4: a physical floor/area within a branch that holds tables. Org-scoped
@@ -5157,6 +5161,7 @@ model RestaurantPrintRoute {
 
   branch  RestaurantBranch          @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
   station RestaurantKitchenStation? @relation(fields: [organizationId, stationId], references: [organizationId, id], onDelete: Cascade)
+  printer RestaurantPrinter         @relation(fields: [organizationId, printerId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, branchId, stationId, documentType])
   @@index([organizationId, branchId])
@@ -5182,11 +5187,63 @@ model RestaurantPrintJob {
   createdAt      DateTime                    @default(now())
   updatedAt      DateTime                    @updatedAt
 
-  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  branch  RestaurantBranch   @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+  printer RestaurantPrinter? @relation(fields: [organizationId, printerId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, branchId, idempotencyKey])
   @@index([organizationId, status, createdAt])
   @@map("restaurant_print_jobs")
+}
+
+enum RestaurantPrinterConnectionKind {
+  TCP
+  DEVICE_PATH
+}
+
+enum RestaurantPrinterStatus {
+  ONLINE
+  OFFLINE
+}
+
+model RestaurantPrinter {
+  id             String                          @id @default(cuid())
+  organizationId String                          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  bridgeId       String
+  name           String
+  connectionKind RestaurantPrinterConnectionKind
+  address        String
+  paperWidthMm   Int
+  status         RestaurantPrinterStatus         @default(OFFLINE)
+  lastSeenAt     DateTime?
+  lastError      String?
+  createdAt      DateTime                        @default(now())
+  updatedAt      DateTime                        @updatedAt
+
+  branch RestaurantBranch           @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+  bridge RestaurantRegisteredDevice @relation(fields: [organizationId, bridgeId], references: [organizationId, id], onDelete: Cascade)
+  routes RestaurantPrintRoute[]
+  jobs   RestaurantPrintJob[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId, bridgeId])
+  @@index([organizationId, branchId])
+  @@map("restaurant_printers")
+}
+
+model RestaurantPrintBridgeEnrollmentCode {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  deviceId       String
+  codeHash       String    @unique
+  expiresAt      DateTime
+  usedAt         DateTime?
+  createdAt      DateTime  @default(now())
+
+  device RestaurantRegisteredDevice @relation(fields: [organizationId, deviceId], references: [organizationId, id], onDelete: Cascade)
+
+  @@index([organizationId, deviceId])
+  @@map("restaurant_print_bridge_enrollment_codes")
 }
 
 /// M4: a routing rule targeting a station. Exactly one of `productId` or
