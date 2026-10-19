@@ -19,6 +19,7 @@ const attemptSchema = z.discriminatedUnion('kind', [
     input: z.object({
       branchId: z.string(),
       saleLineId: z.string(),
+      lotId: z.string().optional(),
       canonicalUnits: z.number().int().positive(),
       disposition: z.enum(['RESTOCK', 'QUARANTINE']),
       quarantineLocationId: z.string().optional(),
@@ -39,7 +40,8 @@ const attemptSchema = z.discriminatedUnion('kind', [
       reason: z.string(),
       idempotencyKey: z.string(),
       manualCashFallback: z.boolean(),
-      requireReturnedValue: z.literal(true),
+      // Preserve legacy saved attempts verbatim for idempotent recovery.
+      requireReturnedValue: z.literal(true).optional(),
     }),
   }),
 ]);
@@ -116,6 +118,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const [searched, setSearched] = useState(0);
   const [saleId, setSaleId] = useState(recovery.attempt?.saleId ?? '');
   const [lineId, setLineId] = useState('');
+  const [lotId, setLotId] = useState('');
   const [units, setUnits] = useState('1');
   const [reason, setReason] = useState('WRONG_ITEM');
   const [disposition, setDisposition] = useState<'RESTOCK' | 'QUARANTINE'>('QUARANTINE');
@@ -150,6 +153,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
   const refund = trpc.pharmacySales.refundTender.useMutation();
   const data = history.data;
   const line = data?.lines.find((row) => row.id === lineId);
+  const selectedLot = line?.lots.find((row) => row.lotId === lotId);
+  const maximumUnits =
+    selectedLot?.returnableUnits ?? (line ? line.canonicalUnits - line.returnedUnits : 0);
   const tender = data?.tenders.find((row) => row.id === tenderId);
   const manualRequired = tender?.type === 'CARD' || tender?.type === 'WALLET';
   const amountMinor = /^\d+(\.\d{1,2})?$/.test(amount) ? Math.round(Number(amount) * 100) : 0;
@@ -352,6 +358,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               value={lineId}
               onChange={(event) => {
                 setLineId(event.target.value);
+                setLotId('');
+                setDisposition('QUARANTINE');
                 setConfirmed(false);
               }}
             >
@@ -367,13 +375,38 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 </option>
               ))}
             </select>
+            <Label htmlFor="return-lot">Returned lot / batch</Label>
+            <select
+              id="return-lot"
+              className={selectClass}
+              value={lotId}
+              onChange={(event) => {
+                setLotId(event.target.value);
+                setDisposition('QUARANTINE');
+                setConfirmed(false);
+              }}
+            >
+              <option value="">Lot cannot be verified — quarantine</option>
+              {line?.lots.map((lot) => (
+                <option key={lot.lotId} value={lot.lotId} disabled={lot.returnableUnits <= 0}>
+                  {lot.batchNumber} · {lot.lotId} · {lot.returnableUnits} units remaining
+                  {lot.restockAllowed ? '' : ' · quarantine only'}
+                </option>
+              ))}
+            </select>
+            {!lotId && (
+              <p className="text-sm text-text-muted">
+                Unidentified stock stays in quarantine with a pharmacist-verification task. No lot
+                receives available stock.
+              </p>
+            )}
             <Label htmlFor="return-units">Return quantity (base units)</Label>
             <Input
               id="return-units"
               className="h-11"
               type="number"
               min="1"
-              max={line ? line.canonicalUnits - line.returnedUnits : 0}
+              max={maximumUnits}
               step="1"
               value={units}
               onChange={(event) => {
@@ -413,7 +446,9 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
               }}
             >
               <option value="QUARANTINE">Quarantine for review</option>
-              <option value="RESTOCK">Restock to original lot and shelf</option>
+              <option value="RESTOCK" disabled={!selectedLot?.restockAllowed}>
+                Restock to verified lot and original shelf
+              </option>
             </select>
             {disposition === 'QUARANTINE' && (
               <>
@@ -422,7 +457,10 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   id="return-location"
                   className={selectClass}
                   value={location}
-                  onChange={(event) => setLocation(event.target.value)}
+                  onChange={(event) => {
+                    setLocation(event.target.value);
+                    setConfirmed(false);
+                  }}
                 >
                   <option value="">Choose location</option>
                   {data.locations.map((row) => (
@@ -470,7 +508,8 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                 !integrity.trim() ||
                 !Number.isSafeInteger(Number(units)) ||
                 Number(units) < 1 ||
-                Number(units) > line.canonicalUnits - line.returnedUnits ||
+                Number(units) > maximumUnits ||
+                (disposition === 'RESTOCK' && !selectedLot?.restockAllowed) ||
                 (disposition === 'QUARANTINE' && !location)
               }
               onClick={() =>
@@ -480,6 +519,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                   input: {
                     branchId,
                     saleLineId: lineId,
+                    lotId: lotId || undefined,
                     canonicalUnits: Number(units),
                     disposition,
                     quarantineLocationId: disposition === 'QUARANTINE' ? location : undefined,
@@ -562,7 +602,6 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
                     reason,
                     idempotencyKey: browserUuid(),
                     manualCashFallback: manualRequired && manual,
-                    requireReturnedValue: true,
                   },
                 })
               }

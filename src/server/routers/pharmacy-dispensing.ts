@@ -1,9 +1,34 @@
 import { z } from 'zod';
 import { capabilityProcedure, router } from '../trpc';
+import { TRPCError } from '@trpc/server';
 
 const dispense = capabilityProcedure('pharmacy:dispense');
 
 export const pharmacyDispensingRouter = router({
+  // Separate, repeatable OTC-capable work queue. These holdings remain quarantined;
+  // a verification task never grants permission to credit AVAILABLE inventory.
+  returnVerificationQueue: dispense
+    .input(z.object({ branchId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { id: input.branchId, organizationId },
+      });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND' });
+      return ctx.db.pharmacyReturnVerificationTask.findMany({
+        where: { organizationId, branchId: input.branchId },
+        orderBy: { requestedAt: 'asc' },
+        include: {
+          holding: {
+            include: {
+              location: { select: { name: true } },
+              saleLine: { select: { medicine: { select: { productName: true } }, saleId: true } },
+            },
+          },
+        },
+      });
+    }),
   reviewQueue: dispense.query(async ({ ctx }) => ({
     currentUserId: ctx.session!.user.id,
     items: await ctx.db.pharmacyPharmacistReviewItem.findMany({

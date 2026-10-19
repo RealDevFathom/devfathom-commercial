@@ -433,9 +433,18 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       status: 'COMPLETED',
     },
     include: {
-      lines: { include: { medicine: { select: { productName: true } }, returnLines: true } },
+      lines: {
+        include: {
+          medicine: { select: { productName: true } },
+          returnLines: true,
+          unidentifiedReturnHolds: true,
+          allocations: { include: { lot: { include: { batch: true } } } },
+        },
+      },
       tenders: { include: { refunds: true } },
-      returns: { include: { lines: true } },
+      returns: {
+        include: { lines: true, unidentifiedHolds: { include: { verificationTask: true } } },
+      },
     },
   });
   if (!sale) throw new PharmacySaleError('NOT_FOUND');
@@ -449,7 +458,29 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
     select: { id: true, name: true },
   });
   const lines = sale.lines.map((line) => {
-    const returnedUnits = line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0);
+    const unidentifiedUnits = line.unidentifiedReturnHolds.reduce(
+      (n, row) => n + row.canonicalUnits,
+      0
+    );
+    const returnedUnits =
+      line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0) + unidentifiedUnits;
+    const lots = [...new Set(line.allocations.map((row) => row.inventoryLotId))].map((lotId) => {
+      const allocations = line.allocations.filter((row) => row.inventoryLotId === lotId);
+      const batch = allocations[0].lot.batch;
+      return {
+        lotId,
+        batchNumber: batch.batchNumber,
+        expiresAt: batch.expiresAt,
+        restockAllowed: batch.state === 'ACTIVE' && batch.expiresAt > new Date(),
+        returnableUnits: Math.min(
+          line.canonicalUnits - returnedUnits,
+          allocations.reduce((n, row) => n + row.canonicalUnits, 0) -
+            line.returnLines
+              .filter((row) => row.inventoryLotId === lotId)
+              .reduce((n, row) => n + row.canonicalUnits, 0)
+        ),
+      };
+    });
     return {
       id: line.id,
       name: line.medicine.productName,
@@ -458,6 +489,8 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       canonicalUnitsPerSaleUnit: line.canonicalUnitsPerSaleUnit,
       canonicalUnits: line.canonicalUnits,
       returnedUnits,
+      unidentifiedUnits,
+      lots,
       returnedMinor: returnedLineValue(line, returnedUnits),
       netMinor: line.quantity * line.unitPriceMinor - line.discountMinor,
     };
@@ -492,11 +525,22 @@ export async function readReturnHistory(db: ScopedDb, scope: LedgerScope, saleId
       id: row.id,
       reason: row.reason,
       createdAt: row.createdAt,
-      lines: row.lines.map((line) => ({
-        saleLineId: line.saleLineId,
-        canonicalUnits: line.canonicalUnits,
-        integrityDecision: line.integrityDecision,
-      })),
+      lines: [
+        ...row.lines.map((line) => ({
+          saleLineId: line.saleLineId,
+          canonicalUnits: line.canonicalUnits,
+          integrityDecision: line.integrityDecision,
+          lotId: line.inventoryLotId,
+          verificationTaskId: null as string | null,
+        })),
+        ...row.unidentifiedHolds.map((hold) => ({
+          saleLineId: hold.saleLineId,
+          canonicalUnits: hold.canonicalUnits,
+          integrityDecision: `QUARANTINE: unidentified lot — pharmacist verification pending. ${hold.integrityDecision}`,
+          lotId: null,
+          verificationTaskId: hold.verificationTask?.id ?? null,
+        })),
+      ],
     })),
   };
 }
@@ -506,6 +550,7 @@ export async function returnSaleLine(
   scope: LedgerScope,
   input: {
     saleLineId: string;
+    lotId?: string;
     canonicalUnits: number;
     quarantineLocationId?: string;
     disposition?: 'RESTOCK' | 'QUARANTINE';
@@ -522,11 +567,18 @@ export async function returnSaleLine(
     AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
   const line = await db.pharmacySaleLine.findFirst({
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { sale: true, allocations: { orderBy: { id: 'asc' } }, returnLines: true },
+    include: {
+      sale: true,
+      allocations: { orderBy: { id: 'asc' } },
+      returnLines: true,
+      unidentifiedReturnHolds: true,
+    },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
-  const disposition = input.disposition ?? 'QUARANTINE';
-  const fingerprint = JSON.stringify({ ...input, disposition });
+  const requestedDisposition = input.disposition ?? 'QUARANTINE';
+  const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
+  // Keep legacy request fingerprints stable; never infer physical identity from allocations.
+  const fingerprint = JSON.stringify({ ...input, disposition: requestedDisposition });
   const prior = await db.pharmacySaleEvent.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -546,8 +598,22 @@ export async function returnSaleLine(
         branchId: scope.branchId,
         originalSaleId: line.saleId,
       },
-      include: { lines: { orderBy: { id: 'asc' } } },
+      include: {
+        lines: { orderBy: { id: 'asc' } },
+        unidentifiedHolds: { include: { verificationTask: true } },
+      },
     });
+    const hold = saleReturn?.unidentifiedHolds[0];
+    if (saleReturn && hold)
+      return {
+        saleReturn,
+        returnLine: null,
+        movement: null,
+        holding: hold,
+        verificationTask: hold.verificationTask,
+        returnId: saleReturn.id,
+        replayed: true,
+      };
     const returnLine = saleReturn?.lines[0];
     const movement =
       returnLine &&
@@ -561,7 +627,9 @@ export async function returnSaleLine(
     if (!saleReturn || !returnLine || !movement) throw new PharmacySaleError('INVALID_STATE');
     return { saleReturn, returnLine, movement, returnId: saleReturn.id, replayed: true };
   }
-  const returned = line.returnLines.reduce((sum, item) => sum + item.canonicalUnits, 0);
+  const returned =
+    line.returnLines.reduce((sum, item) => sum + item.canonicalUnits, 0) +
+    line.unidentifiedReturnHolds.reduce((sum, item) => sum + item.canonicalUnits, 0);
   if (
     !Number.isSafeInteger(input.canonicalUnits) ||
     input.canonicalUnits <= 0 ||
@@ -570,19 +638,33 @@ export async function returnSaleLine(
     throw new PharmacySaleError('RETURN_EXCEEDS_SOLD');
   if (!input.reason.trim() || !input.integrityDecision.trim())
     throw new PharmacySaleError('INVALID_STATE');
+  const allocations = line.allocations.filter((row) => row.inventoryLotId === input.lotId);
+  if (input.lotId && !allocations.length) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+  if (
+    input.lotId &&
+    input.canonicalUnits >
+      allocations.reduce((sum, row) => sum + row.canonicalUnits, 0) -
+        line.returnLines
+          .filter((row) => row.inventoryLotId === input.lotId)
+          .reduce((sum, row) => sum + row.canonicalUnits, 0)
+  )
+    throw new PharmacySaleError('RETURN_EXCEEDS_SOLD');
+  let quarantineLocationId = input.quarantineLocationId;
   if (disposition === 'QUARANTINE') {
     const location =
-      input.quarantineLocationId &&
+      (quarantineLocationId || !input.lotId) &&
       (await db.pharmacyStockLocation.findFirst({
         where: {
-          id: input.quarantineLocationId,
+          id: quarantineLocationId,
           organizationId: scope.organizationId,
           branchId: scope.branchId,
           active: true,
           kind: 'QUARANTINE',
         },
+        orderBy: { id: 'asc' },
       }));
     if (!location) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
+    quarantineLocationId = location.id;
   }
   const saleReturn = await db.pharmacySaleReturn.create({
     data: {
@@ -593,13 +675,53 @@ export async function returnSaleLine(
       reason: input.reason,
     },
   });
+  if (!input.lotId) {
+    const holding = await db.pharmacyUnidentifiedReturnHold.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        returnId: saleReturn.id,
+        saleLineId: line.id,
+        quarantineLocationId: quarantineLocationId!,
+        canonicalUnits: input.canonicalUnits,
+        integrityDecision: input.integrityDecision,
+        actorId: scope.actorId,
+      },
+    });
+    const verificationTask = await db.pharmacyReturnVerificationTask.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        holdingId: holding.id,
+        requestedByUserId: scope.actorId,
+      },
+    });
+    await event(db, scope, line.saleId, 'RETURNED', input.reason, {
+      returnId: saleReturn.id,
+      disposition,
+      holdingId: holding.id,
+      verificationTaskId: verificationTask.id,
+      integrityDecision: input.integrityDecision,
+      idempotencyKey: input.idempotencyKey,
+      fingerprint,
+    });
+    return {
+      saleReturn,
+      returnLine: null,
+      movement: null,
+      holding,
+      verificationTask,
+      returnId: saleReturn.id,
+      replayed: false,
+    };
+  }
   let remaining = input.canonicalUnits;
   let firstReturnLine: Awaited<ReturnType<typeof db.pharmacySaleReturnLine.create>> | undefined;
   let firstMovement: Awaited<ReturnType<typeof db.pharmacyStockMovement.create>> | undefined;
   const consumed = new Map<string, number>();
   for (const row of line.returnLines)
     consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
-  for (const allocation of line.allocations) {
+  for (const allocation of allocations) {
     const used = Math.min(allocation.canonicalUnits, consumed.get(allocation.inventoryLotId) ?? 0);
     consumed.set(allocation.inventoryLotId, (consumed.get(allocation.inventoryLotId) ?? 0) - used);
     const units = Math.min(remaining, allocation.canonicalUnits - used);
@@ -630,7 +752,7 @@ export async function returnSaleLine(
         throw new PharmacySaleError('UNSAFE_STOCK');
     }
     const stockLocationId =
-      disposition === 'RESTOCK' ? allocation.stockLocationId : input.quarantineLocationId!;
+      disposition === 'RESTOCK' ? allocation.stockLocationId : quarantineLocationId!;
     const movement = await db.pharmacyStockMovement.create({
       data: {
         organizationId: scope.organizationId,
@@ -673,6 +795,7 @@ export async function returnSaleLine(
   await event(db, scope, line.saleId, 'RETURNED', input.reason, {
     returnId: saleReturn.id,
     disposition,
+    lotId: input.lotId,
     integrityDecision: input.integrityDecision,
     idempotencyKey: input.idempotencyKey,
     fingerprint,
