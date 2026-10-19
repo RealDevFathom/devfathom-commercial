@@ -1,0 +1,50 @@
+[
+  {
+    "file": "src/app/(app)/pharmacy/inventory/page.tsx",
+    "commit_blob": "802a1bf1651abd02847accbc8de18bc742785b93",
+    "source_blob": "802a1bf1651abd02847accbc8de18bc742785b93",
+    "archive_blob": "802a1bf1651abd02847accbc8de18bc742785b93"
+  },
+  {
+    "file": "src/components/pharmacy/medicine-pack-setup.procedure.test.ts",
+    "commit_blob": "c68a0e982eeb9b9513282fc85427e6636328ee38",
+    "source_blob": "c68a0e982eeb9b9513282fc85427e6636328ee38",
+    "archive_blob": "c68a0e982eeb9b9513282fc85427e6636328ee38"
+  },
+  {
+    "file": "src/components/pharmacy/medicine-pack-setup.test.tsx",
+    "commit_blob": "0e1e4a4802e40514d65edbc50cfcc73664501e11",
+    "source_blob": "0e1e4a4802e40514d65edbc50cfcc73664501e11",
+    "archive_blob": "0e1e4a4802e40514d65edbc50cfcc73664501e11"
+  },
+  {
+    "file": "src/components/pharmacy/medicine-pack-setup.tsx",
+    "commit_blob": "d776f9f2e08d7dcd08d17af68d7f32d48c914876",
+    "source_blob": "d776f9f2e08d7dcd08d17af68d7f32d48c914876",
+    "archive_blob": "d776f9f2e08d7dcd08d17af68d7f32d48c914876"
+  },
+  {
+    "file": "src/components/pharmacy/medicine-reference-workbench.tsx",
+    "commit_blob": "b6a0ea3ae32588115adcc808d0b2f1dee9fa2a75",
+    "source_blob": "b6a0ea3ae32588115adcc808d0b2f1dee9fa2a75",
+    "archive_blob": "b6a0ea3ae32588115adcc808d0b2f1dee9fa2a75"
+  },
+  {
+    "file": "src/lib/pharmacy/onboarding-checklist.test.ts",
+    "commit_blob": "457e7077cedb13f566b0558e17e43e0a4a241bc0",
+    "source_blob": "457e7077cedb13f566b0558e17e43e0a4a241bc0",
+    "archive_blob": "457e7077cedb13f566b0558e17e43e0a4a241bc0"
+  },
+  {
+    "file": "src/lib/pharmacy/onboarding-checklist.ts",
+    "commit_blob": "b8d8555d82247946e5e25f5f68cd8785624c1415",
+    "source_blob": "b8d8555d82247946e5e25f5f68cd8785624c1415",
+    "archive_blob": "b8d8555d82247946e5e25f5f68cd8785624c1415"
+  },
+  {
+    "file": "src/lib/vertical-catalog.ts",
+    "commit_blob": "4281bcf7fb0b98e0624baf2ace14dce1a090209c",
+    "source_blob": "4281bcf7fb0b98e0624baf2ace14dce1a090209c",
+    "archive_blob": "4281bcf7fb0b98e0624baf2ace14dce1a090209c"
+  }
+]

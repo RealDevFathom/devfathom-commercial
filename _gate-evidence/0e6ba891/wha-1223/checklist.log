@@ -1,0 +1,11 @@
+
+ RUN  v4.1.10 /private/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-11f7e81a-5b6-OivK3N/navigation-candidate
+
+ ✓ src/lib/pharmacy/onboarding-checklist.test.ts (11 tests) 4ms
+
+ Test Files  1 passed (1)
+      Tests  11 passed (11)
+   Start at  18:49:30
+   Duration  1.31s (transform 414ms, setup 131ms, import 576ms, tests 4ms, environment 507ms)
+
+JSON report written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-11f7e81a-5b6-OivK3N/checklist.json

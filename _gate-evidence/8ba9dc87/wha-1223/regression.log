@@ -1,0 +1,13 @@
+
+ RUN  v4.1.10 /private/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-04e49f09-c31-DUl4f1/candidate
+
+ ✓ tests/e2e/fixtures/pharmacy-first-sale.test.tsx (1 test) 103ms
+ ✓ tests/qa-wha1223/checklist-name.test.tsx (1 test) 61ms
+ ✓ tests/qa-wha1223/literal-matcher.test.ts (1 test) 1ms
+
+ Test Files  3 passed (3)
+      Tests  3 passed (3)
+   Start at  20:00:23
+   Duration  2.74s (transform 56ms, setup 235ms, import 1.08s, tests 165ms, environment 1.03s)
+
+JSON report written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-04e49f09-c31-DUl4f1/regression.json

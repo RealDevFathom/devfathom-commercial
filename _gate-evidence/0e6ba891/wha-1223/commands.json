@@ -1,0 +1,54 @@
+[
+  {
+    "name": "generate",
+    "command": [
+      "./node_modules/.bin/prisma",
+      "generate"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "checklist",
+    "command": [
+      "./node_modules/.bin/vitest",
+      "run",
+      "src/lib/pharmacy/onboarding-checklist.test.ts",
+      "--maxWorkers=1",
+      "--reporter=default",
+      "--reporter=json",
+      "--outputFile=/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-11f7e81a-5b6-OivK3N/checklist.json"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "types",
+    "command": [
+      "./node_modules/.bin/tsc",
+      "--noEmit",
+      "--incremental",
+      "false",
+      "-p",
+      "tsconfig.navigation.json"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "lint",
+    "command": [
+      "./node_modules/.bin/eslint",
+      "src/lib/pharmacy/onboarding-checklist.ts",
+      "src/lib/pharmacy/onboarding-checklist.test.ts"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "format",
+    "command": [
+      "./node_modules/.bin/prettier",
+      "--check",
+      "src/lib/pharmacy/onboarding-checklist.ts",
+      "src/lib/pharmacy/onboarding-checklist.test.ts"
+    ],
+    "exit": 0
+  }
+]

@@ -1,0 +1,24 @@
+{
+  "target": "0e6ba8911b3d1c41f64875ba644097ef3bbf6ed6",
+  "parent": "a756a1efd157d1f005239eed322734998b2397ff",
+  "source": "/Users/Saad/Downloads/Projects & Code/DevFathom hub/company-hub/.paperclip/worktrees/WHA-1203-wha-1195a-build-first-run-checklist-and-first-sale-scenario",
+  "source_observed_head_final": "0e6ba8911b3d1c41f64875ba644097ef3bbf6ed6",
+  "source_status_final": " M src/app/(app)/team/team-content.tsx\n?? src/app/(app)/team/team-content.test.tsx\n",
+  "review_cwd": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1223-gate-candidate-b20b577f-browser-suite-wha-1132-contract-on-the-runner-with-the-working-postgresql-path-self-cho",
+  "review_head": "b20b577f9d397855458cbef15ea8d178870d85a3",
+  "review_branch": "WHA-1223-gate-candidate-b20b577f-browser-suite-wha-1132-contract-on-the-runner-with-the-working-postgresql-path-self-cho",
+  "blobs": [
+    {
+      "file": "src/lib/pharmacy/onboarding-checklist.test.ts",
+      "candidate_blob": "5378a1e4dc9406ca8a506c860e722d3068a935ef",
+      "archive_blob": "5378a1e4dc9406ca8a506c860e722d3068a935ef",
+      "parent_blob": "457e7077cedb13f566b0558e17e43e0a4a241bc0"
+    },
+    {
+      "file": "src/lib/pharmacy/onboarding-checklist.ts",
+      "candidate_blob": "41c1c8c0555d602a3b5c8bad4a39a9498d0e054a",
+      "archive_blob": "41c1c8c0555d602a3b5c8bad4a39a9498d0e054a",
+      "parent_blob": "b8d8555d82247946e5e25f5f68cd8785624c1415"
+    }
+  ]
+}
