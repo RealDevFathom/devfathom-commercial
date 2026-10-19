@@ -1,0 +1,485 @@
+{
+  "schemaSha256": "3e7ae969bf6548aa6633c56799cc7ed721bb03009e19ca4fafd707cb1dc14729",
+  "migrations": [
+    {
+      "name": "20260728000000_baseline",
+      "sha256": "b3be8a953c3172d0dcd8409586ec8582b768ed48d193d6c80698d48adaecce4e"
+    },
+    {
+      "name": "20260728090000_admin_platform_tenancy",
+      "sha256": "9eb6447aa582f4bafb140fbb9eff3873acfa360ff458f93e365f08300004f9e0"
+    },
+    {
+      "name": "20260728091000_tenant_composite_integrity",
+      "sha256": "69bf5a528809bd010044fba3e153c854a34588837743c3355dedafcdec32045d"
+    },
+    {
+      "name": "20260728092000_row_level_security",
+      "sha256": "e8460eff7f0e02c950b7aaf9475b149a192dd28c2fd6345d12cb6ba1253dda75"
+    },
+    {
+      "name": "20260728100000_platform_sessions",
+      "sha256": "4dd49cc1a927be7889aa5ee5a65882f1bbe2d549400463332885ef45a3b5968f"
+    },
+    {
+      "name": "20260728101000_platform_settings",
+      "sha256": "44b49ad4dbcb74850a07de353842556760053c6580419074467cc3aff99f0cbf"
+    },
+    {
+      "name": "20260728102000_tenant_user_email",
+      "sha256": "163604c3a3bc3b38d817bad55197b378fed5403ab6234bf814885e373da329d4"
+    },
+    {
+      "name": "20260728103000_enterprise_sso",
+      "sha256": "e5569e5a98123fb2e5258062d527bc9735ddf1b927ea7ee4c5c4b8f8d1bf871e"
+    },
+    {
+      "name": "20260728104000_platform_mfa",
+      "sha256": "a9631bfeeff0876ad6958b0b3f4b79d4d9dbca1ad391cc33df58564910881e7b"
+    },
+    {
+      "name": "20260728105000_sso_composite_integrity",
+      "sha256": "491a4e4bb116951e4b32fad134db9cabdeb4d38436f5e2343a17a869d78860dc"
+    },
+    {
+      "name": "20260728106000_support_launch_tickets",
+      "sha256": "8e1f1a1656eb115151c8e1f2599170b9c5a5399dd4c65cb4a0e4fa60542f7610"
+    },
+    {
+      "name": "20260802120000_user_email_lowercase",
+      "sha256": "85cae7dc2a68a4e0cd2ac394cd11b7514e48156cf49c858811f9c08ead84864e"
+    },
+    {
+      "name": "20260802130000_pending_login_intents",
+      "sha256": "3839e0e33948c08393d7bca77db6677b6c153085b2777d6bf77933cbb358bce9"
+    },
+    {
+      "name": "20260803120000_meeting_occurrences",
+      "sha256": "fa702245775e0fea19bba2a0ffceadb62e293710a54a0a4bd8567f50eacf6a51"
+    },
+    {
+      "name": "20260818120000_package_module_inheritance_cleanup",
+      "sha256": "fb6c2cddf8ab23f96f7869b2672229b2c0054a41e9ca93f1d3b64801d8592aee"
+    },
+    {
+      "name": "20260818130000_organization_vertical_foundation",
+      "sha256": "c81b6ce33af69f088a5aad73dcbf7653a355d5b395d89664647cd2c7496605d8"
+    },
+    {
+      "name": "20260818140000_restaurant_staff_operators_devices",
+      "sha256": "0e8be08474f62bed24de9bc469f00af52ef9ceced684ca78cbdf03237737e105"
+    },
+    {
+      "name": "20260818150000_audit_log_operator_actor",
+      "sha256": "8ad20d573c203969d237947e5c2f825f1506534b647b4e0eff8e9f309b60c6ce"
+    },
+    {
+      "name": "20260818160000_restaurant_brands_catalog_menus",
+      "sha256": "f130c070b717ea93aab5a7a8703b90159292db137c015d50d2222ad453257d97"
+    },
+    {
+      "name": "20260819000000_restaurant_orders_kitchen_floor",
+      "sha256": "588de32de42ba15ad0209d5c0c392b5a93792333bd199e6dd3175fb00478b8d9"
+    },
+    {
+      "name": "20260819120000_restaurant_money",
+      "sha256": "ba5f8fe33e50e0b99912016ae3718f3e90bb530cebc0ab678f1020b982226bc1"
+    },
+    {
+      "name": "20260819130000_restaurant_inventory_purchasing",
+      "sha256": "6f6f64c4aeb1d9ff62205198973c9bb0f0c2738ffde88f0bd9fe9f958278f491"
+    },
+    {
+      "name": "20260820000000_restaurant_scheduler_sop_notifications",
+      "sha256": "390fa906589b7cc4f85ad135eed4ce35baa2551896b2782705eddbefaa4ec56c"
+    },
+    {
+      "name": "20260821010000_restaurant_customers_loyalty_insights",
+      "sha256": "3b04f09130eb820df84560eeaf320c4b54b3eea221f84ed30926e920e63659d1"
+    },
+    {
+      "name": "20260824120000_restaurant_m8_bill_grand_total_guard",
+      "sha256": "9bb9dbca2f7c41ed218ffa2ab09b81991f95e2c3fa7c32c8c9f0efe5cceee551"
+    },
+    {
+      "name": "20260825120000_m8_historical_loyalty_liability_correction",
+      "sha256": "f062a937bc66be6435265244a5acb6ca3d01d139e096ae15cb0f8aeb0b3cf285"
+    },
+    {
+      "name": "20260825150000_restaurant_tax_core",
+      "sha256": "461edf55a9130e99ae1878826dc48dddacb395e43d637f40dfbea1e3a2ef087e"
+    },
+    {
+      "name": "20260825170000_restaurant_tax_core_invariants",
+      "sha256": "d79d88dff8a17914dcc20cfa16281a84082265ffb91b913f5f135116db2a75e4"
+    },
+    {
+      "name": "20260827070000_restaurant_cameras",
+      "sha256": "3749c46457f80e2ea7c85f87d0dcadbd71b1edc9588ab0b7e05d91fa75b9b7f2"
+    },
+    {
+      "name": "20260827070000_restaurant_terminal_payments",
+      "sha256": "b1058163aebb109703c3a512a990d633e15e1db3f6e32b4797fa5cfff35345ab"
+    },
+    {
+      "name": "20260827120000_restaurant_menu_ocr_import",
+      "sha256": "70d50f62e99b2224e5f4a43dd7e7dfc5488c48ca240c20a38b858d639ff0d890"
+    },
+    {
+      "name": "20260827120000_restaurant_staff_shifts",
+      "sha256": "e2b446282ae5decee14e75ccf6b9392289c88f70504c551c8d93a342cd074285"
+    },
+    {
+      "name": "20260828100000_vertical_configurable_departments",
+      "sha256": "0f013bd4cb9b41af0c54030b63e6d2d59029f6c5500c8519a5c375567fe78652"
+    },
+    {
+      "name": "20260828120000_restaurant_sop_job_roles_assignment",
+      "sha256": "caa273eb725ad13d85194d0b4b29745515f4a57bbb7f31d3fdbc38a39386d355"
+    },
+    {
+      "name": "20260828140000_restaurant_promotions_core",
+      "sha256": "4618d630ff95460a70da0b0a4ba08a2180e2129321d86347f6f7e437723e59a1"
+    },
+    {
+      "name": "20260828160000_restaurant_staff_capability_deny_override",
+      "sha256": "dabe329641a9ed759d84336c1d293bc8428928a6a1257c118a023db1e0ec8e9f"
+    },
+    {
+      "name": "20260829090000_restaurant_print_bridge",
+      "sha256": "91c50f53aed637d1bb7c54e2e204fa6dd78c5d62001c18e6761c59bfab6f6dd3"
+    },
+    {
+      "name": "20260829090000_restaurant_tax_promotion_evidence",
+      "sha256": "0f5505d6705c25363025e7ea5f24c8a625e0b8b46c9f4e218e8c51f3916441a5"
+    },
+    {
+      "name": "20260829120000_restaurant_sop_evidence_retry_identity",
+      "sha256": "726674b1e84f89cc717603e271db7cf347207651671e640b82b15b9954b14a7c"
+    },
+    {
+      "name": "20260829120000_restaurant_tax_settlement_evidence",
+      "sha256": "3aa181bdc0fca860459b08e02c64ddb9403a8cdeb23af387ca1f7f12e06d6989"
+    },
+    {
+      "name": "20260829150000_restaurant_tax_tender_allocations",
+      "sha256": "88ac66e5ab68813c15ee7fe000fe1a3383a797846ec516422522102e9412edac"
+    },
+    {
+      "name": "20260829180000_restaurant_order_events_append_only_rls",
+      "sha256": "bbd2d5396c03ebe4a803385741140680c5a50fef225e76c00191840e74448db5"
+    },
+    {
+      "name": "20260829180000_restaurant_tax_refund_allocations",
+      "sha256": "572a474d1b21e742d36393fe358b1010d33b224ce84cbe4560cb34b27aab1040"
+    },
+    {
+      "name": "20260829183000_restaurant_tax_activation_replay",
+      "sha256": "1c56aaea5d6c53f80164303f62215ae5817cc702eca8475a457046982514f2a1"
+    },
+    {
+      "name": "20260830070000_restaurant_notification_webhook",
+      "sha256": "67cde24a4ea59e107616efde93b760d09f837b05b046d828c4e3e81e0334fdaf"
+    },
+    {
+      "name": "20260830120000_btree_gist_public_execute_acl",
+      "sha256": "8435cc3fd8bfffb23b411659672f335189396917d8f133015d81944991571bf5"
+    },
+    {
+      "name": "20260830120000_restaurant_service_charge_v1",
+      "sha256": "b85bb3bb26d2f1419de6e3ca97eee9a51f9ea6c168cfff004a75f9fbd8f3ec55"
+    },
+    {
+      "name": "20260830160000_restaurant_custom_tax_profiles",
+      "sha256": "316ffe5c833687bc9e044c8bac61b1f7354992044caa4a8151785d2fedfd6ff0"
+    },
+    {
+      "name": "20260830170000_restaurant_branch_codes",
+      "sha256": "bd4763601dc3c75654161202ea998cb94b082957067d21b0794f8837d3ab8a11"
+    },
+    {
+      "name": "20260830180000_restaurant_workforce_v1",
+      "sha256": "275b878bfb3bc0bacf644b2ef6d956b239671067868325b512365b62dfd6070e"
+    },
+    {
+      "name": "20260830230000_restaurant_shift_overlap_cas",
+      "sha256": "d9e3a0e79e66fa73432c99a5234b480916202c1fbab92e0cdd05f33b448b64ca"
+    },
+    {
+      "name": "20260830235000_restaurant_activation_acknowledgements",
+      "sha256": "22258bb4c176541420c41540a1d213fa0830524d8e9b4c75c9c63fb0eda46828"
+    },
+    {
+      "name": "20260830235900_restaurant_recipe_ingredient_substitutes",
+      "sha256": "88ccb1e71b0b372bcfc3c0406da31b45cbe62daf6e9bf6c2679e27ae1ab5c769"
+    },
+    {
+      "name": "20260831090000_restaurant_direct_delivery_foundation",
+      "sha256": "a580dd63adc49185b578618bdbbe35d85e1138c53019c70214091752068ebb16"
+    },
+    {
+      "name": "20260831180000_restaurant_delivery_money_contract",
+      "sha256": "77349db20e6683d5f9bb93906b4a62d083b7ebce1f938093f7b1c913b4c49d8b"
+    },
+    {
+      "name": "20260831210000_restaurant_delivery_fee_finance_visibility",
+      "sha256": "93f5643a16a9620718adaa0276ce8f280116f277b5027dbc0fd2e2ec482d0103"
+    },
+    {
+      "name": "20260902090000_platform_module_bands",
+      "sha256": "6469207a72c6665ccbaefee910b8e743b6bb11f6962ef06591124278de7459ce"
+    },
+    {
+      "name": "20260902120000_pharmacy_medicine_identity",
+      "sha256": "079ca9c561c922fdb03d239ac33f0830d7dd7d4ce0c02a475e283ab13145e785"
+    },
+    {
+      "name": "20260902120000_pharmacy_migration_profiling",
+      "sha256": "e8a56d4e934a4fe4897a42a08d28e68bb7ec8e3dd09d02d69162079ebee94c9c"
+    },
+    {
+      "name": "20260902120000_pharmacy_vertical",
+      "sha256": "8400d7c5c884fa7cf5559775b46a5628b96b93f9ace79466fe934ad3a5e9b485"
+    },
+    {
+      "name": "20260902130000_pharmacy_batch_stock_ledger",
+      "sha256": "316d655a3cfa55edadb399426c65c820ccbfd98c12077950c78e637fe51ab226"
+    },
+    {
+      "name": "20260902130000_pharmacy_medicine_catalog_review",
+      "sha256": "6af4f76bfcd59c4e8db8137efe4623ffd91ad30410ce457ce570b0fcf3649722"
+    },
+    {
+      "name": "20260902130000_pharmacy_regulatory_profiles",
+      "sha256": "ce3eb7592645cea072ffebff5c2697321f593a911e9f94ea8040869291342111"
+    },
+    {
+      "name": "20260902131500_pharmacy_purchasing",
+      "sha256": "ba6316fc8454df55114164ac3ffbe42b783b6c4f694113b22d9cea0b726ddde2"
+    },
+    {
+      "name": "20260902140000_pharmacy_patient_prescriptions",
+      "sha256": "4cb6c57627ec16644b0376e96a6c2fd86c850198335dd5965f606e3f9b301c4c"
+    },
+    {
+      "name": "20260902150000_pharmacy_goods_receiving",
+      "sha256": "d35b7f026ecc64cd556ce8d13c78f51806e5c1b246082e81c1e32cc8075aa325"
+    },
+    {
+      "name": "20260902150000_pharmacy_inventory_operations",
+      "sha256": "5de4fc439712e85802f1f2a116e036a5a6c183e016af4ee2c369b18abd91ab34"
+    },
+    {
+      "name": "20260902160000_pharmacy_onboarding_and_branch",
+      "sha256": "bac6759a9fbf2b782e5abff9b3f3f835e0c9c32fc574542df35d72fc26e7588d"
+    },
+    {
+      "name": "20260902170000_pharmacy_rx_review_substitution_controlled_register",
+      "sha256": "a015b175d704083ea74ab5bab527dde194bd635172c86c29a1a1b00ecc6bc3ae"
+    },
+    {
+      "name": "20260902170000_pharmacy_sales_demand",
+      "sha256": "1f1dfd911f264d602be885c16a2de043ce1938eccfc265f037a071ed515acee4"
+    },
+    {
+      "name": "20260902170500_pharmacy_supplier_returns_stock_signals",
+      "sha256": "67f44f65d1618d51c12e3428be59c94f6c8cec9fc288caad66b0d4e43ce95b33"
+    },
+    {
+      "name": "20260902180000_finance_journal_postings",
+      "sha256": "c538f312504f848ba2e618fec992cad30b4c3ffd2a98a02eae66e35b1e2c1312"
+    },
+    {
+      "name": "20260902180000_pharmacy_money_settlement",
+      "sha256": "0da1c56b8cb4dfbea018a40cd3436f238387addedd95d289fba068dc6561956c"
+    },
+    {
+      "name": "20260902180000_restaurant_sop_interval_recurrence",
+      "sha256": "87cc5dfc32df0db40c9bae780e2453564071e1fe55e639cccf94043ed0e3d6d5"
+    },
+    {
+      "name": "20260902190000_pharmacy_stock_movement_opening_kind",
+      "sha256": "b3b5950cfd6d40a38c236388dfbcb2940914e969c2bb175f1c7dc7c2a68da7c1"
+    },
+    {
+      "name": "20260902190500_pharmacy_opening_stock_parallel_run_cutover",
+      "sha256": "5d0d21db857e974fac2a16462450ecd567c01fd346f897c0856ce2e0dd681391"
+    },
+    {
+      "name": "20260902200000_pharmacy_offline_counter_runtime",
+      "sha256": "ae361033086bebabc160bb5e05fb12cf6db110470f9ac9a912e8faa247b0763f"
+    },
+    {
+      "name": "20260902200500_pharmacy_counter_keymap_preferences",
+      "sha256": "1b7bad29c96346a6033cb3b329c2af81d541958cff12313dfd4f64aeabf98003"
+    },
+    {
+      "name": "20260902201000_pharmacy_safety_inspection_retention",
+      "sha256": "d67ec5647caa5ecdb994ca2fc574a587466e97cb2dd6146423b0cdc2bf584683"
+    },
+    {
+      "name": "20260902210000_pharmacy_bookkeeping_tax_profiles",
+      "sha256": "82a2a41c525004ce5eda276103b90eb37fe5dc5d8ed646dd64e7dae08533c2dd"
+    },
+    {
+      "name": "20260903120000_pharmacy_onboarding_tenant_deletion",
+      "sha256": "9d0e387fd9be6c099526061c9d6293e17bbae3028750d9fee6941f293650dc79"
+    },
+    {
+      "name": "20260904100000_pharmacy_cold_chain_locations",
+      "sha256": "bebe04a36f9bc4ea477d661ccf7624cc7552764eb73f57dcd995051ad8aad72d"
+    },
+    {
+      "name": "20260904110000_pharmacy_customer_loyalty_p0_lite",
+      "sha256": "8f79f79fcbe8b4a5766d138995bc14b9831ff2625d7a4805360c464bd131fc0c"
+    },
+    {
+      "name": "20260904110500_pharmacy_fiscal_documents",
+      "sha256": "3494aaaecb11c1bc9f519e01498f00cf67cdb5912f7ab9807827cad51b1ff281"
+    },
+    {
+      "name": "20260904120000_pharmacy_owner_digest",
+      "sha256": "e030dda65a29949c74a86c6d8162624eb8a4ace5bb0cf28f4585514b73a90d98"
+    },
+    {
+      "name": "20260904123700_restaurant_stock_report_indexes",
+      "sha256": "ba8d77dba91d030483f037a32861bcefa7fc8bb2542d4030516f5911b8b9746b"
+    },
+    {
+      "name": "20260904133000_restaurant_catering_orders",
+      "sha256": "3e539317fa661329a20eaaf9f683caf35062710d49b4120cfa5cc93bb5cf75ea"
+    },
+    {
+      "name": "20260904133000_restaurant_sales_demo",
+      "sha256": "5e0f552e4db90eb9291d8c11242d91822fbbb043a750ccd669fff38853ac2a42"
+    },
+    {
+      "name": "20260904190000_pharmacy_anomaly_signals",
+      "sha256": "40ed02be10068623acd4973f3aa5d1ba6f27c01bb8f52e751fc8d2fc5099b3ae"
+    },
+    {
+      "name": "20260904192000_pharmacy_supplier_action_links",
+      "sha256": "b2bb2dfbcb638fdd6bb60f15b011f8df751141ad8c84dcaa4a70b95d85a9e77e"
+    },
+    {
+      "name": "20260904193000_pharmacy_family_khata",
+      "sha256": "c1df50b502553d1d196a4f74ebafe4b59efa23206db1c485c053d531f0562286"
+    },
+    {
+      "name": "20260904194000_pharmacy_invoice_ocr",
+      "sha256": "1e13dadf2cbcd6588c3d30ef73180a41be09ede90fcba1ba693c009c984593de"
+    },
+    {
+      "name": "20260904195000_pharmacy_central_purchasing",
+      "sha256": "1d5806d1599c34ae402539b56e06df8c9fc291cbbe104dc457f42f40d4146c63"
+    },
+    {
+      "name": "20260904196000_pharmacy_permissioned_marketing",
+      "sha256": "9e2082b1523e6eafa75b620d50ff1f1da9954b1776ae0385f94157f9c83f69d4"
+    },
+    {
+      "name": "20260904197000_pharmacy_restock_interest",
+      "sha256": "6b76e129ae940715b36fee4e3c1002479cb512bbbf344c9a45ab73a82e7b55f7"
+    },
+    {
+      "name": "20260904198000_pharmacy_refill_support",
+      "sha256": "d345d597ee7c32f0a6f936694cd507ed0f825eaae5635801959339505868535b"
+    },
+    {
+      "name": "20260904200000_pharmacy_pharmacovigilance",
+      "sha256": "8f16b678971e52e4c43df11f445ea3548e4b8cbc2ad88ef7f40cbe0bcf4e9e21"
+    },
+    {
+      "name": "20260905010000_pharmacy_substitute_decline_status",
+      "sha256": "e80e61503c2a8a3d237dff6a8887b7a131b0db98016f9175ea6df7c031d737f7"
+    },
+    {
+      "name": "20260905020000_pharmacy_expiry_return_advisor",
+      "sha256": "6332e27b12ef559c2396ba35425626e40810fe59445fd67cc9e24ba7821f9d24"
+    },
+    {
+      "name": "20260905030000_pharmacy_drap_monitoring",
+      "sha256": "820c63e11f14688cfd8fbb4ba604c0f2134cdadb23c15879a006f56730f80515"
+    },
+    {
+      "name": "20260905040000_pharmacy_pack_authentication",
+      "sha256": "3cbdf13171ae966c373b8e74cb55b1dfc34b9222ea149a882e78a3e8924bd849"
+    },
+    {
+      "name": "20260905050000_pharmacy_cold_chain_sensor_seam",
+      "sha256": "ebc454298dcad12479b79c3177ce3fdedac519c2b6b7e5434bfba0ae75aa0e92"
+    },
+    {
+      "name": "20260905060000_pharmacy_customer_ordering",
+      "sha256": "c05a3140feeabce754c18bd9095a227208de060c0cc054a94473821ddac193e2"
+    },
+    {
+      "name": "20260905070000_pharmacy_reference_connector_automation",
+      "sha256": "08a816f399c67c13663141e6649dc5c5956622f00f986f242dd64718faa955da"
+    },
+    {
+      "name": "20260905080000_pharmacy_regulatory_profile_tenant_purge",
+      "sha256": "727d3bacdc77eb4dca2c96518f60235b3885decb460553aa35391f6ab6d4158c"
+    },
+    {
+      "name": "20260905090000_restaurant_demo_reset_append_only_rls",
+      "sha256": "932b31c8c3d030ab79caf0ce72821dc7133aad6130d18490a65b548c359c2b42"
+    },
+    {
+      "name": "20260905100000_restaurant_demo_reset_delete_rls",
+      "sha256": "f85b4350569a186d04115fc1db38578730acc65740054c30b9240f1eefb667fe"
+    },
+    {
+      "name": "20260905180000_receipt_layout",
+      "sha256": "5bb7c51354c6c7f11e63b3533737fbc81dbd978a5d2f9f0fda7ceaba9f1b7b2b"
+    },
+    {
+      "name": "20260905190000_pharmacy_receipt_layout",
+      "sha256": "a0b1653e8b2c98a9e3e0019b1db7021b2158499e38952c9d2ec68059e8d44123"
+    },
+    {
+      "name": "20260912053000_organization_ask_fathom_control",
+      "sha256": "dffa2bd5dcf8d8b5ca812a14424981c0867c92df2e0d78ef9e03add6288f032a"
+    },
+    {
+      "name": "20260914123000_pharmacy_draft_intent_identity",
+      "sha256": "7362d2d93bf23b963a925b9b70e990af845b1f532fa132745a15b230fba95e65"
+    },
+    {
+      "name": "20260929000100_controlled_register_serial",
+      "sha256": "03f9511447d740b2157ce27ed6cdaaa86caa69be12ffed26f412b8f0f5ce5a36"
+    },
+    {
+      "name": "20260929120000_pharmacy_whatsapp_channel",
+      "sha256": "f3d17498d9b0bbac458d6df15fb3598c0ccf4296d7d2f9010cf562b3ffba7b68"
+    },
+    {
+      "name": "20260929120000_vertical_neutral_camera_evidence",
+      "sha256": "6e2b5995716104d21412ff720dcab847fb8bfba288c481acd658ac903dfe80f7"
+    },
+    {
+      "name": "20261002120000_camera_preset_coldchain_evidence",
+      "sha256": "244f50a6fc3ae6d99138c17ea194a2f387bec7f40f53b77d3523d026dbc9d42a"
+    },
+    {
+      "name": "20261006140000_pharmacy_campaign_dispatch",
+      "sha256": "fa88b96f831ef6c3f932a5fe957d9eefd0f581b87a7dec9f143773218af66a0c"
+    },
+    {
+      "name": "20261006160000_growth_insights",
+      "sha256": "b7b45d2be5825245ffbaba6502ac3edb3c1c673172842ee859bee12fd0ed477f"
+    },
+    {
+      "name": "20261008170000_pharmacy_delivery_custody",
+      "sha256": "d055356e61e62364d49f7b0c025b9d537173419be3d97fc3536510513db3812e"
+    },
+    {
+      "name": "20261008183000_pharmacy_earned_refund_reversal",
+      "sha256": "2990cfbf2540083f58a7c6b7088b2b4c5cd096d15bfdcbb78dcaab885bd68cfa"
+    },
+    {
+      "name": "20261008190000_pharmacy_closed_demand_constraint",
+      "sha256": "e27c2da7f5f910febfed8e700046d1b231569ea6d97dcb672294426ba1f43684"
+    }
+  ]
+}
