@@ -32,6 +32,7 @@ import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
 import type { TenantBrand } from '@/lib/tenant-brand';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 
 type NavGroup = 'Workspace' | 'Firm';
 
@@ -152,6 +153,12 @@ function useVisibleNavigation() {
   const isHr = session?.user?.role === 'HR';
 
   const filteredNav = navigation.filter((item) => {
+    if (
+      item.module &&
+      entitlements.vertical &&
+      verticalForModuleKey(item.module) !== entitlements.vertical
+    )
+      return false;
     if (item.module && !entitlements.enabledModules.includes(item.module)) return false;
     if (item.hrAccess) return isAdmin || isHr;
     if (item.adminOnly) return isAdmin;

@@ -5,6 +5,7 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { VERTICALS } from '@/lib/vertical-catalog';
 
 export default async function CatalogPage() {
   const data = await withPlatformDb(async (db) => {
@@ -158,7 +159,7 @@ export default async function CatalogPage() {
                       <div>
                         <p className="text-sm font-semibold">{item.name}</p>
                         <p className="mt-1 font-mono text-[9px] text-text-muted">
-                          {item.key} · version {item.version}
+                          {item.key} · version {item.version} · {VERTICALS[item.vertical].label}
                         </p>
                       </div>
                       <PlatformStatus value={item.active ? 'ACTIVE' : 'INACTIVE'} />
