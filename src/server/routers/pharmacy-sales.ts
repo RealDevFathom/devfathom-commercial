@@ -14,6 +14,7 @@ import {
   clearLockout,
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
+import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -240,6 +241,24 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
+const closeDate = z
+  .date()
+  .refine(
+    (date) =>
+      date.getUTCHours() === 0 &&
+      date.getUTCMinutes() === 0 &&
+      date.getUTCSeconds() === 0 &&
+      date.getUTCMilliseconds() === 0,
+    'Choose a date without a time.'
+  );
+function requireCloseAccess(ctx: TRPCContext) {
+  if (ctx.session?.user.role !== 'ADMIN')
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Administrator access is required to reconcile and close a day.',
+    });
+}
+
 export const pharmacySalesRouter = router({
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
@@ -312,6 +331,41 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  closePreview: protectedProcedure
+    .input(z.object({ branchId, businessDate: closeDate }).strict())
+    .query(({ ctx, input }) => {
+      requireCloseAccess(ctx);
+      return ctx.db.$transaction((tx) =>
+        readPharmacyClose(txDb(tx), scopeFor(ctx, input.branchId), input.businessDate)
+      );
+    }),
+  closeDay: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          businessDate: closeDate,
+          sourceHash: z.string().length(64),
+          counts: z
+            .array(
+              z
+                .object({
+                  drawerSessionId: z.string().min(1),
+                  countedCashMinor: z.number().int().min(0).max(2147483647),
+                })
+                .strict()
+            )
+            .max(500),
+          varianceNote: z.string().trim().max(1000),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) => {
+      requireCloseAccess(ctx);
+      return ctx.db.$transaction((tx) =>
+        closePharmacyDay(txDb(tx), scopeFor(ctx, input.branchId), input)
+      );
     }),
   customerSnapshot: protectedProcedure
     .input(
@@ -441,11 +495,12 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
+    .mutation(({ ctx, input }) => {
+      requireCloseAccess(ctx);
+      return ctx.db.$transaction((tx) =>
         cutPharmacyDailyClose(txDb(tx), scopeFor(ctx, input.branchId), input)
-      )
-    ),
+      );
+    }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
       input.type === 'KHATA' || input.familyAccountId
