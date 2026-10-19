@@ -1,0 +1,75 @@
+[
+  {
+    "name": "grant",
+    "command": [
+      "node",
+      "/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1362-5e14ef91-961-HKQJao/db-control.cjs",
+      "grant"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "database-evidence",
+    "command": [
+      "node",
+      "/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1362-5e14ef91-961-HKQJao/db-control.cjs",
+      "evidence"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "combined",
+    "command": [
+      "node",
+      "node_modules/vitest/vitest.mjs",
+      "run",
+      "src/app/api/restaurant/checkout/receipt",
+      "src/components/restaurant/pos/receipt-print-controls.test.tsx",
+      "src/components/restaurant/pos/receipt-view.test.tsx",
+      "src/components/restaurant/restaurant-devices-console.test.tsx",
+      "src/app/(app)/settings/settings-entitlements.test.tsx",
+      "src/lib/restaurant/checkout-routes.test.ts",
+      "src/lib/restaurant/printing",
+      "src/lib/receipts",
+      "src/components/receipts/receipt-designer.test.tsx",
+      "src/app/api/restaurant/receipt-layout/route.test.ts",
+      "src/app/api/restaurant/print-bridge/route.test.ts",
+      "tests/print-bridge.test.ts",
+      "--maxWorkers=1",
+      "--no-file-parallelism",
+      "--reporter=json",
+      "--outputFile=/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1362-verify-hw-combined-receipt-layout-queue-authorization-and-printer-runtime-review/docs/reviews/wha-1362/consumer/combined.json"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "typecheck",
+    "command": [
+      "node",
+      "node_modules/typescript/bin/tsc",
+      "--noEmit",
+      "-p",
+      "tsconfig.verify.json"
+    ],
+    "exit": 0
+  },
+  {
+    "name": "lint",
+    "command": [
+      "node",
+      "node_modules/eslint/bin/eslint.js",
+      "src/app/(app)/settings/settings-content.tsx",
+      "src/app/(app)/settings/settings-entitlements.test.tsx",
+      "src/app/api/restaurant/checkout/receipt/receipt-dispatch.db.test.ts",
+      "src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts",
+      "src/app/api/restaurant/checkout/receipt/route.test.ts",
+      "src/app/api/restaurant/checkout/receipt/route.ts",
+      "src/components/restaurant/pos/receipt-browser-print.ts",
+      "src/components/restaurant/pos/receipt-print-controls.test.tsx",
+      "src/components/restaurant/pos/receipt-print-controls.tsx",
+      "src/components/restaurant/pos/receipt-view.tsx",
+      "src/components/restaurant/restaurant-devices-console.tsx"
+    ],
+    "exit": 0
+  }
+]

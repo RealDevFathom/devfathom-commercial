@@ -1,0 +1,9 @@
+{
+  "dir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1350-env-ph-purge-provision-bounded-verification-prerequisites-for-regulatory-profile-repair/.wha1350-verification-9afjzvhz/pgdata",
+  "host": "127.0.0.1/32",
+  "port": 52027,
+  "version": "16.15 (Homebrew)",
+  "database": "wha1362consumer_disposable_5e015ddcf2",
+  "owner": "wha1362consumer_owner_5e015ddcf2",
+  "runtime": "wha1362consumer_runtime_5e015ddcf2"
+}

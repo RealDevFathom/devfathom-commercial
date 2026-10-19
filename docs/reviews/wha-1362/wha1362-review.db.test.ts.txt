@@ -1,0 +1,32 @@
+// @vitest-environment node
+import {randomUUID} from 'node:crypto';
+import {beforeAll,afterAll,it,expect} from 'vitest';
+import {PrintBridgeService,claimNextPrintJob} from '@/lib/restaurant/printing/service';
+import {PrintJobSchema} from '@/lib/restaurant/printing/contract';
+import {DEFAULT_RECEIPT_LAYOUT} from '@/lib/receipts/configuration';
+import {SAMPLE_RECEIPT,buildReceiptPreview} from '@/lib/receipts/preview';
+process.env.DATABASE_URL=process.env.TEST_DATABASE_URL;
+const org='wha1362-'+randomUUID(), branch='branch-'+org;
+let tenancy:typeof import('@/lib/tenancy/scoped-db');
+const run=<T>(f:(db:import('@/lib/tenancy/scoped-db').ScopedDb)=>Promise<T>)=>tenancy.withTenantDb(org,f);
+const config={branchId:branch,routes:[{documentType:'RECEIPT' as const,stationId:null,printerId:'queue:///Receipt_Printer',enabled:true}]};
+const document={type:'RECEIPT' as const,reference:'REVIEW',title:'SYNTHETIC',createdAt:'2026-09-05T12:00:00Z',lines:[{quantity:1,label:'Tea'}]};
+beforeAll(async()=>{tenancy=await import('@/lib/tenancy/scoped-db');const {assertRlsEnforcingRole}=await import('@/lib/testing/rls-role-guard');await assertRlsEnforcingRole(tenancy.withPlatformDb);await tenancy.withPlatformDb(db=>db.organization.create({data:{id:org,slug:org,legalName:org,displayName:org}}));await run(db=>db.restaurantBranch.create({data:{id:branch,organizationId:org,name:branch}}));});
+afterAll(async()=>{if(tenancy)await tenancy.withPlatformDb(db=>db.organization.deleteMany({where:{id:org}}));});
+it('queued snapshot retains exact preview bytes after caller layout/facts mutation',async()=>{
+ const layout={...DEFAULT_RECEIPT_LAYOUT,paperWidth:58 as const}; const facts=structuredClone(SAMPLE_RECEIPT);
+ const expected=buildReceiptPreview(layout,facts);
+ await run(db=>new PrintBridgeService(db).enqueue(org,config,{branchId:branch,stationId:null,idempotencyKey:randomUUID(),document:{...document,receiptSnapshot:{layout,facts}}}));
+ layout.footerText='CHANGED';facts.totals=['CHANGED'];
+ const claim=await run(db=>claimNextPrintJob(db,branch,'review-device'));
+ expect(Buffer.from(claim!.bytes,'base64').subarray(8,-7).toString()).toBe(expected);
+ await run(db=>db.restaurantPrintJob.deleteMany({}));
+});
+it('REPRO: accepted Urdu job repeatedly blocks a later valid job before claiming',async()=>{
+ const bad=PrintJobSchema.parse({branchId:branch,stationId:null,idempotencyKey:randomUUID(),document:{...document,lines:[{quantity:1,label:'چائے'}]}});
+ expect(await run(db=>new PrintBridgeService(db).enqueue(org,config,bad))).toMatchObject({status:'QUEUED'});
+ await run(db=>db.restaurantPrintJob.updateMany({data:{createdAt:new Date('2026-09-01T00:00:00Z')}}));
+ await run(db=>new PrintBridgeService(db).enqueue(org,config,{...bad,idempotencyKey:randomUUID(),document}));
+ for(let i=0;i<2;i++)await expect(run(db=>claimNextPrintJob(db,branch,'review-device'))).rejects.toThrow('Unsupported printer text. Use a browser/OS-rendered receipt.');
+ const rows=await run(db=>db.restaurantPrintJob.findMany());expect(rows).toHaveLength(2);expect(rows.every(r=>r.status==='PENDING'&&r.attemptCount===0&&r.lastAttemptAt===null)).toBe(true);
+});
