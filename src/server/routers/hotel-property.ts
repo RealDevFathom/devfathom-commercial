@@ -28,6 +28,7 @@ import {
   hotelPropertyUpdateInput,
 } from '@/lib/hotel/property';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
+import { hotelFunctionSpacesRouter } from './hotel-function-spaces';
 
 const propertyAdmin = capabilityProcedure('hotel:property-admin');
 
@@ -144,4 +145,7 @@ export const hotelPropertyRouter = router({
       return { mode: input.mode };
     }),
   }),
+
+  /** PROP-07 — function spaces, their layouts, pricing and turnaround buffers. */
+  spaces: hotelFunctionSpacesRouter,
 });
