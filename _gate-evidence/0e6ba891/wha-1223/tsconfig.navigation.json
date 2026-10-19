@@ -1,0 +1,1 @@
+{"extends": "./tsconfig.json", "include": ["src/lib/pharmacy/onboarding-checklist.ts", "src/lib/pharmacy/onboarding-checklist.test.ts"]}

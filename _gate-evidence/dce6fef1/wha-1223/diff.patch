@@ -1,0 +1,1291 @@
+diff --git a/src/app/(app)/team/team-content.departments.test.ts b/src/app/(app)/team/team-content.departments.test.ts
+new file mode 100644
+index 00000000..f0b58335
+--- /dev/null
++++ b/src/app/(app)/team/team-content.departments.test.ts
+@@ -0,0 +1,86 @@
++import { beforeEach, describe, expect, it, vi } from 'vitest';
++
++const mocks = vi.hoisted(() => ({ findMany: vi.fn(), can: vi.fn() }));
++vi.mock('server-only', () => ({}));
++vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
++vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
++vi.mock('@/lib/entitlements', () => ({
++  assertSeatAvailable: vi.fn(),
++  hasModule: vi.fn(() => true),
++  resolveOrganizationEntitlements: vi.fn(),
++}));
++vi.mock('@/server/audit', () => ({
++  annotateAudit: vi.fn(),
++  ipFromHeaders: vi.fn(() => null),
++  isAuditExcludedPath: vi.fn(() => true),
++  recordTrpcAudit: vi.fn(),
++}));
++vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn() }));
++vi.mock('@/lib/abac', async () => ({
++  ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
++  can: mocks.can,
++}));
++
++import type { TRPCContext } from '@/server/trpc';
++import { organizationAdminRouter } from '@/server/routers/organization-admin';
++
++function caller(organizationId: string | undefined, authenticated = true) {
++  return organizationAdminRouter.createCaller({
++    db: { organizationDepartment: { findMany: mocks.findMany } },
++    entitlements: { enabledModules: [], modules: [] },
++    session: authenticated
++      ? {
++          expires: 'later',
++          user: {
++            id: 'inviter',
++            organizationId,
++            role: 'ADMIN',
++            department: 'COUNTER',
++            status: 'ACTIVE',
++          },
++        }
++      : null,
++    organization: null,
++    support: null,
++    requestMeta: { ip: null, userAgent: null },
++    audit: { detail: {} },
++  } as unknown as TRPCContext);
++}
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  mocks.can.mockResolvedValue(true);
++});
++
++describe('invite picker department read contract', () => {
++  it('uses only the active session tenant and the existing admin capability', async () => {
++    const departments = [{ key: 'COUNTER', name: 'Counter', active: true }];
++    mocks.findMany.mockResolvedValue(departments);
++    expect(await caller('pharmacy_a').departments()).toEqual(departments);
++    expect(mocks.findMany).toHaveBeenCalledExactlyOnceWith({
++      where: { organizationId: 'pharmacy_a' },
++      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
++    });
++    expect(mocks.can).toHaveBeenCalledWith(
++      expect.any(Object),
++      'admin:access',
++      undefined,
++      expect.any(Object)
++    );
++  });
++  it('does not read when the existing invite capability denies access', async () => {
++    mocks.can.mockResolvedValue(false);
++    await expect(caller('pharmacy_a').departments()).rejects.toMatchObject({ code: 'FORBIDDEN' });
++    expect(mocks.findMany).not.toHaveBeenCalled();
++  });
++  it('does not read for an anonymous session', async () => {
++    await expect(caller('pharmacy_a', false).departments()).rejects.toMatchObject({
++      code: 'UNAUTHORIZED',
++    });
++    expect(mocks.findMany).not.toHaveBeenCalled();
++  });
++  it('does not guess a tenant when the session has none', async () => {
++    await expect(caller(undefined).departments()).rejects.toMatchObject({ code: 'NOT_FOUND' });
++    expect(mocks.findMany).not.toHaveBeenCalled();
++  });
++});
+diff --git a/src/app/(app)/team/team-content.test.tsx b/src/app/(app)/team/team-content.test.tsx
+new file mode 100644
+index 00000000..ebf22daa
+--- /dev/null
++++ b/src/app/(app)/team/team-content.test.tsx
+@@ -0,0 +1,97 @@
++import { act, cleanup, fireEvent, render, screen } from '@testing-library/react';
++import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
++
++const state = vi.hoisted(() => ({
++  departments: {
++    data: [] as Array<{ key: string; name: string; active: boolean }>,
++    isFetching: false,
++    isError: false,
++    refetch: vi.fn(),
++  },
++  invite: { mutate: vi.fn(), isPending: false },
++}));
++vi.mock('@/lib/trpc', () => ({
++  trpc: {
++    useUtils: () => ({ team: { getAll: { invalidate: vi.fn() } } }),
++    organizationAdmin: { departments: { useQuery: () => state.departments } },
++    team: { inviteMember: { useMutation: () => state.invite } },
++  },
++}));
++import { AddMemberModal } from './team-content';
++
++beforeEach(() => {
++  vi.clearAllMocks();
++  state.departments.data = [
++    { key: 'COUNTER', name: 'Counter', active: true },
++    { key: 'OLD', name: 'Old department', active: false },
++  ];
++  state.departments.isFetching = state.departments.isError = state.invite.isPending = false;
++});
++afterEach(cleanup);
++function fill() {
++  fireEvent.change(screen.getByPlaceholderText('John Doe'), {
++    target: { value: 'Second operator' },
++  });
++  fireEvent.change(screen.getByPlaceholderText('john@company.com'), {
++    target: { value: 'second@e2e.invalid' },
++  });
++  fireEvent.change(screen.getByPlaceholderText('Full Stack Developer'), {
++    target: { value: 'Counter operator' },
++  });
++}
++
++describe('tenant department invitation', () => {
++  it.each([
++    ['COUNTER', 'Counter'],
++    ['KITCHEN', 'Kitchen'],
++    ['ENGINEERING', 'Engineering'],
++  ])('submits an explicit active %s choice with its readable label', (key, name) => {
++    state.departments.data = [{ key, name, active: true }];
++    render(<AddMemberModal onClose={vi.fn()} />);
++    fill();
++    expect(screen.getByLabelText('Department')).toHaveValue('');
++    expect(screen.getByRole('button', { name: 'Send Invite' })).toBeDisabled();
++    fireEvent.change(screen.getByLabelText('Department'), { target: { value: key } });
++    expect(screen.getByRole('option', { name })).toHaveValue(key);
++    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
++    expect(state.invite.mutate).toHaveBeenCalledExactlyOnceWith(
++      expect.objectContaining({ department: key, email: 'second@e2e.invalid' }),
++      expect.any(Object)
++    );
++  });
++
++  it.each(['loading', 'error', 'empty', 'stale'])(
++    'blocks %s department data and preserves the form',
++    (kind) => {
++      const view = render(<AddMemberModal onClose={vi.fn()} />);
++      fill();
++      fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
++      if (kind === 'loading') state.departments.isFetching = true;
++      if (kind === 'error') state.departments.isError = true;
++      if (kind === 'empty') state.departments.data = [];
++      if (kind === 'stale')
++        state.departments.data = [{ key: 'STORE', name: 'Store', active: true }];
++      view.rerender(<AddMemberModal onClose={vi.fn()} />);
++      fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
++      expect(state.invite.mutate).not.toHaveBeenCalled();
++      expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
++      expect(screen.getByPlaceholderText('john@company.com')).toHaveValue('second@e2e.invalid');
++      if (kind === 'error') {
++        fireEvent.click(screen.getByRole('button', { name: 'Retry departments' }));
++        expect(state.departments.refetch).toHaveBeenCalledOnce();
++      }
++    }
++  );
++
++  it('omits inactive departments and preserves entries when server authorization refuses the invite', () => {
++    render(<AddMemberModal onClose={vi.fn()} />);
++    fill();
++    expect(screen.queryByRole('option', { name: 'Old department' })).not.toBeInTheDocument();
++    fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'COUNTER' } });
++    fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
++    act(() => state.invite.mutate.mock.calls[0][1].onError({ message: 'Forbidden' }));
++    expect(screen.getByText('Forbidden')).toBeVisible();
++    expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
++    expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
++  });
++});
+diff --git a/src/app/(app)/team/team-content.tsx b/src/app/(app)/team/team-content.tsx
+index 239ef3e7..89161e4b 100644
+--- a/src/app/(app)/team/team-content.tsx
++++ b/src/app/(app)/team/team-content.tsx
+@@ -238,23 +238,16 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
+   );
+ });
+ 
+-const departmentOptions = [
+-  'LEADERSHIP',
+-  'ENGINEERING',
+-  'PRODUCT',
+-  'QUALITY',
+-  'MARKETING',
+-  'DESIGN',
+-] as const;
+-
+-function AddMemberModal({ onClose }: { onClose: () => void }) {
++export function AddMemberModal({ onClose }: { onClose: () => void }) {
+   const utils = trpc.useUtils();
+   const inviteMember = trpc.team.inviteMember.useMutation();
++  const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
++  const departmentOptions = (departmentQuery.data ?? []).filter((item) => item.active);
+ 
+   const [name, setName] = useState('');
+   const [email, setEmail] = useState('');
+   const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE'>('EMPLOYEE');
+-  const [department, setDepartment] = useState<(typeof departmentOptions)[number]>('ENGINEERING');
++  const [department, setDepartment] = useState('');
+   const [title, setTitle] = useState('');
+   const [phone, setPhone] = useState('');
+   const [bio, setBio] = useState('');
+@@ -264,9 +257,20 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
+   const [sent, setSent] = useState<{ email: string; inviteUrl: string } | null>(null);
+   const [copied, setCopied] = useState(false);
+ 
++  const selectedDepartment = departmentOptions.find((item) => item.key === department);
++  const departmentReady =
++    !departmentQuery.isFetching && !departmentQuery.isError && Boolean(selectedDepartment);
++
+   const handleSubmit = () => {
+     setError('');
+-    if (!name.trim() || !email.trim() || !title.trim()) return;
++    if (
++      !name.trim() ||
++      !email.trim() ||
++      !title.trim() ||
++      !departmentReady ||
++      inviteMember.isPending
++    )
++      return;
+     const submittedEmail = email.trim().toLowerCase();
+     inviteMember.mutate(
+       {
+@@ -351,178 +355,221 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
+             </div>
+           ) : (
+             <>
+-          <div className="p-6 space-y-5">
+-            {error && (
+-              <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+-                {error}
+-              </div>
+-            )}
++              <div className="p-6 space-y-5">
++                {error && (
++                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
++                    {error}
++                  </div>
++                )}
+ 
+-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+-              <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">
+-                  Full Name *
+-                </label>
+-                <input
+-                  autoFocus
+-                  value={name}
+-                  onChange={(e) => setName(e.target.value)}
+-                  placeholder="John Doe"
+-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+-                />
+-              </div>
+-              <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">Email *</label>
+-                <input
+-                  type="email"
+-                  value={email}
+-                  onChange={(e) => setEmail(e.target.value)}
+-                  placeholder="john@company.com"
+-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+-                />
+-              </div>
+-            </div>
++                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
++                  <div>
++                    <label className="block text-sm font-medium text-foreground mb-1.5">
++                      Full Name *
++                    </label>
++                    <input
++                      autoFocus
++                      value={name}
++                      onChange={(e) => setName(e.target.value)}
++                      placeholder="John Doe"
++                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
++                    />
++                  </div>
++                  <div>
++                    <label className="block text-sm font-medium text-foreground mb-1.5">
++                      Email *
++                    </label>
++                    <input
++                      type="email"
++                      value={email}
++                      onChange={(e) => setEmail(e.target.value)}
++                      placeholder="john@company.com"
++                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
++                    />
++                  </div>
++                </div>
+ 
+-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+-              <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">
+-                  Job Title *
+-                </label>
+-                <input
+-                  value={title}
+-                  onChange={(e) => setTitle(e.target.value)}
+-                  placeholder="Full Stack Developer"
+-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+-                />
+-              </div>
+-              <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">Phone</label>
+-                <input
+-                  value={phone}
+-                  onChange={(e) => setPhone(e.target.value)}
+-                  placeholder="+1 (786) 555-0100"
+-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+-                />
+-              </div>
+-            </div>
++                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
++                  <div>
++                    <label className="block text-sm font-medium text-foreground mb-1.5">
++                      Job Title *
++                    </label>
++                    <input
++                      value={title}
++                      onChange={(e) => setTitle(e.target.value)}
++                      placeholder="Full Stack Developer"
++                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
++                    />
++                  </div>
++                  <div>
++                    <label className="block text-sm font-medium text-foreground mb-1.5">
++                      Phone
++                    </label>
++                    <input
++                      value={phone}
++                      onChange={(e) => setPhone(e.target.value)}
++                      placeholder="+1 (786) 555-0100"
++                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
++                    />
++                  </div>
++                </div>
+ 
+-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+-              <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">
+-                  Department
+-                </label>
+-                <select
+-                  value={department}
+-                  onChange={(e) => setDepartment(e.target.value as typeof department)}
+-                  className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+-                >
+-                  {departmentOptions.map((d) => (
+-                    <option key={d} value={d}>
+-                      {d.charAt(0) + d.slice(1).toLowerCase()}
+-                    </option>
+-                  ))}
+-                </select>
+-              </div>
+-              <div>
+-                <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
+-                <div className="flex rounded-xl border border-border overflow-hidden">
+-                  {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
+-                    <button
+-                      key={r}
+-                      onClick={() => setRole(r)}
+-                      className={cn(
+-                        'flex-1 py-2.5 text-xs font-medium transition-colors',
+-                        role === r
+-                          ? 'bg-foreground text-background'
+-                          : 'bg-card text-muted-foreground hover:text-foreground'
+-                      )}
++                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
++                  <div>
++                    <label
++                      htmlFor="invite-department"
++                      className="block text-sm font-medium text-foreground mb-1.5"
+                     >
+-                      {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
+-                    </button>
+-                  ))}
++                      Department
++                    </label>
++                    <select
++                      id="invite-department"
++                      value={selectedDepartment ? department : ''}
++                      disabled={
++                        departmentQuery.isFetching ||
++                        departmentQuery.isError ||
++                        !departmentOptions.length ||
++                        inviteMember.isPending
++                      }
++                      aria-describedby="invite-department-status"
++                      aria-invalid={Boolean(department && !selectedDepartment)}
++                      onChange={(e) => setDepartment(e.target.value)}
++                      className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
++                    >
++                      <option value="">Choose a department</option>
++                      {departmentOptions.map((item) => (
++                        <option key={item.key} value={item.key}>
++                          {item.name}
++                        </option>
++                      ))}
++                    </select>
++                    <div
++                      id="invite-department-status"
++                      className="mt-2 text-sm text-text-muted"
++                      role={departmentQuery.isError ? 'alert' : 'status'}
++                    >
++                      {departmentQuery.isFetching
++                        ? 'Loading departments…'
++                        : departmentQuery.isError
++                          ? 'Departments could not be loaded. Retry or ask your administrator to check access.'
++                          : !departmentOptions.length
++                            ? 'No active departments are available. Ask your administrator to review the organization department catalog.'
++                            : department && !selectedDepartment
++                              ? 'That department is no longer available. Choose an active department.'
++                              : 'Choose from this workspace’s active departments.'}
++                      {departmentQuery.isError ? (
++                        <Button
++                          type="button"
++                          variant="outline"
++                          className="mt-2"
++                          onClick={() => void departmentQuery.refetch()}
++                        >
++                          Retry departments
++                        </Button>
++                      ) : null}
++                    </div>
++                  </div>
++                  <div>
++                    <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
++                    <div className="flex rounded-xl border border-border overflow-hidden">
++                      {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
++                        <button
++                          key={r}
++                          onClick={() => setRole(r)}
++                          className={cn(
++                            'flex-1 py-2.5 text-xs font-medium transition-colors',
++                            role === r
++                              ? 'bg-foreground text-background'
++                              : 'bg-card text-muted-foreground hover:text-foreground'
++                          )}
++                        >
++                          {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
++                        </button>
++                      ))}
++                    </div>
++                  </div>
+                 </div>
+-              </div>
+-            </div>
+ 
+-            <div>
+-              <label className="block text-sm font-medium text-foreground mb-1.5">Bio</label>
+-              <textarea
+-                value={bio}
+-                onChange={(e) => setBio(e.target.value)}
+-                rows={2}
+-                placeholder="Brief bio..."
+-                className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+-              />
+-            </div>
++                <div>
++                  <label className="block text-sm font-medium text-foreground mb-1.5">Bio</label>
++                  <textarea
++                    value={bio}
++                    onChange={(e) => setBio(e.target.value)}
++                    rows={2}
++                    placeholder="Brief bio..."
++                    className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
++                  />
++                </div>
+ 
+-            <div>
+-              <label className="block text-sm font-medium text-foreground mb-1.5">Skills</label>
+-              <div className="flex gap-2">
+-                <input
+-                  value={skillInput}
+-                  onChange={(e) => setSkillInput(e.target.value)}
+-                  onKeyDown={(e) => {
+-                    if (e.key === 'Enter') {
+-                      e.preventDefault();
+-                      const v = skillInput.trim();
+-                      if (v && !skills.includes(v)) {
+-                        setSkills([...skills, v]);
+-                        setSkillInput('');
+-                      }
+-                    }
+-                  }}
+-                  placeholder="Add skill, press Enter..."
+-                  className="flex-1 rounded-xl border border-border bg-card px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+-                />
+-              </div>
+-              {skills.length > 0 && (
+-                <div className="flex flex-wrap gap-1.5 mt-2">
+-                  {skills.map((s) => (
+-                    <span
+-                      key={s}
+-                      className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
+-                    >
+-                      {s}
+-                      <button
+-                        onClick={() => setSkills(skills.filter((sk) => sk !== s))}
+-                        className="text-muted-foreground hover:text-foreground"
+-                      >
+-                        <X className="h-3 w-3" />
+-                      </button>
+-                    </span>
+-                  ))}
++                <div>
++                  <label className="block text-sm font-medium text-foreground mb-1.5">Skills</label>
++                  <div className="flex gap-2">
++                    <input
++                      value={skillInput}
++                      onChange={(e) => setSkillInput(e.target.value)}
++                      onKeyDown={(e) => {
++                        if (e.key === 'Enter') {
++                          e.preventDefault();
++                          const v = skillInput.trim();
++                          if (v && !skills.includes(v)) {
++                            setSkills([...skills, v]);
++                            setSkillInput('');
++                          }
++                        }
++                      }}
++                      placeholder="Add skill, press Enter..."
++                      className="flex-1 rounded-xl border border-border bg-card px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
++                    />
++                  </div>
++                  {skills.length > 0 && (
++                    <div className="flex flex-wrap gap-1.5 mt-2">
++                      {skills.map((s) => (
++                        <span
++                          key={s}
++                          className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
++                        >
++                          {s}
++                          <button
++                            onClick={() => setSkills(skills.filter((sk) => sk !== s))}
++                            className="text-muted-foreground hover:text-foreground"
++                          >
++                            <X className="h-3 w-3" />
++                          </button>
++                        </span>
++                      ))}
++                    </div>
++                  )}
+                 </div>
+-              )}
+-            </div>
+-          </div>
++              </div>
+ 
+-          <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border/60 bg-background px-6 py-4">
+-            <button
+-              onClick={onClose}
+-              className="rounded-xl px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+-            >
+-              Cancel
+-            </button>
+-            <button
+-              onClick={handleSubmit}
+-              disabled={
+-                !name.trim() ||
+-                !email.trim() ||
+-                !title.trim() ||
+-                inviteMember.isPending
+-              }
+-              className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
+-            >
+-              {inviteMember.isPending ? (
+-                <>
+-                  <Loader2 className="h-4 w-4 animate-spin" />
+-                  Sending…
+-                </>
+-              ) : (
+-                'Send Invite'
+-              )}
+-            </button>
+-          </div>
++              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border/60 bg-background px-6 py-4">
++                <button
++                  onClick={onClose}
++                  className="rounded-xl px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
++                >
++                  Cancel
++                </button>
++                <button
++                  onClick={handleSubmit}
++                  disabled={
++                    !name.trim() ||
++                    !email.trim() ||
++                    !title.trim() ||
++                    !departmentReady ||
++                    inviteMember.isPending
++                  }
++                  className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
++                >
++                  {inviteMember.isPending ? (
++                    <>
++                      <Loader2 className="h-4 w-4 animate-spin" />
++                      Sending…
++                    </>
++                  ) : (
++                    'Send Invite'
++                  )}
++                </button>
++              </div>
+             </>
+           )}
+         </div>
+diff --git a/tests/e2e/fixtures/pharmacy-first-sale.ts b/tests/e2e/fixtures/pharmacy-first-sale.ts
+new file mode 100644
+index 00000000..bd53c0c8
+--- /dev/null
++++ b/tests/e2e/fixtures/pharmacy-first-sale.ts
+@@ -0,0 +1,545 @@
++/**
++ * Fresh-tenant acceptance journey. Every domain write goes through rendered UI.
++ * Run only with the dedicated time-to-first-sale config against an explicitly
++ * authorized, isolated SHARED staging candidate. No seed/SQL/request helpers.
++ *
++ * PHARMACY_FIRST_SALE_INPUT is an operator-owned JSON file matching JourneyInput.
++ * References below must describe real staging evidence, not invented approvals.
++ * The environment must already have a compatible Pharmacy package (including
++ * HR/procurement), confirmed jurisdiction rules, uploads, invite acceptance and
++ * a configured SHARED deployment host. This test cannot manufacture those.
++ */
++import { randomUUID } from 'node:crypto';
++import { readFileSync } from 'node:fs';
++
++import { expect, type Browser, type Locator, type Page } from '@playwright/test';
++
++const attestedSteps = [
++  'Organization type',
++  'Legal business',
++  'Launch jurisdiction',
++  'Branches and locations',
++  'Devices and documents',
++  'Readiness and parallel run',
++] as const;
++
++type JourneyInput = {
++  environment: 'ISOLATED_SHARED_STAGING';
++  authorizationRef: string;
++  sourceSha: string;
++  deployedSha: string;
++  packageLabel: string;
++  emailDomain: string;
++  colleaguePhone: string;
++  legalName: string;
++  branchAddress: string;
++  branchCity: string;
++  provinceLabel: string;
++  regulatory: {
++    effectiveFrom: string;
++    premisesStorageDescription: string;
++    licenceCategoryLabel: string;
++    licenceNumber: string;
++    licenceValidFrom: string;
++    licenceValidTo: string;
++    licenceEvidencePath: string;
++    permittedScheduleLabels: string[];
++    qualifiedPersonRegistration: string;
++    qualifiedPersonValidFrom: string;
++    qualifiedPersonValidTo: string;
++    qualifiedPersonCoverageRosterRef: string;
++  };
++  supplier: {
++    name: string;
++    legalName: string;
++    licenceType: string;
++    licenceNumber: string;
++    issuingAuthority: string;
++    issuedAt: string;
++    expiresAt: string;
++    evidenceUri: string;
++    verifiedEvidenceRef: string;
++  };
++  receipt: {
++    supplierInvoiceRef: string;
++    warrantyEvidenceRef: string;
++    approvalNote: string;
++  };
++  attestations: Record<(typeof attestedSteps)[number], string>;
++};
++
++function requiredEnvironment(name: string) {
++  const value = process.env[name];
++  if (!value?.trim()) throw new Error(`Required runtime precondition: ${name}`);
++  return value;
++}
++
++function stagingOrigin(name: string) {
++  const url = new URL(requiredEnvironment(name));
++  if (
++    url.protocol !== 'https:' ||
++    url.username ||
++    url.password ||
++    url.port ||
++    url.pathname !== '/' ||
++    url.search ||
++    url.hash ||
++    /localhost|\.local$|^\d+\.\d+\.\d+\.\d+$/.test(url.hostname)
++  )
++    throw new Error(`${name} must be an explicit isolated HTTPS staging origin.`);
++  return url.origin;
++}
++
++function input(): JourneyInput {
++  const value: JourneyInput = JSON.parse(
++    readFileSync(requiredEnvironment('PHARMACY_FIRST_SALE_INPUT'), 'utf8')
++  );
++  const requiredPaths = [
++    'authorizationRef',
++    'sourceSha',
++    'deployedSha',
++    'packageLabel',
++    'emailDomain',
++    'colleaguePhone',
++    'legalName',
++    'branchAddress',
++    'branchCity',
++    'provinceLabel',
++    'regulatory.effectiveFrom',
++    'regulatory.premisesStorageDescription',
++    'regulatory.licenceCategoryLabel',
++    'regulatory.licenceNumber',
++    'regulatory.licenceValidFrom',
++    'regulatory.licenceValidTo',
++    'regulatory.licenceEvidencePath',
++    'regulatory.qualifiedPersonRegistration',
++    'regulatory.qualifiedPersonValidFrom',
++    'regulatory.qualifiedPersonValidTo',
++    'regulatory.qualifiedPersonCoverageRosterRef',
++    'supplier.name',
++    'supplier.legalName',
++    'supplier.licenceType',
++    'supplier.licenceNumber',
++    'supplier.issuingAuthority',
++    'supplier.issuedAt',
++    'supplier.expiresAt',
++    'supplier.evidenceUri',
++    'supplier.verifiedEvidenceRef',
++    'receipt.supplierInvoiceRef',
++    'receipt.warrantyEvidenceRef',
++    'receipt.approvalNote',
++  ];
++  for (const path of requiredPaths) {
++    const field = path
++      .split('.')
++      .reduce<unknown>(
++        (node, key) => (node && typeof node === 'object' ? Reflect.get(node, key) : undefined),
++        value
++      );
++    if (typeof field !== 'string' || !field.trim())
++      throw new Error(`Missing runtime input: ${path}`);
++  }
++  if (
++    !Array.isArray(value.regulatory.permittedScheduleLabels) ||
++    !value.regulatory.permittedScheduleLabels.every(
++      (item) => typeof item === 'string' && item.trim()
++    )
++  )
++    throw new Error('Supply the permitted schedule labels from the confirmed jurisdiction.');
++  // Validate without echoing credentials, evidence contents or business details.
++  function nonempty(node: unknown): boolean {
++    if (typeof node === 'string') return node.trim().length > 0;
++    if (Array.isArray(node)) return node.length > 0 && node.every(nonempty);
++    return Boolean(
++      node &&
++      typeof node === 'object' &&
++      Object.values(node).length &&
++      Object.values(node).every(nonempty)
++    );
++  }
++  if (!nonempty(value) || value.environment !== 'ISOLATED_SHARED_STAGING')
++    throw new Error('Provide complete, authorized staging journey inputs.');
++  if (!/^[a-f0-9]{40}$/.test(value.sourceSha) || value.sourceSha !== value.deployedSha)
++    throw new Error(
++      'Operator must verify and supply matching exact source/deployed candidate SHAs.'
++    );
++  for (const step of attestedSteps)
++    if (!value.attestations?.[step]?.trim())
++      throw new Error(`Missing actual evidence for ${step}.`);
++  // Fail before organization creation if the actual upload evidence is absent.
++  readFileSync(value.regulatory.licenceEvidencePath);
++  return value;
++}
++
++async function choose(select: Locator, label: string) {
++  const option = select.getByRole('option').filter({ hasText: label });
++  await expect(option).toHaveCount(1);
++  await select.selectOption({ label: (await option.textContent())!.trim() });
++}
++
++async function fill(form: Locator | Page, values: Record<string, string>) {
++  for (const [name, value] of Object.entries(values))
++    await form.locator(`[name="${name}"]`).fill(value);
++}
++
++async function noRawIdEntry(page: Page) {
++  // Native selects may carry opaque values; the operator chooses readable labels.
++  // Batch ID is a user-defined import reference, not a database row identifier.
++  const names = await page
++    .locator('input:visible:not([readonly]), textarea:visible')
++    .evaluateAll((elements) =>
++      elements.map((element) => {
++        const control = element as HTMLInputElement;
++        return [
++          control.name,
++          control.getAttribute('aria-label'),
++          ...Array.from(control.labels ?? [], (label) => label.textContent),
++        ].join(' ');
++      })
++    );
++  expect(
++    names.filter((name) =>
++      /(?:organization|branch|staff|device|medicine|presentation|packLevel|supplier|user|sale)[ _-]?id\b/i.test(
++        name
++      )
++    )
++  ).toEqual([]);
++}
++
++export async function freshPharmacyFirstSale(
++  page: Page,
++  browser: Browser,
++  metric: { clicks: number },
++  fourXx: string[]
++) {
++  const data = input();
++  const platformOrigin = stagingOrigin('PLAYWRIGHT_BASE_URL');
++  const tenantOrigin = stagingOrigin('PLAYWRIGHT_SHARED_BASE_URL');
++  if (platformOrigin === tenantOrigin)
++    throw new Error('Configure separate control and SHARED tenant origins.');
++  const platformEmail = requiredEnvironment('PLAYWRIGHT_PLATFORM_ADMIN_EMAIL');
++  const platformPassword = requiredEnvironment('PLAYWRIGHT_PLATFORM_ADMIN_PASSWORD');
++  const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
++  const slug = `e2e-first-sale-${suffix}`;
++  const ownerEmail = `owner-${suffix}@${data.emailDomain}`;
++  const colleagueEmail = `approver-${suffix}@${data.emailDomain}`;
++  const ownerPassword = `Wha1203!${randomUUID()}`;
++  const colleaguePassword = `Wha1203!${randomUUID()}`;
++  const branchName = `Test branch ${suffix}`;
++  const medicineName = `Synthetic OTC ${suffix}`;
++  const barcode = `TEST${suffix}`;
++  const today = new Date().toISOString().slice(0, 10);
++  const expiry = new Date(Date.now() + 365 * 86400000).toISOString().slice(0, 10);
++  const orderReference = `PO-${suffix}`;
++  const click = async (target: Locator) => {
++    metric.clicks += 1;
++    await target.click();
++  };
++  const setup = async (actor: Page) => {
++    await click(actor.getByRole('link', { name: 'Onboarding', exact: true }));
++    await expect(actor).toHaveURL(new URL('/pharmacy', tenantOrigin).href);
++    await expect(actor.locator('[data-slot="readiness-checklist"]')).toBeVisible();
++    await noRawIdEntry(actor);
++  };
++  const row = (actor: Page, label: string) =>
++    actor
++      .locator('[data-slot="readiness-checklist"]')
++      .getByRole('listitem')
++      .filter({ hasText: label });
++  const follow = async (actor: Page, gate: string, link: string) => {
++    await click(row(actor, gate).getByRole('link', { name: link, exact: true }));
++    await noRawIdEntry(actor);
++  };
++  const formFor = (actor: Page, submit: string) =>
++    actor.locator('form').filter({ has: actor.getByRole('button', { name: submit, exact: true }) });
++  const observe = (actor: Page) =>
++    actor.on('response', (response) => {
++      if (response.status() >= 400 && response.status() < 500)
++        fourXx.push(
++          `${response.status()} ${response.request().method()} ${new URL(response.url()).pathname.replace(/\/invite\/[^/]+/, '/invite/[redacted]')}`
++        );
++    });
++  const platformContext = await browser.newContext();
++  const colleagueContext = await browser.newContext();
++  const platform = await platformContext.newPage();
++  const colleague = await colleagueContext.newPage();
++  observe(platform);
++  observe(colleague);
++  try {
++    await platform.goto(new URL('/platform/login', platformOrigin).href);
++    await fill(platform, { email: platformEmail, password: platformPassword });
++    await click(platform.getByRole('button', { name: 'Continue to control desk' }));
++    await expect(platform).not.toHaveURL(/\/platform\/login/);
++    await platform.goto(new URL('/platform/organizations/new', platformOrigin).href);
++    await click(platform.getByRole('link', { name: /Continue as Pharmacy/ }));
++    const create = formFor(platform, 'Create onboarding record');
++    await fill(create, {
++      displayName: `First sale ${suffix}`,
++      legalName: data.legalName,
++      slug,
++      seatLimit: '5',
++      currency: 'PKR',
++      firstBranchName: branchName,
++      firstBranchAddress: data.branchAddress,
++      firstBranchCity: data.branchCity,
++      primaryContactName: 'Test owner',
++      primaryContactEmail: ownerEmail,
++      adminName: 'Test owner',
++      adminEmail: ownerEmail,
++      adminPassword: ownerPassword,
++    });
++    await choose(create.locator('[name="deploymentMode"]'), 'Shared platform');
++    await choose(create.locator('[name="packageId"]'), data.packageLabel);
++    await choose(create.locator('[name="firstBranchProvinceCode"]'), data.provinceLabel);
++    await click(create.getByRole('button', { name: 'Create onboarding record' }));
++    await expect(platform).toHaveURL(/\/platform\/organizations\/(?!new)[^/?]+$/);
++    const organizationUrl = platform.url();
++    await expect(
++      platform.locator('[data-slot="page-header"]').getByText('ONBOARDING', { exact: true })
++    ).toBeVisible();
++
++    await page.goto(new URL('/login', tenantOrigin).href);
++    await fill(page, { email: ownerEmail, password: ownerPassword });
++    await click(page.getByRole('button', { name: 'Sign in', exact: true }));
++    await expect(page).not.toHaveURL(/\/login/);
++    await setup(page);
++    await expect(row(page, 'Commercial package').getByText('Done', { exact: true })).toBeVisible();
++    await expect(
++      row(page, 'Owner and role templates').getByText('Done', { exact: true })
++    ).toBeVisible();
++
++    await follow(page, 'Branches and locations', 'Create or review stock locations');
++    const location = formFor(page, 'Create location');
++    await fill(location, { name: 'Opening stock store', code: 'OPENING' });
++    await choose(location.locator('[name="kind"]'), 'Store');
++    await click(location.getByRole('button', { name: 'Create location' }));
++    await expect(page.getByText('Opening stock store', { exact: true }).first()).toBeVisible();
++    await setup(page);
++
++    await follow(page, 'Premises and licences', 'Open regulatory profile');
++    await choose(page.getByLabel('Which branch is this profile for?'), branchName);
++    await choose(page.getByLabel('Province', { exact: true }), data.provinceLabel);
++    await choose(
++      page.getByLabel('Licence category', { exact: true }),
++      data.regulatory.licenceCategoryLabel
++    );
++    const { licenceEvidencePath, permittedScheduleLabels } = data.regulatory;
++    await fill(page, {
++      effectiveFrom: data.regulatory.effectiveFrom,
++      premisesStorageDescription: data.regulatory.premisesStorageDescription,
++      licenceNumber: data.regulatory.licenceNumber,
++      licenceValidFrom: data.regulatory.licenceValidFrom,
++      licenceValidTo: data.regulatory.licenceValidTo,
++      qualifiedPersonRegistration: data.regulatory.qualifiedPersonRegistration,
++      qualifiedPersonValidFrom: data.regulatory.qualifiedPersonValidFrom,
++      qualifiedPersonValidTo: data.regulatory.qualifiedPersonValidTo,
++      qualifiedPersonCoverageRosterRef: data.regulatory.qualifiedPersonCoverageRosterRef,
++    });
++    await page.locator('#licenceEvidence').setInputFiles(licenceEvidencePath);
++    await expect(page.getByText('Licence evidence attached', { exact: false })).toBeVisible();
++    for (const schedule of permittedScheduleLabels)
++      await page.getByRole('checkbox', { name: schedule, exact: true }).check();
++    await click(page.getByRole('button', { name: 'Save this version', exact: true }));
++    await expect(page.getByText('Version 1 saved.', { exact: false })).toBeVisible();
++    await setup(page);
++    await expect(
++      row(page, 'Premises and licences').getByText('Done', { exact: true })
++    ).toBeVisible();
++
++    await follow(page, 'Medicine catalog readiness', 'Set up medicines and packs');
++    const headers =
++      'productName,brandName,manufacturer,drapRegistrationNumber,strength,dosageForm,pack,barcode,alias,rx,restricted,controlled,rowSourceKey';
++    const values = [
++      medicineName,
++      'Synthetic test brand',
++      'Synthetic test maker',
++      `TEST-${suffix}`,
++      '500 mg',
++      'Tablet',
++      '10 tablets',
++      barcode,
++      `Synthetic alias ${suffix}`,
++      'false',
++      'false',
++      'false',
++      `row-${suffix}`,
++    ];
++    await page.getByLabel('CSV or Excel workbook').setInputFiles({
++      name: `synthetic-${suffix}.csv`,
++      mimeType: 'text/csv',
++      buffer: Buffer.from(`${headers}\n${values.join(',')}\n`),
++    });
++    await click(page.getByRole('button', { name: 'Preview normalized rows', exact: true }));
++    await click(page.getByRole('button', { name: 'Run 1 rows now', exact: true }));
++    const candidate = page
++      .locator('article')
++      .filter({ has: page.getByRole('heading', { name: medicineName, exact: true }) });
++    await click(candidate.getByRole('button', { name: 'accept', exact: true }));
++    await click(candidate.getByRole('button', { name: 'Publish assertions', exact: true }));
++    await expect(candidate).toHaveCount(0);
++    await page.getByLabel('Medicine name', { exact: true }).fill(medicineName);
++    await click(page.getByRole('button', { name: 'Find medicine', exact: true }));
++    await choose(page.getByLabel('Medicine', { exact: true }), medicineName);
++    await choose(page.getByLabel('Presentation', { exact: true }), '10 tablets');
++    await choose(page.getByLabel('Pack type', { exact: true }), 'Strip');
++    await page.getByLabel(/^Individual units per pack/).fill('10');
++    await page.getByLabel(/^Effective from/).fill(today);
++    await click(page.getByRole('button', { name: 'Create pack', exact: true }));
++    await expect(page.getByText('Pack created', { exact: false })).toBeVisible();
++    await setup(page);
++    await expect(
++      row(page, 'Medicine catalog readiness').getByText('Done', { exact: true })
++    ).toBeVisible();
++
++    await follow(page, 'Parties and balances', 'Set up suppliers');
++    const supplier = formFor(page, 'Add supplier');
++    await fill(supplier, { name: data.supplier.name, legalName: data.supplier.legalName });
++    await click(supplier.getByRole('button', { name: 'Add supplier', exact: true }));
++    await click(page.getByRole('button', { name: 'Authorize this supplier', exact: true }));
++    const licence = formFor(page, 'File licence');
++    await fill(licence, {
++      licenceType: data.supplier.licenceType,
++      licenceNumber: data.supplier.licenceNumber,
++      issuingAuthority: data.supplier.issuingAuthority,
++      issuedAt: data.supplier.issuedAt,
++      expiresAt: data.supplier.expiresAt,
++      evidenceUri: data.supplier.evidenceUri,
++    });
++    await licence
++      .getByRole('checkbox', { name: 'I have checked this licence against the issuing authority' })
++      .check();
++    await click(licence.getByRole('button', { name: 'File licence', exact: true }));
++    await expect(page.getByText('Licence filed.', { exact: false })).toBeVisible();
++    await setup(page);
++
++    await follow(page, 'Opening stock readiness', 'Receive opening stock');
++    await click(page.getByRole('link', { name: 'Invite a colleague', exact: true }));
++    await click(page.getByRole('button', { name: 'Add Member', exact: true }));
++    await page.getByPlaceholder('John Doe', { exact: true }).fill('Test second approver');
++    await page.getByPlaceholder('john@company.com', { exact: true }).fill(colleagueEmail);
++    await page
++      .getByPlaceholder('Full Stack Developer', { exact: true })
++      .fill('Purchasing reviewer');
++    await choose(page.getByLabel('Department', { exact: true }), 'Counter');
++    await click(page.getByRole('button', { name: 'Admin', exact: true }));
++    await click(page.getByRole('button', { name: 'Send Invite', exact: true }));
++    const invitation = page
++      .getByText('Invite link', { exact: true })
++      .locator('..')
++      .locator('p')
++      .last();
++    await expect(invitation).toBeVisible();
++    const inviteUrl = new URL((await invitation.textContent())!.trim());
++    if (inviteUrl.origin !== tenantOrigin || !inviteUrl.pathname.startsWith('/invite/'))
++      throw new Error('Invitation must target the configured isolated SHARED tenant host.');
++    await colleague.goto(inviteUrl.href);
++    await colleague.locator('#password').fill(colleaguePassword);
++    await colleague.locator('#confirm').fill(colleaguePassword);
++    await colleague.locator('#phone').fill(data.colleaguePhone);
++    await click(colleague.getByRole('button', { name: 'Create account', exact: true }));
++    await expect(colleague).not.toHaveURL(/\/invite\//);
++    await setup(colleague);
++    await click(page.getByRole('button', { name: 'Done', exact: true }));
++    await setup(page);
++
++    await follow(page, 'Opening stock readiness', 'Receive opening stock');
++    await click(page.getByRole('link', { name: 'Requisitions & orders', exact: true }));
++    const order = formFor(page, 'Draft order');
++    await fill(order, { reference: orderReference, 'orderedPacks-0': '2', 'listPrice-0': '20.00' });
++    await choose(order.locator('[name="supplierId"]'), data.supplier.name);
++    await choose(order.locator('[name="branchId"]'), branchName);
++    await choose(order.locator('[name="orderMedicineId-0"]'), medicineName);
++    await click(order.getByRole('button', { name: 'Draft order', exact: true }));
++    await click(page.getByRole('button', { name: 'Submit for approval', exact: true }));
++    await expect(
++      page.getByText('You raised this order, so you cannot approve it.', { exact: false })
++    ).toBeVisible();
++    await expect(page.getByRole('button', { name: 'Approve', exact: true })).toHaveCount(0);
++    await follow(colleague, 'Opening stock readiness', 'Receive opening stock');
++    await click(colleague.getByRole('link', { name: 'Requisitions & orders', exact: true }));
++    await click(colleague.getByRole('link').filter({ hasText: orderReference }));
++    await colleague.getByLabel('Decision note', { exact: true }).fill(data.receipt.approvalNote);
++    await click(colleague.getByRole('button', { name: 'Approve', exact: true }));
++    await click(colleague.getByRole('button', { name: 'Send to supplier', exact: true }));
++    await expect(
++      colleague.getByRole('link', { name: 'Receive against this order', exact: true })
++    ).toBeVisible();
++
++    await setup(page);
++    await follow(page, 'Opening stock readiness', 'Receive opening stock');
++    await choose(page.getByLabel('Purchase order', { exact: true }), orderReference);
++    await click(page.getByRole('button', { name: 'Find line', exact: true }));
++    const receipt = formFor(page, 'File receipt (draft)');
++    await fill(receipt, {
++      reference: `GR-${suffix}`,
++      supplierInvoiceRef: data.receipt.supplierInvoiceRef,
++      warrantyEvidenceRef: data.receipt.warrantyEvidenceRef,
++    });
++    await receipt.getByLabel('Batch number', { exact: true }).fill(`B-${suffix}`);
++    await receipt.getByLabel('Printed expiry', { exact: true }).fill(expiry);
++    await receipt.getByLabel('Printed MRP (PKR)', { exact: true }).fill('25.00');
++    await receipt.getByLabel('Packs received', { exact: true }).fill('2');
++    await choose(receipt.getByLabel('Receive into', { exact: true }), 'Opening stock store');
++    await click(receipt.getByRole('button', { name: 'File receipt (draft)', exact: true }));
++    await click(page.getByRole('button', { name: 'Post into stock', exact: true }));
++    await setup(page);
++    await expect(
++      row(page, 'Opening stock readiness').getByText('Done', { exact: true })
++    ).toBeVisible();
++
++    // These are supplied real staging evidence references, never fabricated ticks.
++    for (const step of attestedSteps) {
++      const gate = row(page, step);
++      await click(gate.getByRole('button', { name: 'Confirm this step', exact: true }));
++      await gate
++        .getByLabel('Where is the evidence recorded?', { exact: true })
++        .fill(data.attestations[step]);
++      await click(gate.getByRole('button', { name: 'Mark as done', exact: true }));
++      await expect(gate.getByText('Done', { exact: true })).toBeVisible();
++    }
++    await expect(
++      page.locator('[data-slot="readiness-checklist"]').getByText('Done', { exact: true })
++    ).toHaveCount(12);
++    // Reuse the shipped control-plane action when the SHARED default is still
++    // pending. It resolves the configured tenant host; no invented deployment.
++    await platform.goto(organizationUrl);
++    const shared = platform.getByRole('button', { name: 'Use shared deployment', exact: true });
++    if (await shared.isVisible()) await click(shared);
++    await expect(platform.getByText('Unmet activation gates', { exact: true })).toHaveCount(0);
++    const lifecycle = formFor(platform, 'Apply lifecycle change');
++    await choose(lifecycle.getByLabel('Move to', { exact: true }), 'ACTIVE');
++    await lifecycle.getByLabel('Operator reason', { exact: true }).fill(data.authorizationRef);
++    await click(lifecycle.getByRole('button', { name: 'Apply lifecycle change', exact: true }));
++    await expect(
++      platform.locator('[data-slot="page-header"]').getByText('ACTIVE', { exact: true })
++    ).toBeVisible();
++
++    await follow(page, 'Readiness and parallel run', 'Open pharmacy counter');
++    await click(page.getByRole('button', { name: 'Open drawer', exact: true }));
++    await page.getByLabel('Scan or search', { exact: true }).fill(barcode);
++    await page.getByLabel('Scan or search', { exact: true }).press('Enter');
++    await click(
++      page
++        .getByRole('list', { name: 'Search results' })
++        .getByRole('button')
++        .filter({ hasText: medicineName })
++    );
++    await page.keyboard.press('F4');
++    await page.keyboard.press('F6');
++    await page.keyboard.press('F9');
++    const amount = page.getByLabel('Amount', { exact: true });
++    await expect(amount).toBeEnabled();
++    const due = await amount.getAttribute('placeholder');
++    expect(due).toMatch(/^\d+\.\d{2}$/);
++    expect(Number(due)).toBeGreaterThan(0);
++    await amount.fill(due!);
++    await page.getByLabel('Cash received', { exact: true }).fill(due!);
++    await click(page.getByRole('button', { name: 'Take payment', exact: true }));
++    await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
++    await noRawIdEntry(page);
++    expect(fourXx).toEqual([]);
++  } finally {
++    await colleagueContext.close();
++    await platformContext.close();
++  }
++}
+diff --git a/tests/e2e/time-to-first-sale.config.ts b/tests/e2e/time-to-first-sale.config.ts
+new file mode 100644
+index 00000000..d4cff388
+--- /dev/null
++++ b/tests/e2e/time-to-first-sale.config.ts
+@@ -0,0 +1,30 @@
++import { defineConfig, devices } from '@playwright/test';
++
++if (process.env.PHARMACY_E2E !== '1')
++  throw new Error('This isolated staging config requires PHARMACY_E2E=1.');
++
++// Source collection is safe: no webServer, globalSetup, seed or database hook.
++// Runtime origins and evidence are mandatory in freshPharmacyFirstSale. There is
++// deliberately no default app URL. Invoke with PHARMACY_E2E=1 for the fresh lane.
++export default defineConfig({
++  testDir: '.',
++  testMatch: 'time-to-first-sale.spec.ts',
++  outputDir: process.env.PAPERCLIP_RUN_SCRATCH_DIR
++    ? `${process.env.PAPERCLIP_RUN_SCRATCH_DIR}/first-sale-results`
++    : './first-sale-results',
++  fullyParallel: false,
++  workers: 1,
++  retries: 0,
++  forbidOnly: true,
++  timeout: 300_000,
++  reporter: 'list',
++  use: {
++    baseURL: process.env.PLAYWRIGHT_BASE_URL,
++    // This flow enters actual invitation tokens and credentials. Keep automated
++    // traces/video/screenshots off; later visual QA has its own authorized lane.
++    trace: 'off',
++    screenshot: 'off',
++    video: 'off',
++  },
++  projects: [{ name: 'first-sale-chromium', use: { ...devices['Desktop Chrome'] } }],
++});
+diff --git a/tests/e2e/time-to-first-sale.spec.ts b/tests/e2e/time-to-first-sale.spec.ts
+index cf5e0988..50b3f1b9 100644
+--- a/tests/e2e/time-to-first-sale.spec.ts
++++ b/tests/e2e/time-to-first-sale.spec.ts
+@@ -1,6 +1,6 @@
+ import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
+ 
+-import { PHARMACY_E2E } from './pharmacy-counter-fixture';
++import { freshPharmacyFirstSale } from './fixtures/pharmacy-first-sale';
+ import {
+   installSeededTerminalCookie,
+   restaurantE2eCredentials as restaurant,
+@@ -38,48 +38,6 @@ async function assertNoRawIdInputs(page: Page) {
+   ).toHaveCount(0);
+ }
+ 
+-async function pharmacyFirstSale(page: Page, metric: { clicks: number }) {
+-  await page.goto('/login');
+-  await page.getByLabel('Email').fill(process.env.PHARMACY_E2E_ADMIN_EMAIL!);
+-  await page
+-    .getByRole('textbox', { name: 'Password' })
+-    .fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
+-  await activate(page.getByRole('button', { name: 'Sign in' }), metric);
+-  const chooser = page.getByText('Choose a workspace', { exact: true });
+-  // Do not navigate away while the credential request is still in flight.
+-  await expect
+-    .poll(async () => (await chooser.isVisible()) || new URL(page.url()).pathname !== '/login')
+-    .toBe(true);
+-  if (await chooser.isVisible())
+-    await activate(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }), metric);
+-  await expect(page).not.toHaveURL(/\/login(?:[/?#]|$)/);
+-
+-  await page.goto('/dashboard');
+-  const checklist = page.getByTestId('first-run-checklist');
+-  await expect(checklist).toBeVisible();
+-  await activate(checklist.getByRole('link', { name: /Make a test sale/ }), metric);
+-  await expect(page).toHaveURL(/\/pharmacy\/counter/);
+-  await assertNoRawIdInputs(page);
+-
+-  await activate(page.getByRole('button', { name: 'Open drawer' }), metric);
+-  const search = page.getByLabel('Scan or search');
+-  await search.fill(PHARMACY_E2E.medicines.otc.barcode);
+-  await search.press('Enter');
+-  const result = page
+-    .getByRole('list', { name: 'Search results' })
+-    .getByRole('button')
+-    .filter({ hasText: PHARMACY_E2E.medicines.otc.name })
+-    .first();
+-  await activate(result, metric);
+-  await page.keyboard.press('F4');
+-  await page.keyboard.press('F6');
+-  await page.keyboard.press('F9');
+-  await page.getByLabel('Amount').fill('25.00');
+-  await page.getByLabel('Cash received').fill('25.00');
+-  await activate(page.getByRole('button', { name: 'Take payment' }), metric);
+-  await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
+-}
+-
+ async function restaurantFirstSale(page: Page, browser: Browser, metric: { clicks: number }) {
+   const origin = await signInAs(page, 'restaurantAdmin');
+   await installSeededTerminalCookie(page.context(), restaurant.pos, origin);
+@@ -149,7 +107,7 @@ test('admin follows the first-run checklist to the first completed sale', async
+   const fourXx = observe4xx(page);
+   const vertical = process.env.PHARMACY_E2E === '1' ? 'PHARMACY' : 'RESTAURANT';
+ 
+-  if (vertical === 'PHARMACY') await pharmacyFirstSale(page, metric);
++  if (vertical === 'PHARMACY') await freshPharmacyFirstSale(page, browser, metric, fourXx);
+   else await restaurantFirstSale(page, browser, metric);
+ 
+   const wallTimeMs = Date.now() - started;

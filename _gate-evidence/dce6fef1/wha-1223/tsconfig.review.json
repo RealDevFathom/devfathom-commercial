@@ -1,0 +1,1 @@
+{"extends": "./tsconfig.json", "include": ["src/app/(app)/team/team-content.tsx", "src/app/(app)/team/team-content.test.tsx", "src/app/(app)/team/team-content.departments.test.ts", "tests/e2e/time-to-first-sale.spec.ts", "tests/e2e/fixtures/pharmacy-first-sale.ts", "tests/e2e/time-to-first-sale.config.ts", "next-env.d.ts", "vitest.setup.ts", "src/types/**/*.d.ts"]}

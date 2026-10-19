@@ -1,0 +1,12 @@
+
+ RUN  v4.1.10 /private/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-a8ff68d4-1d2-5uT6mp/candidate
+
+ ✓ src/app/(app)/team/team-content.test.tsx (8 tests) 209ms
+ ✓ src/app/(app)/team/team-content.departments.test.ts (4 tests) 4ms
+
+ Test Files  2 passed (2)
+      Tests  12 passed (12)
+   Start at  19:28:05
+   Duration  2.10s (transform 105ms, setup 183ms, import 748ms, tests 213ms, environment 793ms)
+
+JSON report written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-a8ff68d4-1d2-5uT6mp/team.json

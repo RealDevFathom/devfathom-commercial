@@ -1,0 +1,3 @@
+Listing tests:
+  [first-sale-chromium] › time-to-first-sale.spec.ts:100:5 › admin follows the first-run checklist to the first completed sale
+Total: 1 test in 1 file

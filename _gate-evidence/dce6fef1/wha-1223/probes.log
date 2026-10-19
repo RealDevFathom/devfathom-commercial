@@ -1,0 +1,168 @@
+
+ RUN  v4.1.10 /private/var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-a8ff68d4-1d2-5uT6mp/candidate
+
+ ✓ tests/qa-wha1223/invite-pending.test.tsx (1 test) 80ms
+ ❯ tests/qa-wha1223/checklist-name.test.tsx (1 test | 1 failed) 79ms
+   × proves the authored exact name omits the real checklist accessible suffix 78ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  tests/qa-wha1223/checklist-name.test.tsx > proves the authored exact name omits the real checklist accessible suffix
+TestingLibraryElementError: Unable to find an accessible element with the role "link" and name "Create or review stock locations — Branches and locations"
+
+Here are the accessible roles:
+
+  listitem:
+
+  Name "":
+  [36m<li[39m
+    [33mclass[39m=[32m"flex min-w-0 gap-3 border-b border-border-subtle py-4 last:border-b-0"[39m
+    [33mdata-state[39m=[32m"NEEDS_YOU"[39m
+    [33mdata-step[39m=[32m"4"[39m
+    [33mid[39m=[32m"readiness-step-4"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  heading:
+
+  Name "Step 4: Branches and locations":
+  [36m<h3[39m
+    [33mclass[39m=[32m"font-medium text-text-strong"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  paragraph:
+
+  Name "":
+  [36m<p[39m
+    [33mclass[39m=[32m"text-sm text-text-muted"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+  link:
+
+  Name "Create or review stock locations— Branches and locations":
+  [36m<a[39m
+    [33mclass[39m=[32m"inline-flex min-h-9 items-center text-sm font-medium text-primary underline underline-offset-4 hover:text-accent-brand focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"[39m
+    [33mhref[39m=[32m"/pharmacy/inventory"[39m
+  [36m/>[39m
+
+  --------------------------------------------------
+
+Ignored nodes: comments, script, style
+[36m<body>[39m
+  [36m<div>[39m
+    [36m<li[39m
+      [33mclass[39m=[32m"flex min-w-0 gap-3 border-b border-border-subtle py-4 last:border-b-0"[39m
+      [33mdata-state[39m=[32m"NEEDS_YOU"[39m
+      [33mdata-step[39m=[32m"4"[39m
+      [33mid[39m=[32m"readiness-step-4"[39m
+    [36m>[39m
+      [36m<span[39m
+        [33maria-hidden[39m=[32m"true"[39m
+        [33mclass[39m=[32m"mt-0.5 flex size-7 shrink-0 items-center justify-center rounded-full border border-warning/30 bg-warning/10 text-warning"[39m
+      [36m>[39m
+        [36m<svg[39m
+          [33maria-hidden[39m=[32m"true"[39m
+          [33mclass[39m=[32m"lucide lucide-circle-alert size-3.5"[39m
+          [33mfill[39m=[32m"none"[39m
+          [33mheight[39m=[32m"24"[39m
+          [33mstroke[39m=[32m"currentColor"[39m
+          [33mstroke-linecap[39m=[32m"round"[39m
+          [33mstroke-linejoin[39m=[32m"round"[39m
+          [33mstroke-width[39m=[32m"2"[39m
+          [33mviewBox[39m=[32m"0 0 24 24"[39m
+          [33mwidth[39m=[32m"24"[39m
+          [33mxmlns[39m=[32m"http://www.w3.org/2000/svg"[39m
+        [36m>[39m
+          [36m<circle[39m
+            [33mcx[39m=[32m"12"[39m
+            [33mcy[39m=[32m"12"[39m
+            [33mr[39m=[32m"10"[39m
+          [36m/>[39m
+          [36m<line[39m
+            [33mx1[39m=[32m"12"[39m
+            [33mx2[39m=[32m"12"[39m
+            [33my1[39m=[32m"8"[39m
+            [33my2[39m=[32m"12"[39m
+          [36m/>[39m
+          [36m<line[39m
+            [33mx1[39m=[32m"12"[39m
+            [33mx2[39m=[32m"12.01"[39m
+            [33my1[39m=[32m"16"[39m
+            [33my2[39m=[32m"16"[39m
+          [36m/>[39m
+        [36m</svg>[39m
+      [36m</span>[39m
+      [36m<div[39m
+        [33mclass[39m=[32m"min-w-0 flex-1 space-y-1.5"[39m
+      [36m>[39m
+        [36m<div[39m
+          [33mclass[39m=[32m"flex flex-wrap items-center gap-x-3 gap-y-1"[39m
+        [36m>[39m
+          [36m<h3[39m
+            [33mclass[39m=[32m"font-medium text-text-strong"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33mclass[39m=[32m"font-mono text-xs text-text-faint"[39m
+            [36m>[39m
+              [0mStep [0m
+              [0m4[0m
+              [36m<span[39m
+                [33mclass[39m=[32m"sr-only"[39m
+              [36m>[39m
+                [0m:[0m
+              [36m</span>[39m
+            [36m</span>[39m
+            [0m [0m
+            [0mBranches and locations[0m
+          [36m</h3>[39m
+          [36m<span[39m
+            [33mclass[39m=[32m"inline-flex w-fit items-center gap-1.5 rounded-full px-2 py-0.5 font-mono text-[0.625rem] font-semibold tracking-wide whitespace-nowrap uppercase bg-warning/10 text-warning"[39m
+            [33mdata-slot[39m=[32m"status-pill"[39m
+            [33mdata-tone[39m=[32m"warning"[39m
+          [36m>[39m
+            [36m<span[39m
+              [33maria-hidden[39m=[32m"true"[39m
+              [33mclass[39m=[32m"size-1.5 shrink-0 rounded-full bg-current"[39m
+            [36m/>[39m
+            [0mNeeds you[0m
+          [36m</span>[39m
+        [36m</div>[39m
+        [36m<p[39m
+          [33mclass[39m=[32m"text-sm text-text-muted"[39m
+        [36m>[39m
+          [0mSetup required[0m
+        [36m</p>[39m
+        [36m<a[39m
+          [33mclass[39m=[32m"inline-flex min-h-9 items-center text-sm font-medium text-primary underline underline-offset-4 hover:text-accent-brand focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"[39m
+          [33mhref[39m=[32m"/pharmacy/inventory"[39m
+        [36m>[39m
+          [0mCreate or review stock locations[0m
+          [36m<span[39m
+            [33mclass[39m=[32m"sr-only"[39m
+          [36m>[39m
+            [0m — [0m
+            [0mBranches and locations[0m
+          [36m</span>[39m
+        [36m</a>[39m
+      [36m</div>[39m
+    [36m</li>[39m
+  [36m</div>[39m
+[36m</body>[39m
+ ❯ Object.getElementError ../../../../../../../../Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1376-verify-ph-growth-independently-verify-gross-margin-comparison-addf0323/node_modules/@testing-library/dom/dist/config.js:37:19
+ ❯ ../../../../../../../../Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1376-verify-ph-growth-independently-verify-gross-margin-comparison-addf0323/node_modules/@testing-library/dom/dist/query-helpers.js:76:38
+ ❯ ../../../../../../../../Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1376-verify-ph-growth-independently-verify-gross-margin-comparison-addf0323/node_modules/@testing-library/dom/dist/query-helpers.js:52:17
+ ❯ ../../../../../../../../Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1376-verify-ph-growth-independently-verify-gross-margin-comparison-addf0323/node_modules/@testing-library/dom/dist/query-helpers.js:95:19
+ ❯ tests/qa-wha1223/checklist-name.test.tsx:8:16
+
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/1]⎯
+
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 1 passed (2)
+   Start at  19:29:39
+   Duration  1.91s (transform 73ms, setup 179ms, import 687ms, tests 159ms, environment 743ms)
+
+JSON report written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1223-a8ff68d4-1d2-5uT6mp/probes.json

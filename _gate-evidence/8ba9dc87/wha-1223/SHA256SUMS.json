@@ -1,0 +1,16 @@
+{
+  "diff.patch": "789dfed0be92f20abb165709afa2be94b4aa8d98804c20209495fc9335685e40",
+  "collection.log": "95590d58560ada73ef74f9f25813b7f8267732e899cc7220c953d7bb30f3764c",
+  "types.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "regression.log": "efe525285c8a5df14ef5d1a771364b67bc9e4184123de79c43ecc5d4174ed690",
+  "regression.json": "ecb39d7106bc465adafe16aa26fed2f3f8c84255e4ceb9243279daabe5f75bb1",
+  "format.log": "17aa973d3f004560237d9a95171210b0671deff23d61628eecf7322ff5938f20",
+  "lint.log": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "REPORT.md": "042ca11f46c4c6237f2b57a0af1e407b799df38926635af4d4dad08049a58616",
+  "commands.json": "ed6fb7190f920cb6a7292283968f08357c8054d1e072c3add7a7acd175b595fb",
+  ".paperclip-run-scratch.json": "8172f474e1e1fd771f4cb1f7ebd4c6826df359e05c031d7660516beec6f1b190",
+  "identity.json": "a6e5022f8e6a60f7afd9d37969e80c5d0ac6b7dea888d4215137ee6d325e65fa",
+  "tsconfig.locator.json": "d7a94e7f7419b8c4e83ca4fe8ba4e190952dc0e31e20e86a139421e52daafe3b",
+  "probes/checklist-name.test.tsx": "88c41b520ce3e628ef7df5c303f6c84fc3fb971e3f80fa865404eef038a5bf89",
+  "probes/literal-matcher.test.ts": "ddafd5ea55fc8456ec6ef40745d003ff4828d84990f7266fd745ee19df95ad8b"
+}
