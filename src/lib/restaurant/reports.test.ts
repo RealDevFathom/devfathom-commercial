@@ -640,6 +640,25 @@ describe('restaurant wastage and stock movement reports', () => {
     expect(
       queries.every((text) => text.includes('movement."reason" = \'MANUAL_CORRECTION\''))
     ).toBe(true);
+    const rawQueries = (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls.map(
+      ([query]) => query as { values: unknown[] }
+    );
+    expect(
+      rawQueries.every(
+        (query) => query.values.includes('location-1') && query.values.includes('b1')
+      )
+    ).toBe(true);
+    for (const sql of queries) {
+      expect(sql).toMatch(
+        /COALESCE\(\s*movement\."unitCost",\s*current_costs\."weightedAverageCost",\s*ingredient\."referenceCost"\s*\)/
+      );
+      expect(sql).toContain("ELSE 'UNAVAILABLE'");
+      expect(sql).toContain(`FILTER (WHERE "valuationSource" <> 'RECORDED')`);
+      expect(sql).toContain('movement."occurredAt" >=');
+      expect(sql).toContain('movement."occurredAt" <');
+    }
+    expect(report.byDay[0]).toMatchObject({ day: '2026-01-02', movementCount: 3 });
+    expect(report.byIngredient[0].canonicalUnit).toBe('kg');
   });
 
   it('derives opening, in, out, net, and closing movement balances with complete totals', async () => {
@@ -672,6 +691,7 @@ describe('restaurant wastage and stock movement reports', () => {
       totalNetCost: decimal(4),
       totalClosingCost: decimal(24),
       totalMovementCount: 3,
+      totalIngredientCount: 1,
       totalEstimatedMovementCount: 2,
       totalUnvaluedMovementCount: 0,
       totalActivityCost: decimal(16),
@@ -682,6 +702,7 @@ describe('restaurant wastage and stock movement reports', () => {
 
     expect(report.totals).toEqual({
       movementCount: 3,
+      ingredientCount: 1,
       openingQuantity: '10',
       inQuantity: '5',
       outQuantity: '3',
@@ -698,6 +719,11 @@ describe('restaurant wastage and stock movement reports', () => {
     expect(report.ingredients).toEqual([
       expect.objectContaining({
         ingredientName: 'Flour',
+        canonicalUnit: 'kg',
+        movementCount: 3,
+        inQuantity: '5',
+        outQuantity: '3',
+        netQuantity: '2',
         openingQuantity: '10',
         closingQuantity: '12',
         estimated: true,
@@ -707,6 +733,114 @@ describe('restaurant wastage and stock movement reports', () => {
     expect(queryText((db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0]?.[0])).toContain(
       'HAVING COUNT(*) FILTER'
     );
+  });
+
+  it.each([
+    { status: 'RECORDED', movementCount: 2, estimatedMovementCount: 0, unvaluedMovementCount: 0 },
+    { status: 'ESTIMATED', movementCount: 2, estimatedMovementCount: 2, unvaluedMovementCount: 0 },
+    { status: 'UNVALUED', movementCount: 2, estimatedMovementCount: 2, unvaluedMovementCount: 2 },
+    { status: 'MIXED', movementCount: 2, estimatedMovementCount: 1, unvaluedMovementCount: 0 },
+    { status: 'MIXED', movementCount: 2, estimatedMovementCount: 2, unvaluedMovementCount: 1 },
+    { status: 'MIXED', movementCount: 2, estimatedMovementCount: 1, unvaluedMovementCount: 1 },
+  ])(
+    'classifies reason and ingredient $status valuation with inclusive counts ($estimatedMovementCount/$unvaluedMovementCount)',
+    async ({ status, ...counts }) => {
+      const row = { ...aggregate, ...counts };
+      const db = {
+        $queryRaw: vi.fn(async (query: unknown) => {
+          const text = queryText(query);
+          if (text.includes('GROUP BY "reason"')) return [{ ...row, reason: 'WASTAGE' }];
+          if (text.includes('AS "day"')) return [{ ...row, day: '2026-01-02' }];
+          return [{ ...row, stockItemId: 'stock-1', ingredientName: 'Flour', canonicalUnit: 'kg' }];
+        }),
+      } as unknown as ScopedDb;
+      const report = await readWastageReport(db, boundedRange);
+      expect(report.byReason[0]).toMatchObject({ valuationStatus: status, ...counts });
+      expect(report.byIngredient[0]).toMatchObject({
+        valuationStatus: status,
+        canonicalUnit: 'kg',
+        ...counts,
+      });
+      expect(report.totals.estimatedMovementCount).toBe(counts.estimatedMovementCount);
+      expect(report.byDay[0].movementCount).toBe(2);
+    }
+  );
+
+  it('counts all 312 moved ingredients before the 200-row display cap in one scoped query', async () => {
+    const decimal = new Prisma.Decimal(1);
+    const rows = Array.from({ length: 201 }, (_, index) => ({
+      stockItemId: `stock-${index}`,
+      ingredientName: `Ingredient ${index}`,
+      canonicalUnit: 'kg',
+      movementCount: 3,
+      openingQuantity: decimal,
+      inQuantity: decimal,
+      outQuantity: decimal,
+      netQuantity: new Prisma.Decimal(0),
+      closingQuantity: decimal,
+      openingCost: decimal,
+      inCost: decimal,
+      outCost: decimal,
+      netCost: new Prisma.Decimal(0),
+      closingCost: decimal,
+      estimatedMovementCount: 0,
+      unvaluedMovementCount: 0,
+      totalOpeningQuantity: new Prisma.Decimal(312),
+      totalInQuantity: new Prisma.Decimal(312),
+      totalOutQuantity: new Prisma.Decimal(312),
+      totalNetQuantity: new Prisma.Decimal(0),
+      totalClosingQuantity: new Prisma.Decimal(312),
+      totalOpeningCost: new Prisma.Decimal(312),
+      totalInCost: new Prisma.Decimal(312),
+      totalOutCost: new Prisma.Decimal(312),
+      totalNetCost: new Prisma.Decimal(0),
+      totalClosingCost: new Prisma.Decimal(312),
+      totalMovementCount: 936,
+      totalIngredientCount: 312,
+      totalEstimatedMovementCount: 0,
+      totalUnvaluedMovementCount: 0,
+      totalActivityCost: new Prisma.Decimal(624),
+    }));
+    const db = { $queryRaw: vi.fn(async () => rows) } as unknown as ScopedDb;
+    const report = await readStockMovementReport(db, {
+      ...boundedRange,
+      stockLocationId: 'location-1',
+    });
+    expect(report.totals).toMatchObject({
+      ingredientCount: 312,
+      movementCount: 936,
+      closingQuantity: '312',
+    });
+    expect(report.ingredients).toHaveLength(200);
+    expect(report.truncated).toBe(true);
+    expect(db.$queryRaw).toHaveBeenCalledTimes(1);
+    const query = (db.$queryRaw as ReturnType<typeof vi.fn>).mock.calls[0][0] as {
+      values: unknown[];
+    };
+    const sql = queryText(query);
+    expect(sql).toMatch(
+      /COUNT\(\*\) OVER \(\)::int AS "totalIngredientCount"[\s\S]*FROM grouped[\s\S]*LIMIT/
+    );
+    expect(query.values).toEqual(expect.arrayContaining(['b1', 'location-1', 201]));
+    expect(query.values.filter((value) => value instanceof Date)).toEqual(
+      expect.arrayContaining([
+        new Date('2026-01-01T00:00:00.000Z'),
+        new Date('2026-02-01T00:00:00.000Z'),
+      ])
+    );
+    expect(sql).toContain('movement."locationId" =');
+    expect(sql).toContain('movement."occurredAt" <');
+    expect(sql).toContain('WHERE "occurredAt" <');
+    expect(sql).toContain('HAVING COUNT(*) FILTER');
+    expect(sql).toContain('unit."abbreviation", unit."name"');
+  });
+
+  it('reports zero moved ingredients for an empty filtered ledger', async () => {
+    const db = { $queryRaw: vi.fn(async () => []) } as unknown as ScopedDb;
+    const report = await readStockMovementReport(db, boundedRange);
+    expect(report.totals.ingredientCount).toBe(0);
+    expect(report.ingredients).toEqual([]);
+    expect(report.truncated).toBe(false);
   });
 
   it('exports formula-safe wastage detail with the same stock-location filter', async () => {

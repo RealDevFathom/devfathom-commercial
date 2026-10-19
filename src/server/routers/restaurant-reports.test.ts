@@ -487,6 +487,8 @@ describe('restaurant report capability and branch matrix', () => {
     expect(mocks.wastage).not.toHaveBeenCalled();
 
     mocks.modules.delete('restaurant-inventory');
+    await expect(caller().wastage(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.wastage).not.toHaveBeenCalled();
     await expect(caller().stockMovements(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
     await expect(caller().stockLocations({ branchId: 'b1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -498,37 +500,46 @@ describe('restaurant report capability and branch matrix', () => {
     expect(mocks.exportCsv).not.toHaveBeenCalled();
   });
 
-  it('exports stock reports with the same authorized location filter and audit evidence', async () => {
-    mocks.grants.add('reports:operational');
-    await caller().exportCsv({
-      ...input,
-      section: 'stock-movements',
-      stockLocationId: 'location-1',
-    });
-
-    expect(mocks.exportCsv).toHaveBeenCalledWith(
-      db,
-      'stock-movements',
-      {
-        branchIds: ['b1'],
-        from: input.from,
-        to: input.to,
+  it.each(['wastage', 'stock-movements'] as const)(
+    'exports %s with the same authorized location filter and audit evidence',
+    async (section) => {
+      mocks.grants.add('reports:operational');
+      await caller().exportCsv({
+        ...input,
+        section,
         stockLocationId: 'location-1',
-      },
-      { includeLabourCosts: false }
-    );
-    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
-      expect.objectContaining({
-        ctx: expect.objectContaining({
-          audit: {
-            detail: {
-              metadata: expect.objectContaining({ stockLocationId: 'location-1' }),
+      });
+
+      expect(mocks.exportCsv).toHaveBeenCalledWith(
+        db,
+        section,
+        {
+          branchIds: ['b1'],
+          from: input.from,
+          to: input.to,
+          stockLocationId: 'location-1',
+        },
+        { includeLabourCosts: false }
+      );
+      expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+        expect.objectContaining({
+          ctx: expect.objectContaining({
+            audit: {
+              detail: {
+                metadata: expect.objectContaining({
+                  branchIds: ['b1'],
+                  section,
+                  from: input.from,
+                  to: input.to,
+                  stockLocationId: 'location-1',
+                }),
+              },
             },
-          },
-        }),
-      })
-    );
-  });
+          }),
+        })
+      );
+    }
+  );
   it('requires operational, financial, and workforce rates grants for labour costs', async () => {
     for (const missing of [
       'reports:operational',

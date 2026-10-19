@@ -12,11 +12,13 @@ export function StockReportTabs({
   movements: ReactNode;
 }) {
   return (
-    <Tabs defaultValue="wastage">
-      <TabsList aria-label="Stock reports">
-        <TabsTrigger value="wastage">Wastage</TabsTrigger>
-        <TabsTrigger value="movements">Stock movement</TabsTrigger>
-      </TabsList>
+    <Tabs defaultValue="wastage" className="min-w-0">
+      <div className="max-w-full overflow-x-auto">
+        <TabsList aria-label="Stock reports" className="min-w-max">
+          <TabsTrigger value="wastage">Wastage</TabsTrigger>
+          <TabsTrigger value="movements">Stock movement</TabsTrigger>
+        </TabsList>
+      </div>
       <TabsContent value="wastage">{wastage}</TabsContent>
       <TabsContent value="movements">{movements}</TabsContent>
     </Tabs>

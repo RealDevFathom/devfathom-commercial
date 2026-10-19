@@ -1334,6 +1334,14 @@ function wastageAggregateSelect() {
   `;
 }
 
+function wastageValuationStatus(row: WastageAggregateRow) {
+  if (row.unvaluedMovementCount === row.movementCount) return 'UNVALUED' as const;
+  if (row.estimatedMovementCount === 0) return 'RECORDED' as const;
+  if (row.estimatedMovementCount === row.movementCount && row.unvaluedMovementCount === 0)
+    return 'ESTIMATED' as const;
+  return 'MIXED' as const;
+}
+
 function serializeWastageGroup<T extends WastageAggregateRow>(row: T, totalCost: Prisma.Decimal) {
   return {
     ...row,
@@ -1341,6 +1349,7 @@ function serializeWastageGroup<T extends WastageAggregateRow>(row: T, totalCost:
     cost: serializeDecimal(row.cost),
     estimatedCost: serializeDecimal(row.estimatedCost),
     estimated: row.estimatedMovementCount > 0,
+    valuationStatus: wastageValuationStatus(row),
     shareOfTotal: shareOfTotal(row.cost, totalCost),
   };
 }
@@ -1449,6 +1458,7 @@ type StockMovementGroupRow = {
   totalNetCost: Prisma.Decimal;
   totalClosingCost: Prisma.Decimal;
   totalMovementCount: number;
+  totalIngredientCount: number;
   totalEstimatedMovementCount: number;
   totalUnvaluedMovementCount: number;
   totalActivityCost: Prisma.Decimal;
@@ -1549,6 +1559,7 @@ async function readStockMovementRows(
       SUM("netCost") OVER () AS "totalNetCost",
       SUM("closingCost") OVER () AS "totalClosingCost",
       SUM("movementCount") OVER ()::int AS "totalMovementCount",
+      COUNT(*) OVER ()::int AS "totalIngredientCount",
       SUM("estimatedMovementCount") OVER ()::int AS "totalEstimatedMovementCount",
       SUM("unvaluedMovementCount") OVER ()::int AS "totalUnvaluedMovementCount",
       SUM("inCost" + "outCost") OVER () AS "totalActivityCost"
@@ -1589,6 +1600,7 @@ export async function readStockMovementReport(db: ScopedDb, range: RestaurantSto
     range,
     totals: {
       movementCount: first?.totalMovementCount ?? 0,
+      ingredientCount: first?.totalIngredientCount ?? 0,
       openingQuantity: first?.totalOpeningQuantity.toString() ?? '0',
       inQuantity: first?.totalInQuantity.toString() ?? '0',
       outQuantity: first?.totalOutQuantity.toString() ?? '0',

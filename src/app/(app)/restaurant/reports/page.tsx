@@ -1213,6 +1213,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                             <th className="p-3 text-right">Quantity</th>
                             <th className="p-3 text-right">Cost</th>
                             <th className="p-3 text-right">Share</th>
+                            <th className="p-3">Valuation</th>
                           </tr>
                         </thead>
                         <tbody>
@@ -1226,6 +1227,9 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                                 {displayNumber(row.cost)}
                               </td>
                               <td className="p-3 text-right tabular-nums">{row.shareOfTotal}%</td>
+                              <td className="p-3">
+                                <StatusPill status={row.valuationStatus} />
+                              </td>
                             </tr>
                           ))}
                         </tbody>
@@ -1239,6 +1243,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                         <thead className="bg-surface-sunken font-mono text-xs uppercase tracking-wider text-text-muted">
                           <tr>
                             <th className="p-3">Day</th>
+                            <th className="p-3 text-right">Movements</th>
                             <th className="p-3 text-right">Quantity</th>
                             <th className="p-3 text-right">Cost</th>
                             <th className="p-3 text-right">Share</th>
@@ -1248,6 +1253,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                           {wastage.data.byDay.map((row) => (
                             <tr className="border-t border-border-subtle" key={row.day}>
                               <td className="p-3 font-mono text-xs text-text-muted">{row.day}</td>
+                              <td className="p-3 text-right tabular-nums">{row.movementCount}</td>
                               <td className="p-3 text-right tabular-nums">{row.quantity}</td>
                               <td className="p-3 text-right tabular-nums">
                                 {displayNumber(row.cost)}
@@ -1285,7 +1291,7 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
                             </td>
                             <td className="p-3 text-right tabular-nums">{row.shareOfTotal}%</td>
                             <td className="p-3 text-text-muted">
-                              {row.estimated ? 'Includes estimates' : 'Recorded'}
+                              <StatusPill status={row.valuationStatus} />
                             </td>
                           </tr>
                         ))}
@@ -1332,6 +1338,10 @@ async function RestaurantReportsContent({ searchParams }: { searchParams: Search
               <>
                 <div className="grid gap-5 sm:grid-cols-2 xl:grid-cols-4">
                   <Stat label="Movements" value={stockMovements.data.totals.movementCount} />
+                  <Stat
+                    label="Ingredients moved"
+                    value={stockMovements.data.totals.ingredientCount}
+                  />
                   <Stat
                     label="Inflow cost"
                     value={displayNumber(stockMovements.data.totals.inCost)}

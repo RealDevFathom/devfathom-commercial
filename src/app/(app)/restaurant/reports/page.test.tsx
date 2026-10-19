@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import type { ComponentProps, ReactElement, ReactNode } from 'react';
 import type { readFoodCostReport } from '@/lib/restaurant/reports';
@@ -43,6 +43,7 @@ vi.mock('./profitability-report-tabs', async (importOriginal) => {
 
 import { ExportLink } from './export-link';
 import RestaurantReportsPage from './page';
+import { StockReportTabs } from './stock-report-tabs';
 
 async function renderPage(query: Record<string, string | undefined> = {}) {
   const page = RestaurantReportsPage({
@@ -377,6 +378,8 @@ describe('Restaurant reports CSV downloads', () => {
       'dish-profitability',
       'catering',
       'inventory',
+      'wastage',
+      'stock-movements',
       'purchasing',
       'workforce',
       'sop',
@@ -389,6 +392,9 @@ describe('Restaurant reports CSV downloads', () => {
             key={section}
             section={section}
             branch="branch-1"
+            stockLocationId={
+              section === 'wastage' || section === 'stock-movements' ? 'location-1' : undefined
+            }
             from="2026-08-01"
             to="2026-08-30"
           />
@@ -403,8 +409,144 @@ describe('Restaurant reports CSV downloads', () => {
       expect(links[index]).toHaveAttribute('download');
       expect(links[index]).toHaveAttribute(
         'href',
-        `/api/restaurant/reports/export?section=${section}&branch=branch-1&from=2026-08-01&to=2026-08-30`
+        `/api/restaurant/reports/export?section=${section}&branch=branch-1&from=2026-08-01&to=2026-08-30${section === 'wastage' || section === 'stock-movements' ? '&stockLocation=location-1' : ''}`
       );
     });
+  });
+});
+
+describe('Restaurant stock report presentation', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    reportMocks.context.mockResolvedValue({
+      session: { user: { id: 'user-1' } },
+      db: {},
+      requestMeta: {},
+      entitlements: ['restaurant-inventory'],
+    });
+    reportMocks.can.mockImplementation(
+      async (_subject, action) => action === 'reports:operational'
+    );
+    reportMocks.branches.mockResolvedValue({
+      branches: [{ id: 'branch-1', name: 'Branch One' }],
+      canAllBranches: false,
+    });
+    reportMocks.stockLocations.mockResolvedValue([{ id: 'location-1', name: 'Main' }]);
+    reportMocks.inventory.mockResolvedValue(null);
+    const group = {
+      movementCount: 17,
+      quantity: '2',
+      cost: '4',
+      shareOfTotal: '25',
+      estimated: true,
+      estimatedCost: '4',
+      estimatedMovementCount: 1,
+      unvaluedMovementCount: 0,
+    };
+    const statuses = ['RECORDED', 'ESTIMATED', 'UNVALUED', 'MIXED'];
+    reportMocks.wastage.mockResolvedValue({
+      totals: { ...group },
+      truncated: false,
+      byReason: statuses.map((valuationStatus, i) => ({
+        ...group,
+        reason: `REASON_${i}`,
+        valuationStatus,
+      })),
+      byIngredient: statuses.map((valuationStatus, i) => ({
+        ...group,
+        stockItemId: `stock-${i}`,
+        ingredientName: `Ingredient ${i}`,
+        canonicalUnit: 'kg',
+        valuationStatus,
+      })),
+      byDay: [{ ...group, day: '2026-09-02' }],
+    });
+    reportMocks.stockMovements.mockResolvedValue({
+      totals: {
+        movementCount: 936,
+        ingredientCount: 312,
+        inCost: '10',
+        outCost: '6',
+        netCost: '4',
+        estimatedMovementCount: 0,
+        unvaluedMovementCount: 0,
+      },
+      ingredients: [
+        {
+          stockItemId: 'stock-1',
+          ingredientName: 'Flour',
+          canonicalUnit: 'kg',
+          openingQuantity: '10',
+          inQuantity: '5',
+          outQuantity: '3',
+          netQuantity: '2',
+          closingQuantity: '12',
+          inCost: '10',
+          outCost: '6',
+          shareOfTotal: '100',
+          estimated: true,
+        },
+      ],
+      truncated: true,
+    });
+  });
+
+  it('shows default Wastage panel, reason and ingredient valuations, day counts and complete moved ingredients', async () => {
+    await renderPage({ stockLocation: 'location-1' });
+    expect(screen.getByRole('tab', { name: 'Wastage' })).toHaveAttribute('aria-selected', 'true');
+    expect(screen.getByRole('tabpanel', { name: 'Wastage' })).toBeVisible();
+    for (const name of ['Wastage by reason', 'Wastage by ingredient']) {
+      const table = within(screen.getByRole('region', { name }));
+      for (const status of ['RECORDED', 'ESTIMATED', 'UNVALUED', 'MIXED'])
+        expect(table.getByText(status)).toBeVisible();
+    }
+    const day = within(screen.getByRole('region', { name: 'Wastage by day' }));
+    expect(day.getByRole('columnheader', { name: 'Movements' })).toBeVisible();
+    expect(day.getByRole('cell', { name: '17' })).toBeVisible();
+    expect(reportMocks.wastage).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-1',
+      from: '2026-09-01',
+      to: '2026-09-07',
+      stockLocationId: 'location-1',
+    });
+    expect(reportMocks.stockMovements).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch-1',
+      from: '2026-09-01',
+      to: '2026-09-07',
+      stockLocationId: 'location-1',
+    });
+    expect(screen.getByRole('link', { name: 'Export CSV' })).toHaveAttribute(
+      'href',
+      '/api/restaurant/reports/export?section=wastage&branch=branch-1&from=2026-09-01&to=2026-09-07&stockLocation=location-1'
+    );
+    fireEvent.click(screen.getByRole('tab', { name: 'Stock movement' }));
+    expect(await screen.findByRole('tabpanel', { name: 'Stock movement' })).toBeVisible();
+    expect(screen.getByText('Ingredients moved').parentElement).toHaveTextContent('312');
+    const movementTable = within(
+      screen.getByRole('region', { name: 'Stock movement by ingredient' })
+    );
+    expect(movementTable.getByText('Flour')).toBeVisible();
+    expect(movementTable.getByText('kg')).toBeVisible();
+    expect(movementTable.getByText('Includes estimates')).toBeVisible();
+    expect(movementTable.getByRole('cell', { name: '12' })).toBeVisible();
+    expect(
+      screen.getByText(/Showing the first 200 ingredients; totals use the complete filtered ledger/)
+    ).toBeVisible();
+    expect(screen.getByRole('link', { name: 'Export CSV' })).toHaveAttribute(
+      'href',
+      '/api/restaurant/reports/export?section=stock-movements&branch=branch-1&from=2026-09-01&to=2026-09-07&stockLocation=location-1'
+    );
+  });
+
+  it('keeps labelled stock tabs and default panel inside a bounded overflow container', () => {
+    render(
+      <StockReportTabs wastage={<h2>Wastage report</h2>} movements={<h2>Movement report</h2>} />
+    );
+    const tabs = screen.getByRole('tablist', { name: 'Stock reports' });
+    expect(tabs).toHaveClass('min-w-max');
+    expect(tabs.parentElement).toHaveClass('max-w-full', 'overflow-x-auto');
+    expect(tabs.closest('[data-slot="tabs"]')).toHaveClass('min-w-0');
+    expect(screen.getByRole('tabpanel', { name: 'Wastage' })).toBeVisible();
+    expect(screen.getByRole('heading', { name: 'Wastage report' })).toBeVisible();
   });
 });
