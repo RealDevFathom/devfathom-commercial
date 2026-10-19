@@ -1,5 +1,288 @@
 # DevFathom delivery status
 
+## 2026-09-06 16:15 UTC — Codex Astra supervisor snapshot
+
+**Status: PARTIAL / unreleased.** Supplied independent reports and actual Paperclip evidence were read by the main supervisor; this scribe ran no product checks. This snapshot supersedes the 13:35 first-sale **NOT AUTHORED** status; every prior byte remains preserved below.
+
+- **Authority:** WHA-1116 and last live remote `restaurantv2` remain `fe1e3e383c8b966cdb68669ba5366db00fe2320a`; exact-tip `qa.yml` run `33976399055` is **completed / FAILURE**. No authoritative composition, push or deploy approval.
+- **Private combined source:** `37906386a59700ce4a168e410ca68594baa97c75`, tree `d4d077c986250ee69952ecaff508798143a8d2e7`; evidence-only `61545914d7fa35e344cc74830a25af59c31db834`, clean. Original WHA-1370 final: `b53d8ebd-04d6-45ff-b0ad-80c0a6b4fd83`.
+  [WHA-1370 September 6 recheck](/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/docs/verification/WHA-1370/september6-recheck/README.md) fully read and hash-verified by supervisor: SHA-256 `8411af7bc588e33c2e0ba556bdcf8ff726688f70eaf20110f995e9c58e82e250`.
+  Same **119 unique identities: 119 pass / 0 fail / 0 skip / 0 pending / 0 todo**, zero unhandled errors, one execution. Original **116 pass / 3 fail** remains preserved history.
+  New source changes only two tests: `ceab91e8` → `2a32649a` and `9bc0ce70` → `37906386`; parent product base `2d3`. Prior real production build/full types on `2d3` passed **164/164**, reused with **1,811 other blob identities** proven unchanged; changed tests have **0 fresh focused diagnostics**. This is **not a fresh full build or transitive type check**.
+  GitHub #98 is privately repaired/reviewed but **still open**. Source also includes accepted purchasing `ddcf` / `d5` / `7e02` and growth/onboarding; no money or policy approval is claimed.
+- **First sale:** scenario now **AUTHORED** on `dce6`; invitation `98bc`, pack `a756`, navigation `0e6` and locator `8ba9` have accepted scoped reviews. Locator: **3/3 independent**, with one regression covering six destinations, not six tests. Safe Playwright collection **1/0** is not browser execution.
+  Full fresh organization / real colleague / activation last / sale / Studio journey remains **UNRUN**, gated on owner inputs/credentials and exact matching **SHARED staging**. Manually equal SHA strings are not deployment proof.
+- **WHA-1218 closed:** exact `8ba9`, frozen adapter **7.9.1**, pg **8.22**, Vitest **4.1.10**, Node **22.23.1**. Actual shared `withPlatformDb` startup/pool/HMR/disposal probe: **1 unique PASS**. No original cross-realm failure reproduced; no source change, commit, real DB or SQL/RLS proof. Initial probe-placement failure remains preserved; infer no historical fixing commit.
+- **New direct owner request:** seed all available functions for `owner@chaichowk.pk`; **STAGING deployment by Claude Code**. Three Codex Astra lanes confirmed active at **16:10 UTC**:
+  WHA-1382 Platform Engineer — safe additive seed runner/manifest on `codex/chaichowk-staging-demo-seed`; WHA-1383 QA9 — read-only completeness matrix on `codex/chaichowk-seed-coverage`; WHA-1384 Documentation Engineer — read-only staging/account prerequisites and Claude handoff on `codex/chaichowk-staging-handoff`.
+  All use product base `2d3`; new test-only `379` does not change their source behavior. Single DB writer; **no live Azure write or deploy yet**. Preserve existing password, records and permissions; default dry run, idempotency and tenant fence; validate only on a disposable developer DB. Account is **not declared seeded or live**.
+  Pharmacy has separate workspace scope: do not assume coverage or change the tenant vertical. No fake actual regulatory approval, physical print/camera result or external outreach. Follow actual deliveries before adding fixtures or a verifier.
+- **Open gates and ownership:** human WHA-1354 / WHA-1364 and Pharmacy GitHub #89 policy gates remain open. Purge WHA-1220 is already accepted; do not ask again. Claude / Chief / CTO and all 13 paused agents remain preserved; **35 Codex Astra assignments, maximum seven heavy workers**. Owner LAN `0eddf` app **3218** / DB and **3217** remain untouched.
+  Canonical owner Claude deployment instructions: [deploy-staging.md](</Users/Saad/Downloads/Projects & Code/DevFathom hub/deploy-staging.md>); no new SHA-pinned deployment prompt. Need accepted candidate, exact-tip CI with **0 failed AND 0 pending**, matching revision and browser evidence, then owner deployment. **No Codex push or deploy.**
+
+## 2026-09-06 13:35 UTC — Codex Astra supervisor snapshot
+
+**Status: PARTIAL / unreleased.** This snapshot supersedes older operational status; prior history is preserved verbatim.
+All results below are reported independent supervisor/reviewer evidence, not new tests or artifact reviews by this scribe.
+
+- **Authority and release:** WHA-1116 and remote `restaurantv2` remain `fe1e3e383c8b966cdb68669ba5366db00fe2320a`.
+  Exact-tip `qa.yml` run `33976399055` was still **completed / FAILURE** when checked at 13:30 UTC.
+  No private composition has been accepted into this tree; there is no push or deployment recommendation.
+  Private `0eddf` growth evidence (241 tests and build) and older hardware evidence (479 checks) remain separate historical results. Do not add new counts to either total.
+
+- **Purchasing WHA-1344:** new private `7e02c9d314d18aa6e3232e15aef2041042299857` independently **PASS** for static/component correction only.
+  Parent: `d5f82ed682af9fdeedb1f1b804efc232e0730bb4`; tree: `6368b9de765a445b0052e71a10ed65418b909ef9`.
+  Final executions: 69 durable cases + 4 repeated original probes + 1 new race = **74 successful executions, not 74 unique cases**.
+  Including the initial new-harness timing failure: 75 executions, 74 pass, 1 fail. The `act` boundary was corrected; no final source assertions failed, with 0 skipped/pending.
+  Types: 0 diagnostics; lint, format and diff checks passed. All 18 server bodies and 22 writes are unchanged.
+  Corrections cover outcome lifetime, distinct operations, allocation aliases and read copy.
+  Same-pair/repeated-entry behavior, disabled chooser, JavaScript/hydration and conservative uncertainty product limits remain **UNAPPROVED**. DOM mock writers do not prove Flight, DB, RLS or physical behavior.
+  WHA-1349 reviewer comment: `9775c50f-6664-4973-8465-329a686bb57f`; document `review-7e02c9d3`, ID `de3ed071-7f80-411e-ace2-aee8d05bf456`, revision `0d00ba5f-e1aa-4eb1-a3c2-919b1c59db45`.
+  [GitHub #86 review evidence](https://github.com/WhatTheStack1/devfathom-commercial/issues/86#issuecomment-5559516604).
+
+- **Pharmacy pack UI/checklist:** private `a756a1efd157d1f005239eed322734998b2397ff`, parent `0eddf3675a92e3876a5b9f3e642d91d2af538898`, has independent WHA-1223 **ARTIFACT PASS**, not full-journey acceptance.
+  Combined 79 tests + 10 additional probes passed; 0 fail/skip/pending/todo.
+  Controlled parent/candidate types: 0/0, delta 0, with matched installed dependencies and scratch Prisma generation.
+  The old builder's 450 errors are **not current candidate errors**. Quoted missing `exceljs` and model mismatch are supported; all 450 errors were not individually diagnosed.
+  Clean archives lack Next-generated route types; no full-build claim. Reviewer comment: `b1b1524d-3ad2-455d-882f-52b284875205`.
+  [WHA-1223 report](/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1223-gate-candidate-b20b577f-browser-suite-wha-1132-contract-on-the-runner-with-the-working-postgresql-path-self-cho/_gate-evidence/a756a1ef/wha-1223/REPORT.md).
+  Report SHA-256: `b18955d10ed469c842e325936e4e20ee2c853041e8e8d8e77725c70c3b2b6f1d`.
+
+- **First-sale spec:** still **NOT AUTHORED** as of 13:30 UTC. Original WHA-1203 source tracing found that the `BranchesAndLocations` checklist has a null destination, while existing inventory UI creates a location.
+  [GitHub #97 source-trace evidence](https://github.com/WhatTheStack1/devfathom-commercial/issues/97#issuecomment-5559513528).
+  Original Product Engineer WHA-1203 resumed through `7eb3e5db-e7c5-4f82-a6b9-8d477e853bef` for minimal existing-route checklist correction(s), then the original fresh-organization spec.
+  Source ownership stays in the `company-hub`/WHA-1203 worktree at branch `a756`, not this authoritative tree.
+  Add no policy, schema or capability; preserve attestations, two-person approval and setup **BEFORE activation**. Use no direct fixtures/SQL or imagined selectors.
+  Fresh organization, actual second person, activation, first sale, no-4xx/click-time checks and the full Studio/browser matrix remain **UNRUN**.
+
+- **Offline catalog WHA-970 recovery:** independent WHA-1381 **PASS** at `enrich_healthwire.py` SHA-256 `83297890f30ffa353b02233885a138037f4e8aca6c27aefb0eb03904896fdc3d`.
+  Test SHA-256: `a4b06615f5c996f5741087d5724fea22a171192786c33b36679c04c8c5f6d213`.
+  Evidence: 32/32 matrix + 7 decoder + 6 cache checks; zero external requests or new rows. All 7,941 original and 8,037 pre-existing artifact hashes match.
+  Document `corrective-verification`: ID `5dfa8e67-e8c2-4876-938a-3296fd919fce`, revision `f6385d60-5625-4cbf-8fc5-4716073154bf`.
+  Full catalog, crawl and DRAP work remain incomplete; no collection permission exists.
+  Human interaction `fb9e6c72-51e5-4a96-bc73-dcdf9fb72196` **EXPIRED at 12:33 UTC; it was not approved**. Do not repeat accepted recovery or resume external collection.
+
+- **Owner decisions:** WHA-1354 approval `9653a6ff-1f58-4083-9eb1-2994cc216e42` and WHA-1364 approval `9223573a-aab0-4bde-b8fc-61bd5b16c378` remained **pending at 13:30 UTC**.
+  GitHub #89 staff-branch/saved-receipt-settings permission remains unresolved, with no owner answer. Do not claim deny-all completion or transplant Restaurant ACL.
+  Purge WHA-1220 was validly accepted on September 5; do not request approval again.
+
+- **Owner's local receipt trial:** his explicit local-LAN exception supersedes the older staging-only restriction solely for this trial.
+  The running `0eddf` app is at `http://192.168.3.1:3218/login`, listener `57975`, in the WHA-1376 private combination worktree. Leave its app/DB and the localhost:3217 demo untouched.
+  Windows 7 / Chrome 64 cannot execute the actual served modern JavaScript; rendered styles/login are not acceptance.
+  The user's Abuzar prints to an EPSON TM-T88IV M129H over USB; this is not DevFathom print proof.
+  Do not replay network, driver or authentication diagnostics, downgrade the legacy framework, or print passwords, PINs, cookies or environment values.
+
+- **Supervision and remaining gates:** Codex Astra only; all 35 model assignments remain Astra and all 13 paused agents stay preserved. Maximum seven heavy workers, including this CLI.
+  Do not wake Claude, Chief of Staff or CTO. Open no new feature lanes, D07/D08/D11, catering invoicing, WHA-874 or WHA-1239.
+  Accepted private artifacts remain **SEPARATE and uncomposed**.
+  Remaining gates: owner policy/approval decisions, authorized composition, owner push, exact-new-tip CI with **0 failed AND 0 pending**, and matching browser evidence.
+  Then owner-authorized staging with revision verification, followed by isolated SHARED QA and physical printer/camera gates.
+  This scribe must never push, merge or deploy.
+
+## 2026-09-06 05:40 UTC — Codex supervisor snapshot
+
+**Current authority: this snapshot supersedes older operational status; all prior history remains
+verbatim below.** Results are supplied supervisor/reviewer evidence, not new checks by this
+status-only writer.
+
+- **Authoritative tree:** WHA-1116 remains `fe1e3e383c8b966cdb68669ba5366db00fe2320a`;
+  none of the private compositions is accepted here. Remote `restaurantv2` was freshly confirmed
+  at the same full SHA at 05:37 UTC. Exact-tip `qa.yml` run `33976399055` still **FAILS its browser
+  gate**; historical automated results are **5,403 pass / 0 fail / 0 pending**. Private green is
+  not a push or deploy recommendation.
+- **Scope and execution:** hardware comes first when approvals are actionable; Saad directly
+  authorized independent features meanwhile. Codex/Astra only, at most seven heavy workers;
+  paused Claude, Chief of Staff and CTO remain preserved. Three Pharmacy growth features are
+  independently accepted privately: supplier-credit follow-up, posted two-period gross-margin
+  comparison, and honest 30/60/90-day repeat purchasing with identity coverage. No revenue uplift
+  or clinical adherence is claimed.
+- **One combined PRIVATE verification PASS:** branch
+  `codex/WHA-1376-pharmacy-growth-private-combination`, cwd
+  `/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1376-verify-ph-growth-independently-verify-gross-margin-comparison-addf0323`.
+  Exact tested/final HEAD is `0eddf3675a92e3876a5b9f3e642d91d2af538898`, tree
+  `ddcb2852dc9b9bb099bde877faced6b45407c8ad`; reported clean, with no evidence-only commit.
+  Baseline `bd218de8` and margin `addf0323/fb47bc20` are retained. Source/private patch mappings
+  are `8057582f/7425d407`, `8eebca08/9c591a04`, `1c24c12e/f0e1fd50` and
+  `44a7b9ad/0eddf367`. Exact component blobs match; 24 owned paths differ from `bd218de8`,
+  with no extra paths or schema, dependency or policy changes.
+- **Combined checks:** 241 fresh, unique Vitest passes include 16 actual restricted-DB assertions
+  and purchasing outcome/lock regressions; zero failed, skipped, pending or todo. Only canonical
+  `TEST_DATABASE_URL` was used. Lint, format and diff checks pass. The reviewer's own new restricted
+  FORCE RLS DB and role were identity-checked and removed. A real Next 16.2.12 production build,
+  including actual TypeScript, passed with exit 0: 164/164 generation tasks and 201 listed routes
+  are distinct metrics. An initial external dependency-link setup failure was corrected by an
+  owned frozen install and one affected build retry, without source changes or type weakening.
+- **Evidence and completion:** Paperclip WHA-1376 issue `e6f34dd3-6a70-425c-9e2d-95ca90c9ddfd`,
+  document `private-combination-verification`, final comment
+  `5d41bf2e-19c0-44d9-a7e6-04c54d2c90c3`; reviewer run
+  `29da06bc-60e0-4764-bec6-1723bcd92e0f` completed at 05:35:52 UTC. GitHub #94 canonical DB
+  activation, #95 excessive child fetch/10,000 lifetime limit and #96 obsolete error copy are
+  privately repaired and independently verified. All feature builders, reviews and combination
+  are done. No Paperclip runs remain active after the combined job; do not wake duplicate
+  acknowledgments. This CLI is only maintaining status.
+- **Prior evidence stays separate:** private WHA-1370 baseline `bd218de8`, tree `1d68131d`,
+  passed 479 unique checks and a full build, with all older hardware, void, purge, purchasing and
+  harness fixes included. WHA-1352 passed 13 unit and 13 real-DB stock/concurrency checks. These
+  counts are not additional new checks in the 241 above; do not rerun them.
+- **Owner gates remain open:** receipt WHA-1354 human-only approval
+  `9653a6ff-1f58-4083-9eb1-2994cc216e42` and Pharmacy WHA-1364 human-only approval
+  `9223573a-aab0-4bde-b8fc-61bd5b16c378` were freshly confirmed **PENDING**. GitHub #89
+  assigned-branch/receipt policy remains open with no comments. Saved Pharmacy settings
+  authorization and persistence are not implemented; no broad grant or Restaurant ACL transplant.
+  WHA-1344 purchasing tradeoffs remain unapproved despite safe-fix `8958012b` passing.
+  WHA-1220 purge `not_creator` was validly accepted on September 5; never request it again.
+- **Next:** resolve owner policy and approvals, then authorized accepted composition and push,
+  exact-tip CI with zero failed **and** zero pending plus matching browser evidence, owner staging
+  and revision confirmation, then isolated **SHARED QA** and physical printer/camera checks.
+  Never use Mugd, Lake City or local app services; no WHA-874/WHA-1239 work. D07, D08, D11 and
+  catering invoicing remain owner-gated.
+- **Limits:** lifetime SQL's three scalar rows bound data output, not DB working memory or
+  throughput; the 10,004 fixture is not a capacity guarantee. Browser/Studio and real hardware
+  remain unverified. No universal legacy-OS or hardware claims: spool acknowledgment is not
+  paper, and HTTP 200 is not camera frames.
+
+---
+
+## 2026-09-05 19:10 UTC (2026-09-06 00:10 PKT) — Codex supervisor snapshot
+
+**Current authority: this section supersedes the 18:00 UTC operational counts; every prior section
+below remains preserved history.** All results here are supplied orchestration evidence, not fresh
+tests run by this status-only maintainer.
+
+### Scope and current tree
+
+- **Hardware remains first:** Restaurant receipt designer, settings, transport and cameras, then
+  Pharmacy.
+- **Execution remains Codex Astra only:** maximum seven heavy workers. Paused Claude, Chief of Staff
+  and CTO remain preserved.
+- No accepted repairs are composed into this authoritative tree; only `status.md` is modified. No
+  push or deploy recommendation.
+- Remote `restaurantv2` remains `fe1e3e38`. QA run `33976399055` **FAILED its browser gate**;
+  automated results remain **5,403 pass / 0 fail / 0 pending**, last checked at 19:01 UTC.
+
+### Independent private evidence
+
+- **Core print foundation — WHA-1362 PASS:** `2b5ab7974116051e1075ab7f3006969b1959e697`;
+  **153 pass / 0 fail / 0 skip**.
+- **Restaurant consumer plus matched foundation PASS:** commit
+  `f0c6138ea9ef0572c1b7ecdd64af38676e6be7b0`, tree
+  `7e8d6678b37673b05d3e6e6b8312552a3a2b4b33`; **209 pass / 0 fail / 0 skip**, including
+  26 new isolated-DB tests. Runtime-inclusive scoped type check exited 0. Mappings for shared
+  `513d05ad`, queue `5c222a54` and runtime `ceed2f40` corrections are in
+  `docs/receipt-checkout-WHA-1355.md` on that private branch. No full build, browser or physical
+  proof.
+- **Camera — WHA-1357:** final `f81ae0c315c1c96e950dfb2eee1ffb384d7d9947`, parent
+  `036debad`. Independent WHA-1363 narrow review PASS: **164 pass / 0 fail / 0 skip**, covering real
+  HLS package/import/bundle checks and audit redaction. Full chain, in order: `773a1a8e`,
+  `977eed1e`, `036debad`, `f81ae0c`. Package/import/bundle is not playback; model, codec, gateway TLS
+  and physical frames remain owner-pending.
+- **Pharmacy backend:** `c49b1afa252f20905269a044d09bdb0406eb7b60`; independent WHA-1368
+  PASS, **53 pass / 0 fail / 0 skip**, including nine DB tests.
+- **Pharmacy browser consumer:** `5a1549376377af8321314d3bbfb2ff3a4e987230`; independent source
+  PASS, **48 pass / 0 fail / 0 skip**, including issued-all batch identity and Unicode receipts.
+  Saved Pharmacy settings authorization and persistence are **not implemented**. GitHub #89
+  staff-branch/capability policy remains pending Saad. Human-only WHA-1364 artifact confirmation
+  `9223573a-aab0-4bde-b8fc-61bd5b16c378` remains owner-pending; never answer it as Saad.
+
+### Active private review — not accepted composition
+
+- **NEW WHA-1370 compatibility/build review:** `1e3b79aa-323a-464f-85e8-6761fc931c02`, Codex
+  Release QA `5ae25081`, active from Restaurant base `f0c6138`.
+- Phase 1 adds the exact camera chain and runs the production build. Phase 2 adds only the
+  Pharmacy-owned `8fccc771`, `2cdef75b`, `c49b1afa` and `5a154937`; shared work already included is
+  skipped.
+- WHA-1370 is not authoritative accepted composition, does not bypass human approvals and owns no
+  implementation fixes.
+
+### Purchasing and remaining composition
+
+- **WHA-1344 candidate `424474e5` FAILED independent WHA-1349 recheck:** 39 focused checks pass,
+  but one new safety probe fails (`expected 1 mutation call, got 2`) because a successful write
+  followed by a revalidation error unlocks Save. No actual DB duplicate is claimed.
+- Original Platform 2 is implementing bounded shared safe-retry classification for all 18 actions,
+  preserving values, focus and layout. No automatic retry or financial redesign. Exclude the failed
+  candidate pending correction and recheck; primary review is GitHub #86.
+- Existing WHA-1217 void `671a5974` and WHA-1220 purge `c462f5f6` reviewed PASS and await accepted
+  composition. WHA-1349 review owner remains Fix 4. WHA-1351 harness `1c4d8d9f` plus the Pharmacy
+  cart fix needs fresh CI.
+- No duplicate WHA-1209/WHA-1189 work; no WHA-874/WHA-1239 work. D07, D08, D11 and catering
+  invoicing remain owner-gated. Planning WHA-1345 through WHA-1347 and performance WHA-1348 are
+  done.
+
+### Hardware and release boundaries
+
+- Owner hardware target is “all printers”; “Alhua DVR” remains unconfirmed. Requested hosts are
+  Windows 98, Vista, 7 and 10, plus macOS.
+- No universal printer or legacy/modern POS guarantee exists. Model photo, supported host driver,
+  protocol and actual-device checks remain required. Preserve receipt attempt state; make no
+  physical exactly-once claims.
+- New staging QA starts only after owner push, exact CI with zero errors and zero pending, owner
+  deployment, and confirmation of the matching live revision. Use isolated **SHARED** only; never
+  Mugd, Lake City or local app services.
+
+---
+
+## 2026-09-05 18:00 UTC — Codex supervisor: hardware priority; release not accepted
+
+**Current authority: this section supersedes all older “shipping complete” / “ready to push” claims
+below; history is preserved.** Operational facts are the supplied 18:00 UTC supervisor snapshot.
+This status-only maintenance verified the authorized WHA-1116 compose cwd and branch, HEAD
+`fe1e3e383c8b966cdb68669ba5366db00fe2320a`, and an initially clean worktree.
+
+- **Saad's newly authorized hardware scope supersedes the older printing owner gate:** Restaurants
+  first, then Pharmacy; receipt printer designer/settings plus transport, and DVR live view. All types
+  requested; “Alhua DVR” is unconfirmed, possibly Dahua. Windows 98/Vista/7/10 and macOS requested;
+  modern POS is unsupported on legacy OS. Actual devices, models, OS/driver tests remain unverified.
+- **Execution:** Codex Astra only; preserve paused Claude, Chief of Staff and CTO; maximum seven heavy
+  workers; no new global instruction rewrites. Active builders do not wait on paused Chief of Staff:
+  the current Codex supervisor/board owns review and private composition.
+- **Gate:** remote `restaurantv2` remains at the full HEAD above. Matching QA run `33976399055`
+  **FAILED its browser gate**; automated gate reported **5,403 pass / 0 fail / 0 pending**. No accepted
+  hardware is composed. **No push/deploy recommendation yet; this status edit is not a push reason.**
+
+### Private artifacts — not release accepted
+
+- **WHA-1354 receipt settings:** `806f1138` → `411306de`; 30 unit plus 27 follow-up tests, but four DB
+  tests originally skipped. Creator is now running new isolated WHA-1354 DB tests, **not the WHA-1350
+  DB**; results pending. Migrations `20260905180000` and `20260905190000`. WHA-1354 remains the single
+  hardware schema writer.
+- **WHA-1355 Restaurant receipt:** `74bb5b3c`; 48 pass / four DB skipped; not yet consuming shared
+  settings.
+- **WHA-1356 runtime:** `655c7f9a`; 66 pass / zero skipped; Windows RAW and macOS CUPS with allowlisted
+  queues; no physical test.
+- **WHA-1360 queue:** `bc069370`; 28 pass; device-bound `claimToken`. Combine the queue contract with
+  the runtime producer before use.
+- **WHA-1357 DVR:** `773a1a8e` → `977eed1e`; 23 Vitest pass / one DB skipped plus 15 native fixtures.
+  A configured, authenticated MediaMTX HLS gateway is an external owner prerequisite. No frames or
+  browser proof; credential infrastructure wiring already exists under other ancestry.
+- **WHA-1358 Pharmacy:** `8fccc771` → `2cdef75b`; 34 receipt plus three query-race tests; private browser
+  print fallback/cart fix; shared settings pending. WHA-1358 retains UI ownership.
+- **WHA-1351 harness:** `1c4d8d9f`; static review otherwise acceptable; depends on the WHA-1358 cart fix
+  and fresh CI.
+- **WHA-1361 review FAIL:** two existing bugs, GitHub **#89** receipt staff/branch ACL and **#90** live
+  identity/first-batch-only behavior. Persisted money aggregation is correct; do not invent a repricing
+  bug.
+
+### Next owners and remaining gates
+
+- **WHA-1362 — Verification Engineer:** review the isolated combined foundation
+  `411306de` + `bc069370` + `655c7f9a`; private review only, not authoritative composition.
+- **WHA-1363 — Fix 5:** review DVR security and actual browser player capability.
+- **WHA-1364 — Fix 6:** repair GitHub #89/#90, backend only; preserve WHA-1358 UI ownership and
+  WHA-1354 hardware schema ownership. Consumer integration must use the accepted foundation and run
+  DB plus source checks before authoritative composition.
+- **Existing Pharmacy repairs:** WHA-1217 `671a5974` / WHA-1352 review PASS; WHA-1220 `c462f5f6` /
+  WHA-1353 review PASS; WHA-1344 `de44c9e3` → `424474e5` correction, 39 pass and typecheck exit 0,
+  independent recheck pending. No duplicate fixes for WHA-1209/WHA-1189.
+- **Scope boundaries:** WHA-874/WHA-1239 untouched; D07/D08/D11 and catering invoicing remain owner
+  gated. All print/camera UI visual matrices and physical device proof remain pending.
+- **Release sequence:** after an accepted private candidate is ready, the current owner must push
+  the TIP, then obtain matching CI with **zero errors and zero pending**, then owner deployment and
+  confirmation of the deployed revision before staging-only, isolated **SHARED QA**. Never use real
+  Mugd/LakeCity or local app QA.
+
+---
+
 Last reconciled: 2026-09-05 17:55 PKT (12:55 UTC) — Cowork supervisor check-in #252.
 
 ## 12:55 UTC — all four gate causes repaired by hand; candidate ready to push
