@@ -275,3 +275,22 @@ describe('original tender attempt storage', () => {
     expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
   });
 });
+
+it('round-trips Khata recovery without storing authentication credentials', () => {
+  const attempt = original();
+  attempt.input = {
+    ...attempt.input,
+    type: 'KHATA',
+    familyAccountId: 'family-a',
+    ownerOverride: true,
+  };
+  delete attempt.input.cashReceivedMinor;
+  attempt.draft.cashReceived = '';
+  persistTenderAttempt(attempt);
+  expect(readTenderAttempt(attempt.scope)).toEqual({ status: 'pending', attempt });
+  clearTenderAttempt(attempt);
+  expect(() =>
+    persistTenderAttempt({ ...attempt, input: { ...attempt.input, password: 'private' } } as never)
+  ).toThrow();
+  expect(window.localStorage.length).toBe(0);
+});

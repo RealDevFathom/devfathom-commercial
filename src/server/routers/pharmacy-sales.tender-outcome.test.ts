@@ -285,6 +285,16 @@ describe('pharmacySales.tenderOutcome', () => {
 
   const { cashReceivedMinor: omittedCash, ...withoutCash } = input;
   void omittedCash;
+  it('keeps legacy CREDIT evidence readable without allowing a new unscoped credit', async () => {
+    const raw = { ...input, type: 'CREDIT' as const, cashReceivedMinor: undefined };
+    const f = fixture(raw);
+    expect(await f.caller().tenderOutcome(raw)).toMatchObject({ status: 'ACCEPTED' });
+    await expect(f.caller().tender(raw)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.execute).not.toHaveBeenCalled();
+    expect(f.transaction).not.toHaveBeenCalled();
+    expect(recordTrpcAudit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'FAILURE' }));
+  });
+
   it.each([
     input,
     withoutCash,
@@ -292,7 +302,6 @@ describe('pharmacySales.tenderOutcome', () => {
     Object.fromEntries(Object.entries(input).reverse()),
     { ...input, branchId: ' branch-1 ', idempotencyKey: ' attempt-1 ' },
     { ...input, type: 'BANK_TRANSFER', cashReceivedMinor: 0 },
-    { ...input, type: 'CREDIT', cashReceivedMinor: undefined },
     { ...input, type: 'CARD' },
     { ...input, type: 'WALLET' },
   ])('preserves the old mutation serialized input and hash: %j', async (raw) => {

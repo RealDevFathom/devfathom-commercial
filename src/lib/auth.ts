@@ -12,7 +12,7 @@ import {
   resolveOrganizationById,
   resolveOrganizationForRequest,
 } from '@/lib/tenancy/host';
-import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
 import { SSO_TICKET_COOKIE } from '@/lib/sso';
 import { liveDemoAccessExpiry, type SessionInvalidReason } from '@/lib/auth/session-state';
@@ -373,6 +373,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            // Issued only after this route verifies password and any second factor.
+            passwordAuthenticatedAt: Date.now(),
           };
         });
       },
@@ -511,6 +513,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
           const consumed = await consumeLoginIntent(rawIntent, host, organization.id);
           if (!consumed) return null;
+          // The shared-host password route created this server-owned intent.
+          // Preserve password-entry time; selecting a workspace cannot refresh it.
+          const passwordIntent = organization.isDemo
+            ? null
+            : await withPlatformDb((db) =>
+                db.pendingLoginIntent.findUnique({
+                  where: { id: consumed.id },
+                  select: { createdAt: true },
+                })
+              );
 
           // WHA-1570: the shared-host credential check (/api/login) spends the
           // same `login:ip` / `login:acct` budgets as the per-host provider above,
@@ -552,6 +564,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            passwordAuthenticatedAt: passwordIntent?.createdAt.getTime(),
             demoAccessExpiresAt: organization.isDemo ? candidate.demoAccessExpiresAt : undefined,
           };
         });
@@ -643,6 +656,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // deactivated account (and vice versa).
         token.sessionRevoked = false;
         token.sessionInvalidReason = null;
+        // Never infer password entry from session refresh or non-password sign-in.
+        token.passwordAuthenticatedAt = user.passwordAuthenticatedAt;
         token.lastValidatedAt = Date.now();
         return token;
       }
@@ -741,6 +756,12 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // #16: every consumer of the session must be able to see that the
         // session itself was invalidated, independently of account status.
         session.user.sessionRevoked = Boolean(token.sessionRevoked);
+        session.user.passwordAuthenticatedAt =
+          !token.sessionRevoked &&
+          typeof token.passwordAuthenticatedAt === 'number' &&
+          Number.isFinite(token.passwordAuthenticatedAt)
+            ? token.passwordAuthenticatedAt
+            : undefined;
         session.user.sessionInvalidReason =
           (token.sessionInvalidReason as SessionInvalidReason | null) ?? null;
         session.user.demoAccessExpiresAt =
