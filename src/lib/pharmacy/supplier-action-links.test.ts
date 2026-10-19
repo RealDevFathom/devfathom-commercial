@@ -8,6 +8,10 @@ import {
 import { structuralSupplierFileScanner } from './supplier-file-scanner';
 
 const NOW = new Date('2026-09-04T12:00:00Z');
+const HOUR_MS = 60 * 60 * 1000;
+const WEEK_MS = 7 * 24 * HOUR_MS;
+
+const futureExpiry = () => new Date(Date.now() + WEEK_MS);
 
 function fakeDb() {
   const stored: Record<string, unknown>[] = [];
@@ -55,7 +59,7 @@ function fakeDb() {
   return { db: db as never, rawDb: db, stored, relationship, purchaseOrder };
 }
 
-async function issued() {
+async function issued(expiresAt = futureExpiry()) {
   const state = fakeDb();
   const result = await issueSupplierActionLink(state.db, {
     organizationId: 'org_a',
@@ -63,7 +67,7 @@ async function issued() {
     relationshipId: 'rel_a',
     purchaseOrderId: 'po_a',
     actorUserId: 'user_a',
-    expiresAt: new Date('2026-09-05T00:00:00Z'),
+    expiresAt,
   });
   return { ...state, token: result.token };
 }
@@ -83,7 +87,7 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
         relationshipId: 'rel_a',
         purchaseOrderId: 'po_a',
         actorUserId: 'user_a',
-        expiresAt: new Date('2026-09-05'),
+        expiresAt: futureExpiry(),
       })
     ).rejects.toMatchObject({ reason: 'MISMATCH' });
     state.purchaseOrder.supplierId = 'supplier_a';
@@ -178,13 +182,13 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     await expect(getSupplierActionPage(state.db, `${state.token}x`)).rejects.toMatchObject({
       reason: 'INVALID_LINK',
     });
+    const expired = await issued(new Date(Date.now() - HOUR_MS));
     await expect(
-      submitSupplierEvidence(state.db, {
-        token: state.token,
+      submitSupplierEvidence(expired.db, {
+        token: expired.token,
         kind: 'ACKNOWLEDGEMENT',
         idempotencyKey: 'late',
         payload: {},
-        now: new Date('2026-09-06'),
       })
     ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
     (state.stored[0] as { revokedAt: Date | null }).revokedAt = NOW;
