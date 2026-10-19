@@ -43,6 +43,27 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   }
   const organization = actor.organization;
 
+  const sopEvidence = await withTenantDb(organization.id, (db) =>
+    db.restaurantSopEvidence.findFirst({
+      where: { storageRef: '/api/files/' + name },
+      select: { occurrence: { select: { branchId: true } } },
+    })
+  );
+  if (sopEvidence && session.user.role !== 'ADMIN') {
+    const branchAccess = await withTenantDb(organization.id, (db) =>
+      db.restaurantBranchAssignment.findUnique({
+        where: {
+          branchId_userId: {
+            branchId: sopEvidence.occurrence.branchId,
+            userId: session.user.id,
+          },
+        },
+        select: { id: true },
+      })
+    );
+    if (!branchAccess) return new Response('Not found', { status: 404 });
+  }
+
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
   // leaks a private-channel/DM file to any signed-in user. Non-chat uploads
