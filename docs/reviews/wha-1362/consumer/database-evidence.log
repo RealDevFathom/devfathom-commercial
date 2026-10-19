@@ -1,0 +1,2 @@
+{"role":{"database":"wha1362consumer_disposable_5e015ddcf2","rolname":"wha1362consumer_runtime_5e015ddcf2","rolsuper":false,"rolbypassrls":false,"rolcreatedb":false,"rolcreaterole":false,"rolinherit":false},"runtimeOwnedTables":0,"tables":[{"relname":"restaurant_print_jobs","relrowsecurity":true,"relforcerowsecurity":true},{"relname":"restaurant_branches","relrowsecurity":true,"relforcerowsecurity":true},{"relname":"restaurant_bills","relrowsecurity":true,"relforcerowsecurity":true}],"migrations":105,"checksumMismatches":0,"unsuccessful":0}
+evidence success
