@@ -1,9 +1,12 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./patient-prescriptions', () => ({ auditPatientRead: vi.fn() }));
 
 import {
   applyKhataLimitDecision,
+  authorizeKhataCharge,
+  readKhataBalance,
+  readSaleKhataStatement,
   calculateKhataHealthSuggestion,
   FamilyKhataError,
   readFamilyMemberDispensing,
@@ -44,6 +47,7 @@ describe('CRM-L02 family privacy and khata settlement', () => {
       ...data,
     }));
     const db = {
+      $queryRaw: vi.fn(),
       pharmacyKhataEvent: {
         findMany: vi.fn().mockResolvedValue([
           {
@@ -78,6 +82,12 @@ describe('CRM-L02 family privacy and khata settlement', () => {
 });
 
 describe('CRM-L04 explainable health suggestion', () => {
+  const now = new Date('2026-09-29T16:00:00.000Z');
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(now);
+  });
+  afterEach(() => vi.useRealTimers());
   const suggestion = calculateKhataHealthSuggestion(
     [
       {
@@ -145,6 +155,8 @@ describe('CRM-L04 explainable health suggestion', () => {
       familyAccountId: 'family_1',
       suggestion,
       ownerAuthorized: true,
+      ownerAuthorizedByUserId: scope.actorId,
+      ownerReauthenticatedAt: now,
       overrideLimitMinor: 15_000,
     });
     expect(update).toHaveBeenCalledWith(
@@ -152,8 +164,174 @@ describe('CRM-L04 explainable health suggestion', () => {
     );
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: expect.objectContaining({ kind: 'OVERRIDDEN', appliedLimitMinor: 15_000 }),
+        data: expect.objectContaining({
+          kind: 'OVERRIDDEN',
+          appliedLimitMinor: 15_000,
+          ownerActorId: scope.actorId,
+          reasons: {
+            reasons: suggestion.reasons,
+            ownerAuthorizedByUserId: scope.actorId,
+            ownerReauthenticatedAt: now.toISOString(),
+            ownerAuthorizedAt: now.toISOString(),
+          },
+        }),
       })
     );
+  });
+
+  it.each([
+    ['missing', undefined, scope.actorId],
+    ['expired', new Date('2026-09-29T15:54:59.999Z'), scope.actorId],
+    ['future', new Date('2026-09-29T16:00:00.001Z'), scope.actorId],
+    ['invalid', new Date('invalid'), scope.actorId],
+    ['different owner', new Date('2026-09-29T16:00:00.000Z'), 'other-owner'],
+  ])('rejects %s reauthentication before any write', async (_name, at, actor) => {
+    const update = vi.fn();
+    const create = vi.fn();
+    await expect(
+      applyKhataLimitDecision(
+        {
+          pharmacyFamilyAccount: { update },
+          pharmacyKhataLimitDecision: { create },
+        } as never,
+        scope,
+        {
+          familyAccountId: 'family_1',
+          suggestion,
+          ownerAuthorized: true,
+          ownerAuthorizedByUserId: actor,
+          ownerReauthenticatedAt: at,
+          overrideLimitMinor: 15_000,
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(update).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
+  });
+
+  it('accepts reauthentication exactly five minutes old', async () => {
+    const update = vi.fn().mockResolvedValue({ creditLimitMinor: 20_000 });
+    const create = vi.fn().mockResolvedValue({ kind: 'ACCEPTED' });
+    await applyKhataLimitDecision(
+      {
+        pharmacyFamilyAccount: { update },
+        pharmacyKhataLimitDecision: { create },
+      } as never,
+      scope,
+      {
+        familyAccountId: 'family_1',
+        suggestion,
+        ownerAuthorized: true,
+        ownerAuthorizedByUserId: scope.actorId,
+        ownerReauthenticatedAt: new Date(now.getTime() - 5 * 60_000),
+      }
+    );
+    expect(update).toHaveBeenCalledOnce();
+    expect(create).toHaveBeenCalledOnce();
+  });
+});
+
+describe('counter Khata ledger gate', () => {
+  function fixture() {
+    return {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
+      pharmacyFamilyAccount: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'family-a',
+            displayName: 'Family',
+            creditLimitMinor: 1000,
+            members: [{ id: 'member-a' }],
+          },
+        ]),
+        update: vi.fn().mockResolvedValue({ creditLimitMinor: 1100 }),
+      },
+      pharmacyKhataEvent: {
+        groupBy: vi.fn().mockResolvedValue([
+          { kind: 'CHARGE', _sum: { amountMinor: 1200 } },
+          { kind: 'PAYMENT', _sum: { amountMinor: 700 } },
+        ]),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      pharmacyKhataLimitDecision: { create: vi.fn().mockResolvedValue({}) },
+    };
+  }
+  const input = { saleId: 'sale-a', familyAccountId: 'family-a', amountMinor: 500 };
+  it('uses all ledger events and accepts the exact limit without owner authorization', async () => {
+    const db = fixture();
+    expect(await readKhataBalance(db as never, scope, 'family-a')).toBe(500);
+    await authorizeKhataCharge(db as never, scope, input, { authorized: false });
+    expect(db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(db.pharmacyKhataEvent.groupBy).toHaveBeenCalledWith({
+      by: ['kind'],
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        familyAccountId: 'family-a',
+      },
+      _sum: { amountMinor: true },
+    });
+  });
+  it.each([
+    { authorized: false, passwordAuthenticatedAt: Date.now() },
+    { authorized: true, passwordAuthenticatedAt: Date.now() - 301000 },
+    { authorized: true },
+  ])('rejects over-limit override with insufficient server evidence: %j', async (owner) => {
+    const db = fixture();
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, amountMinor: 600, ownerOverride: true },
+        owner
+      )
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+  });
+  it('records the freshly reauthenticated owner and raised limit', async () => {
+    const db = fixture();
+    await authorizeKhataCharge(
+      db as never,
+      scope,
+      { ...input, amountMinor: 600, ownerOverride: true },
+      { authorized: true, passwordAuthenticatedAt: Date.now() }
+    );
+    expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        appliedLimitMinor: 1100,
+        ownerActorId: scope.actorId,
+        reasons: expect.objectContaining({
+          ownerAuthorizedByUserId: scope.actorId,
+          ownerAuthorizedAt: expect.any(String),
+        }),
+      }),
+    });
+  });
+  it('denies an account outside the sale customer membership and does not expose its statement', async () => {
+    const db = fixture();
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, familyAccountId: 'foreign' },
+        { authorized: true }
+      )
+    ).rejects.toMatchObject({ reason: 'ACCOUNT_NOT_FOUND' });
+    await expect(
+      readSaleKhataStatement(db as never, scope, input.saleId, 'foreign')
+    ).rejects.toMatchObject({ reason: 'ACCOUNT_NOT_FOUND' });
+    expect(db.pharmacyKhataEvent.findMany).not.toHaveBeenCalled();
+  });
+  it('blocks an over-limit charge without an explicit override', async () => {
+    const db = fixture();
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, amountMinor: 501 },
+        { authorized: true, passwordAuthenticatedAt: Date.now() }
+      )
+    ).rejects.toMatchObject({ reason: 'CREDIT_LIMIT_EXCEEDED' });
   });
 });

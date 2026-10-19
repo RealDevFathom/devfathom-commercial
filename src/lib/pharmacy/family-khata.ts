@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditPatientRead } from './patient-prescriptions';
@@ -14,6 +15,8 @@ export class FamilyKhataError extends Error {
       | 'INVALID_AMOUNT'
       | 'PAYMENT_EXCEEDS_BALANCE'
       | 'OWNER_ACTION_REQUIRED'
+      | 'CREDIT_LIMIT_EXCEEDED'
+      | 'ACCOUNT_NOT_FOUND'
   ) {
     super(reason);
   }
@@ -153,6 +156,9 @@ export async function settleFamilyKhata(
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
   const events = await db.pharmacyKhataEvent.findMany({
     where: {
       organizationId: scope.organizationId,
@@ -212,11 +218,24 @@ export async function applyKhataLimitDecision(
   input: {
     familyAccountId: string;
     suggestion: KhataHealthSuggestion;
+    // Trusted server evidence only: never populate this from a client timestamp.
     ownerAuthorized: boolean;
+    ownerAuthorizedByUserId?: string;
+    ownerReauthenticatedAt?: Date;
     overrideLimitMinor?: number;
   }
 ) {
-  if (!input.ownerAuthorized) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  const authorizedAt = new Date();
+  const reauthenticatedAt = input.ownerReauthenticatedAt?.getTime();
+  if (
+    !input.ownerAuthorized ||
+    input.ownerAuthorizedByUserId !== scope.actorId ||
+    reauthenticatedAt === undefined ||
+    !Number.isFinite(reauthenticatedAt) ||
+    reauthenticatedAt > authorizedAt.getTime() ||
+    authorizedAt.getTime() - reauthenticatedAt > 5 * 60_000
+  )
+    throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
   const appliedLimitMinor = input.overrideLimitMinor ?? input.suggestion.suggestedLimitMinor;
   if (!Number.isSafeInteger(appliedLimitMinor) || appliedLimitMinor < 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -242,9 +261,142 @@ export async function applyKhataLimitDecision(
       windowEnd: input.suggestion.windowEnd,
       suggestedLimitMinor: input.suggestion.suggestedLimitMinor,
       appliedLimitMinor,
-      reasons: input.suggestion.reasons,
+      reasons: {
+        reasons: input.suggestion.reasons,
+        ownerAuthorizedByUserId: input.ownerAuthorizedByUserId,
+        ownerReauthenticatedAt: input.ownerReauthenticatedAt!.toISOString(),
+        ownerAuthorizedAt: authorizedAt.toISOString(),
+      },
       ownerActorId: scope.actorId,
     },
   });
   return { account, decision };
+}
+
+/** Entire append-only family ledger, never the counter's ten-sale preview. */
+export async function readKhataBalance(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  familyAccountId: string
+) {
+  const totals = await db.pharmacyKhataEvent.groupBy({
+    by: ['kind'],
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, familyAccountId },
+    _sum: { amountMinor: true },
+  });
+  return totals.reduce(
+    (sum, row) => sum + (row.kind === 'PAYMENT' ? -1 : 1) * (row._sum.amountMinor ?? 0),
+    0
+  );
+}
+
+/** Account membership is checked against the sale's server-read customer. */
+export async function readSaleKhataAccounts(db: ScopedDb, scope: FamilyKhataScope, saleId: string) {
+  const sale = await db.pharmacySale.findFirst({
+    where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { customerId: true },
+  });
+  if (!sale?.customerId) return [];
+  const accounts = await db.pharmacyFamilyAccount.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      active: true,
+      members: { some: { customerId: sale.customerId } },
+    },
+    select: {
+      id: true,
+      displayName: true,
+      creditLimitMinor: true,
+      members: { where: { customerId: sale.customerId }, select: { id: true } },
+    },
+    orderBy: { id: 'asc' },
+  });
+  return Promise.all(
+    accounts.map(async (account) => ({
+      id: account.id,
+      displayName: account.displayName,
+      creditLimitMinor: account.creditLimitMinor,
+      memberId: account.members[0]!.id,
+      balanceMinor: await readKhataBalance(db, scope, account.id),
+    }))
+  );
+}
+
+export async function readSaleKhataStatement(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  saleId: string,
+  familyAccountId: string
+) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR SHARE`
+  );
+  const account = (await readSaleKhataAccounts(db, scope, saleId)).find(
+    (row) => row.id === familyAccountId
+  );
+  if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
+  const rows = await db.pharmacyKhataEvent.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, familyAccountId },
+    select: { id: true, kind: true, amountMinor: true, occurredAt: true },
+    orderBy: [{ occurredAt: 'desc' }, { id: 'desc' }],
+    take: 1001,
+  });
+  return {
+    account,
+    generatedAt: new Date(),
+    truncated: rows.length > 1000,
+    entries: rows.slice(0, 1000),
+  };
+}
+
+/** Caller holds the sale lock; family lock serializes competing counters. */
+export async function authorizeKhataCharge(
+  db: ScopedDb,
+  scope: FamilyKhataScope,
+  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
+  owner: { authorized: boolean; passwordAuthenticatedAt?: number }
+) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
+  const account = (await readSaleKhataAccounts(db, scope, input.saleId)).find(
+    (row) => row.id === input.familyAccountId
+  );
+  if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
+  const projected = account.balanceMinor + input.amountMinor;
+  if (
+    !Number.isSafeInteger(input.amountMinor) ||
+    input.amountMinor <= 0 ||
+    !Number.isSafeInteger(projected) ||
+    projected > 2147483647
+  )
+    throw new FamilyKhataError('INVALID_AMOUNT');
+  if (projected > account.creditLimitMinor) {
+    if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
+    const now = new Date();
+    await applyKhataLimitDecision(db, scope, {
+      familyAccountId: account.id,
+      suggestion: calculateKhataHealthSuggestion(
+        await db.pharmacyKhataEvent.findMany({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            familyAccountId: account.id,
+          },
+        }),
+        account.creditLimitMinor,
+        new Date(now.getTime() - 180 * DAY_MS),
+        now
+      ),
+      ownerAuthorized: owner.authorized,
+      ownerAuthorizedByUserId: scope.actorId,
+      ownerReauthenticatedAt:
+        owner.passwordAuthenticatedAt === undefined
+          ? undefined
+          : new Date(owner.passwordAuthenticatedAt),
+      overrideLimitMinor: projected,
+    });
+  }
+  return account;
 }

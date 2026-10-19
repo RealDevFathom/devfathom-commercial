@@ -32,6 +32,7 @@ const mocks = vi.hoisted(() => ({
   resolveForRequest: vi.fn(),
   withTenantDb: vi.fn(),
   findFirstUser: vi.fn(),
+  findUniqueUser: vi.fn(),
   updateUser: vi.fn(),
   findRecoveryCode: vi.fn(),
 }));
@@ -162,7 +163,11 @@ beforeEach(() => {
   mocks.withTenantDb.mockImplementation(
     async (_organizationId: string, run: (db: unknown) => unknown) =>
       run({
-        user: { findFirst: mocks.findFirstUser, update: mocks.updateUser },
+        user: {
+          findFirst: mocks.findFirstUser,
+          findUnique: mocks.findUniqueUser,
+          update: mocks.updateUser,
+        },
         organizationIdentityConnection: { findFirst: vi.fn().mockResolvedValue(null) },
         twoFactorRecoveryCode: {
           findFirst: mocks.findRecoveryCode,
@@ -235,5 +240,75 @@ describe('tenant login rate limiting', () => {
 
     expect(await attempt(PASSWORD, '000000')).toBeNull();
     expect(lastAuditReason()).toBe('Rate limited');
+  });
+});
+
+describe('password authentication evidence', () => {
+  type Claims = Record<string, unknown>;
+  function callbacks() {
+    return (
+      mocks.config as unknown as {
+        callbacks: {
+          jwt: (input: Claims) => Promise<Claims>;
+          session: (input: Claims) => Promise<{ user: Claims }>;
+        };
+      }
+    ).callbacks;
+  }
+
+  it('issues evidence only after a successful password and second factor', async () => {
+    useUser(tenantUser({ twoFactorEnabledAt: new Date(), twoFactorSecret: 'secret' }));
+    expect(await attempt('wrong-password')).toBeNull();
+    expect(await attempt(PASSWORD)).toBeInstanceOf(Error);
+    expect(await attempt(PASSWORD, '123456')).toBeInstanceOf(Error);
+    mocks.verifyTotp.mockReturnValue(true);
+    const before = Date.now();
+    const user = (await attempt(PASSWORD, '123456')) as Claims;
+    expect(user.passwordAuthenticatedAt).toBeGreaterThanOrEqual(before);
+    expect(user.passwordAuthenticatedAt).toBeLessThanOrEqual(Date.now());
+    const token = await callbacks().jwt({ token: {}, user });
+    const session = await callbacks().session({ session: { user: {} }, token });
+    expect(session.user.passwordAuthenticatedAt).toBe(user.passwordAuthenticatedAt);
+  });
+
+  it('preserves original evidence across routine validation and ignores client updates', async () => {
+    const authenticatedAt = Date.now() - 6 * 60_000;
+    mocks.findUniqueUser.mockResolvedValue({
+      ...tenantUser(),
+      organization: { slug: organization.slug, status: 'ACTIVE', isDemo: false },
+    });
+    const token = await callbacks().jwt({
+      token: {
+        id: 'user_alex',
+        organizationId: organization.id,
+        tokenVersion: 0,
+        passwordAuthenticatedAt: authenticatedAt,
+        lastValidatedAt: 0,
+      },
+      trigger: 'update',
+      session: { passwordAuthenticatedAt: Date.now() },
+    });
+    expect(mocks.findUniqueUser).toHaveBeenCalledOnce();
+    expect(token.passwordAuthenticatedAt).toBe(authenticatedAt);
+    expect(token.lastValidatedAt).toBeGreaterThan(authenticatedAt);
+  });
+
+  it('clears old evidence on non-password sign-in and leaves legacy sessions without evidence', async () => {
+    const token = await callbacks().jwt({
+      token: { passwordAuthenticatedAt: Date.now() },
+      user: { id: 'sso_user', organizationId: organization.id },
+    });
+    expect(token.passwordAuthenticatedAt).toBeUndefined();
+    const legacy = await callbacks().jwt({ token: { lastValidatedAt: Date.now() } });
+    expect(legacy.passwordAuthenticatedAt).toBeUndefined();
+  });
+
+  it('withholds password evidence from revoked sessions', async () => {
+    const session = await callbacks().session({
+      session: { user: {} },
+      token: { passwordAuthenticatedAt: Date.now(), sessionRevoked: true },
+    });
+    expect(session.user.passwordAuthenticatedAt).toBeUndefined();
+    expect(session.user.sessionRevoked).toBe(true);
   });
 });

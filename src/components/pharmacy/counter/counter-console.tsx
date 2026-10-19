@@ -4,7 +4,7 @@ import { browserUuid } from '@/lib/browser-uuid';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import Link from 'next/link';
-import { useSession } from 'next-auth/react';
+import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
 import { evaluateSessionUser } from '@/lib/auth/session-state';
 import { isModuleGranted } from '@/lib/module-catalog';
@@ -218,6 +218,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
+      accountEmail={user.email}
     />
   );
 }
@@ -237,7 +238,13 @@ function ScopedPharmacyCounterConsole({
   organizationId,
   accountId,
   evidenceAuthorized = false,
-}: ConsoleProps & { organizationId: string; accountId: string; evidenceAuthorized?: boolean }) {
+  accountEmail,
+}: ConsoleProps & {
+  organizationId: string;
+  accountId: string;
+  evidenceAuthorized?: boolean;
+  accountEmail: string;
+}) {
   const utils = trpc.useUtils();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
@@ -930,12 +937,89 @@ function ScopedPharmacyCounterConsole({
     [branchId, busy, focusSearch, heldSaleId, refreshCart, saleId, setActiveSale, transition]
   );
 
+  const loadKhataAccounts = useCallback(async () => {
+    if (!saleId) return [];
+    return utils.client.pharmacySales.khataAccounts.query({ branchId, saleId });
+  }, [branchId, saleId, utils]);
+  const reauthenticateOwner = useCallback(
+    async (password: string, totp: string) => {
+      const response = await fetch('/api/login', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        credentials: 'include',
+        body: JSON.stringify({ email: accountEmail, password }),
+      });
+      let result;
+      if (response.status === 404) {
+        result = await signIn('credentials', {
+          email: accountEmail,
+          password,
+          totp,
+          redirect: false,
+        });
+      } else {
+        if (!response.ok) throw new Error('Owner re-authentication failed');
+        const body = (await response.json()) as {
+          organizations?: Array<{ id: string; ssoEnforced?: boolean }>;
+        };
+        if (!body.organizations?.some((row) => row.id === organizationId && !row.ssoEnforced))
+          throw new Error('Current workspace is not eligible');
+        result = await signIn('login-intent', { organizationId, totp, redirect: false });
+      }
+      if (!result?.ok || result.error) throw new Error('Owner re-authentication failed');
+    },
+    [accountEmail, organizationId]
+  );
+  const printKhataStatement = useCallback(
+    async (familyAccountId: string) => {
+      if (!saleId) throw new Error('Open a bill');
+      const popup = window.open('', '_blank', 'popup,width=640,height=720');
+      if (!popup) throw new Error('Allow pop-ups');
+      popup.opener = null;
+      try {
+        const statement = await utils.client.pharmacySales.khataStatement.query({
+          branchId,
+          saleId,
+          familyAccountId,
+        });
+        popup.document.title = 'Family Khata statement';
+        const pre = popup.document.createElement('pre');
+        pre.style.whiteSpace = 'pre-wrap';
+        pre.style.overflowWrap = 'anywhere';
+        // Plain text allowlist: never copy the counter DOM, clinical data or notes.
+        pre.textContent = [
+          'Family Khata statement',
+          statement.account.displayName,
+          `As of ${statement.generatedAt.toISOString()}`,
+          `Balance PKR ${(statement.account.balanceMinor / 100).toFixed(2)}`,
+          `Limit PKR ${(statement.account.creditLimitMinor / 100).toFixed(2)}`,
+          statement.truncated
+            ? 'Latest 1,000 entries shown; balance includes the full ledger.'
+            : 'All ledger entries shown.',
+          ...statement.entries.map(
+            (row) =>
+              `${row.occurredAt.toISOString()}  ${row.kind}  PKR ${(row.amountMinor / 100).toFixed(2)}`
+          ),
+        ].join('\n');
+        popup.document.body.replaceChildren(pre);
+        popup.focus();
+        popup.print();
+      } catch (error) {
+        popup.close();
+        throw error;
+      }
+    },
+    [branchId, saleId, utils]
+  );
+
   const takePayment = useCallback(
     async (
       input: {
         type: CounterTenderType;
         amountMinor: number;
         cashReceivedMinor?: number;
+        familyAccountId?: string;
+        ownerOverride?: boolean;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -976,7 +1060,12 @@ function ScopedPharmacyCounterConsole({
           ...(input.cashReceivedMinor !== undefined
             ? { cashReceivedMinor: input.cashReceivedMinor }
             : {}),
-          idempotencyKey: `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
+          idempotencyKey: input.familyAccountId
+            ? `counter-tender:${saleId}:${input.type}:${crypto.randomUUID()}`
+            : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
+          ...(input.familyAccountId
+            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
+            : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
         // Persistence and read-back must succeed before any money write starts.
@@ -1875,6 +1964,9 @@ function ScopedPharmacyCounterConsole({
             <CounterTenderPanel
               key={`${branchId}:${saleId ?? 'none'}:${restoredAttempt?.input.idempotencyKey ?? ''}`}
               ref={tenderRef}
+              loadKhataAccounts={loadKhataAccounts}
+              reauthenticateOwner={reauthenticateOwner}
+              printKhataStatement={printKhataStatement}
               balanceMinor={balanceMinor}
               state={billState}
               blocked={blocked}
