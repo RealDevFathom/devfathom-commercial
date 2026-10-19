@@ -54,7 +54,7 @@ afterEach(() => {
   vi.restoreAllMocks();
 });
 describe('native login composition', () => {
-  it.each([
+  it.each<Record<string, string>>([
     { origin: 'https://foreign.test' },
     { origin: '' },
     { 'sec-fetch-site': 'cross-site' },
