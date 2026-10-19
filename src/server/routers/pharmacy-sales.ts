@@ -15,6 +15,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -1279,7 +1280,12 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => {
       const scope = scopeFor(ctx, input.branchId);
       try {
-        return await loadCounterReceipt(ctx, scope, input.saleId);
+        const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
+        // F8: sourced Rx label payloads come only from this authorized receipt read.
+        return {
+          ...receipt,
+          dispensingLabelSources: await readDispensingLabelSources(ctx.db, scope, receipt),
+        };
       } catch (error) {
         fail(error);
       }
