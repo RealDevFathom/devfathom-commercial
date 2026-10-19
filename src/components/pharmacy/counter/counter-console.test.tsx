@@ -72,6 +72,7 @@ vi.mock('@/lib/trpc', () => {
     pharmacySales: {
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
+      counterEvidence: { reset: vi.fn() },
     },
   };
   return {
@@ -85,6 +86,7 @@ vi.mock('@/lib/trpc', () => {
         'counterCart',
         'counterReceipt',
         'counterLotOptions',
+        'counterEvidence',
         'customerSnapshot',
         'create',
         'addLine',
@@ -99,6 +101,7 @@ vi.mock('@/lib/trpc', () => {
         'substituteProposals',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
+      pharmacySafety: router(['controlledPharmacists']),
     },
   };
 });
@@ -211,10 +214,12 @@ beforeEach(() => {
     'counterCart',
     'counterReceipt',
     'counterLotOptions',
+    'counterEvidence',
     'customerSnapshot',
     'substituteProposals',
     'counterPatients',
     'counterPatientPanel',
+    'controlledPharmacists',
   ])
     mocks.queries[name] = query();
   mocks.queries.counterBranches = query({
