@@ -1,16 +1,13 @@
 import { COUNTER_RECEIPT_STRINGS, type CounterReceipt } from './counter-receipt';
 
-/**
- * Supplied only by an authorized receipt/Rx read. CounterReceipt currently has no
- * directions or licence number; never infer Rx status or translate instructions.
- * licenceNumber is BranchRegulatoryProfile.licenceNumber, not licenceCategory or
- * qualifiedPersonRegistration from regulatory.ts. Regulatory authorization stays
- * server-side; this renderer cannot establish that a branch may operate.
- */
+/** Minimal authorized label payload. No patient, consent, or actor identifiers. */
 export type DispensingLabelSource = {
   saleId: string;
   saleLineId: string;
+  rx: true;
   licenceNumber: string;
+  pharmacistRegistration: string;
+  pharmacistName?: string;
   directionsEnglish: string;
   directionsUrdu: string;
 };
@@ -49,7 +46,7 @@ export function buildDispensingLabels(
     }
     seen.add(source.saleLineId);
     const line = matches[0]!;
-    if (line.identityStatus !== 'ISSUED' || !line.allocations?.length) {
+    if (source.rx !== true || line.identityStatus !== 'ISSUED' || !line.allocations?.length) {
       throw new Error('Rx label requires issued medicine and batch identity.');
     }
     const branch = escapeHtml(text(receipt.branchName, 'pharmacy name'));
@@ -63,6 +60,11 @@ export function buildDispensingLabels(
         .join(' · ')
     );
     const licence = escapeHtml(text(source.licenceNumber, 'pharmacy licence number'));
+    const registration = escapeHtml(text(source.pharmacistRegistration, 'pharmacist registration'));
+    const pharmacist =
+      source.pharmacistName === undefined
+        ? ''
+        : `${escapeHtml(text(source.pharmacistName, 'pharmacist name'))} · `;
     const english = escapeHtml(text(source.directionsEnglish, 'English directions'));
     const urdu = escapeHtml(text(source.directionsUrdu, 'Urdu directions'));
     return line.allocations.map((allocation) => {
@@ -79,6 +81,7 @@ export function buildDispensingLabels(
       const batch = escapeHtml(text(allocation.batchNumber, 'batch number'));
       return `<section class="dispensing-label" aria-label="Rx dispensing label">
 <div><strong>${branch}</strong> · Licence: <bdi>${licence}</bdi></div>
+<div>Pharmacist: ${pharmacist}<bdi>${registration}</bdi></div>
 <div><strong>${medicine}</strong></div>
 <div lang="en" dir="ltr">${english}</div>
 <div lang="ur" dir="rtl">${urdu}</div>

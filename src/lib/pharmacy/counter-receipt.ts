@@ -16,6 +16,8 @@
 
 import { PrintDocumentSchema, type PrintDocument } from '@/lib/restaurant/printing/contract';
 
+import type { DispensingLabelSource } from './dispensing-label';
+
 import type { SaleUnitKind } from './counter-pricing';
 
 export type CounterReceiptLocale = 'en' | 'ur';
@@ -55,6 +57,7 @@ export type CounterReceiptTender = {
 };
 
 export type CounterReceipt = {
+  dispensingLabelSources?: DispensingLabelSource[];
   saleId: string;
   /** Null until a tender settles the bill; never minted by a render. */
   receiptNumber: number | null;

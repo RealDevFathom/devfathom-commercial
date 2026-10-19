@@ -161,3 +161,95 @@ it('disables printing when shared semantic validation rejects the receipt', () =
   expect(screen.getByRole('button', { name: 'Print receipt' })).toBeDisabled();
   expect(screen.getByRole('alert')).toHaveTextContent('cannot be previewed');
 });
+
+it('keeps Rx printing disabled when receipt has no sourced directions or licence', () => {
+  render(<CounterReceiptView {...props()} />);
+  expect(screen.getByRole('button', { name: /Print Rx labels/ })).toBeDisabled();
+  expect(screen.getByText(/sourced Rx directions/)).toBeTruthy();
+});
+
+it('opens isolated Rx labels and exposes popup failure with retry available', () => {
+  const input = props();
+  input.receipt!.lines[0]!.identityStatus = 'ISSUED';
+  input.receipt!.lines[0]!.allocations = [
+    {
+      allocationId: 'a',
+      inventoryLotId: 'a',
+      batchNumber: 'TEST',
+      expiresAt: '2027-01-01',
+      canonicalUnits: 1,
+    },
+  ];
+  input.dispensingLabelSources = [
+    {
+      saleId: 'sale-1',
+      saleLineId: 'line-1',
+      rx: true,
+      pharmacistRegistration: 'REG',
+      licenceNumber: 'TEST',
+      directionsEnglish: 'English fixture',
+      directionsUrdu: 'اردو',
+    },
+  ];
+  const open = vi.spyOn(window, 'open').mockReturnValue(null);
+  render(<CounterReceiptView {...input} />);
+  const button = screen.getByRole('button', { name: /Print Rx labels/ });
+  expect(button).toBeEnabled();
+  fireEvent.click(button);
+  expect(screen.getByRole('alert')).toHaveTextContent('Allow pop-ups');
+  const popup = {
+    opener: window,
+    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
+    focus: vi.fn(),
+    print: vi.fn(),
+    close: vi.fn(),
+  };
+  open.mockReturnValue(popup as unknown as Window);
+  fireEvent.click(button);
+  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('size: 50mm 30mm'));
+  expect(popup.print).toHaveBeenCalledOnce();
+  expect(input.onPrint).not.toHaveBeenCalled();
+  expect(screen.queryByRole('alert')).toBeNull();
+  open.mockRestore();
+});
+
+it('selects only the clicked line source from the production receipt payload', () => {
+  const input = props();
+  const line = input.receipt!.lines[0]!;
+  input.receipt!.lines = ['first', 'second'].map((saleLineId) => ({
+    ...line,
+    saleLineId,
+    identityStatus: 'ISSUED',
+    allocations: [
+      {
+        allocationId: saleLineId,
+        inventoryLotId: saleLineId,
+        batchNumber: saleLineId,
+        expiresAt: '2027-01-01',
+        canonicalUnits: 1,
+      },
+    ],
+  }));
+  input.receipt!.dispensingLabelSources = ['first', 'second'].map((saleLineId) => ({
+    saleId: input.receipt!.saleId,
+    saleLineId,
+    rx: true,
+    licenceNumber: 'LIC',
+    pharmacistRegistration: 'REG',
+    directionsEnglish: `${saleLineId} directions`,
+    directionsUrdu: 'اردو',
+  }));
+  const popup = {
+    opener: window,
+    document: { open: vi.fn(), write: vi.fn(), close: vi.fn(), querySelectorAll: () => [] },
+    focus: vi.fn(),
+    print: vi.fn(),
+    close: vi.fn(),
+  };
+  const open = vi.spyOn(window, 'open').mockReturnValue(popup as unknown as Window);
+  render(<CounterReceiptView {...input} />);
+  fireEvent.click(screen.getAllByRole('button', { name: /Print Rx labels/ })[1]!);
+  expect(popup.document.write).toHaveBeenCalledWith(expect.stringContaining('second directions'));
+  expect(popup.document.write.mock.calls[0]![0]).not.toContain('first directions');
+  open.mockRestore();
+});
