@@ -15,6 +15,12 @@ describe('RestaurantDashboardContent', () => {
     );
     expect(screen.getByRole('link', { name: /sop board/i })).toBeInTheDocument();
     expect(screen.queryByRole('link', { name: /orders/i })).not.toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 1, name: 'Service dashboard' })).toBeVisible();
+    expect(screen.getByRole('heading', { level: 2, name: 'Open a workspace' })).toBeVisible();
+    expect(
+      screen.getByText('Restaurant workspace').closest('[data-slot="page-header"]')
+    ).toHaveClass('[&_[data-slot=eyebrow]]:text-text-body');
+    expect(screen.getByText('Workspace ready')).toHaveClass('text-text-body');
   });
 
   it('renders a useful core-only setup state', () => {
@@ -24,5 +30,6 @@ describe('RestaurantDashboardContent', () => {
       'href',
       '/restaurant/staff'
     );
+    expect(screen.getByRole('heading', { level: 2, name: /ready for modules/i })).toBeVisible();
   });
 });

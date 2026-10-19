@@ -17,7 +17,7 @@ export function isValidPin(pin: string): boolean {
 }
 
 export function validateOperatorCredential(staffProfileId: string, pin: string): string | null {
-  if (staffProfileId.trim().length === 0) return 'Enter the incoming operator profile ID.';
+  if (staffProfileId.trim().length === 0) return 'Select the incoming operator.';
   if (!isValidPin(pin)) return 'PIN must contain 4–8 digits.';
   return null;
 }
@@ -33,7 +33,7 @@ export function validateCoAuthorization(input: {
 }): string | null {
   const acting = input.actingStaffProfileId.trim();
   const approving = input.approvingStaffProfileId.trim();
-  if (approving.length === 0) return 'Enter the approving manager profile ID.';
+  if (approving.length === 0) return 'Select the approving manager.';
   if (acting === approving) return 'Approving manager must differ from the acting operator.';
   if (!isValidPin(input.pin)) return 'Manager PIN must contain 4–8 digits.';
   if (input.capability.trim().length === 0) return 'Enter the capability or action.';

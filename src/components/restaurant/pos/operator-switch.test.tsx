@@ -6,9 +6,21 @@ import { OperatorSwitch } from './operator-switch';
 describe('OperatorSwitch', () => {
   it('validates with terminal-state rules and submits the incoming identity', async () => {
     const onSwitch = vi.fn().mockResolvedValue(true);
-    render(<OperatorSwitch activeOperatorId="staff-1" pending={false} onSwitch={onSwitch} />);
+    render(
+      <OperatorSwitch
+        activeOperatorId="staff-1"
+        operators={[
+          { staffProfileId: 'staff-1', displayName: 'Amina Khan', role: 'Supervisor' },
+          { staffProfileId: 'staff-2', displayName: 'Bilal Shah', role: 'Cashier' },
+        ]}
+        pending={false}
+        onSwitch={onSwitch}
+      />
+    );
     fireEvent.click(screen.getByRole('button', { name: 'Switch operator' }));
-    fireEvent.change(screen.getByLabelText('Operator profile ID'), {
+    expect(screen.getByText('Currently acting: Amina Khan — Supervisor')).toBeVisible();
+    expect(screen.queryByText('staff-1')).not.toBeInTheDocument();
+    fireEvent.change(screen.getByLabelText('Operator'), {
       target: { value: 'staff-2' },
     });
     fireEvent.change(screen.getByLabelText('Operator PIN'), { target: { value: '12ab34' } });

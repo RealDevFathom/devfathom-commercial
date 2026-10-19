@@ -20,6 +20,15 @@ function tenantRequest(path: string) {
   });
 }
 
+function authenticatedTenantRequest(path: string) {
+  return new Request(`http://acme.localhost:3000${path}`, {
+    headers: {
+      host: 'acme.localhost:3000',
+      cookie: 'authjs.session-token=opaque-session-token',
+    },
+  });
+}
+
 describe('platform host routing', () => {
   it('never redirects framework assets away from their asset URL', () => {
     const response = proxy(adminRequest('/_next/static/chunks/app.js'));
@@ -70,6 +79,56 @@ describe('platform host routing', () => {
     expect(meetingsWorkspace.status).toBe(307);
     expect(meetingsWorkspace.headers.get('location')).toBe(
       'http://acme.localhost:3000/login?callbackUrl=%2Fmeetings'
+    );
+  });
+});
+
+describe('actor-facing tenant URLs', () => {
+  it('removes a forbidden cross-tenant organization id before rendering the dashboard', () => {
+    const response = proxy(
+      authenticatedTenantRequest(
+        '/dashboard?organizationId=org_restaurant_b_forbidden&view=operations'
+      )
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe(
+      'http://acme.localhost:3000/dashboard?view=operations'
+    );
+    expect(response.headers.get('location')).not.toContain('org_restaurant_b_forbidden');
+  });
+
+  it('canonicalizes valid tenant navigation without exposing its internal id', () => {
+    const response = proxy(
+      authenticatedTenantRequest('/dashboard?organizationId=org_restaurant_a&view=operations')
+    );
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe(
+      'http://acme.localhost:3000/dashboard?view=operations'
+    );
+  });
+
+  it('keeps refresh canonical and cleans a raw-id history revisit again', () => {
+    const canonical = proxy(authenticatedTenantRequest('/dashboard?view=operations'));
+    expect(canonical.status).toBe(200);
+    expect(canonical.headers.get('location')).toBeNull();
+
+    const revisited = proxy(
+      authenticatedTenantRequest('/dashboard?organizationId=org_restaurant_a&view=operations')
+    );
+    expect(revisited.headers.get('location')).toBe(
+      'http://acme.localhost:3000/dashboard?view=operations'
+    );
+  });
+
+  it('does not copy an internal organization id into an unauthenticated login URL', () => {
+    const response = proxy(tenantRequest('/dashboard?organizationId=org_restaurant_a'));
+
+    expect(response.status).toBe(307);
+    expect(response.headers.get('location')).toBe('http://acme.localhost:3000/dashboard');
+    expect([...response.headers]).not.toContainEqual(
+      expect.arrayContaining([expect.any(String), expect.stringContaining('org_restaurant_a')])
     );
   });
 });

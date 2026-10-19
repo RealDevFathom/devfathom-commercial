@@ -36,6 +36,7 @@ import {
   Bell,
   Camera,
   CalendarClock,
+  Landmark,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -154,6 +155,13 @@ export const navigation: NavItem[] = [
     icon: CalendarClock,
     group: 'Firm',
     module: 'restaurant-core',
+  },
+  {
+    label: 'Tax configuration',
+    href: '/restaurant/tax',
+    icon: Landmark,
+    adminOnly: true,
+    group: 'Restaurant',
   },
   {
     label: 'Restaurant devices',

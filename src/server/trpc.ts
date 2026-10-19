@@ -37,7 +37,11 @@ export const createTRPCContext = async (opts?: {
   const actor =
     explicitSession !== undefined && opts?.organization
       ? null
-      : await resolveTenantActor({ request: opts?.req, session: explicitSession });
+      : await resolveTenantActor(
+          explicitSession === undefined
+            ? { request: opts?.req }
+            : { request: opts?.req, session: explicitSession }
+        );
   const session = explicitSession !== undefined ? explicitSession : (actor?.session ?? null);
   const organization = opts?.organization ?? actor?.organization ?? null;
   const headers = opts?.req?.headers ?? null;
