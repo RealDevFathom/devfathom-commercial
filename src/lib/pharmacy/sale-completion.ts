@@ -22,15 +22,21 @@ export async function completePaidPharmacySale(
   db: ScopedDb,
   scope: LedgerScope,
   sale: Prisma.PharmacySaleGetPayload<{ include: typeof completionSaleInclude }>,
-  input: { deviceId: string; businessDate: Date }
+  input: { deviceId: string; businessDate: Date },
+  /** F2: a leased offline receipt number the caller already consumed in this transaction. */
+  leasedReceiptNumber: number | null = null
 ) {
-  const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
+  let receiptNumber = leasedReceiptNumber;
+  if (receiptNumber === null) {
+    // Reserved (leased) numbers never return to this online sequence.
+    const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
       INSERT INTO pharmacy_receipt_number_sequences (id, "organizationId", "branchId", "deviceId", "nextNumber", "updatedAt")
       VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${input.deviceId}, 2, now())
       ON CONFLICT ("organizationId", "branchId", "deviceId")
       DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + 1, "updatedAt" = now()
       RETURNING "nextNumber" - 1 AS receipt_number`);
-  const receiptNumber = rows[0]!.receipt_number;
+    receiptNumber = rows[0]!.receipt_number;
+  }
   const issuedAt = new Date();
   await db.pharmacySale.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: sale.id } },
