@@ -1,0 +1,46 @@
+{
+  "owner": {
+    "database": "wha1350_disposable_test",
+    "role": "wha1350_owner",
+    "rolsuper": false,
+    "rolbypassrls": false,
+    "rolcreaterole": false,
+    "rolcreatedb": false
+  },
+  "migrations": {
+    "applied": 104,
+    "unsuccessful": 0
+  },
+  "repair": [
+    {
+      "migration_name": "20260905080000_pharmacy_regulatory_profile_tenant_purge",
+      "checksum": "727d3bacdc77eb4dca2c96518f60235b3885decb460553aa35391f6ab6d4158c",
+      "finished": true
+    }
+  ],
+  "runtime": {
+    "database": "wha1350_disposable_test",
+    "role": "wha1350_runtime",
+    "rolsuper": false,
+    "rolbypassrls": false,
+    "rolcreaterole": false,
+    "rolcreatedb": false
+  },
+  "rls": [
+    {
+      "relname": "pharmacy_onboarding_events",
+      "relrowsecurity": true,
+      "relforcerowsecurity": true,
+      "owner": "wha1350_owner"
+    },
+    {
+      "relname": "pharmacy_branch_regulatory_profiles",
+      "relrowsecurity": true,
+      "relforcerowsecurity": true,
+      "owner": "wha1350_owner"
+    }
+  ],
+  "seed": {
+    "packages": 0
+  }
+}

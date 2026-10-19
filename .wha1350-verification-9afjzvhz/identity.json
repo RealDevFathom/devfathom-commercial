@@ -1,0 +1,8 @@
+{
+  "port": 52027,
+  "database": "wha1350_disposable_test",
+  "data": "/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1350-env-ph-purge-provision-bounded-verification-prerequisites-for-regulatory-profile-repair/.wha1350-verification-9afjzvhz/pgdata",
+  "owner": "wha1350_owner",
+  "runtime": "wha1350_runtime",
+  "cleanupOwner": "WHA-1220 builder / 6bc6de9b-2bb2-4738-a071-67caa641fddc"
+}
