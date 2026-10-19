@@ -6,6 +6,13 @@ import {
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import {
+  ALL_VERTICALS,
+  VERTICALS,
+  isPackageCompatibleWithVertical,
+  mandatoryModulesForVertical,
+  modulesForVertical,
+} from '@/lib/vertical-catalog';
 
 const transitionTargets: Record<string, string[]> = {
   PROSPECT: ['ONBOARDING', 'TERMINATED'],
@@ -25,11 +32,22 @@ export default async function OrganizationDetailPage({
 }) {
   const { id } = await params;
   const data = await withPlatformDb(async (db) => {
-    const [organization, modules, packages] = await Promise.all([
+    const [organization, modules, packages, branches] = await Promise.all([
       db.organization.findUnique({
         where: { id },
         include: {
-          package: { select: { id: true, name: true, key: true } },
+          package: {
+            select: {
+              id: true,
+              name: true,
+              key: true,
+              vertical: true,
+              moduleLinks: {
+                where: { enabled: true },
+                select: { module: { select: { key: true } } },
+              },
+            },
+          },
           modules: {
             include: { module: true },
             orderBy: { module: { sortOrder: 'asc' } },
@@ -75,13 +93,87 @@ export default async function OrganizationDetailPage({
       }),
       db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
       db.platformPackage.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+      db.restaurantBranch.findMany({
+        where: { organizationId: id },
+        orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+        select: { id: true, name: true, timezone: true, active: true, isDefault: true },
+      }),
     ]);
-    return { organization, modules, packages };
+    return { organization, modules, packages, branches };
   });
   if (!data.organization) notFound();
   const organization = data.organization;
   const assigned = new Map(organization.modules.map((item) => [item.moduleId, item]));
   const targets = transitionTargets[organization.status] ?? [];
+  const verticalModules = modulesForVertical(organization.vertical);
+  const verticalModuleKeys = new Set(verticalModules.map((module) => module.key));
+  const enabledModuleKeys = new Set(
+    organization.package?.moduleLinks
+      .map((link) => link.module.key)
+      .filter((key) => verticalModuleKeys.has(key)) ?? []
+  );
+  for (const override of organization.modules) {
+    if (!verticalModuleKeys.has(override.module.key)) continue;
+    if (override.status === 'ENABLED' || override.status === 'TRIAL') {
+      enabledModuleKeys.add(override.module.key);
+    } else {
+      enabledModuleKeys.delete(override.module.key);
+    }
+  }
+  const mandatoryModules = mandatoryModulesForVertical(organization.vertical);
+  const mandatoryKeys = new Set(mandatoryModules.map((module) => module.key));
+  const activeDefaultBranches = data.branches.filter((branch) => branch.active && branch.isDefault);
+  const activeOrganizationAdministrators = organization.users.filter(
+    (user) => user.role === 'ADMIN' && ['ACTIVE', 'ON_LEAVE'].includes(user.status)
+  );
+  const readyProductionDeployments = organization.deployments.filter(
+    (deployment) => deployment.environment === 'production' && deployment.status === 'READY'
+  );
+  const restaurantPreflight = [
+    {
+      label: 'Compatible package',
+      detail: organization.package?.name ?? 'No package assigned',
+      ready: Boolean(
+        organization.package &&
+        isPackageCompatibleWithVertical(
+          organization.package.vertical ?? 'AGENCY',
+          organization.vertical
+        )
+      ),
+    },
+    {
+      label: 'Mandatory core module',
+      detail: mandatoryModules.map((module) => module.name).join(', '),
+      ready: mandatoryModules.every((module) => enabledModuleKeys.has(module.key)),
+    },
+    {
+      label: 'Operational restaurant module',
+      detail: 'At least one enabled module beyond Restaurant Core',
+      ready: verticalModules.some(
+        (module) => !mandatoryKeys.has(module.key) && enabledModuleKeys.has(module.key)
+      ),
+    },
+    {
+      label: 'Active organization administrator',
+      detail:
+        activeOrganizationAdministrators.map((user) => user.name).join(', ') ||
+        'No active organization administrator',
+      ready: activeOrganizationAdministrators.length > 0,
+    },
+    {
+      label: 'Ready production deployment',
+      detail:
+        readyProductionDeployments
+          .map((deployment) => deployment.url ?? deployment.provider)
+          .join(', ') || 'No ready production deployment',
+      ready: readyProductionDeployments.length > 0,
+    },
+    {
+      label: 'Exactly one default branch',
+      detail: activeDefaultBranches.map((branch) => branch.name).join(', ') || 'No active default',
+      ready: activeDefaultBranches.length === 1,
+    },
+  ];
 
   return (
     <div className="mx-auto max-w-[1480px]">
@@ -199,10 +291,31 @@ export default async function OrganizationDetailPage({
                   defaultValue: organization.legalName,
                 },
                 {
+                  name: 'vertical',
+                  label: 'Organization type',
+                  type: 'select',
+                  required: true,
+                  defaultValue: organization.vertical,
+                  disabled: Boolean(organization.activatedAt),
+                  help: organization.activatedAt
+                    ? 'Organization type is locked after activation.'
+                    : 'Choose the operating model first; package choices update automatically.',
+                  options: ALL_VERTICALS.map((vertical) => ({
+                    label: VERTICALS[vertical].label,
+                    value: vertical,
+                  })),
+                },
+                {
                   name: 'packageId',
                   label: 'Commercial package',
                   type: 'select',
-                  options: data.packages.map((item) => ({ label: item.name, value: item.id })),
+                  filterBy: 'vertical',
+                  help: 'Only packages compatible with the selected organization type are shown.',
+                  options: data.packages.map((item) => ({
+                    label: item.name,
+                    value: item.id,
+                    filterValue: item.vertical,
+                  })),
                   defaultValue: organization.packageId,
                 },
                 {
@@ -1348,6 +1461,28 @@ export default async function OrganizationDetailPage({
         </div>
 
         <aside className="space-y-7">
+          {organization.vertical === 'RESTAURANT' ? (
+            <section className="border border-border-default bg-surface-card p-5">
+              <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-text-muted">
+                Activation readiness
+              </p>
+              <h2 className="mt-2 font-display text-xl font-semibold">
+                Restaurant activation preflight
+              </h2>
+              <ul className="mt-4 divide-y divide-border-subtle">
+                {restaurantPreflight.map((item) => (
+                  <li key={item.label} className="flex items-start justify-between gap-4 py-3">
+                    <div>
+                      <p className="text-xs font-semibold">{item.label}</p>
+                      <p className="mt-1 text-[10px] leading-4 text-text-muted">{item.detail}</p>
+                    </div>
+                    <PlatformStatus value={item.ready ? 'READY' : 'FAILED'} />
+                  </li>
+                ))}
+              </ul>
+            </section>
+          ) : null}
+
           <section className="border border-border-default bg-abyss-900 p-5 text-paper-50">
             <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-brass-300">
               Audited support
@@ -1391,8 +1526,22 @@ export default async function OrganizationDetailPage({
                 <dd className="mt-1 break-all font-mono text-[10px]">{organization.id}</dd>
               </div>
               <div>
+                <dt className="text-text-muted">Organization type</dt>
+                <dd className="mt-1">{VERTICALS[organization.vertical].label}</dd>
+              </div>
+              <div>
                 <dt className="text-text-muted">Package</dt>
                 <dd className="mt-1">{organization.package?.name ?? 'Unassigned'}</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Branches</dt>
+                <dd className="mt-1">{data.branches.length} total</dd>
+              </div>
+              <div>
+                <dt className="text-text-muted">Default branch</dt>
+                <dd className="mt-1">
+                  {activeDefaultBranches.map((branch) => branch.name).join(', ') || 'Not set'}
+                </dd>
               </div>
               <div>
                 <dt className="text-text-muted">Created</dt>

@@ -30,8 +30,30 @@ export type CommandField = {
   min?: number;
   max?: number;
   step?: number;
-  options?: Array<{ label: string; value: string }>;
+  disabled?: boolean;
+  filterBy?: string;
+  options?: Array<{ label: string; value: string; filterValue?: string }>;
 };
+
+function optionsFor(field: CommandField, values: Record<string, string>) {
+  return field.filterBy
+    ? field.options?.filter((option) => option.filterValue === values[field.filterBy!])
+    : field.options;
+}
+
+function initialSelectValues(fields: CommandField[]) {
+  const values: Record<string, string> = {};
+  for (const field of fields) {
+    if (field.type !== 'select') continue;
+    const options = optionsFor(field, values);
+    const fallback = field.required ? (options?.[0]?.value ?? '') : '';
+    const preferred = String(field.defaultValue ?? fallback);
+    values[field.name] = options?.some((option) => option.value === preferred)
+      ? preferred
+      : fallback;
+  }
+  return values;
+}
 
 function payloadFromForm(form: HTMLFormElement, fields: CommandField[]) {
   const formData = new FormData(form);
@@ -90,6 +112,28 @@ export function PlatformCommandForm({
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
   const [revealed, setRevealed] = useState('');
+  const [selectState, setSelectState] = useState(() => ({
+    fields,
+    values: initialSelectValues(fields),
+  }));
+  if (selectState.fields !== fields) {
+    setSelectState({ fields, values: initialSelectValues(fields) });
+  }
+  const selectValues = selectState.values;
+
+  function updateSelect(name: string, value: string) {
+    setSelectState((current) => {
+      const next = { ...current.values, [name]: value };
+      for (const field of fields) {
+        if (field.filterBy !== name) continue;
+        const options = optionsFor(field, next);
+        if (!options?.some((option) => option.value === next[field.name])) {
+          next[field.name] = options?.[0]?.value ?? '';
+        }
+      }
+      return { fields, values: next };
+    });
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
@@ -166,6 +210,7 @@ export function PlatformCommandForm({
                 <textarea
                   name={field.name}
                   required={field.required}
+                  disabled={field.disabled}
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
                       ? JSON.stringify(field.defaultValue, null, 2)
@@ -179,11 +224,13 @@ export function PlatformCommandForm({
                 <select
                   name={field.name}
                   required={field.required}
-                  defaultValue={String(field.defaultValue ?? '')}
+                  disabled={field.disabled}
+                  value={selectValues[field.name] ?? ''}
+                  onChange={(event) => updateSelect(field.name, event.target.value)}
                   className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 >
                   {!field.required ? <option value="">Not set</option> : null}
-                  {field.options?.map((option) => (
+                  {optionsFor(field, selectValues)?.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -194,6 +241,7 @@ export function PlatformCommandForm({
                   <input
                     name={field.name}
                     type="checkbox"
+                    disabled={field.disabled}
                     defaultChecked={Boolean(field.defaultValue)}
                     className="h-4 w-4 accent-[var(--accent-brand)]"
                   />
@@ -204,6 +252,7 @@ export function PlatformCommandForm({
                   name={field.name}
                   type={field.type ?? 'text'}
                   required={field.required}
+                  disabled={field.disabled}
                   defaultValue={
                     typeof field.defaultValue === 'boolean'
                       ? undefined
