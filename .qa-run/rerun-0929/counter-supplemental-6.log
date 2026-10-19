@@ -1,0 +1,24 @@
+$ tsx scripts/run-pharmacy-e2e.ts "--reporter=html,line,json" --grep "this spec drives" "--output=.qa-run/rerun-0929/counter-supplemental-6-artifacts"
+Pharmacy counter E2E database preflight passed.
+Pharmacy counter E2E seed complete.
+Pharmacy counter E2E seed complete.
+[WebServer] $ next dev --port "4331"
+
+[WebServer] (node:72743) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:72744) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:72750) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+
+Running 1 test using 1 worker
+
+(node:72760) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/1] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:354:5 › this spec drives the counter without a pointer
+  1 passed (1.8s)

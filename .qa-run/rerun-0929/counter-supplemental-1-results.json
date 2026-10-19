@@ -1,0 +1,182 @@
+{
+  "config": {
+    "argv": [
+      "/Users/Saad/.hermes/node/bin/node",
+      "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/node_modules/.bin/playwright",
+      "test",
+      "--config=playwright.pharmacy-counter.config.ts",
+      "--reporter=html,line,json",
+      "--grep",
+      "bill 1",
+      "--output=.qa-run/rerun-0929/counter-supplemental-1-artifacts"
+    ],
+    "configFile": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright.pharmacy-counter.config.ts",
+    "rootDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/counter-supplemental-1-artifacts",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "pharmacy-counter-serial",
+        "name": "pharmacy-counter-serial",
+        "testDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "pharmacy-counter.spec.ts",
+          "time-to-first-sale.spec.ts"
+        ],
+        "timeout": 45000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "html"
+      ],
+      [
+        "line"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.0",
+    "workers": 1,
+    "webServer": {
+      "command": "bun run dev --port 4331",
+      "url": "http://127.0.0.1:4331",
+      "reuseExistingServer": false,
+      "timeout": 120000,
+      "env": {
+        "DATABASE_URL": "postgresql://qa_runtime@127.0.0.1:55689/pharmacy_counter_e2e",
+        "TEST_DATABASE_URL": "postgresql://qa_runtime@127.0.0.1:55689/pharmacy_counter_e2e",
+        "PHARMACY_E2E": "1",
+        "AUTH_SECRET": "disposable-pharmacy-qa-1589-local-only",
+        "AUTH_TRUST_HOST": "true",
+        "SHARED_APP_HOSTS": "127.0.0.1"
+      }
+    }
+  },
+  "suites": [
+    {
+      "title": "pharmacy-counter.spec.ts",
+      "file": "pharmacy-counter.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 30585,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mpage\u001b[39m\u001b[2m).\u001b[22mtoHaveURL\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nExpected pattern: \u001b[32m/\\/(dashboard|pharmacy)/\u001b[39m\nReceived string:  \u001b[31m\"http://127.0.0.1:4331/login\"\u001b[39m\nTimeout: 30000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveURL\" with timeout 30000ms\u001b[22m\n\u001b[2m    64 × locator resolved to <html lang=\"en\" data-theme=\"light\" data-layout=\"rail\" data-type=\"default\" data-accent=\"quiet\" data-icons=\"numeric\" data-density=\"default\" class=\"instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full\">…</html>\u001b[22m\n\u001b[2m       - unexpected value \"http://127.0.0.1:4331/login\"\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mpage\u001b[39m\u001b[2m).\u001b[22mtoHaveURL\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nExpected pattern: \u001b[32m/\\/(dashboard|pharmacy)/\u001b[39m\nReceived string:  \u001b[31m\"http://127.0.0.1:4331/login\"\u001b[39m\nTimeout: 30000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveURL\" with timeout 30000ms\u001b[22m\n\u001b[2m    64 × locator resolved to <html lang=\"en\" data-theme=\"light\" data-layout=\"rail\" data-type=\"default\" data-accent=\"quiet\" data-icons=\"numeric\" data-density=\"default\" class=\"instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full\">…</html>\u001b[22m\n\u001b[2m       - unexpected value \"http://127.0.0.1:4331/login\"\u001b[22m\n\n    at signIn (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:56:22)\n    at openCounter (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:60:3)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:142:3",
+                    "location": {
+                      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts",
+                      "column": 22,
+                      "line": 56
+                    },
+                    "snippet": "  54 |     await pressControl(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }));\n  55 |   }\n> 56 |   await expect(page).toHaveURL(/\\/(dashboard|pharmacy)/, { timeout: 30_000 });\n     |                      ^\n  57 | }\n  58 |\n  59 | async function openCounter(page: Page) {"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts",
+                        "column": 22,
+                        "line": 56
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mpage\u001b[39m\u001b[2m).\u001b[22mtoHaveURL\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nExpected pattern: \u001b[32m/\\/(dashboard|pharmacy)/\u001b[39m\nReceived string:  \u001b[31m\"http://127.0.0.1:4331/login\"\u001b[39m\nTimeout: 30000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveURL\" with timeout 30000ms\u001b[22m\n\u001b[2m    64 × locator resolved to <html lang=\"en\" data-theme=\"light\" data-layout=\"rail\" data-type=\"default\" data-accent=\"quiet\" data-icons=\"numeric\" data-density=\"default\" class=\"instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full\">…</html>\u001b[22m\n\u001b[2m       - unexpected value \"http://127.0.0.1:4331/login\"\u001b[22m\n\n\n  54 |     await pressControl(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }));\n  55 |   }\n> 56 |   await expect(page).toHaveURL(/\\/(dashboard|pharmacy)/, { timeout: 30_000 });\n     |                      ^\n  57 | }\n  58 |\n  59 | async function openCounter(page: Page) {\n    at signIn (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:56:22)\n    at openCounter (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:60:3)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:142:3"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:56:24.137Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/counter-supplemental-1-artifacts/pharmacy-counter-bill-1-—--da676-der-and-a-bilingual-receipt-pharmacy-counter-serial/test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/counter-supplemental-1-artifacts/pharmacy-counter-bill-1-—--da676-der-and-a-bilingual-receipt-pharmacy-counter-serial/video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/counter-supplemental-1-artifacts/pharmacy-counter-bill-1-—--da676-der-and-a-bilingual-receipt-pharmacy-counter-serial/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/counter-supplemental-1-artifacts/pharmacy-counter-bill-1-—--da676-der-and-a-bilingual-receipt-pharmacy-counter-serial/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts",
+                    "column": 22,
+                    "line": 56
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-2250dfba6d6d85eefd33",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 140,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-29T15:56:22.242Z",
+    "duration": 32781.563,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 1,
+    "flaky": 0
+  }
+}

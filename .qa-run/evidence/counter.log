@@ -1,0 +1,251 @@
+$ tsx scripts/run-pharmacy-e2e.ts "--reporter=html,line"
+Pharmacy counter E2E database preflight passed.
+Pharmacy counter E2E seed complete.
+Pharmacy counter E2E seed complete.
+[WebServer] $ next dev --port "4331"
+
+[WebServer] (node:89674) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:89688) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:89862) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+[WebServer] 
+[WebServer] -----
+[WebServer] FATAL: An unexpected Turbopack error occurred. A panic log has been written to /var/folders/fp/5lfcfqb567l602d65vrk1tkc0000gp/T/paperclip-run-wha-1589-7f394618-22d-gGdmP6/next-panic-5512b9a157a6f72923cf38ea96f96a63.log.
+[WebServer] 
+[WebServer] To help make Turbopack better, report this error by clicking here: https://bugs.nextjs.org/search?category=turbopack-error-report&title=Turbopack%20Error%3A%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage&body=Turbopack%20version%3A%20%60v16.2.12%60%0ANext.js%20version%3A%20%600.0.0%60%0A%0AError%20message%3A%0A%60%60%60%0AFailed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A%0ACaused%20by%3A%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%0ADebug%20info%3A%0A-%20Execution%20of%20get_written_endpoint_with_issues_operation%20failed%0A-%20Execution%20of%20endpoint_write_to_disk%20failed%0A-%20Execution%20of%20%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aoutput%20failed%0A-%20Failed%20to%20write%20app%20endpoint%20%2Flogin%2Fpage%0A-%20Execution%20of%20%2Aall_asset_paths%20failed%0A-%20Execution%20of%20%2AAppEndpointOutput%3A%3Aoutput_assets%20failed%0A-%20Execution%20of%20AppEndpoint%3A%3Aoutput%20failed%0A-%20Execution%20of%20AppProject%3A%3Aapp_module_graphs%20failed%0A-%20Execution%20of%20%2A%3CAppEndpoint%20as%20Endpoint%3E%3A%3Aadditional_entries%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Afrom_graphs%20failed%0A-%20Execution%20of%20ModuleGraph%3A%3Acreate%20failed%0A-%20Execution%20of%20SingleModuleGraph%3A%3Anew_with_entries_visited_intern%20failed%0A-%20%5Bproject%5D%2Fsrc%2Fapp%2Fglobals.css%20%5Bapp-client%5D%20%28css%29%0A-%20Execution%20of%20primary_chunkable_referenced_modules%20failed%0A-%20Execution%20of%20%3CCssModule%20as%20Module%3E%3A%3Areferences%20failed%0A-%20Execution%20of%20parse_css%20failed%0A-%20Execution%20of%20%3CPostCssTransformedAsset%20as%20Asset%3E%3A%3Acontent%20failed%0A-%20Execution%20of%20PostCssTransformedAsset%3A%3Aprocess%20failed%0A-%20Execution%20of%20evaluate_webpack_loader%20failed%0A-%20Execution%20of%20%3CDiskFileSystem%20as%20FileSystem%3E%3A%3Aread%20failed%0A-%20reading%20file%20%22%2FUsers%2FSaad%2FDeveloper%2Fpaperclip-worktrees%2Fdevfathom%2Fph-qa-specs%2F.qa-run%2F.s.PGSQL.55689%22%0A-%20Operation%20not%20supported%20on%20socket%20%28os%20error%20102%29%0A%60%60%60&labels=Turbopack,Turbopack%20Panic%20Backtrace
+[WebServer] -----
+[WebServer] 
+
+
+Running 8 tests using 1 worker
+
+(node:92819) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/8] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:69:5 › pharmacy-only navigation exposes pharmacy destinations and excludes Restaurant routes
+[WebServer] ⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "127.0.0.1".
+[WebServer] Cross-origin access to Next.js dev resources is blocked by default for safety.
+[WebServer] 
+[WebServer] To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+[WebServer] 
+[WebServer] // next.config.js
+[WebServer] module.exports = {
+[WebServer]   allowedDevOrigins: ['127.0.0.1'],
+[WebServer] }
+[WebServer] 
+[WebServer] Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+
+  1) [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:69:5 › pharmacy-only navigation exposes pharmacy destinations and excludes Restaurant routes 
+
+    Error: expect(page).toHaveURL(expected) failed
+
+    Expected pattern: /\/(dashboard|pharmacy)/
+    Received string:  "http://127.0.0.1:4331/login"
+    Timeout: 30000ms
+
+    Call log:
+      - Expect "toHaveURL" with timeout 30000ms
+        64 × locator resolved to <html lang="en" data-theme="light" data-layout="rail" data-type="default" data-accent="quiet" data-icons="numeric" data-density="default" class="instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full">…</html>
+           - unexpected value "http://127.0.0.1:4331/login"
+
+
+      54 |     await pressControl(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }));
+      55 |   }
+    > 56 |   await expect(page).toHaveURL(/\/(dashboard|pharmacy)/, { timeout: 30_000 });
+         |                      ^
+      57 | }
+      58 |
+      59 | async function openCounter(page: Page) {
+        at signIn (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:56:22)
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:72:3
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+[2/8] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:140:5 › bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt
+[3/8] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:207:5 › bill 2 — name search and a loose unit on a medicine with no strip level
+[4/8] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:239:5 › bill 3 — Urdu transliteration alias resolves the same medicine and sells a whole pack
+[5/8] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:267:5 › POS-09 — a safety block is distinct from advice, refuses tender, and is never acknowledged away
+[6/8] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:319:5 › POS-01 — the workflow map is on screen and the Legacy Speed preset is an honest placeholder
+[7/8] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:354:5 › this spec drives the counter without a pointer
+(node:5821) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[8/8] [pharmacy-counter-serial] › tests/e2e/time-to-first-sale.spec.ts:100:5 › admin follows the first-run checklist to the first completed sale
+  2) [pharmacy-counter-serial] › tests/e2e/time-to-first-sale.spec.ts:100:5 › admin follows the first-run checklist to the first completed sale 
+
+    Error: Required runtime precondition: PHARMACY_FIRST_SALE_INPUT
+
+       at fixtures/pharmacy-first-sale.ts:73
+
+      71 | function requiredEnvironment(name: string) {
+      72 |   const value = process.env[name];
+    > 73 |   if (!value?.trim()) throw new Error(`Required runtime precondition: ${name}`);
+         |                             ^
+      74 |   return value;
+      75 | }
+      76 |
+        at requiredEnvironment (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:73:29)
+        at input (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:95:18)
+        at freshPharmacyFirstSale (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:221:16)
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/time-to-first-sale.spec.ts:110:60
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  2 failed
+    [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:69:5 › pharmacy-only navigation exposes pharmacy destinations and excludes Restaurant routes 
+    [pharmacy-counter-serial] › tests/e2e/time-to-first-sale.spec.ts:100:5 › admin follows the first-run checklist to the first completed sale 
+  6 did not run
+error: script "test:e2e:pharmacy-counter" exited with code 1

@@ -1,0 +1,488 @@
+{
+  "config": {
+    "argv": [
+      "/Users/Saad/.hermes/node/bin/node",
+      "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/node_modules/.bin/playwright",
+      "test",
+      "--config=playwright.pharmacy-counter.config.ts",
+      "--reporter=html,line,json"
+    ],
+    "configFile": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright.pharmacy-counter.config.ts",
+    "rootDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": false,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 1
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 1
+        },
+        "id": "pharmacy-counter-serial",
+        "name": "pharmacy-counter-serial",
+        "testDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e",
+        "testIgnore": [],
+        "testMatch": [
+          "pharmacy-counter.spec.ts",
+          "time-to-first-sale.spec.ts"
+        ],
+        "timeout": 45000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "html"
+      ],
+      [
+        "line"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.0",
+    "workers": 1,
+    "webServer": {
+      "command": "bun run dev --port 4331",
+      "url": "http://127.0.0.1:4331",
+      "reuseExistingServer": false,
+      "timeout": 120000,
+      "env": {
+        "DATABASE_URL": "postgresql://qa_runtime@127.0.0.1:55689/pharmacy_counter_e2e",
+        "TEST_DATABASE_URL": "postgresql://qa_runtime@127.0.0.1:55689/pharmacy_counter_e2e",
+        "PHARMACY_E2E": "1",
+        "AUTH_SECRET": "disposable-pharmacy-qa-1589-local-only",
+        "AUTH_TRUST_HOST": "true",
+        "SHARED_APP_HOSTS": "127.0.0.1"
+      }
+    }
+  },
+  "suites": [
+    {
+      "title": "pharmacy-counter.spec.ts",
+      "file": "pharmacy-counter.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "pharmacy-only navigation exposes pharmacy destinations and excludes Restaurant routes",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 30613,
+                  "error": {
+                    "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mpage\u001b[39m\u001b[2m).\u001b[22mtoHaveURL\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nExpected pattern: \u001b[32m/\\/(dashboard|pharmacy)/\u001b[39m\nReceived string:  \u001b[31m\"http://127.0.0.1:4331/login\"\u001b[39m\nTimeout: 30000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveURL\" with timeout 30000ms\u001b[22m\n\u001b[2m    64 × locator resolved to <html lang=\"en\" data-theme=\"light\" data-layout=\"rail\" data-type=\"default\" data-accent=\"quiet\" data-icons=\"numeric\" data-density=\"default\" class=\"instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full\">…</html>\u001b[22m\n\u001b[2m       - unexpected value \"http://127.0.0.1:4331/login\"\u001b[22m\n",
+                    "stack": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mpage\u001b[39m\u001b[2m).\u001b[22mtoHaveURL\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nExpected pattern: \u001b[32m/\\/(dashboard|pharmacy)/\u001b[39m\nReceived string:  \u001b[31m\"http://127.0.0.1:4331/login\"\u001b[39m\nTimeout: 30000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveURL\" with timeout 30000ms\u001b[22m\n\u001b[2m    64 × locator resolved to <html lang=\"en\" data-theme=\"light\" data-layout=\"rail\" data-type=\"default\" data-accent=\"quiet\" data-icons=\"numeric\" data-density=\"default\" class=\"instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full\">…</html>\u001b[22m\n\u001b[2m       - unexpected value \"http://127.0.0.1:4331/login\"\u001b[22m\n\n    at signIn (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:56:22)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:72:3",
+                    "location": {
+                      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts",
+                      "column": 22,
+                      "line": 56
+                    },
+                    "snippet": "  54 |     await pressControl(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }));\n  55 |   }\n> 56 |   await expect(page).toHaveURL(/\\/(dashboard|pharmacy)/, { timeout: 30_000 });\n     |                      ^\n  57 | }\n  58 |\n  59 | async function openCounter(page: Page) {"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts",
+                        "column": 22,
+                        "line": 56
+                      },
+                      "message": "Error: \u001b[2mexpect(\u001b[22m\u001b[31mpage\u001b[39m\u001b[2m).\u001b[22mtoHaveURL\u001b[2m(\u001b[22m\u001b[32mexpected\u001b[39m\u001b[2m)\u001b[22m failed\n\nExpected pattern: \u001b[32m/\\/(dashboard|pharmacy)/\u001b[39m\nReceived string:  \u001b[31m\"http://127.0.0.1:4331/login\"\u001b[39m\nTimeout: 30000ms\n\nCall log:\n\u001b[2m  - Expect \"toHaveURL\" with timeout 30000ms\u001b[22m\n\u001b[2m    64 × locator resolved to <html lang=\"en\" data-theme=\"light\" data-layout=\"rail\" data-type=\"default\" data-accent=\"quiet\" data-icons=\"numeric\" data-density=\"default\" class=\"instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full\">…</html>\u001b[22m\n\u001b[2m       - unexpected value \"http://127.0.0.1:4331/login\"\u001b[22m\n\n\n  54 |     await pressControl(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }));\n  55 |   }\n> 56 |   await expect(page).toHaveURL(/\\/(dashboard|pharmacy)/, { timeout: 30_000 });\n     |                      ^\n  57 | }\n  58 |\n  59 | async function openCounter(page: Page) {\n    at signIn (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:56:22)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:72:3"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:19.049Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/pharmacy-counter-pharmacy--1d072--excludes-Restaurant-routes-pharmacy-counter-serial/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts",
+                    "column": 22,
+                    "line": 56
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-bb99e09e2bc14af16edd",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 69,
+          "column": 5
+        },
+        {
+          "title": "bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:49.901Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-2250dfba6d6d85eefd33",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 140,
+          "column": 5
+        },
+        {
+          "title": "bill 2 — name search and a loose unit on a medicine with no strip level",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:49.901Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-869ebd5b1554e5861cc5",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 207,
+          "column": 5
+        },
+        {
+          "title": "bill 3 — Urdu transliteration alias resolves the same medicine and sells a whole pack",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:49.901Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-6937a0458db3ea04b2af",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 239,
+          "column": 5
+        },
+        {
+          "title": "POS-09 — a safety block is distinct from advice, refuses tender, and is never acknowledged away",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:49.901Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-25011c5c3b4522197ec4",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 267,
+          "column": 5
+        },
+        {
+          "title": "POS-01 — the workflow map is on screen and the Legacy Speed preset is an honest placeholder",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:49.901Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-d2bae8693751ad3f039c",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 319,
+          "column": 5
+        },
+        {
+          "title": "this spec drives the counter without a pointer",
+          "ok": true,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 45000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": -1,
+                  "parallelIndex": -1,
+                  "status": "skipped",
+                  "duration": 0,
+                  "errors": [],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:49.901Z",
+                  "annotations": [],
+                  "attachments": []
+                }
+              ],
+              "status": "skipped"
+            }
+          ],
+          "id": "98d71b9daf287e9fa70d-334e9566ea3afee256a6",
+          "file": "pharmacy-counter.spec.ts",
+          "line": 354,
+          "column": 5
+        }
+      ]
+    },
+    {
+      "title": "time-to-first-sale.spec.ts",
+      "file": "time-to-first-sale.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "admin follows the first-run checklist to the first completed sale",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 135000,
+              "annotations": [
+                {
+                  "type": "slow",
+                  "location": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/time-to-first-sale.spec.ts",
+                    "line": 104,
+                    "column": 8
+                  }
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "pharmacy-counter-serial",
+              "projectName": "pharmacy-counter-serial",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 115,
+                  "error": {
+                    "message": "Error: Required runtime precondition: PHARMACY_FIRST_SALE_INPUT",
+                    "stack": "Error: Required runtime precondition: PHARMACY_FIRST_SALE_INPUT\n    at requiredEnvironment (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:73:29)\n    at input (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:95:18)\n    at freshPharmacyFirstSale (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:221:16)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/time-to-first-sale.spec.ts:110:60",
+                    "location": {
+                      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts",
+                      "column": 29,
+                      "line": 73
+                    },
+                    "snippet": "\u001b[90m   at \u001b[39mfixtures/pharmacy-first-sale.ts:73\n\n  71 | function requiredEnvironment(name: string) {\n  72 |   const value = process.env[name];\n> 73 |   if (!value?.trim()) throw new Error(`Required runtime precondition: ${name}`);\n     |                             ^\n  74 |   return value;\n  75 | }\n  76 |"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts",
+                        "column": 29,
+                        "line": 73
+                      },
+                      "message": "Error: Required runtime precondition: PHARMACY_FIRST_SALE_INPUT\n\n   at fixtures/pharmacy-first-sale.ts:73\n\n  71 | function requiredEnvironment(name: string) {\n  72 |   const value = process.env[name];\n> 73 |   if (!value?.trim()) throw new Error(`Required runtime precondition: ${name}`);\n     |                             ^\n  74 |   return value;\n  75 | }\n  76 |\n    at requiredEnvironment (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:73:29)\n    at input (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:95:18)\n    at freshPharmacyFirstSale (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts:221:16)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/time-to-first-sale.spec.ts:110:60"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T15:51:50.136Z",
+                  "annotations": [
+                    {
+                      "type": "slow",
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/time-to-first-sale.spec.ts",
+                        "line": 104,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright-artifacts/pharmacy-counter/time-to-first-sale-admin-f-f9a71-to-the-first-completed-sale-pharmacy-counter-serial/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/fixtures/pharmacy-first-sale.ts",
+                    "column": 29,
+                    "line": 73
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "2501f75511bb4747c9fc-5d8d0d1f28afb0bcbec2",
+          "file": "time-to-first-sale.spec.ts",
+          "line": 100,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-29T15:51:12.624Z",
+    "duration": 37776.412000000004,
+    "expected": 0,
+    "skipped": 6,
+    "unexpected": 2,
+    "flaky": 0
+  }
+}

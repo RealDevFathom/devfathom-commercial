@@ -1,0 +1,32 @@
+[
+  {
+    "cluster": "rerun-pg-counter",
+    "exit": 3,
+    "status": "pg_ctl: no server running"
+  },
+  {
+    "cluster": "rerun-pg-counter-supplemental",
+    "exit": 3,
+    "status": "pg_ctl: no server running"
+  },
+  {
+    "cluster": "rerun-pg-finance",
+    "exit": 3,
+    "status": "pg_ctl: no server running"
+  },
+  {
+    "cluster": "rerun-pg-finance-corrected",
+    "exit": 3,
+    "status": "pg_ctl: no server running"
+  },
+  {
+    "cluster": "rerun-pg-finance-verified",
+    "exit": 3,
+    "status": "pg_ctl: no server running"
+  },
+  {
+    "cluster": "rerun-pg-purchasing",
+    "exit": 3,
+    "status": "pg_ctl: no server running"
+  }
+]

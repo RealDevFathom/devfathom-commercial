@@ -1,0 +1,22 @@
+START counter-supplemental-setup
+END counter-supplemental-setup 0
+START counter-supplemental-1
+END counter-supplemental-1 1
+comment 201
+START counter-supplemental-2
+END counter-supplemental-2 1
+comment 201
+START counter-supplemental-3
+END counter-supplemental-3 1
+comment 201
+START counter-supplemental-4
+END counter-supplemental-4 1
+comment 201
+START counter-supplemental-5
+END counter-supplemental-5 1
+comment 201
+START counter-supplemental-6
+END counter-supplemental-6 0
+comment 201
+START counter-supplemental-shutdown
+END counter-supplemental-shutdown 0

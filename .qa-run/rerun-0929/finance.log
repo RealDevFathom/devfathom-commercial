@@ -1,0 +1,123 @@
+[WebServer] $ next dev --port "4319"
+
+[WebServer] (node:26769) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:26770) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:26787) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+
+Running 2 tests using 2 workers
+
+(node:26791) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+(node:26790) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/2] [mobile-chromium] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids
+[2/2] [chromium-desktop] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids
+[WebServer] (node:26812) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:26813) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:31751) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:31752) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+  1) [mobile-chromium] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: 'Finance', exact: true })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('heading', { name: 'Finance', exact: true })
+
+
+      32 |   const origin = await signInAs(page, 'restaurantAdmin');
+      33 |   await page.goto(new URL(`/pharmacy/finance?branch=${branchId}`, origin).href);
+    > 34 |   await expect(page.getByRole('heading', { name: 'Finance', exact: true })).toBeVisible();
+         |                                                                             ^
+      35 |   await expect(page.getByLabel('Branch')).toHaveValue(branchId);
+      36 |   await expect(page.locator('body')).not.toContainText(branchId);
+      37 |
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:34:77
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  2) [chromium-desktop] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: 'Finance', exact: true })
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByRole('heading', { name: 'Finance', exact: true })
+
+
+      32 |   const origin = await signInAs(page, 'restaurantAdmin');
+      33 |   await page.goto(new URL(`/pharmacy/finance?branch=${branchId}`, origin).href);
+    > 34 |   await expect(page.getByRole('heading', { name: 'Finance', exact: true })).toBeVisible();
+         |                                                                             ^
+      35 |   await expect(page.getByLabel('Branch')).toHaveValue(branchId);
+      36 |   await expect(page.locator('body')).not.toContainText(branchId);
+      37 |
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:34:77
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/e2e/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  2 failed
+    [chromium-desktop] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 
+    [mobile-chromium] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 

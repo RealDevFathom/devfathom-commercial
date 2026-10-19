@@ -1,0 +1,82 @@
+$ tsx scripts/run-pharmacy-e2e.ts "--reporter=html,line,json" --grep "bill 3" "--output=.qa-run/rerun-0929/counter-supplemental-3-artifacts"
+Pharmacy counter E2E database preflight passed.
+Pharmacy counter E2E seed complete.
+Pharmacy counter E2E seed complete.
+[WebServer] $ next dev --port "4331"
+
+[WebServer] (node:48159) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:48160) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:48334) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+
+Running 1 test using 1 worker
+
+(node:48337) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/1] [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:239:5 › bill 3 — Urdu transliteration alias resolves the same medicine and sells a whole pack
+[WebServer] ⚠ Blocked cross-origin request to Next.js dev resource /_next/webpack-hmr from "127.0.0.1".
+[WebServer] Cross-origin access to Next.js dev resources is blocked by default for safety.
+[WebServer] 
+[WebServer] To allow this host in development, add it to "allowedDevOrigins" in next.config.js and restart the dev server:
+[WebServer] 
+[WebServer] // next.config.js
+[WebServer] module.exports = {
+[WebServer]   allowedDevOrigins: ['127.0.0.1'],
+[WebServer] }
+[WebServer] 
+[WebServer] Read more: https://nextjs.org/docs/app/api-reference/config/next-config-js/allowedDevOrigins
+
+  1) [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:239:5 › bill 3 — Urdu transliteration alias resolves the same medicine and sells a whole pack 
+
+    Error: expect(page).toHaveURL(expected) failed
+
+    Expected pattern: /\/(dashboard|pharmacy)/
+    Received string:  "http://127.0.0.1:4331/login"
+    Timeout: 30000ms
+
+    Call log:
+      - Expect "toHaveURL" with timeout 30000ms
+        64 × locator resolved to <html lang="en" data-theme="light" data-layout="rail" data-type="default" data-accent="quiet" data-icons="numeric" data-density="default" class="instrument_sans_b020fca9-module__XAVg4G__variable ibm_plex_mono_87f81fa4-module__sL176q__variable h-full">…</html>
+           - unexpected value "http://127.0.0.1:4331/login"
+
+
+      54 |     await pressControl(page.getByRole('button', { name: /Fathom Pharmacy E2E/i }));
+      55 |   }
+    > 56 |   await expect(page).toHaveURL(/\/(dashboard|pharmacy)/, { timeout: 30_000 });
+         |                      ^
+      57 | }
+      58 |
+      59 | async function openCounter(page: Page) {
+        at signIn (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:56:22)
+        at openCounter (/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:60:3)
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-counter.spec.ts:243:3
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    .qa-run/rerun-0929/counter-supplemental-3-artifacts/pharmacy-counter-bill-3-—--54ca3-cine-and-sells-a-whole-pack-pharmacy-counter-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    .qa-run/rerun-0929/counter-supplemental-3-artifacts/pharmacy-counter-bill-3-—--54ca3-cine-and-sells-a-whole-pack-pharmacy-counter-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: .qa-run/rerun-0929/counter-supplemental-3-artifacts/pharmacy-counter-bill-3-—--54ca3-cine-and-sells-a-whole-pack-pharmacy-counter-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    .qa-run/rerun-0929/counter-supplemental-3-artifacts/pharmacy-counter-bill-3-—--54ca3-cine-and-sells-a-whole-pack-pharmacy-counter-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace .qa-run/rerun-0929/counter-supplemental-3-artifacts/pharmacy-counter-bill-3-—--54ca3-cine-and-sells-a-whole-pack-pharmacy-counter-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  1 failed
+    [pharmacy-counter-serial] › tests/e2e/pharmacy-counter.spec.ts:239:5 › bill 3 — Urdu transliteration alias resolves the same medicine and sells a whole pack 
+error: script "test:e2e:pharmacy-counter" exited with code 1

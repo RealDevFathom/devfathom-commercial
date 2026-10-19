@@ -1,0 +1,15 @@
+$ prisma generate && next build
+Loaded Prisma config from prisma.config.ts.
+
+Prisma schema loaded from prisma/schema.prisma.
+
+✔ Generated Prisma Client (7.9.1) to ./src/generated/prisma in 6.72s
+
+▲ Next.js 16.2.12 (Turbopack)
+- Experiments (use with caution):
+  · cpus: 1
+  · optimizePackageImports
+
+  Creating an optimized production build ...
+node(75295) MallocStackLogging: can't turn off malloc stack logging because it was not enabled.
+error: script "build" exited with code 143

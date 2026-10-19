@@ -1,0 +1,53 @@
+{
+  "attachment": {
+    "id": "eb5aed36-e43c-44e1-b7a6-7316df77508d",
+    "companyId": "439a6e2c-06be-4fe0-bb43-b213140f664a",
+    "issueId": "5732269a-1aa5-48ef-a0df-81cb822d86a5",
+    "issueCommentId": null,
+    "assetId": "8626b10e-52b9-4fb8-a4b7-81e9065582c4",
+    "provider": "local_disk",
+    "objectKey": "439a6e2c-06be-4fe0-bb43-b213140f664a/issues/5732269a-1aa5-48ef-a0df-81cb822d86a5/2026/09/28/070e27f7-a6f5-4543-bc29-5fba75655ecd-reports.zip",
+    "contentType": "application/zip",
+    "byteSize": 7424228,
+    "sha256": "93547b89817cb5f25571876b68bb88e683fb6cbee5e7c4a514661da1665d448e",
+    "originalFilename": "reports.zip",
+    "createdByAgentId": "d00d0df7-1d08-4a91-be64-3869d54470f8",
+    "createdByUserId": null,
+    "createdAt": "2026-09-28T22:46:29.214Z",
+    "updatedAt": "2026-09-28T22:46:29.214Z",
+    "contentPath": "/api/attachments/eb5aed36-e43c-44e1-b7a6-7316df77508d/content",
+    "openPath": "/api/attachments/eb5aed36-e43c-44e1-b7a6-7316df77508d/content",
+    "downloadPath": "/api/attachments/eb5aed36-e43c-44e1-b7a6-7316df77508d/content?download=1"
+  },
+  "workProduct": {
+    "id": "8601d0b2-82d2-4a1c-9416-5f22f66e41fb",
+    "companyId": "439a6e2c-06be-4fe0-bb43-b213140f664a",
+    "projectId": null,
+    "issueId": "5732269a-1aa5-48ef-a0df-81cb822d86a5",
+    "executionWorkspaceId": null,
+    "runtimeServiceId": null,
+    "type": "artifact",
+    "provider": "paperclip",
+    "externalId": null,
+    "title": "WHA-1589 HTML report and execution logs",
+    "url": null,
+    "status": "ready_for_review",
+    "reviewState": "none",
+    "isPrimary": true,
+    "healthStatus": "unknown",
+    "summary": "Counter HTML report, database setup logs, build exit 143 and disk blocker evidence.",
+    "metadata": {
+      "byteSize": 7424228,
+      "openPath": "/api/attachments/eb5aed36-e43c-44e1-b7a6-7316df77508d/content",
+      "contentPath": "/api/attachments/eb5aed36-e43c-44e1-b7a6-7316df77508d/content",
+      "contentType": "application/zip",
+      "attachmentId": "eb5aed36-e43c-44e1-b7a6-7316df77508d",
+      "downloadPath": "/api/attachments/eb5aed36-e43c-44e1-b7a6-7316df77508d/content?download=1",
+      "originalFilename": "reports.zip"
+    },
+    "sourceTrust": null,
+    "createdByRunId": "7f394618-22da-40f9-bd79-81583e69b9b2",
+    "createdAt": "2026-09-28T22:46:29.684Z",
+    "updatedAt": "2026-09-28T22:46:29.684Z"
+  }
+}

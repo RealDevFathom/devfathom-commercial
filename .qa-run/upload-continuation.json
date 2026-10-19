@@ -1,0 +1,53 @@
+{
+  "attachment": {
+    "id": "478668fe-5787-4171-8a9d-7d5d00c59b0d",
+    "companyId": "439a6e2c-06be-4fe0-bb43-b213140f664a",
+    "issueId": "5732269a-1aa5-48ef-a0df-81cb822d86a5",
+    "issueCommentId": null,
+    "assetId": "285dc23a-8e6a-4cd3-815f-a9c143458d83",
+    "provider": "local_disk",
+    "objectKey": "439a6e2c-06be-4fe0-bb43-b213140f664a/issues/5732269a-1aa5-48ef-a0df-81cb822d86a5/2026/09/28/870f7772-7167-4912-bde7-ea93ddeab064-continuation-evidence.zip",
+    "contentType": "application/zip",
+    "byteSize": 4508,
+    "sha256": "5cfb004297eac292b9e4c0c7eb3037eb5dd06e6fd130054bc01645f8bbf7129f",
+    "originalFilename": "continuation-evidence.zip",
+    "createdByAgentId": "d00d0df7-1d08-4a91-be64-3869d54470f8",
+    "createdByUserId": null,
+    "createdAt": "2026-09-28T22:50:42.248Z",
+    "updatedAt": "2026-09-28T22:50:42.248Z",
+    "contentPath": "/api/attachments/478668fe-5787-4171-8a9d-7d5d00c59b0d/content",
+    "openPath": "/api/attachments/478668fe-5787-4171-8a9d-7d5d00c59b0d/content",
+    "downloadPath": "/api/attachments/478668fe-5787-4171-8a9d-7d5d00c59b0d/content?download=1"
+  },
+  "workProduct": {
+    "id": "48f431d0-3802-4744-8922-595a1bb11740",
+    "companyId": "439a6e2c-06be-4fe0-bb43-b213140f664a",
+    "projectId": null,
+    "issueId": "5732269a-1aa5-48ef-a0df-81cb822d86a5",
+    "executionWorkspaceId": null,
+    "runtimeServiceId": null,
+    "type": "artifact",
+    "provider": "paperclip",
+    "externalId": null,
+    "title": "WHA-1589 continuation — recurring disk-capacity blocker",
+    "url": null,
+    "status": "ready_for_review",
+    "reviewState": "none",
+    "isPrimary": true,
+    "healthStatus": "unknown",
+    "summary": "Capacity recovered to 13 GiB then dropped to 5.9 GiB. Build stopped at exit 143; owned database stopped; no new browser execution.",
+    "metadata": {
+      "byteSize": 4508,
+      "openPath": "/api/attachments/478668fe-5787-4171-8a9d-7d5d00c59b0d/content",
+      "contentPath": "/api/attachments/478668fe-5787-4171-8a9d-7d5d00c59b0d/content",
+      "contentType": "application/zip",
+      "attachmentId": "478668fe-5787-4171-8a9d-7d5d00c59b0d",
+      "downloadPath": "/api/attachments/478668fe-5787-4171-8a9d-7d5d00c59b0d/content?download=1",
+      "originalFilename": "continuation-evidence.zip"
+    },
+    "sourceTrust": null,
+    "createdByRunId": "89dc1284-56ad-4815-a025-42f30f80889e",
+    "createdAt": "2026-09-28T22:50:42.753Z",
+    "updatedAt": "2026-09-28T22:50:42.753Z"
+  }
+}

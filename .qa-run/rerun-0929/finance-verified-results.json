@@ -1,0 +1,280 @@
+{
+  "config": {
+    "argv": [
+      "/Users/Saad/.hermes/node/bin/node",
+      "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/node_modules/.bin/playwright",
+      "test",
+      "tests/e2e/pharmacy-finance.spec.ts",
+      "--reporter=html,line,json",
+      "--output=.qa-run/rerun-0929/finance-verified-artifacts"
+    ],
+    "configFile": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/playwright.config.ts",
+    "rootDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e",
+    "failOnFlakyTests": false,
+    "forbidOnly": false,
+    "fullyParallel": true,
+    "globalSetup": null,
+    "globalTeardown": null,
+    "globalTimeout": 0,
+    "grep": {},
+    "grepInvert": null,
+    "maxFailures": 0,
+    "metadata": {
+      "actualWorkers": 2
+    },
+    "preserveOutput": "always",
+    "projects": [
+      {
+        "outputDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "chromium-desktop",
+        "name": "chromium-desktop",
+        "testDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e",
+        "testIgnore": [
+          "platform-control-plane*.spec.ts",
+          "pharmacy-counter.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      },
+      {
+        "outputDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts",
+        "repeatEach": 1,
+        "retries": 0,
+        "metadata": {
+          "actualWorkers": 2
+        },
+        "id": "mobile-chromium",
+        "name": "mobile-chromium",
+        "testDir": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e",
+        "testIgnore": [
+          "platform-control-plane*.spec.ts",
+          "pharmacy-counter.spec.ts"
+        ],
+        "testMatch": [
+          "**/*.@(spec|test).?(c|m)[jt]s?(x)"
+        ],
+        "timeout": 30000
+      }
+    ],
+    "quiet": false,
+    "reporter": [
+      [
+        "html"
+      ],
+      [
+        "line"
+      ],
+      [
+        "json"
+      ]
+    ],
+    "reportSlowTests": {
+      "max": 5,
+      "threshold": 300000
+    },
+    "shard": null,
+    "tags": [],
+    "updateSnapshots": "missing",
+    "updateSourceMethod": "patch",
+    "version": "1.62.0",
+    "workers": 6,
+    "webServer": {
+      "command": "bun run dev --port 4319",
+      "url": "http://127.0.0.1:4319",
+      "reuseExistingServer": true,
+      "timeout": 120000
+    }
+  },
+  "suites": [
+    {
+      "title": "pharmacy-finance.spec.ts",
+      "file": "pharmacy-finance.spec.ts",
+      "column": 0,
+      "line": 0,
+      "specs": [
+        {
+          "title": "fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 90000,
+              "annotations": [
+                {
+                  "type": "slow",
+                  "location": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                    "line": 30,
+                    "column": 8
+                  }
+                }
+              ],
+              "expectedStatus": "passed",
+              "projectId": "chromium-desktop",
+              "projectName": "chromium-desktop",
+              "results": [
+                {
+                  "workerIndex": 0,
+                  "parallelIndex": 0,
+                  "status": "failed",
+                  "duration": 17529,
+                  "error": {
+                    "message": "Error: locator.fill: Error: strict mode violation: locator('[data-slot=\"section-card\"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference') resolved to 2 elements:\n    1) <input required=\"\" name=\"reference\" data-slot=\"input\" placeholder=\"PV-2026-001\" id=\"base-ui-_R_i9d5esnebnaqitmlb_\" class=\"h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-n…/> aka getByRole('textbox', { name: 'Reference', exact: true })\n    2) <input data-slot=\"input\" name=\"bankReference\" id=\"base-ui-_R_kpd5esnebnaqitmlb_\" class=\"h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 di…/> aka getByRole('textbox', { name: 'Bank reference' })\n\nCall log:\n\u001b[2m  - waiting for locator('[data-slot=\"section-card\"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference')\u001b[22m\n",
+                    "stack": "Error: locator.fill: Error: strict mode violation: locator('[data-slot=\"section-card\"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference') resolved to 2 elements:\n    1) <input required=\"\" name=\"reference\" data-slot=\"input\" placeholder=\"PV-2026-001\" id=\"base-ui-_R_i9d5esnebnaqitmlb_\" class=\"h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-n…/> aka getByRole('textbox', { name: 'Reference', exact: true })\n    2) <input data-slot=\"input\" name=\"bankReference\" id=\"base-ui-_R_kpd5esnebnaqitmlb_\" class=\"h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 di…/> aka getByRole('textbox', { name: 'Bank reference' })\n\nCall log:\n\u001b[2m  - waiting for locator('[data-slot=\"section-card\"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference')\u001b[22m\n\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:42:40",
+                    "location": {
+                      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                      "column": 40,
+                      "line": 42
+                    },
+                    "snippet": "  40 |     .filter({ hasText: 'Record money movement' });\n  41 |   await record.getByLabel('Workflow').selectOption('EXPENSE');\n> 42 |   await record.getByLabel('Reference').fill('EXP-E2E-001');\n     |                                        ^\n  43 |   await record.getByLabel('Amount (PKR)').fill('1250.00');\n  44 |   await record.getByLabel('Posting date').fill('2026-09-02');\n  45 |   await record.getByLabel('Counterparty name').fill('City power company');"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                        "column": 40,
+                        "line": 42
+                      },
+                      "message": "Error: locator.fill: Error: strict mode violation: locator('[data-slot=\"section-card\"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference') resolved to 2 elements:\n    1) <input required=\"\" name=\"reference\" data-slot=\"input\" placeholder=\"PV-2026-001\" id=\"base-ui-_R_i9d5esnebnaqitmlb_\" class=\"h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-n…/> aka getByRole('textbox', { name: 'Reference', exact: true })\n    2) <input data-slot=\"input\" name=\"bankReference\" id=\"base-ui-_R_kpd5esnebnaqitmlb_\" class=\"h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 di…/> aka getByRole('textbox', { name: 'Bank reference' })\n\nCall log:\n\u001b[2m  - waiting for locator('[data-slot=\"section-card\"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference')\u001b[22m\n\n\n  40 |     .filter({ hasText: 'Record money movement' });\n  41 |   await record.getByLabel('Workflow').selectOption('EXPENSE');\n> 42 |   await record.getByLabel('Reference').fill('EXP-E2E-001');\n     |                                        ^\n  43 |   await record.getByLabel('Amount (PKR)').fill('1250.00');\n  44 |   await record.getByLabel('Posting date').fill('2026-09-02');\n  45 |   await record.getByLabel('Counterparty name').fill('City power company');\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:42:40"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T16:05:59.072Z",
+                  "annotations": [
+                    {
+                      "type": "slow",
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                        "line": 30,
+                        "column": 8
+                      }
+                    }
+                  ],
+                  "attachments": [
+                    {
+                      "name": "screenshot",
+                      "contentType": "image/png",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/test-failed-1.png"
+                    },
+                    {
+                      "name": "video",
+                      "contentType": "video/webm",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/video.webm"
+                    },
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                    "column": 40,
+                    "line": 42
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "91f591e47f069572f171-ee762ade3361ddec4c91",
+          "file": "pharmacy-finance.spec.ts",
+          "line": 27,
+          "column": 5
+        },
+        {
+          "title": "fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids",
+          "ok": false,
+          "tags": [],
+          "tests": [
+            {
+              "timeout": 30000,
+              "annotations": [],
+              "expectedStatus": "passed",
+              "projectId": "mobile-chromium",
+              "projectName": "mobile-chromium",
+              "results": [
+                {
+                  "workerIndex": 1,
+                  "parallelIndex": 1,
+                  "status": "failed",
+                  "duration": 0,
+                  "error": {
+                    "message": "error: duplicate key value violates unique constraint \"pharmacy_branches_org_id_key\"",
+                    "stack": "error: duplicate key value violates unique constraint \"pharmacy_branches_org_id_key\"\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/node_modules/pg/lib/client.js:652:17\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:16:5",
+                    "location": {
+                      "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                      "column": 5,
+                      "line": 16
+                    },
+                    "snippet": "  14 |   try {\n  15 |     await db.query(`SET app.is_platform_admin='true'`);\n> 16 |     await db.query(\n     |     ^\n  17 |       `INSERT INTO pharmacy_branches (id,\"organizationId\",code,name,\"addressLine\",city,\"provinceCode\",\"createdAt\",\"updatedAt\")\n  18 |        VALUES ($1,'org_chai_chowk','FIN-E2E','Main pharmacy finance','1 Test Road','Lahore','PB',now(),now())\n  19 |        ON CONFLICT (id) DO NOTHING`,"
+                  },
+                  "errors": [
+                    {
+                      "location": {
+                        "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                        "column": 5,
+                        "line": 16
+                      },
+                      "message": "error: duplicate key value violates unique constraint \"pharmacy_branches_org_id_key\"\n\n  14 |   try {\n  15 |     await db.query(`SET app.is_platform_admin='true'`);\n> 16 |     await db.query(\n     |     ^\n  17 |       `INSERT INTO pharmacy_branches (id,\"organizationId\",code,name,\"addressLine\",city,\"provinceCode\",\"createdAt\",\"updatedAt\")\n  18 |        VALUES ($1,'org_chai_chowk','FIN-E2E','Main pharmacy finance','1 Test Road','Lahore','PB',now(),now())\n  19 |        ON CONFLICT (id) DO NOTHING`,\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/node_modules/pg/lib/client.js:652:17\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:16:5"
+                    }
+                  ],
+                  "stdout": [],
+                  "stderr": [],
+                  "retry": 0,
+                  "startTime": "2026-09-29T16:05:59.067Z",
+                  "annotations": [],
+                  "attachments": [
+                    {
+                      "name": "error-context",
+                      "contentType": "text/markdown",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/error-context.md"
+                    },
+                    {
+                      "name": "trace",
+                      "contentType": "application/zip",
+                      "path": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/trace.zip"
+                    }
+                  ],
+                  "errorLocation": {
+                    "file": "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts",
+                    "column": 5,
+                    "line": 16
+                  }
+                }
+              ],
+              "status": "unexpected"
+            }
+          ],
+          "id": "91f591e47f069572f171-0a982ddfc938267ffb0d",
+          "file": "pharmacy-finance.spec.ts",
+          "line": 27,
+          "column": 5
+        }
+      ]
+    }
+  ],
+  "errors": [],
+  "stats": {
+    "startTime": "2026-09-29T16:05:45.936Z",
+    "duration": 33735.965,
+    "expected": 0,
+    "skipped": 0,
+    "unexpected": 2,
+    "flaky": 0
+  }
+}

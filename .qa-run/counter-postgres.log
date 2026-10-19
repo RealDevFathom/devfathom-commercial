@@ -1,0 +1,16 @@
+2026-09-29 03:40:28.320 PKT [74483] LOG:  starting PostgreSQL 16.15 (Homebrew) on aarch64-apple-darwin25.6.0, compiled by Apple clang version 21.0.0 (clang-2100.1.1.101), 64-bit
+2026-09-29 03:40:28.320 PKT [74483] LOG:  listening on IPv4 address "127.0.0.1", port 55689
+2026-09-29 03:40:28.321 PKT [74483] LOG:  listening on Unix socket "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/.s.PGSQL.55689"
+2026-09-29 03:40:28.323 PKT [74486] LOG:  database system was shut down at 2026-09-29 03:40:28 PKT
+2026-09-29 03:40:28.326 PKT [74483] LOG:  database system is ready to accept connections
+2026-09-29 03:40:32.312 PKT [76604] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-29 03:40:32.386 PKT [76604] WARNING:  SET LOCAL can only be used in transaction blocks
+2026-09-29 03:40:33.117 PKT [79371] ERROR:  permission denied for function gbtreekey4_in
+2026-09-29 03:40:33.117 PKT [79371] STATEMENT:  GRANT EXECUTE ON ALL FUNCTIONS IN SCHEMA public TO qa_runtime;
+2026-09-29 03:41:47.871 PKT [74483] LOG:  received fast shutdown request
+2026-09-29 03:41:47.872 PKT [74483] LOG:  aborting any active transactions
+2026-09-29 03:41:47.874 PKT [74483] LOG:  background worker "logical replication launcher" (PID 74489) exited with exit code 1
+2026-09-29 03:41:47.875 PKT [74484] LOG:  shutting down
+2026-09-29 03:41:47.875 PKT [74484] LOG:  checkpoint starting: shutdown immediate
+2026-09-29 03:41:48.239 PKT [74484] LOG:  checkpoint complete: wrote 2875 buffers (17.5%); 0 WAL file(s) added, 0 removed, 2 recycled; write=0.225 s, sync=0.138 s, total=0.364 s; sync files=3567, longest=0.004 s, average=0.001 s; distance=28477 kB, estimate=28477 kB; lsn=0/30ECEA8, redo lsn=0/30ECEA8
+2026-09-29 03:41:48.245 PKT [74483] LOG:  database system is shut down

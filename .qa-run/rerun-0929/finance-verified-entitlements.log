@@ -1,0 +1,14 @@
+SET
+      email       | role  
+------------------+-------
+ alex@company.com | ADMIN
+(1 row)
+
+UPDATE 1
+INSERT 0 2
+       key        | status  
+------------------+---------
+ pharmacy-core    | ENABLED
+ pharmacy-finance | ENABLED
+(2 rows)
+
