@@ -318,6 +318,7 @@ describe('POS-06 linked returns', () => {
           canonicalUnits: 10,
           sale: { status: 'COMPLETED' },
           allocations: [{ canonicalUnits: 10 }],
+          unidentifiedReturnHolds: [],
           returnLines: [{ canonicalUnits: 7 }],
         }),
       },
@@ -350,6 +351,7 @@ describe('POS-06 linked returns', () => {
           canonicalUnits: 10,
           sale: { status: 'COMPLETED' },
           allocations: [{ inventoryLotId: 'lot-a', canonicalUnits: 10 }],
+          unidentifiedReturnHolds: [],
           returnLines: [],
         }),
       },
@@ -360,6 +362,7 @@ describe('POS-06 linked returns', () => {
     };
     await returnSaleLine(db as never, scope, {
       saleLineId: 'line-a',
+      lotId: 'lot-a',
       canonicalUnits: 2,
       quarantineLocationId: 'quarantine',
       reason: 'customer return',

@@ -642,12 +642,14 @@ describeIfDatabase('FIN-01 — return', () => {
       });
       const returned = await deps.sales.returnSaleLine(db, scopeOf(f), {
         saleLineId: sold.line.id,
+        lotId: sold.allocation.allocations[0].inventoryLotId,
         canonicalUnits: 4,
         quarantineLocationId: f.quarantineId,
         reason: 'Patient reaction',
         integrityDecision: 'QUARANTINE',
         idempotencyKey: `return-${tag('return')}`,
       });
+      if (!returned.returnLine) throw new Error('Expected identified lot return');
       return {
         saleLineId: sold.line.id,
         gross: sold.line.unitPriceMinor * sold.line.quantity,
@@ -1269,12 +1271,14 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
       });
       const returned = await deps.sales.returnSaleLine(db, scopeOf(f), {
         saleLineId: sold.line.id,
+        lotId: sold.allocation.allocations[0].inventoryLotId,
         canonicalUnits: 10,
         quarantineLocationId: f.quarantineId,
         reason: 'Wrong item dispensed',
         integrityDecision: 'QUARANTINE',
         idempotencyKey: `return-${tag('margin-return')}`,
       });
+      if (!returned.returnLine) throw new Error('Expected identified lot return');
       await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
         saleReturnLineId: returned.returnLine.id,
         at: LATER,

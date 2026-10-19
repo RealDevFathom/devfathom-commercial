@@ -438,6 +438,7 @@ export async function refundPharmacyTender(
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
     manualCashFallback?: boolean;
+    /** Settled sales are always capped; true also caps refunds on a sale that is not settled. */
     requireReturnedValue?: boolean;
   }
 ) {
@@ -475,25 +476,46 @@ export async function refundPharmacyTender(
     tender.refunds.reduce((sum, row) => sum + row.amountMinor, 0),
     input.amountMinor
   );
-  if (input.requireReturnedValue) {
-    await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${tender.saleId}
-      AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
-    const sale = await db.pharmacySale.findFirst({
+  // Returned-value cap (F13 c62a34f3 + bbb71a5d, reconciled with the tip's failed-delivery flow):
+  // serialize refunds across all tenders of this sale, then cap every refund on a settled
+  // (COMPLETED) sale at the value of goods actually returned, including unidentified return holds,
+  // whatever the caller sends. A refund on a sale that is not settled (the tip cancels an OPEN
+  // failed-delivery sale and returns its cash) has no returned goods to value; it stays limited by
+  // the tender alone unless the caller explicitly asks for the cap with requireReturnedValue.
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${tender.saleId}
+    AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+  const sale = await db.pharmacySale.findFirst({
+    where: {
+      id: tender.saleId,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'COMPLETED',
+    },
+    include: {
+      lines: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+      refunds: true,
+    },
+  });
+  const unsettledExempt =
+    !sale &&
+    !input.requireReturnedValue &&
+    (await db.pharmacySale.count({
       where: {
         id: tender.saleId,
         organizationId: scope.organizationId,
         branchId: scope.branchId,
-        status: 'COMPLETED',
+        status: { not: 'COMPLETED' },
       },
-      include: { lines: { include: { returnLines: true } }, refunds: true },
-    });
+    })) > 0;
+  if (!unsettledExempt) {
     const returnValue =
       sale?.lines.reduce(
         (sum, line) =>
           sum +
           returnedLineValue(
             line,
-            line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0)
+            line.returnLines.reduce((n, row) => n + row.canonicalUnits, 0) +
+              line.unidentifiedReturnHolds.reduce((n, row) => n + row.canonicalUnits, 0)
           ),
         0
       ) ?? 0;

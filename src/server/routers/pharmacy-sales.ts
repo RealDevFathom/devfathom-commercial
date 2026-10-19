@@ -582,6 +582,8 @@ export const pharmacySalesRouter = router({
           amountMinor: z.number().int().positive(),
           reason: z.string().trim().min(1),
           manualCashFallback: z.boolean().optional(),
+          // Compatibility field: settled sales are always capped by returned value (F13);
+          // true additionally caps a refund on a sale that is not settled.
           requireReturnedValue: z.boolean().optional(),
           idempotencyKey: z.string().trim().min(1).max(160),
         })
@@ -962,6 +964,8 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleLineId: z.string().min(1),
+          // Omitted legacy/unknown lot is accepted only into unidentified quarantine custody.
+          lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
           quarantineLocationId: z.string().min(1).optional(),
           disposition: z.enum(['RESTOCK', 'QUARANTINE']).default('QUARANTINE'),

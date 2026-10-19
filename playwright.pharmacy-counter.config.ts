@@ -27,7 +27,9 @@ export default defineConfig({
   },
   projects: [{ name: 'pharmacy-counter-serial', use: { ...devices['Desktop Chrome'] } }],
   webServer: {
-    command: process.env.CI ? `bunx next start --port ${port}` : `bun run dev --port ${port}`,
+    command: process.env.CI
+      ? `bunx next start --port ${port}`
+      : `bun run dev --hostname 127.0.0.1 --port ${port}`,
     url: baseURL,
     reuseExistingServer: false,
     timeout: 120_000,

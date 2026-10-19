@@ -13,6 +13,7 @@ import { returnedLineValue, returnSaleLine, readReturnHistory } from './sales';
 const scope = { organizationId: 'o', branchId: 'b', actorId: 'a' };
 const input = {
   saleLineId: 'line',
+  lotId: 'lot2',
   canonicalUnits: 6,
   disposition: 'RESTOCK' as const,
   reason: 'WRONG_ITEM',
@@ -29,6 +30,7 @@ function fixture() {
       { id: 'a1', inventoryLotId: 'lot1', stockLocationId: 'shelf1', canonicalUnits: 4 },
       { id: 'a2', inventoryLotId: 'lot2', stockLocationId: 'shelf2', canonicalUnits: 6 },
     ],
+    unidentifiedReturnHolds: [] as Array<{ canonicalUnits: number }>,
     returnLines: [{ inventoryLotId: 'lot1', canonicalUnits: 2 }],
   };
   const db = {
@@ -46,34 +48,32 @@ function fixture() {
     },
     pharmacySaleReturn: {
       create: vi.fn().mockResolvedValue({ id: 'return' }),
-      findFirst: vi
-        .fn()
-        .mockResolvedValue({ id: 'return', lines: [{ stockMovementId: 'movement' }] }),
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'return',
+        lines: [{ stockMovementId: 'movement' }],
+        unidentifiedHolds: [],
+      }),
     },
     pharmacyStockMovement: {
       create: vi.fn().mockResolvedValue({ id: 'movement' }),
       findFirst: vi.fn().mockResolvedValue({ id: 'movement' }),
     },
     pharmacySaleReturnLine: { create: vi.fn().mockResolvedValue({}) },
+    pharmacyUnidentifiedReturnHold: { create: vi.fn().mockResolvedValue({ id: 'hold' }) },
+    pharmacyReturnVerificationTask: { create: vi.fn().mockResolvedValue({ id: 'task' }) },
   };
   return { db, line };
 }
 describe('counter return boundaries', () => {
-  it('restocks remaining allocations without returning already-returned units twice', async () => {
+  it('restocks only the explicitly named second lot, never the first allocation', async () => {
     const { db } = fixture();
     await returnSaleLine(db as never, scope, input);
     expect(db.pharmacyStockMovement.create.mock.calls.map(([v]) => v.data)).toEqual([
       expect.objectContaining({
-        inventoryLotId: 'lot1',
-        stockLocationId: 'shelf1',
-        disposition: 'AVAILABLE',
-        quantityUnits: 2,
-      }),
-      expect.objectContaining({
         inventoryLotId: 'lot2',
         stockLocationId: 'shelf2',
         disposition: 'AVAILABLE',
-        quantityUnits: 4,
+        quantityUnits: 6,
       }),
     ]);
     expect(db.pharmacySaleEvent.create).toHaveBeenCalledWith(
@@ -100,6 +100,9 @@ describe('counter return boundaries', () => {
       });
       await expect(returnSaleLine(db as never, scope, input)).rejects.toThrow('UNSAFE_STOCK');
       expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacyInventoryLot.findFirst).toHaveBeenCalledWith(
+        expect.objectContaining({ where: { id: 'lot2', organizationId: 'o', branchId: 'b' } })
+      );
     }
   );
   it('rejects cross-branch quarantine locations', async () => {
@@ -143,4 +146,77 @@ describe('counter return boundaries', () => {
       })
     );
   });
+});
+
+describe('verified physical lot boundaries', () => {
+  it('refuses an unsold lot even when it is active', async () => {
+    const { db } = fixture();
+    await expect(returnSaleLine(db as never, scope, { ...input, lotId: 'other' })).rejects.toThrow(
+      'CROSS_BRANCH_REFERENCE'
+    );
+    expect(db.pharmacySaleReturn.create).not.toHaveBeenCalled();
+  });
+  it('caps a named lot after earlier returns, even when another lot has units left', async () => {
+    const { db } = fixture();
+    await expect(
+      returnSaleLine(db as never, scope, { ...input, lotId: 'lot1', canonicalUnits: 3 })
+    ).rejects.toThrow('RETURN_EXCEEDS_SOLD');
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+  it.each(['RESTOCK', 'QUARANTINE'] as const)(
+    'quarantines unidentified %s requests without assigning a lot',
+    async (disposition) => {
+      const { db } = fixture();
+      const result = await returnSaleLine(db as never, scope, {
+        ...input,
+        lotId: undefined,
+        disposition,
+        quarantineLocationId: 'q',
+      });
+      expect(result).toMatchObject({
+        holding: { id: 'hold' },
+        verificationTask: { id: 'task' },
+        movement: null,
+      });
+      expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+      expect(db.pharmacySaleReturnLine.create).not.toHaveBeenCalled();
+      expect(db.pharmacyUnidentifiedReturnHold.create).toHaveBeenCalledWith({
+        data: expect.objectContaining({
+          saleLineId: 'line',
+          quarantineLocationId: 'shelf',
+          canonicalUnits: 6,
+        }),
+      });
+      expect(db.pharmacyReturnVerificationTask.create).toHaveBeenCalledWith({
+        data: { organizationId: 'o', branchId: 'b', holdingId: 'hold', requestedByUserId: 'a' },
+      });
+    }
+  );
+  it('counts unidentified holdings against all subsequent named returns', async () => {
+    const { db, line } = fixture();
+    line.unidentifiedReturnHolds.push({ canonicalUnits: 5 });
+    await expect(
+      returnSaleLine(db as never, scope, { ...input, canonicalUnits: 4 })
+    ).rejects.toThrow('RETURN_EXCEEDS_SOLD');
+    expect(db.pharmacySaleReturn.create).not.toHaveBeenCalled();
+  });
+  it('requires quarantine custody for legacy restock requests with no verified lot', async () => {
+    const { db } = fixture();
+    db.pharmacyStockLocation.findFirst.mockResolvedValue(null);
+    await expect(
+      returnSaleLine(db as never, scope, { ...input, lotId: undefined })
+    ).rejects.toThrow('CROSS_BRANCH_REFERENCE');
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+});
+
+it('routes a legacy restock payload without a location to existing branch quarantine', async () => {
+  const { db } = fixture();
+  const result = await returnSaleLine(db as never, scope, { ...input, lotId: undefined });
+  expect(result.movement).toBeNull();
+  expect(db.pharmacyStockLocation.findFirst).toHaveBeenCalledWith({
+    where: { id: undefined, organizationId: 'o', branchId: 'b', active: true, kind: 'QUARANTINE' },
+    orderBy: { id: 'asc' },
+  });
+  expect(db.pharmacyReturnVerificationTask.create).toHaveBeenCalledOnce();
 });
