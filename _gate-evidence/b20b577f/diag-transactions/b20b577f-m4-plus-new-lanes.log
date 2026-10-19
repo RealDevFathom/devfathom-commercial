@@ -1,0 +1,189 @@
+
+ RUN  v4.1.10 /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1222-gate-a07a5518-db-suites-fail-from-the-first-file-transaction-api-error-unable-to-start-a-transaction-in-the-giv
+
+stdout | src/lib/pharmacy/bookkeeping.db.test.ts > FIN-02 bookkeeper acceptance > keeps partial allocations reconciled when one payment is reversed
+prisma:error 
+Invalid `prisma.pharmacyBookkeepingTransaction.create()` invocation:
+
+{
+  data: {
+    organizationId: "org_fin02_1fe8892359",
+    branchId: "branch_fin02_1fe8892359",
+    reference: "PAY-1-1fe8892359",
+    kind: "SUPPLIER_PAYMENT",
+    amountMinor: 6000,
+    currency: "PKR",
+    occurredAt: new Date("2026-08-10T10:00:00.000Z"),
+    idempotencyKey: "pay-1-1fe8892359",
+    counterpartyName: undefined,
+    memo: undefined,
+    bankReference: undefined,
+    chequeNumber: undefined,
+    chequeDueAt: undefined,
+    chequeStatus: "NONE",
+    createdByUserId: "accountant_1fe8892359",
+    allocations: {
+      create: [
+        {
+          organizationId: "org_fin02_1fe8892359",
+          sourceKind: "PURCHASE_INVOICE",
+          sourceId: "invoice-1",
+          sourceReference: "INV-100",
+          amountMinor: 6000
+        }
+      ]
+    }
+  },
+  include: {
+    allocations: true
+  }
+}
+
+Unknown argument `organizationId`. Available options are marked with ?.
+
+stdout | src/lib/pharmacy/bookkeeping.db.test.ts > FIN-04 tax profile versioning > selects effective approved versions and applies shared inclusive rounding
+prisma:error 
+Invalid `prisma.pharmacyTaxProfileVersion.create()` invocation:
+
+{
+  data: {
+    organizationId: "org_fin02_1fe8892359",
+    branchId: "branch_fin02_1fe8892359",
+    versionNumber: 1,
+    name: "2026 medicine tax",
+    status: "PUBLISHED",
+    effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+    effectiveTo: new Date("2027-01-01T00:00:00.000Z"),
+    approvalReference: "ACCOUNTANT-1",
+    approvedAt: new Date("2026-09-03T00:48:05.728Z"),
+    approvedByUserId: "accountant_1fe8892359",
+    idempotencyKey: "tax-1-1fe8892359",
+    rules: {
+      create: [
+        {
+          organizationId: "org_fin02_1fe8892359",
+          productClass: "MEDICINE",
+          pctHsCode: "3004",
+          sroReference: "SRO-PROVISIONAL-1",
+          sroProvisional: true,
+          exemptionCode: undefined,
+          priceMode: "INCLUSIVE",
+          rate: "0.10",
+          roundingScale: 2
+        }
+      ]
+    }
+  },
+  include: {
+    rules: true
+  }
+}
+
+Unknown argument `organizationId`. Available options are marked with ?.
+
+ ❯ src/lib/pharmacy/bookkeeping.db.test.ts (3 tests | 2 failed) 827ms
+     × keeps partial allocations reconciled when one payment is reversed 43ms
+     × selects effective approved versions and applies shared inclusive rounding 12ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 2 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/lib/pharmacy/bookkeeping.db.test.ts > FIN-02 bookkeeper acceptance > keeps partial allocations reconciled when one payment is reversed
+PrismaClientValidationError: 
+Invalid `prisma.pharmacyBookkeepingTransaction.create()` invocation:
+
+{
+  data: {
+    organizationId: "org_fin02_1fe8892359",
+    branchId: "branch_fin02_1fe8892359",
+    reference: "PAY-1-1fe8892359",
+    kind: "SUPPLIER_PAYMENT",
+    amountMinor: 6000,
+    currency: "PKR",
+    occurredAt: new Date("2026-08-10T10:00:00.000Z"),
+    idempotencyKey: "pay-1-1fe8892359",
+    counterpartyName: undefined,
+    memo: undefined,
+    bankReference: undefined,
+    chequeNumber: undefined,
+    chequeDueAt: undefined,
+    chequeStatus: "NONE",
+    createdByUserId: "accountant_1fe8892359",
+    allocations: {
+      create: [
+        {
+          organizationId: "org_fin02_1fe8892359",
+          sourceKind: "PURCHASE_INVOICE",
+          sourceId: "invoice-1",
+          sourceReference: "INV-100",
+          amountMinor: 6000
+        }
+      ]
+    }
+  },
+  include: {
+    allocations: true
+  }
+}
+
+Unknown argument `organizationId`. Available options are marked with ?.
+ ❯ ar node_modules/@prisma/client/src/runtime/core/errorRendering/throwValidationException.ts:46:8
+ ❯ throwValidationException node_modules/@prisma/client/src/runtime/RequestHandler.ts:211:6
+ ❯ Jr.handleAndLogRequestError node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:11
+ ❯ Jr.request node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:11
+ ❯ a node_modules/@prisma/client/src/runtime/getPrismaClient.ts:1014:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/2]⎯
+
+ FAIL  src/lib/pharmacy/bookkeeping.db.test.ts > FIN-04 tax profile versioning > selects effective approved versions and applies shared inclusive rounding
+PrismaClientValidationError: 
+Invalid `prisma.pharmacyTaxProfileVersion.create()` invocation:
+
+{
+  data: {
+    organizationId: "org_fin02_1fe8892359",
+    branchId: "branch_fin02_1fe8892359",
+    versionNumber: 1,
+    name: "2026 medicine tax",
+    status: "PUBLISHED",
+    effectiveFrom: new Date("2026-01-01T00:00:00.000Z"),
+    effectiveTo: new Date("2027-01-01T00:00:00.000Z"),
+    approvalReference: "ACCOUNTANT-1",
+    approvedAt: new Date("2026-09-03T00:48:05.728Z"),
+    approvedByUserId: "accountant_1fe8892359",
+    idempotencyKey: "tax-1-1fe8892359",
+    rules: {
+      create: [
+        {
+          organizationId: "org_fin02_1fe8892359",
+          productClass: "MEDICINE",
+          pctHsCode: "3004",
+          sroReference: "SRO-PROVISIONAL-1",
+          sroProvisional: true,
+          exemptionCode: undefined,
+          priceMode: "INCLUSIVE",
+          rate: "0.10",
+          roundingScale: 2
+        }
+      ]
+    }
+  },
+  include: {
+    rules: true
+  }
+}
+
+Unknown argument `organizationId`. Available options are marked with ?.
+ ❯ ar node_modules/@prisma/client/src/runtime/core/errorRendering/throwValidationException.ts:46:8
+ ❯ throwValidationException node_modules/@prisma/client/src/runtime/RequestHandler.ts:211:6
+ ❯ Jr.handleAndLogRequestError node_modules/@prisma/client/src/runtime/RequestHandler.ts:183:11
+ ❯ Jr.request node_modules/@prisma/client/src/runtime/RequestHandler.ts:152:11
+ ❯ a node_modules/@prisma/client/src/runtime/getPrismaClient.ts:1014:23
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/2]⎯
+
+
+ Test Files  1 failed | 4 passed (5)
+      Tests  2 failed | 72 passed (74)
+   Start at  05:48:04
+   Duration  4.91s (transform 11.53s, setup 654ms, import 836ms, tests 8.51s, environment 2.23s)
+

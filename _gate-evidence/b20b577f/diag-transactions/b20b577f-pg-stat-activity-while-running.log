@@ -1,0 +1,130 @@
+2026-09-03T00:45:13Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 29771 | active |                 | 2026-09-03 05:45:13.396658+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:45:13Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 30527 | active |                 | 2026-09-03 05:45:13.958907+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:45:14Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31100 | active |                 | 2026-09-03 05:45:14.520081+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:45:15Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31598 | active |                 | 2026-09-03 05:45:15.080739+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:45:15Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31624 | active |                 | 2026-09-03 05:45:15.643702+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:45:16Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31633 | active |                 | 2026-09-03 05:45:16.216812+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:45:16Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31653 |        |                 |                               | <insufficient privilege>
+ 31657 | active |                 | 2026-09-03 05:45:16.783916+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(7 rows)
+
+2026-09-03T00:45:17Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31653 |        |                 |                               | <insufficient privilege>
+ 31662 |        |                 |                               | <insufficient privilege>
+ 31665 | active |                 | 2026-09-03 05:45:17.346444+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:45:17Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31653 |        |                 |                               | <insufficient privilege>
+ 31662 |        |                 |                               | <insufficient privilege>
+ 31673 | active |                 | 2026-09-03 05:45:17.910301+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:45:18Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31653 |        |                 |                               | <insufficient privilege>
+ 31662 |        |                 |                               | <insufficient privilege>
+ 31697 | active |                 | 2026-09-03 05:45:18.475227+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:45:19Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        |                 |                               | <insufficient privilege>
+ 24666 |        |                 |                               | <insufficient privilege>
+ 24668 |        |                 |                               | <insufficient privilege>
+ 24669 |        |                 |                               | <insufficient privilege>
+ 24670 |        |                 |                               | <insufficient privilege>
+ 31653 |        |                 |                               | <insufficient privilege>
+ 31662 |        |                 |                               | <insufficient privilege>
+ 31706 | active |                 | 2026-09-03 05:45:19.041124+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+

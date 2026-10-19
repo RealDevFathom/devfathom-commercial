@@ -1,0 +1,127 @@
+2026-09-03T00:48:04Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        | Activity        |                               | 
+ 24666 |        | Activity        |                               | 
+ 24668 |        | Activity        |                               | 
+ 24669 |        | Activity        |                               | 
+ 24670 |        | Activity        |                               | 
+ 42812 | active |                 | 2026-09-03 05:48:04.184631+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:48:04Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        | Activity        |                               | 
+ 24666 |        | Activity        |                               | 
+ 24668 |        | Activity        |                               | 
+ 24669 |        | Activity        |                               | 
+ 24670 |        | Activity        |                               | 
+ 42840 | active |                 | 2026-09-03 05:48:04.727834+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:48:05Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        | Activity        |                               | 
+ 24666 |        | Activity        |                               | 
+ 24668 |        | Activity        |                               | 
+ 24669 |        | Activity        |                               | 
+ 24670 |        | Activity        |                               | 
+ 42848 | active |                 | 2026-09-03 05:48:05.282106+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(6 rows)
+
+2026-09-03T00:48:05Z
+  pid  | state  | wait_event_type |          query_start          |                                       left                                       
+-------+--------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |        | Activity        |                               | 
+ 24666 |        | Activity        |                               | 
+ 24668 |        | Activity        |                               | 
+ 24669 |        | Activity        |                               | 
+ 24670 |        | Activity        |                               | 
+ 42853 | idle   | Client          | 2026-09-03 05:48:05.730115+05 | ROLLBACK
+ 42854 | active |                 | 2026-09-03 05:48:05.832557+05 | DELETE FROM "restaurant_insight_loyalty_liabilities" WHERE "organizationId" = $1
+ 42858 | active |                 | 2026-09-03 05:48:05.83151+05  | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:48:06Z
+  pid  |        state        | wait_event_type |          query_start          |                                       left                                       
+-------+---------------------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |                     | Activity        |                               | 
+ 24666 |                     | Activity        |                               | 
+ 24668 |                     | Activity        |                               | 
+ 24669 |                     | Activity        |                               | 
+ 24670 |                     | Activity        |                               | 
+ 42864 | idle in transaction | Client          | 2026-09-03 05:48:06.388397+05 | SELECT "public"."finance_journal_lines"."id", "public"."finance_journal_lines"."
+ 42865 | idle in transaction | Client          | 2026-09-03 05:48:06.387759+05 | INSERT INTO "public"."pharmacy_pack_levels" ("id","organizationId","presentation
+ 42883 | active              |                 | 2026-09-03 05:48:06.387408+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:48:06Z
+  pid  |        state        | wait_event_type |          query_start          |                                       left                                       
+-------+---------------------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |                     | Activity        |                               | 
+ 24666 |                     | Activity        |                               | 
+ 24668 |                     | Activity        |                               | 
+ 24669 |                     | Activity        |                               | 
+ 24670 |                     | Activity        |                               | 
+ 42864 | active              |                 | 2026-09-03 05:48:06.942084+05 | INSERT INTO "public"."pharmacy_inventory_lots" ("id","organizationId","branchId"
+ 42865 | idle in transaction | Client          | 2026-09-03 05:48:06.837121+05 | INSERT INTO "public"."pharmacy_device_lot_quotas" ("id","organizationId","branch
+ 42888 | idle in transaction | Client          | 2026-09-03 05:48:06.79399+05  | INSERT INTO "public"."restaurant_staff_profiles" ("id","userId","displayName","p
+ 42891 | active              |                 | 2026-09-03 05:48:06.941233+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(9 rows)
+
+2026-09-03T00:48:07Z
+  pid  |        state        | wait_event_type |          query_start          |                                       left                                       
+-------+---------------------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |                     | Activity        |                               | 
+ 24666 |                     | Activity        |                               | 
+ 24668 |                     | Activity        |                               | 
+ 24669 |                     | Activity        |                               | 
+ 24670 |                     | Activity        |                               | 
+ 42888 | idle in transaction | Client          | 2026-09-03 05:48:07.311873+05 | SELECT "public"."restaurant_operator_credentials"."id", "public"."restaurant_ope
+ 42897 | idle                | Client          | 2026-09-03 05:48:07.307931+05 | COMMIT
+ 42900 | active              |                 | 2026-09-03 05:48:07.481429+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:48:08Z
+  pid  |        state        | wait_event_type |          query_start          |                                       left                                       
+-------+---------------------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |                     | Activity        |                               | 
+ 24666 |                     | Activity        |                               | 
+ 24668 |                     | Activity        |                               | 
+ 24669 |                     | Activity        |                               | 
+ 24670 |                     | Activity        |                               | 
+ 42888 | idle                | Client          | 2026-09-03 05:48:08.029878+05 | COMMIT
+ 42897 | idle in transaction | Client          | 2026-09-03 05:48:08.02992+05  | BEGIN
+ 42907 | active              |                 | 2026-09-03 05:48:08.029295+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:48:08Z
+  pid  |        state        | wait_event_type |          query_start          |                                       left                                       
+-------+---------------------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |                     | Activity        |                               | 
+ 24666 |                     | Activity        |                               | 
+ 24668 |                     | Activity        |                               | 
+ 24669 |                     | Activity        |                               | 
+ 24670 |                     | Activity        |                               | 
+ 42888 | idle in transaction | Client          | 2026-09-03 05:48:08.569825+05 | SELECT "public"."restaurant_branches"."id", "public"."restaurant_branches"."acti
+ 42897 | idle                | Client          | 2026-09-03 05:48:08.561918+05 | COMMIT
+ 42929 | active              |                 | 2026-09-03 05:48:08.569058+05 | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(8 rows)
+
+2026-09-03T00:48:09Z
+  pid  |        state        | wait_event_type |          query_start          |                                       left                                       
+-------+---------------------+-----------------+-------------------------------+----------------------------------------------------------------------------------
+ 24665 |                     | Activity        |                               | 
+ 24666 |                     | Activity        |                               | 
+ 24668 |                     | Activity        |                               | 
+ 24669 |                     | Activity        |                               | 
+ 24670 |                     | Activity        |                               | 
+ 42888 | idle                | Client          | 2026-09-03 05:48:09.080167+05 | COMMIT
+ 42897 | idle in transaction | Client          | 2026-09-03 05:48:09.082039+05 | SELECT "public"."restaurant_operator_credentials"."id", "public"."restaurant_ope
+ 42935 | idle                | Client          | 2026-09-03 05:48:09.050519+05 | COMMIT
+ 42936 | idle                | Client          | 2026-09-03 05:48:09.053666+05 | COMMIT
+ 42939 | active              |                 | 2026-09-03 05:48:09.10929+05  | SELECT pid, state, wait_event_type, query_start, left(query,80) FROM pg_stat_act
+(10 rows)
+
