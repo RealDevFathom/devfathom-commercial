@@ -15,7 +15,9 @@ const mocks = vi.hoisted(() => {
         organization: { isDemo: boolean };
       } | null,
       device: { branchId: 'branch-bound' },
-      db: { restaurantKitchenTicket: { findFirst } },
+      db: {
+        restaurantKitchenTicket: { findFirst },
+      },
     },
   };
 });
@@ -62,6 +64,24 @@ beforeEach(() => {
 });
 
 describe('GET KDS queue demo rollover', () => {
+  it.each(['Hot Kitchen', null])(
+    'forwards stationName from readStationQueue (%s)',
+    async (stationName) => {
+      mocks.context.demoActor = null;
+      mocks.readStationQueue.mockResolvedValue({ ...queue(CURRENT_DATE), stationName });
+
+      const response = await GET(request());
+
+      expect(response.status).toBe(200);
+      await expect(response.json()).resolves.toMatchObject({
+        stationId: 'station-bound',
+        stationName,
+        tickets: [],
+      });
+      expect(mocks.readStationQueue).toHaveBeenCalledTimes(1);
+    }
+  );
+
   it('returns the bound station earlier open date as a full snapshot on repeated polls', async () => {
     mocks.findFirst.mockResolvedValue({ businessDate: PREVIOUS_DATE });
     mocks.readStationQueue.mockImplementation(async (_db: unknown, input: { businessDate: Date }) =>

@@ -8,12 +8,15 @@
  */
 import { describe, expect, it, vi } from 'vitest';
 
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+
 vi.mock('server-only', () => ({}));
 
 import {
   KDS_ACTION_TRANSITIONS,
   kdsActionToStatus,
   projectStationQueue,
+  readStationQueue,
   type StationTicketInput,
 } from './kds';
 import { KDS_DISPLAY_BY_ITEM_STATUS, type OrderItemStatus } from './order-state-machine';
@@ -148,4 +151,55 @@ describe('kdsActionToStatus — fixed action → item-domain target', () => {
       expect(['FIRING', 'PREPARED']).toContain(target);
     }
   });
+});
+
+describe('readStationQueue — station name from the existing ticket query', () => {
+  it.each(['QUEUED', 'SERVED', null] as const)(
+    'loads the name before projecting tickets (%s)',
+    async (status) => {
+      const findMany = vi.fn().mockResolvedValue(
+        status === null
+          ? []
+          : [
+              {
+                id: 'tkt_1',
+                ticketNumber: 1,
+                orderId: 'ord_1',
+                createdAt: DATE,
+                order: { orderNumber: 101 },
+                station: { name: 'Hot Kitchen' },
+                items: [
+                  {
+                    orderItemId: 'oi_1',
+                    quantity: 1,
+                    orderItem: {
+                      name: 'Soup',
+                      modifiers: [],
+                      course: 1,
+                      seatNumber: null,
+                      status,
+                    },
+                  },
+                ],
+              },
+            ]
+      );
+      const db = { restaurantKitchenTicket: { findMany } } as unknown as ScopedDb;
+
+      const queue = await readStationQueue(db, {
+        stationId: 'stn_1',
+        businessDate: DATE,
+        limit: 50,
+      });
+
+      expect(findMany).toHaveBeenCalledExactlyOnceWith(
+        expect.objectContaining({
+          where: { stationId: 'stn_1', businessDate: DATE },
+          select: expect.objectContaining({ station: { select: { name: true } } }),
+        })
+      );
+      expect(queue.stationName).toBe(status === null ? null : 'Hot Kitchen');
+      expect(queue.tickets).toHaveLength(status === 'QUEUED' ? 1 : 0);
+    }
+  );
 });

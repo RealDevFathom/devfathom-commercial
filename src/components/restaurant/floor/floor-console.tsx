@@ -513,7 +513,7 @@ export function FloorConsole() {
                               />
                             </div>
                             <p className="mt-1 font-mono text-[0.6875rem] text-text-faint">
-                              {floor.id} · sort {floor.sortOrder}
+                              {floor.name} · sort {floor.sortOrder}
                             </p>
                           </div>
                           <div className="flex flex-wrap gap-2">
