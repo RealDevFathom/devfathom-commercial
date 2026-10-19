@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   staffFindMany: vi.fn(),
   staffFindUnique: vi.fn(),
   resolveStaffCapabilities: vi.fn(),
+  setStaffAccess: vi.fn(),
   staffCreate: vi.fn(),
   branchFindFirst: vi.fn(),
   branchFindMany: vi.fn(),
@@ -51,6 +52,7 @@ vi.mock('@/lib/restaurant/job-roles', async () => ({
     '@/lib/restaurant/job-roles'
   )),
   resolveStaffCapabilities: mocks.resolveStaffCapabilities,
+  setStaffAccess: mocks.setStaffAccess,
 }));
 
 import { restaurantStaffRouter } from './restaurant-staff';
@@ -157,11 +159,12 @@ describe('restaurantStaff.provisionMyProfile', () => {
   it('creates only the calling administrator’s own profile, against the default branch', async () => {
     const result = await caller().provisionMyProfile();
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       created: true,
       staffProfileId: 'staff_new',
       primaryBranchId: 'branch_default',
       userId: 'user_admin',
+      roleProfileGranted: false,
     });
     expect(mocks.staffCreate).toHaveBeenCalledOnce();
     expect(mocks.staffCreate.mock.calls[0]![0].data).toMatchObject({
@@ -177,18 +180,20 @@ describe('restaurantStaff.provisionMyProfile', () => {
   it('audits the repair', async () => {
     await caller().provisionMyProfile();
 
-    expect(mocks.annotateAudit).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        targetType: 'RestaurantStaffProfile',
-        targetId: 'staff_new',
-        metadata: expect.objectContaining({
-          primaryBranchId: 'branch_default',
-          selfProvisioned: true,
-          profileCreated: true,
-        }),
-      })
-    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), {
+      targetType: 'RestaurantStaffProfile',
+      targetId: 'staff_new',
+      targetLabel: 'Restaurant Owner',
+      description: 'Provisioned the organization administrator’s own restaurant staff profile',
+      metadata: {
+        primaryBranchId: 'branch_default',
+        selfProvisioned: true,
+        profileCreated: true,
+        roleProfileGranted: false,
+        jobRolesCreated: [],
+        stationsCreated: [],
+      },
+    });
   });
 
   it('is idempotent: a second call writes nothing and audits nothing', async () => {
@@ -196,16 +201,18 @@ describe('restaurantStaff.provisionMyProfile', () => {
 
     const result = await caller().provisionMyProfile();
 
-    expect(result).toMatchObject({
+    expect(result).toEqual({
       created: false,
       staffProfileId: 'staff_1',
       primaryBranchId: 'branch_default',
+      userId: 'user_admin',
       roleProfileGranted: false,
     });
     expect(mocks.staffCreate).not.toHaveBeenCalled();
     expect(mocks.jobRoleCreate).not.toHaveBeenCalled();
     expect(mocks.stationCreate).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.setStaffAccess).not.toHaveBeenCalled();
   });
 
   it('also repairs the missing role profiles and station the same gap left behind', async () => {
@@ -257,6 +264,7 @@ describe('administrator repair authorization before writes', () => {
     expect(mocks.jobRoleCreate).not.toHaveBeenCalled();
     expect(mocks.stationCreate).not.toHaveBeenCalled();
     expect(mocks.annotateAudit).not.toHaveBeenCalled();
+    expect(mocks.setStaffAccess).not.toHaveBeenCalled();
   }
   it('denies non-ADMIN with staff:manage without provisioning writes', async () => {
     await expect(caller('EMPLOYEE').provisionMyProfile()).rejects.toMatchObject({
@@ -292,13 +300,51 @@ describe('administrator repair authorization before writes', () => {
     });
     expect(mocks.staffCreate).toHaveBeenCalledOnce();
   });
-  it.each([
-    { branchId: 'branch_other', staffProfileId: 'staff_target' },
-    { branchId: 'branch_default', staffProfileId: 'staff_other_tenant' },
-  ])('setStaffAccess denies wrong branch or target without writes: %j', async (input) => {
+  it('setStaffAccess denies branch B for a branch-A actor even when the target is valid', async () => {
+    mocks.can.mockImplementation(
+      async (_subject, capability) => capability !== 'restaurant:configure'
+    );
+    mocks.staffFindMany.mockResolvedValue([
+      {
+        id: 'staff_actor',
+        primaryBranchId: 'branch_default',
+        jobRoles: [{ branchId: 'branch_default' }],
+        directCapabilityGrants: [],
+      },
+    ]);
+    mocks.staffFindUnique.mockResolvedValue({ id: 'staff_target' });
     await expect(
-      caller().setStaffAccess({ ...input, jobRoleIds: [], overrides: [] })
+      caller().setStaffAccess({
+        branchId: 'branch_other',
+        staffProfileId: 'staff_target',
+        jobRoleIds: [],
+        overrides: [],
+      })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.resolveStaffCapabilities).toHaveBeenCalledWith(
+      db,
+      'staff_actor',
+      'branch_default'
+    );
+    expect(mocks.staffFindUnique).not.toHaveBeenCalled();
     expectNoWrites();
   });
+  it.each(['staff_other_tenant', 'staff_missing'])(
+    'setStaffAccess denies invisible target %s on an authorized branch without writes',
+    async (staffProfileId) => {
+      await expect(
+        caller().setStaffAccess({
+          branchId: 'branch_default',
+          staffProfileId,
+          jobRoleIds: [],
+          overrides: [],
+        })
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(mocks.staffFindUnique).toHaveBeenCalledWith({
+        where: { id: staffProfileId },
+        select: { id: true },
+      });
+      expectNoWrites();
+    }
+  );
 });
