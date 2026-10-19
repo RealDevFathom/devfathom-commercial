@@ -1,0 +1,20 @@
+{
+  "command": [
+    "node",
+    "node_modules/vitest/vitest.mjs",
+    "run",
+    "src/lib/receipts/restaurant-settings.db.test.ts",
+    "src/lib/restaurant/printing/claim.db.test.ts",
+    "src/lib/restaurant/printing/printing.db.test.ts",
+    "tests/wha1362-recheck.db.test.ts",
+    "--maxWorkers=1",
+    "--no-file-parallelism",
+    "--reporter=json",
+    "--outputFile=/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1362-verify-hw-combined-receipt-layout-queue-authorization-and-printer-runtime-review/docs/reviews/wha-1362/recheck/db.json"
+  ],
+  "exit": 0,
+  "database": "wha1354_disposable_b032106891",
+  "runtime": "wha1354_runtime_b032106891",
+  "host": "127.0.0.1",
+  "port": 52027
+}
