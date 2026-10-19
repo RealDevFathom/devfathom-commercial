@@ -12,6 +12,7 @@ import type { RestaurantJobHandler } from './job-handlers';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
+export const MAX_BACKFILL_TOTAL_DAYS = 366;
 
 export type RollupErrorReason = 'CLOSE_NOT_FOUND' | 'RECONCILIATION_FAILED' | 'INVALID';
 
@@ -162,7 +163,7 @@ function assertReconciles(close: CloseTip, raw: ReconciledFinancials): void {
   );
   if (mismatch) {
     throw new RollupError(
-      `Daily close reconciliation failed for ${mismatch}: close=${close[mismatch].toString()} raw=${raw[mismatch].toString()}.`,
+      `Daily close reconciliation failed for ${mismatch}.`,
       'RECONCILIATION_FAILED'
     );
   }
@@ -170,6 +171,43 @@ function assertReconciles(close: CloseTip, raw: ReconciledFinancials): void {
 
 function runRollupTransaction<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {
   return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
+}
+
+/** First instant whose organization-local calendar date is the following day. */
+function nextLocalDayBoundary(businessDate: Date, timeZone: string): Date {
+  const nextDate = new Date(businessDate);
+  nextDate.setUTCDate(nextDate.getUTCDate() + 1);
+  const target = nextDate.toISOString().slice(0, 10);
+  let formatter: Intl.DateTimeFormat;
+  try {
+    formatter = new Intl.DateTimeFormat('en-CA', {
+      timeZone,
+      calendar: 'iso8601',
+      numberingSystem: 'latn',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    });
+  } catch {
+    throw new RollupError('Organization timezone is invalid.', 'INVALID');
+  }
+  const localDate = (milliseconds: number) => {
+    const parts = formatter.formatToParts(milliseconds);
+    const value = (type: Intl.DateTimeFormatPartTypes) =>
+      parts.find((part) => part.type === type)?.value ?? '';
+    return `${value('year')}-${value('month')}-${value('day')}`;
+  };
+  let low = nextDate.getTime() - 36 * 60 * 60 * 1_000;
+  let high = nextDate.getTime() + 36 * 60 * 60 * 1_000;
+  if (localDate(low) >= target || localDate(high) < target) {
+    throw new RollupError('Organization day boundary could not be resolved.', 'INVALID');
+  }
+  while (high - low > 1) {
+    const middle = Math.floor((low + high) / 2);
+    if (localDate(middle) < target) low = middle;
+    else high = middle;
+  }
+  return new Date(high);
 }
 
 export type RollupDayInput = { branchId: string; businessDate: string; computedAt?: Date };
@@ -183,6 +221,12 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       select: { organizationId: true },
     });
     if (!branch) throw new RollupError('Restaurant branch not found.', 'INVALID');
+    const organization = await tx.organization.findUnique({
+      where: { id: branch.organizationId },
+      select: { timezone: true },
+    });
+    if (!organization) throw new RollupError('Restaurant organization not found.', 'INVALID');
+    const liabilityCutoff = nextLocalDayBoundary(businessDate, organization.timezone);
 
     const closes = await tx.restaurantDailyClose.findMany({
       where: { branchId: input.branchId, businessDate },
@@ -241,11 +285,42 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
     });
     assertReconciles(close, raw);
 
+    const program = await tx.loyaltyProgramVersion.findFirst({
+      where: { effectiveFrom: { lt: liabilityCutoff } },
+      orderBy: { effectiveFrom: 'desc' },
+      select: { redemptionValue: true },
+    });
+    const loyaltyEntries = await tx.loyaltyPointsEntry.findMany({
+      where: { occurredAt: { lt: liabilityCutoff } },
+      select: { accountId: true, points: true },
+    });
+    const loyaltyLiability = computeLoyaltyLiability(
+      loyaltyEntries,
+      program?.redemptionValue ?? null
+    );
+    const liabilityFact = await tx.insightLoyaltyLiabilityRollup.upsert({
+      where: {
+        organizationId_businessDate: {
+          organizationId: branch.organizationId,
+          businessDate,
+        },
+      },
+      create: { businessDate, liability: loyaltyLiability, computedAt },
+      update: { liability: loyaltyLiability, computedAt },
+      select: { id: true },
+    });
+
     const existing = await tx.insightDailyRollup.findFirst({
       where: { branchId: input.branchId, businessDate },
-      select: { id: true, sourceDailyCloseId: true },
+      select: { id: true, sourceDailyCloseId: true, loyaltyLiabilityRollupId: true },
     });
     if (existing?.sourceDailyCloseId === close.id) {
+      if (existing.loyaltyLiabilityRollupId !== liabilityFact.id) {
+        await tx.insightDailyRollup.update({
+          where: { id: existing.id },
+          data: { loyaltyLiabilityRollupId: liabilityFact.id },
+        });
+      }
       return {
         dailyRollupId: existing.id,
         sourceDailyCloseId: close.id,
@@ -275,19 +350,6 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
     });
     const items = computeItemMix(orders.flatMap((order) => order.items) as ItemMixInput[]);
 
-    const program = await tx.loyaltyProgramVersion.findFirst({
-      where: { effectiveFrom: { lte: close.createdAt } },
-      orderBy: { effectiveFrom: 'desc' },
-      select: { redemptionValue: true },
-    });
-    const loyaltyEntries = await tx.loyaltyPointsEntry.findMany({
-      select: { accountId: true, points: true },
-    });
-    const loyaltyLiability = computeLoyaltyLiability(
-      loyaltyEntries,
-      program?.redemptionValue ?? null
-    );
-
     await tx.insightItemMixRollup.deleteMany({
       where: { branchId: input.branchId, businessDate },
     });
@@ -303,6 +365,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         branchId: input.branchId,
         businessDate,
         sourceDailyCloseId: close.id,
+        loyaltyLiabilityRollupId: liabilityFact.id,
         orderCount: orders.length,
         coverCount: orders.reduce((total, order) => total + (order.coverCount ?? 0), 0),
         grossSales: close.grossSales,
@@ -311,11 +374,12 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         refundTotal: close.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
-        loyaltyLiability,
+        loyaltyLiability: ZERO,
         computedAt,
       },
       update: {
         sourceDailyCloseId: close.id,
+        loyaltyLiabilityRollupId: liabilityFact.id,
         orderCount: orders.length,
         coverCount: orders.reduce((total, order) => total + (order.coverCount ?? 0), 0),
         grossSales: close.grossSales,
@@ -324,7 +388,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         refundTotal: close.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
-        loyaltyLiability,
+        loyaltyLiability: ZERO,
         computedAt,
       },
       select: { id: true },
@@ -357,19 +421,97 @@ export function insightRollupJobKey(input: {
   branchId: string;
   businessDate: string;
   sourceDailyCloseId?: string;
+  rebuild?: boolean;
+  rebuildGeneration?: number;
 }): string {
-  return `insights.rollupDay:${input.branchId}:${input.businessDate}:${input.sourceDailyCloseId ?? 'backfill'}`;
+  const source =
+    input.sourceDailyCloseId ??
+    (input.rebuild ? `rebuild:${input.rebuildGeneration ?? 1}` : 'initial');
+  return `insights.rollupDay:${input.branchId}:${input.businessDate}:${source}`;
+}
+
+const TERMINAL_JOB_STATUSES = ['SUCCEEDED', 'FAILED', 'DEAD'] as const;
+
+function isDuplicateEnqueue(error: unknown): boolean {
+  return (
+    error instanceof Error && (error as Error & { reason?: unknown }).reason === 'DUPLICATE_ENQUEUE'
+  );
 }
 
 export async function enqueueInsightRollup(
   db: ScopedDb,
-  input: { branchId: string; businessDate: string; sourceDailyCloseId?: string }
+  input: {
+    branchId: string;
+    businessDate: string;
+    sourceDailyCloseId?: string;
+    rebuild?: boolean;
+  }
 ) {
-  return enqueue(db, {
+  const payload = { branchId: input.branchId, businessDate: input.businessDate };
+  if (input.rebuild) {
+    const prefix = `insights.rollupDay:${input.branchId}:${input.businessDate}:rebuild:`;
+    return runRollupTransaction(db, async (tx) => {
+      const generationOf = (idempotencyKey: string | null) => {
+        const value = Number(idempotencyKey?.slice(prefix.length));
+        return Number.isSafeInteger(value) && value > 0 ? value : 0;
+      };
+      const observed = await tx.restaurantJob.findMany({
+        where: { idempotencyKey: { startsWith: prefix } },
+      });
+      const observedActive = observed.find(
+        (job) => !(TERMINAL_JOB_STATUSES as readonly string[]).includes(job.status)
+      );
+      if (observedActive) return { job: observedActive, deduplicated: true };
+      const observedGeneration = observed.reduce(
+        (latest, job) => Math.max(latest, generationOf(job.idempotencyKey)),
+        0
+      );
+
+      const [lock] = await tx.$queryRaw<Array<{ acquired: boolean }>>(Prisma.sql`
+        SELECT pg_try_advisory_xact_lock(hashtextextended(${prefix}, 0)) AS acquired
+      `);
+      if (!lock?.acquired) {
+        await tx.$queryRaw(Prisma.sql`
+          SELECT pg_advisory_xact_lock(hashtextextended(${prefix}, 0))
+        `);
+      }
+      const history = await tx.restaurantJob.findMany({
+        where: { idempotencyKey: { startsWith: prefix } },
+      });
+      const active = history.find(
+        (job) => !(TERMINAL_JOB_STATUSES as readonly string[]).includes(job.status)
+      );
+      if (active) return { job: active, deduplicated: true };
+      const generation = history.reduce(
+        (latest, job) => Math.max(latest, generationOf(job.idempotencyKey)),
+        0
+      );
+      if (!lock?.acquired && generation > observedGeneration) {
+        const concurrent = history.find((job) => generationOf(job.idempotencyKey) === generation);
+        if (concurrent) return { job: concurrent, deduplicated: true };
+      }
+      return enqueue(tx, {
+        type: INSIGHTS_ROLLUP_DAY_JOB,
+        payload,
+        idempotencyKey: insightRollupJobKey({
+          ...input,
+          rebuildGeneration: generation + 1,
+        }),
+      });
+    });
+  }
+  const idempotencyKey = insightRollupJobKey(input);
+  const enqueueInput = {
     type: INSIGHTS_ROLLUP_DAY_JOB,
-    payload: { branchId: input.branchId, businessDate: input.businessDate },
-    idempotencyKey: insightRollupJobKey(input),
-  });
+    payload,
+    idempotencyKey,
+  };
+  try {
+    return await enqueue(db, enqueueInput);
+  } catch (error) {
+    if (!isDuplicateEnqueue(error)) throw error;
+    return enqueue(db, enqueueInput);
+  }
 }
 
 export function chunkBusinessDateRange(from: string, to: string) {
@@ -396,6 +538,15 @@ export async function enqueueInsightBackfill(
   db: ScopedDb,
   input: { branchId: string; from: string; to: string }
 ) {
+  const start = businessDateToUtcDate(input.from);
+  const end = businessDateToUtcDate(input.to);
+  const totalDays = Math.floor((end.getTime() - start.getTime()) / 86_400_000) + 1;
+  if (totalDays > MAX_BACKFILL_TOTAL_DAYS) {
+    throw new RollupError(
+      `Backfill range may contain at most ${MAX_BACKFILL_TOTAL_DAYS} inclusive days.`,
+      'INVALID'
+    );
+  }
   const chunks = chunkBusinessDateRange(input.from, input.to);
   let enqueued = 0;
   let deduplicated = 0;
@@ -408,6 +559,7 @@ export async function enqueueInsightBackfill(
       const result = await enqueueInsightRollup(db, {
         branchId: input.branchId,
         businessDate: date.toISOString().slice(0, 10),
+        rebuild: true,
       });
       if (result.deduplicated) deduplicated++;
       else enqueued++;

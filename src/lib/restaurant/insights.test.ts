@@ -5,7 +5,12 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 vi.mock('server-only', () => ({}));
 
-import { formatBranchTimestamp, importLabourCost, listInsightReports } from './insights';
+import {
+  exportInsightReports,
+  formatBranchTimestamp,
+  importLabourCost,
+  listInsightReports,
+} from './insights';
 
 const D = (value: string) => new Prisma.Decimal(value);
 const computedAt = new Date('2026-08-21T12:34:56.000Z');
@@ -22,7 +27,8 @@ const dailyRow = {
   refundTotal: D('10.00'),
   voidTotal: D('2.00'),
   drawerVariance: D('-0.50'),
-  loyaltyLiability: D('18.75'),
+  loyaltyLiability: D('999'),
+  loyaltyLiabilityFact: { liability: D('18.75') },
   computedAt,
   createdAt: computedAt,
   updatedAt: computedAt,
@@ -67,6 +73,35 @@ describe('insight report serialization', () => {
 
   it('formats branch-local timestamps deterministically', () => {
     expect(formatBranchTimestamp(computedAt, 'UTC')).toBe('2026-08-21T12:34:56[UTC]');
+  });
+
+  it('emits organization liability once in a consolidated multi-branch export', async () => {
+    db.insightDailyRollup.findMany.mockResolvedValue([
+      dailyRow,
+      {
+        ...dailyRow,
+        id: 'rollup_2',
+        branchId: 'branch_2',
+        branch: { name: 'Second', timezone: 'Asia/Karachi' },
+      },
+    ]);
+    const exported = await exportInsightReports(db as unknown as ScopedDb, 'financial', {
+      from: '2026-08-20',
+      to: '2026-08-20',
+    });
+    const [header, ...rows] = exported.content.split('\n');
+    const liabilityIndex = header!.split(',').indexOf('loyaltyLiability');
+    expect(rows.map((row) => row.split(',')[liabilityIndex])).toEqual(['18.75', '']);
+  });
+
+  it('falls back to the untouched legacy value while an old writer has not linked a fact', async () => {
+    db.insightDailyRollup.findMany.mockResolvedValue([
+      { ...dailyRow, loyaltyLiability: D('7.25'), loyaltyLiabilityFact: null },
+    ]);
+    const [row] = await listInsightReports(db as unknown as ScopedDb, 'financial', {
+      branchId: 'branch_1',
+    });
+    expect(row).toMatchObject({ loyaltyLiability: '7.25' });
   });
 });
 

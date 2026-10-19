@@ -56,6 +56,7 @@ import type { TRPCContext } from '../trpc';
 import { restaurantInsightsRouter } from './restaurant-insights';
 
 const db = {
+  restaurantBranch: { findFirst: vi.fn() },
   restaurantStaffProfile: { findFirst: vi.fn() },
 };
 
@@ -85,6 +86,7 @@ beforeEach(() => {
   mocks.can.mockImplementation((_subject, action) =>
     Promise.resolve(mocks.grants.has(String(action)))
   );
+  db.restaurantBranch.findFirst.mockResolvedValue({ id: 'branch_1' });
   db.restaurantStaffProfile.findFirst.mockResolvedValue({ primaryBranchId: 'branch_1' });
   mocks.listInsightReports.mockResolvedValue([
     { branchId: 'branch_1', orderCount: 2, coverCount: 4 },
@@ -185,5 +187,14 @@ describe('backfill command', () => {
         extra: true,
       } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
+
+  it('fails closed before enqueue when the requested branch is tenant-invisible', async () => {
+    mocks.grants.add('restaurant:configure');
+    db.restaurantBranch.findFirst.mockResolvedValue(null);
+    await expect(
+      caller().backfill({ branchId: 'branch_other', from: '2026-01-01', to: '2026-01-02' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.enqueueInsightBackfill).not.toHaveBeenCalled();
   });
 });

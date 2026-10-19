@@ -5796,31 +5796,57 @@ model LoyaltyPointsEntry {
 /// D22: rebuildable daily branch projection pinned to the authoritative latest
 /// daily-close chain tip used for reconciliation. All monetary values are Decimal.
 model InsightDailyRollup {
-  id                 String   @id @default(cuid())
-  organizationId     String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId           String
-  businessDate       DateTime @db.Date
-  sourceDailyCloseId String
-  orderCount         Int      @default(0)
-  coverCount         Int      @default(0)
-  grossSales         Decimal  @default(0) @db.Decimal(12, 2)
-  netSales           Decimal  @default(0) @db.Decimal(12, 2)
-  compTotal          Decimal  @default(0) @db.Decimal(12, 2)
-  refundTotal        Decimal  @default(0) @db.Decimal(12, 2)
-  voidTotal          Decimal  @default(0) @db.Decimal(12, 2)
-  drawerVariance     Decimal  @default(0) @db.Decimal(12, 2)
-  loyaltyLiability   Decimal  @default(0) @db.Decimal(12, 2)
-  computedAt         DateTime @default(now())
-  createdAt          DateTime @default(now())
-  updatedAt          DateTime @updatedAt
+  id                       String   @id @default(cuid())
+  organizationId           String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                 String
+  businessDate             DateTime @db.Date
+  sourceDailyCloseId       String
+  loyaltyLiabilityRollupId String?
+  orderCount               Int      @default(0)
+  coverCount               Int      @default(0)
+  grossSales               Decimal  @default(0) @db.Decimal(12, 2)
+  netSales                 Decimal  @default(0) @db.Decimal(12, 2)
+  compTotal                Decimal  @default(0) @db.Decimal(12, 2)
+  refundTotal              Decimal  @default(0) @db.Decimal(12, 2)
+  voidTotal                Decimal  @default(0) @db.Decimal(12, 2)
+  drawerVariance           Decimal  @default(0) @db.Decimal(12, 2)
+  /// Legacy M8 compatibility column. Liability now lives once per organization
+  /// and local calendar date in InsightLoyaltyLiabilityRollup; new writes keep
+  /// this branch-scoped value at zero.
+  loyaltyLiability Decimal  @default(0) @db.Decimal(12, 2)
+  computedAt       DateTime @default(now())
+  createdAt        DateTime @default(now())
+  updatedAt        DateTime @updatedAt
 
-  branch           RestaurantBranch     @relation(fields: [branchId], references: [id], onDelete: Cascade)
-  sourceDailyClose RestaurantDailyClose @relation(fields: [sourceDailyCloseId], references: [id], onDelete: Restrict)
+  branch                 RestaurantBranch                @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  sourceDailyClose       RestaurantDailyClose            @relation(fields: [sourceDailyCloseId], references: [id], onDelete: Restrict)
+  loyaltyLiabilityFact   InsightLoyaltyLiabilityRollup?  @relation(fields: [organizationId, loyaltyLiabilityRollupId], references: [organizationId, id], onDelete: Restrict, map: "tenant_insight_daily_loyalty_fact_fk")
 
   @@unique([organizationId, branchId, businessDate])
   @@index([organizationId])
   @@index([sourceDailyCloseId])
+  @@index([loyaltyLiabilityRollupId], map: "restaurant_insight_daily_loyalty_fact_idx")
   @@map("restaurant_insight_daily_rollups")
+}
+
+/// Organization-wide loyalty liability at the deterministic end of one local
+/// calendar day. Branch reports join this fact instead of duplicating it in each
+/// branch rollup.
+model InsightLoyaltyLiabilityRollup {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  businessDate   DateTime @db.Date
+  liability      Decimal  @default(0) @db.Decimal(12, 2)
+  computedAt     DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  dailyRollups InsightDailyRollup[]
+
+  @@unique([organizationId, businessDate], map: "restaurant_insight_loyalty_liability_org_date_key")
+  @@unique([organizationId, id], map: "restaurant_insight_loyalty_liability_org_id_key")
+  @@index([organizationId], map: "restaurant_insight_loyalty_liability_org_idx")
+  @@map("restaurant_insight_loyalty_liability_rollups")
 }
 
 /// D22: rebuildable product-level item-mix projection. Key adds product to the
