@@ -90,3 +90,69 @@ export function buildCounterReceiptPreview(
     }
   );
 }
+
+/** Aggregate-only report: no patient, medicine, or tender identity is exported. */
+export type CounterZReport = {
+  id: string;
+  branchName: string;
+  businessDate: string;
+  sequence: number;
+  grossSalesMinor: number;
+  refundTotalMinor: number;
+  netSalesMinor: number;
+  cashExpectedMinor: number;
+  cashCountedMinor: number;
+  cashVarianceMinor: number;
+  reason: string | null;
+  isFinal: boolean;
+};
+
+export function buildCounterZReportPreview(
+  report: CounterZReport,
+  locale: CounterReceiptLocale
+): string {
+  const amounts = [
+    report.grossSalesMinor,
+    report.refundTotalMinor,
+    report.netSalesMinor,
+    report.cashExpectedMinor,
+    report.cashCountedMinor,
+    report.cashVarianceMinor,
+  ];
+  if (!report.id || !amounts.every(Number.isSafeInteger))
+    throw new Error('Load a recorded day close before printing.');
+  const labels =
+    locale === 'ur'
+      ? [
+          'روزانہ اختتامی رپورٹ',
+          'تاریخ',
+          'فروخت',
+          'واپسی',
+          'خالص فروخت',
+          'متوقع نقد',
+          'گنتی شدہ نقد',
+          'فرق',
+          'فرق کی وجہ',
+        ]
+      : [
+          'Z-report',
+          'Business date',
+          'Gross sales',
+          'Refunds',
+          'Net sales',
+          'Expected cash',
+          'Counted cash',
+          'Variance',
+          'Variance note',
+        ];
+  return [
+    labels[0],
+    report.branchName,
+    `${labels[1]}: ${report.businessDate}`,
+    `#${report.sequence} · ${report.id}`,
+    'PKR',
+    ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
+    `${labels[8]}: ${report.reason ?? '—'}`,
+    report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
+  ].join('\n');
+}

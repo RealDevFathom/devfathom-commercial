@@ -43,6 +43,8 @@ export const COUNTER_ERROR_MESSAGES: Record<string, string> = {
   // Tenders and the cash drawer (POS-07) — every reason
   // `PharmacySettlementError` can raise, because these are the failures a
   // cashier hits mid-bill rather than during setup.
+  DAY_CLOSED:
+    'This business day is closed. New payments and drawer changes are blocked. Use an open business day.',
   DRAWER_NOT_OPEN: 'Open the cash drawer for this counter before taking a payment.',
   OPEN_DRAWER: 'A drawer is already open on this counter. Close it before opening another.',
   SALE_NOT_OPEN: 'This bill is no longer open for payment. Refresh the counter and try again.',
