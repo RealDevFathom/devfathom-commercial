@@ -60,6 +60,7 @@ import { pharmacyOnboardingRouter } from './pharmacy-onboarding';
 import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 import { hotelPropertyRouter } from './hotel-property';
+import { hotelRatesRouter } from './hotel-rates';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -123,6 +124,7 @@ export const appRouter = router({
   pharmacyOrdering: pharmacyOrderingRouter,
   pharmacySupplierLinks: pharmacySupplierLinksRouter,
   hotelProperty: hotelPropertyRouter,
+  hotelRates: hotelRatesRouter,
 });
 
 export type AppRouter = typeof appRouter;

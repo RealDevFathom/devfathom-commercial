@@ -22,6 +22,7 @@ import {
   roleTemplatesForVertical,
 } from '@/lib/vertical-catalog';
 import { PHARMACY_ONBOARDING_STEPS } from '@/lib/pharmacy/onboarding';
+import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
 
 const mocks = vi.hoisted(() => ({
   pkgFindUnique: vi.fn(),
@@ -40,9 +41,18 @@ const mocks = vi.hoisted(() => ({
   // restaurant branch above, so a test can tell which one provisioning wrote.
   pharmacyBranchCreate: vi.fn(),
   // H1-01 — the hospitality branch aggregate: in that vertical the property row
-  // IS the branch, so a third create tells the three paths apart.
-  hotelPropertyCreate: vi.fn(),
+  // IS the branch, so a third create tells the three paths apart. It returns the
+  // row because H1-07 hangs the property's meal plans off the branch id it
+  // generated, rather than off anything the request supplied.
+  // The argument is named so the assertions below can still read the payload
+  // provisioning wrote; an implementation with no parameters would give the mock
+  // a zero-argument call signature.
+  hotelPropertyCreate: vi.fn(async (_args: { data: Record<string, unknown> }) => ({
+    branchId: 'branch_new',
+  })),
   hotelPropertyFindFirst: vi.fn(),
+  // H1-07 — the meal plans a property opens with (H-D15).
+  hotelMealPlanCreateMany: vi.fn(),
   acknowledgementFindMany: vi.fn(),
   // WHA-1181 — restaurant onboarding and activation now also link each
   // organization administrator to a staff profile. Default implementations
@@ -130,6 +140,7 @@ const platformDb = {
     create: mocks.hotelPropertyCreate,
     findFirst: mocks.hotelPropertyFindFirst,
   },
+  hotelMealPlan: { createMany: mocks.hotelMealPlanCreateMany },
   restaurantBranchAssignment: { create: mocks.assignmentCreate },
   restaurantStaffProfile: { findFirst: mocks.staffFindFirst, create: mocks.staffCreate },
   restaurantActivationAcknowledgement: { findMany: mocks.acknowledgementFindMany },
@@ -485,12 +496,28 @@ describe('organization.create vertical + package compatibility', () => {
     // No mode, tax profile or business-date policy is pre-seeded: the checklist
     // has to have something real to refuse, and the column defaults carry the
     // rest (H-D14 HOTEL, PKR, en/ur).
-    const written = mocks.hotelPropertyCreate.mock.calls[0]![0] as {
-      data: Record<string, unknown>;
-    };
+    const written = mocks.hotelPropertyCreate.mock.calls[0]![0];
     for (const field of ['mode', 'taxProfileId', 'businessDatePolicy', 'currency']) {
       expect(written.data).not.toHaveProperty(field);
     }
+    // H1-07 / H-D15 — the property opens with its meal plans, hung off the row
+    // that was just created rather than off an id the payload supplied.
+    expect(mocks.hotelMealPlanCreateMany).toHaveBeenCalledTimes(1);
+    const seeded = (
+      mocks.hotelMealPlanCreateMany.mock.calls[0]![0] as {
+        data: { organizationId: string; branchId: string; code: string; active: boolean }[];
+      }
+    ).data;
+    expect(seeded).toHaveLength(DEFAULT_HOTEL_MEAL_PLANS.length);
+    expect(seeded.map((plan) => plan.code)).toEqual(
+      DEFAULT_HOTEL_MEAL_PLANS.map((plan) => plan.code)
+    );
+    for (const plan of seeded) {
+      expect(plan.organizationId).toBe('org_new');
+      expect(plan.branchId).toBe('branch_new');
+    }
+    // EP and CP are sold; MAP and AP wait for an operator to enable them.
+    expect(seeded.filter((plan) => plan.active).map((plan) => plan.code)).toEqual(['EP', 'CP']);
     // Neither of the other verticals' branch aggregates was touched.
     expect(mocks.branchCreate).not.toHaveBeenCalled();
     expect(mocks.pharmacyBranchCreate).not.toHaveBeenCalled();
