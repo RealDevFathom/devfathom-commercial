@@ -17,13 +17,38 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { classifyTenderAmount } from './tenders';
+import { allocateTenderTaxCents, classifyTenderAmount } from './tenders';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
+
+describe('bill-bound tender tax allocation', () => {
+  it('reconciles a frozen bucket exactly across multiple original tenders', () => {
+    const rows = allocateTenderTaxCents(new Prisma.Decimal('1.01'), [
+      { tenderId: 'tender-a', principal: new Prisma.Decimal('1.00') },
+      { tenderId: 'tender-b', principal: new Prisma.Decimal('1.00') },
+      { tenderId: 'tender-c', principal: new Prisma.Decimal('1.00') },
+    ]);
+
+    expect(rows).toEqual([
+      { originalTenderId: 'tender-a', cents: 34 },
+      { originalTenderId: 'tender-b', cents: 34 },
+      { originalTenderId: 'tender-c', cents: 33 },
+    ]);
+    expect(rows.reduce((total, row) => total + row.cents, 0)).toBe(101);
+  });
+
+  it('retains zero-cent facts so every frozen bucket remains bill/tender-bound', () => {
+    expect(
+      allocateTenderTaxCents(new Prisma.Decimal('0.00'), [
+        { tenderId: 'tender-a', principal: new Prisma.Decimal('4.00') },
+      ])
+    ).toEqual([{ originalTenderId: 'tender-a', cents: 0 }]);
+  });
+});
 
 const suffix = randomBytes(6).toString('hex');
 const orgId = `org_wha58t_${suffix}`;
@@ -40,6 +65,10 @@ const ids = {
   priceList: `pl_${suffix}`,
   priceVersion: `plv_${suffix}`,
   publication: `pub_${suffix}`,
+  taxSource: `tax_source_${suffix}`,
+  taxProfile: `tax_profile_${suffix}`,
+  taxedProfile: `tax_profile_taxed_${suffix}`,
+  taxedSource: `tax_source_taxed_${suffix}`,
 };
 const AT = new Date('2026-08-19T18:00:00.000Z');
 
@@ -141,6 +170,16 @@ beforeAll(async () => {
     tenders,
   };
 
+  const runtimeRole = await deps.withPlatformDb(
+    (tx) =>
+      tx.$queryRaw<Array<{ rolcanlogin: boolean; rolsuper: boolean; rolbypassrls: boolean }>>`
+      SELECT rolcanlogin, rolsuper, rolbypassrls
+      FROM pg_roles
+      WHERE rolname = current_user
+    `
+  );
+  expect(runtimeRole).toEqual([{ rolcanlogin: true, rolsuper: false, rolbypassrls: false }]);
+
   await deps.withPlatformDb((tx) =>
     tx.organization.create({
       data: {
@@ -156,6 +195,43 @@ beforeAll(async () => {
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Main', timezone: 'UTC', businessDayCutoff: '00:00' },
+    });
+    await tx.restaurantTaxOfficialSource.create({
+      data: {
+        id: ids.taxSource,
+        authorityCode: 'SYNTHETIC_TEST_ONLY',
+        documentTitle: 'Synthetic zero-rate tender fixture',
+        sourceUrl: 'https://example.invalid/synthetic-tax',
+        contentHash: `synthetic-${suffix}`,
+        retrievedAt: new Date('2026-08-01T00:00:00.000Z'),
+        expiresAt: new Date('2027-08-01T00:00:00.000Z'),
+      },
+    });
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        id: ids.taxProfile,
+        branchId: ids.branch,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+        approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+        publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+        rules: {
+          create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+            officialSourceId: ids.taxSource,
+            ruleCode: `SYNTHETIC_${paymentCategory}`,
+            paymentCategory,
+            priceMode: 'EXCLUSIVE',
+            rate: '0.000000',
+            status: 'PUBLISHED',
+            effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+            approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+            approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+            publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          })),
+        },
+      },
     });
     await tx.restaurantStaffProfile.create({
       data: { id: ids.operator, displayName: 'Operator', status: 'ACTIVE' },
@@ -394,6 +470,9 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     });
     expect(partial.settled).toBe(false);
     expect(partial.remainingDue.toString()).toBe('15');
+    expect(
+      await read((tx) => tx.restaurantTaxTransactionSnapshot.count({ where: { billId } }))
+    ).toBe(0);
 
     const final = await deps.tenders.applyTender(db, {
       billId,
@@ -410,6 +489,26 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
       tx.restaurantTender.aggregate({ where: { billId }, _sum: { amount: true } })
     );
     expect(agg._sum.amount?.toString()).toBe(grandTotal); // 25
+
+    const frozen = await read(async (tx) => ({
+      snapshots: await tx.restaurantTaxTransactionSnapshot.count({ where: { billId } }),
+      allocations: await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { billId },
+        select: { originalTenderId: true, paymentCategory: true, cents: true },
+      }),
+    }));
+    expect(frozen.snapshots).toBe(1);
+    expect(new Set(frozen.allocations.map((row) => row.originalTenderId))).toEqual(
+      new Set([partial.tenderId, final.tenderId])
+    );
+    expect(
+      frozen.allocations.every((row) =>
+        row.originalTenderId === partial.tenderId
+          ? row.paymentCategory === 'CARD'
+          : row.paymentCategory === 'CASH'
+      )
+    ).toBe(true);
+    expect(frozen.allocations.reduce((total, row) => total + row.cents, BigInt(0))).toBe(BigInt(0));
   });
 
   it('settles exactly once under concurrent final tenders (receipt allocated once)', async () => {
@@ -448,6 +547,164 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     expect(bill?.status).toBe('SETTLED');
     expect(bill?.receiptNumber).toBeGreaterThan(0);
   });
+
+  it('reconciles non-zero mixed partial/final tax cents by original tender and category', async () => {
+    await read(async (tx) => {
+      await tx.restaurantTaxOfficialSource.create({
+        data: {
+          id: ids.taxedSource,
+          authorityCode: 'SYNTHETIC_TAXED_TEST_ONLY',
+          documentTitle: 'Synthetic taxed tender fixture',
+          sourceUrl: 'https://example.invalid/synthetic-taxed',
+          contentHash: `synthetic-taxed-${suffix}`,
+          retrievedAt: new Date('2026-07-01T00:00:00.000Z'),
+          expiresAt: new Date('2027-07-01T00:00:00.000Z'),
+        },
+      });
+      await tx.restaurantTaxProfileVersion.create({
+        data: {
+          id: ids.taxedProfile,
+          branchId: ids.branch,
+          versionNumber: 2,
+          status: 'PUBLISHED',
+          effectiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+          effectiveTo: new Date('2026-08-01T00:00:00.000Z'),
+          approvalReference: 'SYNTHETIC_TAXED_APPROVAL',
+          approvedAt: new Date('2026-07-01T00:00:00.000Z'),
+          publishedAt: new Date('2026-07-01T00:00:00.000Z'),
+          rules: {
+            create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+              officialSourceId: ids.taxedSource,
+              ruleCode: `SYNTHETIC_TAXED_${paymentCategory}`,
+              paymentCategory,
+              priceMode: 'EXCLUSIVE',
+              rate: '0.100000',
+              status: 'PUBLISHED',
+              effectiveFrom: new Date('2026-07-01T00:00:00.000Z'),
+              effectiveTo: new Date('2026-08-01T00:00:00.000Z'),
+              approvalReference: 'SYNTHETIC_TAXED_APPROVAL',
+              approvedAt: new Date('2026-07-01T00:00:00.000Z'),
+              publishedAt: new Date('2026-07-01T00:00:00.000Z'),
+            })),
+          },
+        },
+      });
+    });
+
+    const { billId } = await openBill(1);
+    const db = deps.createTenantDb(orgId);
+    const at = new Date('2026-07-15T18:00:00.000Z');
+    const partial = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CARD', amount: '5.00' },
+      actor: actor(),
+      now: at,
+    });
+    const final = await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'OTHER', amount: '8.75' },
+      actor: actor(),
+      now: at,
+    });
+    expect(partial).toMatchObject({ settled: false });
+    expect(final).toMatchObject({ settled: true });
+
+    const evidence = await read(async (tx) => ({
+      snapshot: await tx.restaurantTaxTransactionSnapshot.findFirstOrThrow({
+        where: { billId },
+        select: { id: true, taxTotal: true },
+      }),
+      bucket: await tx.restaurantTaxRateBucketSnapshot.findFirstOrThrow({
+        where: { snapshot: { billId } },
+        select: { id: true },
+      }),
+      allocations: await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { billId },
+        orderBy: { paymentCategory: 'asc' },
+        select: { originalTenderId: true, paymentCategory: true, cents: true },
+      }),
+    }));
+    expect(evidence.snapshot.taxTotal.toString()).toBe('1.25');
+    expect(evidence.allocations).toEqual([
+      { originalTenderId: partial.tenderId, paymentCategory: 'CARD', cents: BigInt(50) },
+      { originalTenderId: final.tenderId, paymentCategory: 'OTHER', cents: BigInt(75) },
+    ]);
+
+    const wrongBill = await openBill(1);
+    const wrongBillTender = await read((tx) =>
+      tx.restaurantTender.create({
+        data: {
+          billId: wrongBill.billId,
+          type: 'CARD',
+          amount: '1.00',
+          businessDate: AT,
+          staffProfileId: ids.operator,
+          deviceId,
+        },
+        select: { id: true },
+      })
+    );
+    const base = {
+      snapshotId: evidence.snapshot.id,
+      rateBucketSnapshotId: evidence.bucket.id,
+      originalTenderId: wrongBillTender.id,
+      paymentCategory: 'CARD' as const,
+      cents: BigInt(0),
+    };
+    await expect(
+      read((tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.create({
+          data: { ...base, id: `wrong_bill_app_${suffix}`, billId: wrongBill.billId },
+        })
+      )
+    ).rejects.toThrow();
+    await expect(
+      read((tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.create({
+          data: {
+            ...base,
+            id: `cross_tenant_app_${suffix}`,
+            organizationId: `org_foreign_${suffix}`,
+            billId,
+          },
+        })
+      )
+    ).rejects.toThrow();
+    await expect(
+      read(
+        (tx) =>
+          tx.$executeRaw`INSERT INTO restaurant_tax_tender_allocation_snapshots
+          (id, "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+           "originalTenderId", "paymentCategory", cents)
+          VALUES (${`wrong_bill_db_${suffix}`}, ${orgId}, ${evidence.snapshot.id},
+            ${wrongBill.billId}, ${evidence.bucket.id}, ${wrongBillTender.id}, 'CARD', 0)`
+      )
+    ).rejects.toThrow();
+    await expect(
+      read(
+        (tx) =>
+          tx.$executeRaw`INSERT INTO restaurant_tax_tender_allocation_snapshots
+          (id, "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+           "originalTenderId", "paymentCategory", cents)
+          VALUES (${`cross_tenant_db_${suffix}`}, ${`org_foreign_${suffix}`},
+            ${evidence.snapshot.id}, ${billId}, ${evidence.bucket.id},
+            ${partial.tenderId}, 'CARD', 0)`
+      )
+    ).rejects.toThrow();
+  });
+
+  it('fails closed before writing a new tender when no tax profile is configured', async () => {
+    const { billId } = await openBill(1);
+    await expect(
+      deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId,
+        tender: { type: 'CARD', amount: '12.50' },
+        actor: actor(),
+        now: new Date('2025-01-01T00:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ reason: 'MISSING' });
+    expect(await read((tx) => tx.restaurantTender.count({ where: { billId } }))).toBe(0);
+  });
 });
 
 describeIfDatabase('idempotency (real DB)', () => {
@@ -465,7 +722,9 @@ describeIfDatabase('idempotency (real DB)', () => {
       billId,
       tender: { type: 'CARD', amount: '12.50' },
       actor: reuse,
-      now: AT,
+      // The source fixture has expired by then. Replay must return frozen payload
+      // before any current profile/source lookup.
+      now: new Date('2030-08-19T18:00:00.000Z'),
     });
     expect(replay.replayed).toBe(true);
     expect(replay.tenderId).toBe(first.tenderId);
@@ -473,6 +732,108 @@ describeIfDatabase('idempotency (real DB)', () => {
 
     const tenderCount = await read((tx) => tx.restaurantTender.count({ where: { billId } }));
     expect(tenderCount).toBe(1);
+  });
+
+  it('fails closed when the same key is reused with a conflicting payload', async () => {
+    const { billId } = await openBill(1);
+    const db = deps.createTenantDb(orgId);
+    const reuse = actor();
+    await deps.tenders.applyTender(db, {
+      billId,
+      tender: { type: 'CARD', amount: '5.00' },
+      actor: reuse,
+      now: AT,
+    });
+
+    await expect(
+      deps.tenders.applyTender(db, {
+        billId,
+        tender: { type: 'CARD', amount: '4.00' },
+        actor: reuse,
+        now: AT,
+      })
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
+    expect(await read((tx) => tx.restaurantTender.count({ where: { billId } }))).toBe(1);
+  });
+
+  it('uses legacy replay fallback without a live profile or tax-source lookup', async () => {
+    const { billId } = await openBill(1);
+    const firstRun = actor();
+    const first = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: firstRun,
+      now: AT,
+    });
+    const reuse = actor();
+    await read((tx) =>
+      tx.restaurantMoneyIdempotencyKey.create({
+        data: {
+          deviceId: reuse.deviceId,
+          key: reuse.idempotencyKey,
+          commandType: 'tender.card',
+          resultRef: first.tenderId,
+        },
+      })
+    );
+
+    const replay = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: reuse,
+      now: new Date('2030-08-19T18:00:00.000Z'),
+    });
+    expect(replay).toMatchObject({
+      tenderId: first.tenderId,
+      billId,
+      type: 'CARD',
+      settled: true,
+      receiptNumber: first.receiptNumber,
+      replayed: true,
+    });
+    expect(replay.amount.toString()).toBe('12.5');
+    expect(replay.remainingDue.toString()).toBe('0');
+  });
+
+  it('rejects a cross-command legacy key before replay or live bill/configuration writes', async () => {
+    const { billId } = await openBill(1);
+    const firstRun = actor();
+    const first = await deps.tenders.applyTender(deps.createTenantDb(orgId), {
+      billId,
+      tender: { type: 'CARD', amount: '12.50' },
+      actor: firstRun,
+      now: AT,
+    });
+    const reuse = actor();
+    await read((tx) =>
+      tx.restaurantMoneyIdempotencyKey.create({
+        data: {
+          deviceId: reuse.deviceId,
+          key: reuse.idempotencyKey,
+          commandType: 'cash.day_close',
+          resultRef: first.tenderId,
+        },
+      })
+    );
+    const before = await read(async (tx) => ({
+      tenders: await tx.restaurantTender.count(),
+      idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+    }));
+
+    await expect(
+      deps.tenders.applyTender(deps.createTenantDb(orgId), {
+        billId: `missing_${suffix}`,
+        tender: { type: 'CARD', amount: '12.50' },
+        actor: reuse,
+        now: new Date('2030-08-19T18:00:00.000Z'),
+      })
+    ).rejects.toMatchObject({ reason: 'TAX_SETTLEMENT_CONFLICT' });
+    expect(
+      await read(async (tx) => ({
+        tenders: await tx.restaurantTender.count(),
+        idempotencyKeys: await tx.restaurantMoneyIdempotencyKey.count(),
+      }))
+    ).toEqual(before);
   });
 });
 

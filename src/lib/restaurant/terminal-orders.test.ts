@@ -27,6 +27,7 @@ import {
   openOrderBody,
   orderErrorResponse,
   requireActingOperator,
+  requireOrderInDeviceBranch,
   voidBody,
   type TerminalEffectiveMenu,
 } from './terminal-orders';
@@ -97,6 +98,32 @@ describe('buildActor', () => {
       staffProfileId: 'staff_1',
       deviceId: 'dev_1',
       idempotencyKey: 'key_1',
+    });
+  });
+});
+
+describe('requireOrderInDeviceBranch', () => {
+  it('allows an order in the authenticated device branch', async () => {
+    const findFirst = vi.fn().mockResolvedValue({ id: 'o1' });
+    const db = { restaurantOrder: { findFirst } } as never;
+
+    await expect(requireOrderInDeviceBranch(db, 'o1', 'branch_1')).resolves.toBeUndefined();
+    expect(findFirst).toHaveBeenCalledWith({
+      where: { id: 'o1', branchId: 'branch_1' },
+      select: { id: true },
+    });
+  });
+
+  it('makes a same-organization cross-branch order indistinguishable from missing', async () => {
+    const db = {
+      restaurantOrder: { findFirst: vi.fn().mockResolvedValue(null) },
+    } as never;
+
+    await expect(
+      requireOrderInDeviceBranch(db, 'branch_2_order', 'branch_1')
+    ).rejects.toMatchObject({
+      reason: 'ORDER_NOT_FOUND',
+      message: 'The order does not exist.',
     });
   });
 });

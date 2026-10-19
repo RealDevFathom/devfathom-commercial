@@ -1,10 +1,12 @@
 import 'server-only';
 
+import { randomUUID } from 'node:crypto';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { buildCoAuthorizationRecord } from './co-authorization';
-import { releaseLoyaltyRedemption } from './loyalty';
+import { accrueLoyaltyForSettledBill, releaseLoyaltyRedemption } from './loyalty';
 import {
   add,
   allocate,
@@ -19,6 +21,7 @@ import {
   ZERO,
 } from './money';
 import { allocateReceiptNumber } from './receipt-numbers';
+import { consumeReservations } from './promotion-caps';
 
 /**
  * M5-L2 / C4 — the bill (check) command layer.
@@ -973,6 +976,428 @@ export async function settleBill(tx: ScopedDb, input: SettleBillInput): Promise<
     data: { status: 'SETTLED', settledAt: input.at, receiptNumber },
   });
   return { billId: bill.id, receiptNumber, alreadySettled: false };
+}
+
+export type SettlementBucketEvidence = {
+  ruleVersionId: string;
+  paymentCategory: string;
+  priceMode: 'EXCLUSIVE' | 'INCLUSIVE';
+  rate: Prisma.Decimal;
+  taxableAmount: Prisma.Decimal;
+  taxAmount: Prisma.Decimal;
+  grossAmount: Prisma.Decimal;
+  preDiscountGrossAmount: Prisma.Decimal;
+  beforeTaxDiscountAmount: Prisma.Decimal;
+  afterTaxDiscountAmount: Prisma.Decimal;
+};
+
+export type SettlementLineEvidence = {
+  billLineId: string;
+  taxAmount: Prisma.Decimal;
+  serviceChargeAmount: Prisma.Decimal;
+  lineTotal: Prisma.Decimal;
+  buckets: readonly (SettlementBucketEvidence & { unitOrdinal: number })[];
+};
+
+export type SettlementTaxBucketIdentity = {
+  ruleVersionId: string;
+  paymentCategory: 'CASH' | 'CARD' | 'OTHER';
+} & (
+  | { allocationKind: 'MERCHANDISE'; billLineId: string; unitOrdinal: number }
+  | { allocationKind: 'SERVICE_CHARGE'; billLineId?: never; unitOrdinal?: never }
+);
+
+/** Optional v1 seam populated by a later tender writer and read by refund allocation. */
+export type SettlementTenderTaxAllocation = {
+  originalTenderId: string;
+  paymentCategory: 'CASH' | 'CARD' | 'OTHER';
+  bucket: SettlementTaxBucketIdentity;
+  /** Exact tax amount assigned to this tender, represented as integer minor units. */
+  cents: number;
+};
+
+export type FinalizeBillSettlementInput = SettleBillInput & {
+  organizationId: string;
+  transactionReference: string;
+  profileVersionId: string;
+  currency: string;
+  subtotal: Prisma.Decimal;
+  discountTotal: Prisma.Decimal;
+  serviceChargeTotal: Prisma.Decimal;
+  taxTotal: Prisma.Decimal;
+  roundingAdjustment: Prisma.Decimal;
+  grandTotal: Prisma.Decimal;
+  eligibleNetMerchandise: Prisma.Decimal;
+  promotionEvaluationId?: string | null;
+  promotionEvaluationHash?: string | null;
+  lines: readonly SettlementLineEvidence[];
+  /** Taxable service charge evidence is frozen separately from merchandise. */
+  serviceChargeBuckets: readonly SettlementBucketEvidence[];
+  /** Omitted for legacy/v0-compatible callers that do not yet allocate tax by tender. */
+  tenderTaxAllocations?: readonly SettlementTenderTaxAllocation[];
+};
+
+export type FinalizeBillSettlementResult = SettleBillResult & {
+  snapshotId: string;
+  loyaltyEntryId: string | null;
+  consumedReservationCount: number;
+};
+
+export type FrozenSettlementBucket = SettlementTaxBucketIdentity & {
+  id: string;
+  taxAmount: Prisma.Decimal;
+};
+
+function taxBucketIdentityKey(bucket: SettlementTaxBucketIdentity): string {
+  return JSON.stringify([
+    bucket.allocationKind,
+    bucket.billLineId ?? null,
+    bucket.unitOrdinal ?? null,
+    bucket.ruleVersionId,
+    bucket.paymentCategory,
+  ]);
+}
+
+function exactCents(amount: Prisma.Decimal): number {
+  const cents = amount.mul(100);
+  const value = cents.toNumber();
+  if (!cents.isInteger() || !Number.isSafeInteger(value)) {
+    throw new BillCommandError('Tax evidence must use exact integer cents.', 'INVALID_SPLIT');
+  }
+  return value;
+}
+
+/** Validate complete per-bucket and settlement-tax reconciliation before any write. */
+export function validateTenderTaxAllocations(
+  allocations: readonly SettlementTenderTaxAllocation[],
+  buckets: readonly FrozenSettlementBucket[],
+  settlementTaxTotal: Prisma.Decimal
+): void {
+  const bucketsByIdentity = new Map(
+    buckets.map((bucket) => [taxBucketIdentityKey(bucket), bucket] as const)
+  );
+  const allocatedByBucket = new Map<string, number>();
+  const facts = new Set<string>();
+  let allocatedTotal = 0;
+
+  for (const allocation of allocations) {
+    if (
+      !allocation.originalTenderId.trim() ||
+      !Number.isSafeInteger(allocation.cents) ||
+      allocation.cents < 0
+    ) {
+      throw new BillCommandError(
+        'Tender tax allocations require a tender id and non-negative integer cents.',
+        'INVALID_SPLIT'
+      );
+    }
+    const bucketKey = taxBucketIdentityKey(allocation.bucket);
+    const bucket = bucketsByIdentity.get(bucketKey);
+    if (!bucket) {
+      throw new BillCommandError(
+        'Tender tax allocation references a missing settlement bucket.',
+        'INVALID_SPLIT'
+      );
+    }
+    if (allocation.paymentCategory !== bucket.paymentCategory) {
+      throw new BillCommandError(
+        'Tender tax allocation payment category does not match its bucket.',
+        'INVALID_SPLIT'
+      );
+    }
+    const factKey = JSON.stringify([bucket.id, allocation.originalTenderId]);
+    if (facts.has(factKey)) {
+      throw new BillCommandError(
+        'Tender tax allocation contains a duplicate fact.',
+        'INVALID_SPLIT'
+      );
+    }
+    facts.add(factKey);
+    allocatedByBucket.set(bucket.id, (allocatedByBucket.get(bucket.id) ?? 0) + allocation.cents);
+    allocatedTotal += allocation.cents;
+  }
+
+  for (const bucket of buckets) {
+    if (!allocatedByBucket.has(bucket.id)) {
+      throw new BillCommandError(
+        'Tender tax allocations must cover every settlement bucket.',
+        'INVALID_SPLIT'
+      );
+    }
+    if (allocatedByBucket.get(bucket.id) !== exactCents(bucket.taxAmount)) {
+      throw new BillCommandError(
+        'Tender tax allocations must reconcile exactly to every settlement bucket.',
+        'INVALID_SPLIT'
+      );
+    }
+  }
+  if (allocatedTotal !== exactCents(settlementTaxTotal)) {
+    throw new BillCommandError(
+      'Tender tax allocations must reconcile exactly to settlement tax total.',
+      'INVALID_SPLIT'
+    );
+  }
+}
+
+/**
+ * Persist the bill-owned pieces of a final checkout in the caller's interactive
+ * transaction. No error is caught here: a failure at any write boundary escapes
+ * and makes the caller roll back every financial row in the transaction.
+ */
+export async function finalizeBillSettlement(
+  tx: ScopedDb,
+  input: FinalizeBillSettlementInput
+): Promise<FinalizeBillSettlementResult> {
+  const bill = await tx.restaurantBill.findUnique({
+    where: { id: input.billId },
+    select: {
+      id: true,
+      status: true,
+      branchId: true,
+      compTotal: true,
+      lines: { select: { id: true, compAmount: true } },
+    },
+  });
+  if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+  if (bill.status !== 'OPEN')
+    throw new BillCommandError('Only an OPEN bill can be settled.', 'BILL_NOT_OPEN');
+
+  const expectedLineIds = bill.lines.map((line) => line.id).sort();
+  const suppliedLineIds = input.lines.map((line) => line.billLineId).sort();
+  if (
+    expectedLineIds.length !== suppliedLineIds.length ||
+    expectedLineIds.some((id, index) => id !== suppliedLineIds[index])
+  ) {
+    throw new BillCommandError(
+      'Settlement evidence must cover every bill line exactly once.',
+      'INVALID_SPLIT'
+    );
+  }
+  const lineTotal = sum(input.lines.map((line) => line.lineTotal));
+  const lineTaxTotal = sum(input.lines.map((line) => line.taxAmount));
+  const lineServiceTotal = sum(input.lines.map((line) => line.serviceChargeAmount));
+  const merchandiseBucketTax = sum(
+    input.lines.flatMap((line) => line.buckets.map((bucket) => bucket.taxAmount))
+  );
+  const serviceBucketTax = sum(input.serviceChargeBuckets.map((bucket) => bucket.taxAmount));
+  const serviceBucketBasis = sum(
+    input.serviceChargeBuckets.map((bucket) =>
+      bucket.priceMode === 'INCLUSIVE' ? bucket.grossAmount : bucket.taxableAmount
+    )
+  );
+  const componentTotal = add(
+    sub(add(add(input.subtotal, input.taxTotal), input.serviceChargeTotal), bill.compTotal),
+    sub(input.roundingAdjustment, input.discountTotal)
+  );
+  if (
+    !equals(lineTotal, sub(input.grandTotal, input.roundingAdjustment)) ||
+    !equals(lineTaxTotal, input.taxTotal) ||
+    !equals(lineServiceTotal, input.serviceChargeTotal) ||
+    !equals(add(merchandiseBucketTax, serviceBucketTax), input.taxTotal) ||
+    !equals(serviceBucketBasis, input.serviceChargeTotal) ||
+    !equals(componentTotal, input.grandTotal)
+  ) {
+    throw new BillCommandError('Settlement totals do not reconcile.', 'INVALID_SPLIT');
+  }
+  for (const line of input.lines) {
+    if (
+      line.buckets.some((bucket) => !Number.isInteger(bucket.unitOrdinal) || bucket.unitOrdinal < 0)
+    ) {
+      throw new BillCommandError(
+        'Every merchandise bucket requires a non-negative unit ordinal.',
+        'INVALID_SPLIT'
+      );
+    }
+    const merchandisePayable = sum(
+      line.buckets.map((bucket) => sub(bucket.grossAmount, bucket.afterTaxDiscountAmount))
+    );
+    const merchandiseTax = sum(line.buckets.map((bucket) => bucket.taxAmount));
+    const allocatedServiceTax = sub(line.taxAmount, merchandiseTax);
+    if (
+      !equals(
+        add(add(merchandisePayable, line.serviceChargeAmount), allocatedServiceTax),
+        line.lineTotal
+      )
+    ) {
+      throw new BillCommandError('Settlement line buckets do not reconcile.', 'INVALID_SPLIT');
+    }
+  }
+
+  const frozenBuckets: FrozenSettlementBucket[] = [
+    ...input.lines.flatMap((line) =>
+      line.buckets.map((bucket) => ({
+        id: randomUUID(),
+        allocationKind: 'MERCHANDISE' as const,
+        billLineId: line.billLineId,
+        unitOrdinal: bucket.unitOrdinal,
+        ruleVersionId: bucket.ruleVersionId,
+        paymentCategory: bucket.paymentCategory as 'CASH' | 'CARD' | 'OTHER',
+        taxAmount: bucket.taxAmount,
+      }))
+    ),
+    ...input.serviceChargeBuckets.map((bucket) => ({
+      id: randomUUID(),
+      allocationKind: 'SERVICE_CHARGE' as const,
+      ruleVersionId: bucket.ruleVersionId,
+      paymentCategory: bucket.paymentCategory as 'CASH' | 'CARD' | 'OTHER',
+      taxAmount: bucket.taxAmount,
+    })),
+  ];
+  if (input.tenderTaxAllocations !== undefined) {
+    validateTenderTaxAllocations(input.tenderTaxAllocations, frozenBuckets, input.taxTotal);
+    const tenderFacts = new Map(
+      (
+        await tx.restaurantTender.findMany({
+          where: {
+            id: { in: [...new Set(input.tenderTaxAllocations.map((row) => row.originalTenderId))] },
+          },
+          select: { id: true, billId: true, type: true },
+        })
+      ).map((tender) => [tender.id, tender] as const)
+    );
+    if (
+      input.tenderTaxAllocations.some((allocation) => {
+        const tender = tenderFacts.get(allocation.originalTenderId);
+        return (
+          !tender || tender.billId !== input.billId || tender.type !== allocation.paymentCategory
+        );
+      })
+    ) {
+      throw new BillCommandError(
+        'Tender tax allocation must reference a tender on the bill being settled.',
+        'INVALID_SPLIT'
+      );
+    }
+  }
+
+  const evidencePayload = {
+    version: 1,
+    billId: input.billId,
+    compTotal: bill.compTotal.toFixed(2),
+    discountTotal: input.discountTotal.toFixed(2),
+    serviceChargeTotal: input.serviceChargeTotal.toFixed(2),
+    roundingAdjustment: input.roundingAdjustment.toFixed(2),
+    eligibleNetMerchandise: input.eligibleNetMerchandise.toFixed(2),
+    promotionEvaluationId: input.promotionEvaluationId ?? null,
+    promotionEvaluationHash: input.promotionEvaluationHash ?? null,
+  };
+  const snapshots = await tx.$queryRaw<{ id: string }[]>`
+    INSERT INTO "restaurant_tax_transaction_snapshots"
+      ("id", "organizationId", "branchId", "billId", "transactionReference", "profileVersionId",
+       "currency", "subtotal", "discountTotal", "serviceChargeTotal", "taxTotal",
+       "grandTotal", "settledAt", "promotionEvaluationId", "promotionEvaluationHash",
+       "evidenceVersion", "evidencePayload")
+    VALUES
+      (gen_random_uuid()::text, ${input.organizationId}, ${bill.branchId}, ${input.billId},
+       ${input.transactionReference}, ${input.profileVersionId}, ${input.currency},
+       ${input.subtotal}, ${input.discountTotal}, ${input.serviceChargeTotal}, ${input.taxTotal},
+       ${input.grandTotal}, ${input.at}, ${input.promotionEvaluationId ?? null},
+       ${input.promotionEvaluationHash ?? null}, 1, ${JSON.stringify(evidencePayload)}::jsonb)
+    RETURNING "id"
+  `;
+  const snapshotId = snapshots[0]?.id;
+  if (!snapshotId) throw new Error('Tax settlement snapshot was not created.');
+
+  let frozenBucketIndex = 0;
+  for (const line of input.lines) {
+    await tx.restaurantBillLine.update({
+      where: { id: line.billLineId },
+      data: {
+        taxAmount: line.taxAmount,
+        serviceChargeAmount: line.serviceChargeAmount,
+        lineTotal: line.lineTotal,
+      },
+    });
+    for (const bucket of line.buckets) {
+      const frozenBucket = frozenBuckets[frozenBucketIndex++];
+      if (!frozenBucket) throw new Error('Tax settlement bucket identity was not created.');
+      await tx.$executeRaw`
+        INSERT INTO "restaurant_tax_rate_bucket_snapshots"
+          ("id", "organizationId", "snapshotId", "ruleVersionId", "paymentCategory",
+           "priceMode", "rate", "taxableAmount", "taxAmount", "grossAmount",
+           "preDiscountGrossAmount", "beforeTaxDiscountAmount", "afterTaxDiscountAmount",
+           "evidenceVersion", "allocationKind", "billLineId", "unitOrdinal")
+        VALUES
+          (${frozenBucket.id}, ${input.organizationId}, ${snapshotId},
+           ${bucket.ruleVersionId}, ${bucket.paymentCategory},
+           ${bucket.priceMode}::"RestaurantTaxPriceMode", ${bucket.rate},
+           ${bucket.taxableAmount}, ${bucket.taxAmount}, ${bucket.grossAmount},
+           ${bucket.preDiscountGrossAmount}, ${bucket.beforeTaxDiscountAmount},
+           ${bucket.afterTaxDiscountAmount}, 1, 'MERCHANDISE', ${line.billLineId},
+           ${bucket.unitOrdinal})
+      `;
+    }
+  }
+  for (const bucket of input.serviceChargeBuckets) {
+    const frozenBucket = frozenBuckets[frozenBucketIndex++];
+    if (!frozenBucket) throw new Error('Tax settlement bucket identity was not created.');
+    await tx.$executeRaw`
+      INSERT INTO "restaurant_tax_rate_bucket_snapshots"
+        ("id", "organizationId", "snapshotId", "ruleVersionId", "paymentCategory",
+         "priceMode", "rate", "taxableAmount", "taxAmount", "grossAmount",
+         "preDiscountGrossAmount", "beforeTaxDiscountAmount", "afterTaxDiscountAmount",
+         "evidenceVersion", "allocationKind", "billLineId", "unitOrdinal")
+      VALUES
+        (${frozenBucket.id}, ${input.organizationId}, ${snapshotId},
+         ${bucket.ruleVersionId}, ${bucket.paymentCategory},
+         ${bucket.priceMode}::"RestaurantTaxPriceMode", ${bucket.rate},
+         ${bucket.taxableAmount}, ${bucket.taxAmount}, ${bucket.grossAmount},
+         ${bucket.preDiscountGrossAmount}, ${bucket.beforeTaxDiscountAmount},
+         ${bucket.afterTaxDiscountAmount}, 1, 'SERVICE_CHARGE', NULL, NULL)
+    `;
+  }
+  if (input.tenderTaxAllocations !== undefined) {
+    const bucketIds = new Map(
+      frozenBuckets.map((bucket) => [taxBucketIdentityKey(bucket), bucket.id] as const)
+    );
+    for (const allocation of input.tenderTaxAllocations) {
+      const rateBucketSnapshotId = bucketIds.get(taxBucketIdentityKey(allocation.bucket));
+      if (!rateBucketSnapshotId) throw new Error('Validated tax allocation bucket was not found.');
+      await tx.restaurantTaxTenderAllocationSnapshot.create({
+        data: {
+          id: randomUUID(),
+          organizationId: input.organizationId,
+          snapshotId,
+          billId: input.billId,
+          rateBucketSnapshotId,
+          originalTenderId: allocation.originalTenderId,
+          paymentCategory: allocation.paymentCategory,
+          cents: BigInt(allocation.cents),
+        },
+      });
+    }
+  }
+  await tx.restaurantBill.update({
+    where: { id: bill.id },
+    data: {
+      subtotal: input.subtotal,
+      taxTotal: input.taxTotal,
+      serviceChargeTotal: input.serviceChargeTotal,
+      discountTotal: input.discountTotal,
+      roundingAdjustment: input.roundingAdjustment,
+      grandTotal: input.grandTotal,
+    },
+  });
+
+  const consumedReservationCount = input.promotionEvaluationId
+    ? await consumeReservations(tx, {
+        organizationId: input.organizationId,
+        evaluationId: input.promotionEvaluationId,
+        settledAt: input.at,
+      })
+    : 0;
+  const settled = await settleBill(tx, input);
+  const loyalty = await accrueLoyaltyForSettledBill(tx, {
+    billId: bill.id,
+    eligibleNetMerchandise: input.eligibleNetMerchandise,
+    at: input.at,
+  });
+  return {
+    ...settled,
+    snapshotId,
+    loyaltyEntryId: loyalty?.id ?? null,
+    consumedReservationCount,
+  };
 }
 
 // ── Settlement predicate (settlement guard + getOrderSettlement read) ─────────

@@ -51,7 +51,7 @@ export default async function NewOrganizationPage({
 
   if (!vertical) {
     return (
-      <div className="mx-auto max-w-5xl">
+      <div className="mx-auto max-w-5xl [&_.text-text-faint]:text-text-body [&_.text-text-muted]:text-text-body [&_[data-slot=eyebrow]]:text-text-body dark:[&_[data-slot=eyebrow]]:text-accent-brand">
         <PlatformPageHeading
           eyebrow="Organizations / onboarding"
           title="Onboard an organization"
@@ -103,7 +103,7 @@ export default async function NewOrganizationPage({
   const mandatory = mandatoryModulesForVertical(vertical);
 
   return (
-    <div className="mx-auto max-w-5xl">
+    <div className="mx-auto max-w-5xl [&_.text-text-faint]:text-text-body [&_.text-text-muted]:text-text-body [&_[data-slot=eyebrow]]:text-text-body dark:[&_[data-slot=eyebrow]]:text-accent-brand">
       <PlatformPageHeading
         eyebrow="Organizations / onboarding"
         title="Onboard an organization"
