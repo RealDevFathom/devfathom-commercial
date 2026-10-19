@@ -314,15 +314,25 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
-  // H1-01 — the hospitality rail. Settings is the only entry for now: every
-  // other hotel surface arrives with its own lane, and a nav entry pointing at a
-  // route that does not exist is a dead end (UX rule 12). Gated on mandatory
-  // Hotel Core through explicit module ownership, so the vertical filter hides
-  // it from restaurant and pharmacy workspaces without a `/hotel` catch-all.
+  // H1-01 — the hospitality rail. Every hotel surface arrives with its own lane,
+  // and a nav entry pointing at a route that does not exist is a dead end (UX
+  // rule 12), so an entry joins this rail only once its page does. Gated on
+  // mandatory Hotel Core through explicit module ownership, so the vertical
+  // filter hides it from restaurant and pharmacy workspaces without a `/hotel`
+  // catch-all.
   {
     label: 'Settings',
     href: '/hotel/settings/property',
     icon: Settings,
+    adminOnly: true,
+    group: 'Hospitality',
+    module: 'hotel-core',
+  },
+  // H1-05 (PROP-07) — function spaces, their layouts and turnaround buffers.
+  {
+    label: 'Function spaces',
+    href: '/hotel/settings/spaces',
+    icon: LayoutGrid,
     adminOnly: true,
     group: 'Hospitality',
     module: 'hotel-core',
