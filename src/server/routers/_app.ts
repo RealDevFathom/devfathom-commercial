@@ -41,6 +41,7 @@ import { restaurantNotificationsRouter } from './restaurant-notifications';
 import { restaurantCustomersRouter } from './restaurant-customers';
 import { restaurantLoyaltyRouter } from './restaurant-loyalty';
 import { restaurantInsightsRouter } from './restaurant-insights';
+import { restaurantTaxRouter } from './restaurant-tax';
 
 export const appRouter = router({
   dashboard: dashboardRouter,
@@ -85,6 +86,7 @@ export const appRouter = router({
   restaurantCustomers: restaurantCustomersRouter,
   restaurantLoyalty: restaurantLoyaltyRouter,
   restaurantInsights: restaurantInsightsRouter,
+  restaurantTax: restaurantTaxRouter,
 });
 
 export type AppRouter = typeof appRouter;

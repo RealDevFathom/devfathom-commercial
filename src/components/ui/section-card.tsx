@@ -9,6 +9,8 @@ interface SectionCardProps extends Omit<React.ComponentProps<'div'>, 'title'> {
   eyebrowAccent?: boolean;
   /** Optional Oxanium section title. */
   title?: React.ReactNode;
+  /** Semantic heading level for the title; defaults to 3 for nested cards. */
+  titleLevel?: 2 | 3;
   /** Optional right-aligned actions slot in the header row. */
   actions?: React.ReactNode;
 }
@@ -21,12 +23,14 @@ function SectionCard({
   eyebrow,
   eyebrowAccent = false,
   title,
+  titleLevel = 3,
   actions,
   className,
   children,
   ...props
 }: SectionCardProps) {
   const hasHeader = eyebrow != null || title != null || actions != null;
+  const Title = titleLevel === 2 ? 'h2' : 'h3';
   return (
     <div
       data-slot="section-card"
@@ -41,9 +45,9 @@ function SectionCard({
           <div className="min-w-0 space-y-1">
             {eyebrow != null ? <Eyebrow accent={eyebrowAccent}>{eyebrow}</Eyebrow> : null}
             {title != null ? (
-              <h3 className="font-display text-lg leading-snug font-semibold tracking-tight text-text-strong">
+              <Title className="font-display text-lg leading-snug font-semibold tracking-tight text-text-strong">
                 {title}
-              </h3>
+              </Title>
             ) : null}
           </div>
           {actions != null ? (
