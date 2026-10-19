@@ -7,7 +7,9 @@ const h = vi.hoisted(() => {
     mutate = vi.fn(),
     reset = vi.fn(),
     rename = vi.fn(),
-    renameReset = vi.fn();
+    renameReset = vi.fn(),
+    retire = vi.fn(),
+    retireReset = vi.fn();
   return {
     branches,
     printers,
@@ -16,7 +18,10 @@ const h = vi.hoisted(() => {
     reset,
     rename,
     renameReset,
+    retire,
+    retireReset,
     renameOptions: null as unknown,
+    retireOptions: null as unknown,
     options: null as unknown,
     client: {
       restaurantStaff: { listBranches: { query: branches } },
@@ -32,6 +37,12 @@ vi.mock('@/lib/trpc', () => ({
         useMutation: (options: unknown) => {
           h.renameOptions = options;
           return { mutateAsync: h.rename, reset: h.renameReset };
+        },
+      },
+      retirePrinter: {
+        useMutation: (options: unknown) => {
+          h.retireOptions = options;
+          return { mutateAsync: h.retire, reset: h.retireReset };
         },
       },
       registerPrinters: {
@@ -65,6 +76,7 @@ const printer = {
   paperWidthMm: 80,
   status: 'OFFLINE',
   lastSeenAt: null,
+  retiredAt: null as Date | null,
   bridge: { id: 'bridge', name: 'Kitchen host' },
 };
 function deferred<T>() {
@@ -82,6 +94,7 @@ beforeEach(() => {
   h.devices.mockResolvedValue([bridge]);
   h.printers.mockResolvedValue([printer]);
   h.mutate.mockResolvedValue({ registered: 1 });
+  h.retire.mockResolvedValue(retirementResult());
 });
 async function chooseBranch(id = 'a') {
   await waitFor(() => expect(screen.getByLabelText('Inventory branch')).toBeEnabled());
@@ -649,4 +662,410 @@ it('keeps branch B loading independent of a late branch A reconciliation denial'
   expect(h.printers).toHaveBeenCalledTimes(3);
   expect(screen.getByRole('button', { name: 'Review printer name' })).toBeDisabled();
   expect(h.rename).toHaveBeenCalledOnce();
+});
+
+const savedRetirement = new Date('2026-10-14T10:15:30.000Z');
+function retirementResult(changed = true, retiredAt = savedRetirement) {
+  return {
+    printer: { id: 'printer', branchId: 'a', name: 'Receipt', retiredAt },
+    changed,
+  };
+}
+async function openRetirement() {
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeEnabled());
+  fireEvent.click(screen.getByRole('button', { name: 'Retire Receipt' }));
+}
+const confirmRetirement = () =>
+  fireEvent.click(screen.getByRole('button', { name: 'Confirm retirement' }));
+
+it('identifies the exact branch and printer and cancels without a mutation', async () => {
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  const dialog = screen.getByRole('dialog');
+  expect(dialog).toHaveTextContent('Receipt in Downtown');
+  expect(dialog).toHaveTextContent('tcp://printer:9100');
+  expect(dialog).toHaveTextContent('Inventory ID: printer');
+  fireEvent.click(screen.getByRole('button', { name: 'Cancel retirement' }));
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+  expect(h.retire).not.toHaveBeenCalled();
+});
+
+it('retains the saved server timestamp after a failed refresh and does not offer a repeat action', async () => {
+  h.printers.mockResolvedValueOnce([printer]).mockRejectedValueOnce(new Error('read failed'));
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  const result = await screen.findByText(/Retired Receipt/);
+  expect(result.closest('[role="status"]')).toHaveTextContent('Saved retirement time:');
+  expect(result.closest('[role="status"]')?.querySelector('time')).toHaveAttribute(
+    'datetime',
+    savedRetirement.toISOString()
+  );
+  expect(await screen.findByRole('alert')).toHaveTextContent('Printers could not be loaded');
+  expect(screen.queryByText(/Retirement outcome is uncertain/)).not.toBeInTheDocument();
+  expect(h.retire).toHaveBeenCalledExactlyOnceWith({ branchId: 'a', printerId: 'printer' });
+  expect(h.retireOptions).toEqual({ retry: false, gcTime: 0 });
+});
+
+it('reports an idempotent server result with its original timestamp', async () => {
+  h.retire.mockResolvedValue(retirementResult(false));
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  const result = await screen.findByText(/Receipt was already retired/);
+  expect(result.closest('[role="status"]')?.querySelector('time')).toHaveAttribute(
+    'datetime',
+    savedRetirement.toISOString()
+  );
+  expect(screen.queryByText(/Retired Receipt/)).not.toBeInTheDocument();
+  await waitFor(() =>
+    expect(screen.queryByRole('button', { name: 'Retire Receipt' })).not.toBeInTheDocument()
+  );
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('keeps an idempotent retirement receipt when its list refresh fails', async () => {
+  h.retire.mockResolvedValue(retirementResult(false));
+  h.printers.mockResolvedValueOnce([printer]).mockRejectedValueOnce(new Error('read failed'));
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  const result = await screen.findByText(/Receipt was already retired/);
+  expect(result.closest('[role="status"]')?.querySelector('time')).toHaveAttribute(
+    'datetime',
+    savedRetirement.toISOString()
+  );
+  expect(await screen.findByRole('alert')).toHaveTextContent('Printers could not be loaded');
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('keeps a retired row visible with lifecycle separate from observed health', async () => {
+  h.printers.mockResolvedValue([
+    {
+      ...printer,
+      status: 'ONLINE',
+      lastSeenAt: new Date('2026-10-14T09:00:00.000Z'),
+      retiredAt: savedRetirement,
+    },
+  ]);
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await screen.findByText('Receipt');
+  expect(screen.getByText('ONLINE')).toBeVisible();
+  expect(screen.getByText('Retired')).toBeVisible();
+  expect(screen.queryByRole('button', { name: 'Retire Receipt' })).not.toBeInTheDocument();
+  expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeEnabled();
+  expect(h.retire).not.toHaveBeenCalled();
+});
+
+it('allows authorized retirement when the owning bridge is revoked', async () => {
+  h.devices.mockResolvedValue([{ ...bridge, status: 'REVOKED', revokedAt: new Date() }]);
+  h.printers.mockResolvedValue([
+    { ...printer, bridge: { ...printer.bridge, status: 'REVOKED', revokedAt: new Date() } },
+  ]);
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  expect(screen.getByRole('button', { name: 'Register printers' })).toBeDisabled();
+  await openRetirement();
+  confirmRetirement();
+  await screen.findByText(/Retired Receipt/);
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it.each([
+  'registered route',
+  'unfinished print job',
+  'transaction isolation mismatch',
+  'printer changed concurrently',
+])('reports a definite %s conflict and never retries the mutation', async (blocker) => {
+  h.retire.mockRejectedValueOnce({
+    data: { code: 'CONFLICT' },
+    message: `${blocker}: private server detail`,
+  });
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  expect(await screen.findByRole('alert')).toHaveTextContent('server reported a conflict');
+  expect(screen.getByRole('alert')).toHaveTextContent('No retirement was saved by this request');
+  expect(screen.getByRole('alert')).not.toHaveTextContent('private server detail');
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'I reviewed the current inventory' })).toBeEnabled()
+  );
+  expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeDisabled();
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('keeps a definite missing-target error separate from uncertainty', async () => {
+  h.retire.mockRejectedValueOnce({ data: { code: 'NOT_FOUND' } });
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  expect(await screen.findByRole('alert')).toHaveTextContent('could not be retired');
+  expect(screen.queryByText(/Retirement outcome is uncertain/)).not.toBeInTheDocument();
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('blocks duplicate clicks, cross-mutations, branch changes, and dismissal while retiring', async () => {
+  const pending = deferred<ReturnType<typeof retirementResult>>();
+  h.retire.mockReturnValue(pending.promise);
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  const form = screen.getByRole('button', { name: 'Confirm retirement' }).closest('form')!;
+  act(() => {
+    fireEvent.submit(form);
+    fireEvent.submit(form);
+  });
+  expect(h.retire).toHaveBeenCalledOnce();
+  expect(screen.getByRole('button', { name: 'Cancel retirement' })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Retiring…' })).toBeDisabled();
+  expect(screen.getByLabelText('Inventory branch')).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Register printers', hidden: true })).toBeDisabled();
+  expect(screen.getByRole('button', { name: 'Rename Receipt', hidden: true })).toBeDisabled();
+  fireEvent.keyDown(screen.getByRole('dialog'), { key: 'Escape' });
+  expect(screen.getByRole('dialog')).toBeInTheDocument();
+  await act(async () => pending.resolve(retirementResult()));
+  await screen.findByText(/Retired Receipt/);
+  expect(h.mutate).not.toHaveBeenCalled();
+  expect(h.rename).not.toHaveBeenCalled();
+});
+
+it('does not start retirement during an in-flight registration', async () => {
+  const pending = deferred<{ registered: number }>();
+  h.mutate.mockReturnValue(pending.promise);
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRegistration();
+  save();
+  const retire = screen.getByRole('button', { name: 'Retire Receipt', hidden: true });
+  expect(retire).toBeDisabled();
+  fireEvent.click(retire);
+  expect(h.retire).not.toHaveBeenCalled();
+  await act(async () => pending.resolve({ registered: 1 }));
+});
+
+it('does not start retirement during an in-flight rename', async () => {
+  const pending = deferred<ReturnType<typeof renameResult>>();
+  h.rename.mockReturnValue(pending.promise);
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRename();
+  saveName();
+  const retire = screen.getByRole('button', { name: 'Retire Receipt', hidden: true });
+  expect(retire).toBeDisabled();
+  fireEvent.click(retire);
+  expect(h.retire).not.toHaveBeenCalled();
+  await act(async () => pending.resolve(renameResult()));
+});
+
+it('keeps uncertainty explicit when the fresh read fails and requires a later reviewed inventory', async () => {
+  h.retire.mockRejectedValueOnce(new Error('lost response with private detail'));
+  h.printers
+    .mockResolvedValueOnce([printer])
+    .mockRejectedValueOnce(new Error('read failed'))
+    .mockResolvedValueOnce([printer]);
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  const alert = await screen.findByRole('alert');
+  expect(alert).toHaveTextContent('Retirement outcome is uncertain');
+  expect(alert).not.toHaveTextContent('private detail');
+  expect(screen.getByRole('button', { name: 'I reviewed the current inventory' })).toBeDisabled();
+  await screen.findByText(/Printers could not be loaded/);
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh printers' }));
+  await waitFor(() =>
+    expect(screen.getByRole('button', { name: 'I reviewed the current inventory' })).toBeEnabled()
+  );
+  expect(h.retire).toHaveBeenCalledOnce();
+  fireEvent.click(screen.getByRole('button', { name: 'I reviewed the current inventory' }));
+  expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeEnabled();
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('keeps a confirmed retirement receipt after an authorized refresh during the pending command', async () => {
+  const pending = deferred<ReturnType<typeof retirementResult>>();
+  h.retire.mockReturnValue(pending.promise);
+  h.printers
+    .mockResolvedValueOnce([printer])
+    .mockResolvedValueOnce([printer])
+    .mockResolvedValueOnce([{ ...printer, retiredAt: savedRetirement }]);
+  const view = render(<PrinterInventoryPanel ownerKey="org:admin" refreshVersion={0} />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  view.rerender(<PrinterInventoryPanel ownerKey="org:admin" refreshVersion={1} />);
+  await waitFor(() => expect(h.printers).toHaveBeenCalledTimes(2));
+  await act(async () => pending.resolve(retirementResult()));
+  const receipt = await screen.findByText(/Retired Receipt/);
+  expect(receipt.closest('[role="status"]')?.querySelector('time')).toHaveAttribute(
+    'datetime',
+    savedRetirement.toISOString()
+  );
+  await waitFor(() => expect(h.printers).toHaveBeenCalledTimes(3));
+  expect(screen.queryByText(/Retirement outcome is uncertain/)).not.toBeInTheDocument();
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('requires a post-outcome read after an authorized refresh before acknowledging uncertainty', async () => {
+  const pending = deferred<ReturnType<typeof retirementResult>>();
+  const afterOutcome = deferred<(typeof printer)[]>();
+  h.retire.mockReturnValue(pending.promise);
+  h.printers
+    .mockResolvedValueOnce([printer])
+    .mockResolvedValueOnce([printer])
+    .mockReturnValueOnce(afterOutcome.promise);
+  const view = render(<PrinterInventoryPanel ownerKey="org:admin" refreshVersion={0} />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  view.rerender(<PrinterInventoryPanel ownerKey="org:admin" refreshVersion={1} />);
+  await waitFor(() => expect(h.printers).toHaveBeenCalledTimes(2));
+  await act(async () => pending.reject(new Error('unknown with private detail')));
+  expect(await screen.findByRole('alert')).toHaveTextContent('Retirement outcome is uncertain');
+  expect(screen.getByRole('alert')).not.toHaveTextContent('private detail');
+  await waitFor(() => expect(h.printers).toHaveBeenCalledTimes(3));
+  expect(screen.getByRole('button', { name: 'I reviewed the current inventory' })).toBeDisabled();
+  await act(async () => afterOutcome.resolve([printer]));
+  expect(screen.getByRole('button', { name: 'I reviewed the current inventory' })).toBeEnabled();
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it.each(['register', 'rename'] as const)(
+  'blocks %s opening and an already-open form until retirement is explicitly reconciled',
+  async (kind) => {
+    const afterOutcome = deferred<(typeof printer)[]>();
+    h.retire.mockRejectedValueOnce(new Error('lost response'));
+    h.printers.mockResolvedValueOnce([printer]).mockReturnValueOnce(afterOutcome.promise);
+    render(<PrinterInventoryPanel ownerKey="org:admin" />);
+    await chooseBranch();
+    if (kind === 'register') await openRegistration();
+    else await openRename();
+    fireEvent.click(screen.getByRole('button', { name: 'Retire Receipt', hidden: true }));
+    confirmRetirement();
+    expect(await screen.findByRole('alert', { hidden: true })).toHaveTextContent(
+      'Retirement outcome is uncertain'
+    );
+    await waitFor(() => expect(h.printers).toHaveBeenCalledTimes(2));
+    await act(async () => afterOutcome.resolve([printer]));
+    expect(
+      screen.getByRole('button', { name: 'I reviewed the current inventory', hidden: true })
+    ).toBeEnabled();
+    const saveButton = screen.getByRole('button', {
+      name: kind === 'register' ? 'Save printers' : 'Save printer name',
+    });
+    expect(saveButton).toBeDisabled();
+    fireEvent.submit(saveButton.closest('form')!);
+    expect(h.mutate).not.toHaveBeenCalled();
+    expect(h.rename).not.toHaveBeenCalled();
+    fireEvent.click(
+      screen.getByRole('button', { name: kind === 'register' ? 'Cancel' : 'Cancel rename' })
+    );
+    expect(screen.getByRole('button', { name: 'Register printers' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeDisabled();
+    expect(screen.getByRole('button', { name: 'Refresh printers' })).toBeEnabled();
+    expect(screen.getByLabelText('Inventory branch')).toBeEnabled();
+    fireEvent.click(screen.getByRole('button', { name: 'I reviewed the current inventory' }));
+    expect(screen.getByRole('button', { name: 'Register printers' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeEnabled();
+    expect(h.retire).toHaveBeenCalledOnce();
+  }
+);
+
+it('hides inventory after retirement permission loss until a fresh authorized read', async () => {
+  h.retire.mockRejectedValueOnce({ data: { code: 'FORBIDDEN' } });
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  await screen.findByText(/Refresh to check your access again/);
+  expect(screen.queryByRole('button', { name: 'Retire Receipt' })).not.toBeInTheDocument();
+  expect(screen.queryByText(/Retired Receipt/)).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole('button', { name: 'Refresh printers' }));
+  await waitFor(() => expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeEnabled());
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('ignores retirement success after an owner remount', async () => {
+  const pending = deferred<ReturnType<typeof retirementResult>>();
+  h.retire.mockReturnValue(pending.promise);
+  const view = render(<PrinterInventoryPanel key="a" ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  view.rerender(<PrinterInventoryPanel key="b" ownerKey="org:other" />);
+  await act(async () => pending.resolve(retirementResult()));
+  expect(screen.queryByText(/Retired Receipt/)).not.toBeInTheDocument();
+  expect(h.printers).toHaveBeenCalledOnce();
+});
+
+it.each(['success', 'unknown error'] as const)(
+  'releases the obsolete %s operation after a same-instance owner A/B/A transition',
+  async (outcome) => {
+    const pending = deferred<ReturnType<typeof retirementResult>>();
+    h.retire.mockReturnValue(pending.promise);
+    const view = render(<PrinterInventoryPanel ownerKey="org:admin" />);
+    await chooseBranch();
+    await openRetirement();
+    confirmRetirement();
+    view.rerender(<PrinterInventoryPanel ownerKey="other:user" />);
+    view.rerender(<PrinterInventoryPanel ownerKey="org:admin" />);
+    if (outcome === 'success') await act(async () => pending.resolve(retirementResult()));
+    else await act(async () => pending.reject(new Error('unknown private detail')));
+    await waitFor(() =>
+      expect(screen.getByRole('button', { name: 'Register printers' })).toBeEnabled()
+    );
+    expect(screen.getByRole('button', { name: 'Rename Receipt' })).toBeEnabled();
+    expect(screen.getByRole('button', { name: 'Retire Receipt' })).toBeEnabled();
+    expect(screen.queryByText(/Retired Receipt/)).not.toBeInTheDocument();
+    expect(screen.queryByText(/Retirement outcome is uncertain/)).not.toBeInTheDocument();
+    expect(h.retire).toHaveBeenCalledOnce();
+    expect(h.mutate).not.toHaveBeenCalled();
+    expect(h.rename).not.toHaveBeenCalled();
+  }
+);
+
+it('ignores retirement success after a permission-denied read supersedes its generation', async () => {
+  const pending = deferred<ReturnType<typeof retirementResult>>();
+  h.retire.mockReturnValue(pending.promise);
+  h.printers
+    .mockResolvedValueOnce([printer])
+    .mockRejectedValueOnce({ data: { code: 'FORBIDDEN' } });
+  const view = render(<PrinterInventoryPanel ownerKey="org:admin" refreshVersion={0} />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  view.rerender(<PrinterInventoryPanel ownerKey="org:admin" refreshVersion={1} />);
+  await screen.findByText(/Refresh to check your access again/);
+  await act(async () => pending.resolve(retirementResult()));
+  expect(screen.queryByText(/Retired Receipt/)).not.toBeInTheDocument();
+  expect(screen.queryByRole('button', { name: 'Retire Receipt' })).not.toBeInTheDocument();
+  expect(h.retire).toHaveBeenCalledOnce();
+});
+
+it('ignores an old branch refresh after a retirement and branch switch', async () => {
+  const old = deferred<(typeof printer)[]>();
+  h.printers
+    .mockResolvedValueOnce([printer])
+    .mockReturnValueOnce(old.promise)
+    .mockResolvedValueOnce([{ ...printer, id: 'other', branchId: 'b', name: 'Uptown printer' }]);
+  render(<PrinterInventoryPanel ownerKey="org:admin" />);
+  await chooseBranch();
+  await openRetirement();
+  confirmRetirement();
+  await screen.findByText(/Retired Receipt/);
+  await chooseBranch('b');
+  await screen.findByText('Uptown printer');
+  await act(async () => old.resolve([{ ...printer, name: 'Obsolete Downtown' }]));
+  expect(screen.getByText('Uptown printer')).toBeVisible();
+  expect(screen.queryByText('Obsolete Downtown')).not.toBeInTheDocument();
+  expect(h.retire).toHaveBeenCalledOnce();
 });
