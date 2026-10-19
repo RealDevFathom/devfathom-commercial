@@ -1,0 +1,6 @@
+  rolname   | rolsuper | rolbypassrls | rolcreaterole | rolcanlogin 
+------------+----------+--------------+---------------+-------------
+ qa_owner   | f        | f            | t             | t
+ qa_runtime | f        | f            | f             | t
+(2 rows)
+

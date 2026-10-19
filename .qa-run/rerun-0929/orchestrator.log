@@ -1,0 +1,33 @@
+START counter-setup
+END counter-setup 0
+comment 201
+START counter
+END counter 1
+comment 201
+START counter-shutdown
+END counter-shutdown 0
+START purchasing-setup
+END purchasing-setup 0
+START purchasing-seed
+END purchasing-seed 0
+comment 201
+START build
+END build 0
+START standalone-assets
+END standalone-assets 0
+comment 201
+START purchasing
+END purchasing 1
+comment 201
+START purchasing-shutdown
+END purchasing-shutdown 0
+START finance-setup
+END finance-setup 0
+START finance-seed
+END finance-seed 0
+comment 201
+START finance
+END finance 1
+comment 201
+START finance-shutdown
+END finance-shutdown 0

@@ -1,0 +1,42 @@
+Platform catalog sync: created 42 module(s), 6 package(s), 50 package-module link(s).
+🌱 Seeding DevFathom database...
+
+👥 Creating team members...
+  ✓ Created 8 team members
+
+🏢 Creating clients...
+  ✓ Created 4 clients with contacts
+
+📁 Creating projects...
+  ✓ Created 8 projects with milestones
+
+📋 Creating Kanban boards with tasks...
+  ✓ Created boards with columns, labels, and tasks
+
+💰 Creating financial data...
+  ✓ Created invoices, transactions, and recurring expenses
+
+💬 Creating chat channels...
+  ✓ Created channels and sample messages
+
+📅 Creating leave requests...
+  ✓ Created leave requests
+
+📊 Creating activity feed...
+  ✓ Created activity feed
+
+🔔 Creating notifications...
+  ✓ Created notifications
+
+📅 Creating meetings...
+  ✓ Created meetings
+
+✅ Seeding complete! DevFathom is ready.
+
+Login: [firstname]@company.com — password is the SEED_PASSWORD you provided.
+
+Admin accounts: alex@company.com, jordan@company.com
+(node:78644) DeprecationWarning: Calling client.query() when the client is already executing a query is deprecated and will be removed in pg@9.0. Use async/await or an external async flow control mechanism instead.
+(Use `node --trace-deprecation ...` to show where the warning was created)
+Seeded and verified Chai Chowk (org_chai_chowk): Alex belongs to org_chai_chowk, org_devfathom; exact owned fixture rows=197; leaked fixture rows=0.
+Seeded restaurant Insights completion fixtures: {"tenants":2,"verifiedRows":38,"reportDates":3,"loginable":true}

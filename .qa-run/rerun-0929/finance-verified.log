@@ -1,0 +1,108 @@
+[WebServer] $ next dev --port "4319"
+
+[WebServer] (node:20714) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:20715) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:21084) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+
+Running 2 tests using 2 workers
+
+(node:21129) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+(node:21130) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/2] [mobile-chromium] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids
+[2/2] [chromium-desktop] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids
+  1) [mobile-chromium] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 
+
+    error: duplicate key value violates unique constraint "pharmacy_branches_org_id_key"
+
+      14 |   try {
+      15 |     await db.query(`SET app.is_platform_admin='true'`);
+    > 16 |     await db.query(
+         |     ^
+      17 |       `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","createdAt","updatedAt")
+      18 |        VALUES ($1,'org_chai_chowk','FIN-E2E','Main pharmacy finance','1 Test Road','Lahore','PB',now(),now())
+      19 |        ON CONFLICT (id) DO NOTHING`,
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/node_modules/pg/lib/client.js:652:17
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:16:5
+
+    Error Context: .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/error-context.md
+
+    attachment #2: trace (application/zip) ─────────────────────────────────────────────────────────
+    .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-mobile-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+[WebServer] (node:21188) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:21419) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:22008) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:22446) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:22447) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+[WebServer] (node:23244) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+  2) [chromium-desktop] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 
+
+    Error: locator.fill: Error: strict mode violation: locator('[data-slot="section-card"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference') resolved to 2 elements:
+        1) <input required="" name="reference" data-slot="input" placeholder="PV-2026-001" id="base-ui-_R_i9d5esnebnaqitmlb_" class="h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-n…/> aka getByRole('textbox', { name: 'Reference', exact: true })
+        2) <input data-slot="input" name="bankReference" id="base-ui-_R_kpd5esnebnaqitmlb_" class="h-8 w-full min-w-0 rounded-md border border-input bg-transparent px-2.5 py-1 text-base transition-colors outline-none file:inline-flex file:h-6 file:border-0 file:bg-transparent file:text-sm file:font-medium file:text-foreground placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:pointer-events-none disabled:cursor-not-allowed disabled:bg-input/50 di…/> aka getByRole('textbox', { name: 'Bank reference' })
+
+    Call log:
+      - waiting for locator('[data-slot="section-card"]').filter({ hasText: 'Record money movement' }).getByLabel('Reference')
+
+
+      40 |     .filter({ hasText: 'Record money movement' });
+      41 |   await record.getByLabel('Workflow').selectOption('EXPENSE');
+    > 42 |   await record.getByLabel('Reference').fill('EXP-E2E-001');
+         |                                        ^
+      43 |   await record.getByLabel('Amount (PKR)').fill('1250.00');
+      44 |   await record.getByLabel('Posting date').fill('2026-09-02');
+      45 |   await record.getByLabel('Counterparty name').fill('City power company');
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-finance.spec.ts:42:40
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/trace.zip
+    Usage:
+
+        npx playwright show-trace .qa-run/rerun-0929/finance-verified-artifacts/pharmacy-finance-fresh-org-31eed-harmacy-tax-without-raw-ids-chromium-desktop/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  2 failed
+    [chromium-desktop] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 
+    [mobile-chromium] › tests/e2e/pharmacy-finance.spec.ts:27:5 › fresh organization posts, locks, reopens, and versions pharmacy tax without raw ids 

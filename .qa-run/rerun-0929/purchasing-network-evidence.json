@@ -1,0 +1,29 @@
+[
+  {
+    "trace": "playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-a-vali-10f44-it-and-keeps-the-rest-valid-pharmacy-purchasing-serial/trace.zip",
+    "url": "http://ph-pur-e2e.localhost:4396/pharmacy/purchasing/suppliers?supplier=cmumutw2t003463twadg9mx1q",
+    "status": 200,
+    "redirectHeaders": [],
+    "actionReturn": [
+      "1:\"/pharmacy/purchasing/suppliers?notice=Expires+at%3A+A+licence+must+expire+after+it+was+issued.&kind=error&outcome=unknown&field=expiresAt&supplier=cmumutw2t003463twadg9mx1q\""
+    ]
+  },
+  {
+    "trace": "playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PO-\u2192-r-7a8c2-n-\u2192-resolve-\u2192-stock-visible-pharmacy-purchasing-serial/trace.zip",
+    "url": "http://ph-pur-e2e.localhost:4396/pharmacy/purchasing/receiving?branch=cmumutw2f002y63twaabogvot&order=cmumutw2v003663tw87fjterc&scan=",
+    "status": 200,
+    "redirectHeaders": [],
+    "actionReturn": [
+      "1:\"/pharmacy/purchasing/receiving?notice=Receipt+GRN-E2E-1-0-20260929155159+drafted.+Nothing+is+in+stock+until+you+post+it.&kind=success&outcome=committed&branch=cmumutw2f002y63twaabogvot&receipt=cmumuvj6t00049xtw5ydpudlf&order=cmumutw2v003663tw87fjterc\""
+    ]
+  },
+  {
+    "trace": "playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PUR-01-42060-plained-unselectable-option-pharmacy-purchasing-serial/trace.zip",
+    "url": "http://ph-pur-e2e.localhost:4396/pharmacy/purchasing/suppliers",
+    "status": 200,
+    "redirectHeaders": [],
+    "actionReturn": [
+      "1:\"/pharmacy/purchasing/suppliers?notice=Lapsed+Distributors+2-1790697258675+added.+Record+a+verified+licence+before+ordering+from+it.&kind=success&outcome=committed&supplier=cmumuwvw300079xtwkndy6q7p\""
+    ]
+  }
+]

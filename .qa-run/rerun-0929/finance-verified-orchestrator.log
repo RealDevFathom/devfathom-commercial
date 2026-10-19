@@ -1,0 +1,19 @@
+START finance-verified-setup
+END finance-verified-setup 98
+Traceback (most recent call last):
+  File "/Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/.qa-run/rerun-0929/finance-verified.py", line 27, in <module>
+    if run('finance-verified-setup',steps['finance-setup']['command'],env):raise RuntimeError('setup failed')
+                                                                           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^
+RuntimeError: setup failed
+START finance-verified-setup
+END finance-verified-setup 0
+START finance-verified-seed
+END finance-verified-seed 0
+START finance-verified-entitlements
+END finance-verified-entitlements 0
+comment 201
+START finance-verified
+END finance-verified 1
+comment 201
+START finance-verified-shutdown
+END finance-verified-shutdown 0

@@ -1,0 +1,202 @@
+[WebServer] (node:13317) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+
+
+Running 6 tests using 1 worker
+
+(node:13332) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[1/6] [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:70:5 › the overview reports a workspace that is ready to receive
+[2/6] [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:82:5 › PO → receive → exception → resolve → stock visible
+  1) [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:82:5 › PO → receive → exception → resolve → stock visible 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('heading', { name: 'GRN-E2E-1-0-20260929155159', level: 2 }).first()
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for getByRole('heading', { name: 'GRN-E2E-1-0-20260929155159', level: 2 }).first()
+
+
+      132 |   // ── 4. the draft is selected and posts into the ledger ──────────────────
+      133 |   const receiptPanel = page.getByRole('heading', { level: 2, name: receiptReference }).first();
+    > 134 |   await expect(receiptPanel).toBeVisible();
+          |                              ^
+      135 |   await page.getByRole('button', { name: 'Post into stock' }).first().click();
+      136 |
+      137 |   const posted = page.getByRole('status').filter({ hasText: 'Receipt posted' }).first();
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-purchasing.spec.ts:134:30
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PO-→-r-7a8c2-n-→-resolve-→-stock-visible-pharmacy-purchasing-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PO-→-r-7a8c2-n-→-resolve-→-stock-visible-pharmacy-purchasing-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PO-→-r-7a8c2-n-→-resolve-→-stock-visible-pharmacy-purchasing-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PO-→-r-7a8c2-n-→-resolve-→-stock-visible-pharmacy-purchasing-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PO-→-r-7a8c2-n-→-resolve-→-stock-visible-pharmacy-purchasing-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+(node:16391) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[3/6] [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:183:5 › the resolved exception is kept with the note that closed it
+  2) [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:183:5 › the resolved exception is kept with the note that closed it 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('Supplier confirmed a short ship; balance cancelled.').first()
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for getByText('Supplier confirmed a short ship; balance cancelled.').first()
+
+
+      190 |   await expect(
+      191 |     shellText(page, 'Supplier confirmed a short ship; balance cancelled.')
+    > 192 |   ).toBeVisible();
+          |     ^
+      193 | });
+      194 |
+      195 | test('PUR-01 offers an unauthorized supplier as an explained, unselectable option', async ({
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-purchasing.spec.ts:192:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-the-re-97495-ith-the-note-that-closed-it-pharmacy-purchasing-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-the-re-97495-ith-the-note-that-closed-it-pharmacy-purchasing-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-the-re-97495-ith-the-note-that-closed-it-pharmacy-purchasing-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-the-re-97495-ith-the-note-that-closed-it-pharmacy-purchasing-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-the-re-97495-ith-the-note-that-closed-it-pharmacy-purchasing-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+(node:17923) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[4/6] [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:195:5 › PUR-01 offers an unauthorized supplier as an explained, unselectable option
+  3) [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:195:5 › PUR-01 offers an unauthorized supplier as an explained, unselectable option 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('Trade with this supplier is not authorized').first()
+    Expected: visible
+    Timeout: 30000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 30000ms
+      - waiting for getByText('Trade with this supplier is not authorized').first()
+
+
+      210 |   await expect(added).toBeVisible({ timeout: 20_000 });
+      211 |   await expect(added).toContainText('Record a verified licence before ordering from it');
+    > 212 |   await expect(shellText(page, 'Trade with this supplier is not authorized')).toBeVisible();
+          |                                                                               ^
+      213 |
+      214 |   await page.goto(`${ROUTE}/orders`);
+      215 |   const option = page.getByRole('option', { name: `${name} — not authorized` }).first();
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-purchasing.spec.ts:212:79
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PUR-01-42060-plained-unselectable-option-pharmacy-purchasing-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PUR-01-42060-plained-unselectable-option-pharmacy-purchasing-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PUR-01-42060-plained-unselectable-option-pharmacy-purchasing-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PUR-01-42060-plained-unselectable-option-pharmacy-purchasing-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-PUR-01-42060-plained-unselectable-option-pharmacy-purchasing-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+(node:22521) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+
+
+[5/6] [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:223:5 › PUR-05 never offers the receiver as their own bypass approver
+[6/6] [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:237:5 › a validation failure names its field, focuses it, and keeps the rest valid
+  4) [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:237:5 › a validation failure names its field, focuses it, and keeps the rest valid 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByRole('alert').filter({ hasText: 'A licence must expire after it was issued.' }).first()
+    Expected: visible
+    Timeout: 20000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 20000ms
+      - waiting for getByRole('alert').filter({ hasText: 'A licence must expire after it was issued.' }).first()
+
+
+      258 |       .filter({ hasText: 'A licence must expire after it was issued.' })
+      259 |       .first()
+    > 260 |   ).toBeVisible({ timeout: 20_000 });
+          |     ^
+      261 |
+      262 |   const expires = page.getByLabel('Expires on').first();
+      263 |   await expect(expires).toHaveAttribute('aria-invalid', 'true');
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/ph-qa-specs/tests/e2e/pharmacy-purchasing.spec.ts:260:5
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-a-vali-10f44-it-and-keeps-the-rest-valid-pharmacy-purchasing-serial/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-a-vali-10f44-it-and-keeps-the-rest-valid-pharmacy-purchasing-serial/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-a-vali-10f44-it-and-keeps-the-rest-valid-pharmacy-purchasing-serial/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-a-vali-10f44-it-and-keeps-the-rest-valid-pharmacy-purchasing-serial/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/pharmacy-purchasing/pharmacy-purchasing-a-vali-10f44-it-and-keeps-the-rest-valid-pharmacy-purchasing-serial/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+
+  4 failed
+    [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:82:5 › PO → receive → exception → resolve → stock visible 
+    [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:183:5 › the resolved exception is kept with the note that closed it 
+    [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:195:5 › PUR-01 offers an unauthorized supplier as an explained, unselectable option 
+    [pharmacy-purchasing-serial] › tests/e2e/pharmacy-purchasing.spec.ts:237:5 › a validation failure names its field, focuses it, and keeps the rest valid 
+  2 passed (2.0m)

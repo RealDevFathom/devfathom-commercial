@@ -1,0 +1,8 @@
+SET
+INSERT 0 2
+       key        | status  
+------------------+---------
+ pharmacy-core    | ENABLED
+ pharmacy-finance | ENABLED
+(2 rows)
+

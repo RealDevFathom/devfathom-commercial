@@ -1,0 +1,53 @@
+{
+  "attachment": {
+    "id": "67444682-7190-43b9-8772-462628bd1f84",
+    "companyId": "439a6e2c-06be-4fe0-bb43-b213140f664a",
+    "issueId": "5732269a-1aa5-48ef-a0df-81cb822d86a5",
+    "issueCommentId": null,
+    "assetId": "630a10e5-48a8-4fd9-8143-ccee47ce6f32",
+    "provider": "local_disk",
+    "objectKey": "439a6e2c-06be-4fe0-bb43-b213140f664a/issues/5732269a-1aa5-48ef-a0df-81cb822d86a5/2026/09/28/e5c08d9d-df4a-4159-b593-98e2415c7714-report.md",
+    "contentType": "text/markdown",
+    "byteSize": 5779,
+    "sha256": "75cea11ae76fe20c1da2347aca220200cc85b8f7c709b1001f71d9e29e6a3bf4",
+    "originalFilename": "report.md",
+    "createdByAgentId": "d00d0df7-1d08-4a91-be64-3869d54470f8",
+    "createdByUserId": null,
+    "createdAt": "2026-09-28T22:46:46.972Z",
+    "updatedAt": "2026-09-28T22:46:46.972Z",
+    "contentPath": "/api/attachments/67444682-7190-43b9-8772-462628bd1f84/content",
+    "openPath": "/api/attachments/67444682-7190-43b9-8772-462628bd1f84/content",
+    "downloadPath": "/api/attachments/67444682-7190-43b9-8772-462628bd1f84/content?download=1"
+  },
+  "workProduct": {
+    "id": "eb34fe4b-e082-4de0-a019-ca44422d795d",
+    "companyId": "439a6e2c-06be-4fe0-bb43-b213140f664a",
+    "projectId": null,
+    "issueId": "5732269a-1aa5-48ef-a0df-81cb822d86a5",
+    "executionWorkspaceId": null,
+    "runtimeServiceId": null,
+    "type": "artifact",
+    "provider": "paperclip",
+    "externalId": null,
+    "title": "WHA-1589 partial QA report — disk blocked",
+    "url": null,
+    "status": "ready_for_review",
+    "reviewState": "none",
+    "isPrimary": true,
+    "healthStatus": "unknown",
+    "summary": "Commands, exit codes, counts, failure locations, harness limitations, and named disk-capacity unblock action.",
+    "metadata": {
+      "byteSize": 5779,
+      "openPath": "/api/attachments/67444682-7190-43b9-8772-462628bd1f84/content",
+      "contentPath": "/api/attachments/67444682-7190-43b9-8772-462628bd1f84/content",
+      "contentType": "text/markdown",
+      "attachmentId": "67444682-7190-43b9-8772-462628bd1f84",
+      "downloadPath": "/api/attachments/67444682-7190-43b9-8772-462628bd1f84/content?download=1",
+      "originalFilename": "report.md"
+    },
+    "sourceTrust": null,
+    "createdByRunId": "7f394618-22da-40f9-bd79-81583e69b9b2",
+    "createdAt": "2026-09-28T22:46:48.247Z",
+    "updatedAt": "2026-09-28T22:46:48.247Z"
+  }
+}
