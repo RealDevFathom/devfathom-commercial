@@ -1,3 +1,10 @@
+import {
+  confirmPriceChanges,
+  priceIntelligence,
+  priceOverrides,
+  setManualPackPrice,
+} from '@/lib/pharmacy/pricing';
+import { FileDrapNoticeSource, ingestDrapSource } from '@/lib/pharmacy/drap-monitoring';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -167,6 +174,65 @@ function domainError(error: unknown): never {
 }
 
 export const pharmacyMedicineRouter = router({
+  priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
+    priceIntelligence(ctx.db, {
+      organizationId: ctx.entitlements.organizationId,
+      actorId: ctx.session.user.id,
+    })
+  ),
+  confirmPrices: capabilityProcedure('pharmacy:safety')
+    .input(z.object({ proposalIds: z.array(z.string().min(1)).min(1).max(100) }).strict())
+    .mutation(({ ctx, input }) =>
+      confirmPriceChanges(
+        ctx.db,
+        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        input.proposalIds
+      )
+    ),
+  ingestPriceNotices: capabilityProcedure('pharmacy:safety')
+    .input(z.object({ contents: z.string().min(2).max(1000000) }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const source = new FileDrapNoticeSource(input.contents);
+      const notices = await source.read();
+      if (!notices.length || notices.length > 100 || notices.some((n) => n.kind !== 'PRICE'))
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Supply 1–100 PRICE notices' });
+      return ctx.db.$transaction((tx) =>
+        ingestDrapSource(
+          tx as typeof ctx.db,
+          { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+          source
+        )
+      );
+    }),
+  setPackPrice: adminProcedure
+    .input(
+      z
+        .object({
+          packLevelId: z.string().min(1),
+          branchId: z.string().min(1).optional(),
+          mrpMinor: z.number().int().min(0).max(2147483647),
+          sellingPriceMinor: z.number().int().min(0).max(2147483647).nullable(),
+          effectiveFrom: z.date(),
+        })
+        .strict()
+    )
+    .mutation(({ ctx, input }) =>
+      setManualPackPrice(
+        ctx.db,
+        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        input
+      )
+    ),
+  priceOverrides: adminProcedure
+    .input(z.object({ branchId: z.string().min(1).optional() }).strict())
+    .query(({ ctx, input }) =>
+      priceOverrides(
+        ctx.db,
+        { organizationId: ctx.entitlements.organizationId, actorId: ctx.session.user.id },
+        input.branchId
+      )
+    ),
+
   configureReferenceConnector: adminProcedure
     .input(
       z

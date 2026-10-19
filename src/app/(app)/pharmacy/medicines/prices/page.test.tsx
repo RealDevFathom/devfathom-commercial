@@ -1,0 +1,171 @@
+import { render, screen, fireEvent, waitFor, within } from '@testing-library/react';
+import { describe, it, expect, vi } from 'vitest';
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    pharmacyMedicine: {
+      priceNotices: { useQuery: () => ({ isLoading: true }) },
+      priceOverrides: { useQuery: () => ({ isLoading: true }) },
+      confirmPrices: { useMutation: () => ({}) },
+    },
+  },
+}));
+import MedicinePricesPage from './page';
+import {
+  PriceNoticesView,
+  PriceOverridesView,
+  pricesCsv,
+} from '@/components/pharmacy/medicines/price-notices';
+const row = {
+  id: 'ingest',
+  proposalId: 'proposal',
+  reference: '=SRO-1',
+  medicine: 'Medicine',
+  aliases: ['گولی'],
+  presentation: 'Tablet',
+  packLevel: 'BOX',
+  packLevelId: 'box',
+  units: 30,
+  status: 'PROPOSED',
+  eligible: true,
+  effectiveDate: new Date('2027-01-01'),
+  notifiedMrpMinor: 30000,
+  confirmedMrpMinor: 20000,
+  sellingPriceMinor: null,
+  amountMinor: null,
+  percent: null,
+  sellingUnitMinor: null,
+  mrpUnitMinor: 20000 / 30,
+};
+const packRow = {
+  ...row,
+  medicineId: 'medicine',
+  medicine: '=Manual medicine',
+  source: 'manual',
+  effectiveDate: new Date('2026-01-01'),
+};
+const data = { asOf: new Date('2026-09-29'), rows: [row], packRows: [packRow] };
+const base = { onRetry: vi.fn(), onConfirm: vi.fn(async () => undefined) };
+describe('price intelligence page states', () => {
+  it('renders the route with one heading and accessible initial loading', () => {
+    render(<MedicinePricesPage />);
+    expect(screen.getByRole('heading', { level: 1 })).toHaveTextContent('Price intelligence');
+    expect(screen.getByRole('status')).toHaveTextContent('Loading');
+  });
+  it('renders loading, error/retry, permission and empty states accessibly', () => {
+    const { rerender } = render(<PriceNoticesView {...base} loading />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading');
+    rerender(<PriceNoticesView {...base} error />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry' }));
+    expect(base.onRetry).toHaveBeenCalled();
+    rerender(<PriceNoticesView {...base} forbidden />);
+    expect(screen.getByRole('alert')).toHaveTextContent('safety access');
+    rerender(<PriceNoticesView {...base} data={{ ...data, rows: [] }} />);
+    expect(screen.getByRole('status')).toHaveTextContent('No DRAP');
+  });
+  it('keeps mapping rows unselectable; confirms eligible selection explicitly', async () => {
+    render(
+      <PriceNoticesView
+        {...base}
+        data={{
+          ...data,
+          rows: [
+            row,
+            {
+              ...row,
+              id: 'unmapped',
+              proposalId: null,
+              reference: 'unmapped',
+              status: 'NEEDS_MAPPING',
+              eligible: false,
+            },
+          ],
+        }}
+      />
+    );
+    expect(screen.queryByLabelText('Select unmapped')).not.toBeInTheDocument();
+    expect(screen.getAllByText('گولی')).toHaveLength(2);
+    expect(screen.getByRole('button', { name: 'Review 0 selected' })).toBeDisabled();
+    fireEvent.click(screen.getByLabelText('Select =SRO-1'));
+    fireEvent.click(screen.getByRole('button', { name: 'Review 1 selected' }));
+    expect(base.onConfirm).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole('button', { name: 'Confirm pack prices' }));
+    await waitFor(() => expect(base.onConfirm).toHaveBeenCalledWith(['proposal']));
+    expect(await screen.findByRole('status')).toHaveTextContent('confirmed');
+  });
+  it('exports UTF-8 aliases, formula-safe identifiers and blank unknown prices', () => {
+    const csv = pricesCsv(data);
+    expect(csv).toContain('گولی');
+    expect(csv).toContain('"\'=Manual medicine"');
+    expect(csv).not.toContain('SRO-1');
+    expect(csv).toContain('"200","","",""');
+    expect(csv.startsWith('\uFEFF')).toBe(true);
+  });
+});
+
+describe('corrected reports', () => {
+  it('keeps notice history out of current variance and exports manual policy once', () => {
+    const history = { ...data, rows: [row, { ...row, id: 'old', reference: 'historic' }] };
+    render(<PriceNoticesView {...base} data={history} />);
+    const table = screen.getByRole('table', { name: 'Current pack variance, PKR' });
+    expect(within(table).getAllByRole('row')).toHaveLength(2);
+    for (const name of [
+      'Current organization pack price variance, PKR',
+      'Mapped DRAP pack price notices, PKR',
+    ]) {
+      const region = screen.getByRole('region', { name });
+      expect(region).toHaveAttribute('tabindex', '0');
+      expect(within(region).getByRole('table')).toBeVisible();
+    }
+    expect(within(table).queryByText('historic')).not.toBeInTheDocument();
+    expect(pricesCsv(history).split('\r\n')).toHaveLength(2);
+    expect(screen.getByText(/Keep the original source reference and payload/)).toBeVisible();
+    expect(screen.queryByText(/new source reference/)).not.toBeInTheDocument();
+  });
+  it('shows preserved override amounts and review flags with accessible fallback states', () => {
+    const override = {
+      id: 'override',
+      organizationId: 'org',
+      presentationId: 'presentation',
+      packLevelId: 'box',
+      branchId: 'branch',
+      branchName: 'Main branch',
+      medicine: 'Medicine',
+      presentation: 'Tablet',
+      packLevel: 'BOX',
+      isOverride: true,
+      mrpMinor: 12300,
+      sellingPriceMinor: 12000,
+      effectiveFrom: new Date('2026-01-01'),
+      source: 'manual',
+      proposalId: null,
+      reviewedOrgPriceId: null,
+      createdById: 'actor',
+      createdAt: new Date(),
+      needsReview: true,
+    };
+    const { rerender } = render(
+      <PriceOverridesView
+        data={[override, { ...override, id: 'reviewed', needsReview: false }]}
+        onRetry={base.onRetry}
+      />
+    );
+    const region = screen.getByRole('region', {
+      name: 'Preserved branch override versions, PKR',
+    });
+    expect(region).toHaveAttribute('tabindex', '0');
+    expect(within(region).getByRole('table')).toBeVisible();
+    expect(screen.getByText('Needs review')).toBeVisible();
+    expect(screen.getByText('Reviewed')).toBeVisible();
+    expect(screen.getAllByText(/123.00/)).toHaveLength(2);
+    expect(screen.getAllByText(/120.00/)).toHaveLength(2);
+    rerender(<PriceOverridesView loading onRetry={base.onRetry} />);
+    expect(screen.getByRole('status')).toHaveTextContent('Loading branch overrides');
+    rerender(<PriceOverridesView error onRetry={base.onRetry} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Retry overrides' }));
+    expect(base.onRetry).toHaveBeenCalled();
+    rerender(<PriceOverridesView forbidden onRetry={base.onRetry} />);
+    expect(screen.getByText(/Administrator access/)).toBeVisible();
+    rerender(<PriceOverridesView data={[]} onRetry={base.onRetry} />);
+    expect(screen.getByText('No branch overrides.')).toBeVisible();
+  });
+});
