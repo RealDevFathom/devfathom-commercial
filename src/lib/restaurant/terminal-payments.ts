@@ -1,5 +1,6 @@
 import 'server-only';
 
+import { createHmac, timingSafeEqual } from 'node:crypto';
 import { z } from 'zod';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -24,6 +25,20 @@ export const terminalEventSchema = z
   .strict();
 
 export type TerminalEvent = z.infer<typeof terminalEventSchema>;
+
+export function verifyTerminalSignature(
+  source: string,
+  rawBody: string,
+  signature: string | null
+): 'VERIFIED' | 'FAILED' {
+  const secret = process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
+  if (!secret || !signature) return 'FAILED';
+  const encoded = signature.startsWith('sha256=') ? signature.slice(7) : signature;
+  if (!/^[a-f\d]{64}$/i.test(encoded)) return 'FAILED';
+  const expected = createHmac('sha256', secret).update(`${source}.${rawBody}`).digest();
+  const actual = Buffer.from(encoded, 'hex');
+  return timingSafeEqual(expected, actual) ? 'VERIFIED' : 'FAILED';
+}
 
 export class TerminalPaymentError extends Error {
   constructor(

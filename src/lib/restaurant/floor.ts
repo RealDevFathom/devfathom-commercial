@@ -262,7 +262,13 @@ export async function listFloors(db: ScopedDb, input: ListFloorsInput): Promise<
           code: true,
           capacity: true,
           active: true,
-          orderLinks: { where: { active: true }, select: { orderId: true } },
+          orderLinks: {
+            where: {
+              active: true,
+              order: { status: { notIn: ['CLOSED', 'CANCELLED'] } },
+            },
+            select: { orderId: true },
+          },
         },
       },
     },

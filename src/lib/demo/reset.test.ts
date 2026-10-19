@@ -11,6 +11,7 @@ vi.mock('@/lib/demo/seed-seat', () => ({
 
 import { resetDemoSeatInTransaction } from '@/lib/demo/reset';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { DEMO_PERSONA_KEYS, demoPersonaEmail, demoPersonaUserId } from './personas';
 
 const ORGANIZATION_ID = 'org_demo_restaurant_seat_1';
 const MANAGER_STAFF_ID = 'manager_staff_actual';
@@ -231,9 +232,12 @@ describe('resetDemoSeatInTransaction', () => {
     expect(jobs.sql).toContain('type <> $2');
     expect(jobs.parameters).toEqual([ORGANIZATION_ID, 'demo-reset']);
     expect(executions.sql).toContain('job.type <> $2');
-    expect(staff.parameters).toEqual([ORGANIZATION_ID, MANAGER_STAFF_ID, APPROVER_STAFF_ID]);
+    expect(staff.parameters).toEqual([ORGANIZATION_ID, [MANAGER_STAFF_ID, APPROVER_STAFF_ID]]);
     expect(credentials.sql).toContain('"deviceId" IS NULL');
-    expect(credentials.parameters).toEqual([ORGANIZATION_ID, MANAGER_STAFF_ID, APPROVER_STAFF_ID]);
+    expect(credentials.parameters).toEqual([
+      ORGANIZATION_ID,
+      [MANAGER_STAFF_ID, APPROVER_STAFF_ID],
+    ]);
     expect(
       fake.deletes.some(({ sql }) => sql.includes('restaurant_activation_acknowledgements'))
     ).toBe(false);
@@ -252,6 +256,52 @@ describe('resetDemoSeatInTransaction', () => {
     ).rejects.toThrow('builder failed');
     expect(fake.events).toContain('guc:clear');
     expect(fake.events).not.toContain('last-reset');
+  });
+
+  it('retains all canonical persona staff and credentials, clears old sessions, and rebuilds the same seat', async () => {
+    const rows = DEMO_PERSONA_KEYS.map((persona) => ({
+      id: persona === 'manager' ? MANAGER_STAFF_ID : `staff_${persona}`,
+      userId: demoPersonaUserId(1, persona),
+      email: demoPersonaEmail(1, persona),
+      status: 'ACTIVE',
+    }));
+    rows.push({
+      id: APPROVER_STAFF_ID,
+      userId: 'user_demo_restaurant_seat_1_approver',
+      email: 'approver.seat1@demo.devfathom.invalid',
+      status: 'ACTIVE',
+    });
+    const fake = fakeDb({}, [], rows);
+    await resetDemoSeatInTransaction(fake.db, { organizationId: ORGANIZATION_ID, now: NOW });
+    const retained = [
+      MANAGER_STAFF_ID,
+      APPROVER_STAFF_ID,
+      ...rows
+        .filter((row) => ![MANAGER_STAFF_ID, APPROVER_STAFF_ID].includes(row.id))
+        .map((row) => row.id),
+    ];
+    for (const table of ['restaurant_staff_profiles', 'restaurant_operator_credentials']) {
+      const deletion = fake.deletes.find(({ sql }) => sql.startsWith(`DELETE FROM ${table}`))!;
+      expect(deletion.parameters).toEqual([ORGANIZATION_ID, retained]);
+      expect(deletion.sql).toContain('ANY($2::text[])');
+    }
+    expect(
+      fake.deletes.find(({ sql }) => sql.startsWith('DELETE FROM "restaurant_terminal_sessions"'))
+        ?.parameters
+    ).toEqual([ORGANIZATION_ID]);
+    expect(
+      fake.deletes.some(({ sql }) =>
+        /DELETE FROM (users|organization_roles|user_permission_overrides)/.test(sql)
+      )
+    ).toBe(false);
+    expect(mocks.rebuild).toHaveBeenCalledWith(
+      fake.db,
+      expect.objectContaining({
+        identity: expect.objectContaining({ organizationId: ORGANIZATION_ID }),
+        managerStaffProfileId: MANAGER_STAFF_ID,
+        approverStaffProfileId: APPROVER_STAFF_ID,
+      })
+    );
   });
 
   it('rejects an approver email attached to the wrong user before destruction', async () => {

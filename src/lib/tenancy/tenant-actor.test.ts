@@ -1,5 +1,5 @@
 import type { Session } from 'next-auth';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
@@ -57,10 +57,12 @@ const request = () => new Request('http://devfathom.localhost:3000/dashboard');
 
 describe('resolveTenantActor', () => {
   beforeEach(() => {
+    vi.stubEnv('DEMO_ACCESS_CODE', 'test-only-code');
     vi.clearAllMocks();
     mocks.getSupportSession.mockResolvedValue(null);
     mocks.isSharedHost.mockReturnValue(false);
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   it('treats a session for another workspace as unauthenticated', async () => {
     mocks.requireOrganizationForRequest.mockRejectedValue(
@@ -120,12 +122,34 @@ describe('resolveTenantActor', () => {
         session: sessionFor({ status: 'ACTIVE', demoAccessExpiresAt: Date.now() - 1 }),
       })
     ).resolves.toBeNull();
+    const user = {
+      status: 'ACTIVE',
+      id: 'user_demo_restaurant_seat_1_waiter',
+      email: 'waiter.seat1@demo.devfathom.invalid',
+      organizationId: 'org_demo_restaurant_seat_1',
+      demoAccessExpiresAt: Date.now() + 60_000,
+    };
     await expect(
-      resolveTenantActor({
-        request: request(),
-        session: sessionFor({ status: 'ACTIVE', demoAccessExpiresAt: Date.now() + 60_000 }),
-      })
-    ).resolves.toMatchObject({ organization: { id: 'org_other', isDemo: true } });
+      resolveTenantActor({ request: request(), session: sessionFor(user) })
+    ).resolves.toBeNull();
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: user.organizationId,
+      slug: 'demo-restaurant-seat-1',
+      isDemo: true,
+      status: 'ACTIVE',
+      vertical: 'RESTAURANT',
+      deploymentMode: 'SHARED',
+    });
+    await expect(
+      resolveTenantActor({ request: request(), session: sessionFor(user) })
+    ).resolves.toMatchObject({ organization: { id: user.organizationId, isDemo: true } });
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: user.organizationId,
+      isDemo: false,
+    });
+    await expect(
+      resolveTenantActor({ request: request(), session: sessionFor(user) })
+    ).resolves.toBeNull();
   });
 
   // D14: `df_support_session` is domain-wide and outranks the tenant JWT, so an

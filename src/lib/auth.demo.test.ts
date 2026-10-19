@@ -1,4 +1,11 @@
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
+import {
+  DEMO_PERSONA_KEYS,
+  DEMO_PERSONAS,
+  demoPersonaUserId,
+  demoPersonaEmail,
+  demoPersonaUserRole,
+} from './demo/personas';
 
 const mocks = vi.hoisted(() => ({
   config: null as Record<string, unknown> | null,
@@ -76,6 +83,8 @@ const demoOrganization = {
   slug: 'demo-restaurant-seat-1',
   status: 'ACTIVE',
   isDemo: true,
+  vertical: 'RESTAURANT',
+  deploymentMode: 'SHARED',
 };
 const demoUser = {
   id: 'user_demo_restaurant_seat_1_manager',
@@ -90,6 +99,8 @@ const demoUser = {
   tokenVersion: 0,
   twoFactorEnabledAt: null,
   twoFactorSecret: null,
+  password: null,
+  organizationRole: { key: 'owner' },
 };
 
 function request() {
@@ -100,6 +111,7 @@ function request() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  vi.stubEnv('DEMO_ACCESS_CODE', 'test-only-code');
   mocks.compare.mockResolvedValue(false);
   mocks.resolveForRequest.mockResolvedValue(demoOrganization);
   mocks.resolveById.mockResolvedValue(demoOrganization);
@@ -124,9 +136,11 @@ beforeEach(() => {
         update: vi.fn().mockResolvedValue(demoUser),
       },
       organizationIdentityConnection: { findFirst: vi.fn().mockResolvedValue(null) },
+      restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff_1' }]) },
     })
   );
 });
+afterEach(() => vi.unstubAllEnvs());
 
 describe('demo Auth.js boundary', () => {
   it('keeps the ordinary Auth.js lifetime at eight hours', () => {
@@ -183,6 +197,62 @@ describe('demo Auth.js boundary', () => {
     await expect(
       config().providers[1]!.authorize({ organizationId: demoOrganization.id }, request())
     ).resolves.toBeNull();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
+  });
+
+  it.each(DEMO_PERSONA_KEYS)(
+    'authenticates the server-owned %s identity and keeps its actual role',
+    async (persona) => {
+      const user = {
+        ...demoUser,
+        id: demoPersonaUserId(1, persona),
+        email: demoPersonaEmail(1, persona),
+        role: demoPersonaUserRole(persona),
+        organizationRole: { key: DEMO_PERSONAS[persona].roleKey },
+      };
+      const update = vi.fn();
+      mocks.peekIntent.mockResolvedValue({
+        email: user.email,
+        candidates: [
+          {
+            organizationId: demoOrganization.id,
+            userId: user.id,
+            demoAccessExpiresAt: Date.now() + 60_000,
+          },
+        ],
+      });
+      const findUser = vi.fn().mockResolvedValue(user);
+      mocks.withTenantDb.mockImplementation(async (_id, run) =>
+        run({
+          user: { findUnique: findUser, update },
+          restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([{ id: 'staff' }]) },
+          organizationIdentityConnection: { findFirst: vi.fn().mockResolvedValue(null) },
+        })
+      );
+      await expect(
+        config().providers[1]!.authorize({ organizationId: demoOrganization.id }, request())
+      ).resolves.toMatchObject({ id: user.id, role: user.role });
+      mocks.consumeIntent.mockClear();
+      findUser.mockResolvedValue({ ...user, password: 'production-password-hash' });
+      await expect(
+        config().providers[1]!.authorize({ organizationId: demoOrganization.id }, request())
+      ).resolves.toBeNull();
+      expect(mocks.consumeIntent).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each([
+    { isDemo: false },
+    { deploymentMode: 'DEDICATED' },
+    { vertical: 'AGENCY' },
+    { slug: 'production' },
+    { status: 'SUSPENDED' },
+  ])('rejects a demo intent after tenant state changes: %j', async (change) => {
+    mocks.resolveById.mockResolvedValue({ ...demoOrganization, ...change });
+    await expect(
+      config().providers[1]!.authorize({ organizationId: demoOrganization.id }, request())
+    ).resolves.toBeNull();
+    expect(mocks.consumeIntent).not.toHaveBeenCalled();
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 

@@ -20,7 +20,13 @@ import { consumeLoginIntent, LOGIN_INTENT_COOKIE, peekLoginIntent } from '@/lib/
 import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
-import { demoManagerEmail, demoManagerId, demoSeatFromOrganizationId } from '@/lib/demo/config';
+import { demoSeatFromOrganizationId, isDemoEnabled } from '@/lib/demo/config';
+import {
+  DEMO_PERSONAS,
+  demoPersonaForUser,
+  demoPersonaUserRole,
+  isCanonicalDemoOrganization,
+} from '@/lib/demo/personas';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -410,11 +416,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const organization = await resolveOrganizationById(organizationId);
         if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
         const demoSeat = organization.isDemo ? demoSeatFromOrganizationId(organization.id) : null;
+        const demoPersona = demoSeat
+          ? demoPersonaForUser(demoSeat, { id: candidate.userId, email: intent.email })
+          : null;
+        // A demo intent must never become an ordinary tenant login after a state change.
+        if (candidate.demoAccessExpiresAt !== undefined && !organization.isDemo) return null;
         if (
           organization.isDemo &&
-          (!demoSeat ||
-            candidate.userId !== demoManagerId(demoSeat) ||
-            intent.email !== demoManagerEmail(demoSeat) ||
+          (!isDemoEnabled() ||
+            !isCanonicalDemoOrganization(organization) ||
+            !demoPersona ||
             !liveDemoAccessExpiry(candidate.demoAccessExpiresAt))
         ) {
           return null;
@@ -434,6 +445,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               avatar: true,
               status: true,
               tokenVersion: true,
+              password: true,
+              organizationRole: { select: { key: true } },
               twoFactorEnabledAt: true,
               twoFactorSecret: true,
             },
@@ -442,6 +455,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // decision, not a substitute for the state it was based on: the account
           // may have been deactivated, or SSO enforced, in the five minutes since.
           if (!user || user.email !== intent.email) return null;
+          if (organization.isDemo) {
+            if (
+              !demoPersona ||
+              user.organizationId !== organization.id ||
+              user.password !== null ||
+              user.status !== 'ACTIVE' ||
+              user.role !== demoPersonaUserRole(demoPersona) ||
+              user.organizationRole?.key !== DEMO_PERSONAS[demoPersona].roleKey
+            )
+              return null;
+            const profiles = await tenantDb.restaurantStaffProfile.findMany({
+              where: { userId: user.id, status: 'ACTIVE', primaryBranch: { active: true } },
+              select: { id: true },
+              take: 2,
+            });
+            if (profiles.length !== 1) return null;
+          }
           if (!SIGNIN_ALLOWED_STATUSES.has(user.status)) throw new SuspendedError();
 
           const enforcedConnection = await tenantDb.organizationIdentityConnection.findFirst({

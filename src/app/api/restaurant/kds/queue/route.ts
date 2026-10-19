@@ -44,12 +44,38 @@ export const GET = withDeviceAuth(async (ctx, request) => {
     parsed.data.businessDate,
     new Date()
   );
-  const queue = await readStationQueue(ctx.db, {
+  const limit = parsed.data.limit ?? 50;
+  let queue = await readStationQueue(ctx.db, {
     stationId: station.stationId,
     businessDate,
     sinceCursor: parsed.data.sinceCursor ?? null,
-    limit: parsed.data.limit ?? 50,
+    limit,
   });
+  if (
+    ctx.demoActor?.organization.isDemo === true &&
+    parsed.data.businessDate === undefined &&
+    queue.tickets.length === 0
+  ) {
+    const previousQueueDate = await ctx.db.restaurantKitchenTicket.findFirst({
+      where: {
+        stationId: station.stationId,
+        businessDate: { lt: businessDate },
+        items: {
+          some: { orderItem: { status: { notIn: ['SERVED', 'VOIDED'] } } },
+        },
+      },
+      orderBy: { businessDate: 'desc' },
+      select: { businessDate: true },
+    });
+    if (previousQueueDate) {
+      queue = await readStationQueue(ctx.db, {
+        stationId: station.stationId,
+        businessDate: previousQueueDate.businessDate,
+        sinceCursor: null,
+        limit,
+      });
+    }
+  }
   return NextResponse.json({
     ...queue,
     businessDate: queue.businessDate.toISOString().slice(0, 10),

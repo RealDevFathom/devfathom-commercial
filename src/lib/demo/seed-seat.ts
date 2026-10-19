@@ -14,6 +14,7 @@ import {
 } from '@/lib/demo/seed-inventory';
 import { seedDemoRestaurantHistory } from '@/lib/demo/seed-history';
 import { seedDemoRestaurantOperations } from '@/lib/demo/seed-operations';
+import { rollupDay } from '@/lib/restaurant/insight-rollups';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export type DemoRestaurantSeatResult = {
@@ -183,6 +184,15 @@ export async function rebuildDemoRestaurantSeatInTransaction(
   const inventory = await seedDemoRestaurantInventory(db, seed, catalog, context, operations);
   await seedDemoRestaurantHistory(db, seed, catalog, context, operations);
   await reconcileDemoRestaurantInventory(db, seed, catalog, context, operations, inventory);
+  const projectedDays = new Set<string>();
+  for (const close of seed.sales.dailyCloses) {
+    const branchId = catalog.branch[close.branchId];
+    if (!branchId) throw new Error(`Missing demo branch ${close.branchId}.`);
+    const projectionKey = `${branchId}:${close.businessDate}`;
+    if (projectedDays.has(projectionKey)) continue;
+    projectedDays.add(projectionKey);
+    await rollupDay(db, { branchId, businessDate: close.businessDate, computedAt: input.now });
+  }
   const counts = await persistedCounts(
     db,
     input.identity.organizationId,

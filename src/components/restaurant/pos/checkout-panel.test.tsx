@@ -26,6 +26,7 @@ const billed = {
       status: 'OPEN',
       splitKind: 'NONE',
       grandTotal: '24.00',
+      remainingDue: '24.00',
       deliveryFeeTotal: '4.00',
       compTotal: '0.00',
       receiptNumber: null,
@@ -34,6 +35,52 @@ const billed = {
 };
 
 describe('CheckoutPanel', () => {
+  it.each(['3860.00', '2860.25', '0.00'])(
+    'prefills the authoritative initial balance %s, including partial and zero balances',
+    async (remainingDue) => {
+      const request: TerminalRequest = async <T,>() =>
+        ({
+          ...billed,
+          derivedOrderTotal: '3860.00',
+          accountedTotal: '3860.00',
+          bills: [{ ...billed.bills[0], grandTotal: '3860.00', remainingDue }],
+        }) as T;
+      render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+      expect(await screen.findByLabelText('Amount')).toHaveValue(remainingDue);
+      expect(screen.getByLabelText('Cash received')).toHaveValue(remainingDue);
+      expect(screen.queryByText(/Outstanding balance unavailable/)).not.toBeInTheDocument();
+    }
+  );
+
+  it('keeps an absent balance unknown instead of falling back to the bill total', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], remainingDue: undefined }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText(/Outstanding balance unavailable/)).toBeVisible();
+    expect(screen.getByLabelText('Amount')).toHaveValue('');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('');
+  });
+
+  it('does not offer another tender for a settled bill with zero remaining due', async () => {
+    const request: TerminalRequest = async <T,>(path: string) => {
+      if (path.includes('/receipt')) return null as T;
+      return {
+        ...billed,
+        settled: true,
+        blocker: null,
+        bills: [{ ...billed.bills[0], status: 'SETTLED', remainingDue: '0.00' }],
+      } as T;
+    };
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Bill total')).toBeVisible();
+    expect(screen.queryByLabelText('Amount')).not.toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Apply tender' })).not.toBeInTheDocument();
+    expect(screen.queryByText(/Outstanding balance unavailable/)).not.toBeInTheDocument();
+  });
+
   it('shows the frozen delivery fee separately from order and bill totals', async () => {
     const request: TerminalRequest = async <T,>() => billed as T;
     render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
@@ -124,7 +171,7 @@ describe('CheckoutPanel', () => {
     expect(await screen.findByRole('button', { name: 'Apply tender' })).toBeEnabled();
   });
 
-  it('keeps a verified partial balance through close and reopen without an unsafe prefill', async () => {
+  it('updates a successful partial tender and uses the latest summary when reopened', async () => {
     const calls: { path: string; options?: TerminalRequestOptions }[] = [];
     let resolveTender!: (result: TenderResult) => void;
     const pendingTender = new Promise<TenderResult>((resolve) => {
@@ -142,9 +189,10 @@ describe('CheckoutPanel', () => {
       remainingDue: '16.00',
       replayed: false,
     };
+    let summary = billed;
     const request: TerminalRequest = async <T,>(path: string, options?: TerminalRequestOptions) => {
       calls.push({ path, options });
-      if (path.includes('/summary')) return billed as T;
+      if (path.includes('/summary')) return summary as T;
       return (await pendingTender) as T;
     };
     const onClose = vi.fn();
@@ -152,11 +200,8 @@ describe('CheckoutPanel', () => {
       <CheckoutPanel open orderId="order-1" request={request} onClose={onClose} />
     );
 
-    expect(
-      await screen.findByText('Outstanding balance unavailable. Enter the exact tender amount.')
-    ).toBeVisible();
-    expect(screen.getByLabelText('Amount')).toHaveValue('');
-    expect(screen.getByLabelText('Cash received')).toHaveValue('');
+    expect(await screen.findByLabelText('Amount')).toHaveValue('24.00');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('24.00');
     fireEvent.change(screen.getByLabelText('Amount'), { target: { value: '8.00' } });
     fireEvent.change(screen.getByLabelText('Cash received'), { target: { value: '8.00' } });
     fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
@@ -167,6 +212,8 @@ describe('CheckoutPanel', () => {
 
     await act(async () => resolveTender(partial));
     expect(await screen.findByText('Remaining balance 16.00')).toBeVisible();
+    expect(screen.getByLabelText('Amount')).toHaveValue('16.00');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('16.00');
     expect(calls.filter(({ path }) => path.includes('/summary'))).toHaveLength(1);
 
     fireEvent.click(screen.getByRole('button', { name: 'Close checkout' }));
@@ -174,10 +221,11 @@ describe('CheckoutPanel', () => {
     view.rerender(
       <CheckoutPanel open={false} orderId="order-1" request={request} onClose={onClose} />
     );
+    summary = { ...billed, bills: [{ ...billed.bills[0], remainingDue: '12.50' }] };
     view.rerender(<CheckoutPanel open orderId="order-1" request={request} onClose={onClose} />);
 
-    await waitFor(() => expect(screen.getByLabelText('Amount')).toHaveValue('16.00'));
-    expect(screen.getByLabelText('Cash received')).toHaveValue('16.00');
+    await waitFor(() => expect(screen.getByLabelText('Amount')).toHaveValue('12.50'));
+    expect(screen.getByLabelText('Cash received')).toHaveValue('12.50');
     expect(
       screen.queryByText('Outstanding balance unavailable. Enter the exact tender amount.')
     ).not.toBeInTheDocument();

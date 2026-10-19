@@ -242,6 +242,7 @@ describe('read model (C12)', () => {
           status: 'OPEN',
           splitKind: 'NONE',
           grandTotal: D('26.00'),
+          remainingDue: D('16.50'),
           compTotal: D('0'),
           receiptNumber: null,
         },
@@ -253,6 +254,7 @@ describe('read model (C12)', () => {
     expect(s.derivedOrderTotal).toBe('26');
     expect(s.accountedTotal).toBe('26');
     expect(s.bills[0].grandTotal).toBe('26');
+    expect(s.bills[0].remainingDue).toBe('16.5');
     expect(mocks.requireBranchScope).toHaveBeenCalledWith(expect.anything(), 'b1');
   });
 });

@@ -4,6 +4,127 @@
 restaurant job queue, but only the authenticated demo cron may claim or recover `demo-reset` jobs.
 The ordinary `restaurant:jobs` worker excludes that type from both claims and stale recovery.
 
+## Presenting several perspectives
+
+Entry reuses the Studio form and the existing login-intent flow. Choose one of seven real staff
+accounts: Owner, Manager (the default), Cashier, Waiter / Server, Kitchen, Inventory / Purchasing,
+or Finance. This selection requests a new authenticated session; it does not impersonate a role
+or replace server permission checks with browser filtering.
+
+Use **separate browser profiles with the same seat and branch** for a team demonstration. Those
+profiles share the restaurant's orders, stock, and reset. Tabs in one browser profile share login
+cookies: signing in as another perspective replaces the current role across those tabs. Different
+seats remain independent. Agree with everyone sharing a seat before its owner or manager resets it.
+
+| Perspective            | Landing                 | Guided work                                                                  |
+| ---------------------- | ----------------------- | ---------------------------------------------------------------------------- |
+| Owner                  | `/dashboard`            | Branch overview and operational reports; discuss exceptions with the team.   |
+| Manager                | `/dashboard`            | All ten original tour stops, targets, and preparations.                      |
+| Cashier                | `/pos`                  | Find the handed-over order, review bill splits, and record demo settlement.  |
+| Waiter / Server        | `/pos`                  | Capture table, items and modifiers; send the order to kitchen.               |
+| Kitchen                | `/kds`                  | Find the same order in the station queue and progress permitted item states. |
+| Inventory / Purchasing | `/restaurant/inventory` | Review shortages, movements, purchase orders, receipts and discrepancies.    |
+| Finance                | `/restaurant/money`     | Review daily-close history and reports for the presented branch and date.    |
+
+The manager's ten stops remain: overview, POS modifiers, kitchen, floor, bill settlement, daily
+close, low stock, recipe units, purchasing receipt, and reports. Other guides use a subset of
+these real surfaces. Waiter and kitchen guides do not prepare manager editors or settlement;
+cashier may open the existing payment dialog; finance may open the daily-close review tab. Tour
+preparation does not submit a tender, advance a kitchen item, post stock, or create a close.
+
+For the connected service story:
+
+1. Waiter opens an order on the presented branch, selects the available table/menu/modifiers,
+   sends it, and shares its order number.
+2. Kitchen finds that number on the authorized branch/station queue and prepares the items using
+   the available transitions. If absent, check branch, station, and whether the order was sent.
+3. After service, cashier locates the same order, closes it when appropriate, opens Collect payment,
+   and records the demo tender. The existing payment-pending sample is a separate fallback story;
+   do not claim it is the waiter's new order.
+4. Manager and finance review the recorded order and relevant business-date reports. Seeded history
+   is distinct from today's activity; normal reporting projections may need to refresh.
+5. Inventory connects ingredient shortages and movement reasons to supplier orders and recorded
+   receipts; owner reviews the resulting operational picture. Restricted approvals stay with an
+   authorized manager.
+
+Card processing, receipt printers, fiscal devices, and external integrations are simulated or
+unverified. A browser workflow or recorded demo tender is not live hardware, payment-processing,
+physical-stocktake, or fiscal acceptance evidence.
+
+### UI/backend integration contract
+
+- Canonical metadata comes from `src/lib/demo/personas.ts`: `DEMO_PERSONA_KEYS`, `DEMO_PERSONAS`,
+  `DemoPersona`, and `demoPersonaForUser`. UI workflow copy is in `sales-script.ts`.
+- The seat API's per-persona `ready` flags disable unavailable accounts. Legacy seat responses
+  without persona readiness enable only manager. A seat change cannot submit an unavailable
+  perspective; seats that are still preparing offer a readiness refresh.
+- Entry sends `POST /demo/restaurants/access` with `{ code, seat, persona }`. It requires a nonempty
+  `organizationId` and the selected persona's exact canonical `callbackUrl`; external URLs, queries,
+  and another persona's landing route are rejected. The response must echo `persona`; only the
+  original manager response remains compatible without that field.
+- Entry calls `signIn('login-intent', { organizationId, redirect: false, callbackUrl })`. When
+  canonical `deviceKind` is present, it then posts `{ kind: deviceKind }` to
+  `/demo/restaurants/device-session` and requires `{ ready: true }`. Finance and inventory skip
+  terminal preparation. Navigation and router refresh follow successful preparation.
+- The toolbar resolves the canonical persona from the authenticated session's organization, user
+  ID, and email. Loading, revoked, missing, or unknown sessions receive no tour/reset controls.
+  Changing the account remounts the guide. Progress is scoped to organization and user, so a
+  kitchen profile cannot resume a saved manager preparation.
+- Toolbar filtering chooses relevant narration only. Backend authentication, terminal capabilities,
+  and permission enforcement remain authoritative for every page and mutation.
+
+### UI verification, 2026-09-10
+
+Run from `/Users/Saad/Developer/paperclip-worktrees/devfathom/demo-restaurants`:
+
+```sh
+bunx vitest run src/app/demo/restaurants/demo-entry-client.test.tsx src/lib/demo/toolbar.test.tsx src/lib/demo/tour.test.ts
+bunx eslint src/app/demo/restaurants/demo-entry-client.tsx src/app/demo/restaurants/demo-entry-client.test.tsx src/lib/demo/toolbar.tsx src/lib/demo/toolbar.test.tsx src/lib/demo/tour.ts src/lib/demo/tour.test.ts src/lib/demo/sales-script.ts src/app/demo/restaurants/page.tsx
+bunx prettier --check src/app/demo/restaurants/demo-entry-client.tsx src/app/demo/restaurants/demo-entry-client.test.tsx src/lib/demo/toolbar.tsx src/lib/demo/toolbar.test.tsx src/lib/demo/tour.ts src/lib/demo/tour.test.ts src/lib/demo/sales-script.ts src/app/demo/restaurants/page.tsx docs/demo-restaurants.md
+git diff --check -- src/app/demo/restaurants/demo-entry-client.tsx src/app/demo/restaurants/demo-entry-client.test.tsx src/lib/demo/toolbar.tsx src/lib/demo/toolbar.test.tsx src/lib/demo/tour.ts src/lib/demo/tour.test.ts src/lib/demo/sales-script.ts src/app/demo/restaurants/page.tsx docs/demo-restaurants.md
+```
+
+The focused unit run passed **53/53 tests across three files**, exit `0`, in `2.50s`. ESLint,
+Prettier, and the owned-file diff check passed with exit `0`. Coverage includes all seven login requests and terminal kinds, bounded
+landing paths, mismatched identities, unavailable personas, legacy manager entry, failed sign-in
+and device preparation, rate limiting, account-scoped progress, keyboard Escape/focus, and the
+unchanged ten manager routes/targets/preparations.
+
+No application server was listening during this UI lane. An isolated Playwright fixture renders
+the owned React components with current semantic CSS and installed fonts, synthetic session/seat
+responses, and no application server or database connection. Its local commands and artifacts are:
+
+```sh
+bun /tmp/restaurant-persona-ui-qa/build.ts
+node /tmp/restaurant-persona-ui-qa/check.cjs
+# Results: /tmp/restaurant-persona-ui-qa/results.json
+# Screenshots: /tmp/restaurant-persona-ui-qa/screenshots/
+```
+
+Both fixture commands exited `0`. The final **83 browser cases passed**, with zero document
+horizontal overflow, zero Axe WCAG A/AA violations, and zero unexpected console/page errors.
+Coverage: 375/768/1024/1440px; light/dark; normal/reduced motion; entry, kitchen tour and guide,
+manager's complete ten-stop guide and reset confirmation; loading, empty, and error entry states.
+Native radio arrow keys, visible focus rings, guide Escape/focus restoration, and dialog Tab/Escape
+behavior passed. These are isolated component results, not live authentication or route acceptance.
+
+Initial checks exposed low-contrast entry/guide text and a client use of server-only seat-count
+configuration (`process is not defined`); both were corrected within UI ownership. Axe reported
+`color-contrast` for muted text on sunken surfaces and the existing reset-button treatment (4.26:1);
+semantic body/strong text corrected those failures without changing shared tokens. The first Prettier check exited `1` for
+the added Markdown table and was corrected. Fixture setup separately encountered unresolved
+React/alias imports (`Could not resolve: "react-dom/client"`, then `File not found` for extensionless
+aliases), an inline `</script>` delimiter (radio wait timed out), and Axe's `Please use browser.newContext()`
+requirement; those fixture-only failures were corrected without adding dependencies. A dialog-focus
+assertion initially sampled before focus restoration; the fixture now waits for that handoff. The deliberate
+HTTP `500` error-state fixture records the expected resource error separately from unexpected
+browser errors.
+
+Live seven-account authentication, same-seat cross-profile service handoff, database permissions,
+real route hydration, and hardware/integration acceptance remain backend/integration gates. This
+UI lane did not run a production build, seed/reset a database, start/change an application server,
+or perform Git/release mutations. Existing backend edits and prior runbook evidence were preserved.
+
 ## Release sequence
 
 Run these steps in order through the existing release process. Do not seed before the target
@@ -84,6 +205,15 @@ HTTPS, with no credentials, query, fragment, or path beyond `/`.
 Explicit loopback ports are preserved. HTTP is allowed only for `localhost`, `127.0.0.1`, and
 `[::1]`; every other host requires HTTPS.
 
+## KDS business-date rollover
+
+KDS reads the current branch business date first. Only for an authenticated demo organization,
+when no explicit `businessDate` was supplied and that current queue has no open tickets, it reads
+the bound station's most recent earlier business date containing an item that is not `SERVED` or
+`VOIDED`. The response is a full polling snapshot for that actual date and identifies it in
+`businessDate`; current-date tickets always win, while explicit dates and non-demo organizations
+remain unchanged.
+
 ## Verified local seed evidence
 
 Attempt 7 completed all five seats in `540.998s` with exit `0`; seats 1 through 5 were each
@@ -96,7 +226,8 @@ branches=3, floors=7, tables=52, modifierGroups=7, modifierOptions=20, products=
 The independent read-only check found these counts for every seat: 3 branches; 1,745 total orders
 (1,743 historical + 2 live); 40 recipes; 200 loyalty customers; 9 SOP evidence rows; 15 refunds;
 and 1,743 taxed bills. The `540.998s` figure is the complete seed-run duration, not a reset
-duration; live reset timing remains unmeasured.
+duration. Two local reset commands completed in `410.012s` and `466.029s`; these are command wall
+times, not database transaction durations. Production reset duration remains unmeasured.
 
 ## Nightly reset trigger
 
@@ -199,11 +330,12 @@ an automatic whole-run retry: a partial run requires operator review of the guar
 queue before another dispatch.
 
 Processing is synchronous. Each request declares a 30-minute application maximum and the command
-allows five seconds of transport overhead. Reset duration is not measured yet. The external
-scheduler's total execution deadline must accommodate up to `DEMO_SEATS` sequential requests;
-verify that provider limit before enabling the schedule. Keep `maxJobs` at `1`. A single request
-with `maxJobs: DEMO_SEATS` is an alternative only after production timing proves it fits the
-hosting request deadline; it is not the default safety claim.
+allows five seconds of transport overhead. Local reset commands completed in `410.012s` and
+`466.029s`; these are command wall times, not database transaction durations, and production reset
+duration remains unmeasured. The external scheduler's total execution deadline must accommodate up
+to `DEMO_SEATS` sequential requests; verify that provider limit before enabling the schedule. Keep
+`maxJobs` at `1`. A single request with `maxJobs: DEMO_SEATS` is an alternative only after
+production timing proves it fits the hosting request deadline; it is not the default safety claim.
 
 Only configured demo seat IDs still flagged `isDemo`, `SHARED`, and `RESTAURANT` are visited.
 Payload organization must match the claimed job organization. Reset and rescheduling run inside
@@ -244,4 +376,5 @@ is healthy:
    Expect status `307` and a `Location` ending in
    `/demo/restaurants?source=operator-check`.
 
-No live reset duration or production reset result has been established by this runbook.
+The observed local reset command wall times are `410.012s` and `466.029s`, not database transaction
+durations. No production reset duration or result has been established by this runbook.

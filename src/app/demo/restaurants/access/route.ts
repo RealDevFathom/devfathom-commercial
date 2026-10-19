@@ -9,6 +9,7 @@ import {
   resolveDemoSeat,
 } from '@/lib/demo/access';
 import { isDemoEnabled } from '@/lib/demo/config';
+import { DEMO_PERSONA_KEYS, DEMO_PERSONAS } from '@/lib/demo/personas';
 import {
   LOGIN_INTENT_COOKIE,
   createLoginIntent,
@@ -29,6 +30,7 @@ const inputSchema = z
   .object({
     code: z.string().max(256).optional(),
     seat: z.number().int().min(1).max(25),
+    persona: z.enum(DEMO_PERSONA_KEYS).default('manager'),
   })
   .strict();
 
@@ -60,7 +62,7 @@ export async function POST(request: Request) {
 
   const parsed = await readInput(request);
   if (!parsed?.success) return json({ error: 'Invalid request.' }, 400);
-  const seat = await resolveDemoSeat(parsed.data.seat);
+  const seat = await resolveDemoSeat(parsed.data.seat, parsed.data.persona);
   if (!seat) return json({ error: 'Demo seat is not ready.' }, 409);
 
   const rawGrant = parseCookie(request.headers.get('cookie'), DEMO_ACCESS_COOKIE);
@@ -99,19 +101,25 @@ export async function POST(request: Request) {
     }
   }
   const intent = await createLoginIntent({
-    email: seat.managerEmail,
+    email: seat.email,
     host,
     candidates: [
       {
         organizationId: seat.organizationId,
-        userId: seat.managerUserId,
+        userId: seat.userId,
         demoAccessExpiresAt: grant.expiresAt.getTime(),
       },
     ],
     ip: ipFromHeaders(request.headers),
     userAgent: request.headers.get('user-agent'),
   });
-  const response = json({ organizationId: seat.organizationId, callbackUrl: '/dashboard' });
+  const { callbackUrl, deviceKind } = DEMO_PERSONAS[seat.persona];
+  const response = json({
+    organizationId: seat.organizationId,
+    persona: seat.persona,
+    callbackUrl,
+    deviceKind,
+  });
   response.cookies.set(DEMO_ACCESS_COOKIE, grant.value, demoAccessCookieOptions(grant.expiresAt));
   response.cookies.set(
     LOGIN_INTENT_COOKIE,

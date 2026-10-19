@@ -7,7 +7,8 @@ import type { Prisma } from '@/generated/prisma/client';
 import { readJson } from '@/lib/api-json';
 import { liveDemoAccessExpiry } from '@/lib/auth/session-state';
 import { demoApproverEmail, deriveDemoApproverPin } from '@/lib/demo/approval';
-import { demoManagerEmail, demoManagerId, demoSeatFromOrganizationId } from '@/lib/demo/config';
+import { demoSeatFromOrganizationId } from '@/lib/demo/config';
+import { demoPersonaForUser } from '@/lib/demo/personas';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { BillCommandError, evaluateOrderSettlement, type MoneyCommandActor } from './bills';
@@ -271,6 +272,7 @@ export async function resolveDemoApproverIdentity(
 ): Promise<DemoApproverIdentity | null> {
   const seat = demoSeatFromOrganizationId(ctx.organizationId);
   const actor = ctx.demoActor;
+  const persona = seat && actor ? demoPersonaForUser(seat, actor.session.user) : null;
   const expiresAt = liveDemoAccessExpiry(actor?.session.user.demoAccessExpiresAt, now.getTime());
   if (
     !seat ||
@@ -279,8 +281,7 @@ export async function resolveDemoApproverIdentity(
     !actor.organization.isDemo ||
     actor.organization.id !== ctx.organizationId ||
     actor.session.user.organizationId !== ctx.organizationId ||
-    actor.session.user.id !== demoManagerId(seat) ||
-    actor.session.user.email !== demoManagerEmail(seat) ||
+    (persona !== 'manager' && persona !== 'owner') ||
     !expiresAt
   ) {
     return null;
@@ -597,6 +598,7 @@ export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string,
       status: b.status,
       splitKind: b.splitKind,
       grandTotal: money(b.grandTotal),
+      remainingDue: money(b.remainingDue),
       deliveryFeeTotal: money(b.deliveryFeeTotal),
       compTotal: money(b.compTotal),
       receiptNumber: b.receiptNumber,

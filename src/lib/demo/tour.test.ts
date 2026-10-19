@@ -12,6 +12,7 @@ import {
   readTourProgress,
   saveTourProgress,
   TOUR_STEPS,
+  tourStepsForPersona,
 } from './tour';
 import { isUsableTourTarget, prepareTourTarget } from './tour-preparation';
 import { DEMO_SALES_SCRIPT } from './sales-script';
@@ -104,6 +105,42 @@ describe('restaurant demo tour', () => {
       expect(step.likelyQuestion.trim()).not.toBe('');
       expect(step.answer.trim()).not.toBe('');
     }
+  });
+
+  it('keeps manager intact and limits other personas to applicable routes and preparations', () => {
+    expect(tourStepsForPersona('manager')).toBe(TOUR_STEPS);
+    expect(tourStepsForPersona('owner').map((step) => step.href)).toEqual([
+      '/dashboard',
+      '/restaurant/reports',
+    ]);
+    expect(tourStepsForPersona('cashier').map((step) => [step.href, step.preparation])).toEqual([
+      ['/pos', 'bill-settlement'],
+    ]);
+    expect(tourStepsForPersona('waiter').map((step) => [step.href, step.preparation])).toEqual([
+      ['/pos', undefined],
+    ]);
+    expect(tourStepsForPersona('kitchen').map((step) => [step.href, step.preparation])).toEqual([
+      ['/kds', undefined],
+    ]);
+    expect(tourStepsForPersona('inventory').map((step) => [step.href, step.preparation])).toEqual([
+      ['/restaurant/inventory', undefined],
+      ['/restaurant/purchasing', undefined],
+    ]);
+    expect(tourStepsForPersona('finance').map((step) => [step.href, step.preparation])).toEqual([
+      ['/restaurant/money', 'daily-close'],
+      ['/restaurant/reports', undefined],
+    ]);
+  });
+
+  it('isolates tour progress by seat and account and validates against the active journey length', () => {
+    saveTourProgress(sessionStorage, 7, 'seat1:manager');
+    expect(readTourProgress(sessionStorage, 'seat1:kitchen', 1)).toBeNull();
+    expect(readTourProgress(sessionStorage, 'seat2:manager')).toBeNull();
+    expect(readTourProgress(sessionStorage, 'seat1:manager', 1)).toBeNull();
+    saveTourProgress(sessionStorage, 0, 'seat1:kitchen', 1);
+    expect(readTourProgress(sessionStorage, 'seat1:kitchen', 1)).toEqual({ index: 0 });
+    clearTourProgress(sessionStorage, 'seat1:kitchen');
+    expect(readTourProgress(sessionStorage, 'seat1:manager')).toEqual({ index: 7 });
   });
 
   it('rejects malformed progress and tolerates unavailable storage', () => {

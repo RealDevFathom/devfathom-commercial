@@ -6,6 +6,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { businessDateToUtcDate, resolveBusinessDate } from './business-date';
+import { assertMoneyDayOpen } from './daily-close';
 import {
   appendMovement,
   beginMoneyIdempotent,
@@ -309,6 +310,7 @@ export async function refundTender(
     const businessDate = businessDateToUtcDate(
       resolveBusinessDate(at, branch.timezone, branch.businessDayCutoff)
     );
+    await assertMoneyDayOpen(tx, branchId, businessDate);
 
     // VOID_REVERSAL is only valid for a same-day FULL reversal with no prior refund.
     if (kind === 'VOID_REVERSAL') {

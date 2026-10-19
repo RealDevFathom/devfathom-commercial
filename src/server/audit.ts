@@ -1,4 +1,4 @@
-import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * ============================================================================
@@ -68,7 +68,7 @@ export interface AuditContext {
     } | null;
   } | null;
   requestMeta?: { ip?: string | null; userAgent?: string | null } | null;
-  audit?: { detail: AuditDetail };
+  audit?: { detail: AuditDetail; db?: ScopedDb };
 }
 
 // ---------------------------------------------------------------------------
@@ -363,44 +363,51 @@ export async function flushAuditWritesForTest(): Promise<void> {
  * the caller. The `as never` casts let us pass plain JSON into Prisma's `Json`
  * columns (same pattern as logActivity).
  */
-export function recordAudit(row: AuditRowInput): void {
+export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<void> {
+  // Seed actors are uncommitted: their audit rows must share the transaction.
+  // An explicit transaction is awaited and fails closed; normal writes keep
+  // their existing independent, fire-and-forget behavior.
+  if (db && !row.organizationId) {
+    throw new Error('Transactional audit writes require a tenant organization.');
+  }
+  const writeTenant = (tenantDb: ScopedDb) =>
+    tenantDb.auditLog.create({
+      data: {
+        organizationId: row.organizationId!,
+        actorType: row.actorType ?? 'USER',
+        actorId: row.actorId ?? null,
+        actorStaffProfileId: row.actorStaffProfileId ?? null,
+        actorName: row.actorName ?? null,
+        actorEmail: row.actorEmail ?? null,
+        actorRole: row.actorRole ?? null,
+        tokenId: row.tokenId ?? null,
+        tokenName: row.tokenName ?? null,
+        source: row.source,
+        category: row.category,
+        operation: row.operation ?? 'OTHER',
+        action: row.action,
+        description: row.description ?? null,
+        targetType: row.targetType ?? null,
+        targetId: row.targetId ?? null,
+        targetLabel: row.targetLabel ?? null,
+        input: (row.input ?? undefined) as never,
+        changes: (row.changes ?? undefined) as never,
+        result: (row.result ?? undefined) as never,
+        metadata: (row.metadata ?? undefined) as never,
+        ip: row.ip ?? null,
+        userAgent: row.userAgent ?? null,
+        httpMethod: row.httpMethod ?? null,
+        path: row.path ?? null,
+        statusCode: row.statusCode ?? null,
+        outcome: row.outcome ?? 'SUCCESS',
+        errorCode: row.errorCode ?? null,
+        errorMessage: row.errorMessage ?? null,
+        durationMs: row.durationMs ?? null,
+      },
+    });
+  if (db) return writeTenant(db).then(() => undefined);
   const write = row.organizationId
-    ? withTenantDb(row.organizationId, (tenantDb) =>
-        tenantDb.auditLog.create({
-          data: {
-            organizationId: row.organizationId!,
-            actorType: row.actorType ?? 'USER',
-            actorId: row.actorId ?? null,
-            actorStaffProfileId: row.actorStaffProfileId ?? null,
-            actorName: row.actorName ?? null,
-            actorEmail: row.actorEmail ?? null,
-            actorRole: row.actorRole ?? null,
-            tokenId: row.tokenId ?? null,
-            tokenName: row.tokenName ?? null,
-            source: row.source,
-            category: row.category,
-            operation: row.operation ?? 'OTHER',
-            action: row.action,
-            description: row.description ?? null,
-            targetType: row.targetType ?? null,
-            targetId: row.targetId ?? null,
-            targetLabel: row.targetLabel ?? null,
-            input: (row.input ?? undefined) as never,
-            changes: (row.changes ?? undefined) as never,
-            result: (row.result ?? undefined) as never,
-            metadata: (row.metadata ?? undefined) as never,
-            ip: row.ip ?? null,
-            userAgent: row.userAgent ?? null,
-            httpMethod: row.httpMethod ?? null,
-            path: row.path ?? null,
-            statusCode: row.statusCode ?? null,
-            outcome: row.outcome ?? 'SUCCESS',
-            errorCode: row.errorCode ?? null,
-            errorMessage: row.errorMessage ?? null,
-            durationMs: row.durationMs ?? null,
-          },
-        })
-      )
+    ? withTenantDb(row.organizationId, writeTenant)
     : withPlatformDb((platformDb) =>
         platformDb.platformAuditLog.create({
           data: {
@@ -450,47 +457,50 @@ export function recordTrpcAudit(args: {
   outcome: AuditOutcomeT;
   error?: unknown;
   durationMs?: number;
-}): void {
+}): void | Promise<void> {
   const user = args.ctx.session?.user ?? null;
   const detail = args.ctx.audit?.detail ?? {};
   const { code, message } = extractError(args.error);
 
-  recordAudit({
-    organizationId: user?.organizationId ?? null,
-    actorType: user?.id ? 'USER' : 'ANONYMOUS',
-    actorId: user?.id ?? null,
-    actorName: user?.name ?? null,
-    actorEmail: user?.email ?? null,
-    actorRole: user?.role ?? null,
-    source: 'TRPC',
-    category: detail.category ?? categoryForPath(args.path),
-    operation: detail.operation ?? operationForPath(args.path, args.type),
-    action: detail.action ?? args.path,
-    description: detail.description ?? null,
-    targetType: detail.targetType ?? null,
-    targetId: detail.targetId ?? null,
-    targetLabel: detail.targetLabel ?? null,
-    input: detail.skipInput ? '[skipped]' : toAuditJson(args.input),
-    changes: detail.changes ? toAuditJson(detail.changes) : undefined,
-    result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
-    metadata: toAuditJson({
-      ...(detail.metadata ?? {}),
-      ...(user?.isSupportSession
-        ? {
-            supportSessionId: user.supportSessionId,
-            platformUserId: user.platformUserId,
-            actingAsTenantUserId: user.id,
-          }
-        : {}),
-    }),
-    ip: args.ctx.requestMeta?.ip ?? null,
-    userAgent: args.ctx.requestMeta?.userAgent ?? null,
-    path: args.path,
-    outcome: args.outcome,
-    errorCode: code,
-    errorMessage: message,
-    durationMs: args.durationMs ?? null,
-  });
+  return recordAudit(
+    {
+      organizationId: user?.organizationId ?? null,
+      actorType: user?.id ? 'USER' : 'ANONYMOUS',
+      actorId: user?.id ?? null,
+      actorName: user?.name ?? null,
+      actorEmail: user?.email ?? null,
+      actorRole: user?.role ?? null,
+      source: 'TRPC',
+      category: detail.category ?? categoryForPath(args.path),
+      operation: detail.operation ?? operationForPath(args.path, args.type),
+      action: detail.action ?? args.path,
+      description: detail.description ?? null,
+      targetType: detail.targetType ?? null,
+      targetId: detail.targetId ?? null,
+      targetLabel: detail.targetLabel ?? null,
+      input: detail.skipInput ? '[skipped]' : toAuditJson(args.input),
+      changes: detail.changes ? toAuditJson(detail.changes) : undefined,
+      result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
+      metadata: toAuditJson({
+        ...(detail.metadata ?? {}),
+        ...(user?.isSupportSession
+          ? {
+              supportSessionId: user.supportSessionId,
+              platformUserId: user.platformUserId,
+              actingAsTenantUserId: user.id,
+            }
+          : {}),
+      }),
+      ip: args.ctx.requestMeta?.ip ?? null,
+      userAgent: args.ctx.requestMeta?.userAgent ?? null,
+      path: args.path,
+      outcome: args.outcome,
+      errorCode: code,
+      errorMessage: message,
+      durationMs: args.durationMs ?? null,
+    },
+    args.ctx.audit?.db
+  );
 }
 
 /**

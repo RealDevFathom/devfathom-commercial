@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { usePathname, useRouter } from 'next/navigation';
+import Link from 'next/link';
+import { useSession } from 'next-auth/react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -15,13 +17,19 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog';
 
-import { DEMO_SALES_SCRIPT } from './sales-script';
+import { demoOrganizationId } from './config';
+import { DEMO_PERSONAS, demoPersonaForUser, type DemoPersona } from './personas';
+import {
+  DEMO_SHARED_SERVICE_STORY,
+  DEMO_VERIFICATION_NOTE,
+  DEMO_WORKFLOW_BRIEFS,
+} from './sales-script';
 import {
   clearTourProgress,
   isTourStepPath,
   readTourProgress,
   saveTourProgress,
-  TOUR_STEPS,
+  tourStepsForPersona,
 } from './tour';
 import { prepareTourTarget } from './tour-preparation';
 
@@ -92,8 +100,62 @@ function activePaymentDialog(target: HTMLElement | null) {
 }
 
 export function DemoToolbar({ seatName }: { seatName: string }) {
+  const { data: session, status } = useSession();
+  const user = status === 'authenticated' && !session?.user.sessionRevoked ? session?.user : null;
+  // The session is authoritative; configured seat counts are server-only environment values.
+  const seat = Number(user?.organizationId.split('_').at(-1));
+  const persona =
+    user && Number.isInteger(seat) && seat > 0 && user.organizationId === demoOrganizationId(seat)
+      ? demoPersonaForUser(seat, user)
+      : null;
+  if (!user || !persona) {
+    return (
+      <aside
+        aria-label="Restaurant demo controls"
+        className="fixed right-3 bottom-3 z-40 max-w-[calc(100vw-1.5rem)] rounded-md border border-border-default bg-card p-3 text-sm text-text-muted shadow-sm"
+      >
+        <p role="status">
+          {status === 'loading'
+            ? 'Loading your demo perspective…'
+            : 'Demo perspective unavailable. Sign in again to open your guide.'}
+        </p>
+        {status !== 'loading' ? (
+          <Link
+            href="/demo/restaurants"
+            className="mt-2 inline-flex min-h-11 items-center rounded-sm underline underline-offset-4 focus-visible:ring-3 focus-visible:ring-ring"
+          >
+            Choose perspective
+          </Link>
+        ) : null}
+      </aside>
+    );
+  }
+  const progressScope = `${user.organizationId}:${user.id}`;
+  return (
+    <PersonaDemoToolbar
+      key={progressScope}
+      seatName={seatName}
+      persona={persona}
+      progressScope={progressScope}
+    />
+  );
+}
+
+function PersonaDemoToolbar({
+  seatName,
+  persona,
+  progressScope,
+}: {
+  seatName: string;
+  persona: DemoPersona;
+  progressScope: string;
+}) {
   const pathname = usePathname();
   const router = useRouter();
+  const steps = tourStepsForPersona(persona);
+  const brief = DEMO_WORKFLOW_BRIEFS[persona];
+  const perspective = DEMO_PERSONAS[persona].label;
+  const canReset = persona === 'manager' || persona === 'owner';
   const startButtonRef = useRef<HTMLButtonElement | null>(null);
   const tourPanelRef = useRef<HTMLElement | null>(null);
   const restoreTourFocusRef = useRef<HTMLElement | null>(null);
@@ -109,14 +171,14 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
   const [tourAttempt, setTourAttempt] = useState(0);
   const [guideCollapsed, setGuideCollapsed] = useState(false);
   const currentIndex = activeIndex ?? 0;
-  const step = activeIndex == null ? null : TOUR_STEPS[currentIndex];
+  const step = activeIndex == null ? null : steps[currentIndex];
 
   function endTour() {
     const dialog = step?.id === 'bill-settlement' ? activePaymentDialog(tourTarget) : null;
     restoreTourFocusRef.current =
       dialog?.querySelector<HTMLElement>('button, [href], [tabindex="0"]') ??
       startButtonRef.current;
-    clearTourProgress(tourStorage());
+    clearTourProgress(tourStorage(), progressScope);
     setActiveIndex(null);
     setTourTarget(null);
     setTourError('');
@@ -124,11 +186,11 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
 
   useEffect(() => {
     const timeout = window.setTimeout(() => {
-      const progress = readTourProgress(tourStorage());
+      const progress = readTourProgress(tourStorage(), progressScope, steps.length);
       if (progress) setActiveIndex(progress.index);
     }, 0);
     return () => window.clearTimeout(timeout);
-  }, []);
+  }, [progressScope, steps.length]);
 
   useEffect(() => {
     if (resetCooldown <= 0) return;
@@ -141,7 +203,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
 
   useEffect(() => {
     if (activeIndex == null) return;
-    const step = TOUR_STEPS[activeIndex];
+    const step = steps[activeIndex];
     if (!step) return;
 
     let cancelled = false;
@@ -194,7 +256,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
       highlightCleanup();
       preparationCleanup();
     };
-  }, [activeIndex, pathname, router, tourAttempt]);
+  }, [activeIndex, pathname, router, tourAttempt, steps]);
 
   useEffect(() => {
     if (activeIndex == null) return;
@@ -232,15 +294,15 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
     setTourTarget(null);
     setActiveIndex(0);
     setTourAttempt((attempt) => attempt + 1);
-    saveTourProgress(tourStorage(), 0);
+    saveTourProgress(tourStorage(), 0, progressScope, steps.length);
   }
 
   function moveTour(nextIndex: number) {
-    if (nextIndex < 0 || nextIndex >= TOUR_STEPS.length) {
+    if (nextIndex < 0 || nextIndex >= steps.length) {
       endTour();
       return;
     }
-    saveTourProgress(tourStorage(), nextIndex);
+    saveTourProgress(tourStorage(), nextIndex, progressScope, steps.length);
     setTourStatus('preparing');
     setTourTarget(null);
     setTourError('');
@@ -248,7 +310,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
   }
 
   async function resetSeat() {
-    if (resetPending || resetCooldown > 0) return;
+    if (!canReset || resetPending || resetCooldown > 0) return;
     setResetPending(true);
     setResetFailure('');
     setResetMessage('');
@@ -272,7 +334,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
         return;
       }
 
-      clearTourProgress(tourStorage());
+      clearTourProgress(tourStorage(), progressScope);
       setActiveIndex(null);
       setResetOpen(false);
       setResetMessage(`${seatName} reset. Seeded operations are ready.`);
@@ -292,7 +354,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
       aria-labelledby="demo-tour-title"
       aria-describedby="demo-tour-detail"
       tabIndex={-1}
-      className={`fixed right-4 bottom-4 z-[70] rounded-lg border border-border-strong bg-card text-card-foreground shadow-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40 sm:right-6 sm:bottom-6 ${
+      className={`fixed right-4 bottom-4 z-[70] rounded-lg border border-border-strong bg-card text-card-foreground shadow-md outline-none focus-visible:ring-3 focus-visible:ring-ring/40 sm:right-6 sm:bottom-6 [&_button]:min-h-11 motion-reduce:[&_button]:transform-none motion-reduce:[&_button]:transition-none ${
         guideCollapsed
           ? 'w-[min(20rem,calc(100vw-2rem))] p-3'
           : 'max-h-[min(34rem,calc(100svh-2rem))] w-[min(26rem,calc(100vw-2rem))] overflow-y-auto p-5'
@@ -300,7 +362,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
     >
       <div className="flex items-center justify-between gap-3">
         <p className="font-mono text-[0.6875rem] tracking-[0.14em] text-text-muted uppercase">
-          Step {currentIndex + 1} of {TOUR_STEPS.length}
+          {perspective} · Step {currentIndex + 1} of {steps.length}
         </p>
         <Button
           type="button"
@@ -337,7 +399,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
             </Button>
             {tourStatus === 'ready' ? (
               <Button type="button" onClick={() => moveTour(currentIndex + 1)}>
-                {currentIndex === TOUR_STEPS.length - 1 ? 'Finish' : 'Next'}
+                {currentIndex === steps.length - 1 ? 'Finish' : 'Next'}
               </Button>
             ) : null}
           </div>
@@ -349,6 +411,9 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
           role="status"
         >
           Opening and checking live seeded content…
+          <Button className="mt-3 block" type="button" variant="outline" onClick={endTour}>
+            End tour
+          </Button>
         </p>
       ) : tourStatus === 'error' ? (
         <div className="mt-3 space-y-4">
@@ -390,7 +455,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
           </ul>
           <div className="rounded-md border border-border-subtle bg-surface-sunken p-3">
             <p className="text-sm font-semibold text-text-strong">{step.likelyQuestion}</p>
-            <p className="mt-1 text-sm leading-relaxed text-text-muted">{step.answer}</p>
+            <p className="mt-1 text-sm leading-relaxed text-text-body">{step.answer}</p>
           </div>
           <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border-subtle pt-4">
             <Button
@@ -406,7 +471,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
                 End tour
               </Button>
               <Button type="button" onClick={() => moveTour(currentIndex + 1)}>
-                {currentIndex === TOUR_STEPS.length - 1 ? 'Finish' : 'Next'}
+                {currentIndex === steps.length - 1 ? 'Finish' : 'Next'}
               </Button>
             </div>
           </div>
@@ -427,51 +492,62 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
       <aside
         data-tour="demo-toolbar"
         aria-label="Restaurant demo controls"
-        className="fixed right-3 bottom-3 z-40 flex max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-end gap-2 rounded-md border border-border-default bg-card p-2 shadow-sm sm:right-5 sm:bottom-5"
+        className="fixed right-3 bottom-3 z-40 flex max-w-[calc(100vw-1.5rem)] flex-wrap items-center justify-end gap-2 rounded-md border border-border-default bg-card p-2 shadow-sm sm:right-5 sm:bottom-5 [&_button]:min-h-11 motion-reduce:[&_button]:transform-none motion-reduce:[&_button]:transition-none"
       >
-        <span className="max-w-40 truncate px-1 font-mono text-[0.6875rem] tracking-wide text-text-muted uppercase">
-          {seatName}
+        <span className="px-1 text-xs text-text-muted">
+          {seatName} · {perspective}
         </span>
         <Button ref={startButtonRef} type="button" size="sm" onClick={startTour}>
           {activeIndex == null ? 'Start tour' : 'Restart tour'}
         </Button>
 
-        <Dialog open={resetOpen} onOpenChange={setResetOpen}>
-          <DialogTrigger
-            render={
-              <Button type="button" size="sm" variant="outline" disabled={resetCooldown > 0} />
-            }
-          >
-            {resetCooldown > 0 ? `Reset in ${resetCooldown}s` : 'Reset my seat'}
-          </DialogTrigger>
-          <DialogContent>
-            <DialogHeader>
-              <DialogTitle>Reset {seatName}?</DialogTitle>
-              <DialogDescription>
-                Current demo changes in this seat will be replaced with the seeded restaurant story.
-                Other sales seats are untouched.
-              </DialogDescription>
-            </DialogHeader>
-            {resetFailure ? (
-              <p
-                className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
-                role="alert"
-              >
-                {resetFailure}
-              </p>
-            ) : null}
-            <DialogFooter showCloseButton={!resetPending}>
-              <Button
-                type="button"
-                variant="destructive"
-                disabled={resetPending}
-                onClick={resetSeat}
-              >
-                {resetPending ? 'Resetting seat…' : 'Reset seat'}
-              </Button>
-            </DialogFooter>
-          </DialogContent>
-        </Dialog>
+        <Link
+          href="/demo/restaurants"
+          className="inline-flex min-h-11 items-center rounded-sm px-2 text-sm text-text-strong underline underline-offset-4 hover:bg-surface-sunken focus-visible:ring-3 focus-visible:ring-ring"
+        >
+          Change perspective
+        </Link>
+
+        {canReset ? (
+          <Dialog open={resetOpen} onOpenChange={setResetOpen}>
+            <DialogTrigger
+              render={
+                <Button type="button" size="sm" variant="outline" disabled={resetCooldown > 0} />
+              }
+            >
+              {resetCooldown > 0 ? `Reset in ${resetCooldown}s` : 'Reset my seat'}
+            </DialogTrigger>
+            <DialogContent>
+              <DialogHeader>
+                <DialogTitle>Reset {seatName}?</DialogTitle>
+                <DialogDescription>
+                  Current demo changes in this seat will be replaced with the seeded restaurant
+                  story. Everyone using this seat in other browser profiles is affected. Agree with
+                  the team before resetting. Other sales seats are untouched.
+                </DialogDescription>
+              </DialogHeader>
+              {resetFailure ? (
+                <p
+                  className="rounded-md border border-destructive/30 bg-destructive/10 p-3 text-sm text-destructive"
+                  role="alert"
+                >
+                  {resetFailure}
+                </p>
+              ) : null}
+              <DialogFooter showCloseButton={!resetPending}>
+                <Button
+                  type="button"
+                  variant="destructive"
+                  className="min-h-11 border-destructive text-text-strong"
+                  disabled={resetPending || resetCooldown > 0}
+                  onClick={resetSeat}
+                >
+                  {resetPending ? 'Resetting seat…' : 'Reset seat'}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+        ) : null}
 
         <Dialog>
           <DialogTrigger render={<Button type="button" size="sm" variant="outline" />}>
@@ -479,21 +555,36 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
           </DialogTrigger>
           <DialogContent className="max-h-[min(48rem,calc(100svh-2rem))] overflow-y-auto sm:max-w-3xl">
             <DialogHeader>
-              <DialogTitle>Restaurant demo sales script</DialogTitle>
+              <DialogTitle>{perspective} demo guide</DialogTitle>
               <DialogDescription>
-                Ten product-led stops. Claims stay within visible seeded operations.
+                {brief.summary}{' '}
+                {persona === 'manager'
+                  ? 'All ten original tour stops are available.'
+                  : 'This guide follows the work available to your signed-in perspective.'}
               </DialogDescription>
             </DialogHeader>
+            <ol className="list-decimal space-y-2 pl-5 text-sm leading-relaxed text-text-muted">
+              {brief.actions.map((action) => (
+                <li key={action}>{action}</li>
+              ))}
+            </ol>
+            <p className="text-sm leading-relaxed text-text-muted">{brief.handoff}</p>
+            <p className="text-sm leading-relaxed text-text-muted">{DEMO_SHARED_SERVICE_STORY}</p>
+            <p className="text-sm leading-relaxed text-text-muted">
+              Changing perspective signs in again and replaces the role across tabs in this browser
+              profile. Use separate profiles with the same seat to follow the team handoff.
+            </p>
+            <p className="text-sm leading-relaxed text-text-muted">{DEMO_VERIFICATION_NOTE}</p>
             <ol className="space-y-4">
-              {DEMO_SALES_SCRIPT.map((script, index) => (
+              {steps.map((script, index) => (
                 <li
                   key={script.id}
                   className="rounded-md border border-border-subtle bg-surface-sunken p-4"
                 >
-                  <p className="font-mono text-[0.6875rem] tracking-wide text-text-muted uppercase">
+                  <p className="font-mono text-[0.6875rem] tracking-wide text-text-body uppercase">
                     {index + 1}. {script.title}
                   </p>
-                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-relaxed text-text-muted">
+                  <ul className="mt-2 list-disc space-y-1 pl-5 text-sm leading-relaxed text-text-body">
                     {script.talkingPoints.map((point) => (
                       <li key={point}>{point}</li>
                     ))}
@@ -501,7 +592,7 @@ export function DemoToolbar({ seatName }: { seatName: string }) {
                   <p className="mt-3 text-sm font-semibold text-text-strong">
                     Prospect: {script.likelyQuestion}
                   </p>
-                  <p className="mt-1 text-sm leading-relaxed text-text-muted">
+                  <p className="mt-1 text-sm leading-relaxed text-text-body">
                     Answer: {script.answer}
                   </p>
                 </li>

@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { demoApproverEmail } from '@/lib/demo/approval';
+import { DEMO_PERSONA_KEYS, demoPersonaForUser, demoPersonaUserId } from '@/lib/demo/personas';
 import { demoSeatIdentity, type DemoSeatIdentity } from '@/lib/demo/seed-data';
 import {
   rebuildDemoRestaurantSeatInTransaction,
@@ -290,7 +291,13 @@ async function assertDemoStillAllowed(db: ScopedDb, identity: DemoSeatIdentity):
 async function preservedStaffIds(
   db: ScopedDb,
   identity: DemoSeatIdentity
-): Promise<[managerStaffProfileId: string, approverStaffProfileId: string]> {
+): Promise<
+  [
+    managerStaffProfileId: string,
+    approverStaffProfileId: string,
+    ...personaStaffProfileIds: string[],
+  ]
+> {
   const approverUserId = `user_demo_restaurant_seat_${identity.seatNumber}_approver`;
   const approverEmail = demoApproverEmail(identity.seatNumber);
   const users = await db.$queryRawUnsafe<Array<{ id: string; email: string }>>(
@@ -314,11 +321,14 @@ async function preservedStaffIds(
     `SELECT id, "userId" AS "userId", email, status::text AS status
        FROM restaurant_staff_profiles
       WHERE "organizationId" = $1
-        AND ("userId" = $2 OR ("userId" = $3 AND email = $4))`,
+        AND ("userId" = $2 OR ("userId" = $3 AND email = $4) OR "userId" = ANY($5::text[]))`,
     identity.organizationId,
     identity.managerUserId,
     approverUserId,
-    approverEmail
+    approverEmail,
+    DEMO_PERSONA_KEYS.filter((persona) => persona !== 'manager').map((persona) =>
+      demoPersonaUserId(identity.seatNumber, persona)
+    )
   );
   const managers = staff.filter(
     (profile) => profile.userId === identity.managerUserId && profile.status === 'ACTIVE'
@@ -332,7 +342,21 @@ async function preservedStaffIds(
   if (managers.length !== 1 || approvers.length !== 1 || managers[0]!.id === approvers[0]!.id) {
     throw new Error('Demo reset requires distinct active manager and approver staff profiles.');
   }
-  return [managers[0]!.id, approvers[0]!.id];
+  const personas = staff.filter(
+    (profile) => profile.userId !== identity.managerUserId && profile.userId !== approverUserId
+  );
+  const seen = new Set<string>();
+  for (const profile of personas) {
+    const persona = demoPersonaForUser(identity.seatNumber, {
+      id: profile.userId,
+      email: profile.email,
+    });
+    if (!persona || profile.status !== 'ACTIVE' || seen.has(persona)) {
+      throw new Error('Demo reset requires canonical unique persona staff profiles.');
+    }
+    seen.add(persona);
+  }
+  return [managers[0]!.id, approvers[0]!.id, ...personas.map((profile) => profile.id)];
 }
 
 function deletionOrder(rows: ForeignKey[]): string[] {
@@ -406,8 +430,14 @@ async function clearRestaurantData(
   db: ScopedDb,
   identity: DemoSeatIdentity,
   managerStaffProfileId: string,
-  approverStaffProfileId: string
+  approverStaffProfileId: string,
+  personaStaffProfileIds: string[]
 ): Promise<void> {
+  const retainedStaffIds = [
+    managerStaffProfileId,
+    approverStaffProfileId,
+    ...personaStaffProfileIds,
+  ];
   const order = await loadDeletionOrder(db);
   for (const table of order) {
     if (table === 'restaurant_job_executions') {
@@ -438,20 +468,18 @@ async function clearRestaurantData(
         identity,
         `DELETE FROM restaurant_operator_credentials
           WHERE "organizationId" = $1
-            AND NOT ("staffProfileId" IN ($2, $3) AND "deviceId" IS NULL)`,
+            AND NOT ("staffProfileId" = ANY($2::text[]) AND "deviceId" IS NULL)`,
         identity.organizationId,
-        managerStaffProfileId,
-        approverStaffProfileId
+        retainedStaffIds
       );
     } else if (table === 'restaurant_staff_profiles') {
       await guardedDelete(
         db,
         identity,
         `DELETE FROM restaurant_staff_profiles
-          WHERE "organizationId" = $1 AND id NOT IN ($2, $3)`,
+          WHERE "organizationId" = $1 AND NOT (id = ANY($2::text[]))`,
         identity.organizationId,
-        managerStaffProfileId,
-        approverStaffProfileId
+        retainedStaffIds
       );
     } else {
       await guardedDelete(
@@ -488,20 +516,19 @@ async function clearRestaurantData(
   >(
     `SELECT
        (SELECT count(*)::int FROM restaurant_staff_profiles
-         WHERE "organizationId" = $1 AND id NOT IN ($2, $3)) AS staff,
+         WHERE "organizationId" = $1 AND NOT (id = ANY($2::text[]))) AS staff,
        (SELECT count(*)::int FROM restaurant_operator_credentials
          WHERE "organizationId" = $1
-           AND NOT ("staffProfileId" IN ($2, $3) AND "deviceId" IS NULL)) AS credentials,
+           AND NOT ("staffProfileId" = ANY($2::text[]) AND "deviceId" IS NULL)) AS credentials,
        (SELECT count(*)::int FROM restaurant_jobs
-         WHERE "organizationId" = $1 AND type <> $4) AS jobs,
+         WHERE "organizationId" = $1 AND type <> $3) AS jobs,
        (SELECT count(*)::int
           FROM restaurant_job_executions AS execution
           LEFT JOIN restaurant_jobs AS job ON job.id = execution."jobId"
          WHERE execution."organizationId" = $1
-           AND (job.id IS NULL OR job.type <> $4)) AS executions`,
+           AND (job.id IS NULL OR job.type <> $3)) AS executions`,
     identity.organizationId,
-    managerStaffProfileId,
-    approverStaffProfileId,
+    retainedStaffIds,
     DEMO_RESET_JOB_TYPE
   );
   if (!special || Object.values(special).some((count) => Number(count) !== 0)) {
@@ -519,13 +546,20 @@ export async function resetDemoSeatInTransaction(
   assertValidDate(now);
   const identity = identityForOrganization(input.organizationId);
   await lockAndGuardOrganization(db, identity);
-  const [managerStaffProfileId, approverStaffProfileId] = await preservedStaffIds(db, identity);
+  const [managerStaffProfileId, approverStaffProfileId, ...personaStaffProfileIds] =
+    await preservedStaffIds(db, identity);
 
   await db.$queryRawUnsafe(
     `SELECT set_config('app.demo_reset_organization_id', $1, true)`,
     identity.organizationId
   );
-  await clearRestaurantData(db, identity, managerStaffProfileId, approverStaffProfileId);
+  await clearRestaurantData(
+    db,
+    identity,
+    managerStaffProfileId,
+    approverStaffProfileId,
+    personaStaffProfileIds
+  );
   await db.$queryRawUnsafe(`SELECT set_config('app.demo_reset_organization_id', '', true)`);
 
   const result = await rebuildDemoRestaurantSeatInTransaction(db, {

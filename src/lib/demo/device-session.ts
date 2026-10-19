@@ -21,12 +21,15 @@ import {
   resolveSessionByToken,
 } from '@/lib/restaurant/terminal-session';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { DEMO_SESSION_MAX_AGE, demoSeatFromOrganizationId } from './config';
 import {
-  DEMO_SESSION_MAX_AGE,
-  demoManagerEmail,
-  demoManagerId,
-  demoSeatFromOrganizationId,
-} from './config';
+  DEMO_PERSONAS,
+  demoPersonaForUser,
+  demoPersonaCanUseDevice,
+  demoPersonaDeviceName,
+  demoPersonaUserRole,
+  isCanonicalDemoOrganization,
+} from './personas';
 
 export type DemoDeviceKind = 'POS' | 'KDS';
 export const DEMO_TERMINAL_SESSION_COOKIE = 'devfathom-demo-terminal-session';
@@ -84,21 +87,44 @@ export async function prepareDemoDeviceSession(
   existing: ExistingDemoTerminal = {}
 ) {
   const organization = await db.organization.findFirst({
-    select: { id: true, isDemo: true },
+    select: {
+      id: true,
+      slug: true,
+      isDemo: true,
+      status: true,
+      vertical: true,
+      deploymentMode: true,
+    },
   });
   const seat = organization ? demoSeatFromOrganizationId(organization.id) : null;
+  const persona = seat ? demoPersonaForUser(seat, user) : null;
   if (
-    !organization?.isDemo ||
+    !organization ||
+    !isCanonicalDemoOrganization(organization) ||
     !seat ||
+    !persona ||
+    !demoPersonaCanUseDevice(persona, kind) ||
+    !demoTerminalCookieOptions(user.demoAccessExpiresAt, now) ||
     user.organizationId !== organization.id ||
-    user.id !== demoManagerId(seat) ||
-    user.email !== demoManagerEmail(seat)
+    user.role !== demoPersonaUserRole(persona)
   ) {
     return null;
   }
 
-  const staff = await db.restaurantStaffProfile.findFirst({
-    where: { userId: user.id, status: 'ACTIVE', primaryBranch: { active: true } },
+  const profiles = await db.restaurantStaffProfile.findMany({
+    where: {
+      userId: user.id,
+      status: 'ACTIVE',
+      primaryBranch: { active: true },
+      user: {
+        organizationId: organization.id,
+        email: user.email!,
+        password: null,
+        status: 'ACTIVE',
+        role: demoPersonaUserRole(persona),
+        organizationRole: { key: DEMO_PERSONAS[persona].roleKey },
+      },
+    },
     select: {
       id: true,
       displayName: true,
@@ -106,21 +132,27 @@ export async function prepareDemoDeviceSession(
       user: { select: { title: true, organizationRole: { select: { name: true } } } },
     },
     orderBy: { id: 'asc' },
+    take: 2,
   });
-  if (!staff?.primaryBranchId) return null;
+  const staff = profiles[0];
+  if (profiles.length !== 1 || !staff?.primaryBranchId) return null;
 
   const [canOperateTerminal, canOperateKind] = await Promise.all([
     operatorHasCapability(db, staff.id, 'terminal:operate', now),
-    operatorHasCapability(db, staff.id, kind === 'POS' ? 'pos:operate' : 'orders:read', now),
+    operatorHasCapability(db, staff.id, kind === 'POS' ? 'pos:operate' : 'kitchen:operate', now),
   ]);
   if (!canOperateTerminal || !canOperateKind) return null;
 
   // The transaction-scoped lock makes every duplicate read the hash left by its predecessor.
-  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`demo-device-session:${organization.id}:${kind}`}, 0))`;
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`demo-device-session:${organization.id}:${persona}:${kind}`}, 0))`;
   const device = await db.restaurantRegisteredDevice.findFirst({
     where: {
       branchId: staff.primaryBranchId,
       kind,
+      name:
+        persona === 'manager'
+          ? { startsWith: `Demo ${kind} S${seat} ` }
+          : demoPersonaDeviceName(seat, persona, kind),
       status: 'ACTIVE',
       revokedAt: null,
       ...(kind === 'KDS' ? { station: { active: true } } : {}),

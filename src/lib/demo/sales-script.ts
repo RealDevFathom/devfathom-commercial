@@ -1,3 +1,5 @@
+import type { DemoPersona } from './personas';
+
 export type DemoSalesScriptStep = {
   id:
     | 'dashboard'
@@ -23,7 +25,7 @@ export const DEMO_SALES_SCRIPT = [
     talkingPoints: [
       'Karahi Khaas runs Lahore DHA, Lahore Gulberg, and Karachi Clifton as one seeded PKR workspace.',
       'The dashboard starts with reconciled closed-day performance, then links directly into operational work.',
-      'Each sales seat has isolated demo data, so another presenter cannot change this walkthrough.',
+      'Different seats have isolated data. People using the same seat share orders, stock, and resets.',
     ],
     likelyQuestion: 'Can a regional manager work across all three branches?',
     answer:
@@ -138,3 +140,86 @@ export const DEMO_SALES_SCRIPT = [
       'No. It demonstrates DevFathom operational ledgers and PKR reporting, not a live card processor, fiscal certification, or an unconfigured external integration.',
   },
 ] as const satisfies readonly DemoSalesScriptStep[];
+
+export const DEMO_SHARED_SERVICE_STORY =
+  'Use the same seat and branch in separate browser profiles: waiter sends an order, kitchen prepares it, cashier settles the bill, then manager and finance review the recorded activity. Inventory follows stock and purchasing; owner reviews the operation.';
+
+export const DEMO_VERIFICATION_NOTE =
+  'Seeded data and demo activity only. Card processing, receipt printers, fiscal devices, and external integrations are simulated or unverified; this walkthrough does not prove live hardware or integration acceptance.';
+
+// Presentation copy only. Identity, landing routes, and permissions belong to backend personas.
+export const DEMO_WORKFLOW_BRIEFS = {
+  owner: {
+    summary: 'Understand branch performance and the service-to-stock picture.',
+    actions: [
+      'Compare the seeded branch overview and select the branch being presented.',
+      'Review orders, covers, item mix, and permitted PKR totals in reports.',
+      'Ask manager, finance, and inventory to explain exceptions in the same seat.',
+    ],
+    handoff:
+      'Review recorded results with the team. Seeded history is sample data, not a live trading claim.',
+  },
+  manager: {
+    summary: 'Walk the full ten-step restaurant story and coordinate the team.',
+    actions: [
+      'Follow the existing tour through POS, kitchen, floor, settlement, and daily close.',
+      'Connect low stock, recipes, purchasing receipts, and operational reports.',
+      'Use the same seat and branch as the waiter, kitchen, and cashier to follow their handoff.',
+    ],
+    handoff:
+      'Review completed service with finance. Reset only after everyone sharing this seat has finished.',
+  },
+  cashier: {
+    summary: 'Take over an order and record its bill and tender.',
+    actions: [
+      'Find the team’s order in POS by its order number; confirm its items and total.',
+      'When service is complete, close the order and open Collect payment; an existing payment-pending sample can also be used.',
+      'Review the bill split and record a demo tender. Refunds and approval overrides require an authorized manager.',
+    ],
+    handoff:
+      'Share the settled order number with manager and finance. A recorded tender does not prove live card processing or a physical receipt.',
+  },
+  waiter: {
+    summary: 'Capture the guest’s order and send it to the kitchen.',
+    actions: [
+      'Open an order in POS for the presented branch and available table; note its order number.',
+      'Choose a published menu item, required modifiers, quantity, and applicable course or seat.',
+      'Send the order, then ask the kitchen profile to find the same order number and prepare it.',
+    ],
+    handoff:
+      'After service, pass the order number to cashier for settlement. Payment, refunds, and floor-plan editing are outside this walkthrough.',
+  },
+  kitchen: {
+    summary: 'Prepare the waiter’s order on the real kitchen display.',
+    actions: [
+      'Use the same seat and branch as the waiter; locate the order number on the station queue.',
+      'Read modifiers, course, and ticket age. Follow the available item transitions to prepare the order.',
+      'Tell the waiter which items are ready. If the ticket is absent, confirm it was sent to this branch and station.',
+    ],
+    handoff:
+      'Cashier settles the served order in a separate profile. The browser display does not verify a physical kitchen printer or device.',
+  },
+  inventory: {
+    summary: 'Trace ingredient shortages through stock and purchasing.',
+    actions: [
+      'Review ingredient balances, locations, low-stock rules, and movement reasons.',
+      'Compare a supplier purchase order with its receipt quantities and discrepancy notes.',
+      'Use available count, purchase-order, approval, and receiving controls; confirm quantities before posting.',
+    ],
+    handoff:
+      'Show the manager the shortage, supplier order, and recorded receipt. Do not present sample stock as a physical stocktake.',
+  },
+  finance: {
+    summary: 'Review the money recorded after service and settlement.',
+    actions: [
+      'Review daily-close records, tender totals, drawer variances, and correction history.',
+      'Compare reports for the same branch and business date, including permitted sales, payments, and tax.',
+      'Reconcile the cashier’s order with recorded activity; explain seeded history separately from today’s demo.',
+    ],
+    handoff:
+      'Review exceptions with manager. Do not create a close, refund, or correction in this review journey; reports may require the normal projection refresh.',
+  },
+} as const satisfies Record<
+  DemoPersona,
+  { summary: string; actions: readonly string[]; handoff: string }
+>;

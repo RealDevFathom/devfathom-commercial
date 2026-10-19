@@ -273,6 +273,7 @@ async function getOrderSettlement(db: ScopedDb, orderId: string) {
       status: b.status,
       splitKind: b.splitKind,
       grandTotal: money(b.grandTotal),
+      remainingDue: money(b.remainingDue),
       compTotal: money(b.compTotal),
       receiptNumber: b.receiptNumber,
     })),

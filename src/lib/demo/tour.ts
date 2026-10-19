@@ -1,4 +1,5 @@
-import { DEMO_SALES_SCRIPT, type DemoSalesScriptStep } from './sales-script';
+import { DEMO_SALES_SCRIPT, DEMO_WORKFLOW_BRIEFS, type DemoSalesScriptStep } from './sales-script';
+import type { DemoPersona } from './personas';
 
 export const DEMO_TOUR_STORAGE_KEY = 'devfathom:restaurant-demo-tour:v1';
 
@@ -51,9 +52,49 @@ export const TOUR_STEPS: readonly DemoTourStep[] = DEMO_SALES_SCRIPT.map((step) 
   ...ROUTES[step.id],
 }));
 
+function roleJourney(
+  persona: DemoPersona,
+  ids: readonly DemoSalesScriptStep['id'][]
+): readonly DemoTourStep[] {
+  const brief = DEMO_WORKFLOW_BRIEFS[persona];
+  return ids.map((id) => {
+    const step = TOUR_STEPS.find((candidate) => candidate.id === id)!;
+    return {
+      ...step,
+      title: persona === 'cashier' ? 'Bills and settlement' : step.title,
+      // Only open the cashier's payment dialog or finance's read tab. Never prepare editors.
+      preparation: persona === 'cashier' || persona === 'finance' ? step.preparation : undefined,
+      talkingPoints: ids.length === 1 ? brief.actions : step.talkingPoints,
+      likelyQuestion: 'What happens next in this perspective?',
+      answer: brief.handoff,
+    };
+  });
+}
+
+const PERSONA_TOURS: Record<DemoPersona, readonly DemoTourStep[]> = {
+  owner: roleJourney('owner', ['dashboard', 'reports-overview']),
+  manager: TOUR_STEPS,
+  cashier: roleJourney('cashier', ['bill-settlement']),
+  waiter: roleJourney('waiter', ['pos-modifiers']),
+  kitchen: roleJourney('kitchen', ['kds-ticket']),
+  inventory: roleJourney('inventory', ['inventory-low-stock', 'purchase-receipt']),
+  finance: roleJourney('finance', ['daily-close', 'reports-overview']),
+};
+
+export function tourStepsForPersona(persona: DemoPersona): readonly DemoTourStep[] {
+  return PERSONA_TOURS[persona];
+}
+
+function progressKey(scope: string) {
+  return scope ? `${DEMO_TOUR_STORAGE_KEY}:${scope}` : DEMO_TOUR_STORAGE_KEY;
+}
+
 export type DemoTourProgress = { index: number };
 
-export function parseTourProgress(raw: string | null): DemoTourProgress | null {
+export function parseTourProgress(
+  raw: string | null,
+  stepCount = TOUR_STEPS.length
+): DemoTourProgress | null {
   if (!raw) return null;
   try {
     const value = JSON.parse(raw) as { version?: unknown; active?: unknown; index?: unknown };
@@ -62,7 +103,7 @@ export function parseTourProgress(raw: string | null): DemoTourProgress | null {
       value.active !== true ||
       !Number.isInteger(value.index) ||
       Number(value.index) < 0 ||
-      Number(value.index) >= TOUR_STEPS.length
+      Number(value.index) >= stepCount
     ) {
       return null;
     }
@@ -73,10 +114,12 @@ export function parseTourProgress(raw: string | null): DemoTourProgress | null {
 }
 
 export function readTourProgress(
-  storage: Pick<Storage, 'getItem'> | null | undefined
+  storage: Pick<Storage, 'getItem'> | null | undefined,
+  scope = '',
+  stepCount = TOUR_STEPS.length
 ): DemoTourProgress | null {
   try {
-    return storage ? parseTourProgress(storage.getItem(DEMO_TOUR_STORAGE_KEY)) : null;
+    return storage ? parseTourProgress(storage.getItem(progressKey(scope)), stepCount) : null;
   } catch {
     return null;
   }
@@ -84,19 +127,24 @@ export function readTourProgress(
 
 export function saveTourProgress(
   storage: Pick<Storage, 'setItem'> | null | undefined,
-  index: number
+  index: number,
+  scope = '',
+  stepCount = TOUR_STEPS.length
 ) {
-  if (!Number.isInteger(index) || index < 0 || index >= TOUR_STEPS.length) return;
+  if (!Number.isInteger(index) || index < 0 || index >= stepCount) return;
   try {
-    storage?.setItem(DEMO_TOUR_STORAGE_KEY, JSON.stringify({ version: 1, active: true, index }));
+    storage?.setItem(progressKey(scope), JSON.stringify({ version: 1, active: true, index }));
   } catch {
     // Private browsing and embedded hosts may deny storage. Tour still works on this route.
   }
 }
 
-export function clearTourProgress(storage: Pick<Storage, 'removeItem'> | null | undefined) {
+export function clearTourProgress(
+  storage: Pick<Storage, 'removeItem'> | null | undefined,
+  scope = ''
+) {
   try {
-    storage?.removeItem(DEMO_TOUR_STORAGE_KEY);
+    storage?.removeItem(progressKey(scope));
   } catch {
     // Nothing else to clear when storage is unavailable.
   }

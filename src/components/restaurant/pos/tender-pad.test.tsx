@@ -46,6 +46,54 @@ describe('TenderPad', () => {
     ]);
     expect(screen.getByText('Remaining balance 2.00')).toBeVisible();
     expect(screen.getByText('Change 12.00')).toBeVisible();
+    expect(screen.getByLabelText('Amount')).toHaveValue('2.00');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('2.00');
+  });
+
+  it('refreshes a changed authoritative balance and clears the prior tender error', async () => {
+    const request = vi.fn().mockRejectedValue(new Error('DRAWER_NOT_OPEN'));
+    const onApplied = vi.fn();
+    const view = render(
+      <TenderPad billId="bill-1" amountDue="10.00" request={request} onApplied={onApplied} />
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('DRAWER_NOT_OPEN');
+
+    view.rerender(
+      <TenderPad billId="bill-1" amountDue="6.25" request={request} onApplied={onApplied} />
+    );
+    expect(screen.getByLabelText('Amount')).toHaveValue('6.25');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('6.25');
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(request).toHaveBeenCalledOnce();
+    expect(onApplied).not.toHaveBeenCalled();
+  });
+
+  it('clears a failed attempt on successful retry and locks the settled tender', async () => {
+    const request = vi
+      .fn()
+      .mockRejectedValueOnce(new Error('DRAWER_NOT_OPEN'))
+      .mockResolvedValueOnce({
+        tenderId: 'tender-1',
+        billId: 'bill-1',
+        type: 'CASH',
+        amount: '10.00',
+        tipAmount: '0.00',
+        changeGiven: '0.00',
+        settled: true,
+        receiptNumber: 1,
+        remainingDue: '0.00',
+        replayed: false,
+      } satisfies TenderResult);
+    render(<TenderPad billId="bill-1" amountDue="10.00" request={request} onApplied={vi.fn()} />);
+    fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
+    expect(await screen.findByRole('alert')).toHaveTextContent('DRAWER_NOT_OPEN');
+    fireEvent.click(screen.getByRole('button', { name: 'Apply tender' }));
+
+    expect(await screen.findByRole('button', { name: 'Bill settled' })).toBeDisabled();
+    expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    expect(screen.getByLabelText('Amount')).toHaveValue('0.00');
+    expect(request).toHaveBeenCalledTimes(2);
   });
 
   it('blocks malformed decimal strings before request', () => {

@@ -47,6 +47,8 @@ import { enqueueInsightRollup } from './insight-rollups';
  *   - cash{Expected,Counted,Variance} = Σ over drawer sessions of the ledger fold
  *                    / counted / (counted − expected)
  *   - per-tender-type totals = Σ tender.{amount,tipAmount} + count grouped by type
+ *                    on COLLECTION date, including collections of prior-day bills.
+ *                    Sales retain the bill date; collection is not another sale.
  * Every value is Prisma.Decimal (C2). Money never touches a float; equality is
  * exact Decimal string equality.
  */
@@ -638,6 +640,26 @@ async function lockDailyClose(tx: ScopedDb, branchId: string, businessDate: stri
   if (!branch) throw new DailyCloseError('The branch does not exist.', 'INVALID');
   const key = `${branch.organizationId}:${branchId}:${businessDate}`;
   await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${key}, 0))`;
+}
+
+/** Money writers hold the same lock as cut/correct until their transaction ends.
+ * ponytail: branch-day serialization; use shared writer locks if throughput requires it. */
+export async function assertMoneyDayOpen(
+  tx: ScopedDb,
+  branchId: string,
+  businessDate: Date
+): Promise<void> {
+  await lockDailyClose(tx, branchId, businessDate.toISOString().slice(0, 10));
+  const close = await tx.restaurantDailyClose.findFirst({
+    where: { branchId, businessDate },
+    select: { id: true },
+  });
+  if (close) {
+    throw new DailyCloseError(
+      'This business day is closed; no money can be posted.',
+      'CLOSE_EXISTS'
+    );
+  }
 }
 
 // ── Internal helpers ──────────────────────────────────────────────────────────

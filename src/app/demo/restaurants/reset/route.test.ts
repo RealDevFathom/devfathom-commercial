@@ -19,6 +19,7 @@ vi.mock('@/lib/demo/config', () => ({
 }));
 vi.mock('@/lib/demo/isolation', () => ({ isDemoMutationOrigin: mocks.sameOrigin }));
 vi.mock('@/lib/demo/device-session', () => ({
+  DEMO_TERMINAL_SESSION_COOKIE: 'devfathom-demo-terminal-session',
   demoTerminalCookieOptions: mocks.cookieOptions,
   prepareDemoDeviceSession: mocks.prepare,
 }));
@@ -130,7 +131,41 @@ describe('POST demo restaurant reset', () => {
       expect.stringMatching(
         /^devfathom-terminal=private-device-secret; Path=\/; Expires=.*; Max-Age=3600; Secure; HttpOnly; SameSite=strict$/
       ),
+      expect.stringMatching(
+        /^devfathom-demo-terminal-session=private-session-token; Path=\/demo\/restaurants\/device-session; Expires=.*; Max-Age=3600; Secure; HttpOnly; SameSite=strict$/
+      ),
     ]);
+  });
+
+  it('allows owner reset and denies operational personas', async () => {
+    const owner = {
+      ...actor,
+      session: {
+        user: {
+          ...actor.session.user,
+          id: 'user_demo_restaurant_seat_1_owner',
+          email: 'owner.seat1@demo.devfathom.invalid',
+        },
+      },
+    };
+    mocks.actor.mockResolvedValueOnce(owner);
+    expect((await POST(request())).status).toBe(200);
+    expect(mocks.prepare).toHaveBeenCalledWith(db, owner.session.user, 'POS', NOW);
+    mocks.reset.mockClear();
+    for (const persona of ['cashier', 'waiter', 'kitchen', 'inventory', 'finance']) {
+      mocks.actor.mockResolvedValueOnce({
+        ...actor,
+        session: {
+          user: {
+            ...actor.session.user,
+            id: `user_demo_restaurant_seat_1_${persona}`,
+            email: `${persona}.seat1@demo.devfathom.invalid`,
+          },
+        },
+      });
+      expect((await POST(request())).status).toBe(404);
+    }
+    expect(mocks.reset).not.toHaveBeenCalled();
   });
 
   it('enforces the ten-minute cooldown under the row lock', async () => {

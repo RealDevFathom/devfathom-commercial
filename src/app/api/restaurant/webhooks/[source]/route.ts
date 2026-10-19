@@ -1,11 +1,10 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
-import { createHmac, timingSafeEqual } from 'node:crypto';
 
 import type { Prisma } from '@/generated/prisma/client';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { recordInboundWebhook, webhookEnvelopeSchema } from '@/lib/restaurant/webhook-inbox';
-import { terminalEventSchema } from '@/lib/restaurant/terminal-payments';
+import { terminalEventSchema, verifyTerminalSignature } from '@/lib/restaurant/terminal-payments';
 import { requestHost, resolveExplicitOrganizationByHost } from '@/lib/tenancy/host';
 import { createTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -37,20 +36,6 @@ const SOURCE = z
 const SIGNATURE_HEADER = 'x-webhook-signature';
 const IP_LIMIT = 120;
 const IP_WINDOW_MS = 60_000;
-
-export function verifyTerminalSignature(
-  source: string,
-  rawBody: string,
-  signature: string | null
-): 'VERIFIED' | 'FAILED' {
-  const secret = process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
-  if (!secret || !signature) return 'FAILED';
-  const encoded = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-  if (!/^[a-f\d]{64}$/i.test(encoded)) return 'FAILED';
-  const expected = createHmac('sha256', secret).update(`${source}.${rawBody}`).digest();
-  const actual = Buffer.from(encoded, 'hex');
-  return timingSafeEqual(expected, actual) ? 'VERIFIED' : 'FAILED';
-}
 
 export async function POST(
   request: Request,

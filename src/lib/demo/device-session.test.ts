@@ -31,17 +31,26 @@ vi.mock('@/lib/restaurant/terminal-session', async (importOriginal) => ({
 
 import { hashDeviceSecret } from '@/lib/restaurant/devices';
 import { demoTerminalCookieOptions, prepareDemoDeviceSession } from './device-session';
+import {
+  DEMO_PERSONA_KEYS,
+  DEMO_PERSONAS,
+  demoPersonaUserId,
+  demoPersonaEmail,
+  demoPersonaUserRole,
+} from './personas';
 
 const NOW = new Date('2026-09-04T12:00:00.000Z');
 const user = {
   id: 'user_demo_restaurant_seat_1_manager',
   email: 'manager.seat1@demo.devfathom.invalid',
   organizationId: 'org_demo_restaurant_seat_1',
+  role: 'ADMIN',
+  demoAccessExpiresAt: NOW.getTime() + 60_000,
 };
 const db = {
   $executeRaw: mocks.lock,
   organization: { findFirst: mocks.organization },
-  restaurantStaffProfile: { findFirst: mocks.staff },
+  restaurantStaffProfile: { findMany: mocks.staff },
   restaurantRegisteredDevice: { findFirst: mocks.device },
 };
 const activeDevice = {
@@ -74,13 +83,22 @@ const existing = { deviceSecret: 'rdk_existing', sessionToken: 'rts_existing' };
 beforeEach(() => {
   vi.clearAllMocks();
   mocks.lock.mockResolvedValue(0);
-  mocks.organization.mockResolvedValue({ id: 'org_demo_restaurant_seat_1', isDemo: true });
-  mocks.staff.mockResolvedValue({
-    id: 'staff_1',
-    displayName: 'Demo Manager',
-    primaryBranchId: 'branch_1',
-    user: { title: 'General manager', organizationRole: { name: 'Administrator' } },
+  mocks.organization.mockResolvedValue({
+    id: 'org_demo_restaurant_seat_1',
+    isDemo: true,
+    slug: 'demo-restaurant-seat-1',
+    status: 'ACTIVE',
+    vertical: 'RESTAURANT',
+    deploymentMode: 'SHARED',
   });
+  mocks.staff.mockResolvedValue([
+    {
+      id: 'staff_1',
+      displayName: 'Demo Manager',
+      primaryBranchId: 'branch_1',
+      user: { title: 'General manager', organizationRole: { name: 'Administrator' } },
+    },
+  ]);
   mocks.capability.mockResolvedValue(true);
   mocks.device.mockResolvedValue({
     id: 'device_1',
@@ -102,6 +120,95 @@ beforeEach(() => {
 });
 
 describe('demo device session recovery', () => {
+  it.each(DEMO_PERSONA_KEYS)('prepares only the supported %s device context', async (persona) => {
+    const actor = {
+      ...user,
+      id: demoPersonaUserId(1, persona),
+      email: demoPersonaEmail(1, persona),
+      role: demoPersonaUserRole(persona),
+    };
+    const kind = DEMO_PERSONAS[persona].deviceKind;
+    const prepared = await prepareDemoDeviceSession(
+      db as never,
+      actor as never,
+      kind ?? 'POS',
+      NOW
+    );
+    if (kind) {
+      expect(prepared?.session.activeStaffProfileId).toBe('staff_1');
+      expect(mocks.staff).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            userId: actor.id,
+            user: expect.objectContaining({
+              role: actor.role,
+              organizationRole: { key: DEMO_PERSONAS[persona].roleKey },
+            }),
+          }),
+        })
+      );
+      expect(mocks.device).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            kind,
+            name:
+              persona === 'manager' ? { startsWith: 'Demo POS S1 ' } : `Demo ${persona} ${kind} S1`,
+          }),
+        })
+      );
+      expect(mocks.bind).toHaveBeenCalledWith(db, 'session_1', 'staff_1', NOW);
+    } else {
+      expect(prepared).toBeNull();
+      expect(mocks.rotate).not.toHaveBeenCalled();
+      expect(mocks.bind).not.toHaveBeenCalled();
+    }
+  });
+
+  it('rejects an expired actor, wrong device kind, unknown persona, or duplicate staff before issuance', async () => {
+    const waiter = {
+      ...user,
+      id: demoPersonaUserId(1, 'waiter'),
+      email: demoPersonaEmail(1, 'waiter'),
+      role: 'EMPLOYEE',
+    };
+    expect(await prepareDemoDeviceSession(db as never, waiter as never, 'KDS', NOW)).toBeNull();
+    expect(
+      await prepareDemoDeviceSession(
+        db as never,
+        { ...user, demoAccessExpiresAt: NOW.getTime() } as never,
+        'POS',
+        NOW
+      )
+    ).toBeNull();
+    expect(
+      await prepareDemoDeviceSession(
+        db as never,
+        { ...user, id: 'user_other' } as never,
+        'POS',
+        NOW
+      )
+    ).toBeNull();
+    mocks.staff.mockResolvedValue([
+      { id: 'a', primaryBranchId: 'branch_1' },
+      { id: 'b', primaryBranchId: 'branch_1' },
+    ]);
+    expect(await prepareDemoDeviceSession(db as never, user as never, 'POS', NOW)).toBeNull();
+    expect(mocks.rotate).not.toHaveBeenCalled();
+    expect(mocks.bind).not.toHaveBeenCalled();
+  });
+
+  it('replaces a carried terminal session belonging to another persona', async () => {
+    mocks.resolveDevice.mockResolvedValue(activeDevice);
+    mocks.resolveSession.mockResolvedValue({
+      ...existingSession,
+      activeStaffProfileId: 'other_persona_staff',
+    });
+    await prepareDemoDeviceSession(db as never, user as never, 'POS', NOW, existing);
+    expect(mocks.establish).toHaveBeenCalledWith(db, 'device_1', NOW);
+    expect(mocks.bind).toHaveBeenCalledWith(db, 'session_1', 'staff_1', NOW);
+    expect(mocks.rotate).not.toHaveBeenCalled();
+  });
+
   it('uses trusted product issuance and binds the exact seeded manager', async () => {
     const result = await prepareDemoDeviceSession(db as never, user as never, 'POS', NOW);
 
@@ -110,7 +217,7 @@ describe('demo device session recovery', () => {
       [db, 'staff_1', 'pos:operate', NOW],
     ]);
     expect(mocks.lock.mock.calls[0]?.[1]).toBe(
-      'demo-device-session:org_demo_restaurant_seat_1:POS'
+      'demo-device-session:org_demo_restaurant_seat_1:manager:POS'
     );
     expect(mocks.lock.mock.calls[0]?.[0].join('')).not.toContain('org_demo_restaurant_seat_1');
     expect(mocks.lock.mock.invocationCallOrder[0]).toBeLessThan(
@@ -287,9 +394,9 @@ describe('demo device session recovery', () => {
 
     await prepareDemoDeviceSession(db as never, user as never, 'KDS', NOW);
 
-    expect(mocks.capability).toHaveBeenCalledWith(db, 'staff_1', 'orders:read', NOW);
+    expect(mocks.capability).toHaveBeenCalledWith(db, 'staff_1', 'kitchen:operate', NOW);
     expect(mocks.lock.mock.calls[0]?.[1]).toBe(
-      'demo-device-session:org_demo_restaurant_seat_1:KDS'
+      'demo-device-session:org_demo_restaurant_seat_1:manager:KDS'
     );
     expect(mocks.device).toHaveBeenCalledWith(
       expect.objectContaining({

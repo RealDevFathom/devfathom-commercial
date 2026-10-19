@@ -7,6 +7,8 @@ const mocks = vi.hoisted(() => ({
   inventory: vi.fn(),
   history: vi.fn(),
   reconcile: vi.fn(),
+  rollup: vi.fn(),
+  dailyCloses: [{ branchId: 'branch_a', businessDate: '2026-09-03' }],
   minimums: {} as Record<string, number>,
 }));
 
@@ -21,6 +23,7 @@ vi.mock('@/lib/demo/seed-inventory', () => ({
 }));
 vi.mock('@/lib/demo/seed-history', () => ({ seedDemoRestaurantHistory: mocks.history }));
 vi.mock('@/lib/demo/seed-operations', () => ({ seedDemoRestaurantOperations: mocks.operations }));
+vi.mock('@/lib/restaurant/insight-rollups', () => ({ rollupDay: mocks.rollup }));
 
 const COUNT_KEYS = [
   'branches',
@@ -85,7 +88,11 @@ Object.assign(persisted, {
 });
 
 vi.mock('@/lib/demo/seed-data', () => ({
-  buildDemoRestaurantSeed: () => ({ identity, historicalBusinessDates: ['2026-09-03'] }),
+  buildDemoRestaurantSeed: () => ({
+    identity,
+    historicalBusinessDates: ['2026-09-03'],
+    sales: { dailyCloses: mocks.dailyCloses },
+  }),
   demoRestaurantSeedCounts: () => mocks.minimums,
 }));
 
@@ -98,7 +105,7 @@ beforeEach(() => {
   for (const key of COUNT_KEYS) mocks.minimums[key] = 0;
   mocks.catalog.mockImplementation(async () => {
     mocks.events.push('catalog');
-    return {};
+    return { branch: { branch_a: 'branch_1', branch_b: 'branch_2' } };
   });
   mocks.operations.mockImplementation(async () => {
     mocks.events.push('operations');
@@ -116,6 +123,13 @@ beforeEach(() => {
   });
   mocks.reconcile.mockImplementation(async () => {
     mocks.events.push('reconcile');
+  });
+  mocks.rollup.mockImplementation(async (_db, input) => {
+    mocks.events.push(`rollup:${input.branchId}:${input.businessDate}`);
+  });
+  mocks.dailyCloses.splice(0, mocks.dailyCloses.length, {
+    branchId: 'branch_a',
+    businessDate: '2026-09-03',
   });
 });
 
@@ -140,6 +154,7 @@ describe('rebuildDemoRestaurantSeatInTransaction', () => {
       'inventory',
       'history',
       'reconcile',
+      'rollup:branch_1:2026-09-03',
       'counts',
     ]);
     expect(result.counts).toEqual(persisted);
@@ -161,5 +176,57 @@ describe('rebuildDemoRestaurantSeatInTransaction', () => {
       approverStaffProfileId: 'approver_staff_actual',
     });
     expect(result.counts.historicalOrders).toBe(1_500);
+  });
+
+  it('rolls up each distinct seeded branch and business date once', async () => {
+    mocks.dailyCloses.splice(
+      0,
+      mocks.dailyCloses.length,
+      { branchId: 'branch_a', businessDate: '2026-09-02' },
+      { branchId: 'branch_b', businessDate: '2026-09-02' },
+      { branchId: 'branch_a', businessDate: '2026-09-03' },
+      { branchId: 'branch_a', businessDate: '2026-09-02' }
+    );
+    const db = { $queryRawUnsafe: vi.fn(async () => [persisted]) } as unknown as ScopedDb;
+
+    await rebuildDemoRestaurantSeatInTransaction(db, {
+      identity,
+      now: new Date('2026-09-04T12:00:00.000Z'),
+      managerStaffProfileId: 'manager_staff_actual',
+      approverStaffProfileId: 'approver_staff_actual',
+    });
+
+    expect(mocks.rollup.mock.calls.map(([, input]) => input)).toEqual([
+      {
+        branchId: 'branch_1',
+        businessDate: '2026-09-02',
+        computedAt: new Date('2026-09-04T12:00:00.000Z'),
+      },
+      {
+        branchId: 'branch_2',
+        businessDate: '2026-09-02',
+        computedAt: new Date('2026-09-04T12:00:00.000Z'),
+      },
+      {
+        branchId: 'branch_1',
+        businessDate: '2026-09-03',
+        computedAt: new Date('2026-09-04T12:00:00.000Z'),
+      },
+    ]);
+  });
+
+  it('fails readiness before counts when an insight projection fails', async () => {
+    const db = { $queryRawUnsafe: vi.fn(async () => [persisted]) } as unknown as ScopedDb;
+    mocks.rollup.mockRejectedValueOnce(new Error('projection failed'));
+
+    await expect(
+      rebuildDemoRestaurantSeatInTransaction(db, {
+        identity,
+        now: new Date('2026-09-04T12:00:00.000Z'),
+        managerStaffProfileId: 'manager_staff_actual',
+        approverStaffProfileId: 'approver_staff_actual',
+      })
+    ).rejects.toThrow('projection failed');
+    expect(db.$queryRawUnsafe).not.toHaveBeenCalled();
   });
 });

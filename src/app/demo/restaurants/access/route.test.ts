@@ -54,6 +54,7 @@ vi.mock('@/lib/tenancy/host', () => ({
 vi.mock('@/server/audit', () => ({ ipFromHeaders: () => '203.0.113.4' }));
 
 import { POST } from './route';
+import { DEMO_PERSONA_KEYS, DEMO_PERSONAS } from '@/lib/demo/personas';
 
 const ORIGINAL_EXPIRY = new Date('2026-09-05T00:00:00.000Z');
 const FRESH_EXPIRY = new Date('2026-09-05T06:00:00.000Z');
@@ -78,6 +79,9 @@ beforeEach(() => {
   mocks.rateLimit.mockReturnValue({ ok: true, retryAfter: 0 });
   mocks.codeMatches.mockReturnValue(true);
   mocks.resolveSeat.mockResolvedValue({
+    persona: 'manager',
+    userId: 'user_demo_restaurant_seat_2_manager',
+    email: 'manager.seat2@demo.devfathom.invalid',
     seat: 2,
     name: 'Demo Restaurant — Seat 2',
     ready: true,
@@ -91,6 +95,60 @@ beforeEach(() => {
 });
 
 describe('POST demo access', () => {
+  it.each(DEMO_PERSONA_KEYS)(
+    'issues only the resolved %s intent and returns its destination',
+    async (persona) => {
+      mocks.resolveSeat.mockResolvedValue({
+        seat: 2,
+        organizationId: 'org_demo_restaurant_seat_2',
+        persona,
+        userId: `user_demo_restaurant_seat_2_${persona}`,
+        email: `${persona}.seat2@demo.devfathom.invalid`,
+      });
+      const response = await POST(request({ seat: 2, code: 'correct', persona }));
+      expect(mocks.resolveSeat).toHaveBeenCalledWith(2, persona);
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({
+        organizationId: 'org_demo_restaurant_seat_2',
+        persona,
+        callbackUrl: DEMO_PERSONAS[persona].callbackUrl,
+        deviceKind: DEMO_PERSONAS[persona].deviceKind,
+      });
+      expect(mocks.createIntent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          email: `${persona}.seat2@demo.devfathom.invalid`,
+          candidates: [
+            expect.objectContaining({ userId: `user_demo_restaurant_seat_2_${persona}` }),
+          ],
+        })
+      );
+    }
+  );
+
+  it.each([
+    { persona: 'admin' },
+    { persona: 'OWNER' },
+    { role: 'ADMIN' },
+    { userId: 'production_admin' },
+    { organizationId: 'org_production' },
+  ])('rejects unsupported persona or impersonation fields %j', async (extra) => {
+    expect((await POST(request({ seat: 2, code: 'correct', ...extra }))).status).toBe(400);
+    expect(mocks.resolveSeat).not.toHaveBeenCalled();
+    expect(mocks.createIntent).not.toHaveBeenCalled();
+  });
+
+  it('rejects an unready persona and prevents grant reuse across seats', async () => {
+    mocks.resolveSeat.mockResolvedValueOnce(null);
+    expect((await POST(request({ seat: 2, code: 'correct', persona: 'waiter' }))).status).toBe(409);
+    expect(mocks.createIntent).not.toHaveBeenCalled();
+    mocks.readGrant.mockReturnValue({
+      organizationId: 'org_demo_restaurant_seat_1',
+      seat: 1,
+      expiresAt: ORIGINAL_EXPIRY.getTime(),
+    });
+    expect((await POST(request({ seat: 2 }, 'df_demo_access=seat-one-grant'))).status).toBe(401);
+  });
+
   it('preserves the original absolute grant expiry on code-free re-entry', async () => {
     mocks.readGrant.mockReturnValue({
       v: 1,
@@ -106,6 +164,8 @@ describe('POST demo access', () => {
     await expect(response.json()).resolves.toEqual({
       organizationId: 'org_demo_restaurant_seat_2',
       callbackUrl: '/dashboard',
+      persona: 'manager',
+      deviceKind: 'POS',
     });
     expect(mocks.createGrant).not.toHaveBeenCalled();
     expect(mocks.createIntent).toHaveBeenCalledWith(
