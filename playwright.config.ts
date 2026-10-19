@@ -32,10 +32,11 @@ export default defineConfig({
   webServer: process.env.PLAYWRIGHT_BASE_URL
     ? undefined
     : {
-        // CI has already run `bun run build` as an earlier gate, so serve that
-        // artifact instead of compiling routes on demand — it is both faster and
-        // closer to what staging actually runs.
-        command: process.env.CI ? `bunx next start --port ${port}` : `bun run dev --port ${port}`,
+        // CI has already run `bun run build`. Standalone output must use its
+        // generated server; copy the static assets that it does not include.
+        command: process.env.CI
+          ? `mkdir -p .next/standalone/.next && cp -R public .next/standalone/public && cp -R .next/static .next/standalone/.next/static && HOSTNAME=127.0.0.1 PORT=${port} node .next/standalone/server.js`
+          : `bun run dev --port ${port}`,
         url: baseURL,
         reuseExistingServer: !process.env.CI,
         timeout: 120_000,
