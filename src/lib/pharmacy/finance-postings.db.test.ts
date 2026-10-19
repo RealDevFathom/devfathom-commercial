@@ -392,6 +392,16 @@ beforeAll(async () => {
     sales,
   };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
+  // existing organization, so anchor this suite's synthetic tenants before any test runs.
+  await scopedDb.withPlatformDb((db) =>
+    db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id
+       ON CONFLICT (id) DO NOTHING`,
+      [ORG_A, ORG_B]
+    )
+  );
 }, 120_000);
 
 // ── FIN-01 — one balanced entry per event kind ──────────────────────────────
