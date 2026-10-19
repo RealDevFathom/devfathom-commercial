@@ -1,0 +1,10 @@
+initdb_exit=0
+cluster_start_exit=0
+database_bootstrap_exit=0
+clean_build_exit=0
+provision_restaurant_e2e_gate_exit=0
+provision_platform_e2e_gate_exit=0
+provision_agency_e2e_gate_exit=0
+lanes_driver_exit=0
+cluster_stop_exit=0
+port_55593_closed_exit=0

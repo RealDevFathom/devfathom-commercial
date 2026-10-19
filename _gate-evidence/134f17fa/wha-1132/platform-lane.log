@@ -1,0 +1,142 @@
+[WebServer] (node:34073) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+[WebServer] (Use `node --trace-warnings ...` to show where the warning was created)
+[WebServer] ⚠ "next start" does not work with "output: standalone" configuration. Use "node .next/standalone/server.js" instead.
+
+Running 12 tests using 1 worker
+
+(node:34200) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   1 [platform-control-plane-chromium] › tests/e2e/platform-control-plane-activation-gates.spec.ts:70:5 › activation checklist lists the unmet deployment gate and the shared default resolves it (13.1s)
+  ✓   2 [platform-control-plane-chromium] › tests/e2e/platform-control-plane-administrator-staff.spec.ts:71:5 › the administrator SuperAdmin creates is provisioned a staff profile and is served notifications (5.6s)
+  ✘   3 [platform-control-plane-chromium] › tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:55:5 › SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical requests fail closed (3.5s)
+(node:35833) Warning: The 'NO_COLOR' env is ignored due to the 'FORCE_COLOR' env being set.
+(Use `node --trace-warnings ...` to show where the warning was created)
+  ✓   4 [platform-control-plane-chromium] › tests/e2e/platform-control-plane-pharmacy-onboarding.spec.ts:151:5 › a fresh pharmacy fills its regulatory profile, watches the steps flip, and is refused activation until the last one (6.1s)
+  ✓   5 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:40:5 › full administrator can load every declared route and matching navigation (3.6s)
+  ✓   6 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:61:5 › restricted operator sees only grants and denied document/data requests fail safely (3.9s)
+[WebServer] Platform control command failed: Error [PrismaClientKnownRequestError]: 
+[WebServer] Invalid `prisma.platformSetting.upsert()` invocation:
+[WebServer] 
+[WebServer] 
+[WebServer] Database error. Code: `P0001`. Message: `forced e2e rollback`
+[WebServer]     at ignore-listed frames {
+[WebServer]   code: 'P2039',
+[WebServer]   meta: {
+[WebServer]     modelName: 'PlatformSetting',
+[WebServer]     driverAdapterError: Error [DriverAdapterError]: forced e2e rollback
+[WebServer]         at Y.onError (.next/server/chunks/[root-of-the-server]__0n0olo9._.js:3:3764850)
+[WebServer]         at Y.performIO (.next/server/chunks/[root-of-the-server]__0n0olo9._.js:3:3764791)
+[WebServer]         at async Y.queryRaw (.next/server/chunks/[root-of-the-server]__0n0olo9._.js:3:3761379) {
+[WebServer]       [cause]: [Object]
+[WebServer]     }
+[WebServer]   },
+[WebServer]   clientVersion: '7.9.1'
+[WebServer] }
+[WebServer] Platform control command failed: Error [PrismaClientKnownRequestError]: 
+[WebServer] Invalid `prisma.platformSetting.upsert()` invocation:
+[WebServer] 
+[WebServer] 
+[WebServer] Database error. Code: `P0001`. Message: `forced e2e rollback`
+[WebServer]     at ignore-listed frames {
+[WebServer]   code: 'P2039',
+[WebServer]   meta: {
+[WebServer]     modelName: 'PlatformSetting',
+[WebServer]     driverAdapterError: Error [DriverAdapterError]: forced e2e rollback
+[WebServer]         at Y.onError (.next/server/chunks/[root-of-the-server]__0n0olo9._.js:3:3764850)
+[WebServer]         at Y.performIO (.next/server/chunks/[root-of-the-server]__0n0olo9._.js:3:3764791)
+[WebServer]         at async Y.queryRaw (.next/server/chunks/[root-of-the-server]__0n0olo9._.js:3:3761379) {
+[WebServer]       [cause]: [Object]
+[WebServer]     }
+[WebServer]   },
+[WebServer]   clientVersion: '7.9.1'
+[WebServer] }
+  ✓   7 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:113:5 › failure ledger records denial, validation, rollback, success, replay, and redaction (1.1s)
+  ✓   8 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:215:5 › restaurant onboarding time field exposes the HH:MM input contract (1.4s)
+  ✘   9 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:226:5 › restaurant onboarding reaches ACTIVE (8.0s)
+  -  10 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:373:5 › agency onboarding exposes no Restaurant setup fields
+  -  11 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:383:5 › shared-host login succeeds and forged tenant selection is generic
+  -  12 [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:429:5 › compact navigation preserves keyboard focus and has no hydration/request errors
+
+
+  1) [platform-control-plane-chromium] › tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:55:5 › SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical requests fail closed 
+
+    error: pharmacy_branch_regulatory_profiles is append-only; create a new effective-dated version
+
+      215 |       );
+      216 |     }
+    > 217 |     await db.query(
+          |     ^
+      218 |       `UPDATE pharmacy_branch_regulatory_profiles SET "effectiveTo"='2026-09-02T01:00:00.000Z' WHERE id='e2e_pharmacy_profile_provisional'`
+      219 |     );
+      220 |     await db.query(
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/node_modules/pg/lib/client.js:652:17
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:217:5
+        at withAdminDatabase (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/fixtures/platform-control-plane.ts:172:12)
+        at seedMinimalReadiness (/Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:208:3)
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:115:3
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/platform-control-plane/platform-control-plane-pha-89389-rtical-requests-fail-closed-platform-control-plane-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2) [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:226:5 › restaurant onboarding reaches ACTIVE 
+
+    Error: expect(locator).toBeVisible() failed
+
+    Locator: getByText('Use 24-hour time, e.g. 09:30')
+    Expected: visible
+    Timeout: 5000ms
+    Error: element(s) not found
+
+    Call log:
+      - Expect "toBeVisible" with timeout 5000ms
+      - waiting for getByText('Use 24-hour time, e.g. 09:30')
+
+
+      249 |   await onboardingCutoff.fill('24:30');
+      250 |   await page.getByRole('button', { name: 'Create onboarding record' }).click();
+    > 251 |   await expect(page.getByText('Use 24-hour time, e.g. 09:30')).toBeVisible();
+          |                                                                ^
+      252 |   await expect(onboardingCutoff).toBeFocused();
+      253 |   await onboardingCutoff.fill('04:30');
+      254 |   await page.getByLabel('Primary contact', { exact: true }).fill('Restaurant Owner');
+        at /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1210-gate-candidate-3d3d0c1b-browser-suite-only-wha-1132-contract-restaurant-15-platform-control-plane-7-agency-8-se/tests/e2e/platform-control-plane.spec.ts:251:64
+
+    attachment #1: screenshot (image/png) ──────────────────────────────────────────────────────────
+    playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/test-failed-1.png
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    attachment #2: video (video/webm) ──────────────────────────────────────────────────────────────
+    playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/video.webm
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+    Error Context: playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/error-context.md
+
+    attachment #4: trace (application/zip) ─────────────────────────────────────────────────────────
+    playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/trace.zip
+    Usage:
+
+        npx playwright show-trace playwright-artifacts/platform-control-plane/platform-control-plane-restaurant-onboarding-reaches-ACTIVE-platform-control-plane-chromium/trace.zip
+
+    ────────────────────────────────────────────────────────────────────────────────────────────────
+
+  2 failed
+    [platform-control-plane-chromium] › tests/e2e/platform-control-plane-pharmacy-lifecycle.spec.ts:55:5 › SuperAdmin completes the audited PHARMACY lifecycle and cross-vertical requests fail closed 
+    [platform-control-plane-chromium] › tests/e2e/platform-control-plane.spec.ts:226:5 › restaurant onboarding reaches ACTIVE 
+  3 did not run
+  7 passed (1.0m)
+PLATFORM_LANE_EXIT=1

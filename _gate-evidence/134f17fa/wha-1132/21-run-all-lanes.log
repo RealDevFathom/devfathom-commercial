@@ -1,0 +1,16 @@
+########## RESTAURANT LANE ##########
+RESTAURANT_DRIVER_EXIT=0
+  1 failed
+  14 passed (2.3m)
+RESTAURANT_LANE_EXIT=1
+########## PLATFORM LANE ##########
+PLATFORM_DRIVER_EXIT=0
+  2 failed
+  3 did not run
+  7 passed (1.0m)
+PLATFORM_LANE_EXIT=1
+########## AGENCY LANE ##########
+AGENCY_DRIVER_EXIT=0
+  8 passed (26.8s)
+AGENCY_LANE_EXIT=0
+ALL_LANES_DONE
