@@ -13775,8 +13775,149 @@ model HotelProperty {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
+  roomTypes    HotelRoomType[]
+  rooms        HotelRoom[]
+  beds         HotelBed[]
+  statusEvents HotelRoomStatusEvent[]
+  roomBlocks   HotelRoomBlock[]
+
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
   @@index([organizationId, active], map: "hotel_properties_org_active_idx")
   @@map("hotel_properties")
+}
+
+// H1-03: UNIT inventory uses HotelRoom; BED occupancy belongs to the future stay workflow.
+enum HotelInventoryKind {
+  ROOM
+  BED
+  UNIT
+}
+
+enum HotelRoomStatus {
+  VACANT_CLEAN
+  VACANT_DIRTY
+  OCCUPIED
+  INSPECTED
+  OUT_OF_ORDER
+  OUT_OF_SERVICE
+}
+
+model HotelRoomType {
+  id             String             @id @default(cuid())
+  organizationId String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  code           String
+  name           String
+  nameUr         String?
+  inventoryKind  HotelInventoryKind @default(ROOM)
+  bedsPerRoom    Int?
+  description    String?
+  baseAdults     Int                @default(1)
+  maxAdults      Int                @default(2)
+  maxChildren    Int                @default(0)
+  bedConfig      String?
+  amenities      String[]           @default([])
+  images         String[]           @default([])
+  upgradeRank    Int                @default(0)
+  sort           Int                @default(0)
+  createdAt      DateTime           @default(now())
+  updatedAt      DateTime           @updatedAt
+  property       HotelProperty      @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_room_types_property_fkey")
+  rooms          HotelRoom[]
+
+  @@unique([organizationId, branchId, id], map: "hotel_room_types_scope_key")
+  @@unique([branchId, code], map: "hotel_room_types_branch_code_key")
+  @@map("hotel_room_types")
+}
+
+model HotelRoom {
+  id               String                 @id @default(cuid())
+  organizationId   String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId         String
+  roomTypeId       String
+  number           String
+  floor            String?
+  features         String[]               @default([])
+  connectingRoomId String?
+  genderPolicy     String?
+  status           HotelRoomStatus        @default(VACANT_DIRTY)
+  statusChangedAt  DateTime               @default(now())
+  statusChangedBy  String
+  createdAt        DateTime               @default(now())
+  updatedAt        DateTime               @updatedAt
+  property         HotelProperty          @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_rooms_property_fkey")
+  roomType         HotelRoomType          @relation(fields: [organizationId, branchId, roomTypeId], references: [organizationId, branchId, id], onDelete: Restrict, map: "hotel_rooms_type_fkey")
+  connectingRoom   HotelRoom?             @relation("HotelConnectingRooms", fields: [organizationId, branchId, connectingRoomId], references: [organizationId, branchId, id], onDelete: Restrict, map: "hotel_rooms_connecting_fkey")
+  connectedRooms   HotelRoom[]            @relation("HotelConnectingRooms")
+  beds             HotelBed[]
+  statusEvents     HotelRoomStatusEvent[]
+  blocks           HotelRoomBlock[]
+
+  @@unique([organizationId, branchId, id], map: "hotel_rooms_scope_key")
+  @@unique([branchId, number], map: "hotel_rooms_branch_number_key")
+  @@index([organizationId, branchId, roomTypeId], map: "hotel_rooms_type_idx")
+  @@map("hotel_rooms")
+}
+
+model HotelBed {
+  id              String                 @id @default(cuid())
+  organizationId  String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  roomId          String
+  label           String
+  status          HotelRoomStatus        @default(VACANT_DIRTY)
+  statusChangedAt DateTime               @default(now())
+  statusChangedBy String
+  createdAt       DateTime               @default(now())
+  updatedAt       DateTime               @updatedAt
+  property        HotelProperty          @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_beds_property_fkey")
+  room            HotelRoom              @relation(fields: [organizationId, branchId, roomId], references: [organizationId, branchId, id], onDelete: Restrict, map: "hotel_beds_room_fkey")
+  statusEvents    HotelRoomStatusEvent[]
+
+  @@unique([organizationId, branchId, roomId, id], map: "hotel_beds_scope_key")
+  @@unique([roomId, label], map: "hotel_beds_room_label_key")
+  @@map("hotel_beds")
+}
+
+// Database triggers create events atomically with status writes; direct event writes are refused.
+model HotelRoomStatusEvent {
+  id             String           @id @default(dbgenerated("gen_random_uuid()::text"))
+  organizationId String           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  roomId         String
+  bedId          String?
+  fromStatus     HotelRoomStatus?
+  toStatus       HotelRoomStatus
+  actorId        String
+  reason         String
+  createdAt      DateTime         @default(now())
+  property       HotelProperty    @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_room_status_events_property_fkey")
+  room           HotelRoom        @relation(fields: [organizationId, branchId, roomId], references: [organizationId, branchId, id], onDelete: Restrict, map: "hotel_room_status_events_room_fkey")
+  bed            HotelBed?        @relation(fields: [organizationId, branchId, roomId, bedId], references: [organizationId, branchId, roomId, id], onDelete: Restrict, map: "hotel_room_status_events_bed_fkey")
+
+  @@index([organizationId, branchId, roomId, createdAt], map: "hotel_room_status_events_history_idx")
+  @@map("hotel_room_status_events")
+}
+
+// Dates are half-open [startDate, endDate). Release retains the original block and attribution.
+model HotelRoomBlock {
+  id             String          @id @default(cuid())
+  organizationId String          @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  roomId         String
+  kind           HotelRoomStatus
+  startDate      DateTime        @db.Date
+  endDate        DateTime        @db.Date
+  reason         String
+  createdBy      String
+  createdAt      DateTime        @default(now())
+  releasedAt     DateTime?
+  releasedBy     String?
+  releaseReason  String?
+  property       HotelProperty   @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_room_blocks_property_fkey")
+  room           HotelRoom       @relation(fields: [organizationId, branchId, roomId], references: [organizationId, branchId, id], onDelete: Restrict, map: "hotel_room_blocks_room_fkey")
+
+  @@index([organizationId, branchId, roomId], map: "hotel_room_blocks_room_idx")
+  @@map("hotel_room_blocks")
 }

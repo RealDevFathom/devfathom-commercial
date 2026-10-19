@@ -18,7 +18,9 @@
  */
 import { TRPCError } from '@trpc/server';
 
-import type { Prisma } from '@/generated/prisma/client';
+import type { HotelProperty, Prisma } from '@/generated/prisma/client';
+import { evaluateHotelFeatures } from '@/lib/hotel/features';
+import { applyHotelModeDefaults } from '@/lib/hotel/modes';
 import { evaluateHotelReadiness, hotelActivationSummary } from '@/lib/hotel/onboarding-checklist';
 import {
   HOTEL_PROPERTY_MODES,
@@ -27,6 +29,24 @@ import {
   hotelPropertyModeInput,
   hotelPropertyUpdateInput,
 } from '@/lib/hotel/property';
+import {
+  createInventoryRoom,
+  createInventoryBlock,
+  releaseInventoryBlock,
+  setInventoryStatus,
+  withHotelInventory,
+  inventoryWhere,
+  HotelInventoryError,
+  hotelRoomTypeCreateInput,
+  hotelRoomCreateInput,
+  hotelInventoryRoomInput,
+  hotelInventoryStatusInput,
+  hotelRoomBlockCreateInput,
+  hotelRoomBlockReleaseInput,
+  type HotelInventoryScope,
+} from '@/lib/hotel/inventory';
+import type { PrismaClient } from '@/generated/prisma/client';
+import { annotateAudit } from '@/server/audit';
 import { capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const propertyAdmin = capabilityProcedure('hotel:property-admin');
@@ -63,7 +83,152 @@ const modeOptions = HOTEL_PROPERTY_MODES.map((mode) => ({
   description: HOTEL_PROPERTY_MODE_DESCRIPTIONS[mode],
 }));
 
+/** Reuse the foundation's server-selected property; the client cannot select another branch. */
+async function inventoryOperation<T>(
+  ctx: TRPCContext,
+  reason: string,
+  run: (db: PrismaClient, scope: HotelInventoryScope, property: HotelProperty) => Promise<T>
+): Promise<T> {
+  if (!ctx.session?.user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const property = await currentProperty(ctx);
+  if (!property) throw notProvisioned();
+  const scope = {
+    organizationId: ctx.entitlements.organizationId,
+    branchId: property.branchId,
+    actorId: ctx.session.user.id,
+  };
+  annotateAudit(ctx, { metadata: { branchId: scope.branchId, reason } });
+  try {
+    return await withHotelInventory(ctx.db, scope, reason, (db) => run(db, scope, property));
+  } catch (error) {
+    // Rethrow outside the service transaction; failures never become commits.
+    if (error instanceof HotelInventoryError)
+      throw new TRPCError({ code: error.code, message: error.message, cause: error });
+    const driverCause = (
+      error as { meta?: { driverAdapterError?: { cause?: { originalCode?: string } } } }
+    )?.meta?.driverAdapterError?.cause;
+    if (driverCause?.originalCode === '23P01') {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'Room block overlaps an existing block.',
+        cause: error,
+      });
+    }
+    if (error && typeof error === 'object' && 'code' in error && error.code === 'P2002') {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message: 'Inventory identifier already exists.',
+        cause: error,
+      });
+    }
+    throw error;
+  }
+}
+
 export const hotelPropertyRouter = router({
+  roomTypes: router({
+    list: propertyAdmin.query(({ ctx }) =>
+      inventoryOperation(ctx, '', (db, scope) =>
+        db.hotelRoomType.findMany({
+          where: inventoryWhere(scope),
+          orderBy: [{ sort: 'asc' }, { code: 'asc' }],
+        })
+      )
+    ),
+    create: propertyAdmin
+      .input(hotelRoomTypeCreateInput)
+      .mutation(({ ctx, input }) =>
+        inventoryOperation(ctx, 'Create room type', (db, scope) =>
+          db.hotelRoomType.create({ data: { ...input, ...inventoryWhere(scope) } })
+        )
+      ),
+  }),
+  rooms: router({
+    list: propertyAdmin.query(({ ctx }) =>
+      inventoryOperation(ctx, '', (db, scope) =>
+        db.hotelRoom.findMany({
+          where: inventoryWhere(scope),
+          include: { roomType: true, beds: true },
+          orderBy: { number: 'asc' },
+        })
+      )
+    ),
+    create: propertyAdmin.input(hotelRoomCreateInput).mutation(({ ctx, input }) =>
+      inventoryOperation(ctx, input.reason, async (db, scope, property) => {
+        const roomType = await db.hotelRoomType.findFirst({
+          where: { ...inventoryWhere(scope), id: input.roomTypeId },
+        });
+        if (!roomType) throw new HotelInventoryError('NOT_FOUND', 'Room type not found.');
+        // The configured room type enables inventory beyond mode defaults;
+        // only the authoritative request snapshot can grant room entitlement.
+        const configuration = applyHotelModeDefaults(property.mode, {
+          inventoryKinds: [roomType.inventoryKind],
+        });
+        if (!evaluateHotelFeatures(configuration, ctx.entitlements).rooms) {
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Room creation is disabled by workspace entitlements.',
+          });
+        }
+        return createInventoryRoom(db, scope, input);
+      })
+    ),
+    setStatus: propertyAdmin
+      .input(hotelInventoryStatusInput)
+      .mutation(({ ctx, input }) =>
+        inventoryOperation(ctx, input.reason, (db, scope) =>
+          setInventoryStatus(db, scope, 'room', input)
+        )
+      ),
+    history: propertyAdmin.input(hotelInventoryRoomInput).query(({ ctx, input }) =>
+      inventoryOperation(ctx, '', (db, scope) =>
+        db.hotelRoomStatusEvent.findMany({
+          where: { ...inventoryWhere(scope), roomId: input.roomId },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        })
+      )
+    ),
+  }),
+  beds: router({
+    list: propertyAdmin.input(hotelInventoryRoomInput).query(({ ctx, input }) =>
+      inventoryOperation(ctx, '', (db, scope) =>
+        db.hotelBed.findMany({
+          where: { ...inventoryWhere(scope), roomId: input.roomId },
+          orderBy: { label: 'asc' },
+        })
+      )
+    ),
+    setStatus: propertyAdmin
+      .input(hotelInventoryStatusInput)
+      .mutation(({ ctx, input }) =>
+        inventoryOperation(ctx, input.reason, (db, scope) =>
+          setInventoryStatus(db, scope, 'bed', input)
+        )
+      ),
+  }),
+  blocks: router({
+    list: propertyAdmin.input(hotelInventoryRoomInput).query(({ ctx, input }) =>
+      inventoryOperation(ctx, '', (db, scope) =>
+        db.hotelRoomBlock.findMany({
+          where: { ...inventoryWhere(scope), roomId: input.roomId },
+          orderBy: { startDate: 'asc' },
+        })
+      )
+    ),
+    create: propertyAdmin
+      .input(hotelRoomBlockCreateInput)
+      .mutation(({ ctx, input }) =>
+        inventoryOperation(ctx, input.reason, (db, scope) => createInventoryBlock(db, scope, input))
+      ),
+    release: propertyAdmin
+      .input(hotelRoomBlockReleaseInput)
+      .mutation(({ ctx, input }) =>
+        inventoryOperation(ctx, input.reason, (db, scope) =>
+          releaseInventoryBlock(db, scope, input)
+        )
+      ),
+  }),
+
   /** The property, its mode choices, and where onboarding currently stands. */
   get: propertyAdmin.query(async ({ ctx }) => {
     const [property, readiness] = await Promise.all([

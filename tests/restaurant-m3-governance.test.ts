@@ -275,11 +275,15 @@ const PHARMACY_CUSTOMER_ORDERING_TABLES = [
 ] as const;
 
 // H1-01 (WHA-1415) registers the hospitality vertical's first tenant table here.
-// Re-derived from `prisma/schema.prisma`: `hotel_properties` is the only table
-// with the `hotel_` prefix in this build, and the assertion below is a closed
-// world over that prefix — a later hotel lane that adds a table without listing
-// it fails this pin deliberately.
-const HOSPITALITY_TABLES = ['hotel_properties'] as const;
+// Closed inventory table set: each table must retain ENABLE + FORCE RLS.
+const HOSPITALITY_TABLES = [
+  'hotel_properties',
+  'hotel_room_types',
+  'hotel_rooms',
+  'hotel_beds',
+  'hotel_room_status_events',
+  'hotel_room_blocks',
+] as const;
 
 const M3_COLUMNS = {
   restaurant_brands: [
