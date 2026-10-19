@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { VERTICAL_CAMERA_PRESETS } from '@/lib/cameras/camera-preset';
 import { hasModule } from '@/lib/entitlements';
 import { listActiveCameraBrandPresets } from '@/lib/restaurant/camera-presets';
 import {
@@ -315,6 +316,7 @@ export const restaurantCamerasRouter = router({
         username: z.string().min(1),
         password: z.string().min(1),
         registerAnyway: z.boolean().default(false),
+        preset: z.enum(VERTICAL_CAMERA_PRESETS.restaurant).optional(),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -351,8 +353,9 @@ export const restaurantCamerasRouter = router({
           name: input.name,
           sourceRef: input.sourceRef,
           enabled: !input.registerAnyway,
+          preset: input.preset ?? null,
         },
       });
-      return { id: camera.id, name: camera.name, enabled: camera.enabled };
+      return { id: camera.id, name: camera.name, enabled: camera.enabled, preset: camera.preset };
     }),
 });

@@ -30,6 +30,8 @@ function database(
       })),
     },
     pharmacyTemperatureLog: { createMany },
+    // CAM-3 excursion hook: no cold-chain camera watches this zone.
+    camera: { findFirst: vi.fn(async () => null) },
   } as unknown as ScopedDb;
   return {
     db: { ...db, $transaction: transaction } as unknown as ScopedDb,
