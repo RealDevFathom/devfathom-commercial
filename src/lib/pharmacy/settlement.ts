@@ -15,6 +15,8 @@ import { firstCloseIsFinal } from './migration/first-close';
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
 import type { LedgerScope } from './stock-ledger';
 import { paymentSandboxAdmitted } from './payment-sandbox-admission';
+import { authenticatePharmacyCommand, validateLeasedReceiptReplay } from './sales';
+import type { PharmacyCommandAuthentication, PharmacyLeasedReceipt } from './sales';
 
 export type PharmacyTenderType = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET' | 'CREDIT';
 
@@ -22,6 +24,8 @@ export class PharmacySettlementError extends Error {
   constructor(
     readonly reason:
       | 'DAY_CLOSED'
+      | 'INVALID_RECEIPT_LEASE'
+      | 'LEASE_REQUIRES_SETTLEMENT'
       | 'SALE_NOT_OPEN'
       | 'INVALID_AMOUNT'
       | 'OVER_TENDER'
@@ -257,9 +261,21 @@ export async function applyPharmacyTender(
     cashReceivedMinor?: number;
     idempotencyKey: string;
     adapter?: PharmacyPaymentAdapter;
-  }
+    leasedReceipt?: PharmacyLeasedReceipt;
+  },
+  authentication?: PharmacyCommandAuthentication
 ) {
   assertPositiveMinor(input.amountMinor);
+  if (input.leasedReceipt) {
+    await authenticatePharmacyCommand(
+      db,
+      scope,
+      input.deviceId,
+      input.leasedReceipt,
+      authentication
+    );
+    validateLeasedReceiptReplay(scope, input.deviceId, input.leasedReceipt);
+  }
   const payloadHash = hash(input);
   const idem = await bindIdempotency(
     db,
@@ -284,6 +300,38 @@ export async function applyPharmacyTender(
   const tenderedMinor = sale.tenders.reduce((sum, tender) => sum + tender.amountMinor, 0);
   if (input.amountMinor > totalMinor - tenderedMinor)
     throw new PharmacySettlementError('OVER_TENDER');
+
+  const settled = tenderedMinor + input.amountMinor === totalMinor;
+  if (input.leasedReceipt && !settled)
+    throw new PharmacySettlementError('LEASE_REQUIRES_SETTLEMENT');
+
+  // Same owning transaction as the sale/tender/event. UPDATE locks and rechecks
+  // the cursor, so a second command cannot consume the same number. Reserved
+  // numbers never return to the online sequence, including on rejection.
+  let receiptNumber: number | null = null;
+  if (input.leasedReceipt) {
+    const { leaseId, receiptNumber: leasedNumber } = input.leasedReceipt;
+    const consumed = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
+      UPDATE pharmacy_receipt_number_leases AS lease
+      SET "nextNumber" = ${leasedNumber} + 1
+      WHERE lease.id = ${leaseId}
+        AND lease."organizationId" = ${scope.organizationId}
+        AND lease."branchId" = ${scope.branchId}
+        AND lease."deviceId" = ${input.deviceId}
+        AND lease."nextNumber" = ${leasedNumber}
+        AND ${leasedNumber} BETWEEN lease."blockStart" AND lease."blockEnd"
+        AND lease."issuedAt" <= ${new Date(input.leasedReceipt.originalSaleAt)}
+        AND EXISTS (
+          SELECT 1 FROM pharmacy_registered_devices AS device
+          WHERE device.id = lease."deviceId"
+            AND device."organizationId" = lease."organizationId"
+            AND device."branchId" = lease."branchId"
+            AND device.status = 'ACTIVE' AND device."revokedAt" IS NULL
+        )
+      RETURNING lease."nextNumber" - 1 AS receipt_number`);
+    if (!consumed[0]) throw new PharmacySettlementError('INVALID_RECEIPT_LEASE');
+    receiptNumber = consumed[0].receipt_number;
+  }
 
   let drawerSessionId: string | undefined;
   let cashReceivedMinor: number | undefined;
@@ -348,10 +396,10 @@ export async function applyPharmacyTender(
       },
     });
 
-  const settled = tenderedMinor + input.amountMinor === totalMinor;
-  let receiptNumber: number | null = null;
   if (settled) {
-    receiptNumber = await completePaidPharmacySale(db, scope, sale, input);
+    // F2: a leased offline receipt number was consumed above in this transaction; online
+    // sales (receiptNumber still null) draw the next number from the device sequence.
+    receiptNumber = await completePaidPharmacySale(db, scope, sale, input, receiptNumber);
     if (sale.customerId) await accrueSalePoints(db, scope, sale.id);
   }
   await requestCounterEvidence(db, scope, { kind: 'TENDER', subjectId: tender.id });

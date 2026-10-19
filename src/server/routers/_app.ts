@@ -4,6 +4,7 @@ import { router } from '../trpc';
 import { hotelPropertyRouter } from './hotel-property';
 import { restaurantPromotionsRouter } from './restaurant-promotions';
 import { platformHealthRouter } from './platform-health';
+import { pharmacyOfflineRouter } from './pharmacy-offline';
 import { dashboardRouter } from './dashboard';
 import { projectsRouter } from './projects';
 import { financeRouter } from './finance';
@@ -70,6 +71,7 @@ export const appRouter = router({
   hotelProperty: hotelPropertyRouter,
   restaurantPromotions: restaurantPromotionsRouter,
   platformHealth: platformHealthRouter,
+  pharmacyOffline: pharmacyOfflineRouter,
   dashboard: dashboardRouter,
   projects: projectsRouter,
   finance: financeRouter,
