@@ -1,0 +1,556 @@
+[
+  {
+    "execution": "vitest",
+    "rc": 0,
+    "passed": 85,
+    "failed": 0,
+    "pending": 0,
+    "todo": 0,
+    "tests": [
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities keeps partial allocation, outstanding claim and unallocated credit separate",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities excludes DRAFT returns from debt",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities excludes SUBMITTED returns from debt",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities excludes CANCELLED returns from debt",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities excludes SETTLED returns from debt",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities excludes CANCELLED notes",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities excludes SETTLED notes",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities excludes cancellation evidence and fully allocated notes",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated note amount -1",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated note amount 1.5",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated note amount NaN",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated note amount Infinity",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated note amount 10001",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated note amount 9007199254740991",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated credit amount -1",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated credit amount 6001",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated credit amount NaN",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects invalid/overallocated credit amount Infinity",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities only matches the same supplier; credit suggestions do not reserve or consume funds",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects foreign scope { organizationId: 'foreign' } on returns, notes and credits",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects foreign scope { branchId: 'foreign' } on returns, notes and credits",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects mismatched note supplier and allocation ownership",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities uses exact clock boundaries and never fabricates issue age",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities sorts oldest exact issue timestamp first with unknown last",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities closes dispatch exactly at deadline and excludes unsubmitted/already dispatched returns",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities keeps missing deadlines unknown and a known expired line blocks the whole return",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities prioritizes upcoming deadlines before expired and unknown returns",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities retains partial coverage rather than inventing branch totals",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-credit-follow-up.test.ts",
+        "name": "supplier-credit priorities rejects an invalid as-of clock",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 the return lifecycle allows only the transitions the document actually has",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 the return lifecycle refuses to skip submission, to reopen a settled return, or to cancel after dispatch",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 the return lifecycle treats the supplier return window as closed at its deadline, not after it",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 the return lifecycle keeps the actor who submitted a return off its own settlement (\u00a78A invariant 26)",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 claimable quantity is the INV-09 reservation, read once subtracts reserved units from on-hand",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 claimable quantity is the INV-09 reservation, read once never reports a negative claimable quantity",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 claimable quantity is the INV-09 reservation, read once refuses a second claim over units the first one already reserved",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 claimable quantity is the INV-09 reservation, read once rejects a non-integer or non-positive quantity rather than rounding it",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 expected vs received credit stay two numbers freezes the expected credit as the sum of the return lines",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 expected vs received credit stay two numbers reports an unsettled note as OPEN with the whole claim outstanding",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 expected vs received credit stay two numbers shows the shortfall when the supplier credits less than was claimed",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 expected vs received credit stay two numbers settles only when the received credit reaches the expected credit",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 allocation cannot invent money allows an allocation inside both ceilings",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 allocation cannot invent money refuses to allocate more than the debit note is owed",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 allocation cannot invent money refuses to allocate a credit twice",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/lib/pharmacy/supplier-returns.test.ts",
+        "name": "PUR-06 \u2014 allocation cannot invent money refuses a zero, negative or fractional allocation",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "tenancy and licensing (UX rule 7) never asks the context factory to re-resolve tenancy",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "tenancy and licensing (UX rule 7) says \"not licensed\" and never calls the router when the module is absent",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "tenancy and licensing (UX rule 7) says \"no purchasing access\" \u2014 a different sentence \u2014 when the session has no user",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "tenancy and licensing (UX rule 7) renders the access state rather than throwing when tenancy does not resolve",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "selection (UX rules 3, 4, 5, 6) shows the empty state instead of auto-selecting the first supplier",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "selection (UX rules 3, 4, 5, 6) shows the empty state when the requested supplier is not this organization\u2019s",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "selection (UX rules 3, 4, 5, 6) opens the detail beside the list and keeps the selected row a focusable control",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "selection (UX rules 3, 4, 5, 6) carries the requisition selection through an order link (rule 6)",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "pickers (UX rules 1, 12, 16) offers a lapsed supplier as a disabled, explained option rather than hiding or allowing it",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "pickers (UX rules 1, 12, 16) states the pack conversion in the picker so no multiplier is ever typed",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "pickers (UX rules 1, 12, 16) replaces an empty required picker with what is missing and where to fix it",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "validation errors (UX rule 11) renders the message at the named field and focuses it, not only in a banner",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "validation errors (UX rule 11) announces the failure to a screen reader as an alert",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "preconditions (UX rule 13) lists every unmet gate with a link to the page that clears it",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "preconditions (UX rule 13) says nothing about setup once every gate is met",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "branch scope (UX rules 1, 5, 12) adopts the only branch and says so rather than asking for an id",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "branch scope (UX rules 1, 5, 12) prompts for a branch \u2014 a distinct state from \"no results\" \u2014 when there are several",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "branch scope (UX rules 1, 5, 12) falls through to the prompt when the requested branch is not this organization\u2019s",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "branch scope (UX rules 1, 5, 12) names the branch that has no active location instead of a bare empty page",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "error states (UX rule 9) says what failed and what to do when a read throws, and does not crash",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "goods-in bench (PUR-02/04/05) reports an unresolvable scan rather than silently matching nothing",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "goods-in bench (PUR-02/04/05) does not offer a draft order for receiving",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "segregation of duties (PUR-02) explains why the raiser cannot approve instead of offering a button that refuses",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "explicit purchasing action outcomes returns a success destination after one authenticated supplier write",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "explicit purchasing action outcomes returns field validation feedback without writing",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "explicit purchasing action outcomes re-resolves the session at submission and returns session-loss feedback",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "explicit purchasing action outcomes delivers domain rejection feedback without changing its meaning",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "WHA-1349 action-boundary retry safety post-write revalidation failure cannot repeat the supplier mutation",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "WHA-1349 action-boundary retry safety post-write revalidation failure cannot repeat the supplier credit mutation",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "WHA-1349 action-boundary retry safety definitive local validation rejection permits correction before the first write",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "WHA-1349 action-boundary retry safety unknown server mutation failure remains locked even with a familiar domain message",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+        "name": "WHA-1349 action-boundary retry safety generic server setup error is not mislabeled as safe local validation",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.test.tsx",
+        "name": "explains empty state without claiming branch debt or recovery",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.test.tsx",
+        "name": "warns on capped data and excludes invalid records visibly",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.test.tsx",
+        "name": "bounds the queue and links the existing return and credit detail",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.test.tsx",
+        "name": "does not suggest dispatch for expired or unknown deadlines",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+        "name": "does not read or render priorities without module access",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+        "name": "does not render priorities after branch read denial",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+        "name": "loads the queue from the existing authorized branch reads",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "src/app/(app)/pharmacy/purchasing/returns/page.test.tsx",
+        "name": "retains the descriptive route loading state",
+        "status": "passed",
+        "failureMessages": []
+      }
+    ]
+  },
+  {
+    "execution": "probes",
+    "rc": 0,
+    "passed": 4,
+    "failed": 0,
+    "pending": 0,
+    "todo": 0,
+    "tests": [
+      {
+        "file": "tests/verification/wha1374-follow-up.test.tsx",
+        "name": "rejects invalid principal amounts and unsafe aggregate allocations",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "tests/verification/wha1374-follow-up.test.tsx",
+        "name": "keeps upcoming work visible above six expired returns and discloses top-five",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "tests/verification/wha1374-follow-up.test.tsx",
+        "name": "discloses matching-credit truncation and non-additive advice",
+        "status": "passed",
+        "failureMessages": []
+      },
+      {
+        "file": "tests/verification/wha1374-follow-up.test.tsx",
+        "name": "connects populated page to selected return and encoded credit target; reload reflects changed independent projection",
+        "status": "passed",
+        "failureMessages": []
+      }
+    ]
+  }
+]

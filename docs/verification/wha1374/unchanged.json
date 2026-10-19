@@ -1,0 +1,11 @@
+{
+  "createReturn": true,
+  "advanceReturn": true,
+  "recordCredit": true,
+  "allocateCredit": true,
+  "src/app/(app)/pharmacy/purchasing/_lib/console.ts": true,
+  "src/app/(app)/pharmacy/purchasing/_components/action-form.tsx": true,
+  "src/lib/pharmacy/purchasing-console.ts": true,
+  "src/server/routers/pharmacy-purchasing.ts": true,
+  "src/lib/pharmacy/supplier-returns-operations.ts": true
+}
