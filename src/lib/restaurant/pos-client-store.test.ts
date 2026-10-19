@@ -307,6 +307,8 @@ describe('storage minimization (criterion 2)', () => {
       { operator: { pin: '1234' } },
       { customer: { id: 'cus-1', name: 'A Person' } },
       { loyaltyBalance: '250.00' },
+      { walletAlias: `wla_${'0'.repeat(26)}` },
+      { wallet: { alias: `wla_${'1'.repeat(26)}` } },
       { tenders: [{ amount: '100.00' }] },
       { payment: { cardNumber: '4111111111111111' } },
     ]) {

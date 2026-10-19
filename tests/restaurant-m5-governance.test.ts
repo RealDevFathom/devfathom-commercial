@@ -383,7 +383,7 @@ const M5_ENUMS = [
 ] as const;
 
 const M8_ENUMS = [
-  ['CustomerIdentifierKind', ['EMAIL', 'PHONE']],
+  ['CustomerIdentifierKind', ['EMAIL', 'PHONE', 'WALLET']],
   ['CustomerConsentChannel', ['EMAIL', 'SMS', 'PHONE', 'WHATSAPP', 'PUSH']],
   ['LoyaltyPointsEntryKind', ['EARN', 'REDEEM', 'REVERSAL', 'EXPIRY', 'ADJUSTMENT']],
 ] as const;

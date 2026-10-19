@@ -1,0 +1,8 @@
+-- Align wallet composite foreign-key names with the Prisma model. The original
+-- wallet migrations remain immutable; relation columns and actions are unchanged.
+ALTER TABLE "restaurant_wallet_enrollment_attempts" RENAME CONSTRAINT "restaurant_wallet_enrollment_attempts_branch_fkey" TO "restaurant_wallet_enrollment_attempts_organizationId_branc_fkey";
+ALTER TABLE "restaurant_wallet_enrollment_links" RENAME CONSTRAINT "restaurant_wallet_enrollment_links_branch_fkey" TO "restaurant_wallet_enrollment_links_organizationId_branchId_fkey";
+ALTER TABLE "restaurant_wallet_pass_registrations" RENAME CONSTRAINT "restaurant_wallet_pass_registrations_pass_fkey" TO "restaurant_wallet_pass_registrations_organizationId_passId_fkey";
+ALTER TABLE "restaurant_wallet_pass_updates" RENAME CONSTRAINT "restaurant_wallet_pass_updates_pass_fkey" TO "restaurant_wallet_pass_updates_organizationId_passId_fkey";
+ALTER TABLE "restaurant_wallet_passes" RENAME CONSTRAINT "restaurant_wallet_passes_customer_fkey" TO "restaurant_wallet_passes_organizationId_customerId_fkey";
+ALTER TABLE "restaurant_wallet_passes" RENAME CONSTRAINT "restaurant_wallet_passes_loyalty_account_fkey" TO "restaurant_wallet_passes_organizationId_loyaltyAccountId_fkey";

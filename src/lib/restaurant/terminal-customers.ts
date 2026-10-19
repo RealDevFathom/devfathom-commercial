@@ -5,6 +5,7 @@ import { z } from 'zod';
 
 import type { CustomerIdentifierKind } from '@/generated/prisma/client';
 import { readJson } from '@/lib/api-json';
+import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { operatorHasCapability } from './checkout-routes';
@@ -66,6 +67,10 @@ export const customerSearchQuery = z
 
 export const customerAttachBody = z.object({ orderId: ID, customerId: ID }).strict();
 
+export const walletScanQuery = z
+  .object({ code: z.string().regex(/^DFW1:wla_[0-9a-hjkmnp-tv-z]{26}$/) })
+  .strict();
+
 // ── Capability gate + route factories (shared with `terminal-loyalty.ts`) ─────
 
 /** The vertical capabilities this lane's connected routes gate on. */
@@ -99,6 +104,7 @@ export function customerErrorResponse(err: unknown): NextResponse | null {
  */
 export function connectedReadRoute(opts: {
   capability: ConnectedCapability;
+  moduleKey?: string;
   mapError?: (err: unknown) => NextResponse | null;
   run: (ctx: TerminalContext, request: Request) => Promise<Response>;
 }) {
@@ -110,6 +116,12 @@ export function connectedReadRoute(opts: {
         !(await operatorHasCapability(ctx.db, operator.staffProfileId, opts.capability, new Date()))
       ) {
         return forbidden(opts.capability);
+      }
+      if (opts.moduleKey) {
+        const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, ctx.db);
+        if (!hasModule(entitlements, opts.moduleKey)) {
+          return json({ error: 'The loyalty module is not enabled for this organization.' }, 403);
+        }
       }
       return await opts.run(ctx, request);
     },
@@ -247,7 +259,14 @@ export async function searchConnectedCustomers(
         { displayName: { contains: query, mode: 'insensitive' } },
         { givenName: { contains: query, mode: 'insensitive' } },
         { familyName: { contains: query, mode: 'insensitive' } },
-        { identifiers: { some: { normalizedValue: { contains: query.toLowerCase() } } } },
+        {
+          identifiers: {
+            some: {
+              kind: { in: ['EMAIL', 'PHONE'] },
+              normalizedValue: { contains: query.toLowerCase() },
+            },
+          },
+        },
       ],
     },
     orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
@@ -256,6 +275,7 @@ export async function searchConnectedCustomers(
       id: true,
       displayName: true,
       identifiers: {
+        where: { kind: { in: ['EMAIL', 'PHONE'] } },
         orderBy: [{ kind: 'asc' }, { normalizedValue: 'asc' }, { id: 'asc' }],
         select: { id: true, kind: true, normalizedValue: true },
       },
@@ -270,6 +290,56 @@ export async function searchConnectedCustomers(
       masked: maskCustomerIdentifier(identifier.kind, identifier.normalizedValue),
     })),
   }));
+}
+
+export type WalletScanResult = {
+  customerId: string;
+  loyalty: {
+    accountId: string | null;
+    accountActive: boolean;
+    balance: number;
+  };
+};
+
+/** Resolve only an active wallet alias inside the terminal's tenant transaction. */
+export async function resolveWalletScan(
+  db: ScopedDb,
+  alias: string
+): Promise<WalletScanResult | null> {
+  const identifier = await db.customerIdentifier.findFirst({
+    where: {
+      kind: 'WALLET',
+      normalizedValue: alias,
+      customer: {
+        anonymizedAt: null,
+        walletPasses: { some: { status: 'ACTIVE' } },
+      },
+    },
+    select: {
+      customerId: true,
+      customer: {
+        select: { loyaltyAccount: { select: { id: true, active: true } } },
+      },
+    },
+  });
+  if (!identifier) return null;
+
+  const account = identifier.customer.loyaltyAccount;
+  const aggregate = account
+    ? await db.loyaltyPointsEntry.aggregate({
+        where: { accountId: account.id },
+        _sum: { points: true },
+      })
+    : null;
+
+  return {
+    customerId: identifier.customerId,
+    loyalty: {
+      accountId: account?.id ?? null,
+      accountActive: account?.active ?? false,
+      balance: aggregate?._sum.points ?? 0,
+    },
+  };
 }
 
 /**

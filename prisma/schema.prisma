@@ -4959,9 +4959,13 @@ model RestaurantBranch {
   deliveryFulfillments        RestaurantDeliveryFulfillment[]
   cateringOrders              RestaurantCateringOrder[]
 
+  walletEnrollmentLinks WalletEnrollmentLink[]
+  walletEnrollmentAttempts WalletEnrollmentAttempt[]
+
   @@unique([organizationId, id])
   @@index([organizationId])
   @@map("restaurant_branches")
+
 }
 
 enum RestaurantTaxVersionStatus {
@@ -9035,6 +9039,7 @@ model RestaurantNotificationDelivery {
 enum CustomerIdentifierKind {
   EMAIL
   PHONE
+  WALLET
 }
 
 enum CustomerConsentChannel {
@@ -9079,10 +9084,13 @@ model RestaurantCustomer {
   deliveryFulfillments RestaurantDeliveryFulfillment[]
   cateringOrders       RestaurantCateringOrder[]
 
+  walletPasses WalletPass[]
+
   @@unique([organizationId, id])
   @@index([organizationId])
   @@index([anonymizedAt])
   @@map("restaurant_customers")
+
 }
 
 /// Direct-delivery configuration owned by one branch. The fee is authoritative
@@ -9486,10 +9494,14 @@ model LoyaltyAccount {
   customer      RestaurantCustomer   @relation(fields: [customerId], references: [id], onDelete: Restrict)
   pointsEntries LoyaltyPointsEntry[]
 
+  walletPasses WalletPass[]
+
   @@unique([organizationId, customerId])
   @@index([organizationId])
   @@index([active])
   @@map("restaurant_loyalty_accounts")
+
+  @@unique([organizationId, id])
 }
 
 /// D08: APPEND-ONLY signed whole-points ledger. EARN pins the settled bill and
@@ -14542,4 +14554,148 @@ model RestaurantPrinter {
   @@index([organizationId, bridgeId])
   @@index([organizationId, branchId])
   @@map("restaurant_printers")
+}
+
+enum WalletPassPlatform {
+  APPLE
+  GOOGLE
+}
+
+enum WalletPassStatus {
+  ACTIVE
+  REVOKED
+}
+
+enum WalletPassUpdateReason {
+  LEDGER
+  PROGRAM
+  REVOKE
+  RECONCILE
+}
+
+enum WalletPassUpdateStatus {
+  PENDING
+  SENT
+  FAILED
+}
+
+model WalletPass {
+  id                 String             @id @default(cuid())
+  organizationId     String             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  customerId         String
+  loyaltyAccountId   String
+  platform           WalletPassPlatform
+  serialNumber       String             @unique
+  status             WalletPassStatus   @default(ACTIVE)
+  appleAuthTokenHash String?
+  lastPushedBalance  Int?
+  lastPushedAt       DateTime?
+  contentRevision    Int                @default(1)
+  issuedAt           DateTime           @default(now())
+  revokedAt          DateTime?
+  createdAt          DateTime           @default(now())
+  updatedAt          DateTime           @updatedAt
+
+  customer       RestaurantCustomer       @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
+  loyaltyAccount LoyaltyAccount           @relation(fields: [organizationId, loyaltyAccountId], references: [organizationId, id], onDelete: Restrict)
+  registrations  WalletPassRegistration[]
+  updates        WalletPassUpdate[]
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([customerId])
+  @@index([loyaltyAccountId])
+  @@map("restaurant_wallet_passes")
+}
+
+model WalletPassRegistration {
+  id                      String   @id @default(cuid())
+  organizationId          String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  passId                  String
+  deviceLibraryIdentifier String
+  pushToken               String
+  createdAt               DateTime @default(now())
+  updatedAt               DateTime @updatedAt
+
+  pass WalletPass @relation(fields: [organizationId, passId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, id])
+  @@unique([passId, deviceLibraryIdentifier])
+  @@index([organizationId])
+  @@index([passId])
+  @@map("restaurant_wallet_pass_registrations")
+}
+
+model WalletPassUpdate {
+  id             String                 @id @default(cuid())
+  organizationId String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  passId         String
+  reason         WalletPassUpdateReason
+  status         WalletPassUpdateStatus @default(PENDING)
+  attempts       Int                    @default(0)
+  nextAttemptAt  DateTime
+  lastError      String?
+  createdAt      DateTime               @default(now())
+  updatedAt      DateTime               @updatedAt
+
+  pass WalletPass @relation(fields: [organizationId, passId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([passId])
+  @@index([status, nextAttemptAt])
+  @@map("restaurant_wallet_pass_updates")
+}
+
+model WalletTenantConfig {
+  id                 String   @id @default(cuid())
+  organizationId     String   @unique @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  programDisplayName String
+  logoFileId         String?
+  backgroundColor    String?
+  foregroundColor    String?
+  googleClassSuffix  String   @unique
+  createdAt          DateTime @default(now())
+  updatedAt          DateTime @updatedAt
+
+  @@unique([organizationId, id])
+  @@map("restaurant_wallet_tenant_config")
+}
+
+model WalletEnrollmentLink {
+  id             String    @id @default(cuid())
+  organizationId String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  tokenHash      String    @unique
+  active         Boolean   @default(true)
+  createdAt      DateTime  @default(now())
+  revokedAt      DateTime?
+
+  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([branchId])
+  @@map("restaurant_wallet_enrollment_links")
+}
+
+model WalletEnrollmentAttempt {
+  id              String                 @id @default(cuid())
+  organizationId  String                 @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String
+  identifierKind  CustomerIdentifierKind
+  normalizedValue String
+  otpHash         String
+  expiresAt       DateTime
+  consumedAt      DateTime?
+  failedAttempts  Int                    @default(0)
+  createdAt       DateTime               @default(now())
+
+  branch RestaurantBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Restrict)
+
+  @@unique([organizationId, id])
+  @@index([organizationId])
+  @@index([branchId])
+  @@index([expiresAt])
+  @@map("restaurant_wallet_enrollment_attempts")
 }

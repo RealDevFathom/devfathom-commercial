@@ -176,7 +176,7 @@ const APPEND_ONLY = [
 ] as const;
 
 const ENUMS = [
-  ['CustomerIdentifierKind', ['EMAIL', 'PHONE']],
+  ['CustomerIdentifierKind', ['EMAIL', 'PHONE', 'WALLET']],
   ['CustomerConsentChannel', ['EMAIL', 'SMS', 'PHONE', 'WHATSAPP', 'PUSH']],
   ['LoyaltyPointsEntryKind', ['EARN', 'REDEEM', 'REVERSAL', 'EXPIRY', 'ADJUSTMENT']],
 ] as const;
