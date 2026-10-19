@@ -12,6 +12,7 @@ import {
   missingIdempotencyKey,
   orderErrorResponse,
   requireActingOperator,
+  requireOrderInDeviceBranch,
 } from '@/lib/restaurant/terminal-orders';
 
 /**
@@ -34,6 +35,14 @@ export const POST = withTerminalAuth(async (ctx, request) => {
   if (!parsedJson.ok) return parsedJson.response;
   const parsed = cancelBody.safeParse(parsedJson.data);
   if (!parsed.success) return invalidBody(parsed.error.issues);
+
+  try {
+    await requireOrderInDeviceBranch(ctx.db, parsed.data.orderId, ctx.device.branchId);
+  } catch (err) {
+    const response = orderErrorResponse(err);
+    if (response) return response;
+    throw err;
+  }
 
   let approvingStaffProfileId: string | null = null;
   if (parsed.data.approving) {

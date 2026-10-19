@@ -14,6 +14,8 @@ import { Label } from '@/components/ui/label';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
+import type { RestaurantStaffOption } from '@/components/restaurant/restaurant-staff-select';
+import { RestaurantStaffSelect } from '@/components/restaurant/restaurant-staff-select';
 
 export type OrderItem = {
   id: string;
@@ -48,6 +50,7 @@ export type VoidItemInput = {
 type OrderTicketPanelProps = {
   order: OrderDetail | null;
   actingOperatorId: string;
+  operators?: RestaurantStaffOption[];
   pending: boolean;
   onHold: (course: number) => void;
   onFire: (course: number) => void;
@@ -80,6 +83,7 @@ function ids(value: string) {
 export function OrderTicketPanel({
   order,
   actingOperatorId,
+  operators = [],
   pending,
   onHold,
   onFire,
@@ -125,7 +129,7 @@ export function OrderTicketPanel({
     if (!voidItem || !voidReason.trim() || pending) return;
     const postPrep = POST_PREP.has(voidItem.status);
     if (postPrep && (!managerId.trim() || !/^\d{4,8}$/.test(managerPin))) {
-      setVoidError('Enter manager profile ID and a 4–8 digit PIN.');
+      setVoidError('Select a manager and enter their 4–8 digit PIN.');
       return;
     }
     if (postPrep && managerId.trim() === actingOperatorId) {
@@ -399,13 +403,14 @@ export function OrderTicketPanel({
               {voidItem && POST_PREP.has(voidItem.status) ? (
                 <>
                   <div className="space-y-1.5">
-                    <Label htmlFor="manager-id">Approving manager profile ID</Label>
-                    <Input
+                    <Label htmlFor="manager-id">Approving manager</Label>
+                    <RestaurantStaffSelect
                       id="manager-id"
                       required
+                      staff={operators.filter((operator) => operator.id !== actingOperatorId)}
                       value={managerId}
-                      onChange={(event) => setManagerId(event.target.value)}
-                      className="h-11"
+                      onChange={setManagerId}
+                      label="Approving manager"
                     />
                   </div>
                   <div className="space-y-1.5">

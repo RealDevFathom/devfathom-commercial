@@ -243,6 +243,15 @@ vi.mock('@/lib/trpc', () => {
   const invalidate = () => ({ invalidate: mocks.invalidations });
   return {
     trpc: {
+      restaurantStaff: {
+        listBranches: {
+          useQuery: () => ({
+            data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+            error: null,
+            isLoading: false,
+          }),
+        },
+      },
       restaurantCustomers: {
         list: query('customers'),
         detail: query('detail'),

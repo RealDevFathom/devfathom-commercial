@@ -17,13 +17,16 @@ const mocks = vi.hoisted(() => ({
   recordTrpcAudit: vi.fn(),
   can: vi.fn(async () => true),
   hasModule: vi.fn(() => true),
+  resolveTenantActor: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({
   createTenantDb: vi.fn(() => ({})),
 }));
-vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+vi.mock('@/lib/tenancy/tenant-actor', () => ({
+  resolveTenantActor: mocks.resolveTenantActor,
+}));
 vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
@@ -41,6 +44,7 @@ vi.mock('@/lib/abac', async () => {
 import {
   adminProcedure,
   capabilityProcedure,
+  createTRPCContext,
   entitlementIndependentAdminProcedure,
   entitlementIndependentHistoryProcedure,
   hrProcedure,
@@ -48,6 +52,40 @@ import {
   router,
 } from './trpc';
 import type { TRPCContext } from './trpc';
+
+describe('createTRPCContext request actor resolution', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+  });
+
+  it('does not mark an unresolved route session as explicitly resolved', async () => {
+    const request = new Request('https://restaurant.devfathom.test/api/restaurant/sop/evidence');
+    mocks.resolveTenantActor.mockResolvedValueOnce({
+      session: {
+        expires: 'later',
+        user: { id: 'user-1', organizationId: 'org-1', status: 'ACTIVE' },
+      },
+      organization: { id: 'org-1' },
+      support: null,
+    });
+
+    await expect(createTRPCContext({ req: request })).resolves.toMatchObject({
+      session: { user: { id: 'user-1' } },
+      organization: { id: 'org-1' },
+    });
+    expect(mocks.resolveTenantActor).toHaveBeenCalledWith({ request });
+  });
+
+  it('keeps the workspace guard and its internal error classification', async () => {
+    const request = new Request('https://restaurant.devfathom.test/api/restaurant/sop/evidence');
+    mocks.resolveTenantActor.mockResolvedValueOnce(null);
+
+    await expect(createTRPCContext({ req: request })).rejects.toMatchObject({
+      code: 'NOT_FOUND',
+      message: 'Workspace not found.',
+    });
+  });
+});
 
 type SessionUser = Record<string, unknown> & { id: string };
 

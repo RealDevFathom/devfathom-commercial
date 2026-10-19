@@ -22,6 +22,8 @@ import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '../restaurant-branch-select';
+import { RestaurantStaffSelect } from '../restaurant-staff-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type Floor = RouterOutputs['restaurantFloor']['listFloors'][number];
@@ -104,6 +106,9 @@ export function FloorConsole() {
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
   const utils = trpc.useUtils();
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: posEnabled,
+  });
   const [branchId, setBranchId] = useState('');
   const [businessDate, setBusinessDate] = useState('');
   const [includeInactive, setIncludeInactive] = useState(false);
@@ -113,6 +118,10 @@ export function FloorConsole() {
 
   const normalizedBranchId = branchId.trim();
   const branchReady = posEnabled && normalizedBranchId.length > 0;
+  const staffQuery = trpc.restaurantStaff.listDirectory.useQuery(
+    { branchId: normalizedBranchId },
+    { enabled: branchReady }
+  );
   const sectionsReady = branchReady && businessDate.length > 0;
   const floorsQuery = trpc.restaurantFloor.listFloors.useQuery(
     { branchId: normalizedBranchId, includeInactive },
@@ -393,13 +402,13 @@ export function FloorConsole() {
         <>
           <SectionCard eyebrow="Scope" title="Branch and service date">
             <div className="grid gap-4 md:grid-cols-[minmax(0,1fr)_13rem_auto] md:items-end">
-              <Field label="Branch ID">
-                <Input
-                  aria-label="Branch ID"
+              <Field label="Branch">
+                <RestaurantBranchSelect
+                  branches={branchesQuery.data ?? []}
+                  loading={branchesQuery.isLoading}
+                  error={Boolean(branchesQuery.error)}
                   value={branchId}
-                  onChange={(event) => setBranchId(event.target.value)}
-                  placeholder="branch_…"
-                  className="h-11"
+                  onChange={setBranchId}
                 />
               </Field>
               <Field label="Business date">
@@ -425,8 +434,8 @@ export function FloorConsole() {
           {!branchReady ? (
             <SectionCard title="Choose a branch">
               <EmptyState
-                title="Branch ID required"
-                detail="Enter a branch ID to load floors and stations. Add a business date to load assignments."
+                title="Branch required"
+                detail="Select a branch to load floors and stations. Add a business date to load assignments."
               />
             </SectionCard>
           ) : permissionDenied ? (
@@ -680,9 +689,6 @@ export function FloorConsole() {
                                     {assignment.staffDisplayName}
                                   </span>
                                   <StatusPill status={assignment.staffStatus} />
-                                  <span className="ml-2 font-mono text-[0.625rem] text-text-faint">
-                                    {assignment.staffProfileId}
-                                  </span>
                                 </div>
                                 <Button
                                   size="sm"
@@ -969,8 +975,14 @@ export function FloorConsole() {
 
               {editor.kind === 'assignment' ? (
                 <>
-                  <Field label="Staff profile ID">
-                    <Input name="staffProfileId" required className="h-11" />
+                  <Field label="Staff member">
+                    <RestaurantStaffSelect
+                      name="staffProfileId"
+                      required
+                      staff={staffQuery.data ?? []}
+                      loading={staffQuery.isLoading}
+                      error={Boolean(staffQuery.error)}
+                    />
                   </Field>
                   <Field label="Business date">
                     <Input

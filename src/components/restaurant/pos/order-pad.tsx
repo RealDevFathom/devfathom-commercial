@@ -682,6 +682,7 @@ export function OrderPad() {
               />
               <OperatorSwitch
                 activeOperatorId={runtime.operator?.staffProfileId ?? ''}
+                operators={operators}
                 pending={busy}
                 onSwitch={switchOperator}
               />
@@ -894,6 +895,11 @@ export function OrderPad() {
             <OrderTicketPanel
               order={order}
               actingOperatorId={runtime.operator?.staffProfileId ?? ''}
+              operators={operators.map((operator) => ({
+                id: operator.staffProfileId,
+                displayName: operator.displayName,
+                role: operator.role,
+              }))}
               pending={busy}
               onHold={(course) =>
                 order &&

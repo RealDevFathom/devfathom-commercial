@@ -18,11 +18,82 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { deriveOrderTotal, planBills } from './bills';
+import { deriveOrderTotal, planBills, validateTenderTaxAllocations } from './bills';
+import type { FinalizeBillSettlementInput } from './bills';
 
 // ── Pure fixtures ────────────────────────────────────────────────────────────
 
 const D = (v: string | number) => new Prisma.Decimal(v);
+
+describe('tender tax allocation validation', () => {
+  const merchandise = {
+    id: 'bucket-unit',
+    allocationKind: 'MERCHANDISE' as const,
+    billLineId: 'line-1',
+    unitOrdinal: 0,
+    ruleVersionId: 'rule-card',
+    paymentCategory: 'CARD' as const,
+    taxAmount: D('1.20'),
+  };
+  const service = {
+    id: 'bucket-service',
+    allocationKind: 'SERVICE_CHARGE' as const,
+    ruleVersionId: 'rule-card',
+    paymentCategory: 'CARD' as const,
+    taxAmount: D('0.10'),
+  };
+  const allocations = [
+    {
+      originalTenderId: 'tender-a',
+      paymentCategory: 'CARD' as const,
+      bucket: merchandise,
+      cents: 70,
+    },
+    {
+      originalTenderId: 'tender-b',
+      paymentCategory: 'CARD' as const,
+      bucket: merchandise,
+      cents: 50,
+    },
+    {
+      originalTenderId: 'tender-a',
+      paymentCategory: 'CARD' as const,
+      bucket: service,
+      cents: 5,
+    },
+    {
+      originalTenderId: 'tender-b',
+      paymentCategory: 'CARD' as const,
+      bucket: service,
+      cents: 5,
+    },
+  ];
+
+  it('accepts two same-category tenders split across unit and service buckets', () => {
+    expect(() =>
+      validateTenderTaxAllocations(allocations, [merchandise, service], D('1.30'))
+    ).not.toThrow();
+  });
+
+  it.each([
+    ['negative cents', [{ ...allocations[0]!, cents: -1 }, ...allocations.slice(1)]],
+    ['missing bucket allocation', allocations.slice(0, 2)],
+    ['duplicate fact', [...allocations, allocations[0]!]],
+    [
+      'mismatched category',
+      [{ ...allocations[0]!, paymentCategory: 'CASH' as const }, ...allocations.slice(1)],
+    ],
+    [
+      'missing bucket identity',
+      [{ ...allocations[0]!, bucket: { ...merchandise, unitOrdinal: 9 } }, ...allocations.slice(1)],
+    ],
+    ['bucket mismatch', [{ ...allocations[0]!, cents: 69 }, ...allocations.slice(1)]],
+  ])('rejects %s', (_label, invalid) => {
+    expect(() => validateTenderTaxAllocations(invalid, [merchandise, service], D('1.30'))).toThrow(
+      'Tender tax allocation'
+    );
+  });
+});
 
 /** Build a minimal LoadedBillOrder-shaped literal for the pure planners. */
 function order(
@@ -195,6 +266,10 @@ const ids = {
   priceList: `pl_${suffix}`,
   priceVersion: `plv_${suffix}`,
   publication: `pub_${suffix}`,
+  taxSource: `tax_source_${suffix}`,
+  taxProfile: `tax_profile_${suffix}`,
+  taxRule: `tax_rule_${suffix}`,
+  loyaltyProgram: `loyalty_program_${suffix}`,
 };
 const AT = new Date('2026-08-19T18:00:00.000Z');
 
@@ -345,8 +420,184 @@ beforeAll(async () => {
         channels: [],
       },
     });
+    await tx.restaurantTaxOfficialSource.create({
+      data: {
+        id: ids.taxSource,
+        authorityCode: 'SYNTHETIC',
+        documentTitle: 'Synthetic test source',
+        sourceUrl: 'https://example.invalid/synthetic',
+        contentHash: `synthetic-${suffix}`,
+        retrievedAt: AT,
+      },
+    });
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        id: ids.taxProfile,
+        branchId: ids.branch,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        approvalReference: 'synthetic-test',
+        approvedAt: AT,
+        publishedAt: AT,
+      },
+    });
+    await tx.restaurantTaxRuleVersion.create({
+      data: {
+        id: ids.taxRule,
+        profileVersionId: ids.taxProfile,
+        officialSourceId: ids.taxSource,
+        ruleCode: 'SYNTHETIC_CARD_10',
+        paymentCategory: 'CARD',
+        priceMode: 'EXCLUSIVE',
+        rate: '0.100000',
+        status: 'PUBLISHED',
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        approvalReference: 'synthetic-test',
+        approvedAt: AT,
+        publishedAt: AT,
+      },
+    });
+    await tx.loyaltyProgramVersion.create({
+      data: {
+        id: ids.loyaltyProgram,
+        versionNumber: 1,
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        earnRate: '1.000000',
+        redemptionValue: '0.050000',
+      },
+    });
   });
 });
+
+async function seedFinalSettlementEvidence(orderId: string, tag: string) {
+  const customerId = `customer_${tag}_${suffix}`;
+  const accountId = `account_${tag}_${suffix}`;
+  const versionId = `promo_version_${tag}_${suffix}`;
+  const evaluationId = `promo_eval_${tag}_${suffix}`;
+  await deps.withTenantDb(orgId, async (tx) => {
+    await tx.restaurantCustomer.create({
+      data: { id: customerId, displayName: 'Settlement Guest' },
+    });
+    await tx.loyaltyAccount.create({ data: { id: accountId, customerId } });
+    await tx.restaurantOrder.update({ where: { id: orderId }, data: { customerId } });
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "restaurant_promotions" ("id","organizationId","code","name","updatedAt")
+       VALUES ($1,$2,$3,'Settlement promotion',now())`,
+      `promo_${tag}_${suffix}`,
+      orgId,
+      `SETTLE_${tag}_${suffix}`
+    );
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "restaurant_promotion_versions"
+         ("id","organizationId","promotionId","versionNumber","status","effectiveFrom",
+          "timezone","targetKind","benefitKind","benefitAmount","currency","globalCap",
+          "offlinePolicy","approvalReference","publishedAt","ruleSnapshot","ruleHash","updatedAt")
+       VALUES ($1,$2,$3,1,'PUBLISHED',$4,'UTC','ORDER','AMOUNT_OFF',0.50,'USD',1,
+               'ONLINE_ONLY','synthetic-test',$4,'{}'::jsonb,$5,now())`,
+      versionId,
+      orgId,
+      `promo_${tag}_${suffix}`,
+      AT,
+      `promo_hash_${tag}_${suffix}`
+    );
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "restaurant_promotion_evaluation_snapshots"
+         ("id","organizationId","orderId","branchId","channel","currency","idempotencyKey",
+          "evaluatedAt","timezone","localDate","localMinute","utcOffsetMinutes",
+          "engineVersion","moneyVersion","setRevisionId","setRevisionHash","source",
+          "inputLines","evaluationContext","inputHash","outputHash","discountTotal")
+       VALUES ($1,$2,$3,$4,'DINE_IN','USD',$1,$5,'UTC','2026-08-19',1080,0,
+               '1.0.0','money','revision','revision-hash','ONLINE','[]'::jsonb,'{}'::jsonb,
+               $6,$7,0.50)`,
+      evaluationId,
+      orgId,
+      orderId,
+      ids.branch,
+      AT,
+      `promo_input_${tag}_${suffix}`,
+      `promo_output_${tag}_${suffix}`
+    );
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "restaurant_promotion_cap_counters"
+         ("id","organizationId","promotionVersionId","scopeKind","scopeKey","capCount","updatedAt")
+       VALUES ($1,$2,$3,'GLOBAL','',1,now())`,
+      `promo_counter_${tag}_${suffix}`,
+      orgId,
+      versionId
+    );
+    await tx.$executeRawUnsafe(
+      `INSERT INTO "restaurant_promotion_cap_reservations"
+         ("id","organizationId","counterId","promotionVersionId","scopeKind","scopeKey",
+          "evaluationId","applicationOrdinal","reservedCount","reservedAmount","state")
+       VALUES ($1,$2,$3,$4,'GLOBAL','',$5,0,1,0.50,'RESERVED')`,
+      `promo_reservation_${tag}_${suffix}`,
+      orgId,
+      `promo_counter_${tag}_${suffix}`,
+      versionId,
+      evaluationId
+    );
+  });
+  return { evaluationId, accountId };
+}
+
+function settlementInput(billId: string, billLineId: string, evaluationId: string, tag: string) {
+  const bucket = {
+    ruleVersionId: ids.taxRule,
+    paymentCategory: 'CARD',
+    priceMode: 'EXCLUSIVE' as const,
+    rate: D('0.100000'),
+    preDiscountGrossAmount: D('13.75'),
+    beforeTaxDiscountAmount: D('0.50'),
+    afterTaxDiscountAmount: D('0.00'),
+  };
+  return {
+    organizationId: orgId,
+    billId,
+    staffProfileId: ids.operator,
+    deviceId,
+    at: AT,
+    transactionReference: `tax_settlement_${tag}_${suffix}`,
+    profileVersionId: ids.taxProfile,
+    currency: 'USD',
+    subtotal: D('12.50'),
+    discountTotal: D('0.50'),
+    serviceChargeTotal: D('1.00'),
+    taxTotal: D('1.30'),
+    roundingAdjustment: D('0.00'),
+    grandTotal: D('14.30'),
+    eligibleNetMerchandise: D('12.00'),
+    promotionEvaluationId: evaluationId,
+    promotionEvaluationHash: `promo_output_${tag}_${suffix}`,
+    lines: [
+      {
+        billLineId,
+        taxAmount: D('1.30'),
+        serviceChargeAmount: D('1.00'),
+        lineTotal: D('14.30'),
+        buckets: [
+          {
+            ...bucket,
+            taxableAmount: D('12.00'),
+            taxAmount: D('1.20'),
+            grossAmount: D('13.20'),
+            unitOrdinal: 0,
+          },
+        ],
+      },
+    ],
+    serviceChargeBuckets: [
+      {
+        ...bucket,
+        taxableAmount: D('1.00'),
+        taxAmount: D('0.10'),
+        grossAmount: D('1.10'),
+        preDiscountGrossAmount: D('1.10'),
+        beforeTaxDiscountAmount: D('0.00'),
+      },
+    ],
+  };
+}
 
 describeIfDatabase('bills command layer (real DB)', () => {
   it('cuts one NONE bill for the whole order; replay is idempotent', async () => {
@@ -565,6 +816,342 @@ describeIfDatabase('bills command layer (real DB)', () => {
     );
     expect(again.alreadySettled).toBe(true);
     expect(again.receiptNumber).toBe(settleA.receiptNumber);
+  });
+
+  it('final settlement freezes v1 evidence, consumes promotion and accrues loyalty atomically', async () => {
+    const makeBill = async (tag: string) => {
+      const opened = await openWithItems([{}]);
+      const cut = await deps.bills.cutBills(opened.db, {
+        orderId: opened.orderId,
+        split: { kind: 'NONE' },
+        actor: actor(),
+      });
+      const billId = cut.billIds[0]!;
+      const billLineId = await read(async (tx) =>
+        tx.restaurantBillLine
+          .findFirstOrThrow({ where: { billId }, select: { id: true } })
+          .then((line) => line.id)
+      );
+      const seeded = await seedFinalSettlementEvidence(opened.orderId, tag);
+      return { billId, billLineId, ...seeded };
+    };
+
+    const rollback = await makeBill('rollback');
+    await expect(
+      deps.withTenantDb(orgId, async (tx) => {
+        await deps.bills.finalizeBillSettlement(
+          tx,
+          settlementInput(rollback.billId, rollback.billLineId, rollback.evaluationId, 'rollback')
+        );
+        throw new Error('injected after final settlement write');
+      })
+    ).rejects.toThrow('injected after final settlement write');
+
+    const rolledBack = await read(async (tx) => ({
+      bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: rollback.billId } }),
+      line: await tx.restaurantBillLine.findUniqueOrThrow({
+        where: { id: rollback.billLineId },
+      }),
+      snapshots: await tx.$queryRaw<{ count: number }[]>`
+        SELECT count(*)::int AS count FROM "restaurant_tax_transaction_snapshots"
+         WHERE "transactionReference" = ${`tax_settlement_rollback_${suffix}`}
+      `,
+      reservation: await tx.restaurantPromotionCapReservation.findUniqueOrThrow({
+        where: { id: `promo_reservation_rollback_${suffix}` },
+      }),
+      loyaltyEntries: await tx.loyaltyPointsEntry.count({
+        where: { accountId: rollback.accountId },
+      }),
+    }));
+    expect(rolledBack.bill).toMatchObject({ status: 'OPEN', receiptNumber: null });
+    expect(rolledBack.bill.taxTotal.toString()).toBe('0');
+    expect(rolledBack.line.taxAmount.toString()).toBe('0');
+    expect(rolledBack.line.serviceChargeAmount.toString()).toBe('0');
+    expect(rolledBack.snapshots[0]?.count).toBe(0);
+    expect(rolledBack.reservation.state).toBe('RESERVED');
+    expect(rolledBack.loyaltyEntries).toBe(0);
+
+    const wrongBill = await makeBill('wrong_bill');
+    const foreignBill = await makeBill('foreign_bill');
+    const wrongBillTender = await deps.withTenantDb(orgId, (tx) =>
+      tx.restaurantTender.create({
+        data: {
+          billId: foreignBill.billId,
+          type: 'CARD',
+          amount: D('14.30'),
+          businessDate: new Date('2026-08-29T00:00:00.000Z'),
+          staffProfileId: ids.operator,
+          deviceId,
+        },
+        select: { id: true },
+      })
+    );
+    const wrongBillInput: FinalizeBillSettlementInput = settlementInput(
+      wrongBill.billId,
+      wrongBill.billLineId,
+      wrongBill.evaluationId,
+      'wrong_bill'
+    );
+    wrongBillInput.tenderTaxAllocations = [
+      {
+        originalTenderId: wrongBillTender.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'MERCHANDISE',
+          billLineId: wrongBill.billLineId,
+          unitOrdinal: 0,
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 120,
+      },
+      {
+        originalTenderId: wrongBillTender.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'SERVICE_CHARGE',
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 10,
+      },
+    ];
+    await expect(
+      deps.withTenantDb(orgId, (tx) => deps.bills.finalizeBillSettlement(tx, wrongBillInput))
+    ).rejects.toThrow('tender on the bill being settled');
+    const rejectedWrites = await read(async (tx) => ({
+      snapshots: await tx.restaurantTaxTransactionSnapshot.count({
+        where: { transactionReference: `tax_settlement_wrong_bill_${suffix}` },
+      }),
+      allocations: await tx.restaurantTaxTenderAllocationSnapshot.count({
+        where: { billId: wrongBill.billId },
+      }),
+      bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: wrongBill.billId } }),
+    }));
+    expect(rejectedWrites).toMatchObject({ snapshots: 0, allocations: 0 });
+    expect(rejectedWrites.bill).toMatchObject({ status: 'OPEN', taxTotal: D('0') });
+
+    const committed = await makeBill('commit');
+    const [tenderA, tenderB] = await deps.withTenantDb(orgId, (tx) =>
+      Promise.all([
+        tx.restaurantTender.create({
+          data: {
+            billId: committed.billId,
+            type: 'CARD',
+            amount: D('8.00'),
+            businessDate: new Date('2026-08-29T00:00:00.000Z'),
+            staffProfileId: ids.operator,
+            deviceId,
+          },
+          select: { id: true },
+        }),
+        tx.restaurantTender.create({
+          data: {
+            billId: committed.billId,
+            type: 'CARD',
+            amount: D('6.30'),
+            businessDate: new Date('2026-08-29T00:00:00.000Z'),
+            staffProfileId: ids.operator,
+            deviceId,
+          },
+          select: { id: true },
+        }),
+      ])
+    );
+    const committedInput: FinalizeBillSettlementInput = settlementInput(
+      committed.billId,
+      committed.billLineId,
+      committed.evaluationId,
+      'commit'
+    );
+    committedInput.tenderTaxAllocations = [
+      {
+        originalTenderId: tenderA.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'MERCHANDISE',
+          billLineId: committed.billLineId,
+          unitOrdinal: 0,
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 70,
+      },
+      {
+        originalTenderId: tenderB.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'MERCHANDISE',
+          billLineId: committed.billLineId,
+          unitOrdinal: 0,
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 50,
+      },
+      {
+        originalTenderId: tenderA.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'SERVICE_CHARGE',
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 5,
+      },
+      {
+        originalTenderId: tenderB.id,
+        paymentCategory: 'CARD',
+        bucket: {
+          allocationKind: 'SERVICE_CHARGE',
+          ruleVersionId: ids.taxRule,
+          paymentCategory: 'CARD',
+        },
+        cents: 5,
+      },
+    ];
+    const result = await deps.withTenantDb(orgId, (tx) =>
+      deps.bills.finalizeBillSettlement(tx, committedInput)
+    );
+    expect(result).toMatchObject({
+      alreadySettled: false,
+      consumedReservationCount: 1,
+    });
+    expect(result.receiptNumber).toBeGreaterThan(0);
+    expect(result.loyaltyEntryId).toBeTruthy();
+
+    const frozen = await read(async (tx) => ({
+      bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: committed.billId } }),
+      line: await tx.restaurantBillLine.findUniqueOrThrow({
+        where: { id: committed.billLineId },
+      }),
+      snapshot: await tx.restaurantTaxTransactionSnapshot.findUniqueOrThrow({
+        where: {
+          organizationId_transactionReference: {
+            organizationId: orgId,
+            transactionReference: `tax_settlement_commit_${suffix}`,
+          },
+        },
+      }),
+      buckets: await tx.restaurantTaxRateBucketSnapshot.findMany({
+        where: { snapshotId: result.snapshotId },
+        orderBy: { allocationKind: 'asc' },
+      }),
+      tenderAllocations: await tx.restaurantTaxTenderAllocationSnapshot.findMany({
+        where: { snapshotId: result.snapshotId },
+        orderBy: [{ rateBucketSnapshotId: 'asc' }, { originalTenderId: 'asc' }],
+        include: { rateBucket: true },
+      }),
+      reservation: await tx.restaurantPromotionCapReservation.findUniqueOrThrow({
+        where: { id: `promo_reservation_commit_${suffix}` },
+      }),
+      counter: await tx.restaurantPromotionCapCounter.findUniqueOrThrow({
+        where: { id: `promo_counter_commit_${suffix}` },
+      }),
+      earn: await tx.loyaltyPointsEntry.findUniqueOrThrow({
+        where: {
+          organizationId_idempotencyKey: {
+            organizationId: orgId,
+            idempotencyKey: `loyalty:earn:${committed.billId}`,
+          },
+        },
+      }),
+    }));
+    expect(frozen.bill).toMatchObject({ status: 'SETTLED' });
+    expect(frozen.bill.taxTotal.toString()).toBe('1.3');
+    expect(frozen.bill.serviceChargeTotal.toString()).toBe('1');
+    expect(frozen.bill.discountTotal.toString()).toBe('0.5');
+    expect(frozen.bill.grandTotal.toString()).toBe('14.3');
+    expect(frozen.line.taxAmount.toString()).toBe('1.3');
+    expect(frozen.line.serviceChargeAmount.toString()).toBe('1');
+    expect(frozen.line.lineTotal.toString()).toBe('14.3');
+    expect(frozen.snapshot.evidenceVersion).toBe(1);
+    expect(frozen.snapshot.billId).toBe(committed.billId);
+    expect(frozen.buckets).toHaveLength(2);
+    expect(frozen.buckets.map((bucket) => bucket.allocationKind)).toEqual([
+      'MERCHANDISE',
+      'SERVICE_CHARGE',
+    ]);
+    expect(frozen.buckets[0]).toMatchObject({
+      billLineId: committed.billLineId,
+      unitOrdinal: 0,
+    });
+    expect(frozen.buckets[1]).toMatchObject({ billLineId: null, unitOrdinal: null });
+    expect(frozen.tenderAllocations).toHaveLength(4);
+    expect(frozen.tenderAllocations.reduce((total, row) => total + row.cents, BigInt(0))).toBe(
+      BigInt(130)
+    );
+    expect(new Set(frozen.tenderAllocations.map((row) => row.originalTenderId))).toEqual(
+      new Set([tenderA.id, tenderB.id])
+    );
+    expect(new Set(frozen.tenderAllocations.map((row) => row.rateBucket.allocationKind))).toEqual(
+      new Set(['MERCHANDISE', 'SERVICE_CHARGE'])
+    );
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.update({
+          where: { id: frozen.tenderAllocations[0]!.id },
+          data: { cents: BigInt(1) },
+        })
+      )
+    ).rejects.toMatchObject({ code: 'P2039' });
+    await expect(
+      deps.withTenantDb(orgId, (tx) =>
+        tx.restaurantTaxTenderAllocationSnapshot.delete({
+          where: { id: frozen.tenderAllocations[0]!.id },
+        })
+      )
+    ).rejects.toMatchObject({ code: 'P2039' });
+    const firstAllocation = frozen.tenderAllocations[0]!;
+    await expect(
+      deps.withTenantDb(
+        orgId,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "restaurant_tax_tender_allocation_snapshots"
+            ("id", "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+             "originalTenderId", "paymentCategory", "cents")
+          VALUES
+            (gen_random_uuid()::text, ${orgId}, ${result.snapshotId}, ${committed.billId},
+             ${firstAllocation.rateBucketSnapshotId}, ${firstAllocation.originalTenderId},
+             ${firstAllocation.paymentCategory}::"RestaurantTenderType", ${firstAllocation.cents})
+        `
+      )
+    ).rejects.toMatchObject({ code: 'P2010' });
+    await expect(
+      deps.withTenantDb(
+        orgId,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "restaurant_tax_tender_allocation_snapshots"
+            ("id", "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+             "originalTenderId", "paymentCategory", "cents")
+          VALUES
+            (gen_random_uuid()::text, ${orgId}, 'different-snapshot', ${committed.billId},
+             ${firstAllocation.rateBucketSnapshotId}, ${firstAllocation.originalTenderId},
+             ${firstAllocation.paymentCategory}::"RestaurantTenderType", ${firstAllocation.cents})
+        `
+      )
+    ).rejects.toMatchObject({ code: 'P2010' });
+    await expect(
+      deps.withTenantDb(
+        orgId,
+        (tx) =>
+          tx.$executeRaw`
+          INSERT INTO "restaurant_tax_tender_allocation_snapshots"
+            ("id", "organizationId", "snapshotId", "billId", "rateBucketSnapshotId",
+             "originalTenderId", "paymentCategory", "cents")
+          VALUES
+            (gen_random_uuid()::text, ${orgId}, ${result.snapshotId}, ${committed.billId},
+             ${firstAllocation.rateBucketSnapshotId}, ${wrongBillTender.id},
+             'CARD'::"RestaurantTenderType", 1)
+        `
+      )
+    ).rejects.toMatchObject({ code: 'P2010' });
+    expect(frozen.reservation.state).toBe('CONSUMED');
+    expect(frozen.counter.consumedCount).toBe(1);
+    expect(frozen.counter.consumedAmount.toString()).toBe('0.5');
+    expect(frozen.earn.points).toBe(12);
   });
 
   it('settlement predicate: NO_BILLS → BILLS_OPEN → settled once every bill is settled', async () => {
