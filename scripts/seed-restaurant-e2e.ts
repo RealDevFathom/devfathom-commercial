@@ -21,6 +21,7 @@ import {
   seedRecipeProfitabilityFixture,
 } from './seed-restaurant-acceptance-fixtures.js';
 import {
+  roleTemplatesForVertical,
   adminDepartmentKeyForVertical,
   defaultDepartmentRowsForVertical,
 } from '../src/lib/vertical-catalog.js';
@@ -760,6 +761,239 @@ function seedCurrentWindowClose(databaseUrl: string) {
   if (result.status !== 0) throw new Error('Current-window daily-close fixture failed.');
 }
 
+/** Match platform onboarding's role catalog without changing existing actor grants. */
+async function seedFirstRunRoles(tx: Prisma.TransactionClient, organizationId: string) {
+  for (const template of roleTemplatesForVertical('RESTAURANT')) {
+    await tx.organizationRole.upsert({
+      where: {
+        organizationId_key: {
+          organizationId,
+          key: template.key,
+        },
+      },
+      update: {},
+      create: {
+        key: template.key,
+        name: template.name,
+        isSystem: template.isSystem,
+        permissions: {
+          create: template.capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+        },
+      },
+    });
+  }
+}
+
+/** Setup-only tenant: never seed orders, bills, tenders, receipts or closes. */
+async function seedFirstSaleTenant(prisma: PrismaClient, password: string) {
+  const organizationId = 'org_restaurant_first_sale';
+  const id = (key: string) => `first_sale_${key}`;
+  await prisma.$transaction(
+    async (tx) => {
+      await tx.$executeRaw`SELECT set_config('app.current_organization_id', ${organizationId}, true), set_config('app.is_platform_admin', 'true', true)`;
+      const existing = await tx.organization.findUnique({ where: { id: organizationId } });
+      if (existing) {
+        if (
+          (await tx.restaurantOrder.count({ where: { organizationId } })) ||
+          (await tx.restaurantBill.count({ where: { organizationId } }))
+        )
+          throw new Error(
+            'First-sale tenant has trading history; use a fresh disposable database.'
+          );
+        console.log('First-sale tenant replay: zero orders and bills.');
+        return;
+      }
+      const source = await tx.organization.findUniqueOrThrow({
+        where: { id: RESTAURANT_E2E.organizationId },
+      });
+      await tx.organization.create({
+        data: {
+          id: organizationId,
+          slug: 'restaurant-first-sale',
+          displayName: 'First Sale Cafe',
+          legalName: 'First Sale Cafe Test Fixture',
+          vertical: 'RESTAURANT',
+          status: 'ACTIVE',
+          deploymentMode: 'SHARED',
+          timezone: 'Asia/Karachi',
+          currency: 'PKR',
+          locale: 'en',
+          packageId: source.packageId,
+          seatLimit: 5,
+          activatedAt: FIXED_AT,
+        },
+      });
+      await tx.$executeRaw`SELECT set_config('app.is_platform_admin', 'false', true)`;
+      for (const department of defaultDepartmentRowsForVertical('RESTAURANT'))
+        await tx.organizationDepartment.create({ data: department });
+      await seedFirstRunRoles(tx, organizationId);
+      const owner = await tx.organizationRole.findUniqueOrThrow({
+        where: { organizationId_key: { organizationId, key: 'owner' } },
+      });
+      await tx.user.create({
+        data: {
+          id: id('user'),
+          name: 'First Sale Owner',
+          email: 'first-sale@restaurant-e2e.test',
+          password,
+          role: 'EMPLOYEE',
+          department: adminDepartmentKeyForVertical('RESTAURANT'),
+          title: 'Owner',
+          organizationRoleId: owner.id,
+        },
+      });
+      await tx.restaurantBranch.create({
+        data: {
+          id: id('branch'),
+          name: 'First Sale Kitchen',
+          timezone: 'Asia/Karachi',
+          isDefault: true,
+        },
+      });
+      await tx.restaurantBranchAssignment.create({
+        data: { branchId: id('branch'), userId: id('user') },
+      });
+      await tx.restaurantStaffProfile.create({
+        data: {
+          id: id('staff'),
+          userId: id('user'),
+          displayName: 'First Sale Owner',
+          primaryBranchId: id('branch'),
+        },
+      });
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: id('staff'),
+          type: 'PIN',
+          credentialHash: hashSync('424242', PIN_BCRYPT_SALT),
+        },
+      });
+      await tx.restaurantKitchenStation.create({
+        data: { id: id('station'), branchId: id('branch'), name: 'Kitchen', isDefault: true },
+      });
+      for (const kind of ['POS', 'KDS'] as const) {
+        await tx.restaurantRegisteredDevice.create({
+          data: {
+            id: id(kind.toLowerCase()),
+            branchId: id('branch'),
+            name: `First Sale ${kind}`,
+            kind,
+            stationId: kind === 'KDS' ? id('station') : null,
+            deviceSecretHash: deviceSecretHash(
+              `rdk_first_sale_${kind.toLowerCase()}_local_ci_only`
+            ),
+          },
+        });
+      }
+      await tx.restaurantDrawerSession.create({
+        data: {
+          deviceId: id('pos'),
+          branchId: id('branch'),
+          staffProfileId: id('staff'),
+          businessDate: CURRENT_BUSINESS_DATE,
+          openingFloat: '100.00',
+        },
+      });
+      await tx.restaurantFloor.create({
+        data: { id: id('floor'), branchId: id('branch'), name: 'Dining' },
+      });
+      await tx.restaurantTable.create({
+        data: { id: id('table'), floorId: id('floor'), code: 'Table 1', capacity: 4 },
+      });
+      await tx.restaurantBrand.create({
+        data: { id: id('brand'), name: 'First Sale', isDefault: true },
+      });
+      await tx.restaurantCategory.create({ data: { id: id('category'), name: 'Mains' } });
+      await tx.restaurantProduct.create({
+        data: { id: id('product'), categoryId: id('category'), name: 'First Sale Bun' },
+      });
+      await tx.restaurantPriceList.create({
+        data: { id: id('prices'), name: 'First Sale Prices', isDefault: true },
+      });
+      await tx.restaurantPriceListVersion.create({
+        data: {
+          id: id('price_version'),
+          priceListId: id('prices'),
+          versionNumber: 1,
+          effectiveFrom: FIXED_AT,
+          status: 'ACTIVE',
+          activatedAt: FIXED_AT,
+        },
+      });
+      await tx.restaurantPriceListEntry.create({
+        data: { priceListVersionId: id('price_version'), productId: id('product'), price: '12.50' },
+      });
+      await tx.restaurantMenu.create({
+        data: { id: id('menu'), brandId: id('brand'), name: 'First Sale Menu' },
+      });
+      await tx.restaurantMenuSection.create({
+        data: { id: id('section'), menuId: id('menu'), name: 'Mains' },
+      });
+      await tx.restaurantMenuItem.create({
+        data: { sectionId: id('section'), productId: id('product') },
+      });
+      await tx.restaurantBranchMenuPublication.create({
+        data: {
+          id: id('publication'),
+          branchId: id('branch'),
+          menuId: id('menu'),
+          priceListId: id('prices'),
+          status: 'PUBLISHED',
+          channels: ['DINE_IN'],
+          publishedAt: FIXED_AT,
+        },
+      });
+      await tx.restaurantMenuAvailabilityWindow.create({
+        data: {
+          publicationId: id('publication'),
+          daysOfWeek: [0, 1, 2, 3, 4, 5, 6],
+          startMinutes: 0,
+          endMinutes: 1440,
+        },
+      });
+      await tx.restaurantTaxOfficialSource.create({
+        data: {
+          id: id('tax_source'),
+          authorityCode: 'TEST-E2E',
+          documentTitle: 'Synthetic zero-rate first-sale fixture',
+          sourceUrl: 'https://example.invalid/first-sale/synthetic-zero-rate-tax',
+          contentHash: createHash('sha256').update('first-sale synthetic zero rate').digest('hex'),
+          retrievedAt: FIXED_AT,
+        },
+      });
+      await tx.restaurantTaxProfileVersion.create({
+        data: {
+          id: id('tax_profile'),
+          branchId: id('branch'),
+          versionNumber: 1,
+          status: 'PUBLISHED',
+          effectiveFrom: FIXED_AT,
+          approvedAt: FIXED_AT,
+          publishedAt: FIXED_AT,
+          approvalReference: 'TEST_ONLY · SYNTHETIC_ZERO_RATE',
+          priceMode: 'INCLUSIVE',
+          rules: {
+            create: ['CASH', 'CARD', 'OTHER'].map((paymentCategory) => ({
+              officialSourceId: id('tax_source'),
+              ruleCode: `TEST_ZERO_${paymentCategory}`,
+              paymentCategory,
+              priceMode: 'INCLUSIVE',
+              rate: '0',
+              status: 'PUBLISHED',
+              effectiveFrom: FIXED_AT,
+              approvalReference: 'TEST_ONLY · SYNTHETIC_ZERO_RATE',
+              approvedAt: FIXED_AT,
+              publishedAt: FIXED_AT,
+            })),
+          },
+        },
+      });
+      console.log('Seeded separate first-sale tenant: setup only; zero trading history.');
+    },
+    { timeout: 60_000 }
+  );
+}
+
 async function main() {
   const databaseUrl = resolveRestaurantE2eDatabaseUrl();
   const operatorPassword = process.env.RESTAURANT_ACTOR_OPERATOR_PASSWORD;
@@ -1009,6 +1243,7 @@ async function main() {
             updatedAt: FIXED_AT,
           },
         });
+        await seedFirstRunRoles(tx, RESTAURANT_E2E.organizationId);
         await requirePristineDeliveryLane(tx);
         await seedDeliveryTaxProfile(tx);
         await seedCoreTaxProfile(tx);
@@ -2592,6 +2827,7 @@ async function main() {
     // WHA-1553 — the two isolated Insights completion acceptance tenants. They
     // own separate organizations and never read or write Chai Chowk's rows, so
     // they run after the verification above rather than inside it.
+    await seedFirstSaleTenant(prisma, devFathomAlexPassword!);
     seedCurrentWindowClose(databaseUrl);
 
     const insightsCompletion = await seedRestaurantInsightsCompletionFixtures(prisma);

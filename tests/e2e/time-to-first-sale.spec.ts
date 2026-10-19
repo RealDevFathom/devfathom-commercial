@@ -1,11 +1,58 @@
 import { expect, test, type Browser, type Locator, type Page } from '@playwright/test';
 
+import pg from 'pg';
+
 import { freshPharmacyFirstSale } from './fixtures/pharmacy-first-sale';
-import {
-  installSeededTerminalCookie,
-  restaurantE2eCredentials as restaurant,
-} from './restaurant-fixture';
-import { signInAs } from './fixtures/restaurant-actor-accessibility';
+import { installSeededTerminalCookie } from './restaurant-fixture';
+import { completeWorkspaceSelection } from './fixtures/restaurant-actor-accessibility';
+
+// Dedicated setup-only tenant; never reuse Chai Chowk's historical sales.
+const restaurant = {
+  organizationId: 'org_restaurant_first_sale',
+  operator: { staffProfileId: 'first_sale_staff', pin: '424242' },
+  pos: {
+    deviceId: 'first_sale_pos',
+    secret: 'rdk_first_sale_pos_local_ci_only',
+    clientIp: '198.51.100.71',
+  },
+  kds: {
+    deviceId: 'first_sale_kds',
+    secret: 'rdk_first_sale_kds_local_ci_only',
+    clientIp: '198.51.100.72',
+  },
+  menuItem: { name: 'First Sale Bun', unitPrice: '12.50' },
+};
+
+async function tradingEvidence() {
+  const connectionString = process.env.RESTAURANT_ACTOR_RUNTIME_DATABASE_URL;
+  if (!connectionString) throw new Error('Disposable runtime database URL required.');
+  const target = new URL(connectionString);
+  if (
+    !['127.0.0.1', 'localhost', '[::1]'].includes(target.hostname) ||
+    Number(target.port) < 55600 ||
+    Number(target.port) > 55699 ||
+    !/(?:^|[_-])(?:test|e2e|tmp|disposable)(?:[_-]|$)/i.test(target.pathname.slice(1))
+  )
+    throw new Error('First-sale evidence requires the authorized loopback disposable DB range.');
+  const client = new pg.Client({ connectionString });
+  await client.connect();
+  try {
+    await client.query('BEGIN');
+    await client.query(
+      "SELECT set_config('app.current_organization_id', $1, true), set_config('app.is_platform_admin', 'false', true)",
+      [restaurant.organizationId]
+    );
+    const { rows } = await client.query(`SELECT
+      (SELECT count(*)::int FROM restaurant_orders) AS orders,
+      (SELECT count(*)::int FROM restaurant_bills) AS bills,
+      (SELECT count(*)::int FROM restaurant_bills WHERE status = 'SETTLED') AS settled,
+      (SELECT role FROM users WHERE id = 'first_sale_user') AS role`);
+    await client.query('COMMIT');
+    return rows[0];
+  } finally {
+    await client.end();
+  }
+}
 
 test.describe.configure({ mode: 'serial' });
 
@@ -14,8 +61,7 @@ async function activate(target: Locator, metric: { clicks: number }) {
   await target.click();
 }
 
-function observe4xx(page: Page) {
-  const failures: string[] = [];
+function observe4xx(page: Page, failures: string[] = []) {
   page.on('response', (response) => {
     if (response.status() >= 400 && response.status() < 500)
       failures.push(
@@ -38,12 +84,29 @@ async function assertNoRawIdInputs(page: Page) {
   ).toHaveCount(0);
 }
 
-async function restaurantFirstSale(page: Page, browser: Browser, metric: { clicks: number }) {
-  const origin = await signInAs(page, 'restaurantAdmin');
+async function restaurantFirstSale(
+  page: Page,
+  browser: Browser,
+  metric: { clicks: number },
+  fourXx: string[]
+) {
+  expect(await tradingEvidence()).toEqual({ orders: 0, bills: 0, settled: 0, role: 'EMPLOYEE' });
+  const origin = `http://restaurant-first-sale.localhost:${process.env.PLAYWRIGHT_PORT ?? 4319}`;
+  await page.goto(new URL('/login', origin).href);
+  await page.getByLabel('Email').fill('first-sale@restaurant-e2e.test');
+  await page
+    .getByLabel('Password', { exact: true })
+    .fill(process.env.RESTAURANT_ACTOR_ADMIN_PASSWORD!);
+  await page.getByRole('button', { name: 'Sign in', exact: true }).click();
+  await completeWorkspaceSelection(page, '/login', /First Sale Cafe/);
   await installSeededTerminalCookie(page.context(), restaurant.pos, origin);
   await page.goto(new URL('/dashboard', origin).href);
   const checklist = page.getByTestId('first-run-checklist');
   await expect(checklist).toBeVisible();
+  await expect(
+    checklist.getByRole('listitem').filter({ hasText: 'First test sale' })
+  ).toHaveAttribute('data-state', 'NEEDS_YOU');
+  await expect(checklist.locator('[data-state="DONE"]')).toHaveCount(5);
   const established = page.waitForResponse((response) =>
     response.url().endsWith('/api/restaurant/terminal/establish')
   );
@@ -69,6 +132,7 @@ async function restaurantFirstSale(page: Page, browser: Browser, metric: { click
   const kdsContext = await browser.newContext();
   await installSeededTerminalCookie(kdsContext, restaurant.kds, origin);
   const kds = await kdsContext.newPage();
+  observe4xx(kds, fourXx);
   const kdsEstablished = kds.waitForResponse((response) =>
     response.url().endsWith('/api/restaurant/terminal/establish')
   );
@@ -95,6 +159,10 @@ async function restaurantFirstSale(page: Page, browser: Browser, metric: { click
   await page.getByLabel('Cash received').fill(restaurant.menuItem.unitPrice);
   await activate(page.getByRole('button', { name: 'Apply tender' }), metric);
   await expect(page.getByRole('region', { name: /^Receipt \d+$/ })).toBeVisible();
+  expect(await tradingEvidence()).toEqual({ orders: 1, bills: 1, settled: 1, role: 'EMPLOYEE' });
+  await page.goto(new URL('/dashboard', origin).href);
+  await expect(page.getByRole('heading', { name: 'Restaurant dashboard' })).toBeVisible();
+  await expect(page.getByTestId('first-run-checklist')).toHaveCount(0);
 }
 
 test('admin follows the first-run checklist to the first completed sale', async ({
@@ -108,7 +176,7 @@ test('admin follows the first-run checklist to the first completed sale', async 
   const vertical = process.env.PHARMACY_E2E === '1' ? 'PHARMACY' : 'RESTAURANT';
 
   if (vertical === 'PHARMACY') await freshPharmacyFirstSale(page, browser, metric, fourXx);
-  else await restaurantFirstSale(page, browser, metric);
+  else await restaurantFirstSale(page, browser, metric, fourXx);
 
   const wallTimeMs = Date.now() - started;
   testInfo.annotations.push(

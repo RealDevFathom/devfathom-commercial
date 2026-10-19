@@ -7,6 +7,7 @@ import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { FirstRunChecklist } from '@/components/onboarding/first-run-checklist';
 import { loadSetupChecklist } from '@/lib/onboarding/setup-evaluator';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { can, subjectFromSession } from '@/lib/abac';
 
 export const metadata: Metadata = {
   title: 'Dashboard',
@@ -22,10 +23,13 @@ export default async function DashboardPage() {
       ? ssr.entitlements.vertical
       : null;
   const organizationId = ssr?.organization?.id;
+  const user = ssr?.session?.user;
   const checklist =
-    organizationId && firstRunVertical && ssr?.session?.user?.role === 'ADMIN'
-      ? await withTenantDb(organizationId, (db) =>
-          loadSetupChecklist(db, organizationId, firstRunVertical)
+    organizationId && firstRunVertical && user
+      ? await withTenantDb(organizationId, async (db) =>
+          (await can(subjectFromSession(user), 'admin:access', undefined, { db }))
+            ? loadSetupChecklist(db, organizationId, firstRunVertical)
+            : null
         )
       : null;
 
