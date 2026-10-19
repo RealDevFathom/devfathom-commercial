@@ -25,7 +25,13 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  */
 
 export type SopExecutionErrorReason =
-  'NOT_FOUND' | 'INVALID_STATE' | 'STEP_NOT_FOUND' | 'STEP_ALREADY_COMPLETED' | 'INVALID';
+  | 'NOT_FOUND'
+  | 'INVALID_STATE'
+  | 'STEP_NOT_FOUND'
+  | 'STEP_ALREADY_COMPLETED'
+  | 'FORBIDDEN'
+  | 'EVIDENCE_REQUIRED'
+  | 'INVALID';
 
 export class SopExecutionError extends Error {
   constructor(
@@ -39,6 +45,50 @@ export class SopExecutionError extends Error {
 
 function runSopTx<T>(db: ScopedDb, work: (tx: ScopedDb) => Promise<T>): Promise<T> {
   return (db.$transaction as unknown as (fn: (tx: ScopedDb) => Promise<T>) => Promise<T>)(work);
+}
+
+type OwnedOccurrence = {
+  assignedStaffProfileId: string | null;
+  poolJobRoleId: string | null;
+  claimedByStaffProfileId: string | null;
+};
+
+function assertOccurrenceOwner(occurrence: OwnedOccurrence, staffProfileId?: string | null) {
+  if (!staffProfileId) {
+    throw new SopExecutionError('A completing staff profile is required.', 'FORBIDDEN');
+  }
+  if (occurrence.assignedStaffProfileId) {
+    if (occurrence.assignedStaffProfileId !== staffProfileId) {
+      throw new SopExecutionError(
+        'This checklist is assigned to another staff member.',
+        'FORBIDDEN'
+      );
+    }
+    return;
+  }
+  if (occurrence.poolJobRoleId) {
+    if (!occurrence.claimedByStaffProfileId) {
+      throw new SopExecutionError(
+        'Claim this role-pool checklist before working on it.',
+        'FORBIDDEN'
+      );
+    }
+    if (occurrence.claimedByStaffProfileId !== staffProfileId) {
+      throw new SopExecutionError(
+        'This checklist was claimed by another staff member.',
+        'FORBIDDEN'
+      );
+    }
+    return;
+  }
+  // Occurrences created before SOP-1 have neither owner column populated. Keep
+  // those historical rows executable with explicit actor attribution; every new
+  // PERSON/ROLE occurrence takes one of the guarded paths above.
+  return;
+}
+
+function evidencePurpose(mimeType: string) {
+  return /(?:^|;)\s*evidence=(photo|signature)(?:;|$)/i.exec(mimeType)?.[1]?.toLowerCase();
 }
 
 // ── Start occurrence ──────────────────────────────────────────────────────────
@@ -67,7 +117,13 @@ export async function startOccurrence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
     if (occ.status !== 'SCHEDULED' && occ.status !== 'REJECTED') {
@@ -76,6 +132,7 @@ export async function startOccurrence(
         'INVALID_STATE'
       );
     }
+    assertOccurrenceOwner(occ, input.actorStaffProfileId);
     const updated = await tx.restaurantSopOccurrence.update({
       where: { id: input.occurrenceId },
       data: { status: 'IN_PROGRESS', startedAt: now },
@@ -113,7 +170,13 @@ export async function completeStep(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
     if (occ.status !== 'IN_PROGRESS') {
@@ -122,6 +185,7 @@ export async function completeStep(
         'INVALID_STATE'
       );
     }
+    assertOccurrenceOwner(occ, input.actorStaffProfileId);
     const step = await tx.restaurantSopOccurrenceStep.findUnique({
       where: {
         occurrenceId_templateStepId: {
@@ -129,11 +193,31 @@ export async function completeStep(
           templateStepId: input.templateStepId,
         },
       },
-      select: { id: true, completed: true, completedAt: true },
+      select: {
+        id: true,
+        completed: true,
+        completedAt: true,
+        templateStep: {
+          select: { requiresPhoto: true, requiresSignature: true, requiresNote: true },
+        },
+        evidence: { select: { mimeType: true } },
+      },
     });
     if (!step) throw new SopExecutionError('Step not found on this occurrence.', 'STEP_NOT_FOUND');
     if (step.completed) {
       return { occurrenceStepId: step.id, completed: true, completedAt: step.completedAt! };
+    }
+    const purposes = new Set(step.evidence.map((item) => evidencePurpose(item.mimeType)));
+    const missing = [
+      step.templateStep.requiresPhoto && !purposes.has('photo') ? 'photo' : null,
+      step.templateStep.requiresSignature && !purposes.has('signature') ? 'signature' : null,
+      step.templateStep.requiresNote && !input.note?.trim() ? 'note' : null,
+    ].filter((item): item is string => item !== null);
+    if (missing.length > 0) {
+      throw new SopExecutionError(
+        `Capture the required ${missing.join(', ')} before completing this step.`,
+        'EVIDENCE_REQUIRED'
+      );
     }
     const updated = await tx.restaurantSopOccurrenceStep.update({
       where: { id: step.id },
@@ -191,8 +275,8 @@ export async function attachEvidence(
       'INVALID'
     );
   }
-  if (input.sizeBytes < 0) {
-    throw new SopExecutionError('sizeBytes must be non-negative.', 'INVALID');
+  if (!Number.isSafeInteger(input.sizeBytes) || input.sizeBytes <= 0) {
+    throw new SopExecutionError('sizeBytes must be a positive safe integer.', 'INVALID');
   }
 
   const contentHash = input.contentBytes
@@ -202,7 +286,13 @@ export async function attachEvidence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true },
+      select: {
+        id: true,
+        status: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
     const allowedStatuses = ['IN_PROGRESS', 'SUBMITTED', 'LATE'] as const;
@@ -212,6 +302,7 @@ export async function attachEvidence(
         'INVALID_STATE'
       );
     }
+    assertOccurrenceOwner(occ, input.uploaderStaffProfileId);
     if (input.occurrenceStepId) {
       const step = await tx.restaurantSopOccurrenceStep.findUnique({
         where: { id: input.occurrenceStepId },
@@ -268,13 +359,51 @@ export async function submitOccurrence(
   return runSopTx(db, async (tx) => {
     const occ = await tx.restaurantSopOccurrence.findUnique({
       where: { id: input.occurrenceId },
-      select: { id: true, status: true, windowEndsAt: true },
+      select: {
+        id: true,
+        status: true,
+        windowEndsAt: true,
+        assignedStaffProfileId: true,
+        poolJobRoleId: true,
+        claimedByStaffProfileId: true,
+        steps: {
+          select: {
+            completed: true,
+            templateStep: {
+              select: {
+                title: true,
+                requiresPhoto: true,
+                requiresSignature: true,
+                requiresNote: true,
+              },
+            },
+            evidence: { select: { mimeType: true } },
+            note: true,
+          },
+        },
+      },
     });
     if (!occ) throw new SopExecutionError('Occurrence not found.', 'NOT_FOUND');
     if (occ.status !== 'IN_PROGRESS') {
       throw new SopExecutionError(
         `Cannot submit an occurrence in status ${occ.status}. Expected IN_PROGRESS.`,
         'INVALID_STATE'
+      );
+    }
+    assertOccurrenceOwner(occ, input.actorStaffProfileId);
+    const incomplete = occ.steps.filter((step) => {
+      const purposes = new Set(step.evidence.map((item) => evidencePurpose(item.mimeType)));
+      return (
+        !step.completed ||
+        (step.templateStep.requiresPhoto && !purposes.has('photo')) ||
+        (step.templateStep.requiresSignature && !purposes.has('signature')) ||
+        (step.templateStep.requiresNote && !step.note?.trim())
+      );
+    });
+    if (incomplete.length > 0) {
+      throw new SopExecutionError(
+        `Complete every checklist step and capture its required proof before submitting (${incomplete[0]!.templateStep.title}).`,
+        'EVIDENCE_REQUIRED'
       );
     }
     // LATE = submitted after the window closed (BUILD-ASSUMPTIONS §SOP-defaults (4))

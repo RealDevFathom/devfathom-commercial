@@ -38,9 +38,11 @@ function mapExecutionError(err: unknown): never {
     const code =
       err.reason === 'NOT_FOUND'
         ? 'NOT_FOUND'
-        : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
-          ? 'CONFLICT'
-          : 'BAD_REQUEST';
+        : err.reason === 'FORBIDDEN'
+          ? 'FORBIDDEN'
+          : err.reason === 'INVALID_STATE' || err.reason === 'STEP_ALREADY_COMPLETED'
+            ? 'CONFLICT'
+            : 'BAD_REQUEST';
     throw new TRPCError({ code, message: err.message });
   }
   if (err instanceof SopVerificationError) {
@@ -286,16 +288,19 @@ export const restaurantSopExecutionRouter = router({
       }
     }),
 
+  /**
+   * Compatibility seam for trusted storage adapters. The product UI uses the
+   * multipart evidence route, which computes the hash from uploaded bytes.
+   */
   attachEvidence: completeProcedure
     .input(
       z
         .object({
           occurrenceId: OCCURRENCE_ID,
           occurrenceStepId: z.string().min(1).nullable().optional(),
-          /** Hex sha256 of the content (caller computes; bytes never sent to this endpoint). */
           contentHashHex: z.string().regex(/^[0-9a-f]{64}$/, 'Expected 64-char hex sha256.'),
           mimeType: z.string().min(1).max(255),
-          sizeBytes: z.number().int().min(0),
+          sizeBytes: z.number().int().positive(),
           storageRef: z.string().max(2_000).nullable().optional(),
           uploaderStaffProfileId: OPTIONAL_ACTOR,
         })
