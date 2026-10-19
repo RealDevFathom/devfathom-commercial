@@ -38,6 +38,7 @@ import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
+import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
 import { defaultBookingEngineSlug } from '@/lib/hotel/property';
 import {
   ensureAdministratorStaffProfile,
@@ -834,7 +835,7 @@ async function bootstrapOrganization(
   // fills them in on the property settings page; pre-seeding them here would be
   // exactly the "seed data fakes readiness" move the checklist exists to refuse.
   if (input.vertical === 'HOSPITALITY') {
-    await db.hotelProperty.create({
+    const property = await db.hotelProperty.create({
       data: {
         organizationId: organization.id,
         name: input.firstBranchName!,
@@ -846,6 +847,21 @@ async function bootstrapOrganization(
         // about DevFathom's contract, not about what a guest is charged.
         bookingEngineSlug: defaultBookingEngineSlug(input.slug, input.firstBranchName!),
       },
+    });
+    // H1-14 / UPS-04 — the English and Urdu journey drafts, so a new property
+    // opens on real wording to edit rather than eight empty boxes.
+    //
+    // Every seed is a DRAFT. UPS-04's acceptance is "template approval before
+    // use", so seeding APPROVED copy would hand a guest words nobody at the
+    // property had read — the same "seed data fakes readiness" move the
+    // checklist above refuses.
+    await db.hotelJourneyTemplate.createMany({
+      data: defaultJourneyTemplateSeeds().map((seed) => ({
+        ...seed,
+        organizationId: organization.id,
+        branchId: property.branchId,
+        createdByUserId: admin.id,
+      })),
     });
   }
   // §9 Step 6 — instantiate the vertical's role templates from the catalog.
