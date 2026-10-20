@@ -50,6 +50,7 @@ import {
   currentProperty,
   inputJson,
   notProvisioned,
+  uniqueViolationColumns,
   withLockedProperty,
   type PropertyContext,
 } from '@/server/hotel-property-context';
@@ -71,11 +72,10 @@ async function withExtraCodeConflict<T>(code: string, run: () => Promise<T>): Pr
     return await run();
   } catch (error) {
     if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-      const target = error.meta?.target;
+      const target = uniqueViolationColumns(error);
       const matches =
-        target === 'hotel_extras_org_branch_code_key' ||
-        (Array.isArray(target) &&
-          target.length === 3 &&
+        target.includes('hotel_extras_org_branch_code_key') ||
+        (target.length === 3 &&
           ['organizationId', 'branchId', 'code'].every((field) => target.includes(field)));
       if (matches && (!error.meta?.modelName || error.meta.modelName === 'HotelExtra')) {
         throw new TRPCError({

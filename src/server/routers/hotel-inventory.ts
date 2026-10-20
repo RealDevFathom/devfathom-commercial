@@ -64,6 +64,7 @@ import type { EntitlementSnapshot } from '@/lib/module-catalog';
 import {
   currentProperty,
   hasSqlState,
+  uniqueViolationColumns,
   withLockedProperty,
   type PropertyContext,
 } from '@/server/hotel-property-context';
@@ -166,11 +167,7 @@ function mapInventoryError(error: unknown): never {
     });
   }
   if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
-    const target = Array.isArray(error.meta?.target)
-      ? (error.meta.target as string[])
-      : typeof error.meta?.target === 'string'
-        ? [error.meta.target]
-        : [];
+    const target = uniqueViolationColumns(error);
     const field = target.some((column) => column.includes('code'))
       ? 'code'
       : target.some((column) => column.includes('number'))

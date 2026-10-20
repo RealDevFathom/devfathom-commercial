@@ -105,6 +105,45 @@ export function inputJson(value: Record<string, unknown>): Prisma.InputJsonValue
  * constraint, and the verticals keep their own copy rather than sharing a
  * restaurant module.
  */
+/**
+ * The columns and constraint name a Prisma unique violation reports. The query
+ * engine fills `meta.target`; the pg driver adapter instead fills
+ * `meta.driverAdapterError.cause.constraint` with `fields` (quoted identifiers,
+ * `"organizationId"`) or `index`. On a table with row-level security Postgres
+ * withholds the key detail those fields are parsed from, so the adapter sends
+ * no constraint at all and only `originalMessage` ("duplicate key value
+ * violates unique constraint "…_key"") names it; that is read too. Names are
+ * unquoted and de-duplicated, and an error carrying none yields an empty list.
+ */
+export function uniqueViolationColumns(error: { meta?: Record<string, unknown> }): string[] {
+  const names: string[] = [];
+  const collect = (value: unknown) => {
+    if (typeof value === 'string') names.push(value);
+    else if (Array.isArray(value)) {
+      for (const entry of value) if (typeof entry === 'string') names.push(entry);
+    }
+  };
+  collect(error.meta?.target);
+  const adapterError = error.meta?.driverAdapterError;
+  if (adapterError && typeof adapterError === 'object') {
+    const cause = (adapterError as { cause?: unknown }).cause;
+    if (cause && typeof cause === 'object') {
+      const { constraint, originalMessage } = cause as {
+        constraint?: unknown;
+        originalMessage?: unknown;
+      };
+      if (constraint && typeof constraint === 'object') {
+        collect((constraint as { fields?: unknown }).fields);
+        collect((constraint as { index?: unknown }).index);
+      }
+      if (typeof originalMessage === 'string') {
+        collect(originalMessage.match(/unique constraint "([^"]+)"/)?.[1]);
+      }
+    }
+  }
+  return [...new Set(names.map((name) => name.replace(/^"(.*)"$/, '$1')))];
+}
+
 export function hasSqlState(error: unknown, sqlState: string, seen = new Set<unknown>()): boolean {
   if (typeof error === 'string') return error.includes(sqlState);
   if (!error || typeof error !== 'object' || seen.has(error)) return false;

@@ -423,6 +423,32 @@ describe('Hotel mutation concurrency contracts', () => {
       cause: { issues: expect.arrayContaining([expect.objectContaining({ path: ['code'] })]) },
     });
   });
+  it('translates the same violation as the pg driver adapter reports it', async () => {
+    db.hotelExtra.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('duplicate', {
+        code: 'P2002',
+        clientVersion: '7.9.1',
+        meta: {
+          modelName: 'HotelExtra',
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              originalCode: '23505',
+              // Postgres withholds the key detail on a row-level-secured table,
+              // so only the message names the constraint.
+              originalMessage:
+                'duplicate key value violates unique constraint "hotel_extras_org_branch_code_key"',
+              kind: 'UniqueConstraintViolation',
+            },
+          },
+        },
+      })
+    );
+    await expect(caller().extras.create(extra)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      cause: { issues: expect.arrayContaining([expect.objectContaining({ path: ['code'] })]) },
+    });
+  });
   it('preserves unrelated database errors', async () => {
     const error = new Prisma.PrismaClientKnownRequestError('other unique', {
       code: 'P2002',

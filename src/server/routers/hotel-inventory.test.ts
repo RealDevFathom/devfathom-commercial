@@ -422,6 +422,54 @@ describe('hotelProperty.inventory room types', () => {
       cause: { issues: [expect.objectContaining({ path: ['code'] })] },
     });
   });
+  it.each([
+    // Prisma 7 with @prisma/adapter-pg leaves `meta.target` unset and names the
+    // columns under `driverAdapterError.cause.constraint.fields` (quoted)...
+    ['parsed key columns', { fields: ['"organizationId"', '"branchId"', 'code'] }],
+    // ...except on a row-level-secured table, where Postgres withholds the key
+    // detail and only the message names the constraint.
+    ['the constraint name alone', undefined],
+  ])(
+    'reads the duplicate code the pg driver adapter reports from %s',
+    async (_label, constraint) => {
+      db.hotelRoomType.create.mockRejectedValueOnce(
+        new Prisma.PrismaClientKnownRequestError('duplicate', {
+          code: 'P2002',
+          clientVersion: '7.9.1',
+          meta: {
+            modelName: 'HotelRoomType',
+            driverAdapterError: {
+              name: 'DriverAdapterError',
+              cause: {
+                originalCode: '23505',
+                originalMessage:
+                  'duplicate key value violates unique constraint "hotel_room_types_org_branch_code_key"',
+                kind: 'UniqueConstraintViolation',
+                ...(constraint ? { constraint } : {}),
+              },
+            },
+          },
+        })
+      );
+      await expect(caller().roomTypes.create(typeInput)).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: 'This property already has a room type with that code. Choose another.',
+        cause: { issues: [expect.objectContaining({ path: ['code'] })] },
+      });
+    }
+  );
+  it('keeps an unrecognised unique violation as a conflict with the original cause', async () => {
+    const error = new Prisma.PrismaClientKnownRequestError('duplicate', {
+      code: 'P2002',
+      clientVersion: '7.9.1',
+      meta: { modelName: 'HotelRoomType', driverAdapterError: { name: 'DriverAdapterError' } },
+    });
+    db.hotelRoomType.create.mockRejectedValueOnce(error);
+    await expect(caller().roomTypes.create(typeInput)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      cause: error,
+    });
+  });
 });
 
 describe('hotelProperty.inventory rooms', () => {
@@ -510,6 +558,27 @@ describe('hotelProperty.inventory rooms', () => {
         code: 'P2002',
         clientVersion: '7.9.1',
         meta: { modelName: 'HotelRoom', target: ['organizationId', 'branchId', 'number'] },
+      })
+    );
+    await expect(caller().rooms.create(roomInput)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      cause: { issues: [expect.objectContaining({ path: ['number'] })] },
+    });
+    db.hotelRoom.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('duplicate', {
+        code: 'P2002',
+        clientVersion: '7.9.1',
+        meta: {
+          modelName: 'HotelRoom',
+          driverAdapterError: {
+            name: 'DriverAdapterError',
+            cause: {
+              originalCode: '23505',
+              kind: 'UniqueConstraintViolation',
+              constraint: { index: 'hotel_rooms_org_branch_number_key' },
+            },
+          },
+        },
       })
     );
     await expect(caller().rooms.create(roomInput)).rejects.toMatchObject({
