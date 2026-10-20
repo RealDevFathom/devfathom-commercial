@@ -136,17 +136,16 @@ describeIfDatabase('platform audit redaction, against PostgreSQL', () => {
     );
   }, 60_000);
 
+  // The audit rows and the organization stay: platform_audit_logs is
+  // append-only (20261019212000), and deleting the organization would SET NULL
+  // on those rows, which the same trigger refuses. Every id is per run.
   afterAll(async () => {
     if (!deps) return;
     await deps.withPlatformDb(async (db) => {
-      await db.platformAuditLog.deleteMany({
-        where: { OR: [{ organizationId: ORGANIZATION }, { actorPlatformUserId: OPERATOR }] },
-      });
       await db.platformSetting.deleteMany({
         where: { key: { in: [SETTING_SENSITIVE, SETTING_PLAIN] } },
       });
       await db.organizationScimToken.deleteMany({ where: { organizationId: ORGANIZATION } });
-      await db.organization.deleteMany({ where: { id: ORGANIZATION } });
     });
   }, 60_000);
 
