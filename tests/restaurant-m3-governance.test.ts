@@ -304,9 +304,14 @@ const PHARMACY_CUSTOMER_ORDERING_TABLES = [
 // that adds a table without listing it fails this pin deliberately, and every
 // listed table must carry ENABLE + FORCE RLS.
 const HOSPITALITY_TABLES = [
+  'hotel_beds',
   'hotel_extras',
   'hotel_properties',
   'hotel_property_assignments',
+  'hotel_room_blocks',
+  'hotel_room_status_events',
+  'hotel_room_types',
+  'hotel_rooms',
 ] as const;
 
 const M3_COLUMNS = {

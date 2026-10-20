@@ -1646,6 +1646,95 @@ async function main() {
       [hotelExtraA, hotelPropertyA, hotelExtraB, organizationB, hotelPropertyB]
     );
 
+    // H1-03 — inventory: a BED room type, one room, one bed and a live block per
+    // tenant. The status triggers write each row's first ledger line themselves
+    // (a direct insert is refused), and they attribute it to the acting user
+    // and reason GUCs, so the superuser seeding names those too and clears them
+    // afterwards, leaving the run in the state the earlier probes expect.
+    const hotelRoomTypeA = `hotel_room_type_a_${suffix}`;
+    const hotelRoomTypeB = `hotel_room_type_b_${suffix}`;
+    const hotelRoomA = `hotel_room_a_${suffix}`;
+    const hotelRoomB = `hotel_room_b_${suffix}`;
+    const hotelBedA = `hotel_bed_a_${suffix}`;
+    const hotelBedB = `hotel_bed_b_${suffix}`;
+    const hotelBlockA = `hotel_block_a_${suffix}`;
+    const hotelBlockB = `hotel_block_b_${suffix}`;
+    await client.query(
+      `SELECT set_config('app.current_user_id', $1, true),
+              set_config('app.hotel_inventory_reason', 'Isolation seed', true)`,
+      [userA]
+    );
+    await client.query(
+      `INSERT INTO "hotel_room_types" (
+        "id", "organizationId", "branchId", "code", "name", "inventoryKind", "bedsPerRoom", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'DORM', 'Dormitory', 'BED', 2, CURRENT_TIMESTAMP),
+               ($3, $4, $5, 'DORM', 'Dormitory', 'BED', 2, CURRENT_TIMESTAMP)`,
+      [hotelRoomTypeA, hotelPropertyA, hotelRoomTypeB, organizationB, hotelPropertyB]
+    );
+    await client.query(
+      `INSERT INTO "hotel_rooms" (
+        "id", "organizationId", "branchId", "roomTypeId", "inventoryKind", "number", "statusChangedBy", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 'BED', '101', $4, CURRENT_TIMESTAMP),
+               ($5, $6, $7, $8, 'BED', '101', $9, CURRENT_TIMESTAMP)`,
+      [
+        hotelRoomA,
+        hotelPropertyA,
+        hotelRoomTypeA,
+        userA,
+        hotelRoomB,
+        organizationB,
+        hotelPropertyB,
+        hotelRoomTypeB,
+        userB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "hotel_beds" (
+        "id", "organizationId", "branchId", "roomId", "label", "statusChangedBy", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, '1', $4, CURRENT_TIMESTAMP),
+               ($5, $6, $7, $8, '1', $9, CURRENT_TIMESTAMP)`,
+      [
+        hotelBedA,
+        hotelPropertyA,
+        hotelRoomA,
+        userA,
+        hotelBedB,
+        organizationB,
+        hotelPropertyB,
+        hotelRoomB,
+        userB,
+      ]
+    );
+    const hotelLedger = await client.query<{ roomId: string; id: string }>(
+      `SELECT "roomId", "id" FROM "hotel_room_status_events"
+       WHERE "roomId" IN ($1, $2) AND "bedId" IS NULL`,
+      [hotelRoomA, hotelRoomB]
+    );
+    assertEqual(hotelLedger.rows.length, 2, 'each seeded room must open its own ledger');
+    const hotelEventA = hotelLedger.rows.find((row) => row.roomId === hotelRoomA)!.id;
+    const hotelEventB = hotelLedger.rows.find((row) => row.roomId === hotelRoomB)!.id;
+    await client.query(
+      `INSERT INTO "hotel_room_blocks" (
+        "id", "organizationId", "branchId", "roomId", "kind", "startDate", "endDate", "reason", "createdBy"
+      ) VALUES ($1, 'org_devfathom', $2, $3, 'OUT_OF_ORDER', DATE '2030-01-10', DATE '2030-01-12', 'Isolation seed', $4),
+               ($5, $6, $7, $8, 'OUT_OF_ORDER', DATE '2030-01-10', DATE '2030-01-12', 'Isolation seed', $9)`,
+      [
+        hotelBlockA,
+        hotelPropertyA,
+        hotelRoomA,
+        userA,
+        hotelBlockB,
+        organizationB,
+        hotelPropertyB,
+        hotelRoomB,
+        userB,
+      ]
+    );
+    await client.query(
+      `SELECT set_config('app.current_user_id', '', true),
+              set_config('app.hotel_inventory_reason', '', true)`
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -1935,14 +2024,14 @@ async function main() {
       assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
     }
     // Blind writes on the property and the catalog reach exactly the rows the
-    // acting user can see — the RESTRICTIVE policy filters UPDATE and DELETE as
-    // it filters SELECT (the property DELETE cascades to the assignment and
-    // the catalog, inside the rolled-back savepoint).
+    // acting user can see — the RESTRICTIVE policy filters UPDATE as it filters
+    // SELECT. A property is not blind-deletable from any tenant scope once it
+    // has inventory (RESTRICT children), so its DELETE policy is covered by the
+    // cross-tenant DELETE above and the purge path, not by a blind delete.
     await expectBlindWriteScoped(
       'hotel_properties',
       `UPDATE "hotel_properties" SET "updatedAt" = CURRENT_TIMESTAMP`
     );
-    await expectBlindWriteScoped('hotel_properties', `DELETE FROM "hotel_properties"`);
     await expectBlindWriteScoped(
       'hotel_extras',
       `UPDATE "hotel_extras" SET "updatedAt" = CURRENT_TIMESTAMP`
@@ -2102,7 +2191,308 @@ async function main() {
       );
       assertEqual(both.rows[0]?.count, 2, `platform scope must read both tenants' "${table}" rows`);
     }
+    // The control plane's own assignment writes — the first assignment of a
+    // property's life and a retarget after manager loss — are admitted
+    // (rolled back with the savepoint), with the organization named explicitly
+    // because the column default is blank in a platform transaction.
+    await client.query('SAVEPOINT hotel_platform_assignment');
+    try {
+      const bootstrapped = await client.query(
+        `INSERT INTO "hotel_property_assignments" (
+          "id", "organizationId", "branchId", "userId", "organizationRoleId", "active", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', $2, $3, $4, true, CURRENT_TIMESTAMP)`,
+        [`hotel_platform_grant_${suffix}`, hotelPropertyA, strangerA, hotelRoleA]
+      );
+      assertEqual(bootstrapped.rowCount, 1, 'platform scope must be able to write an assignment');
+      const retargeted = await client.query(
+        `UPDATE "hotel_property_assignments" SET "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $1`,
+        [hotelAssignmentB]
+      );
+      assertEqual(retargeted.rowCount, 1, 'platform scope must be able to retarget an assignment');
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT hotel_platform_assignment');
+      await client.query('RELEASE SAVEPOINT hotel_platform_assignment');
+    }
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
+
+    // H1-03 — the five inventory tables, as the acting assigned user. Read,
+    // UPDATE and DELETE isolation first; then the trigger rules that make the
+    // ledger trustworthy under RLS; then the fail-closed inserts.
+    await client.query(
+      `SELECT set_config('app.current_user_id', $1, true),
+              set_config('app.hotel_inventory_reason', 'Isolation probe', true)`,
+      [userA]
+    );
+    const hotelInventoryRows: Array<[table: string, idA: string, idB: string]> = [
+      ['hotel_room_types', hotelRoomTypeA, hotelRoomTypeB],
+      ['hotel_rooms', hotelRoomA, hotelRoomB],
+      ['hotel_beds', hotelBedA, hotelBedB],
+      ['hotel_room_status_events', hotelEventA, hotelEventB],
+      ['hotel_room_blocks', hotelBlockA, hotelBlockB],
+    ];
+    for (const [table, idA, idB] of hotelInventoryRows) {
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(visible.rows[0]?.count, 1, `tenant A must only see its own "${table}" row`);
+      const updated = await client.query(
+        `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+        [idB]
+      );
+      assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
+      assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
+    // A tenant status change under RLS writes its own attributed ledger line.
+    const cleaned = await client.query(
+      `UPDATE "hotel_rooms" SET "status" = 'VACANT_CLEAN' WHERE "id" = $1`,
+      [hotelRoomA]
+    );
+    assertEqual(cleaned.rowCount, 1, 'tenant A must be able to change its own room status');
+    const ledgerLine = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "hotel_room_status_events"
+       WHERE "roomId" = $1 AND "bedId" IS NULL AND "fromStatus" = 'VACANT_DIRTY'
+         AND "toStatus" = 'VACANT_CLEAN' AND "actorId" = $2 AND "reason" = 'Isolation probe'`,
+      [hotelRoomA, userA]
+    );
+    assertEqual(
+      ledgerLine.rows[0]?.count,
+      1,
+      'a status change must write one ledger line attributed to the acting user and reason'
+    );
+    // No reason, or a stay-owned target, and the change is refused by the guard.
+    await client.query(`SELECT set_config('app.hotel_inventory_reason', '', true)`);
+    await expectDatabaseError(
+      '23514',
+      () =>
+        client.query(`UPDATE "hotel_rooms" SET "status" = 'INSPECTED' WHERE "id" = $1`, [
+          hotelRoomA,
+        ]),
+      'a status change without a reason'
+    );
+    await client.query(`SELECT set_config('app.hotel_inventory_reason', 'Isolation probe', true)`);
+    await expectDatabaseError(
+      '23514',
+      () =>
+        client.query(`UPDATE "hotel_rooms" SET "status" = 'OCCUPIED' WHERE "id" = $1`, [
+          hotelRoomA,
+        ]),
+      'a status change into the stay-owned OCCUPIED state'
+    );
+    // The ledger is append-only and trigger-owned for the owner's own rows too:
+    // no update, no delete, and no direct insert in any tenant.
+    await expectDatabaseError(
+      '23514',
+      () =>
+        client.query(
+          `UPDATE "hotel_room_status_events" SET "reason" = 'rewritten' WHERE "id" = $1`,
+          [hotelEventA]
+        ),
+      'owner UPDATE on "hotel_room_status_events"'
+    );
+    await expectDatabaseError(
+      '23514',
+      () => client.query(`DELETE FROM "hotel_room_status_events" WHERE "id" = $1`, [hotelEventA]),
+      'owner DELETE on "hotel_room_status_events"'
+    );
+    for (const [label, organizationId, branchId, roomId] of [
+      ['own-organization', 'org_devfathom', hotelPropertyA, hotelRoomA],
+      ['org-B', organizationB, hotelPropertyB, hotelRoomB],
+    ] as const) {
+      await expectDatabaseError(
+        '23514',
+        () =>
+          client.query(
+            `INSERT INTO "hotel_room_status_events" (
+              "organizationId", "branchId", "roomId", "toStatus", "actorId", "reason"
+            ) VALUES ($1, $2, $3, 'VACANT_CLEAN', $4, 'forged')`,
+            [organizationId, branchId, roomId, userA]
+          ),
+        `a direct ${label} insert into "hotel_room_status_events"`
+      );
+    }
+    // Blind UPDATEs reach exactly the visible rows. A block's only legal update
+    // is its release, so that is the statement probed; nothing here is blind-
+    // deletable from a tenant scope (RESTRICT children, the ledger's cascade, or
+    // the trigger refusals pinned below), so DELETE is probed by its refusal.
+    await expectBlindWriteScoped(
+      'hotel_room_types',
+      `UPDATE "hotel_room_types" SET "updatedAt" = CURRENT_TIMESTAMP`
+    );
+    await expectBlindWriteScoped(
+      'hotel_rooms',
+      `UPDATE "hotel_rooms" SET "updatedAt" = CURRENT_TIMESTAMP`
+    );
+    await expectBlindWriteScoped(
+      'hotel_beds',
+      `UPDATE "hotel_beds" SET "updatedAt" = CURRENT_TIMESTAMP`
+    );
+    await expectBlindWriteScoped(
+      'hotel_room_blocks',
+      `UPDATE "hotel_room_blocks" SET "releasedAt" = CURRENT_TIMESTAMP, "releasedBy" = 'probe', "releaseReason" = 'Isolation probe'`
+    );
+    await expectDatabaseError(
+      '23514',
+      () =>
+        client.query(`UPDATE "hotel_room_blocks" SET "reason" = 'rewritten' WHERE "id" = $1`, [
+          hotelBlockA,
+        ]),
+      'a non-release UPDATE on "hotel_room_blocks"'
+    );
+    await expectDatabaseError(
+      '23514',
+      () => client.query(`DELETE FROM "hotel_room_blocks" WHERE "id" = $1`, [hotelBlockA]),
+      'owner DELETE on "hotel_room_blocks"'
+    );
+    // Two live blocks never overlap on one room (23P01, the gist exclusion); the
+    // range is half-open, so a block starting on the day another ends is fine.
+    await expectDatabaseError(
+      '23P01',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_room_blocks" (
+            "id", "organizationId", "branchId", "roomId", "kind", "startDate", "endDate", "reason", "createdBy"
+          ) VALUES ($1, 'org_devfathom', $2, $3, 'OUT_OF_SERVICE', DATE '2030-01-11', DATE '2030-01-13', 'Overlap', $4)`,
+          [`hotel_block_overlap_${suffix}`, hotelPropertyA, hotelRoomA, userA]
+        ),
+      'an overlapping live block'
+    );
+    await client.query('SAVEPOINT hotel_adjacent_block');
+    try {
+      const adjacent = await client.query(
+        `INSERT INTO "hotel_room_blocks" (
+          "id", "organizationId", "branchId", "roomId", "kind", "startDate", "endDate", "reason", "createdBy"
+        ) VALUES ($1, 'org_devfathom', $2, $3, 'OUT_OF_SERVICE', DATE '2030-01-12', DATE '2030-01-13', 'Adjacent', $4)`,
+        [`hotel_block_adjacent_${suffix}`, hotelPropertyA, hotelRoomA, userA]
+      );
+      assertEqual(adjacent.rowCount, 1, 'an adjacent block must be admitted (half-open ranges)');
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT hotel_adjacent_block');
+      await client.query('RELEASE SAVEPOINT hotel_adjacent_block');
+    }
+    // Each table's WITH CHECK fails closed for an org-B row. Three refusals
+    // arrive before the policy of the table under probe and say nothing about
+    // it: the bed insert is refused by the structure guard (it cannot see org
+    // B's room under tenant A's scope), a room or bed insert that passed would
+    // be refused when its status trigger writes the org-B ledger line, and a
+    // direct ledger insert is refused by the event guard whatever the tenant.
+    // So, as for the pharmacy L1 guards, each is pinned with its guard on and
+    // then probed with the guard switched off as the superuser, inside this
+    // rolled-back transaction, and the guard is switched back on after.
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_room_types" (
+            "id", "organizationId", "branchId", "code", "name", "updatedAt"
+          ) VALUES ($1, $2, $3, 'ESCAPE', 'Escape', CURRENT_TIMESTAMP)`,
+          [`hotel_room_type_escape_${suffix}`, organizationB, hotelPropertyB]
+        ),
+      'tenant A inserting an org-B "hotel_room_types" row'
+    );
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_room_blocks" (
+            "id", "organizationId", "branchId", "roomId", "kind", "startDate", "endDate", "reason", "createdBy"
+          ) VALUES ($1, $2, $3, $4, 'OUT_OF_SERVICE', DATE '2030-02-01', DATE '2030-02-02', 'Escape', $5)`,
+          [`hotel_block_escape_${suffix}`, organizationB, hotelPropertyB, hotelRoomB, userA]
+        ),
+      'tenant A inserting an org-B "hotel_room_blocks" row'
+    );
+    const deniedRoomInsert = () =>
+      client.query(
+        `INSERT INTO "hotel_rooms" (
+          "id", "organizationId", "branchId", "roomTypeId", "inventoryKind", "number", "statusChangedBy", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'BED', '102', $5, CURRENT_TIMESTAMP)`,
+        [`hotel_room_escape_${suffix}`, organizationB, hotelPropertyB, hotelRoomTypeB, userA]
+      );
+    const deniedBedInsert = () =>
+      client.query(
+        `INSERT INTO "hotel_beds" (
+          "id", "organizationId", "branchId", "roomId", "label", "statusChangedBy", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, '2', $5, CURRENT_TIMESTAMP)`,
+        [`hotel_bed_escape_${suffix}`, organizationB, hotelPropertyB, hotelRoomB, userA]
+      );
+    const deniedEventInsert = () =>
+      client.query(
+        `INSERT INTO "hotel_room_status_events" (
+          "organizationId", "branchId", "roomId", "toStatus", "actorId", "reason"
+        ) VALUES ($1, $2, $3, 'VACANT_CLEAN', $4, 'forged')`,
+        [organizationB, hotelPropertyB, hotelRoomB, userA]
+      );
+    await expectDatabaseError(
+      '42501',
+      deniedRoomInsert,
+      'guarded tenant A insert of an org-B "hotel_rooms" row'
+    );
+    await expectDatabaseError(
+      '23514',
+      deniedBedInsert,
+      'guarded tenant A insert of an org-B "hotel_beds" row'
+    );
+    await expectDatabaseError(
+      '23514',
+      deniedEventInsert,
+      'guarded tenant A insert of an org-B "hotel_room_status_events" row'
+    );
+    const hotelInsertGuards = [
+      ['hotel_rooms', 'hotel_rooms_status_event'],
+      ['hotel_beds', 'hotel_beds_structure_guard'],
+      ['hotel_beds', 'hotel_beds_status_event'],
+      ['hotel_room_status_events', 'hotel_inventory_event_guard'],
+    ] as const;
+    await client.query('RESET ROLE');
+    for (const [table, trigger] of hotelInsertGuards) {
+      await client.query(`ALTER TABLE "${table}" DISABLE TRIGGER "${trigger}"`);
+    }
+    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    await expectDatabaseError(
+      '42501',
+      deniedRoomInsert,
+      'tenant A inserting an org-B "hotel_rooms" row'
+    );
+    await expectDatabaseError(
+      '42501',
+      deniedBedInsert,
+      'tenant A inserting an org-B "hotel_beds" row'
+    );
+    await expectDatabaseError(
+      '42501',
+      deniedEventInsert,
+      'tenant A inserting an org-B "hotel_room_status_events" row'
+    );
+    // With the event guard off, the ledger's own UPDATE and DELETE policies are
+    // what decide which rows a blind write reaches.
+    await expectBlindWriteScoped(
+      'hotel_room_status_events',
+      `UPDATE "hotel_room_status_events" SET "reason" = "reason"`
+    );
+    await expectBlindWriteScoped(
+      'hotel_room_status_events',
+      `DELETE FROM "hotel_room_status_events"`
+    );
+    await client.query('RESET ROLE');
+    for (const [table, trigger] of hotelInsertGuards) {
+      await client.query(`ALTER TABLE "${table}" ENABLE TRIGGER "${trigger}"`);
+    }
+    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    // The control plane reads both tenants' rows on every inventory table.
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    for (const [table, idA, idB] of hotelInventoryRows) {
+      const both = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(both.rows[0]?.count, 2, `platform scope must read both tenants' "${table}" rows`);
+    }
+    await client.query(
+      `SELECT set_config('app.is_platform_admin', 'false', true),
+              set_config('app.current_user_id', '', true),
+              set_config('app.hotel_inventory_reason', '', true)`
+    );
 
     // MEET-01: one read-isolation case per new meeting table. Each query names
     // both tenants' rows, so seeing exactly one proves isolation rather than an
@@ -2709,7 +3099,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, hospitality property/assignment/catalog/inventory probes, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);
