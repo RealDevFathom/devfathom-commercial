@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   requirements: vi.fn(),
   costs: vi.fn(),
   list: vi.fn(),
+  listInput: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
   addLine: vi.fn(),
@@ -207,7 +208,12 @@ vi.mock('@/lib/trpc', () => ({
       approveQuote: {
         useMutation: (options: MutationOptions) => useTestMutation(mocks.approve, options),
       },
-      list: { useQuery: () => mocks.list() ?? query([orderA, orderB]) },
+      list: {
+        useQuery: (input: unknown) => {
+          mocks.listInput(input);
+          return mocks.list() ?? query([orderA, orderB]);
+        },
+      },
       get: {
         useQuery: (input: { orderId: string }, options: { enabled: boolean }) =>
           useEventQuery('detail', input, options),
@@ -900,6 +906,91 @@ describe('CateringConsole', () => {
       expect(mocks.approve).toHaveBeenCalledWith(
         { orderId: 'order_a', quoteRevisionId: 'quote_2' },
         expect.anything()
+      )
+    );
+  });
+});
+
+describe('CateringConsole calendar dates in a non-UTC browser zone', () => {
+  // `eventDate` is a `@db.Date` column and `serviceTime` a `@db.Time`: the server stores
+  // the UTC calendar day / clock time of the Date it receives, and every read formats the
+  // UTC fields back. Parsing the typed value as *local* midnight (the regression) sent
+  // 2026-11-06T19:00Z from Asia/Karachi, so the ledger showed the day before.
+  const originalZone = process.env.TZ;
+  beforeEach(() => {
+    process.env.TZ = 'Asia/Karachi';
+    vi.resetAllMocks();
+    mocks.payments.mockReturnValue(query({ evidence: [], currency: 'USD' }));
+    mocks.approvals.mockReturnValue(query([]));
+    mocks.consumption.mockReturnValue(query({ reconciliationRequired: false, movements: [] }));
+    mocks.availability.mockReturnValue(query({ capacityStatus: 'UNKNOWN' }));
+    mocks.quotes.mockReturnValue(query([]));
+    mocks.locations.mockReturnValue(query([]));
+    mocks.detail.mockImplementation(async ({ orderId }: { orderId: string }) =>
+      orderId === orderA.id ? orderA : orderB
+    );
+    mocks.requirements.mockResolvedValue([]);
+    mocks.costs.mockResolvedValue({});
+    mocks.create.mockResolvedValue(orderA);
+    client = new QueryClient({
+      defaultOptions: {
+        queries: { retry: false, staleTime: Infinity },
+        mutations: { retry: false },
+      },
+    });
+  });
+  afterEach(() => {
+    cleanup();
+    if (originalZone === undefined) delete process.env.TZ;
+    else process.env.TZ = originalZone;
+  });
+  it('runs in a zone east of UTC, so a local-midnight parse would move the day', () => {
+    expect(new Date('2026-11-07T00:00:00').getTimezoneOffset()).toBe(-300);
+  });
+  it('submits the entered event date and service time as UTC calendar values', async () => {
+    mount();
+    fireEvent.click(screen.getByRole('button', { name: 'New order' }));
+    const dialog = screen.getByRole('dialog', { name: 'Create catering order' });
+    fireEvent.change(within(dialog).getByLabelText('Event name'), {
+      target: { value: 'Mehndi dinner — Rana family' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Event date'), {
+      target: { value: '2026-11-07' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Service time'), {
+      target: { value: '19:30' },
+    });
+    fireEvent.change(within(dialog).getByLabelText('Headcount'), { target: { value: '120' } });
+    fireEvent.submit(within(dialog).getByLabelText('Event name').closest('form')!);
+    await waitFor(() => expect(mocks.create).toHaveBeenCalled());
+    const [payload] = mocks.create.mock.calls[0]!;
+    expect(payload.eventDate.toISOString()).toBe('2026-11-07T00:00:00.000Z');
+    expect(payload.serviceTime.toISOString()).toBe('1970-01-01T19:30:00.000Z');
+  });
+  it('round-trips a stored UTC calendar day and clock time into the editor unchanged', () => {
+    client.setQueryData(['detail', orderA.id], {
+      ...orderA,
+      eventDate: '2026-11-07T00:00:00.000Z',
+      serviceTime: '1970-01-01T19:30:00.000Z',
+    });
+    mount();
+    select();
+    fireEvent.click(screen.getByRole('button', { name: 'Edit order' }));
+    const dialog = screen.getByRole('dialog', { name: 'Edit catering order' });
+    expect(dialog).toHaveTextContent('Founders dinner · 2026-11-07');
+    expect(within(dialog).getByLabelText('Event date')).toHaveValue('2026-11-07');
+    expect(within(dialog).getByLabelText('Service time')).toHaveValue('19:30');
+  });
+  it('filters the ledger by the entered calendar days, not their local midnights', async () => {
+    mount();
+    change('Event date from', '2026-11-07');
+    change('Event date to', '2026-11-14');
+    await waitFor(() =>
+      expect(mocks.listInput).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          eventDateFrom: new Date('2026-11-07T00:00:00.000Z'),
+          eventDateTo: new Date('2026-11-14T23:59:59.999Z'),
+        })
       )
     );
   });

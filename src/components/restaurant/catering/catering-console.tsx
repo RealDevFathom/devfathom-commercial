@@ -76,6 +76,24 @@ function value(data: FormData, key: string) {
 function optional(data: FormData, key: string) {
   return value(data, key) || null;
 }
+/**
+ * `eventDate` is a `@db.Date` column and `serviceTime` a `@db.Time` column: the
+ * server stores the UTC calendar day / clock time of the Date it receives and
+ * every read formats the UTC fields back (`localDate`, the editor defaults, the
+ * reports' `dateKey`). A value typed into a date or time input is therefore a
+ * calendar value, never an instant, and must be parsed as UTC. Parsing it as
+ * local midnight moved an event entered as 2026-11-07 in Asia/Karachi to
+ * 2026-11-06T19:00Z, which the ledger then showed as the day before.
+ */
+function calendarDate(value: string) {
+  return new Date(`${value}T00:00:00.000Z`);
+}
+function calendarDateEnd(value: string) {
+  return new Date(`${value}T23:59:59.999Z`);
+}
+function calendarTime(value: string) {
+  return new Date(`1970-01-01T${value}:00.000Z`);
+}
 function localDate(value: Date | string | null | undefined) {
   return value ? new Date(value).toISOString().slice(0, 10) : '';
 }
@@ -214,8 +232,8 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     {
       ...(branchId ? { branchId } : {}),
       ...(status ? { status } : {}),
-      ...(from ? { eventDateFrom: new Date(`${from}T00:00:00`) } : {}),
-      ...(to ? { eventDateTo: new Date(`${to}T23:59:59`) } : {}),
+      ...(from ? { eventDateFrom: calendarDate(from) } : {}),
+      ...(to ? { eventDateTo: calendarDateEnd(to) } : {}),
     },
     { enabled }
   );
@@ -398,10 +416,8 @@ export function CateringConsole({ currency }: { currency: string | null }) {
     const order = editor?.order;
     const payload = {
       eventName: value(data, 'eventName'),
-      eventDate: new Date(`${value(data, 'eventDate')}T00:00:00`),
-      serviceTime: value(data, 'serviceTime')
-        ? new Date(`1970-01-01T${value(data, 'serviceTime')}:00`)
-        : null,
+      eventDate: calendarDate(value(data, 'eventDate')),
+      serviceTime: value(data, 'serviceTime') ? calendarTime(value(data, 'serviceTime')) : null,
       headcount: Number(value(data, 'headcount')),
       customerId: optional(data, 'customerId'),
       venueAddress: optional(data, 'venueAddress'),
