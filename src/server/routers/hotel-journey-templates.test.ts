@@ -26,13 +26,19 @@
  * Competing requests run one after the other, because that is all the property
  * lock allows: the stale caller reads the board in one request, a colleague
  * writes in another, and the stale caller's write arrives last carrying what it
- * read. Each race runs twice — with `updatedAt` advancing on every write, and
- * with it frozen so two writes share a timestamp and the wording comparison is
- * what decides. The `beforeWrite` hook is kept only for what the lock does not
- * serialize: a writer outside it (a raw row, a raw update) and a serialization
- * failure, which the conditional writes and the unique indexes must still
- * refuse. This is source regression evidence, not PostgreSQL concurrency
- * evidence; the DB suite holds the latter.
+ * read. Most races run twice — with `updatedAt` advancing on every write, and
+ * with it frozen so two writes share a timestamp and only the words, the
+ * status or the approval named can decide. The rest run with `updatedAt`
+ * advancing only: the retirements, which name nothing but the time, and the
+ * first-approver race and the HTTP 409, whose repeated approval of the same
+ * words is refused by the transition rule, not as a conflict, when timestamps
+ * collide (pinned on its own). With shared timestamps, retiring a draft saved
+ * since goes through: its words stay as a record and nothing is approved. The
+ * `beforeWrite` hook is kept only for what the lock does not serialize: a
+ * writer outside it (a raw row, a raw update) and a serialization failure,
+ * which the conditional writes and the unique indexes must still refuse. This
+ * is source regression evidence, not PostgreSQL concurrency evidence; the DB
+ * suite holds the latter.
  */
 import { fetchRequestHandler } from '@trpc/server/adapters/fetch';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
