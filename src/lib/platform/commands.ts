@@ -43,6 +43,7 @@ import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
+import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
 import { defaultBookingEngineSlug } from '@/lib/hotel/property';
 import {
   deactivateHotelProperty,
@@ -1007,6 +1008,23 @@ async function bootstrapOrganization(
         organizationRoleId: ownerRoleId,
         active: true,
       },
+    });
+    // H1-07 / MEAL-01 — the property's meal plans (H-D15). Unlike the tax
+    // profile, these are not a readiness claim: EP and CP are the industry's
+    // own meaning of "room only" and "bed & breakfast", and MAP and AP are
+    // created inactive so a property that starts selling half board enables a
+    // plan rather than inventing one. What they cover — outlets, cut-off times —
+    // is left empty for the operator, so nothing here fakes configuration.
+    await db.hotelMealPlan.createMany({
+      data: DEFAULT_HOTEL_MEAL_PLANS.map((plan) => ({
+        organizationId: organization.id,
+        branchId: property.branchId,
+        code: plan.code,
+        name: plan.name,
+        nameUr: plan.nameUr,
+        meals: plan.meals,
+        active: plan.active,
+      })),
     });
   }
   // §2.3: onboarding no longer copies the package's enabled modules into

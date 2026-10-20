@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ComponentProps } from 'react';
+import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
 import { HOSPITALITY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { PlatformCommandForm } from '@/components/platform/platform-command-form';
 
@@ -11,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   packageFindMany: vi.fn(),
   propertyCreate: vi.fn(),
   assignmentCreate: vi.fn(),
+  mealPlanCreateMany: vi.fn(),
   orgCreate: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
@@ -49,6 +51,7 @@ const db = {
   user: { findFirst: vi.fn(async () => null), create: vi.fn(async () => ({ id: 'named_admin' })) },
   hotelProperty: { create: mocks.propertyCreate, findFirst: vi.fn() },
   hotelPropertyAssignment: { create: mocks.assignmentCreate },
+  hotelMealPlan: { createMany: mocks.mealPlanCreateMany },
   hotelRoomType: { count: vi.fn(async () => 0) },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },
@@ -90,6 +93,7 @@ beforeEach(() => {
   }));
   mocks.propertyCreate.mockResolvedValue({ branchId: 'created_property' });
   mocks.assignmentCreate.mockResolvedValue({ id: 'assignment_1' });
+  mocks.mealPlanCreateMany.mockResolvedValue({ count: DEFAULT_HOTEL_MEAL_PLANS.length });
   mocks.packageFindMany.mockResolvedValue([
     { id: 'package_1', name: 'Hotel Essentials', defaultSeats: 10 },
   ]);
@@ -210,6 +214,43 @@ describe('Hospitality provisioning foundation', () => {
       mocks.propertyCreate.mock.invocationCallOrder[0]
     );
   });
+  it('opens the created property with the four standard meal plans, MAP and AP inactive', async () => {
+    await executePlatformCommand(actor, 'organization.create', payload, request);
+    // H1-07 / H-D15 — hung off the property row that was just created, never
+    // off an id the payload supplied, and written after the administrator's
+    // assignment so a failed assignment leaves no plan behind.
+    expect(mocks.mealPlanCreateMany).toHaveBeenCalledTimes(1);
+    const seeded = (
+      mocks.mealPlanCreateMany.mock.calls[0]![0] as {
+        data: {
+          organizationId: string;
+          branchId: string;
+          code: string;
+          name: string;
+          nameUr: string;
+          meals: unknown[];
+          active: boolean;
+        }[];
+      }
+    ).data;
+    expect(seeded.map((plan) => plan.code)).toEqual(['EP', 'CP', 'MAP', 'AP']);
+    for (const plan of seeded) {
+      expect(plan).toMatchObject({ organizationId: 'org_new', branchId: 'created_property' });
+      expect(plan.nameUr.trim().length).toBeGreaterThan(0);
+    }
+    expect(seeded.filter((plan) => plan.active).map((plan) => plan.code)).toEqual(['EP', 'CP']);
+    expect(seeded.find((plan) => plan.code === 'AP')!.meals).toHaveLength(3);
+    expect(mocks.assignmentCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.mealPlanCreateMany.mock.invocationCallOrder[0]!
+    );
+  });
+  it('seeds no meal plan when the administrator’s assignment fails', async () => {
+    mocks.assignmentCreate.mockRejectedValueOnce(new Error('assignment refused'));
+    await expect(
+      executePlatformCommand(actor, 'organization.create', payload, request)
+    ).rejects.toThrow('assignment refused');
+    expect(mocks.mealPlanCreateMany).not.toHaveBeenCalled();
+  });
   it.each(['firstBranchName', 'firstBranchAddress', 'firstBranchCity'])(
     'rejects missing %s before provisioning writes',
     async (field) => {
@@ -224,6 +265,7 @@ describe('Hospitality provisioning foundation', () => {
       expect(mocks.orgCreate).not.toHaveBeenCalled();
       expect(mocks.propertyCreate).not.toHaveBeenCalled();
       expect(mocks.assignmentCreate).not.toHaveBeenCalled();
+      expect(mocks.mealPlanCreateMany).not.toHaveBeenCalled();
     }
   );
   it('fails closed before property creation when the Owner role did not return an identity', async () => {

@@ -414,6 +414,18 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         },
       })
     );
+    // H1-07 — the plans provisioning seeds, as a CASCADE child of the property.
+    await withPlatformDb((db) =>
+      db.hotelMealPlan.create({
+        data: {
+          organizationId,
+          branchId: scope.branchId,
+          code: 'CP',
+          name: 'Bed & breakfast',
+          meals: [{ meal: 'BREAKFAST', outlets: [], cutoff_time: null, per_person: true }],
+        },
+      })
+    );
     return { ...tenant, branchId: scope.branchId };
   }
 
@@ -423,6 +435,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     'hotel_beds',
     'hotel_rooms',
     'hotel_room_types',
+    'hotel_meal_plans',
     'hotel_extras',
     'hotel_property_assignments',
     'hotel_properties',
@@ -452,6 +465,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       hotel_beds: 4,
       hotel_rooms: 2,
       hotel_room_types: 1,
+      hotel_meal_plans: 1,
       hotel_extras: 1,
       hotel_property_assignments: 1,
       hotel_properties: 1,
@@ -494,6 +508,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       hotel_room_status_events: 7,
       hotel_room_blocks: 1,
       hotel_rooms: 2,
+      hotel_meal_plans: 1,
       hotel_properties: 1,
     });
     const organization = await withPlatformDb((db) =>
