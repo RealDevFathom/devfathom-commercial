@@ -299,6 +299,16 @@ const PHARMACY_CUSTOMER_ORDERING_TABLES = [
   'pharmacy_customer_order_events',
 ] as const;
 
+// H1 (hospitality) registers its tenant tables here as a closed world over the
+// `hotel_` prefix, re-derived from `prisma/schema.prisma`: a later hotel lane
+// that adds a table without listing it fails this pin deliberately, and every
+// listed table must carry ENABLE + FORCE RLS.
+const HOSPITALITY_TABLES = [
+  'hotel_extras',
+  'hotel_properties',
+  'hotel_property_assignments',
+] as const;
+
 const M3_COLUMNS = {
   restaurant_brands: [
     'id',
@@ -705,6 +715,36 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
     );
     expect(result.rows).toEqual(
       [...PHARMACY_CUSTOMER_ORDERING_TABLES]
+        .sort()
+        .map((relname) => ({ relname, relrowsecurity: true, relforcerowsecurity: true }))
+    );
+  });
+
+  it('pins the hospitality tables as a closed world under forced RLS', async () => {
+    const tables = await client!.query<{ table_name: string }>(
+      `SELECT table_name
+         FROM information_schema.tables
+        WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
+          AND table_name LIKE 'hotel\_%' ESCAPE '\\'
+        ORDER BY table_name`
+    );
+    expect(tables.rows.map((row) => row.table_name)).toEqual([...HOSPITALITY_TABLES].sort());
+
+    const posture = await client!.query<{
+      relname: string;
+      relrowsecurity: boolean;
+      relforcerowsecurity: boolean;
+    }>(
+      `SELECT relname, relrowsecurity, relforcerowsecurity
+         FROM pg_catalog.pg_class
+        WHERE relnamespace = 'public'::regnamespace
+          AND relkind = 'r'
+          AND relname = ANY($1::text[])
+        ORDER BY relname`,
+      [[...HOSPITALITY_TABLES]]
+    );
+    expect(posture.rows).toEqual(
+      [...HOSPITALITY_TABLES]
         .sort()
         .map((relname) => ({ relname, relrowsecurity: true, relforcerowsecurity: true }))
     );

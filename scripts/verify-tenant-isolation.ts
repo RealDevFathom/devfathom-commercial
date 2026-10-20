@@ -100,6 +100,21 @@ async function main() {
       'the seeded tenant must be organization-scoped'
     );
     const userA = tenantAUser.rows[0]!.id;
+    // H1: the hospitality probes need two more members of tenant A — one who is
+    // assigned beside user A at the property, and one who is not assigned at all.
+    const tenantAColleagues = await client.query<{ id: string }>(
+      `SELECT "id" FROM "users"
+       WHERE "organizationId" = 'org_devfathom' AND "status" = 'ACTIVE' AND "id" <> $1
+       ORDER BY "createdAt" ASC LIMIT 2`,
+      [userA]
+    );
+    assertEqual(
+      tenantAColleagues.rows.length,
+      2,
+      'the seeded tenant must hold at least three active members for the hotel probes'
+    );
+    const colleagueA = tenantAColleagues.rows[0]!.id;
+    const strangerA = tenantAColleagues.rows[1]!.id;
     const platformUser = await client.query<{ id: string }>(
       `SELECT "id" FROM "platform_users" LIMIT 1`
     );
@@ -1572,6 +1587,65 @@ async function main() {
       ]
     );
 
+    // H1 — the hospitality foundation: the property (in hospitality the branch IS
+    // the property), the explicit per-property assignment that makes it reachable
+    // under the RESTRICTIVE `hotel_properties_assigned_user` policy, and the
+    // extras catalog hanging off it. One mirrored row per table in each tenant,
+    // plus a second tenant-A assignment held by a colleague, so the assignment
+    // write policies can be told apart from the read policy below. The Owner
+    // role rows only satisfy the assignment's composite role key; which keys
+    // resolve a tRPC scope is the resolver's rule, not a SQL one.
+    const hotelRoleA = `hotel_role_a_${suffix}`;
+    const hotelRoleB = `hotel_role_b_${suffix}`;
+    const hotelPropertyA = `hotel_property_a_${suffix}`;
+    const hotelPropertyB = `hotel_property_b_${suffix}`;
+    const hotelAssignmentA = `hotel_assignment_a_${suffix}`;
+    const hotelAssignmentA2 = `hotel_assignment_a2_${suffix}`;
+    const hotelAssignmentB = `hotel_assignment_b_${suffix}`;
+    const hotelExtraA = `hotel_extra_a_${suffix}`;
+    const hotelExtraB = `hotel_extra_b_${suffix}`;
+    await client.query(
+      `INSERT INTO "organization_roles" (
+        "id", "organizationId", "key", "name", "isSystem", "createdAt", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 'owner', 'Owner', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP),
+               ($2, $3, 'owner', 'Owner', true, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+      [hotelRoleA, hotelRoleB, organizationB]
+    );
+    await client.query(
+      `INSERT INTO "hotel_properties" (
+        "branchId", "organizationId", "name", "addressLine", "city", "timezone", "bookingEngineSlug", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', 'Tenant A Property', '1 Isolation St', 'Lahore', 'Asia/Karachi', $2, CURRENT_TIMESTAMP),
+               ($3, $4, 'Tenant B Property', '2 Isolation St', 'Lahore', 'Asia/Karachi', $5, CURRENT_TIMESTAMP)`,
+      [hotelPropertyA, `hotel-a-${suffix}`, hotelPropertyB, organizationB, `hotel-b-${suffix}`]
+    );
+    await client.query(
+      `INSERT INTO "hotel_property_assignments" (
+        "id", "organizationId", "branchId", "userId", "organizationRoleId", "active", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, $3, $4, true, CURRENT_TIMESTAMP),
+               ($5, 'org_devfathom', $2, $6, $4, true, CURRENT_TIMESTAMP),
+               ($7, $8, $9, $10, $11, true, CURRENT_TIMESTAMP)`,
+      [
+        hotelAssignmentA,
+        hotelPropertyA,
+        userA,
+        hotelRoleA,
+        hotelAssignmentA2,
+        colleagueA,
+        hotelAssignmentB,
+        organizationB,
+        hotelPropertyB,
+        userB,
+        hotelRoleB,
+      ]
+    );
+    await client.query(
+      `INSERT INTO "hotel_extras" (
+        "id", "organizationId", "branchId", "code", "name", "priceMinor", "taxClass", "department", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'LAUNDRY', 'Laundry', 1000, 'SERVICES', 'LAUNDRY', CURRENT_TIMESTAMP),
+               ($3, $4, $5, 'LAUNDRY', 'Laundry', 1000, 'SERVICES', 'LAUNDRY', CURRENT_TIMESTAMP)`,
+      [hotelExtraA, hotelPropertyA, hotelExtraB, organizationB, hotelPropertyB]
+    );
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -1808,6 +1882,227 @@ async function main() {
       () => client.query(`DELETE FROM "pharmacy_pack_prices" WHERE "id" = $1`, [packPriceA]),
       'owner DELETE on "pharmacy_pack_prices"'
     );
+
+    // H1 — the hospitality foundation tables. `hotel_properties` is keyed by
+    // "branchId" and carries a RESTRICTIVE policy on top of the tenant one (a
+    // row is reachable only by an acting user holding an active assignment at
+    // that property), and `hotel_property_assignments` has per-command
+    // policies that read the acting user too — so neither fits the generic
+    // "id" loop above, and every probe here names the acting user explicitly.
+    await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [userA]);
+    const assignedProperties = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "hotel_properties" WHERE "branchId" IN ($1, $2)`,
+      [hotelPropertyA, hotelPropertyB]
+    );
+    assertEqual(
+      assignedProperties.rows[0]?.count,
+      1,
+      'an assigned member must see exactly their own tenant property'
+    );
+    const propertyUpdatedAcross = await client.query(
+      `UPDATE "hotel_properties" SET "organizationId" = "organizationId" WHERE "branchId" = $1`,
+      [hotelPropertyB]
+    );
+    assertEqual(
+      propertyUpdatedAcross.rowCount,
+      0,
+      'tenant A must not update tenant B\'s "hotel_properties" row'
+    );
+    const propertyDeletedAcross = await client.query(
+      `DELETE FROM "hotel_properties" WHERE "branchId" = $1`,
+      [hotelPropertyB]
+    );
+    assertEqual(
+      propertyDeletedAcross.rowCount,
+      0,
+      'tenant A must not delete tenant B\'s "hotel_properties" row'
+    );
+    for (const [table, idA, idB] of [
+      ['hotel_property_assignments', hotelAssignmentA, hotelAssignmentB],
+      ['hotel_extras', hotelExtraA, hotelExtraB],
+    ] as const) {
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(visible.rows[0]?.count, 1, `tenant A must only see its own "${table}" row`);
+      const updated = await client.query(
+        `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+        [idB]
+      );
+      assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
+      assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
+    // Blind writes on the property and the catalog reach exactly the rows the
+    // acting user can see — the RESTRICTIVE policy filters UPDATE and DELETE as
+    // it filters SELECT (the property DELETE cascades to the assignment and
+    // the catalog, inside the rolled-back savepoint).
+    await expectBlindWriteScoped(
+      'hotel_properties',
+      `UPDATE "hotel_properties" SET "updatedAt" = CURRENT_TIMESTAMP`
+    );
+    await expectBlindWriteScoped('hotel_properties', `DELETE FROM "hotel_properties"`);
+    await expectBlindWriteScoped(
+      'hotel_extras',
+      `UPDATE "hotel_extras" SET "updatedAt" = CURRENT_TIMESTAMP`
+    );
+    await expectBlindWriteScoped('hotel_extras', `DELETE FROM "hotel_extras"`);
+    // Assignments: a manager at the property may retarget a colleague's row,
+    // never their own, and nobody deletes one — revocation is a flag.
+    const ownAssignmentUpdated = await client.query(
+      `UPDATE "hotel_property_assignments" SET "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $1`,
+      [hotelAssignmentA]
+    );
+    assertEqual(
+      ownAssignmentUpdated.rowCount,
+      0,
+      'a member must not change their own "hotel_property_assignments" row'
+    );
+    const colleagueAssignmentUpdated = await client.query(
+      `UPDATE "hotel_property_assignments" SET "updatedAt" = CURRENT_TIMESTAMP WHERE "id" = $1`,
+      [hotelAssignmentA2]
+    );
+    assertEqual(
+      colleagueAssignmentUpdated.rowCount,
+      1,
+      'an assigned manager must be able to change a colleague\'s "hotel_property_assignments" row'
+    );
+    const assignmentDeleted = await client.query(
+      `DELETE FROM "hotel_property_assignments" WHERE "id" IN ($1, $2)`,
+      [hotelAssignmentA, hotelAssignmentA2]
+    );
+    assertEqual(
+      assignmentDeleted.rowCount,
+      0,
+      'no tenant scope may delete a "hotel_property_assignments" row'
+    );
+    // No self-grant: the acting user cannot write an assignment naming themself,
+    // even at a property they already hold. Granting a colleague at that
+    // property is what the policy admits (rolled back with the savepoint), so
+    // the refusals around it are not vacuous.
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_property_assignments" (
+            "id", "organizationId", "branchId", "userId", "organizationRoleId", "active", "updatedAt"
+          ) VALUES ($1, 'org_devfathom', $2, $3, $4, true, CURRENT_TIMESTAMP)`,
+          [`hotel_self_grant_${suffix}`, hotelPropertyA, userA, hotelRoleA]
+        ),
+      'a member granting themself a "hotel_property_assignments" row'
+    );
+    await client.query('SAVEPOINT hotel_grant');
+    try {
+      const granted = await client.query(
+        `INSERT INTO "hotel_property_assignments" (
+          "id", "organizationId", "branchId", "userId", "organizationRoleId", "active", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', $2, $3, $4, true, CURRENT_TIMESTAMP)`,
+        [`hotel_grant_${suffix}`, hotelPropertyA, strangerA, hotelRoleA]
+      );
+      assertEqual(
+        granted.rowCount,
+        1,
+        'an assigned manager must be able to grant a colleague at their own property'
+      );
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT hotel_grant');
+      await client.query('RELEASE SAVEPOINT hotel_grant');
+    }
+    // Cross-tenant and tenant-minted rows all fail closed. The own-organization
+    // property insert is refused because the restrictive policy needs an
+    // assignment that cannot exist before the row does: tenants never create
+    // properties; the control plane does, in one transaction with the first
+    // assignment.
+    const hotelWriteDenied: Array<[table: string, sql: string, values: unknown[]]> = [
+      [
+        'hotel_properties (org B)',
+        `INSERT INTO "hotel_properties" (
+          "branchId", "organizationId", "name", "addressLine", "city", "timezone", "bookingEngineSlug", "updatedAt"
+        ) VALUES ($1, $2, 'Escape Property', '3 Isolation St', 'Lahore', 'Asia/Karachi', $3, CURRENT_TIMESTAMP)`,
+        [`hotel_property_escape_${suffix}`, organizationB, `hotel-escape-${suffix}`],
+      ],
+      [
+        'hotel_properties (own organization, unassigned)',
+        `INSERT INTO "hotel_properties" (
+          "branchId", "organizationId", "name", "addressLine", "city", "timezone", "bookingEngineSlug", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', 'Minted Property', '4 Isolation St', 'Lahore', 'Asia/Karachi', $2, CURRENT_TIMESTAMP)`,
+        [`hotel_property_minted_${suffix}`, `hotel-minted-${suffix}`],
+      ],
+      [
+        'hotel_property_assignments (org B)',
+        `INSERT INTO "hotel_property_assignments" (
+          "id", "organizationId", "branchId", "userId", "organizationRoleId", "active", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, $5, true, CURRENT_TIMESTAMP)`,
+        [`hotel_assignment_escape_${suffix}`, organizationB, hotelPropertyB, userB, hotelRoleB],
+      ],
+      [
+        'hotel_extras (org B)',
+        `INSERT INTO "hotel_extras" (
+          "id", "organizationId", "branchId", "code", "name", "priceMinor", "taxClass", "department", "updatedAt"
+        ) VALUES ($1, $2, $3, 'ESCAPE', 'Escape', 1000, 'SERVICES', 'LAUNDRY', CURRENT_TIMESTAMP)`,
+        [`hotel_extra_escape_${suffix}`, organizationB, hotelPropertyB],
+      ],
+    ];
+    for (const [table, sql, values] of hotelWriteDenied) {
+      await expectDatabaseError(
+        '42501',
+        () => client.query(sql, values),
+        `tenant A inserting a ${table} row`
+      );
+    }
+    // An unassigned member of the same organization reaches no property, and a
+    // tenant transaction with no acting user reaches neither a property nor an
+    // assignment; the catalog stays organization-scoped in both cases.
+    await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [strangerA]);
+    const strangerProperties = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "hotel_properties"`
+    );
+    assertEqual(
+      strangerProperties.rows[0]?.count,
+      0,
+      'an unassigned member must see no "hotel_properties" row'
+    );
+    await client.query(`SELECT set_config('app.current_user_id', '', true)`);
+    const anonymousProperties = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "hotel_properties"`
+    );
+    assertEqual(
+      anonymousProperties.rows[0]?.count,
+      0,
+      'a tenant transaction without an acting user must see no "hotel_properties" row'
+    );
+    const anonymousAssignments = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "hotel_property_assignments"`
+    );
+    assertEqual(
+      anonymousAssignments.rows[0]?.count,
+      0,
+      'a tenant transaction without an acting user must see no "hotel_property_assignments" row'
+    );
+    const anonymousExtras = await client.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM "hotel_extras" WHERE "id" IN ($1, $2)`,
+      [hotelExtraA, hotelExtraB]
+    );
+    assertEqual(
+      anonymousExtras.rows[0]?.count,
+      1,
+      'the extras catalog stays organization-scoped without an acting user'
+    );
+    // The control plane reaches both tenants' rows on every hotel table.
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    for (const [table, column, idA, idB] of [
+      ['hotel_properties', 'branchId', hotelPropertyA, hotelPropertyB],
+      ['hotel_property_assignments', 'id', hotelAssignmentA, hotelAssignmentB],
+      ['hotel_extras', 'id', hotelExtraA, hotelExtraB],
+    ] as const) {
+      const both = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "${column}" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(both.rows[0]?.count, 2, `platform scope must read both tenants' "${table}" rows`);
+    }
+    await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
 
     // MEET-01: one read-isolation case per new meeting table. Each query names
     // both tenants' rows, so seeing exactly one proves isolation rather than an
