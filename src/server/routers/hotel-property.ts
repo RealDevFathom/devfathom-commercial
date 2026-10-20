@@ -59,6 +59,7 @@ import {
   requireHotelPropertyScope,
 } from '@/server/hotel-property-scope';
 import { adminProcedure, capabilityProcedure, protectedProcedure, router } from '../trpc';
+import { hotelInventoryRouter } from './hotel-inventory';
 
 const propertyAdmin = capabilityProcedure('hotel:property-admin');
 const expectedVersionInput = z.object({ expectedUpdatedAt: z.coerce.date() });
@@ -416,6 +417,13 @@ export const hotelPropertyRouter = router({
         return { mode: input.mode };
       }),
   }),
+
+  /**
+   * PROP-02 / PROP-03 / HK-03 — room types, rooms, beds, the status ledger
+   * and OOO/OOS blocks. Under `hotelProperty` for the same reason as extras:
+   * whoever configures how a property is sold configures what it sells.
+   */
+  inventory: hotelInventoryRouter,
 
   /**
    * PROP-05 — the extras and services catalog.

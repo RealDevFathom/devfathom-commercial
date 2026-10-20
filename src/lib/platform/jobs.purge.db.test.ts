@@ -85,10 +85,14 @@ const LOCATION_ID = `wha1209_loc_${suffix}`;
 const JOB_ID = `wha1209_job_${suffix}`;
 const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
 const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
+const HOTEL_PURGED_ORG = `hotel_purge_${suffix}`;
+const HOTEL_LIVE_ORG = `hotel_live_${suffix}`;
+const HOTEL_JOB_ID = `hotel_purge_job_${suffix}`;
 
 type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
 
 let withPlatformDb: typeof import('@/lib/tenancy/scoped-db').withPlatformDb;
+let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
 let processPlatformJobs: typeof import('./jobs').processPlatformJobs;
 
 /** An organization plus the onboarding history that made it undeletable. */
@@ -141,7 +145,7 @@ const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
 
 describeIfDatabase('tenant purge, against PostgreSQL', () => {
   beforeAll(async () => {
-    ({ withPlatformDb } = await import('@/lib/tenancy/scoped-db'));
+    ({ withPlatformDb, withTenantDb } = await import('@/lib/tenancy/scoped-db'));
     ({ processPlatformJobs } = await import('./jobs'));
 
     await withPlatformDb(async (db) => {
@@ -319,6 +323,227 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       `
     );
     expect(rules.count).toBe(BigInt(1));
+  });
+
+  /**
+   * H1-03 — a hospitality tenant with inventory. Two facts would have stopped
+   * it from ever being destroyed, and neither survives a mock: the status
+   * ledger and the block table refuse DELETE by trigger for every role, and
+   * `hotel_rooms` references itself (connecting rooms) while every other
+   * inventory table references it. The purge has to finish, every hotel row
+   * has to be gone, and the live tenant's ledger has to stay append-only.
+   */
+  async function seedHotelInventory(organizationId: string, status: 'PURGING' | 'ACTIVE') {
+    const { seedHotelTenant } = await import('@/lib/testing/hotel-tenant-fixture');
+    const inventory = await import('@/lib/hotel/inventory');
+    const tenant = await seedHotelTenant(withPlatformDb, {
+      organizationId,
+      status,
+      properties: [{ name: `${status} property` }],
+    });
+    const scope = { organizationId, branchId: tenant.branchIds[0]!, actorId: tenant.userId };
+    const run = <T>(
+      reason: string,
+      work: (tx: Parameters<typeof inventory.createInventoryRoom>[0]) => Promise<T>
+    ) =>
+      withTenantDb(organizationId, (tx) => inventory.withHotelInventory(tx, scope, reason, work), {
+        userId: tenant.userId,
+      });
+    const dorm = await run('Seed', (tx) =>
+      tx.hotelRoomType.create({
+        data: {
+          organizationId,
+          branchId: scope.branchId,
+          code: 'DORM',
+          name: 'Dormitory',
+          inventoryKind: 'BED',
+          bedsPerRoom: 2,
+        },
+      })
+    );
+    const first = await run('Commissioned', (tx) =>
+      inventory.createInventoryRoom(
+        tx,
+        scope,
+        inventory.hotelRoomCreateInput.parse({
+          roomTypeId: dorm.id,
+          number: '101',
+          reason: 'Commissioned',
+        })
+      )
+    );
+    const second = await run('Commissioned', (tx) =>
+      inventory.createInventoryRoom(
+        tx,
+        scope,
+        inventory.hotelRoomCreateInput.parse({
+          roomTypeId: dorm.id,
+          number: '102',
+          reason: 'Commissioned',
+          connectingRoomId: first.id,
+        })
+      )
+    );
+    await run('Cleaned', (tx) =>
+      inventory.setInventoryStatus(tx, scope, 'bed', {
+        id: first.beds[0]!.id,
+        expectedStatus: 'VACANT_DIRTY',
+        status: 'VACANT_CLEAN',
+        reason: 'Cleaned',
+      })
+    );
+    await run('Leak', (tx) =>
+      inventory.createInventoryBlock(tx, scope, {
+        roomId: second.id,
+        kind: 'OUT_OF_ORDER',
+        startDate: '2030-03-01',
+        endDate: '2030-03-04',
+        reason: 'Leak',
+      })
+    );
+    await withPlatformDb((db) =>
+      db.hotelExtra.create({
+        data: {
+          organizationId,
+          branchId: scope.branchId,
+          code: 'LAUNDRY',
+          name: 'Laundry',
+          priceMinor: 1000,
+          taxClass: 'SERVICES',
+          department: 'LAUNDRY',
+        },
+      })
+    );
+    return { ...tenant, branchId: scope.branchId };
+  }
+
+  const HOTEL_TABLES = [
+    'hotel_room_status_events',
+    'hotel_room_blocks',
+    'hotel_beds',
+    'hotel_rooms',
+    'hotel_room_types',
+    'hotel_extras',
+    'hotel_property_assignments',
+    'hotel_properties',
+  ] as const;
+  async function hotelRowCounts(organizationId: string) {
+    const [row] = await withPlatformDb((db) =>
+      db.$queryRawUnsafe<Array<Record<string, bigint>>>(
+        HOTEL_TABLES.map(
+          (table, index) =>
+            `${index === 0 ? 'SELECT' : ','} (SELECT count(*) FROM "${table}" WHERE "organizationId" = $1) AS "${table}"`
+        ).join(' '),
+        organizationId
+      )
+    );
+    return Object.fromEntries(Object.entries(row!).map(([table, count]) => [table, Number(count)]));
+  }
+
+  it('purges a hospitality tenant whose inventory ledger and blocks refuse ordinary deletes', async () => {
+    await seedHotelInventory(HOTEL_PURGED_ORG, 'PURGING');
+    await seedHotelInventory(HOTEL_LIVE_ORG, 'ACTIVE');
+    const before = await hotelRowCounts(HOTEL_PURGED_ORG);
+    // Two dorm rooms with two berths each, every one with its first ledger
+    // line, one bed cleaned: 2 + 4 + 1 lines.
+    expect(before).toMatchObject({
+      hotel_room_status_events: 7,
+      hotel_room_blocks: 1,
+      hotel_beds: 4,
+      hotel_rooms: 2,
+      hotel_room_types: 1,
+      hotel_extras: 1,
+      hotel_property_assignments: 1,
+      hotel_properties: 1,
+    });
+
+    await withPlatformDb(async (db) => {
+      await db.$executeRawUnsafe(
+        `INSERT INTO platform_jobs (id, "organizationId", type, status, payload, "maxAttempts", "updatedAt")
+         VALUES ($1, $2, 'PURGE_DATA', 'QUEUED', '{}'::jsonb, 1, now())`,
+        HOTEL_JOB_ID,
+        HOTEL_PURGED_ORG
+      );
+      await db.$executeRawUnsafe(
+        `UPDATE platform_jobs SET "scheduledAt" = '1900-01-01', "createdAt" = '1900-01-01' WHERE id = $1`,
+        HOTEL_JOB_ID
+      );
+    });
+    const result = await processPlatformJobs(1);
+    const job = await withPlatformDb((db) =>
+      db.platformJob.findUniqueOrThrow({
+        where: { id: HOTEL_JOB_ID },
+        select: { status: true, error: true },
+      })
+    );
+    expect({
+      status: job.status,
+      error: job.error,
+      succeeded: result.succeeded,
+      failed: result.failed,
+    }).toEqual({
+      status: 'SUCCEEDED',
+      error: null,
+      succeeded: 1,
+      failed: 0,
+    });
+    expect(await hotelRowCounts(HOTEL_PURGED_ORG)).toEqual(
+      Object.fromEntries(HOTEL_TABLES.map((table) => [table, 0]))
+    );
+    expect(await hotelRowCounts(HOTEL_LIVE_ORG)).toMatchObject({
+      hotel_room_status_events: 7,
+      hotel_room_blocks: 1,
+      hotel_rooms: 2,
+      hotel_properties: 1,
+    });
+    const organization = await withPlatformDb((db) =>
+      db.organization.findUniqueOrThrow({
+        where: { id: HOTEL_PURGED_ORG },
+        select: { status: true },
+      })
+    );
+    expect(organization.status).toBe('PURGED');
+  });
+
+  it('keeps the live tenant’s inventory ledger append-only and its blocks undeletable outside the exact purge context', async () => {
+    await expect(
+      withPlatformDb((db) =>
+        db.$executeRawUnsafe(
+          `DELETE FROM hotel_room_status_events WHERE "organizationId" = $1`,
+          HOTEL_LIVE_ORG
+        )
+      )
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      withPlatformDb((db) =>
+        db.$executeRawUnsafe(
+          `UPDATE hotel_room_status_events SET reason = 'rewritten' WHERE "organizationId" = $1`,
+          HOTEL_LIVE_ORG
+        )
+      )
+    ).rejects.toThrow(/append-only/);
+    await expect(
+      withPlatformDb((db) =>
+        db.$executeRawUnsafe(
+          `DELETE FROM hotel_room_blocks WHERE "organizationId" = $1`,
+          HOTEL_LIVE_ORG
+        )
+      )
+    ).rejects.toThrow(/Release inventory blocks/);
+    // Naming ANOTHER organization in the purge GUC unlocks nothing here.
+    await expect(
+      withPlatformDb(async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${HOTEL_PURGED_ORG}, true)`;
+        return db.$executeRawUnsafe(
+          `DELETE FROM hotel_room_status_events WHERE "organizationId" = $1`,
+          HOTEL_LIVE_ORG
+        );
+      })
+    ).rejects.toThrow(/append-only/);
+    expect(await hotelRowCounts(HOTEL_LIVE_ORG)).toMatchObject({
+      hotel_room_status_events: 7,
+      hotel_room_blocks: 1,
+    });
   });
 
   it('keeps the onboarding history append-only while the tenant exists', async () => {

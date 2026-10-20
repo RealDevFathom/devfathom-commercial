@@ -34,7 +34,7 @@
  */
 import { z } from 'zod';
 
-import type { PrismaClient } from '@/generated/prisma/client';
+import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import type {
   HotelGenderPolicy as GeneratedGenderPolicy,
   HotelInventoryKind as GeneratedInventoryKind,
@@ -85,6 +85,8 @@ export const HOTEL_GENDER_POLICIES = ['ANY', 'MALE', 'FEMALE'] as const satisfie
 export type HotelInventoryKind = HotelInventoryKindValue;
 export type HotelInventoryStatus = (typeof HOTEL_INVENTORY_STATUSES)[number];
 export type HotelInventoryScope = { organizationId: string; branchId: string; actorId: string };
+/** The engine runs inside the caller's tenant transaction; a full client also satisfies this. */
+export type InventoryDb = Prisma.TransactionClient;
 
 export const HOTEL_ROOM_STATUS_LABELS: Record<HotelRoomStatusValue, string> = {
   VACANT_CLEAN: 'Vacant, clean',
@@ -435,22 +437,35 @@ export class HotelInventoryError extends Error {
 }
 
 /**
- * Run `run` inside the caller's tenant transaction with the actor and the
- * reason the status and block triggers read. Call on a tenant client (or on a
- * tenant transaction, which the scoped client reuses); errors must escape the
- * owning transaction so nothing partial is committed. Nothing here sets a
- * branch GUC — the property is a query predicate, never a session fact.
+ * Hand the status and block triggers the actor and the reason for the rest of
+ * this transaction. Transaction-local (`set_config(..., true)`), so nothing
+ * leaks past the request. Nothing here sets a branch GUC — the property is a
+ * query predicate the resolver supplies, never a session fact.
+ */
+export async function applyInventoryActor(
+  tx: InventoryDb,
+  scope: HotelInventoryScope,
+  changeReason: string
+): Promise<void> {
+  await tx.$queryRaw`SELECT set_config('app.current_user_id', ${scope.actorId}, true),
+    set_config('app.hotel_inventory_reason', ${changeReason}, true)`;
+}
+
+/**
+ * Run `run` inside a tenant transaction with the actor and the reason applied.
+ * Call on a tenant client (or on a tenant transaction, which the scoped client
+ * reuses); errors must escape the owning transaction so nothing partial is
+ * committed.
  */
 export function withHotelInventory<T>(
   db: PrismaClient,
   scope: HotelInventoryScope,
   changeReason: string,
-  run: (tx: PrismaClient) => Promise<T>
+  run: (tx: InventoryDb) => Promise<T>
 ): Promise<T> {
   return db.$transaction(async (tx) => {
-    await tx.$queryRaw`SELECT set_config('app.current_user_id', ${scope.actorId}, true),
-      set_config('app.hotel_inventory_reason', ${changeReason}, true)`;
-    return run(tx as PrismaClient);
+    await applyInventoryActor(tx, scope, changeReason);
+    return run(tx);
   });
 }
 
@@ -479,7 +494,7 @@ export function sellableUnitsOf(roomType: {
  * connecting room from another property is "not found" rather than linked.
  */
 export async function createInventoryRoom(
-  db: PrismaClient,
+  db: InventoryDb,
   scope: HotelInventoryScope,
   input: HotelRoomCreateInput
 ) {
@@ -553,7 +568,7 @@ export async function createInventoryRoom(
  * attributed ledger line in the same transaction.
  */
 export async function setInventoryStatus(
-  db: PrismaClient,
+  db: InventoryDb,
   scope: HotelInventoryScope,
   target: 'room' | 'bed',
   input: HotelInventoryStatusInput,
@@ -613,7 +628,7 @@ export async function setInventoryStatus(
  * by a read-then-write check that two requests could both pass.
  */
 export async function createInventoryBlock(
-  db: PrismaClient,
+  db: InventoryDb,
   scope: HotelInventoryScope,
   input: HotelRoomBlockCreateInput
 ) {
@@ -644,7 +659,7 @@ export async function createInventoryBlock(
  * release keeps the first actor and reason rather than overwriting them.
  */
 export async function releaseInventoryBlock(
-  db: PrismaClient,
+  db: InventoryDb,
   scope: HotelInventoryScope,
   input: HotelRoomBlockReleaseInput
 ) {
