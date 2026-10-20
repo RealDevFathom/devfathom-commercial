@@ -41,6 +41,16 @@ beforeAll(async () => {
     'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
   );
   expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+  // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
+  // existing organization, so anchor this suite's synthetic tenant first.
+  await client.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe("SELECT set_config('app.is_platform_admin', 'true', true)");
+    await tx.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+      org
+    );
+  });
   await transaction((db) =>
     db.pharmacyBranch.create({
       data: {
