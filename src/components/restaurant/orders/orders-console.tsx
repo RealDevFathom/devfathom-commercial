@@ -384,16 +384,15 @@ export function OrdersConsole() {
                             <span className="block font-medium text-text-strong">
                               #{order.orderNumber}
                             </span>
-                            <span className="block font-mono text-[0.625rem] text-text-faint">
-                              {order.id}
-                            </span>
                           </TableCell>
                           <TableCell>{order.businessDate}</TableCell>
                           <TableCell>
                             <StatusPill status={order.status} tone={tone(order.status)} />
                           </TableCell>
                           <TableCell>{order.channel.replaceAll('_', ' ')}</TableCell>
-                          <TableCell>{order.activeTableIds.join(', ') || '—'}</TableCell>
+                          <TableCell>
+                            {order.activeTables.map((table) => table.code).join(', ') || '—'}
+                          </TableCell>
                           <TableCell numeric>{order.itemCount}</TableCell>
                           <TableCell numeric>{order.subtotal}</TableCell>
                           <TableCell className="text-right">

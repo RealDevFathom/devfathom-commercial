@@ -623,7 +623,10 @@ async function listOrders(db: ScopedDb, input: ListOrdersInput) {
           modifiers: { select: { priceDelta: true } },
         },
       },
-      orderTables: { where: { active: true }, select: { tableId: true } },
+      orderTables: {
+        where: { active: true },
+        select: { tableId: true, table: { select: { code: true } } },
+      },
     },
   });
 
@@ -640,6 +643,12 @@ async function listOrders(db: ScopedDb, input: ListOrdersInput) {
       sectionId: order.sectionId,
       serverStaffProfileId: order.serverStaffProfileId,
       activeTableIds: order.orderTables.map((t) => t.tableId),
+      // The table code is what the floor plan and the register print (UX rule 1:
+      // an operator never reads an id the application already knows the name of).
+      activeTables: order.orderTables.map((t) => ({
+        id: t.tableId,
+        code: t.table?.code ?? t.tableId,
+      })),
       itemCount: order.items.length,
       subtotal: money(deriveSubtotal(order.items)),
     })),

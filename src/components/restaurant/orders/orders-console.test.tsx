@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
           sectionId: 'section_1',
           serverStaffProfileId: 'staff_server',
           activeTableIds: ['table_1'],
+          activeTables: [{ id: 'table_1', code: 'T1' }],
           itemCount: 1,
           subtotal: '18.50',
         },
@@ -198,6 +199,16 @@ describe('OrdersConsole', () => {
       input: { orderId: 'order_1' },
       enabled: true,
     });
+  });
+
+  it('names tables by their floor-plan code and never prints raw ids in the ledger', () => {
+    renderConsole();
+    fireEvent.change(screen.getByLabelText('Branch'), { target: { value: 'branch_1' } });
+    const row = screen.getByRole('button', { name: 'View order 42' }).closest('tr')!;
+    expect(row).toHaveTextContent('#42');
+    expect(within(row).getByText('T1')).toBeInTheDocument();
+    expect(row).not.toHaveTextContent('table_1');
+    expect(row).not.toHaveTextContent('order_1');
   });
 
   it('keeps DELIVERY available for historical order filtering', () => {

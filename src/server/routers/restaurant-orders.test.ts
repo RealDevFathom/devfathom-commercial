@@ -120,7 +120,7 @@ describe('read model (C10)', () => {
           { unitPrice: D('10.00'), quantity: 2, modifiers: [{ priceDelta: D('1.50') }] },
           { unitPrice: D('4.00'), quantity: 1, modifiers: [] },
         ],
-        orderTables: [{ tableId: 't1' }],
+        orderTables: [{ tableId: 't1', table: { code: 'T1' } }],
       },
     ]);
     const result = await caller().listOrders({ branchId: 'b1' });
@@ -128,6 +128,17 @@ describe('read model (C10)', () => {
     expect(result.orders[0].subtotal).toBe('27');
     expect(typeof result.orders[0].subtotal).toBe('string');
     expect(result.orders[0].activeTableIds).toEqual(['t1']);
+    expect(result.orders[0].activeTables).toEqual([{ id: 't1', code: 'T1' }]);
+    expect(mocks.orderFindMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({
+          orderTables: {
+            where: { active: true },
+            select: { tableId: true, table: { select: { code: true } } },
+          },
+        }),
+      })
+    );
     expect(result.orders[0].itemCount).toBe(2);
     expect(result.nextCursor).toBeNull();
   });
