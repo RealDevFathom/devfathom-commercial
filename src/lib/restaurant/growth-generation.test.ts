@@ -1,6 +1,15 @@
 import { beforeEach, expect, it, vi } from 'vitest';
-const mocks = vi.hoisted(() => ({ config: vi.fn(), model: vi.fn(), generateText: vi.fn() }));
-vi.mock('@/lib/ai/provider', () => ({ readAIConfig: mocks.config, createAIModel: mocks.model }));
+const mocks = vi.hoisted(() => ({
+  config: vi.fn(),
+  model: vi.fn(),
+  generateText: vi.fn(),
+  availability: vi.fn(),
+}));
+vi.mock('@/lib/ai/provider', () => ({
+  readAIConfig: mocks.config,
+  createAIModel: mocks.model,
+  readAIAvailability: mocks.availability,
+}));
 vi.mock('ai', async () => ({ ...(await vi.importActual('ai')), generateText: mocks.generateText }));
 import { generateRestaurantGrowth, listRestaurantGrowth } from './growth-generation';
 import { validateRestaurantGrowthPersisted, restaurantGrowthBinding } from './growth-binding';
@@ -40,6 +49,7 @@ const snapshot = () => ({
 });
 beforeEach(() => {
   vi.clearAllMocks();
+  mocks.availability.mockReturnValue({ available: true, provider: 'groq' });
   provenance = growthSourceFixture();
   mocks.config.mockReturnValue({ provider: 'TEST_DOUBLE', model: 'DETERMINISTIC_CATERING_TOKENS' });
   mocks.model.mockReturnValue({ model: {} });

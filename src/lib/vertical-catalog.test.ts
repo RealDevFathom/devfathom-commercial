@@ -40,10 +40,11 @@ import {
 
 describe('vertical definitions (§2)', () => {
   it('defines the registered verticals with UI labels', () => {
-    expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT', 'PHARMACY']);
+    expect(ALL_VERTICALS).toEqual(['AGENCY', 'RESTAURANT', 'PHARMACY', 'HOSPITALITY']);
     expect(VERTICALS.AGENCY.label).toBe('Agency');
     expect(VERTICALS.RESTAURANT.label).toBe('Restaurant');
     expect(VERTICALS.PHARMACY.label).toBe('Pharmacy');
+    expect(VERTICALS.HOSPITALITY.label).toBe('Hospitality');
   });
 });
 

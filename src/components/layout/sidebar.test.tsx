@@ -40,6 +40,22 @@ vi.mock('motion/react', () => ({
     ),
   },
 }));
+vi.mock('@/lib/trpc', () => ({
+  trpc: {
+    hotelProperty: {
+      extras: {
+        properties: {
+          useQuery: () => ({
+            data: undefined,
+            isError: false,
+            isFetching: false,
+            refetch: vi.fn(),
+          }),
+        },
+      },
+    },
+  },
+}));
 vi.mock('@/components/preferences-provider', () => ({
   usePreferences: () => ({ icons: 'numbered' }),
 }));

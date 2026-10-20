@@ -474,7 +474,13 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
       deploymentMode: 'SHARED',
     });
 
-    const error = await caught(run('organization.update', { id: 'org_r', vertical: 'AGENCY' }));
+    const error = await caught(
+      run('organization.update', {
+        id: 'org_r',
+        vertical: 'AGENCY',
+        reason: 'Correct onboarding classification',
+      })
+    );
 
     expect(error).toBeInstanceOf(PlatformSecurityError);
     expect(error).toMatchObject({ status: 400 });
@@ -516,7 +522,12 @@ describe('§2.2 contract item 5 — vertical immutable once active', () => {
     mocks.orgUpdate.mockResolvedValue({ id: 'org_x' });
     mocks.pkgFindUnique.mockResolvedValue({ active: true, vertical: 'RESTAURANT' });
 
-    await run('organization.update', { id: 'org_x', vertical: 'RESTAURANT', packageId: 'pkg_r' });
+    await run('organization.update', {
+      id: 'org_x',
+      vertical: 'RESTAURANT',
+      packageId: 'pkg_r',
+      reason: 'Correct onboarding classification',
+    });
 
     expect(mocks.orgUpdate).toHaveBeenCalledWith(
       expect.objectContaining({ data: expect.objectContaining({ vertical: 'RESTAURANT' }) })
@@ -669,6 +680,28 @@ describe('§9 contract item 6 — restaurant activation preflight matrix', () =>
 // ---------------------------------------------------------------------------
 describe('§16 / §2.3 contract item 7 — Phase-1 scattered-conditional audit', () => {
   const APPROVED_EXACT_FILES = new Set([
+    // b01f8aec: prior catalogs stay intact in additive Hotel integration fixtures.
+    'src/lib/hotel/foundation.test.ts',
+    // 5c7be21b: Hotel maintenance denies the wrong vertical.
+    'src/lib/platform/hotel-property-maintenance.test.ts',
+    // 7d8e4cfd: navigation fixtures prove cross-vertical isolation.
+    'src/components/layout/hotel-navigation.test.tsx',
+    // d299: Restaurant growth availability fixture.
+    'src/lib/ai/provider.test.ts',
+    // d299: canonical demo identity moved to this tenancy boundary.
+    'src/lib/tenancy/demo-identity.ts',
+    // d299: shared demo deployment boundary moved to activation gates.
+    'src/lib/platform/activation-gates.ts',
+    // 9b9f522e: entitlement-gated vertical descriptions and suggestions.
+    'src/components/assistant/assistant-suggestions.ts',
+    // 9b9f522e: description, isolation and entitlement proof for those suggestions.
+    'src/components/assistant/assistant-panel.test.tsx',
+    // 675a939b: platform-wide health filter and its matching console selector.
+    'src/server/routers/platform-health.ts',
+    'src/app/platform/(console)/health/page.tsx',
+    // Accepted L1 F5 8537f1d6 (from e623f49d): RESTAURANT is a negative khata
+    // fixture; centralized khataScope rejects it FORBIDDEN before tender writes.
+    'src/server/routers/pharmacy-sales.khata.test.ts',
     // Accepted catering/growth boundaries and their vertical-isolation fixtures.
     // Exact consumers only; no directory-wide exemption.
     'src/lib/ai/growth-recommendations.test.ts',
