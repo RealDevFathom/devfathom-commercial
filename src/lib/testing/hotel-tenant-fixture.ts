@@ -29,8 +29,6 @@ export type HotelTenantFixtureOptions = {
   organizationId: string;
   /** One property per name; the first is the suite's main property. */
   properties: readonly { name: string; branchId?: string }[];
-  /** `OrganizationVertical` value; HOSPITALITY unless a suite needs otherwise. */
-  vertical?: 'HOSPITALITY';
   status?: 'ONBOARDING' | 'ACTIVE' | 'PURGING';
   userId?: string;
   roleId?: string;
@@ -43,7 +41,8 @@ export async function seedHotelTenant(
   const organizationId = options.organizationId;
   const userId = options.userId ?? `${organizationId}_user`;
   const roleId = options.roleId ?? `${organizationId}_owner`;
-  const vertical = options.vertical ?? 'HOSPITALITY';
+  // A hospitality tenant by definition; the fixture never branches on it.
+  const vertical = 'HOSPITALITY' as const;
 
   return withPlatformDb(async (db) => {
     await db.organization.create({
