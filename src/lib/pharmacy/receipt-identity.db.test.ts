@@ -1,8 +1,7 @@
 /** Run only against a NEW disposable wha1364_* database, never an existing tenant. */
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { PrismaClient } from '@/generated/prisma/client';
-import { PrismaPg } from '@prisma/adapter-pg';
+import { db } from '@/lib/db';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { addSaleLine, createSale, changeSaleStatus } from './sales';
 import { receiveLot } from './stock-ledger';
@@ -16,7 +15,10 @@ if (url && !new URL(url).pathname.startsWith('/wha1364_')) {
     'New isolated WHA1364_RECEIPT_TEST_DATABASE_URL required; no skipped DB acceptance'
   );
 }
-const client = url ? new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) }) : null;
+// The app client, not a bare PrismaPg one: only it decodes the void result of the services'
+// `SELECT pg_advisory_xact_lock(...)`. It reads DATABASE_URL lazily, on first use.
+if (url) process.env.DATABASE_URL = url;
+const client = url ? db : null;
 const describeDatabase = url ? describe : describe.skip;
 const org = `org_${randomUUID()}`;
 const branch = `branch_${randomUUID()}`;
