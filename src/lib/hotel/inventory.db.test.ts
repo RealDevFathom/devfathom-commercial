@@ -34,7 +34,10 @@ import {
   hotelRoomTypeCreateInput,
   inventoryTransitionAllowed,
   inventoryWhere,
+  lockSellableUnitCeiling,
   releaseInventoryBlock,
+  reserveSellableUnits,
+  sellableUnitsUsed,
   setInventoryStatus,
   withHotelInventory,
   HOUSEKEEPING_ROOM_STATUSES,
@@ -685,5 +688,66 @@ describeIfDatabase('inventory with restricted runtime and forced RLS', () => {
     await within(scope, (tx) =>
       createInventoryBlock(tx, scope, { ...input, kind: 'OUT_OF_ORDER' })
     );
+  });
+
+  it('holds the sellable-unit ceiling lock across the organization’s properties, not across tenants', async () => {
+    // One transaction takes the organization's ceiling lock and holds it; a
+    // sibling property's reservation must wait on it (the ceiling is shared),
+    // while another organization's reservation must not (its key differs).
+    let lockTaken!: () => void;
+    let releaseLock!: () => void;
+    const taken = new Promise<void>((resolve) => (lockTaken = resolve));
+    const held = new Promise<void>((resolve) => (releaseLock = resolve));
+    const holder = within(scope, async (tx) => {
+      await lockSellableUnitCeiling(tx, scope.organizationId);
+      lockTaken();
+      await held;
+      return 'released';
+    });
+    await taken;
+    let siblingSettled = false;
+    const contender = within(sibling, (tx) =>
+      reserveSellableUnits(tx, sibling.organizationId, 1, 1_000)
+    ).finally(() => {
+      siblingSettled = true;
+    });
+    const stranger = within(other, (tx) =>
+      reserveSellableUnits(tx, other.organizationId, 1, 1_000)
+    );
+    await expect(stranger).resolves.toBeGreaterThanOrEqual(0);
+    await new Promise((resolve) => setTimeout(resolve, 400));
+    expect(siblingSettled).toBe(false);
+    releaseLock();
+    await expect(holder).resolves.toBe('released');
+    await expect(contender).resolves.toBeGreaterThanOrEqual(0);
+    expect(siblingSettled).toBe(true);
+  });
+
+  it('admits exactly one of two properties racing for the last sellable unit', async () => {
+    const used = await within(scope, (tx) => sellableUnitsUsed(tx, scope.organizationId));
+    const limit = used + 1;
+    const types = await Promise.all([makeType(scope, 'ROOM'), makeType(sibling, 'ROOM')]);
+    const results = await Promise.allSettled(
+      [scope, sibling].map((s, index) =>
+        within(s, async (tx) => {
+          await reserveSellableUnits(tx, s.organizationId, 1, limit);
+          return createInventoryRoom(
+            tx,
+            s,
+            hotelRoomCreateInput.parse({
+              roomTypeId: types[index]!.id,
+              number: `ceiling-race-${index}`,
+              reason: 'Commissioned',
+            })
+          );
+        })
+      )
+    );
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    const refusal = results.find((result) => result.status === 'rejected') as PromiseRejectedResult;
+    expect(refusal.reason).toEqual(rejectsWith('FORBIDDEN'));
+    expect(refusal.reason.message).toContain(`up to ${limit}`);
+    expect(await within(scope, (tx) => sellableUnitsUsed(tx, scope.organizationId))).toBe(limit);
   });
 });

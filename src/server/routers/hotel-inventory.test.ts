@@ -57,6 +57,7 @@ const dormType = {
 const db = {
   $transaction: vi.fn(),
   $queryRaw: vi.fn(),
+  $executeRaw: vi.fn(),
   hotelProperty: { findFirst: vi.fn() },
   hotelRoomType: { findMany: vi.fn(), findFirst: vi.fn(), create: vi.fn() },
   hotelRoom: {
@@ -527,6 +528,40 @@ describe('hotelProperty.inventory rooms', () => {
     await expect(
       caller(roomy, 'HOSTEL').rooms.create({ ...roomInput, roomTypeId: 'type_dorm' })
     ).resolves.toMatchObject({ room: { id: 'room_1' } });
+  });
+  it('serialises the ceiling count on an organization-wide lock taken after the property lock', async () => {
+    const tight = entitlementsOf(
+      hotelPackageEntitlements('hotel-essentials', { limits: { 'hotel.rooms.max': 5 } })
+    );
+    await expect(caller(tight).rooms.create(roomInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    // The property row lock is a `$queryRaw` (it reads the row); the advisory
+    // lock keyed on the organization alone is the one `$executeRaw`. Order:
+    // property lock, then organization lock, then the counts the refusal was
+    // decided on.
+    const sqlOf = (call: unknown[]) => (call[0] as readonly string[]).join('?');
+    const propertyLockIndex = db.$queryRaw.mock.calls.findIndex((call) =>
+      sqlOf(call).includes('FOR UPDATE')
+    );
+    expect(db.$queryRaw.mock.calls[propertyLockIndex]!.slice(1)).toEqual(['org_1', 'property_1']);
+    expect(db.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(sqlOf(db.$executeRaw.mock.calls[0]!)).toContain(
+      'pg_advisory_xact_lock(hashtextextended('
+    );
+    expect(db.$executeRaw.mock.calls[0]!.slice(1)).toEqual(['hotel-rooms-ceiling:org_1']);
+    const ceilingLock = first(db.$executeRaw)!;
+    expect(db.$queryRaw.mock.invocationCallOrder[propertyLockIndex]!).toBeLessThan(ceilingLock);
+    expect(ceilingLock).toBeLessThan(first(db.hotelRoom.count)!);
+    expect(ceilingLock).toBeLessThan(first(db.hotelBed.count)!);
+    expect(db.hotelRoom.create).not.toHaveBeenCalled();
+    // The lock guards the admitted path too, not only the refusal.
+    db.$executeRaw.mockClear();
+    db.hotelRoom.create.mockClear();
+    await caller().rooms.create(roomInput);
+    expect(db.$executeRaw).toHaveBeenCalledTimes(1);
+    expect(db.$executeRaw.mock.calls[0]!.slice(1)).toEqual(['hotel-rooms-ceiling:org_1']);
+    expect(first(db.$executeRaw)!).toBeLessThan(first(db.hotelRoom.create)!);
   });
   it('commissions a room with the server-derived scope and actor, provisioning a dorm’s berths', async () => {
     await caller().rooms.create(roomInput);

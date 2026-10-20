@@ -486,6 +486,59 @@ export function sellableUnitsOf(roomType: {
   return roomType.inventoryKind === 'BED' ? (roomType.bedsPerRoom ?? 0) : 1;
 }
 
+/** Sellable units the organization already holds, the way `hotel.rooms.max` counts them. */
+export async function sellableUnitsUsed(db: InventoryDb, organizationId: string): Promise<number> {
+  const rooms = await db.hotelRoom.count({
+    where: { organizationId, active: true, inventoryKind: { not: 'BED' } },
+  });
+  const beds = await db.hotelBed.count({ where: { organizationId, active: true } });
+  return rooms + beds;
+}
+
+/**
+ * Serialise every check against the organization's sellable-unit ceiling for
+ * the rest of this transaction. The property lock a write already holds covers
+ * one property, but `hotel.rooms.max` spans the organization: two properties
+ * commissioning at once would each count before the other's insert and
+ * together overshoot the ceiling. The transaction-scoped advisory lock is
+ * keyed on the organization alone, so count-then-insert is exclusive across
+ * its properties and no other tenant waits on it; PostgreSQL releases it with
+ * the transaction. Take it after the property row lock, never before: every
+ * writer orders property → organization, so the two can never form a cycle.
+ */
+export async function lockSellableUnitCeiling(
+  db: InventoryDb,
+  organizationId: string
+): Promise<void> {
+  // `$executeRaw`: the function returns `void`, which the driver adapter cannot
+  // deserialize as a `$queryRaw` column.
+  await db.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`hotel-rooms-ceiling:${organizationId}`}, 0))`;
+}
+
+/**
+ * Claim `adding` sellable units under the organization's ceiling, or refuse.
+ * Locks the ceiling first (see {@link lockSellableUnitCeiling}), then counts,
+ * so the count a caller inserts against cannot be overtaken by a sibling
+ * property's insert before this transaction commits. Returns the count the
+ * decision was made on.
+ */
+export async function reserveSellableUnits(
+  db: InventoryDb,
+  organizationId: string,
+  adding: number,
+  limit: number
+): Promise<number> {
+  await lockSellableUnitCeiling(db, organizationId);
+  const used = await sellableUnitsUsed(db, organizationId);
+  if (used + adding > limit) {
+    throw new HotelInventoryError(
+      'FORBIDDEN',
+      `This workspace may sell up to ${limit} rooms, beds and units and already has ${used}. Ask your DevFathom account manager to raise the limit.`
+    );
+  }
+  return used;
+}
+
 /**
  * Create a room (or a dorm room, or a unit) under one of the property's types,
  * provisioning the berths a BED type declares. The room's `inventoryKind` is

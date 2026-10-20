@@ -14,7 +14,9 @@
  * Creates are gated on the property's REAL configuration — its mode plus its
  * explicit overrides, evaluated against the organization's entitlements by
  * `evaluateHotelFeatures` — never on a mode name, and on the `hotel.rooms.max`
- * ceiling the package sells, counted in sellable units across the organization.
+ * ceiling the package sells, counted in sellable units across the organization
+ * under an organization-wide advisory lock (`reserveSellableUnits`), because
+ * the property lock alone would let two properties overshoot it together.
  *
  * Every write runs inside `withLockedProperty` (lock, re-check access, write),
  * every query carries the organization and the resolved property as predicates,
@@ -51,7 +53,9 @@ import {
   hotelRoomTypeCreateInput,
   inventoryWhere,
   releaseInventoryBlock,
+  reserveSellableUnits,
   sellableUnitsOf,
+  sellableUnitsUsed,
   setInventoryStatus,
   type HotelInventoryKindValue,
   type HotelInventoryScope,
@@ -137,15 +141,6 @@ function requireKind(
       `Not available for this property: ${HOTEL_INVENTORY_KIND_LABELS[kind].toLowerCase()} inventory.`
     ),
   });
-}
-
-/** Sellable units the organization already holds, the way `hotel.rooms.max` counts them. */
-async function sellableUnitsUsed(db: InventoryDb, organizationId: string): Promise<number> {
-  const rooms = await db.hotelRoom.count({
-    where: { organizationId, active: true, inventoryKind: { not: 'BED' } },
-  });
-  const beds = await db.hotelBed.count({ where: { organizationId, active: true } });
-  return rooms + beds;
 }
 
 /** The `hotel.rooms.max` ceiling, bootstrapped (`hotel-core.` prefixed) or explicit. */
@@ -384,15 +379,14 @@ export const hotelInventoryRouter = router({
             );
           }
           requireKind(property, ctx.entitlements, roomType.inventoryKind);
-          const limit = roomLimit(ctx.entitlements);
-          const used = await sellableUnitsUsed(db, scope.organizationId);
-          const adding = sellableUnitsOf(roomType);
-          if (used + adding > limit) {
-            throw new TRPCError({
-              code: 'FORBIDDEN',
-              message: `This workspace may sell up to ${limit} rooms, beds and units and already has ${used}. Ask your DevFathom account manager to raise the limit.`,
-            });
-          }
+          // The ceiling spans the organization while the lock above covers one
+          // property, so the count is serialised on the organization first.
+          await reserveSellableUnits(
+            db,
+            scope.organizationId,
+            sellableUnitsOf(roomType),
+            roomLimit(ctx.entitlements)
+          );
           const room = await createInventoryRoom(db, scope, withoutSelection(input));
           recordHotelAudit(ctx, {
             entity: { type: 'HotelRoom', id: room.id, label: room.number },
