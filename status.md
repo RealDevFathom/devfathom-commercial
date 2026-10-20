@@ -490,8 +490,28 @@ numPendingTests=27; require numeric zero` — note **pending counts as failure**
   in the browser gate + qa.yml) are COMPOSED too — the restaurant-completion programme is fully on
   the tip; what remains is verification on staging (owner deploy) and the WHA-1285 dark-theme contrast
   fix. Promote a backlog lane to `todo` only when its
-  dependency is composed AND heavy runs ≤ 5 and total actual runs ≤ 7. Not in scope yet (owner said restaurants first): hotel
-  bookings/guest journey, online payment gateways (providers are MOCK/TERMINAL only).
+  dependency is composed AND heavy runs ≤ 5 and total actual runs ≤ 7. Not in scope yet: online
+  payment gateways (providers are MOCK/TERMINAL only). Hotel is no longer out of scope; what exists
+  is the next item.
+- **Hotel (hospitality): the configuration surfaces exist, the operations do not (20 Oct 2026).**
+  Ported from the parked WHA-1415/1417/1419/1421/1428 lanes onto the merged tree as local commits on
+  `wp04b/hotel-journeys-nav` (not pushed, composed or deployed). A property administrator sets up
+  **rooms** (room types, rooms, beds and units, an attributed append-only housekeeping status history,
+  OOO/OOS blocks that cannot overlap), **function spaces** (layouts and capacities, PKR-minor pricing,
+  setup and teardown buffers, and a booking skeleton whose buffered range the database owns and keeps
+  collision-free) and **guest messages** (one versioned message per journey moment, channel —
+  WhatsApp, e-mail, SMS — and language, EN or UR; twenty drafts seeded at provisioning; at most one
+  approved version per message; a preview with sample values; nothing sends). A member holding
+  `hotel:rates` manages **meal plans** (EP/CP/MAP/AP plus custom; four seeded at provisioning, MAP and
+  AP off), and marketing drafts guest messages for approval. The onboarding walk counts active room
+  types, or active function spaces for a property whose configuration sells no room inventory (a
+  Venue), and the hospitality rail shows each page to whoever holds the capability it checks. Every new
+  table has forced RLS under the standard tenant policy, with verifier probes. Migrations used, in
+  order: `20261021100000_hospitality_inventory`, `20261021101000_hospitality_meal_plans`,
+  `20261021102000_hospitality_function_spaces`, `20261021103000_hospitality_journey_templates` and
+  `20261021104000_hospitality_space_booking_hardening`; `20261021105000`–`20261021109900` stay
+  reserved for corrections. Not built yet: reservations, front desk, folios and payments, night-audit
+  operations, sending guest messages, and the `hotelOps` audit timeline read.
 - **Composition now uses native Git only:** require a clean compose worktree; verify the delivery's sole
   commit, parent, diff and exact-tree evidence; compose with `git cherry-pick -x <sha>`. Any conflict means
   `git cherry-pick --abort` and route correction in the lane's own worktree. Never use the obsolete VM
