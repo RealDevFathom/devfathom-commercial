@@ -431,20 +431,30 @@ export const hotelInventoryRouter = router({
         )
       ),
 
-    /** The attributed, append-only history of one room (its beds included). */
+    /**
+     * The attributed, append-only history of one room (its beds included),
+     * with each actor named rather than shown as an id (UX rule 1). A member
+     * who has since left is reported as unknown, never guessed.
+     */
     history: propertyAdmin
       .input(selected(hotelInventoryRoomInput))
       .query(async ({ ctx, input }) => {
         const property = await currentProperty(ctx, input.branchId);
-        return ctx.db.hotelRoomStatusEvent.findMany({
-          where: {
-            organizationId: ctx.entitlements.organizationId,
-            branchId: property.branchId,
-            roomId: input.roomId,
-          },
+        const organizationId = ctx.entitlements.organizationId;
+        const events = await ctx.db.hotelRoomStatusEvent.findMany({
+          where: { organizationId, branchId: property.branchId, roomId: input.roomId },
           orderBy: [{ createdAt: 'desc' }, { id: 'desc' }],
           take: 200,
         });
+        const actorIds = [...new Set(events.map((event) => event.actorId))];
+        const actors = actorIds.length
+          ? await ctx.db.user.findMany({
+              where: { organizationId, id: { in: actorIds } },
+              select: { id: true, name: true },
+            })
+          : [];
+        const names = new Map(actors.map((actor) => [actor.id, actor.name]));
+        return events.map((event) => ({ ...event, actorName: names.get(event.actorId) ?? null }));
       }),
   }),
 

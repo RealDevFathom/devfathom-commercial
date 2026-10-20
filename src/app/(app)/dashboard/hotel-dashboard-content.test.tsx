@@ -99,12 +99,22 @@ describe('HotelDashboardContent', () => {
       'href',
       '/hotel/settings/extras?branchId=branch_lahore'
     );
+    expect(screen.getByRole('link', { name: 'Rooms' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/rooms?branchId=branch_lahore'
+    );
+    expect(screen.getByRole('link', { name: 'Add room types and rooms' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/rooms?branchId=branch_lahore'
+    );
     expect(
       screen.getByRole('link', { name: 'Invite the team and assign Hotel roles' })
     ).toHaveAttribute('href', '/organization');
+    // Rooms exist in this build; what does not is still said out loud.
     expect(
-      screen.getByText(/Rooms, rates, reservations and folios are not available/)
+      screen.getByText(/Rates, reservations and folios are not available/)
     ).toBeInTheDocument();
+    expect(screen.queryByText(/Rooms, rates, reservations/)).not.toBeInTheDocument();
   });
 
   it('reports a property that is ready to activate', () => {

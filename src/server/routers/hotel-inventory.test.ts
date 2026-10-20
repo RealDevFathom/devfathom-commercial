@@ -75,6 +75,7 @@ const db = {
     count: vi.fn(),
   },
   hotelRoomStatusEvent: { findMany: vi.fn() },
+  user: { findMany: vi.fn() },
   hotelRoomBlock: {
     findMany: vi.fn(),
     findFirst: vi.fn(),
@@ -164,6 +165,7 @@ beforeEach(() => {
   db.hotelBed.updateMany.mockResolvedValue({ count: 1 });
   db.hotelBed.count.mockResolvedValue(2);
   db.hotelRoomStatusEvent.findMany.mockResolvedValue([]);
+  db.user.findMany.mockResolvedValue([]);
   db.hotelRoomBlock.findMany.mockResolvedValue([]);
   db.hotelRoomBlock.findFirst.mockResolvedValue({ id: 'block_1', releasedAt: null });
   db.hotelRoomBlock.findFirstOrThrow.mockResolvedValue({ id: 'block_1', releasedAt: new Date() });
@@ -300,6 +302,7 @@ describe('hotelProperty.inventory reads', () => {
         where: { organizationId: 'org_1', branchId: 'property_1', roomId: 'room_1' },
       })
     );
+    expect(db.user.findMany).not.toHaveBeenCalled();
     await caller().blocks.list({ branchId: 'property_1', roomId: 'room_1' });
     expect(db.hotelRoomBlock.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -311,6 +314,19 @@ describe('hotelProperty.inventory reads', () => {
         },
       })
     );
+  });
+  it('names the actor on each history line from the organization’s own members only', async () => {
+    db.hotelRoomStatusEvent.findMany.mockResolvedValue([
+      { id: 'event_1', actorId: 'actor_1', fromStatus: null, toStatus: 'VACANT_DIRTY' },
+      { id: 'event_2', actorId: 'gone', fromStatus: 'VACANT_DIRTY', toStatus: 'VACANT_CLEAN' },
+    ]);
+    db.user.findMany.mockResolvedValue([{ id: 'actor_1', name: 'Front Desk' }]);
+    const history = await caller().rooms.history({ branchId: 'property_1', roomId: 'room_1' });
+    expect(db.user.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: { in: ['actor_1', 'gone'] } },
+      select: { id: true, name: true },
+    });
+    expect(history.map((event) => event.actorName)).toEqual(['Front Desk', null]);
   });
   it.each([
     ['HOTEL', null, ['ROOM']],

@@ -43,6 +43,10 @@ export function HotelDashboardContent({
     properties.length === 1
       ? `/hotel/settings/extras?branchId=${encodeURIComponent(properties[0]!.branchId)}`
       : '/hotel/settings/extras';
+  const roomsHref =
+    properties.length === 1
+      ? `/hotel/settings/rooms?branchId=${encodeURIComponent(properties[0]!.branchId)}`
+      : '/hotel/settings/rooms';
 
   return (
     <div className="space-y-6" data-testid="hotel-dashboard">
@@ -52,8 +56,8 @@ export function HotelDashboardContent({
         description={
           landing.kind === 'properties'
             ? summary.ready
-              ? 'Every property can be activated. Rooms, reservations and folios arrive with the operating modules.'
-              : 'Property setup, where each property stands, and what to do next. Rooms, reservations and folios arrive with the operating modules.'
+              ? 'Every property can be activated. Reservations and folios arrive with the operating modules.'
+              : 'Property setup, where each property stands, and what to do next. Reservations and folios arrive with the operating modules.'
             : 'Property setup lives here once a property is assigned to you.'
         }
         actions={
@@ -64,6 +68,9 @@ export function HotelDashboardContent({
                 href={propertyHref}
               >
                 Property settings
+              </Link>
+              <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href={roomsHref}>
+                Rooms
               </Link>
               <Link className={buttonVariants({ size: 'lg' })} href={extrasHref}>
                 Extras catalog
@@ -120,7 +127,12 @@ export function HotelDashboardContent({
                 ))}
               </ul>
             </SectionCard>
-            <NextSteps isAdmin={isAdmin} propertyHref={propertyHref} extrasHref={extrasHref} />
+            <NextSteps
+              isAdmin={isAdmin}
+              propertyHref={propertyHref}
+              roomsHref={roomsHref}
+              extrasHref={extrasHref}
+            />
           </div>
         </>
       ) : (
@@ -152,7 +164,7 @@ export function HotelDashboardContent({
               </a>
             ) : null}
           </SectionCard>
-          <NextSteps isAdmin={isAdmin} propertyHref={null} extrasHref={null} />
+          <NextSteps isAdmin={isAdmin} propertyHref={null} roomsHref={null} extrasHref={null} />
         </div>
       )}
     </div>
@@ -256,10 +268,12 @@ function PropertyRow({ property }: { property: HotelLandingProperty }) {
 function NextSteps({
   isAdmin,
   propertyHref,
+  roomsHref,
   extrasHref,
 }: {
   isAdmin: boolean;
   propertyHref: string | null;
+  roomsHref: string | null;
   extrasHref: string | null;
 }) {
   const steps = [
@@ -268,6 +282,13 @@ function NextSteps({
           href: propertyHref,
           label: 'Finish the property facts',
           detail: 'Mode, tax profile, audit time and business-date rule.',
+        }
+      : null,
+    roomsHref
+      ? {
+          href: roomsHref,
+          label: 'Add room types and rooms',
+          detail: 'What the property sells, and the rooms, beds or units sold under each type.',
         }
       : null,
     extrasHref
@@ -313,8 +334,8 @@ function NextSteps({
         ))}
       </ol>
       <p className="mt-4 text-xs text-text-muted">
-        Rooms, rates, reservations and folios are not available in this build; your DevFathom
-        delivery team enables them.
+        Rates, reservations and folios are not available in this build; your DevFathom delivery team
+        enables them.
       </p>
     </SectionCard>
   );
