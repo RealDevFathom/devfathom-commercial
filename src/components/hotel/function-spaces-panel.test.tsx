@@ -392,6 +392,11 @@ describe('HotelFunctionSpacesPanel', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Refused');
   });
 
+  it('takes no focus when it mounts', () => {
+    mount();
+    expect(document.activeElement).toBe(document.body);
+  });
+
   it('explains a property that cannot sell function space and offers reading only', () => {
     mount(view({ enabled: false }));
     expect(

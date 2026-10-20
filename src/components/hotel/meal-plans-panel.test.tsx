@@ -333,6 +333,16 @@ describe('HotelMealPlansPanel', () => {
     expect(screen.queryByRole('form', { name: 'Add a meal plan' })).not.toBeInTheDocument();
   });
 
+  it('takes no focus when it mounts, and none when a row re-renders with its editor closed', async () => {
+    mount();
+    expect(document.activeElement).toBe(document.body);
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: 'Refresh plans' }));
+    });
+    expect(screen.queryByRole('button', { name: 'Edit CP' })).not.toHaveFocus();
+    expect(screen.queryByRole('button', { name: 'Edit EP' })).not.toHaveFocus();
+  });
+
   it('explains an empty list with the next action', () => {
     mount(view([]));
     expect(screen.getByText(/No meal plans yet/)).toBeInTheDocument();

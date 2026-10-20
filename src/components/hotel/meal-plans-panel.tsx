@@ -446,10 +446,15 @@ function PlanRow({
   onToggle: () => void;
 }) {
   const trigger = useRef<HTMLButtonElement>(null);
+  const wasOpen = useRef(false);
   useEffect(() => {
     // The editor closed and took the focused control with it: hand focus back
     // to the action that opened it rather than letting it fall to the body.
-    if (open || typeof document === 'undefined') return;
+    // Only on that transition — a row mounting with its editor closed must not
+    // take focus from the page.
+    const closed = wasOpen.current && !open;
+    wasOpen.current = open;
+    if (!closed || typeof document === 'undefined') return;
     if (document.activeElement && document.activeElement !== document.body) return;
     trigger.current?.focus();
   }, [open]);
