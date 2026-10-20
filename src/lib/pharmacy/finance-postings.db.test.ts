@@ -1289,14 +1289,17 @@ describeIfDatabase('FIN-03 — perpetual valuation, margin and leakage', () => {
         idempotencyKey: `return-${tag('margin-return')}`,
       });
       if (!returned.returnLine) throw new Error('Expected identified lot return');
-      await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
+      // returnSaleLine posts its own reversal at the return's createdAt (wall
+      // clock), so this call is an idempotent replay that hands that entry
+      // back. The window must reach it, or the reversal is simply out of range.
+      const reversal = await deps.postings.postSaleReturnEntry(db, scopeOf(f), {
         saleReturnLineId: returned.returnLine.id,
         at: LATER,
       });
       return deps.reports.grossMargin(
         db,
         { organizationId: ORG_A, branchId: f.branchId },
-        { ...WINDOW, by: 'line' }
+        { from: WINDOW.from, to: new Date(reversal.occurredAt.getTime() + 1), by: 'line' }
       );
     });
 
