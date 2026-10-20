@@ -41,6 +41,8 @@ export async function createSSRHelpers() {
   const helpers = createServerSideHelpers({ router: appRouter, ctx, transformer: superjson });
   return {
     helpers,
+    /** The same context, for pages that read through a router caller instead of prefetching. */
+    ctx,
     session: ctx.session,
     organization: ctx.organization,
     entitlements: ctx.entitlements,

@@ -132,6 +132,18 @@ describe('Hotel navigation composition', () => {
     expect(moduleForPath('/hotel/settings/extras')).toBe('hotel-core');
     expect(moduleForPath('/hotel/future')).toBeNull();
   });
+  it('labels the property entry by what it configures, so no two entries read "Settings"', () => {
+    const visible = visibleNavigation(
+      { vertical: 'HOSPITALITY', enabledModules: ['hotel-core'] },
+      'ADMIN',
+      true
+    );
+    const labels = visible.map((n) => n.label);
+    expect(new Set(labels).size).toBe(labels.length);
+    expect(labels.filter((label) => label === 'Settings')).toEqual(['Settings']);
+    expect(visible.find((n) => n.href === '/hotel/settings/property')?.label).toBe('Property');
+    expect(visible.find((n) => n.href === '/settings')?.label).toBe('Settings');
+  });
   it('admits an assigned capable non-admin and rejects an unassigned admin', () => {
     const e = { vertical: 'HOSPITALITY' as const, enabledModules: ['hotel-core'] };
     expect(

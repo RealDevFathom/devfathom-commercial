@@ -46,6 +46,7 @@ import {
   BookLock,
   Pill,
   Tags,
+  BedDouble,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -320,9 +321,30 @@ export const navigation: NavItem[] = [
     icon: BarChart3,
     group: 'Pharmacy',
   },
-  { label: 'Cameras', href: '/pharmacy/cameras', icon: Camera, group: 'Pharmacy', adminOnly: true, module: 'pharmacy-core' },
-  { label: 'Loyalty points', href: '/pharmacy/loyalty', icon: Users, group: 'Pharmacy', adminOnly: true, module: 'pharmacy-crm' },
-  { label: 'Marketing & growth', href: '/pharmacy/marketing', icon: BarChart3, group: 'Pharmacy', adminOnly: true, module: 'pharmacy-crm' },
+  {
+    label: 'Cameras',
+    href: '/pharmacy/cameras',
+    icon: Camera,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-core',
+  },
+  {
+    label: 'Loyalty points',
+    href: '/pharmacy/loyalty',
+    icon: Users,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-crm',
+  },
+  {
+    label: 'Marketing & growth',
+    href: '/pharmacy/marketing',
+    icon: BarChart3,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-crm',
+  },
   {
     label: 'Prescriptions',
     href: '/pharmacy/prescriptions',
@@ -364,10 +386,12 @@ export const navigation: NavItem[] = [
   // at a route that does not exist is a dead end (UX rule 12). Gated on mandatory
   // Hotel Core through explicit module ownership, so the vertical filter hides
   // it from restaurant and pharmacy workspaces without a `/hotel` catch-all.
+  // Labelled by what it configures: the workspace "Settings" entry sits in the
+  // same rail, and two entries reading "Settings" named nothing.
   {
-    label: 'Settings',
+    label: 'Property',
     href: '/hotel/settings/property',
-    icon: Settings,
+    icon: BedDouble,
     group: 'Hospitality',
     module: 'hotel-core',
   },
