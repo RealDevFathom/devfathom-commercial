@@ -7,6 +7,8 @@ import {
   assertHotelAvailabilityDays,
   evaluateHotelFeatures,
   hotelPackageEntitlements,
+  hotelRoomLimit,
+  resolveHotelLimits,
 } from './features';
 import { applyHotelModeDefaults, type HotelModeConfiguration } from './modes';
 
@@ -174,6 +176,72 @@ describe('package feature evaluation', () => {
         hotelPackageEntitlements('hotel-essentials')
       )
     ).toMatchObject({ dayUse: false, availabilityDays: false });
+  });
+});
+
+describe('hospitality limit resolution', () => {
+  // resolveOrganizationEntitlements prefixes a module link's limits with the
+  // module key, so a package's bootstrapped ceilings arrive as `hotel-core.*`.
+  const bootstrapped = {
+    enabledModules: HOSPITALITY_MODULES.map((entry) => entry.key),
+    limits: {
+      'hotel-core.hotel.properties.max': 3,
+      'hotel-core.hotel.rooms.max': 250,
+      'hotel-core.hotel.users.max': 75,
+    },
+  };
+
+  it('reads the bootstrapped package ceiling the runtime snapshot carries', () => {
+    expect(hotelRoomLimit(bootstrapped)).toBe(250);
+    expect(resolveHotelLimits(bootstrapped).limits).toEqual({
+      ...bootstrapped.limits,
+      'hotel.properties.max': 3,
+      'hotel.rooms.max': 250,
+      'hotel.users.max': 75,
+    });
+    expect(evaluateHotelFeatures(allConfiguration, bootstrapped)).toMatchObject({
+      rooms: true,
+      beds: true,
+      units: true,
+      reservations: true,
+    });
+  });
+
+  it('lets an explicit organization limit win over the bootstrapped one, zero included', () => {
+    const explicitZero = {
+      ...bootstrapped,
+      limits: { ...bootstrapped.limits, 'hotel.rooms.max': 0 },
+    };
+    expect(hotelRoomLimit(explicitZero)).toBe(0);
+    expect(evaluateHotelFeatures(allConfiguration, explicitZero)).toMatchObject({
+      rooms: false,
+      beds: false,
+      units: false,
+      reservations: false,
+      folio: true,
+    });
+    expect(
+      hotelRoomLimit({ limits: { 'hotel.rooms.max': 12, 'hotel-core.hotel.rooms.max': 250 } })
+    ).toBe(12);
+  });
+
+  it.each([-1, 1.5, Number.NaN, Number.POSITIVE_INFINITY])(
+    'treats the invalid ceiling %s as no ceiling at all',
+    (value) => {
+      const snapshot = { ...bootstrapped, limits: { 'hotel-core.hotel.rooms.max': value } };
+      expect(hotelRoomLimit(snapshot)).toBe(0);
+      expect(resolveHotelLimits(snapshot).limits).not.toHaveProperty('hotel.rooms.max');
+      expect(evaluateHotelFeatures(allConfiguration, snapshot).rooms).toBe(false);
+    }
+  );
+
+  it('leaves the caller’s snapshot untouched', () => {
+    const limits = Object.freeze({ 'hotel-core.hotel.rooms.max': 250 });
+    const snapshot = { enabledModules: ['hotel-core'], limits };
+    expect(evaluateHotelFeatures(allConfiguration, snapshot).rooms).toBe(true);
+    expect(resolveHotelLimits(snapshot)).not.toBe(snapshot);
+    expect(resolveHotelLimits(snapshot).limits).not.toBe(limits);
+    expect(limits).toEqual({ 'hotel-core.hotel.rooms.max': 250 });
   });
 });
 

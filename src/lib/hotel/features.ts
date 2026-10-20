@@ -1,7 +1,39 @@
+import {
+  HOSPITALITY_COMMERCIAL_LIMITS,
+  HOTEL_ROOMS_LIMIT,
+  resolveEntitlementLimit,
+} from '@/lib/entitlement-limits';
 import { evaluateEntitlementRequirement, type EntitlementSnapshot } from '@/lib/module-catalog';
 import { HOSPITALITY_PACKAGES } from '@/lib/vertical-catalog';
 
 import type { HotelModeConfiguration } from './modes';
+
+/**
+ * The snapshot with every hospitality limit under its bare key. A package's
+ * default limits reach the snapshot as `hotel-core.<key>` (the module link
+ * carries them); an explicit `organization_limits` row keeps `<key>` and wins.
+ * An invalid value (negative, fractional, non-finite) counts as absent, so the
+ * requirement below fails closed instead of reading garbage as a grant.
+ */
+export function resolveHotelLimits(entitlements: EntitlementSnapshot): EntitlementSnapshot {
+  const limits: Record<string, number> = { ...entitlements.limits };
+  for (const definition of HOSPITALITY_COMMERCIAL_LIMITS) {
+    const resolution = resolveEntitlementLimit(entitlements.limits, definition);
+    if (resolution.status === 'configured') limits[definition.explicitKey] = resolution.value;
+    else delete limits[definition.explicitKey];
+  }
+  return { ...entitlements, limits };
+}
+
+/**
+ * The organization's sellable-unit ceiling (`hotel.rooms.max`): rooms, beds and
+ * units across every property. Absent or invalid resolves to zero, the Venue
+ * package's deliberate "no rooms" value, never to "unlimited".
+ */
+export function hotelRoomLimit(entitlements: Pick<EntitlementSnapshot, 'limits'>): number {
+  const resolution = resolveEntitlementLimit(entitlements.limits, HOTEL_ROOMS_LIMIT);
+  return resolution.status === 'configured' ? resolution.value : 0;
+}
 
 /**
  * Pure package preview. Runtime callers must instead supply the snapshot from
@@ -30,8 +62,9 @@ export function hotelPackageEntitlements(
 /** MODE-05: features follow configuration and granted modules/limits, never mode names. */
 export function evaluateHotelFeatures(
   configuration: HotelModeConfiguration,
-  entitlements: EntitlementSnapshot
+  snapshot: EntitlementSnapshot
 ) {
+  const entitlements = resolveHotelLimits(snapshot);
   const moduleEnabled = (module: string) =>
     evaluateEntitlementRequirement(entitlements, {
       modules: ['hotel-core', module],

@@ -332,6 +332,34 @@ describe('hotelProperty.inventory reads', () => {
       expect(view.roomLimit).toEqual({ max: 50, used: 5 });
     }
   );
+  it('reads the ceiling the runtime snapshot carries under the hotel-core prefix', async () => {
+    // resolveOrganizationEntitlements prefixes a package link's limits with the
+    // module key; an explicit organization_limits row keeps the bare key and wins.
+    const bootstrapped = entitlementsOf({
+      enabledModules: [...hotelPackageEntitlements('hotel-pro').enabledModules],
+      limits: { 'hotel-core.hotel.rooms.max': 250, 'hotel-core.hotel.properties.max': 3 },
+    });
+    const view = await caller(bootstrapped).roomTypes.list({ branchId: 'property_1' });
+    expect(view.kindOptions.find((kind) => kind.value === 'ROOM')).toMatchObject({
+      enabled: true,
+    });
+    expect(view.roomLimit).toEqual({ max: 250, used: 5 });
+    await expect(caller(bootstrapped).rooms.create(roomInput)).resolves.toMatchObject({
+      room: { id: 'room_1' },
+    });
+    const overridden = entitlementsOf({
+      ...bootstrapped,
+      limits: { ...bootstrapped.limits, 'hotel.rooms.max': 0 },
+    });
+    expect((await caller(overridden).roomTypes.list({ branchId: 'property_1' })).roomLimit).toEqual(
+      { max: 0, used: 5 }
+    );
+    db.hotelRoom.create.mockClear();
+    await expect(caller(overridden).rooms.create(roomInput)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(db.hotelRoom.create).not.toHaveBeenCalled();
+  });
 });
 
 describe('hotelProperty.inventory room types', () => {

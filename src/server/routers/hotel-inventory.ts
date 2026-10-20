@@ -26,7 +26,7 @@ import { z, ZodRealError, type ZodError } from 'zod';
 
 import { Prisma, type HotelProperty } from '@/generated/prisma/client';
 import { recordHotelAudit } from '@/lib/hotel/audit';
-import { evaluateHotelFeatures } from '@/lib/hotel/features';
+import { evaluateHotelFeatures, hotelRoomLimit } from '@/lib/hotel/features';
 import {
   HOTEL_INVENTORY_KINDS,
   HOTEL_INVENTORY_KIND_DESCRIPTIONS,
@@ -147,8 +147,9 @@ async function sellableUnitsUsed(db: InventoryDb, organizationId: string): Promi
   return rooms + beds;
 }
 
+/** The `hotel.rooms.max` ceiling, bootstrapped (`hotel-core.` prefixed) or explicit. */
 function roomLimit(entitlements: EntitlementSnapshot): number {
-  return entitlements.limits['hotel.rooms.max'] ?? 0;
+  return hotelRoomLimit(entitlements);
 }
 
 /**

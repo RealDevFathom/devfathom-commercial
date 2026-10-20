@@ -62,6 +62,28 @@ export const RESTAURANT_COMMERCIAL_LIMITS = [
   SOP_TEMPLATES_LIMIT,
 ] as const;
 
+/**
+ * GTM-01 — hospitality limits. The catalog sync stores a package's default
+ * limits on its `-core` module link, and the entitlement snapshot prefixes a
+ * link's limits with the module key, so a bootstrapped hotel ceiling arrives as
+ * `hotel-core.hotel.rooms.max` while an explicit `organization_limits` row keeps
+ * the bare key. Hotel readers resolve both through these definitions, explicit
+ * first, exactly as the restaurant readers do.
+ */
+function hotelLimit(label: string, explicitKey: string): EntitlementLimitDefinition {
+  return { label, explicitKey, bootstrappedKey: `hotel-core.${explicitKey}` };
+}
+
+export const HOTEL_PROPERTIES_LIMIT = hotelLimit('Property limit', 'hotel.properties.max');
+export const HOTEL_ROOMS_LIMIT = hotelLimit('Sellable unit limit', 'hotel.rooms.max');
+export const HOTEL_USERS_LIMIT = hotelLimit('Hospitality user limit', 'hotel.users.max');
+
+export const HOSPITALITY_COMMERCIAL_LIMITS = [
+  HOTEL_PROPERTIES_LIMIT,
+  HOTEL_ROOMS_LIMIT,
+  HOTEL_USERS_LIMIT,
+] as const;
+
 function invalidReason(
   value: number
 ): 'negative' | 'fractional' | 'non-finite' | 'unsafe-integer' | undefined {
