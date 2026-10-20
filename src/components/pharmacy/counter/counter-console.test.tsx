@@ -494,7 +494,7 @@ describe('PharmacyCounterConsole tender recovery', () => {
         changeMinor: 5000,
       },
     } satisfies CounterReceipt;
-    mocks.receiptRefetch.mockResolvedValueOnce({ data: completeCounterReceipt });
+    mocks.receiptRefetch.mockResolvedValueOnce({ isSuccess: true, data: completeCounterReceipt });
     mocks.mutations.tender!.mockResolvedValue(accepted(0));
     mocks.refetch.mockImplementation(async () => {
       mocks.queries.counterCart!.data = cart({
