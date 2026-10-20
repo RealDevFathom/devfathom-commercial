@@ -362,10 +362,52 @@ export type HotelJourneyApproval = {
 };
 
 /**
- * Compare the persisted wording as well as its lifecycle version. Draft edits
- * keep their version number, and two writes can share a timestamp, so neither
- * version nor updatedAt alone proves that we are approving the copy we read.
- * Callers must add their organization/property predicates to this snapshot.
+ * What a caller last read of one version, as its client sends it back with a
+ * write: the version's `updatedAt` and, where the write stands behind the words
+ * (an approval) or rewrites them (a draft edit), the exact wording it showed.
+ *
+ * A read on the server is no substitute. Every write runs under the property
+ * lock, so a row read there is always the current one and can never tell that
+ * a colleague changed it after the caller's screen was drawn — that is only
+ * visible against what the caller itself read.
+ */
+export type HotelJourneyTemplateReading = {
+  updatedAt: Date;
+  /** Compared when present; `null` is a reading of "no subject line". */
+  subject?: string | null;
+  /** Compared when present. */
+  body?: string;
+};
+
+const CHANGED_WHILE_WORKING =
+  'This message changed while you were working. Reload the current version before trying again.';
+
+/**
+ * Refuse a write whose caller read another version than the stored one. The
+ * wording is compared whenever the caller sent it, because two writes can share
+ * a timestamp: `updatedAt` alone does not prove the words are the ones read.
+ */
+export function assertJourneyTemplateAsRead(
+  template: Pick<HotelJourneyTemplateShape, 'subject' | 'body'> & { updatedAt: Date },
+  reading: HotelJourneyTemplateReading
+): void {
+  const asRead =
+    template.updatedAt.getTime() === reading.updatedAt.getTime() &&
+    (reading.subject === undefined || template.subject === reading.subject) &&
+    (reading.body === undefined || template.body === reading.body);
+  if (!asRead)
+    throw new HotelJourneyTemplateError('CONCURRENT_MODIFICATION', CHANGED_WHILE_WORKING);
+}
+
+/**
+ * The state a conditional write is scoped to: the row as just read, with the
+ * caller's reading laid over it, so the database itself — not only
+ * {@link assertJourneyTemplateAsRead} — refuses a version that moved on since
+ * the caller read it. The wording is compared as well as the lifecycle
+ * version: draft edits keep their version number, and two writes can share a
+ * timestamp, so neither version nor updatedAt alone proves that we are writing
+ * over the copy that was read. Callers add their organization/property
+ * predicates to this snapshot.
  */
 export function journeyTemplateExpectedState(
   template: HotelJourneyTemplateShape & {
@@ -373,7 +415,8 @@ export function journeyTemplateExpectedState(
     version: number;
     status: HotelJourneyTemplateStatusValue;
     updatedAt: Date;
-  }
+  },
+  reading?: HotelJourneyTemplateReading
 ) {
   return {
     id: template.id,
@@ -382,19 +425,16 @@ export function journeyTemplateExpectedState(
     language: template.language,
     version: template.version,
     status: template.status,
-    updatedAt: template.updatedAt,
-    subject: template.subject,
-    body: template.body,
+    updatedAt: reading?.updatedAt ?? template.updatedAt,
+    subject: reading?.subject !== undefined ? reading.subject : template.subject,
+    body: reading?.body ?? template.body,
   };
 }
 
 /** A conditional write must win exactly once; a lost race is never success. */
 export function assertJourneyTemplateWrite(count: number): void {
   if (count !== 1)
-    throw new HotelJourneyTemplateError(
-      'CONCURRENT_MODIFICATION',
-      'This template changed while you were working. Reload the current version before trying again.'
-    );
+    throw new HotelJourneyTemplateError('CONCURRENT_MODIFICATION', CHANGED_WHILE_WORKING);
 }
 
 /**
@@ -724,13 +764,59 @@ export const journeyTemplateKeyInput = z.object({
   language: z.enum(HotelJourneyLanguage),
 });
 
-export const journeyTemplateDraftInput = journeyTemplateKeyInput.extend({
-  /** Absent on WhatsApp and SMS; `validateJourneyTemplate` refuses it there. */
-  subject: z.string().trim().min(1).max(200).nullable().optional(),
-  body: z.string().trim().min(1).max(4000),
-});
+/** The `updatedAt` of the version the caller last read. */
+const expectedUpdatedAt = z.coerce.date();
+
+/**
+ * The wording the caller last read, compared exactly: never trimmed, because
+ * it is not copy to store but proof of what was on screen.
+ */
+const expectedSubject = z.string().max(200).nullable();
+const expectedBody = z.string().min(1).max(4000);
+
+export const journeyTemplateDraftInput = journeyTemplateKeyInput
+  .extend({
+    /** Absent on WhatsApp and SMS; `validateJourneyTemplate` refuses it there. */
+    subject: z.string().trim().min(1).max(200).nullable().optional(),
+    body: z.string().trim().min(1).max(4000),
+    /**
+     * The draft this save rewrites, as its editor read it. A message that has a
+     * draft is only rewritten by a save naming the version it was read at, and
+     * a save naming one is refused once there is no draft left to rewrite —
+     * the one it was editing has been approved or retired since. A new draft,
+     * or the replacement of approved wording, names none.
+     */
+    expectedUpdatedAt: expectedUpdatedAt.optional(),
+    expectedSubject: expectedSubject.optional(),
+    expectedBody: expectedBody.optional(),
+  })
+  .refine(
+    (input) =>
+      (input.expectedUpdatedAt === undefined) === (input.expectedSubject === undefined) &&
+      (input.expectedUpdatedAt === undefined) === (input.expectedBody === undefined),
+    {
+      path: ['expectedUpdatedAt'],
+      message: 'Name the version this edit was made from by its time and its wording together.',
+    }
+  );
 
 export const journeyTemplateIdInput = z.object({ id: z.string().trim().min(1).max(191) });
+
+/** Retiring names the version the caller read; a version changed since is a conflict. */
+export const journeyTemplateRetireInput = journeyTemplateIdInput.extend({ expectedUpdatedAt });
+
+/**
+ * Approving names the version and the exact wording the approver read, so
+ * words changed since — even within the same millisecond — are never approved
+ * under their name, and the approved version this approval retires, so a
+ * colleague's approval made since is not retired unseen.
+ */
+export const journeyTemplateApproveInput = journeyTemplateRetireInput.extend({
+  expectedSubject,
+  expectedBody,
+  /** The approved version of this message the approver saw, or `null` when there was none. */
+  expectedApprovedId: z.string().trim().min(1).max(191).nullable(),
+});
 
 /**
  * A preview context. Values arrive as strings from a form; numbers are accepted

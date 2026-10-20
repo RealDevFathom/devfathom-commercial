@@ -2,13 +2,17 @@ import { describe, expect, it } from 'vitest';
 
 import {
   approveJourneyTemplate,
+  assertJourneyTemplateAsRead,
   assertJourneyTransition,
   canSendJourneyMessage,
   currentJourneyConsent,
   defaultJourneyTemplateSeeds,
   HOTEL_JOURNEY_MOMENTS,
   journeyPlaceholdersUsed,
+  journeyTemplateApproveInput,
   journeyTemplateDraftInput,
+  journeyTemplateExpectedState,
+  journeyTemplateRetireInput,
   parseJourneySettings,
   propertyMinuteOfDay,
   renderJourneyTemplate,
@@ -181,6 +185,135 @@ describe('journey approval hooks', () => {
     });
     expect(retireJourneyTemplate(approved)).toEqual({ ...approved, status: 'RETIRED' });
     expect(approved.status).toBe('APPROVED');
+  });
+});
+
+describe('writes against the version the caller read', () => {
+  const readAt = new Date('2026-09-13T08:00:00.000Z');
+  const stored = Object.freeze({
+    ...template,
+    channel: 'EMAIL' as const,
+    subject: 'Welcome to {{property_name}}',
+    id: 'v2',
+    version: 2,
+    status: 'DRAFT' as const,
+    updatedAt: readAt,
+  });
+  const changed = expect.objectContaining({ code: 'CONCURRENT_MODIFICATION' });
+
+  it('admits the version exactly as read, by time alone or with its wording', () => {
+    expect(() =>
+      assertJourneyTemplateAsRead(stored, { updatedAt: new Date(readAt) })
+    ).not.toThrow();
+    expect(() =>
+      assertJourneyTemplateAsRead(stored, {
+        updatedAt: new Date(readAt),
+        subject: stored.subject,
+        body: stored.body,
+      })
+    ).not.toThrow();
+    const whatsapp = { ...stored, channel: 'WHATSAPP' as const, subject: null };
+    expect(() =>
+      assertJourneyTemplateAsRead(whatsapp, { updatedAt: readAt, subject: null, body: stored.body })
+    ).not.toThrow();
+  });
+
+  it('refuses a version saved since, by its time or — when two writes share one — by its words', () => {
+    expect(() =>
+      assertJourneyTemplateAsRead(stored, { updatedAt: new Date(readAt.getTime() - 1) })
+    ).toThrow(changed);
+    expect(() =>
+      assertJourneyTemplateAsRead(stored, { updatedAt: readAt, body: `${stored.body} ` })
+    ).toThrow(changed);
+    expect(() =>
+      assertJourneyTemplateAsRead(stored, {
+        updatedAt: readAt,
+        subject: 'Another subject',
+        body: stored.body,
+      })
+    ).toThrow(changed);
+    expect(() =>
+      assertJourneyTemplateAsRead(stored, { updatedAt: readAt, subject: null, body: stored.body })
+    ).toThrow(changed);
+  });
+
+  it('scopes a conditional write to the caller’s reading laid over the row just read', () => {
+    expect(journeyTemplateExpectedState(stored)).toEqual({
+      id: 'v2',
+      moment: 'WELCOME',
+      channel: 'EMAIL',
+      language: 'EN',
+      version: 2,
+      status: 'DRAFT',
+      updatedAt: readAt,
+      subject: stored.subject,
+      body: stored.body,
+    });
+    const seenAt = new Date(readAt.getTime() - 1000);
+    expect(
+      journeyTemplateExpectedState(stored, { updatedAt: seenAt, subject: null, body: 'Read' })
+    ).toMatchObject({ updatedAt: seenAt, subject: null, body: 'Read', status: 'DRAFT' });
+    // A time-only reading leaves the stored wording in the predicate.
+    expect(journeyTemplateExpectedState(stored, { updatedAt: seenAt })).toMatchObject({
+      updatedAt: seenAt,
+      subject: stored.subject,
+      body: stored.body,
+    });
+  });
+
+  it('makes approval and retirement name the version read, and keeps the wording untrimmed', () => {
+    const approval = {
+      id: 'v2',
+      expectedUpdatedAt: readAt.toISOString(),
+      expectedSubject: null,
+      expectedBody: '  Words as shown  ',
+      expectedApprovedId: null,
+    };
+    expect(journeyTemplateApproveInput.parse(approval)).toEqual({
+      ...approval,
+      expectedUpdatedAt: readAt,
+    });
+    for (const missing of [
+      'expectedUpdatedAt',
+      'expectedSubject',
+      'expectedBody',
+      'expectedApprovedId',
+    ] as const) {
+      const partial: Record<string, unknown> = { ...approval };
+      delete partial[missing];
+      expect(journeyTemplateApproveInput.safeParse(partial).success).toBe(false);
+    }
+    expect(journeyTemplateRetireInput.safeParse({ id: 'v2' }).success).toBe(false);
+    expect(
+      journeyTemplateRetireInput.parse({ id: 'v2', expectedUpdatedAt: readAt.toISOString() })
+    ).toEqual({ id: 'v2', expectedUpdatedAt: readAt });
+  });
+
+  it('lets a draft save name the version it edits only as a whole: time and wording together', () => {
+    const payload = {
+      moment: 'WELCOME',
+      channel: 'WHATSAPP',
+      language: 'EN',
+      subject: null,
+      body: 'Hello {{guest_name}}',
+    };
+    const read = { expectedUpdatedAt: readAt, expectedSubject: null, expectedBody: 'Hi ' };
+    expect(journeyTemplateDraftInput.parse({ ...payload, ...read })).toEqual({
+      ...payload,
+      ...read,
+    });
+    for (const partial of [
+      { expectedUpdatedAt: readAt },
+      { expectedUpdatedAt: readAt, expectedBody: 'Hi' },
+      { expectedSubject: null, expectedBody: 'Hi' },
+      { expectedBody: 'Hi' },
+    ]) {
+      const result = journeyTemplateDraftInput.safeParse({ ...payload, ...partial });
+      expect(result.success).toBe(false);
+      expect(result.error?.issues).toEqual([
+        expect.objectContaining({ path: ['expectedUpdatedAt'] }),
+      ]);
+    }
   });
 });
 

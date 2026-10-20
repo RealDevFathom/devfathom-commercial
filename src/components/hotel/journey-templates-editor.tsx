@@ -18,8 +18,10 @@
  *   the editor offers its kept text as a new draft (UX rule 13).
  *
  * Every call names the property the page was opened for; the server re-checks
- * access on every one. Nothing on this page sends. Approving is the last step
- * here; the send belongs to H4.
+ * access on every one. Every write also names the version this page rendered:
+ * a save, the draft on screen; an approval, the version and wording on screen
+ * and the approval it retires; a retirement, the version shown. Nothing on this
+ * page sends. Approving is the last step here; the send belongs to H4.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -307,18 +309,24 @@ function SelectedJourneyTemplates({
   const unsaved =
     selected &&
     (copy.body !== selected.body || (key.channel === 'EMAIL' && copy.subject !== selected.subject));
-  const latestMatching = view.templates
+  const versions = view.templates
     .filter(
       (template) =>
         template.moment === key.moment &&
         template.channel === key.channel &&
         template.language === key.language
     )
-    .sort((a, b) => b.version - a.version)[0];
+    .sort((a, b) => b.version - a.version);
+  const latestMatching = versions[0];
+  // A draft is changed in its own editor, where its words are on screen: a
+  // replacement of approved wording, or a new draft, of a message that already
+  // has one opens that draft instead of writing over words nobody here read.
   const matchingDraft =
-    selected && selected.status !== 'DRAFT' && latestMatching?.status === 'DRAFT'
+    (!selected || selected.status !== 'DRAFT') && latestMatching?.status === 'DRAFT'
       ? latestMatching
       : null;
+  /** The approval an approval here would retire, as this page shows it. */
+  const standingApproval = versions.find((template) => template.status === 'APPROVED') ?? null;
   const openMatchingDraft = () => {
     if (!matchingDraft) return;
     setSelectedId(matchingDraft.id);
@@ -357,6 +365,15 @@ function SelectedJourneyTemplates({
       language: key.language,
       subject: key.channel === 'EMAIL' ? (copy.subject ?? '').trim() : null,
       body: copy.body.trim(),
+      // The draft version this page rendered: the save rewrites that version
+      // or nothing. A new draft, or a replacement, rewrites no draft.
+      ...(selected?.status === 'DRAFT'
+        ? {
+            expectedUpdatedAt: selected.updatedAt,
+            expectedSubject: selected.subject,
+            expectedBody: selected.body,
+          }
+        : {}),
     });
   };
 
@@ -645,7 +662,10 @@ function SelectedJourneyTemplates({
             {matchingDraft ? (
               <p className="text-sm text-text-muted">
                 Draft version {matchingDraft.version} already exists for this moment, channel and
-                language. Open it to continue with its kept text.
+                language.{' '}
+                {selected
+                  ? 'Open it to continue with its kept text.'
+                  : 'Open it to read and change its wording.'}
               </p>
             ) : selected && selected.status !== 'DRAFT' && editable ? (
               <p className="text-sm text-text-muted">
@@ -653,10 +673,9 @@ function SelectedJourneyTemplates({
                 unchanged.
               </p>
             ) : null}
-            {!selected ? (
+            {!selected && !matchingDraft ? (
               <p className="text-xs text-text-muted">
-                If this moment, channel and language already have a draft, saving updates that
-                draft.
+                A moment, channel and language that already have a draft are changed in that draft.
               </p>
             ) : null}
             {key.channel === 'EMAIL' ? (
@@ -787,7 +806,18 @@ function SelectedJourneyTemplates({
                   variant="outline"
                   className="min-h-11"
                   disabled={pending || !!refreshError || !!unsaved}
-                  onClick={() => approve.mutate({ branchId, id: selected.id })}
+                  onClick={() =>
+                    // Approval stands behind the words on screen: the server
+                    // refuses it if they are not, or no longer, the stored ones.
+                    approve.mutate({
+                      branchId,
+                      id: selected.id,
+                      expectedUpdatedAt: selected.updatedAt,
+                      expectedSubject: selected.subject,
+                      expectedBody: selected.body,
+                      expectedApprovedId: standingApproval?.id ?? null,
+                    })
+                  }
                 >
                   {approve.isPending ? 'Approving…' : 'Approve'}
                 </Button>
@@ -801,7 +831,13 @@ function SelectedJourneyTemplates({
                   variant="outline"
                   className="min-h-11"
                   disabled={pending || !!refreshError || !!unsaved}
-                  onClick={() => retire.mutate({ branchId, id: selected.id })}
+                  onClick={() =>
+                    retire.mutate({
+                      branchId,
+                      id: selected.id,
+                      expectedUpdatedAt: selected.updatedAt,
+                    })
+                  }
                 >
                   {retire.isPending ? 'Retiring…' : 'Retire'}
                 </Button>

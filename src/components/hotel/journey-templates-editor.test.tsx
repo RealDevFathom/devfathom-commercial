@@ -399,7 +399,14 @@ describe('guest message draft editing', () => {
   it('approves and retires with the selection, and shows approved read-only copy even when the refresh fails', async () => {
     mount();
     click('Approve');
-    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch', id: 'original' });
+    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch',
+      id: 'original',
+      expectedUpdatedAt: at,
+      expectedSubject: 'Welcome to {{property_name}}',
+      expectedBody: 'Hello {{guest_name}}, room {{room_number}}.',
+      expectedApprovedId: null,
+    });
     mocks.fetch.mockRejectedValueOnce(new Error('Offline'));
     await act(() =>
       mocks.callbacks.approve.onSuccess(
@@ -415,7 +422,11 @@ describe('guest message draft editing', () => {
     click('Retry refresh');
     await waitFor(() => expect(screen.queryByRole('alert')).not.toBeInTheDocument());
     click('Retire');
-    expect(mocks.retire).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch', id: 'original' });
+    expect(mocks.retire).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch',
+      id: 'original',
+      expectedUpdatedAt: at,
+    });
   });
 
   it('sends the operator back to the chooser when a write is refused for access', () => {
@@ -508,6 +519,10 @@ describe('guest message review corrections', () => {
         language: draft.language,
         subject: 'Kept draft subject',
         body: 'Kept unsaved draft body',
+        // The draft version the kept text was started from.
+        expectedUpdatedAt: at,
+        expectedSubject: draft.subject,
+        expectedBody: 'Draft body',
       });
       expect(original.body).toBe('Hello {{guest_name}}, room {{room_number}}.');
       expect(draft.body).toBe('Draft body');
@@ -570,6 +585,83 @@ describe('guest message review corrections', () => {
       subject: original.subject,
       body: original.body,
     });
+  });
+});
+
+describe('guest message writes name the version the page read', () => {
+  const later = new Date('2026-09-13T09:30:00Z');
+
+  it('sends the draft version it rendered with an edit, and nothing with a new draft', () => {
+    const original = row();
+    mount(view([original]));
+    change('Message', 'Edited {{guest_name}}');
+    click('Save draft');
+    expect(mocks.save).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch',
+      moment: 'WELCOME',
+      channel: 'EMAIL',
+      language: 'EN',
+      subject: original.subject,
+      body: 'Edited {{guest_name}}',
+      expectedUpdatedAt: at,
+      expectedSubject: original.subject,
+      expectedBody: original.body,
+    });
+    click('New draft');
+    change('Journey moment', 'INVOICE');
+    change('Channel', 'SMS');
+    change('Message', 'Invoice {{invoice_number}}');
+    click('Save draft');
+    expect(mocks.save).toHaveBeenLastCalledWith({
+      branchId: 'branch',
+      moment: 'INVOICE',
+      channel: 'SMS',
+      language: 'EN',
+      subject: null,
+      body: 'Invoice {{invoice_number}}',
+    });
+  });
+
+  it('names the approval it retires along with the version and the wording on screen', () => {
+    const standing = row({
+      id: 'approved',
+      status: 'APPROVED',
+      version: 1,
+      approvedByUserId: 'admin',
+      approvedAt: at,
+    });
+    const next = row({ id: 'next', version: 2, body: 'Next {{guest_name}}', updatedAt: later });
+    const otherLanguage = row({ id: 'ur', language: 'UR', status: 'APPROVED', approvedAt: at });
+    mount(view([standing, otherLanguage, next]));
+    fireEvent.click(screen.getByRole('button', { name: /English version 2/ }));
+    click('Approve');
+    expect(mocks.approve).toHaveBeenCalledExactlyOnceWith({
+      branchId: 'branch',
+      id: 'next',
+      expectedUpdatedAt: later,
+      expectedSubject: next.subject,
+      expectedBody: 'Next {{guest_name}}',
+      expectedApprovedId: 'approved',
+    });
+  });
+
+  it('opens the existing draft instead of saving a new draft over its words', () => {
+    const existing = row({ body: 'Existing draft {{guest_name}}' });
+    mount(view([existing]));
+    click('New draft');
+    change('Journey moment', 'WELCOME');
+    change('Channel', 'EMAIL');
+    change('Language', 'EN');
+    change('Message', 'Written without reading the draft');
+    expect(
+      screen.getByText(/Draft version 1 already exists for this moment, channel and language/)
+    ).toHaveTextContent('Open it to read and change its wording.');
+    expect(screen.queryByRole('button', { name: 'Save draft' })).not.toBeInTheDocument();
+    fireEvent.submit(screen.getByRole('form', { name: 'Guest message' }));
+    expect(mocks.save).not.toHaveBeenCalled();
+    // Submitting opened the draft, where its own words are on screen.
+    expect(screen.getByLabelText('Message')).toHaveValue('Existing draft {{guest_name}}');
+    expect(screen.getByRole('button', { name: /^Opened/ })).toHaveAttribute('aria-current', 'true');
   });
 });
 

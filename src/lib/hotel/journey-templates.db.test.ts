@@ -22,6 +22,13 @@
  * a transaction that is rolled back, because the SQLSTATE and the constraint
  * name are what they pin; the client probes go through the scoped Prisma
  * client, the way the router does.
+ *
+ * The stale-write cases go further and commit: a conditional write scoped to
+ * a version read before a colleague's save, through the scoped client, and
+ * then the journey router itself, each call in its own tenant transaction the
+ * way each HTTP request runs. Only the organization-level ABAC decision and
+ * the audit row write are stubbed there; the property scope (assignment, role
+ * grant), the lock, Prisma's `@updatedAt` and the conditional writes are real.
  */
 import { randomBytes, randomUUID } from 'node:crypto';
 
@@ -30,7 +37,10 @@ import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PrismaClient } from '@/generated/prisma/client';
-import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
+import {
+  defaultJourneyTemplateSeeds,
+  journeyTemplateExpectedState,
+} from '@/lib/hotel/journey-templates';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -44,6 +54,17 @@ vi.mock('@/lib/db', () => ({
     adapter: new PrismaPg({ connectionString: TEST_DATABASE_URL, max: 10 }),
     log: ['error'],
   }),
+}));
+// The router cases build their context by hand (no request, no auth() call),
+// grant the organization-level capability, and leave the audit row unwritten.
+vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+vi.mock('@/lib/abac', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/abac')>()),
+  can: vi.fn(async () => true),
+}));
+vi.mock('@/server/audit', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/server/audit')>()),
+  recordTrpcAudit: vi.fn(),
 }));
 
 const describeIfDatabase = TEST_DATABASE_URL ? describe : describe.skip;
@@ -77,6 +98,42 @@ const TABLE = 'hotel_journey_templates';
 let db: PrismaClient;
 let withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
 let withPlatformDb: (typeof import('@/lib/tenancy/scoped-db'))['withPlatformDb'];
+type ScopedDb = import('@/lib/tenancy/scoped-db').ScopedDb;
+
+/** One tenant transaction as the tenant's user — one request's worth of work. */
+function asTenant<T>(tenant: Tenant, run: (db: ScopedDb) => Promise<T>): Promise<T> {
+  return withTenantDb(tenant.organizationId, run, { userId: tenant.userId });
+}
+
+/** The journey procedures as `tenant`'s user calls them, on one request's transaction. */
+async function journeys(tenant: Tenant, db: ScopedDb) {
+  const { hotelJourneyTemplatesRouter } = await import('@/server/routers/hotel-journey-templates');
+  return hotelJourneyTemplatesRouter.createCaller({
+    db,
+    entitlements: {
+      organizationId: tenant.organizationId,
+      enabledModules: ['hotel-core', 'hotel-upsell'],
+      modules: [],
+      limits: {},
+      seatLimit: 10,
+      activeSeats: 1,
+    },
+    session: {
+      expires: 'later',
+      user: {
+        id: tenant.userId,
+        role: 'ADMIN',
+        department: 'FRONT_OFFICE',
+        status: 'ACTIVE',
+        organizationId: tenant.organizationId,
+      },
+    },
+    organization: { id: tenant.organizationId },
+    support: null,
+    requestMeta: { ip: null, userAgent: null },
+    audit: { detail: {} },
+  } as never);
+}
 
 async function seedTenants() {
   const scoped = await import('@/lib/tenancy/scoped-db');
@@ -520,6 +577,165 @@ describeIfDatabase('journey templates: database rules and tenant boundaries', ()
       { userId: tenantA.userId }
     );
     expect(result.count).toBe(0);
+  });
+
+  it('matches no row for an approval scoped to a version read before a colleague’s save, whether or not the timestamp moved', async () => {
+    // Committed on tenant A's second property, under a moment no probe uses.
+    const scope = { organizationId: tenantA.organizationId, branchId: tenantA.secondBranchId };
+    const read = await asTenant(tenantA, (db) =>
+      db.hotelJourneyTemplate.create({
+        data: {
+          ...scope,
+          moment: 'IN_STAY',
+          channel: 'WHATSAPP',
+          language: 'EN',
+          body: 'Read {{guest_name}}, room {{room_number}}.',
+          createdByUserId: tenantA.userId,
+        },
+      })
+    );
+    const readingOf = (row: typeof read) => ({
+      updatedAt: row.updatedAt,
+      subject: row.subject,
+      body: row.body,
+    });
+    const approval = {
+      status: 'APPROVED' as const,
+      approvedByUserId: tenantA.userId,
+      approvedAt: new Date(),
+    };
+    const approveAsRead = (current: typeof read, seen: typeof read) =>
+      asTenant(tenantA, (db) =>
+        db.hotelJourneyTemplate.updateMany({
+          where: { ...scope, ...journeyTemplateExpectedState(current, readingOf(seen)) },
+          data: approval,
+        })
+      );
+    const stored = () =>
+      asTenant(tenantA, (db) =>
+        db.hotelJourneyTemplate.findUniqueOrThrow({ where: { id: read.id } })
+      );
+
+    // A colleague saves new words after the approver read the draft; Prisma's
+    // `@updatedAt` stamps the row.
+    const resaved = await asTenant(tenantA, (db) =>
+      db.hotelJourneyTemplate.updateMany({
+        where: { ...scope, ...journeyTemplateExpectedState(read, readingOf(read)) },
+        data: { body: 'Saved since {{guest_name}}, room {{room_number}}.' },
+      })
+    );
+    expect(resaved.count).toBe(1);
+    const current = await stored();
+    expect(current.updatedAt.getTime()).toBeGreaterThan(read.updatedAt.getTime());
+    expect(await approveAsRead(current, read)).toEqual({ count: 0 });
+
+    // Two writes sharing one timestamp: only the wording tells them apart.
+    const sameStamp = await asTenant(tenantA, (db) =>
+      db.hotelJourneyTemplate.updateMany({
+        where: { id: read.id, updatedAt: current.updatedAt },
+        data: {
+          body: 'Same stamp {{guest_name}}, room {{room_number}}.',
+          updatedAt: current.updatedAt,
+        },
+      })
+    );
+    expect(sameStamp.count).toBe(1);
+    const latest = await stored();
+    expect(latest.updatedAt).toEqual(current.updatedAt);
+    expect(await approveAsRead(latest, current)).toEqual({ count: 0 });
+    expect(latest).toMatchObject({
+      status: 'DRAFT',
+      body: 'Same stamp {{guest_name}}, room {{room_number}}.',
+      approvedByUserId: null,
+      approvedAt: null,
+    });
+
+    // The version as it stands, once read, is what an approval may stand behind.
+    expect(await approveAsRead(latest, latest)).toEqual({ count: 1 });
+    expect(await stored()).toMatchObject({
+      status: 'APPROVED',
+      body: 'Same stamp {{guest_name}}, room {{room_number}}.',
+      approvedByUserId: tenantA.userId,
+    });
+  });
+
+  it('refuses a stale approval and a stale save through the router, writing nothing, and approves the stored words once read', async () => {
+    const message = {
+      branchId: tenantA.branchId,
+      moment: 'EXPRESS_CHECKOUT',
+      channel: 'WHATSAPP',
+      language: 'EN',
+      subject: null,
+    } as const;
+    const reading = (seen: { updatedAt: Date; subject: string | null; body: string }) => ({
+      expectedUpdatedAt: seen.updatedAt,
+      expectedSubject: seen.subject,
+      expectedBody: seen.body,
+    });
+    const created = await asTenant(tenantA, async (db) =>
+      (await journeys(tenantA, db)).save({
+        ...message,
+        body: 'Departure from room {{room_number}} by {{check_out_time}}.',
+      })
+    );
+    // The administrator opens the board in one request…
+    const seen = await asTenant(tenantA, async (db) => {
+      const board = await (await journeys(tenantA, db)).list({ branchId: tenantA.branchId });
+      return board.templates.find((template) => template.id === created.id)!;
+    });
+    // …a colleague saves new words into the same draft in another…
+    const resaved = await asTenant(tenantA, async (db) =>
+      (await journeys(tenantA, db)).save({
+        ...message,
+        body: 'Please leave room {{room_number}} by {{check_out_time}}.',
+        ...reading(seen),
+      })
+    );
+    expect(resaved).toMatchObject({ id: seen.id, version: seen.version, status: 'DRAFT' });
+    expect(resaved.updatedAt.getTime()).toBeGreaterThan(seen.updatedAt.getTime());
+    // …and the administrator's approval of the words on screen is refused.
+    await expect(
+      asTenant(tenantA, async (db) =>
+        (await journeys(tenantA, db)).approve({
+          branchId: tenantA.branchId,
+          id: seen.id,
+          ...reading(seen),
+          expectedApprovedId: null,
+        })
+      )
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    // So is a second editor's save over the version it read before the colleague's.
+    await expect(
+      asTenant(tenantA, async (db) =>
+        (await journeys(tenantA, db)).save({ ...message, body: 'Stale words.', ...reading(seen) })
+      )
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    const stored = () =>
+      asTenant(tenantA, (db) =>
+        db.hotelJourneyTemplate.findUniqueOrThrow({ where: { id: seen.id } })
+      );
+    expect(await stored()).toMatchObject({
+      status: 'DRAFT',
+      body: resaved.body,
+      updatedAt: resaved.updatedAt,
+      approvedByUserId: null,
+      approvedAt: null,
+    });
+    // Read again, the stored words are what the approval stands behind.
+    const approved = await asTenant(tenantA, async (db) =>
+      (await journeys(tenantA, db)).approve({
+        branchId: tenantA.branchId,
+        id: seen.id,
+        ...reading(resaved),
+        expectedApprovedId: null,
+      })
+    );
+    expect(approved).toMatchObject({
+      status: 'APPROVED',
+      body: resaved.body,
+      approvedByUserId: tenantA.userId,
+    });
+    expect(await stored()).toMatchObject({ status: 'APPROVED', body: resaved.body });
   });
 });
 

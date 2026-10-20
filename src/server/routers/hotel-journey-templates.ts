@@ -20,9 +20,13 @@
  * send gate — live in `@/lib/hotel/journey-templates`; this file is the gates,
  * the tenant predicate, the conditional writes and the operator-facing
  * refusals. Every write runs inside `withLockedProperty` (lock, re-check
- * access, write), is scoped by `(organizationId, branchId)` plus the exact
- * state the caller read, and enriches the request's audit row. Forced
- * row-level security is the second wall and never the only one.
+ * access, write), is scoped by `(organizationId, branchId)` plus the version
+ * the caller read, and enriches the request's audit row. That version comes
+ * from the caller — its `updatedAt` and, for a draft edit or an approval, the
+ * wording on its screen — because the lock serializes writers: a row read
+ * under it is always current and cannot show that a colleague changed it after
+ * the caller's page was drawn. Forced row-level security is the second wall
+ * and never the only one.
  *
  * Nothing here sends. `canSendJourneyMessage` is exercised as the pure hook it
  * is; the WhatsApp adapter and the send itself belong to H4.
@@ -35,6 +39,7 @@ import { hasModule } from '@/lib/entitlements';
 import { recordHotelAudit } from '@/lib/hotel/audit';
 import {
   approveJourneyTemplate,
+  assertJourneyTemplateAsRead,
   assertJourneyTemplateWrite,
   canSendJourneyMessage,
   HOTEL_JOURNEY_CHANNEL_LABELS,
@@ -47,14 +52,16 @@ import {
   HOTEL_JOURNEY_PLACEHOLDERS,
   HOTEL_JOURNEY_TEMPLATE_STATUS_LABELS,
   HotelJourneyTemplateError,
+  journeyTemplateApproveInput,
   journeyTemplateDraftInput,
   journeyTemplateExpectedState,
-  journeyTemplateIdInput,
   journeyTemplatePreviewInput,
+  journeyTemplateRetireInput,
   parseJourneySettings,
   renderJourneyTemplate,
   retireJourneyTemplate,
   validateJourneyTemplate,
+  type HotelJourneyTemplateReading,
 } from '@/lib/hotel/journey-templates';
 import {
   currentProperty,
@@ -100,6 +107,11 @@ const ERROR_FIELDS: Record<HotelJourneyTemplateError['code'], string> = {
 
 const CHANGED_MESSAGE =
   'This message changed while you were working. Reload the current version before trying again.';
+
+/** The version the caller read is not the stored one, or no longer the one in play. */
+function changedWhileWorking(): TRPCError {
+  return new TRPCError({ code: 'CONFLICT', message: CHANGED_MESSAGE });
+}
 
 /**
  * Translate the lib's refusals and the two races the database arbitrates into
@@ -340,26 +352,36 @@ export const hotelJourneyTemplatesRouter = router({
    * Write a draft. An existing draft of the same message is edited in place;
    * anything already approved or retired is superseded by a new version,
    * because UPS-04 makes approved words a thing that is replaced, not rewritten.
-   * The edit is conditional on the exact state the caller read — wording,
-   * version, status and timestamp — so a colleague's save, approval or
-   * retirement in between is a conflict rather than a silent overwrite.
+   * An edit names the version its editor read — timestamp and wording — and is
+   * conditional on it, so a colleague's save, approval or retirement since the
+   * editor read the draft is a conflict rather than a silent overwrite; a save
+   * naming no version (a new draft, a replacement) never rewrites a draft.
    */
-  save: journeyProcedure.input(selected(journeyTemplateDraftInput)).mutation(({ ctx, input }) => {
-    const subject = input.subject ?? null;
-    const draft = {
-      moment: input.moment,
-      channel: input.channel,
-      language: input.language,
-      subject,
-      body: input.body,
-    };
-    // Pure rules first: a typo in a placeholder needs no lock to be refused.
-    try {
-      validateJourneyTemplate(draft);
-    } catch (error) {
-      asTrpcError(error);
-    }
-    return journeyWrite(ctx, input.branchId, 'DRAFT', async (ctx, { property }) => {
+  save: journeyProcedure.input(selected(journeyTemplateDraftInput)).mutation(({ ctx, input }) =>
+    journeyWrite(ctx, input.branchId, 'DRAFT', async (ctx, { property }) => {
+      const subject = input.subject ?? null;
+      // The module and the scope come first (journeyWrite), so a caller who may
+      // not draft here is told that rather than which placeholder is wrong.
+      // The pure rules then refuse a typo before any template is read.
+      try {
+        validateJourneyTemplate({
+          moment: input.moment,
+          channel: input.channel,
+          language: input.language,
+          subject,
+          body: input.body,
+        });
+      } catch (error) {
+        asTrpcError(error);
+      }
+      const reading: HotelJourneyTemplateReading | null =
+        input.expectedUpdatedAt === undefined
+          ? null
+          : {
+              updatedAt: input.expectedUpdatedAt,
+              subject: input.expectedSubject,
+              body: input.expectedBody,
+            };
       const where = {
         organizationId: ctx.entitlements.organizationId,
         branchId: property.branchId,
@@ -374,8 +396,16 @@ export const hotelJourneyTemplatesRouter = router({
       });
       try {
         if (latest?.status === 'DRAFT') {
+          // A draft is rewritten only at the version its editor read. A save
+          // that read none has never seen this draft's words.
+          if (!reading)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: `This message already has a draft (version ${latest.version}). Reload the list and open that draft to change it.`,
+            });
+          assertJourneyTemplateAsRead(latest, reading);
           const saved = await ctx.db.hotelJourneyTemplate.updateMany({
-            where: { ...where, ...journeyTemplateExpectedState(latest) },
+            where: { ...where, ...journeyTemplateExpectedState(latest, reading) },
             data: { subject, body: input.body },
           });
           assertJourneyTemplateWrite(saved.count);
@@ -397,6 +427,10 @@ export const hotelJourneyTemplatesRouter = router({
           });
           return template!;
         }
+        // No draft to rewrite. A save that was editing one finds it approved or
+        // retired since it was read; its words do not quietly become a new
+        // version the editor never chose to start.
+        if (reading) throw changedWhileWorking();
         const created = await ctx.db.hotelJourneyTemplate.create({
           data: {
             ...where,
@@ -418,85 +452,109 @@ export const hotelJourneyTemplatesRouter = router({
       } catch (error) {
         asTrpcError(error);
       }
-    });
-  }),
+    })
+  ),
 
   /**
    * Approve a draft. The version that was approved before is retired in the
    * same transaction — the partial unique index allows exactly one approved
-   * version per message, so "which wording did we send?" has one answer. Every
-   * write is conditional on the state just read; a lost race is a conflict.
+   * version per message, so "which wording did we send?" has one answer. The
+   * approver names the version and the wording it read and the approval it
+   * saw standing; anything else found under the lock is a conflict, and every
+   * write is conditional on what was named, so unread words are never approved.
    */
-  approve: journeyProcedure.input(selected(journeyTemplateIdInput)).mutation(({ ctx, input }) =>
-    journeyWrite(ctx, input.branchId, 'APPROVE', async (ctx, { property }) => {
-      const template = await journeyTemplateById(ctx, property.branchId, input.id);
-      let approval;
-      try {
-        approval = approveJourneyTemplate(template, {
-          approvedByUserId: actorId(ctx),
-          approvedAt: new Date(),
-        });
-      } catch (error) {
-        asTrpcError(error);
-      }
-      const where = {
-        organizationId: ctx.entitlements.organizationId,
-        branchId: property.branchId,
-        moment: template.moment,
-        channel: template.channel,
-        language: template.language,
-      };
-      const previous = await ctx.db.hotelJourneyTemplate.findFirst({
-        where: { ...where, status: 'APPROVED' },
-        select: JOURNEY_SELECT,
-      });
-      try {
-        // Claim the validated target first with a conditional no-op (updatedAt
-        // kept as read, so a refused approval changes nothing); then retire the
-        // previous approval; then approve. Each step must match exactly one
-        // row, so wording that changed since the read is never approved.
-        const claimed = await ctx.db.hotelJourneyTemplate.updateMany({
-          where: { ...where, ...journeyTemplateExpectedState(template) },
-          data: { updatedAt: template.updatedAt },
-        });
-        assertJourneyTemplateWrite(claimed.count);
-        if (previous) {
-          const retired = await ctx.db.hotelJourneyTemplate.updateMany({
-            where: { ...where, ...journeyTemplateExpectedState(previous) },
-            data: { status: 'RETIRED' },
+  approve: journeyProcedure
+    .input(selected(journeyTemplateApproveInput))
+    .mutation(({ ctx, input }) =>
+      journeyWrite(ctx, input.branchId, 'APPROVE', async (ctx, { property }) => {
+        const template = await journeyTemplateById(ctx, property.branchId, input.id);
+        const reading: HotelJourneyTemplateReading = {
+          updatedAt: input.expectedUpdatedAt,
+          subject: input.expectedSubject,
+          body: input.expectedBody,
+        };
+        let approval;
+        try {
+          // What the approver read comes before any rule: a version that moved on
+          // since — a colleague's edit, an approval, a retirement — is a conflict
+          // to reload, whatever it has become.
+          assertJourneyTemplateAsRead(template, reading);
+          approval = approveJourneyTemplate(template, {
+            approvedByUserId: actorId(ctx),
+            approvedAt: new Date(),
           });
-          assertJourneyTemplateWrite(retired.count);
+        } catch (error) {
+          asTrpcError(error);
         }
-        const approved = await ctx.db.hotelJourneyTemplate.updateMany({
-          where: { ...where, ...journeyTemplateExpectedState(template) },
-          data: approval,
-        });
-        assertJourneyTemplateWrite(approved.count);
-        const result = await ctx.db.hotelJourneyTemplate.findFirst({
-          where: { ...where, id: template.id },
+        const where = {
+          organizationId: ctx.entitlements.organizationId,
+          branchId: property.branchId,
+          moment: template.moment,
+          channel: template.channel,
+          language: template.language,
+        };
+        const previous = await ctx.db.hotelJourneyTemplate.findFirst({
+          where: { ...where, status: 'APPROVED' },
           select: JOURNEY_SELECT,
         });
-        assertJourneyTemplateWrite(result ? 1 : 0);
-        recordHotelAudit(ctx, {
-          entity: { type: 'HotelJourneyTemplate', id: result!.id, label: auditLabel(result!) },
-          action: 'hotel.journey.template.approve',
-          before: auditFacts(template),
-          after: auditFacts(result!),
-          metadata: { branchId: property.branchId, retired: previous?.id ?? null },
-        });
-        return result!;
-      } catch (error) {
-        asTrpcError(error);
-      }
-    })
-  ),
+        // Approving retires whatever stands approved, so that must be the
+        // approval the approver saw: one made since is a colleague's decision to
+        // read, not one to retire unseen.
+        if ((previous?.id ?? null) !== input.expectedApprovedId) throw changedWhileWorking();
+        const expected = { ...where, ...journeyTemplateExpectedState(template, reading) };
+        try {
+          // Claim the validated target first with a conditional no-op (updatedAt
+          // kept as read, so a refused approval changes nothing); then retire the
+          // previous approval; then approve. Each step must match exactly one
+          // row, so wording that changed since the approver read it is never
+          // approved.
+          const claimed = await ctx.db.hotelJourneyTemplate.updateMany({
+            where: expected,
+            data: { updatedAt: template.updatedAt },
+          });
+          assertJourneyTemplateWrite(claimed.count);
+          if (previous) {
+            const retired = await ctx.db.hotelJourneyTemplate.updateMany({
+              where: { ...where, ...journeyTemplateExpectedState(previous) },
+              data: { status: 'RETIRED' },
+            });
+            assertJourneyTemplateWrite(retired.count);
+          }
+          const approved = await ctx.db.hotelJourneyTemplate.updateMany({
+            where: expected,
+            data: approval,
+          });
+          assertJourneyTemplateWrite(approved.count);
+          const result = await ctx.db.hotelJourneyTemplate.findFirst({
+            where: { ...where, id: template.id },
+            select: JOURNEY_SELECT,
+          });
+          assertJourneyTemplateWrite(result ? 1 : 0);
+          recordHotelAudit(ctx, {
+            entity: { type: 'HotelJourneyTemplate', id: result!.id, label: auditLabel(result!) },
+            action: 'hotel.journey.template.approve',
+            before: auditFacts(template),
+            after: auditFacts(result!),
+            metadata: { branchId: property.branchId, retired: previous?.id ?? null },
+          });
+          return result!;
+        } catch (error) {
+          asTrpcError(error);
+        }
+      })
+    ),
 
-  /** Retire a version. Its approval facts stay: who approved it is history. */
-  retire: journeyProcedure.input(selected(journeyTemplateIdInput)).mutation(({ ctx, input }) =>
+  /**
+   * Retire a version. Its approval facts stay: who approved it is history. The
+   * caller names the version it read, and one changed since is a conflict.
+   */
+  retire: journeyProcedure.input(selected(journeyTemplateRetireInput)).mutation(({ ctx, input }) =>
     journeyWrite(ctx, input.branchId, 'APPROVE', async (ctx, { property }) => {
       const template = await journeyTemplateById(ctx, property.branchId, input.id);
+      const reading: HotelJourneyTemplateReading = { updatedAt: input.expectedUpdatedAt };
       let retirement;
       try {
+        assertJourneyTemplateAsRead(template, reading);
         retirement = retireJourneyTemplate(template);
       } catch (error) {
         asTrpcError(error);
@@ -510,7 +568,7 @@ export const hotelJourneyTemplatesRouter = router({
       };
       try {
         const retired = await ctx.db.hotelJourneyTemplate.updateMany({
-          where: { ...where, ...journeyTemplateExpectedState(template) },
+          where: { ...where, ...journeyTemplateExpectedState(template, reading) },
           data: retirement,
         });
         assertJourneyTemplateWrite(retired.count);
