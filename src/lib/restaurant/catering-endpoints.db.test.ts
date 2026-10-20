@@ -120,12 +120,13 @@ describeIfDatabase('catering authenticated endpoints', () => {
     c.confdeltype::text AS confdeltype,c.confupdtype::text AS confupdtype,pg_get_constraintdef(c.oid) AS definition
     FROM pg_constraint c WHERE c.conrelid::regclass::text LIKE 'restaurant_catering_%' ORDER BY 1,2`;
       const receipt = process.env.RESTAURANT_ACCEPTANCE_RUNTIME_RECEIPT;
-      writeFileSync(
-        process.env.RESTAURANT_ACCEPTANCE_ADMITTED === '1' && receipt
-          ? new URL('./catering-catalog.json', `file://${receipt}`)
-          : '../runtime-evidence/catering-catalog.json',
-        JSON.stringify(catalog, null, 2)
-      );
+      // Catalog evidence belongs beside an admitted acceptance run's receipt;
+      // any other run must not write outside the repository.
+      if (process.env.RESTAURANT_ACCEPTANCE_ADMITTED === '1' && receipt)
+        writeFileSync(
+          new URL('./catering-catalog.json', `file://${receipt}`),
+          JSON.stringify(catalog, null, 2)
+        );
     });
     await tenant(async (tx) => {
       for (const b of [branch, otherBranch])
