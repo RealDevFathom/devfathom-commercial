@@ -322,7 +322,7 @@ describe('guest message draft editing', () => {
     expect(screen.getByLabelText('Message')).toHaveValue('My {{typo}}');
   });
 
-  it('keeps both subject and body after a mutation failure, and says a conflict kept them', () => {
+  it('keeps both subject and body after a mutation failure, and says a conflict kept them', async () => {
     mount();
     change('Subject line', 'Edited subject');
     change('Message', 'Edited body');
@@ -331,7 +331,8 @@ describe('guest message draft editing', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('Save unavailable');
     expect(screen.getByLabelText('Subject line')).toHaveValue('Edited subject');
     expect(screen.getByLabelText('Message')).toHaveValue('Edited body');
-    act(() =>
+    expect(mocks.fetch).not.toHaveBeenCalled();
+    await act(async () =>
       mocks.callbacks.save.onError(
         refused('CONFLICT', undefined, 'This message changed while you were working.')
       )
@@ -340,6 +341,8 @@ describe('guest message draft editing', () => {
       'This message changed while you were working. Your editor text has been kept.'
     );
     expect(screen.getByLabelText('Message')).toHaveValue('Edited body');
+    // A conflict means the list is out of date: it is reloaded past the cache.
+    expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' }, { staleTime: 0 });
   });
 
   it('exposes refresh failure after a successful save and recovers without dropping text', async () => {
@@ -590,6 +593,9 @@ describe('guest message review corrections', () => {
 
 describe('guest message writes name the version the page read', () => {
   const later = new Date('2026-09-13T09:30:00Z');
+  const CHANGED =
+    'This message changed while you were working. Reload the current version before trying again.';
+  const savedRegion = () => screen.queryByRole('region', { name: /Saved wording/ });
 
   it('sends the draft version it rendered with an edit, and nothing with a new draft', () => {
     const original = row();
@@ -642,6 +648,124 @@ describe('guest message writes name the version the page read', () => {
       expectedSubject: next.subject,
       expectedBody: 'Next {{guest_name}}',
       expectedApprovedId: 'approved',
+    });
+  });
+
+  it.each(['Keep my text', 'Use the saved wording'] as const)(
+    'keeps the version typed text started from across a refresh, shows the saved wording, and lets the operator choose: %s',
+    async (choice) => {
+      mount(view([row()]));
+      change('Message', 'My edit {{guest_name}}');
+      // A colleague saves the draft; this page learns of it on a refresh.
+      mocks.fetch.mockResolvedValue(
+        view([row({ body: 'Colleague {{guest_name}}', updatedAt: later })])
+      );
+      await act(async () => {
+        click('Refresh messages');
+      });
+      const saved = savedRegion();
+      expect(saved).toBeInTheDocument();
+      expect(within(saved!).getByText('Colleague {{guest_name}}')).toBeInTheDocument();
+      expect(screen.getByLabelText('Message')).toHaveValue('My edit {{guest_name}}');
+      // Saving over words this page never showed is not offered.
+      expect(screen.getByRole('button', { name: 'Save draft' })).toBeDisabled();
+      expect(screen.getByRole('button', { name: 'Approve' })).toBeDisabled();
+      fireEvent.submit(screen.getByRole('form', { name: 'Guest message' }));
+      expect(mocks.save).not.toHaveBeenCalled();
+
+      click(choice);
+      expect(savedRegion()).not.toBeInTheDocument();
+      if (choice === 'Keep my text') {
+        expect(screen.getByLabelText('Message')).toHaveValue('My edit {{guest_name}}');
+        click('Save draft');
+        expect(mocks.save).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            body: 'My edit {{guest_name}}',
+            expectedUpdatedAt: later,
+            expectedBody: 'Colleague {{guest_name}}',
+          })
+        );
+      } else {
+        expect(screen.getByLabelText('Message')).toHaveValue('Colleague {{guest_name}}');
+        click('Approve');
+        expect(mocks.approve).toHaveBeenCalledExactlyOnceWith(
+          expect.objectContaining({
+            expectedUpdatedAt: later,
+            expectedBody: 'Colleague {{guest_name}}',
+          })
+        );
+      }
+    }
+  );
+
+  it('on a save conflict keeps the text, reloads the list and shows the saved wording beside it', async () => {
+    mount(view([row()]));
+    change('Message', 'My edit {{guest_name}}');
+    click('Save draft');
+    mocks.fetch.mockResolvedValue(
+      view([row({ body: 'Colleague {{guest_name}}', updatedAt: later })])
+    );
+    await act(async () => mocks.callbacks.save.onError(refused('CONFLICT', undefined, CHANGED)));
+    expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' }, { staleTime: 0 });
+    expect(screen.getAllByRole('alert')[0]).toHaveTextContent(
+      `${CHANGED} Your editor text has been kept.`
+    );
+    expect(screen.getByLabelText('Message')).toHaveValue('My edit {{guest_name}}');
+    expect(within(savedRegion()!).getByText('Colleague {{guest_name}}')).toBeInTheDocument();
+  });
+
+  it('on an approval conflict says nothing was approved, reloads, and shows the current wording before approving again', async () => {
+    const original = row();
+    mount(view([original]));
+    // Typed and put back: nothing of the operator's to keep.
+    change('Message', 'Briefly changed');
+    change('Message', original.body);
+    click('Approve');
+    expect(mocks.approve).toHaveBeenLastCalledWith(
+      expect.objectContaining({ expectedUpdatedAt: at, expectedBody: original.body })
+    );
+    mocks.fetch.mockResolvedValue(
+      view([row({ body: 'Changed {{guest_name}}', updatedAt: later })])
+    );
+    await act(async () => mocks.callbacks.approve.onError(refused('CONFLICT', undefined, CHANGED)));
+    expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' }, { staleTime: 0 });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      `${CHANGED} Nothing was approved. Read the current wording before approving it.`
+    );
+    // The words now shown are the stored ones, not the ones approved a moment ago.
+    expect(screen.getByLabelText('Message')).toHaveValue('Changed {{guest_name}}');
+    expect(savedRegion()).not.toBeInTheDocument();
+    click('Approve');
+    expect(mocks.approve).toHaveBeenLastCalledWith({
+      branchId: 'branch',
+      id: 'original',
+      expectedUpdatedAt: later,
+      expectedSubject: original.subject,
+      expectedBody: 'Changed {{guest_name}}',
+      expectedApprovedId: null,
+    });
+  });
+
+  it('on a retirement conflict says nothing was retired and reloads the list', async () => {
+    mount(view([row()]));
+    click('Retire');
+    mocks.fetch.mockResolvedValue(
+      view([
+        row({ status: 'APPROVED', approvedByUserId: 'admin', approvedAt: later, updatedAt: later }),
+      ])
+    );
+    await act(async () => mocks.callbacks.retire.onError(refused('CONFLICT', undefined, CHANGED)));
+    expect(mocks.fetch).toHaveBeenCalledExactlyOnceWith({ branchId: 'branch' }, { staleTime: 0 });
+    expect(screen.getByRole('alert')).toHaveTextContent(
+      `${CHANGED} Nothing was retired. Check the current version before retiring it.`
+    );
+    expect(screen.getByRole('button', { name: /Opened/ })).toBeInTheDocument();
+    expect(screen.getByText('Approved · version 1')).toBeInTheDocument();
+    click('Retire');
+    expect(mocks.retire).toHaveBeenLastCalledWith({
+      branchId: 'branch',
+      id: 'original',
+      expectedUpdatedAt: later,
     });
   });
 

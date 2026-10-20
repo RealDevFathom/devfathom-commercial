@@ -18,10 +18,13 @@
  *   the editor offers its kept text as a new draft (UX rule 13).
  *
  * Every call names the property the page was opened for; the server re-checks
- * access on every one. Every write also names the version this page rendered:
- * a save, the draft on screen; an approval, the version and wording on screen
- * and the approval it retires; a retirement, the version shown. Nothing on this
- * page sends. Approving is the last step here; the send belongs to H4.
+ * access on every one. Every write also names the version it was made from: a
+ * save, the draft version its text was started from (a refresh never moves
+ * that); an approval, the version and wording on screen and the approval it
+ * retires; a retirement, the version shown. A conflict reloads the list, and a
+ * draft saved again under typed text is shown beside it until the operator
+ * keeps their text or takes the saved wording. Nothing on this page sends.
+ * Approving is the last step here; the send belongs to H4.
  */
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import type { inferRouterOutputs } from '@trpc/server';
@@ -40,7 +43,10 @@ type JourneyTemplate = HotelJourneyView['templates'][number];
 type JourneyPreview = RouterOutputs['hotelProperty']['journeyTemplates']['preview'];
 type DraftCopy = Pick<JourneyTemplate, 'subject' | 'body'>;
 type DraftKey = Pick<JourneyTemplate, 'moment' | 'channel' | 'language'>;
-type DraftBuffer = DraftKey & DraftCopy;
+/** A stored version as an editor read it: what a write says it read. */
+type DraftBase = Pick<JourneyTemplate, 'updatedAt' | 'subject' | 'body'>;
+/** Editor text, and the stored draft it was started from (none for a new draft). */
+type DraftBuffer = DraftKey & DraftCopy & { base: DraftBase | null };
 type JourneySelection = { branchId: string; organizationId: string; userId: string };
 
 const labelClass =
@@ -66,6 +72,31 @@ function validationErrors(error: unknown): Record<string, string> {
 const errorCode = (error: unknown) => (error as { data?: { code?: string } } | null)?.data?.code;
 const accessDenied = (error: unknown) =>
   ['FORBIDDEN', 'UNAUTHORIZED'].includes(errorCode(error) ?? '');
+
+const baseOf = (row: DraftBase): DraftBase => ({
+  updatedAt: row.updatedAt,
+  subject: row.subject,
+  body: row.body,
+});
+/** Whether `row` is still the stored version `base` was read as. */
+function isVersion(base: DraftBase | null, row: DraftBase): boolean {
+  return (
+    !!base &&
+    new Date(base.updatedAt).getTime() === new Date(row.updatedAt).getTime() &&
+    base.subject === row.subject &&
+    base.body === row.body
+  );
+}
+/** Text that is exactly the version it was started from: nothing typed to keep. */
+const untouched = (buffer: DraftBuffer) =>
+  !!buffer.base && buffer.subject === buffer.base.subject && buffer.body === buffer.base.body;
+
+/** What each refused write adds once the list is being reloaded after a conflict. */
+const AFTER_CONFLICT: Record<'save' | 'approve' | 'retire', string> = {
+  save: 'Your editor text has been kept.',
+  approve: 'Nothing was approved. Read the current wording before approving it.',
+  retire: 'Nothing was retired. Check the current version before retiring it.',
+};
 
 /** `21:00` from a minute of the day. */
 export function minutesToClock(minute: number): string {
@@ -200,15 +231,25 @@ function SelectedJourneyTemplates({
         { staleTime: 0 }
       );
       if (!mounted.current || request !== generation.current) return;
-      // A version the refreshed list no longer carries keeps its editor text.
-      setCopies((current) => ({
-        ...Object.fromEntries(
-          view.templates
-            .filter((template) => !refreshed.templates.some((row) => row.id === template.id))
-            .map((template) => [template.id, template])
-        ),
-        ...current,
-      }));
+      setCopies((current) => {
+        const next: Record<string, DraftBuffer> = {};
+        // A version the refreshed list no longer carries keeps its editor text.
+        for (const template of view.templates)
+          if (!refreshed.templates.some((row) => row.id === template.id))
+            next[template.id] = {
+              moment: template.moment,
+              channel: template.channel,
+              language: template.language,
+              subject: template.subject,
+              body: template.body,
+              base: null,
+            };
+        // Typed text is kept; text nobody typed into follows the stored
+        // version, so a colleague's change shows instead of the words it replaced.
+        for (const [id, buffer] of Object.entries(current))
+          if (!untouched(buffer)) next[id] = buffer;
+        return next;
+      });
       setView(refreshed);
     } catch (error) {
       if (!mounted.current || request !== generation.current) return;
@@ -224,13 +265,14 @@ function SelectedJourneyTemplates({
   const key: DraftKey = selected ?? newKey;
   const copyKey = selectedId ?? 'new';
 
-  const onError = (error: { message: string }) => {
+  const onError = (action: keyof typeof AFTER_CONFLICT, error: { message: string }) => {
     if (!mounted.current) return;
     if (accessDenied(error)) {
       setUnavailable(true);
       return;
     }
     const fields = validationErrors(error);
+    const conflict = errorCode(error) === 'CONFLICT';
     // A refusal on a field the form is not showing still has to be said.
     const unrendered = Object.entries(fields)
       .filter(([field]) => field !== 'body' && !(field === 'subject' && key.channel === 'EMAIL'))
@@ -240,12 +282,14 @@ function SelectedJourneyTemplates({
       Object.keys(fields).length
         ? { ...fields, ...(unrendered.length ? { form: unrendered.join(' ') } : {}) }
         : {
-            form:
-              errorCode(error) === 'CONFLICT'
-                ? `${error.message} Your editor text has been kept.`
-                : error.message || 'The action could not be completed. Please try again.',
+            form: conflict
+              ? `${error.message} ${AFTER_CONFLICT[action]}`
+              : error.message || 'The action could not be completed. Please try again.',
           }
     );
+    // The list this page holds is out of date: reload it, so the version shown
+    // next is the one that stands now, before anything is tried again.
+    if (conflict) void refresh();
   };
 
   const save = trpc.hotelProperty.journeyTemplates.save.useMutation({
@@ -257,12 +301,17 @@ function SelectedJourneyTemplates({
         ...current,
         templates: [template, ...current.templates.filter((row) => row.id !== template.id)],
       }));
-      setCopies((current) => ({ ...current, [template.id]: template }));
+      // The saved words are the stored version now; the editor shows that.
+      setCopies((current) => {
+        const next = { ...current };
+        delete next[template.id];
+        return next;
+      });
       setSelectedId(template.id);
       setPreview(null);
       await refresh();
     },
-    onError,
+    onError: (error) => onError('save', error),
   });
 
   const approve = trpc.hotelProperty.journeyTemplates.approve.useMutation({
@@ -278,7 +327,7 @@ function SelectedJourneyTemplates({
       setPreview(null);
       await refresh();
     },
-    onError,
+    onError: (error) => onError('approve', error),
   });
 
   const retire = trpc.hotelProperty.journeyTemplates.retire.useMutation({
@@ -294,7 +343,7 @@ function SelectedJourneyTemplates({
       setPreview(null);
       await refresh();
     },
-    onError,
+    onError: (error) => onError('retire', error),
   });
 
   const moment = view.moments.find((entry) => entry.value === key.moment);
@@ -333,31 +382,65 @@ function SelectedJourneyTemplates({
     setErrors({});
     setNotice(`Opened draft version ${matchingDraft.version}. Your editor text has been kept.`);
   };
+  const buffer = selected ? copies[selected.id] : undefined;
+  // The stored draft moved on since the editor's text was started from it. A
+  // save would be refused, so the page shows the saved wording and asks.
+  const stale = selected?.status === 'DRAFT' && !!buffer && !isVersion(buffer.base, selected);
 
   const updateCopy = (change: Partial<DraftCopy>) => {
-    setCopies((current) => ({
-      ...current,
-      [copyKey]: {
-        moment: key.moment,
-        channel: key.channel,
-        language: key.language,
-        subject: copy.subject,
-        body: copy.body,
-        ...change,
-      },
-    }));
+    setCopies((current) => {
+      const existing = current[copyKey];
+      return {
+        ...current,
+        [copyKey]: {
+          moment: key.moment,
+          channel: key.channel,
+          language: key.language,
+          subject: copy.subject,
+          body: copy.body,
+          // The stored draft this text starts from, kept once set: a refresh
+          // that brings a colleague's edit never quietly rebases typed text.
+          base: existing ? existing.base : selected?.status === 'DRAFT' ? baseOf(selected) : null,
+          ...change,
+        },
+      };
+    });
     setNotice(null);
+  };
+  const keepMyText = () => {
+    if (!selected) return;
+    setCopies((current) => {
+      const kept = current[selected.id];
+      return kept ? { ...current, [selected.id]: { ...kept, base: baseOf(selected) } } : current;
+    });
+    setErrors({});
+    setNotice(
+      `Your text is kept. Saving it replaces the wording saved in version ${selected.version}.`
+    );
+  };
+  const useSavedWording = () => {
+    if (!selected) return;
+    setCopies((current) => {
+      const next = { ...current };
+      delete next[selected.id];
+      return next;
+    });
+    setErrors({});
+    setNotice(`Showing the wording saved in version ${selected.version}.`);
   };
 
   const onSubmit = (event: FormEvent<HTMLFormElement>) => {
     event.preventDefault();
-    if (!editable || pending || refreshError || (selectedId && !selected)) return;
+    if (!editable || pending || refreshError || stale || (selectedId && !selected)) return;
     if (matchingDraft) {
       openMatchingDraft();
       return;
     }
     setErrors({});
     setNotice(null);
+    // The draft version this text was started from: the save rewrites that
+    // version or nothing. A new draft, or a replacement, rewrites no draft.
+    const base = selected?.status === 'DRAFT' ? (buffer ? buffer.base : baseOf(selected)) : null;
     save.mutate({
       branchId,
       moment: key.moment,
@@ -365,13 +448,11 @@ function SelectedJourneyTemplates({
       language: key.language,
       subject: key.channel === 'EMAIL' ? (copy.subject ?? '').trim() : null,
       body: copy.body.trim(),
-      // The draft version this page rendered: the save rewrites that version
-      // or nothing. A new draft, or a replacement, rewrites no draft.
-      ...(selected?.status === 'DRAFT'
+      ...(base
         ? {
-            expectedUpdatedAt: selected.updatedAt,
-            expectedSubject: selected.subject,
-            expectedBody: selected.body,
+            expectedUpdatedAt: base.updatedAt,
+            expectedSubject: base.subject,
+            expectedBody: base.body,
           }
         : {}),
     });
@@ -595,7 +676,7 @@ function SelectedJourneyTemplates({
               className="mt-3 min-h-11"
               onClick={() => {
                 const kept = copies[copyKey]!;
-                setCopies((current) => ({ ...current, new: kept }));
+                setCopies((current) => ({ ...current, new: { ...kept, base: null } }));
                 setNewKey({ moment: kept.moment, channel: kept.channel, language: kept.language });
                 select(null);
               }}
@@ -736,6 +817,65 @@ function SelectedJourneyTemplates({
               )}
             </div>
 
+            {stale && selected ? (
+              <div
+                role="region"
+                aria-labelledby="saved-wording-title"
+                className="space-y-3 rounded-md border border-border-subtle bg-surface-sunken p-4"
+              >
+                <p className={labelClass} id="saved-wording-title">
+                  Saved wording · version {selected.version}
+                </p>
+                <p className="text-sm text-text-body">
+                  This draft was saved again after you started editing it. Your text is kept in the
+                  editor above; this is the wording saved now. Choose which to continue with before
+                  saving.
+                </p>
+                {key.channel === 'EMAIL' ? (
+                  <p className="text-sm">
+                    <span className={labelClass}>Subject</span>
+                    <span
+                      className="mt-1 block font-semibold text-text-strong"
+                      dir={key.language === 'UR' ? 'rtl' : 'ltr'}
+                      lang={key.language === 'UR' ? 'ur' : 'en'}
+                    >
+                      {selected.subject}
+                    </span>
+                  </p>
+                ) : null}
+                <div>
+                  <span className={labelClass}>Message</span>
+                  <p
+                    className="mt-1 whitespace-pre-wrap text-sm text-text-body"
+                    dir={key.language === 'UR' ? 'rtl' : 'ltr'}
+                    lang={key.language === 'UR' ? 'ur' : 'en'}
+                  >
+                    {selected.body}
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11"
+                    disabled={pending}
+                    onClick={keepMyText}
+                  >
+                    Keep my text
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="min-h-11"
+                    disabled={pending}
+                    onClick={useSavedWording}
+                  >
+                    Use the saved wording
+                  </Button>
+                </div>
+              </div>
+            ) : null}
+
             {errors.form ? (
               <p className="text-sm text-destructive" role="alert">
                 {errors.form}
@@ -766,7 +906,11 @@ function SelectedJourneyTemplates({
                   Open draft version {matchingDraft.version}
                 </Button>
               ) : editable ? (
-                <Button type="submit" className="min-h-11" disabled={pending || !!refreshError}>
+                <Button
+                  type="submit"
+                  className="min-h-11"
+                  disabled={pending || !!refreshError || stale}
+                >
                   {save.isPending
                     ? 'Saving…'
                     : selected && selected.status !== 'DRAFT'
@@ -805,7 +949,7 @@ function SelectedJourneyTemplates({
                   type="button"
                   variant="outline"
                   className="min-h-11"
-                  disabled={pending || !!refreshError || !!unsaved}
+                  disabled={pending || !!refreshError || !!unsaved || stale}
                   onClick={() =>
                     // Approval stands behind the words on screen: the server
                     // refuses it if they are not, or no longer, the stored ones.
@@ -830,7 +974,7 @@ function SelectedJourneyTemplates({
                   type="button"
                   variant="outline"
                   className="min-h-11"
-                  disabled={pending || !!refreshError || !!unsaved}
+                  disabled={pending || !!refreshError || !!unsaved || stale}
                   onClick={() =>
                     retire.mutate({
                       branchId,
@@ -843,7 +987,7 @@ function SelectedJourneyTemplates({
                 </Button>
               ) : null}
             </div>
-            {unsaved && selected?.status === 'DRAFT' ? (
+            {unsaved && !stale && selected?.status === 'DRAFT' ? (
               <p className="text-xs text-text-muted">
                 Save your changes before approving or retiring this draft.
               </p>
