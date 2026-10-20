@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '@/lib/db';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { addSaleLine, createSale, changeSaleStatus } from './sales';
+import { addSaleLine, createSale, changeSaleStatus, returnSaleLine } from './sales';
 import { receiveLot } from './stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender } from './settlement';
 import { readCounterReceipt } from './counter';
@@ -205,6 +205,20 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
           data: { batchNumber: `Renamed ${batch.id}`, expiresAt: new Date('2040-01-01') },
         });
       const tender = await db.pharmacyTender.findFirstOrThrow({ where: { saleId: f.sale.id } });
+      // A refund on a COMPLETED sale is capped by the value of goods returned, so goods come
+      // back first: 2 of the 10 units return 190 of the 950 net.
+      const allocation = await db.pharmacySaleLineAllocation.findFirstOrThrow({
+        where: { saleLineId: before.lines[0]!.saleLineId, canonicalUnits: 3 },
+      });
+      await returnSaleLine(db, scope, {
+        saleLineId: allocation.saleLineId,
+        lotId: allocation.inventoryLotId,
+        canonicalUnits: 2,
+        disposition: 'RESTOCK',
+        reason: 'test original sale distinction',
+        integrityDecision: 'Sealed strip',
+        idempotencyKey: randomUUID(),
+      });
       await refundPharmacyTender(db, scope, {
         originalTenderId: tender.id,
         deviceId: f.input.deviceId,
