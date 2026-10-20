@@ -15,7 +15,31 @@ const commandCentre = vi.fn(async () => ({
     expiryValueMinor90: 0,
   },
 }));
-vi.mock('@/server/trpc', () => ({ createTRPCContext: vi.fn(async () => ({})) }));
+vi.mock('@/server/trpc', () => ({
+  createTRPCContext: vi.fn(async () => ({
+    organization: { id: 'org-a', currency: 'PKR' },
+    entitlements: { organizationId: 'org-a' },
+  })),
+}));
+vi.mock('@/server/routers/pharmacy-sales', () => ({
+  pharmacySalesRouter: {
+    createCaller: () => ({
+      demandAggregate: async ({ from, to }: { from: Date; to: Date }) => ({
+        label: 'Estimate',
+        method: 'Explicit POS-10 events grouped by requested item and cause',
+        window: { from, to },
+        exclusions: ['searches without an explicit event', 'abandoned carts'],
+        confidence: 'observed-events-only',
+        rows: [],
+      }),
+    }),
+  },
+}));
+// The installed Next Vitest guide excludes async RSC rendering; this case covers sibling reports.
+vi.mock('./daily-work-pack', () => ({
+  DailyWorkPack: () => null,
+  DailyWorkPackLoading: () => null,
+}));
 vi.mock('@/server/routers/pharmacy-reports', () => ({
   pharmacyReportsRouter: {
     createCaller: () => ({

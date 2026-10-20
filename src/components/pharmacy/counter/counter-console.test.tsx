@@ -2,6 +2,7 @@ import { act, fireEvent, render, screen, waitFor } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { CounterCart } from '@/lib/pharmacy/counter';
+import type { CounterReceipt } from '@/lib/pharmacy/counter-receipt';
 
 type Query = {
   data?: unknown;
@@ -453,6 +454,47 @@ describe('PharmacyCounterConsole tender recovery', () => {
   });
 
   it('clears an accepted full payment and shows settlement after the completed bill is read', async () => {
+    const completeCounterReceipt = {
+      saleId: 'sale-a',
+      receiptNumber: 42,
+      branchName: 'Synthetic branch',
+      completedAt: '2026-09-11T10:00:00Z',
+      businessDate: '2026-09-11',
+      currency: 'PKR',
+      lines: [
+        {
+          saleLineId: 'line-a',
+          identityStatus: 'ISSUED',
+          medicineName: 'Synthetic item',
+          strength: null,
+          presentation: 'Pack',
+          batchNumber: 'BATCH-A',
+          expiresAt: '2027-09-11',
+          saleUnit: 'PACK',
+          quantity: 1,
+          canonicalUnits: 1,
+          unitPriceMinor: 25000,
+          discountMinor: 0,
+          lineTotalMinor: 25000,
+        },
+      ],
+      tenders: [
+        {
+          tenderId: 'tender-a',
+          type: 'CASH',
+          amountMinor: 25000,
+          changeGivenMinor: 5000,
+        },
+      ],
+      totals: {
+        grossMinor: 25000,
+        discountMinor: 0,
+        netMinor: 25000,
+        tenderedMinor: 25000,
+        changeMinor: 5000,
+      },
+    } satisfies CounterReceipt;
+    mocks.receiptRefetch.mockResolvedValueOnce({ data: completeCounterReceipt });
     mocks.mutations.tender!.mockResolvedValue(accepted(0));
     mocks.refetch.mockImplementation(async () => {
       mocks.queries.counterCart!.data = cart({
