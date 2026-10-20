@@ -3,7 +3,7 @@ import Link from 'next/link';
 import { redirect } from 'next/navigation';
 import { Suspense } from 'react';
 
-import { Button } from '@/components/ui/button';
+import { Button, buttonVariants } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -296,28 +296,34 @@ export default async function PharmacyReportsPage({
         eyebrow="Pharmacy operations"
         heading="Reports"
         description="Bounded, permission-scoped command centre and report catalog. Values are ledger-derived and freshness-labelled."
+        actions={
+          // The sub-reports are the page's secondary actions, so they sit in the
+          // header's action slot as Studio controls rather than as bare links.
+          <nav aria-label="Sub-reports" className="flex flex-wrap gap-2">
+            <Link
+              href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
+              className={buttonVariants({ variant: 'outline', size: 'lg' })}
+            >
+              Replenishment
+            </Link>
+            <Link
+              href={`/pharmacy/reports/repeat-purchasing${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
+              className={buttonVariants({ variant: 'outline', size: 'lg' })}
+            >
+              Repeat purchasing
+            </Link>
+            {catalog.permissions.financial ? (
+              <Link
+                href={`/pharmacy/reports/supplier-credit-follow-up?${followUpQuery}`}
+                prefetch={false}
+                className={buttonVariants({ variant: 'outline', size: 'lg' })}
+              >
+                Supplier-credit follow-up
+              </Link>
+            ) : null}
+          </nav>
+        }
       />
-      <Link
-        href={`/pharmacy/reports/replenishment${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
-        className="flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        Replenishment observations and planning
-      </Link>
-      <Link
-        href={`/pharmacy/reports/repeat-purchasing${branch ? `?${new URLSearchParams({ branch })}` : ''}`}
-        className="flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
-      >
-        Repeat purchasing and identity coverage
-      </Link>
-      {catalog.permissions.financial ? (
-        <Link
-          href={`/pharmacy/reports/supplier-credit-follow-up?${followUpQuery}`}
-          prefetch={false}
-          className="flex min-h-11 items-center text-sm underline focus-visible:outline-2 focus-visible:outline-ring"
-        >
-          Supplier-credit follow-up
-        </Link>
-      ) : null}
       <SectionCard eyebrow="RPT-01 / RPT-02" title="Report filters" titleLevel={2}>
         <form className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4" method="get">
           <label className="text-sm text-text-body">

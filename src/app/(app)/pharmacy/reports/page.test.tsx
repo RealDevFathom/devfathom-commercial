@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
 const commandCentre = vi.fn(async () => ({
@@ -171,5 +171,26 @@ describe('pharmacy report catalog filters', () => {
         'No digests captured yet. Turn on a branch digest; history appears after its scheduled time.'
       )
     ).toBeVisible();
+  });
+
+  it('offers the sub-reports as header actions styled like every other Studio control', async () => {
+    render(await PharmacyReportsPage({ searchParams: Promise.resolve({ branch: 'b1' }) }));
+    const header = document.querySelector('[data-slot="page-header"]')!;
+    const subReports = within(header as HTMLElement).getByRole('navigation', {
+      name: 'Sub-reports',
+    });
+    const links = within(subReports).getAllByRole('link');
+    expect(links.map((link) => link.textContent)).toEqual([
+      'Replenishment',
+      'Repeat purchasing',
+      'Supplier-credit follow-up',
+    ]);
+    expect(links[0]).toHaveAttribute('href', '/pharmacy/reports/replenishment?branch=b1');
+    expect(links[1]).toHaveAttribute('href', '/pharmacy/reports/repeat-purchasing?branch=b1');
+    // Button geometry, not bare underlined text.
+    for (const link of links) {
+      expect(link.className).toContain('border');
+      expect(link.className).not.toMatch(/(^|\s)underline(\s|$)/);
+    }
   });
 });
