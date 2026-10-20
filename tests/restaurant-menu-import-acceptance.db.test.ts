@@ -36,7 +36,7 @@
 import { randomBytes } from 'node:crypto';
 
 import { Client } from 'pg';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 import { seedDepartments } from '@/lib/test-support/departments';
 
 const TEST_DATABASE_URL =
@@ -207,6 +207,9 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
   let sql: Client;
 
   beforeAll(async () => {
+    // Extraction and storage fail closed unless explicitly enabled (test/development only).
+    vi.stubEnv('MENU_IMPORT_ADAPTER', 'FIXTURE');
+    vi.stubEnv('STORAGE_ADAPTER', 'local');
     const parsed = new URL(TEST_DATABASE_URL!);
     if (
       !['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsed.hostname) &&
@@ -271,6 +274,7 @@ describeIfDatabase('WHA-194 menu import acceptance (real PostgreSQL)', () => {
   }, 120_000);
 
   afterAll(async () => {
+    vi.unstubAllEnvs();
     await sql?.end();
   });
 
