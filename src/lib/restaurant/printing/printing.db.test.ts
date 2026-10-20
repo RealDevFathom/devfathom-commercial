@@ -2,7 +2,7 @@ import { randomBytes } from 'node:crypto';
 import { once } from 'node:events';
 import { createServer } from 'node:net';
 
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import type { PrintJob, PrintRoutingConfig } from './contract';
 import { acknowledgePrintJob, claimNextPrintJob, PrintBridgeService } from './service';
@@ -39,6 +39,8 @@ const job: PrintJob = {
 
 describeIfDatabase('durable print bridge', () => {
   beforeAll(async () => {
+    // Claim tokens are HMACs keyed by AUTH_SECRET; claims refuse to run without one.
+    vi.stubEnv('AUTH_SECRET', 'synthetic-print-db-test-key');
     tenancy = await import('@/lib/tenancy/scoped-db');
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
     await assertRlsEnforcingRole(tenancy.withPlatformDb);
