@@ -975,22 +975,21 @@ export function DashboardContent() {
           isAdmin ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'
         )}
       >
+        {/* No month-over-month or quarter deltas are computed by `dashboard.getStats`;
+            these cards show the figure alone rather than a placeholder trend. */}
         {isAdmin && (
           <KPICard
             title="Revenue This Month"
             value={moneyListLabel(stats.data?.revenue ?? [])}
-            change="+12%"
-            changeLabel="vs last month"
+            changeLabel="income recorded this month"
             icon={DollarSign}
-            trend="up"
           />
         )}
         <KPICard
           title="Active Projects"
           value={String(stats.data?.activeProjects ?? 0)}
-          change="2 new this quarter"
+          changeLabel="in progress"
           icon={FolderKanban}
-          trend="up"
         />
         <KPICard
           title="Tasks Completed"
