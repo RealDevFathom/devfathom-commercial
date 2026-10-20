@@ -22,7 +22,7 @@
  */
 import { randomBytes } from 'node:crypto';
 
-import { beforeAll, describe, expect, it } from 'vitest';
+import { afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -39,7 +39,7 @@ const ORG_A = `org_wha1176_sig_a_${suffix}`;
 const ORG_B = `org_wha1176_sig_b_${suffix}`;
 const BRANCH_A = 'branch_a';
 const BRANCH_B = 'branch_b';
-const ACTOR = 'user_inventory_lead';
+const ACTOR = `user_inventory_lead_${suffix}`;
 
 const NOW = new Date('2026-09-02T09:00:00.000Z');
 const DAY = 86_400_000;
@@ -300,6 +300,43 @@ beforeAll(async () => {
   ]);
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, signals };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
+  // C1 (createDraftAction) authorizes a real, active PHARMACY actor holding the
+  // native pharmacy.procurement / pharmacy.inventory grants.
+  await scopedDb.withPlatformDb(async (db) => {
+    await db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id`,
+      [ORG_A, ORG_B]
+    );
+    await db.$executeRawUnsafe(
+      `INSERT INTO organization_departments (id, "organizationId", key, name, active, "sortOrder", "createdAt", "updatedAt")
+       VALUES ($1, $2, 'inventory', 'Inventory', true, 0, now(), now())`,
+      `dept_${suffix}`,
+      ORG_A
+    );
+    await db.$executeRawUnsafe(
+      `INSERT INTO organization_roles (id, "organizationId", key, name, "isSystem", "createdAt", "updatedAt")
+       VALUES ($1, $2, 'inventory-lead', 'Inventory lead', false, now(), now())`,
+      `role_${suffix}`,
+      ORG_A
+    );
+    await db.$executeRawUnsafe(
+      `INSERT INTO organization_role_permissions (id, "organizationId", "organizationRoleId", capability, effect, "createdAt")
+       SELECT 'perm_' || c || '_' || $1, $2, $3, c, 'ALLOW', now()
+       FROM unnest(ARRAY['pharmacy.procurement', 'pharmacy.inventory']) AS c`,
+      suffix,
+      ORG_A,
+      `role_${suffix}`
+    );
+    await db.$executeRawUnsafe(
+      `INSERT INTO users (id, "organizationId", "organizationRoleId", name, email, role, department, title, "startDate", status, "createdAt", "updatedAt")
+       VALUES ($1, $2, $3, 'Inventory lead', $4, 'EMPLOYEE', 'inventory', 'Inventory lead', now(), 'ACTIVE', now(), now())`,
+      ACTOR,
+      ORG_A,
+      `role_${suffix}`,
+      `${ACTOR}@example.test`
+    );
+  });
 }, 120_000);
 
 // ── The evaluator reads real ledger facts ──────────────────────────────────
@@ -615,6 +652,9 @@ describeIfDatabase('PUR-07 — stale source data marks the signal unusable', () 
 describeIfDatabase(
   'PUR-07 — §8A invariant 29: a draft action creates a draft and nothing else',
   () => {
+    // createDraftAction re-checks freshness and eligibility on the wall clock.
+    beforeEach(() => vi.setSystemTime(NOW));
+    afterEach(() => vi.useRealTimers());
     /** Everything a signal must never be able to create. */
     async function ledgerCensus(db: ScopedDb, organizationId: string) {
       const [movements, purchaseOrders, claims, submittedReturns, liveTransfers] =
@@ -695,6 +735,7 @@ describeIfDatabase(
         const before = await ledgerCensus(db, fixture.organizationId);
         const action = await deps.signals.createDraftAction(db, scopeOf(fixture), {
           kind: 'DRAFT_TRANSFER',
+          idempotencyKey: tag('draft-transfer-intent'),
           signalId: refreshed.signals[0]!.id,
           fromBranchId: donorBranchId,
           lines: [
@@ -733,12 +774,53 @@ describeIfDatabase(
 
     it('creates a DRAFT expiry claim that reserves nothing', async () => {
       const fixture = await scenario(ORG_A, 'draft-claim');
+      const receiving = await import('./goods-receipt');
       const outcome = await inOrg(ORG_A, async (db) => {
-        const { lot } = await stockLot(db, fixture, {
-          units: 40,
-          label: 'draft-claim',
-          expiresAt: new Date(NOW.getTime() + 20 * DAY),
+        // C1 proves claim supplier ownership through a POSTED native receipt line.
+        const receivedAt = new Date('2026-02-01T00:00:00.000Z');
+        const receipt = await db.pharmacyGoodsReceipt.create({
+          data: {
+            organizationId: fixture.organizationId,
+            branchId: fixture.branchId,
+            reference: `GRN-${tag('draft-claim')}`,
+            supplierId: fixture.supplierId,
+            supplierInvoiceRef: `INV-${tag('draft-claim')}`,
+            supplierInvoiceDate: receivedAt,
+            warrantyEvidenceRef: `WARRANTY-${tag('draft-claim')}`,
+            receivedByUserId: ACTOR,
+            receivedAt,
+            directPurchase: true,
+            bypassReason: 'Emergency cash-and-carry purchase.',
+            bypassApprovedByUserId: 'user_manager',
+            bypassApprovedAt: receivedAt,
+            lines: {
+              create: {
+                lineNumber: 1,
+                medicineId: fixture.medicineId,
+                packLevelId: fixture.packLevelId,
+                batchNumber: `B-${tag('draft-claim')}`,
+                printedExpiry: new Date(NOW.getTime() + 20 * DAY),
+                expiryPrecision: 'DAY',
+                printedMrpMinor: 2000,
+                canonicalUnitsPerPack: 10,
+                receivedPacks: 4,
+                bonusPacks: 0,
+                receivedCanonicalUnits: 40,
+                bonusCanonicalUnits: 0,
+                acceptedCanonicalUnits: 40,
+                rejectedCanonicalUnits: 0,
+                invoicedPricePerPackMinor: 12_000,
+                unitCostMinor: 1200,
+                stockLocationId: fixture.locationId,
+              },
+            },
+          },
         });
+        const posted = await receiving.postGoodsReceipt(db, scopeOf(fixture), {
+          goodsReceiptId: receipt.id,
+          at: receivedAt,
+        });
+        const lot = { id: posted.lines[0]!.inventoryLotId };
         const refreshed = await deps.signals.refreshStockSignals(db, scopeOf(fixture), NOW);
         const nearExpiry = refreshed.signals.find((signal) => signal.kind === 'NEAR_EXPIRY')!;
         const before = await ledgerCensus(db, fixture.organizationId);
