@@ -426,6 +426,31 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         },
       })
     );
+    // H1-05 — a function space (RESTRICT child of the property) and a claim on
+    // its time (RESTRICT child of the space, written in SQL as every claim is).
+    const space = await withPlatformDb((db) =>
+      db.hotelFunctionSpace.create({
+        data: {
+          organizationId,
+          branchId: scope.branchId,
+          name: 'Crystal Hall',
+          layouts: [{ layout: 'Theatre', capacity: 300 }],
+          setupMinutes: 30,
+          teardownMinutes: 15,
+        },
+        select: { id: true },
+      })
+    );
+    await withPlatformDb((db) =>
+      db.$executeRawUnsafe(
+        `INSERT INTO hotel_space_bookings ("organizationId", "branchId", "spaceId", "startsAt", "endsAt", kind, "createdBy", "updatedAt")
+         VALUES ($1, $2, $3, '2030-05-01T10:00:00Z', '2030-05-01T12:00:00Z', 'HOLD', $4, now())`,
+        organizationId,
+        scope.branchId,
+        space.id,
+        tenant.userId
+      )
+    );
     return { ...tenant, branchId: scope.branchId };
   }
 
@@ -436,6 +461,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     'hotel_rooms',
     'hotel_room_types',
     'hotel_meal_plans',
+    'hotel_space_bookings',
+    'hotel_function_spaces',
     'hotel_extras',
     'hotel_property_assignments',
     'hotel_properties',
@@ -466,6 +493,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       hotel_rooms: 2,
       hotel_room_types: 1,
       hotel_meal_plans: 1,
+      hotel_space_bookings: 1,
+      hotel_function_spaces: 1,
       hotel_extras: 1,
       hotel_property_assignments: 1,
       hotel_properties: 1,
@@ -509,6 +538,8 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       hotel_room_blocks: 1,
       hotel_rooms: 2,
       hotel_meal_plans: 1,
+      hotel_space_bookings: 1,
+      hotel_function_spaces: 1,
       hotel_properties: 1,
     });
     const organization = await withPlatformDb((db) =>

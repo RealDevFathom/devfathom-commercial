@@ -62,6 +62,8 @@ export const HOTEL_AUDIT_ENTITY_TYPES = [
   'HotelRoomStatusEvent',
   'HotelRoomBlock',
   'HotelMealPlan',
+  'HotelFunctionSpace',
+  'HotelSpaceBooking',
 ] as const;
 
 export type HotelAuditEntityType = (typeof HOTEL_AUDIT_ENTITY_TYPES)[number];

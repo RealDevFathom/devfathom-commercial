@@ -61,6 +61,7 @@ import {
   requireHotelPropertyScope,
 } from '@/server/hotel-property-scope';
 import { adminProcedure, capabilityProcedure, protectedProcedure, router } from '../trpc';
+import { hotelFunctionSpacesRouter } from './hotel-function-spaces';
 import { hotelInventoryRouter } from './hotel-inventory';
 
 const propertyAdmin = capabilityProcedure('hotel:property-admin');
@@ -477,6 +478,14 @@ export const hotelPropertyRouter = router({
    * whoever configures how a property is sold configures what it sells.
    */
   inventory: hotelInventoryRouter,
+
+  /**
+   * PROP-07 — function spaces, their layouts, pricing and turnaround buffers,
+   * and the claims on their time. Gated on the `hotel-banquets` module inside
+   * the router, because the whole `hotelProperty` namespace is licensed on
+   * `hotel-core`.
+   */
+  spaces: hotelFunctionSpacesRouter,
 
   /**
    * PROP-05 — the extras and services catalog.
