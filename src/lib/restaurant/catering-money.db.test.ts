@@ -9,6 +9,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { CateringMoneyInput, CateringMoneyScope } from './catering-money';
 
 const url = process.env.TEST_DATABASE_URL;
+// Skipped, never silently passed, without a database; the slot guard below still applies.
+const describeIfDatabase = url ? describe : describe.skip;
 const suffix = randomUUID().slice(0, 8);
 const orgA = `cm_org_a_${suffix}`, orgB = `cm_org_b_${suffix}`;
 const branchA = `cm_branch_a_${suffix}`, branchA2 = `cm_branch_a2_${suffix}`, branchB = `cm_branch_b_${suffix}`;
@@ -55,7 +57,7 @@ async function counts() {
   }));
 }
 
-describe('catering evidence: restricted PostgreSQL acceptance', () => {
+describeIfDatabase('catering evidence: restricted PostgreSQL acceptance', () => {
   beforeAll(async () => {
     if (!url || process.env.CATERING_MONEY_DB_SLOT !== 'reserved') throw new Error('Requires TEST_DATABASE_URL and CATERING_MONEY_DB_SLOT=reserved; do not start a listener from this test.');
     const target = new URL(url);

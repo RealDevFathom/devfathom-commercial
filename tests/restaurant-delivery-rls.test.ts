@@ -5,8 +5,9 @@ import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import { assertDisposableRlsDatabase } from './disposable-rls-database';
 
-const url = process.env.DELIVERY_TEST_OWNER_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-if (!url) throw new Error('DELIVERY_TEST_OWNER_DATABASE_URL or TEST_DATABASE_URL is required');
+const url = process.env.DELIVERY_TEST_OWNER_DATABASE_URL ?? process.env.TEST_DATABASE_URL ?? '';
+// Skipped, never silently passed, without a disposable database.
+const describeIfDatabase = url ? describe : describe.skip;
 
 const client = new pg.Client({ connectionString: url });
 const suffix = randomUUID().replaceAll('-', '').slice(0, 10);
@@ -64,7 +65,7 @@ async function insertFulfillment(overrides: Record<string, unknown> = {}) {
   );
 }
 
-describe('restaurant direct-delivery schema and forced RLS', () => {
+describeIfDatabase('restaurant direct-delivery schema and forced RLS', () => {
   beforeAll(async () => {
     assertDisposableRlsDatabase(url);
     await client.connect();
