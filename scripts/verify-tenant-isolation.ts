@@ -12,8 +12,11 @@ if (!databaseUrl) {
 }
 
 const parsedUrl = new URL(databaseUrl);
+// WHATWG `URL.hostname` keeps the brackets around an IPv6 host, so the IPv6
+// loopback arrives as "[::1]" (every spelling of it normalises to that); a bare
+// "::1" is never what the parser yields.
 if (
-  !['localhost', '127.0.0.1', '::1'].includes(parsedUrl.hostname) &&
+  !['localhost', '127.0.0.1', '::1', '[::1]'].includes(parsedUrl.hostname) &&
   process.env.ALLOW_REMOTE_RLS_TEST !== 'true'
 ) {
   throw new Error('Refusing to run the destructive RLS verifier against a non-local database.');
