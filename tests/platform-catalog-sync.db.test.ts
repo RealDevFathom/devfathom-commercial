@@ -37,6 +37,8 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
 import {
+  HOSPITALITY_MODULES,
+  HOSPITALITY_PACKAGES,
   PHARMACY_MODULES,
   PHARMACY_PACKAGES,
   RESTAURANT_MODULES,
@@ -256,7 +258,11 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     const missingModules = MODULE_CATALOG.filter(
       (definition) => !registeredModules.has(definition.key)
     );
-    const verticalPackages = [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES];
+    const verticalPackages = [
+      ...RESTAURANT_PACKAGES,
+      ...PHARMACY_PACKAGES,
+      ...HOSPITALITY_PACKAGES,
+    ];
     const missingPackages = verticalPackages.filter(
       (definition) => !registeredPackages.has(definition.key)
     );
@@ -319,6 +325,12 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
     }
     for (const definition of PHARMACY_PACKAGES) {
       expectVerticalPackage(definition, 'PHARMACY', 'pharmacy-core');
+    }
+    for (const definition of HOSPITALITY_MODULES) {
+      expect(after.modules.map((row) => row.key)).toContain(definition.key);
+    }
+    for (const definition of HOSPITALITY_PACKAGES) {
+      expectVerticalPackage(definition, 'HOSPITALITY', 'hotel-core');
     }
 
     // The pre-existing package is untouched: same links, same version.
