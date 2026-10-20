@@ -46,55 +46,22 @@ import {
 } from '@/lib/hotel/property';
 import { annotateAudit } from '@/server/audit';
 import {
+  currentProperty,
+  inputJson,
+  notProvisioned,
+  withLockedProperty,
+  type PropertyContext,
+} from '@/server/hotel-property-context';
+import {
   hotelCapabilityInput,
   hotelPropertySelectionInput,
   hotelRoleKeys,
   requireHotelPropertyScope,
 } from '@/server/hotel-property-scope';
-import {
-  adminProcedure,
-  capabilityProcedure,
-  protectedProcedure,
-  router,
-  type TRPCContext,
-} from '../trpc';
+import { adminProcedure, capabilityProcedure, protectedProcedure, router } from '../trpc';
 
 const propertyAdmin = capabilityProcedure('hotel:property-admin');
 const expectedVersionInput = z.object({ expectedUpdatedAt: z.coerce.date() });
-
-type PropertyContext = Omit<TRPCContext, 'db'> & { db: Prisma.TransactionClient };
-
-/** Every consumer must supply a selection; only fresh membership authorizes it. */
-async function currentProperty(ctx: PropertyContext, branchId?: string) {
-  if (!branchId)
-    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Choose a property to continue.' });
-  await requireHotelPropertyScope(ctx, branchId, 'hotel:property-admin');
-  const property = await ctx.db.hotelProperty.findFirst({
-    where: { organizationId: ctx.entitlements.organizationId, branchId, active: true },
-  });
-  if (!property)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'This property is no longer available.' });
-  return property;
-}
-
-/** Keep property mutation authorization inside the same lock as assignment and lifecycle changes. */
-async function withLockedProperty<T>(
-  ctx: TRPCContext,
-  branchId: string | undefined,
-  run: (ctx: PropertyContext, property: Awaited<ReturnType<typeof currentProperty>>) => Promise<T>
-): Promise<T> {
-  if (!branchId)
-    throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'Choose a property to continue.' });
-  const organizationId = ctx.entitlements.organizationId;
-  return ctx.db.$transaction(async (db) => {
-    await db.$queryRaw`SELECT "branchId" FROM "hotel_properties"
-      WHERE "organizationId" = ${organizationId} AND "branchId" = ${branchId}
-      FOR UPDATE`;
-    const transactionContext = { ...ctx, db };
-    const property = await currentProperty(transactionContext, branchId);
-    return run(transactionContext, property);
-  });
-}
 
 /** Translate only this catalog's code uniqueness violation, preserving all other errors. */
 async function withExtraCodeConflict<T>(code: string, run: () => Promise<T>): Promise<T> {
@@ -135,23 +102,6 @@ async function propertyReadiness(
     ctx.entitlements.organizationId,
     hotelEvidence(property, count, keys.length, null)
   );
-}
-
-function notProvisioned(): TRPCError {
-  return new TRPCError({
-    code: 'NOT_FOUND',
-    message:
-      'This workspace has no property yet. A property is created with the workspace, so ask your DevFathom account manager to re-run provisioning.',
-  });
-}
-
-/**
- * A validated policy object on its way into a JSONB column. The round-trip drops
- * anything Prisma's `InputJsonValue` cannot carry (undefined members, prototypes)
- * rather than asserting the shape and hoping.
- */
-function inputJson(value: Record<string, unknown>): Prisma.InputJsonValue {
-  return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
 
 function noSuchExtra(): TRPCError {
