@@ -551,8 +551,9 @@ function SelectedJourneyTemplates({
                           {current ? 'Opened' : 'Open'}
                           <span className="sr-only">
                             {' '}
-                            {view.moments.find((entry) => entry.value === template.moment)?.label},{' '}
-                            {channelLabel(template.channel)}, {languageLabel(template.language)}{' '}
+                            {
+                              view.moments.find((entry) => entry.value === template.moment)?.label
+                            }, {channelLabel(template.channel)}, {languageLabel(template.language)}{' '}
                             version {template.version}
                           </span>
                         </Button>
