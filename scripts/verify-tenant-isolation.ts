@@ -1219,6 +1219,168 @@ async function main() {
       [orderA, customerA, orderB, customerB]
     );
 
+    // Consolidation merge: the wallet (20261019213000), printer (20261014000000,
+    // 20261014010000) and pharmacy return-hold / pack-price (20261020000000,
+    // 20261020000100) tables get mirrored rows and explicit probes, not only the
+    // forced-RLS discovery. Rows are symmetric; tenant B's spare return (r3) and
+    // spare hold (h2) give its fail-closed inserts below fresh unique keys.
+    const mirrorId = (name: string, tenant: 'a' | 'b') => `${name}_${tenant}_${suffix}`;
+    for (const [tenant, organizationId, userId, branchId, deviceId, customerId, accountId] of [
+      ['a', 'org_devfathom', userA, branchA, deviceA, customerA, loyaltyAccountA],
+      ['b', organizationB, userB, branchB, deviceB, customerB, loyaltyAccountB],
+    ] as const) {
+      const id = (name: string) => mirrorId(name, tenant);
+      await client.query(
+        `INSERT INTO "restaurant_wallet_tenant_config" (
+          "id", "organizationId", "programDisplayName", "googleClassSuffix", "updatedAt"
+        ) VALUES ($1, $2, 'Rewards', $3, CURRENT_TIMESTAMP)`,
+        [id('rwcfg'), organizationId, id('wgc')]
+      );
+      await client.query(
+        `INSERT INTO "restaurant_wallet_passes" (
+          "id", "organizationId", "customerId", "loyaltyAccountId", "platform", "serialNumber", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'APPLE', $5, CURRENT_TIMESTAMP)`,
+        [id('rwpass'), organizationId, customerId, accountId, id('wserial')]
+      );
+      await client.query(
+        `INSERT INTO "restaurant_wallet_pass_registrations" (
+          "id", "organizationId", "passId", "deviceLibraryIdentifier", "pushToken", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP)`,
+        [id('rwreg'), organizationId, id('rwpass'), id('wdevice'), id('wpush')]
+      );
+      await client.query(
+        `INSERT INTO "restaurant_wallet_pass_updates" (
+          "id", "organizationId", "passId", "reason", "nextAttemptAt", "updatedAt"
+        ) VALUES ($1, $2, $3, 'LEDGER', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [id('rwupdate'), organizationId, id('rwpass')]
+      );
+      await client.query(
+        `INSERT INTO "restaurant_wallet_enrollment_links" ("id", "organizationId", "branchId", "tokenHash")
+         VALUES ($1, $2, $3, $4)`,
+        [id('rwlink'), organizationId, branchId, id('wlinkhash')]
+      );
+      await client.query(
+        `INSERT INTO "restaurant_wallet_enrollment_attempts" (
+          "id", "organizationId", "branchId", "identifierKind", "normalizedValue", "otpHash", "expiresAt"
+        ) VALUES ($1, $2, $3, 'EMAIL', $4, $5, CURRENT_TIMESTAMP + interval '10 minutes')`,
+        [id('rwattempt'), organizationId, branchId, `${id('wotp')}@example.test`, id('wotphash')]
+      );
+      await client.query(
+        `INSERT INTO "restaurant_printers" (
+          "id", "organizationId", "branchId", "bridgeId", "name", "connectionKind", "address",
+          "paperWidthMm", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'Receipt', 'TCP', '192.0.2.10:9100', 80, CURRENT_TIMESTAMP)`,
+        [id('rprinter'), organizationId, branchId, deviceId]
+      );
+      await client.query(
+        `INSERT INTO "restaurant_print_bridge_enrollment_codes" (
+          "id", "organizationId", "deviceId", "codeHash", "issuedDeviceSecretHash", "expiresAt"
+        ) VALUES ($1, $2, $3, $4, $5, CURRENT_TIMESTAMP + interval '10 minutes')`,
+        [id('rpbcode'), organizationId, deviceId, id('pbcodehash'), id('pbsecrethash')]
+      );
+      // Pharmacy: branch -> quarantine location; medicine -> presentation -> pack
+      // level -> pack price; sale -> line -> returns -> holds -> verification task.
+      await client.query(
+        `INSERT INTO "pharmacy_branches" (
+          "id", "organizationId", "code", "name", "addressLine", "city", "provinceCode", "updatedAt"
+        ) VALUES ($1, $2, $1, 'Isolation Pharmacy', 'Synthetic', 'Lahore', 'PB', CURRENT_TIMESTAMP)`,
+        [id('phbranch'), organizationId]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_stock_locations" (
+          "id", "organizationId", "branchId", "code", "name", "kind", "updatedAt"
+        ) VALUES ($1, $2, $3, 'QUARANTINE', 'Quarantine', 'QUARANTINE', CURRENT_TIMESTAMP)`,
+        [id('phquarantine'), organizationId, id('phbranch')]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_medicines" ("id", "organizationId", "productName", "productFamily", "updatedAt")
+         VALUES ($1, $2, 'Isolation Medicine', 'PHARMACEUTICAL', CURRENT_TIMESTAMP)`,
+        [id('phmedicine'), organizationId]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_presentations" ("id", "organizationId", "medicineId", "presentation", "updatedAt")
+         VALUES ($1, $2, $3, 'Tablet', CURRENT_TIMESTAMP)`,
+        [id('phpresentation'), organizationId, id('phmedicine')]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_pack_levels" (
+          "id", "organizationId", "presentationId", "versionGroupId", "version", "level",
+          "unitsPerParent", "effectiveFrom"
+        ) VALUES ($1, $2, $3, $1, 1, 'UNIT', 1, TIMESTAMP '2020-01-01')`,
+        [id('phpack'), organizationId, id('phpresentation')]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_pack_prices" (
+          "id", "organizationId", "presentationId", "packLevelId", "mrpMinor", "effectiveFrom",
+          "source", "createdById"
+        ) VALUES ($1, $2, $3, $4, 100, TIMESTAMP '2030-01-01', 'manual', $5)`,
+        [id('phprice'), organizationId, id('phpresentation'), id('phpack'), userId]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_sales" ("id", "organizationId", "branchId", "status", "createdByUserId", "updatedAt")
+         VALUES ($1, $2, $3, 'COMPLETED', $4, CURRENT_TIMESTAMP)`,
+        [id('phsale'), organizationId, id('phbranch'), userId]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_sale_lines" (
+          "id", "organizationId", "branchId", "saleId", "medicineId", "presentationId", "packLevelId",
+          "saleUnit", "quantity", "canonicalUnitsPerSaleUnit", "canonicalUnits", "unitPriceMinor",
+          "proRataCeilingMinor", "unitCostMinor", "idempotencyKey"
+        ) VALUES ($1, $2, $3, $4, $5, $6, $7, 'PACK', 2, 1, 2, 100, 100, 50, $1)`,
+        [
+          id('phline'),
+          organizationId,
+          id('phbranch'),
+          id('phsale'),
+          id('phmedicine'),
+          id('phpresentation'),
+          id('phpack'),
+        ]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_sale_returns" ("id", "organizationId", "branchId", "originalSaleId", "actorId", "reason")
+         VALUES ($1, $4, $5, $6, $7, 'Isolation'), ($2, $4, $5, $6, $7, 'Isolation'),
+                ($3, $4, $5, $6, $7, 'Isolation')`,
+        [id('phr1'), id('phr2'), id('phr3'), organizationId, id('phbranch'), id('phsale'), userId]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_unidentified_return_holds" (
+          "id", "organizationId", "branchId", "returnId", "saleLineId", "quarantineLocationId",
+          "canonicalUnits", "integrityDecision", "actorId"
+        ) VALUES ($1, $3, $4, $5, $7, $8, 1, 'QUARANTINE', $9),
+                 ($2, $3, $4, $6, $7, $8, 1, 'QUARANTINE', $9)`,
+        [
+          id('phh1'),
+          id('phh2'),
+          organizationId,
+          id('phbranch'),
+          id('phr1'),
+          id('phr2'),
+          id('phline'),
+          id('phquarantine'),
+          userId,
+        ]
+      );
+      await client.query(
+        `INSERT INTO "pharmacy_return_verification_tasks" (
+          "id", "organizationId", "branchId", "holdingId", "requestedByUserId"
+        ) VALUES ($1, $2, $3, $4, $5)`,
+        [id('phtask'), organizationId, id('phbranch'), id('phh1'), userId]
+      );
+    }
+    // These BEFORE INSERT validators read their parents as the invoker, through
+    // RLS, so from a tenant scope they reject a foreign row before the policy's
+    // WITH CHECK is evaluated and would mask a loosened policy. Disable them in
+    // this rolled-back transaction so the 42501 probes below test WITH CHECK
+    // itself; the append-only UPDATE/DELETE triggers stay enabled.
+    for (const [table, trigger] of [
+      ['pharmacy_unidentified_return_holds', 'pharmacy_return_holding_quantity_guard'],
+      ['pharmacy_unidentified_return_holds', 'pharmacy_unidentified_return_hold_validate'],
+      ['pharmacy_pack_prices', 'pharmacy_price_identity'],
+    ] as const) {
+      await client.query(`ALTER TABLE "${table}" DISABLE TRIGGER "${trigger}"`);
+    }
+
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
     await client.query(`SELECT set_config('app.is_platform_admin', 'false', true)`);
     await client.query(`SELECT set_config('app.current_organization_id', 'org_devfathom', true)`);
@@ -1314,6 +1476,24 @@ async function main() {
       ['restaurant_insight_loyalty_liabilities', insightLiabilityA, insightLiabilityB],
       ['restaurant_insight_item_mix_rollups', insightItemA, insightItemB],
       ['restaurant_labour_cost_facts', labourFactA, labourFactB],
+      // Consolidation merge. The pharmacy holds and tasks are append-only and
+      // pack prices delete-guarded by triggers; RLS hides tenant B's row first,
+      // so those triggers never fire here.
+      ...(
+        [
+          ['restaurant_wallet_tenant_config', 'rwcfg'],
+          ['restaurant_wallet_passes', 'rwpass'],
+          ['restaurant_wallet_pass_registrations', 'rwreg'],
+          ['restaurant_wallet_pass_updates', 'rwupdate'],
+          ['restaurant_wallet_enrollment_links', 'rwlink'],
+          ['restaurant_wallet_enrollment_attempts', 'rwattempt'],
+          ['restaurant_printers', 'rprinter'],
+          ['restaurant_print_bridge_enrollment_codes', 'rpbcode'],
+          ['pharmacy_unidentified_return_holds', 'phh1'],
+          ['pharmacy_return_verification_tasks', 'phtask'],
+          ['pharmacy_pack_prices', 'phprice'],
+        ] as const
+      ).map(([table, name]) => [table, mirrorId(name, 'a'), mirrorId(name, 'b')] as const),
     ] as const) {
       const visible = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
@@ -1576,6 +1756,101 @@ async function main() {
           "id", "organizationId", "displayName", "updatedAt"
         ) VALUES ($1, $2, 'Escape Customer', CURRENT_TIMESTAMP)`,
         [`deny_customer_${suffix}`, organizationB],
+      ],
+      // Consolidation merge: wallet, printer and pharmacy tables. Parents are real
+      // org-B rows and unique keys are fresh (a GOOGLE pass, a SENT update, an
+      // inactive link, tenant B's spare return r3 and hold h2), so a loosened
+      // WITH CHECK lets the insert succeed. The one-per-organization wallet config
+      // can only collide; WITH CHECK runs before unique checks, so a 23505 there
+      // still means the policy let the row through.
+      [
+        `INSERT INTO "restaurant_wallet_tenant_config" (
+          "id", "organizationId", "programDisplayName", "googleClassSuffix", "updatedAt"
+        ) VALUES ($1, $2, 'Escape', $3, CURRENT_TIMESTAMP)`,
+        [`deny_wcfg_${suffix}`, organizationB, `deny-wgc-${suffix}`],
+      ],
+      [
+        `INSERT INTO "restaurant_wallet_passes" (
+          "id", "organizationId", "customerId", "loyaltyAccountId", "platform", "serialNumber", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'GOOGLE', $5, CURRENT_TIMESTAMP)`,
+        [`deny_wpass_${suffix}`, organizationB, customerB, loyaltyAccountB, `deny-ws-${suffix}`],
+      ],
+      [
+        `INSERT INTO "restaurant_wallet_pass_registrations" (
+          "id", "organizationId", "passId", "deviceLibraryIdentifier", "pushToken", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'escape', CURRENT_TIMESTAMP)`,
+        [`deny_wreg_${suffix}`, organizationB, mirrorId('rwpass', 'b'), `deny-wd-${suffix}`],
+      ],
+      [
+        `INSERT INTO "restaurant_wallet_pass_updates" (
+          "id", "organizationId", "passId", "reason", "status", "nextAttemptAt", "updatedAt"
+        ) VALUES ($1, $2, $3, 'LEDGER', 'SENT', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [`deny_wupdate_${suffix}`, organizationB, mirrorId('rwpass', 'b')],
+      ],
+      [
+        `INSERT INTO "restaurant_wallet_enrollment_links" (
+          "id", "organizationId", "branchId", "tokenHash", "active"
+        ) VALUES ($1, $2, $3, $4, false)`,
+        [`deny_wlink_${suffix}`, organizationB, branchB, `deny-wl-${suffix}`],
+      ],
+      [
+        `INSERT INTO "restaurant_wallet_enrollment_attempts" (
+          "id", "organizationId", "branchId", "identifierKind", "normalizedValue", "otpHash", "expiresAt"
+        ) VALUES ($1, $2, $3, 'EMAIL', 'escape@example.test', 'escape', CURRENT_TIMESTAMP)`,
+        [`deny_wattempt_${suffix}`, organizationB, branchB],
+      ],
+      [
+        `INSERT INTO "restaurant_printers" (
+          "id", "organizationId", "branchId", "bridgeId", "name", "connectionKind", "address",
+          "paperWidthMm", "updatedAt"
+        ) VALUES ($1, $2, $3, $4, 'Escape', 'TCP', '192.0.2.99:9100', 58, CURRENT_TIMESTAMP)`,
+        [`deny_printer_${suffix}`, organizationB, branchB, deviceB],
+      ],
+      [
+        `INSERT INTO "restaurant_print_bridge_enrollment_codes" (
+          "id", "organizationId", "deviceId", "codeHash", "issuedDeviceSecretHash", "expiresAt"
+        ) VALUES ($1, $2, $3, $4, 'escape', CURRENT_TIMESTAMP)`,
+        [`deny_pbcode_${suffix}`, organizationB, deviceB, `deny-pbc-${suffix}`],
+      ],
+      [
+        `INSERT INTO "pharmacy_unidentified_return_holds" (
+          "id", "organizationId", "branchId", "returnId", "saleLineId", "quarantineLocationId",
+          "canonicalUnits", "integrityDecision", "actorId"
+        ) VALUES ($1, $2, $3, $4, $5, $6, 1, 'QUARANTINE', $7)`,
+        [
+          `deny_phhold_${suffix}`,
+          organizationB,
+          mirrorId('phbranch', 'b'),
+          mirrorId('phr3', 'b'),
+          mirrorId('phline', 'b'),
+          mirrorId('phquarantine', 'b'),
+          userB,
+        ],
+      ],
+      [
+        `INSERT INTO "pharmacy_return_verification_tasks" (
+          "id", "organizationId", "branchId", "holdingId", "requestedByUserId"
+        ) VALUES ($1, $2, $3, $4, $5)`,
+        [
+          `deny_phtask_${suffix}`,
+          organizationB,
+          mirrorId('phbranch', 'b'),
+          mirrorId('phh2', 'b'),
+          userB,
+        ],
+      ],
+      [
+        `INSERT INTO "pharmacy_pack_prices" (
+          "id", "organizationId", "presentationId", "packLevelId", "mrpMinor", "effectiveFrom",
+          "source", "createdById"
+        ) VALUES ($1, $2, $3, $4, 100, TIMESTAMP '2031-01-01', 'manual', $5)`,
+        [
+          `deny_phprice_${suffix}`,
+          organizationB,
+          mirrorId('phpresentation', 'b'),
+          mirrorId('phpack', 'b'),
+          userB,
+        ],
       ],
     ];
     for (const [sql, values] of restaurantWriteDenied) {
