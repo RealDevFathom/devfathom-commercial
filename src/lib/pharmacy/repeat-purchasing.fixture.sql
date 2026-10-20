@@ -44,6 +44,9 @@ INSERT INTO pharmacy_refunds(id,"organizationId","branchId","saleId","originalTe
 SELECT 'refund-'||i,'org_a','b1','a','t',1,'2026-01-10','Synthetic','synthetic','2026-01-10' FROM generate_series(1,1201) i;
 INSERT INTO pharmacy_sale_returns(id,"organizationId","branchId","originalSaleId","actorId",reason,"createdAt")
 SELECT 'return-'||i,'org_a','b1','a','synthetic','Synthetic','2026-01-10' FROM generate_series(1,1201) i;
+-- The return-lot guard (20261020000000) caps a lot's returns at what the line allocated from it.
+INSERT INTO pharmacy_sale_line_allocations(id,"organizationId","branchId","saleLineId","inventoryLotId","stockLocationId","canonicalUnits","stockMovementId")
+VALUES ('a-line-allocation','org_a','b1','a-line','b1','synthetic',2402,'synthetic-allocation');
 INSERT INTO pharmacy_sale_return_lines(id,"organizationId","branchId","returnId","saleLineId","inventoryLotId","stockLocationId","canonicalUnits","integrityDecision","stockMovementId","createdAt")
 SELECT 'return-line-'||i,'org_a','b1','return-'||i,'a-line','b1','synthetic',1,'RESTOCK','synthetic-'||i,'2026-01-10' FROM generate_series(1,1201) i;
 -- Small semantic matrix, separate from the large transfer/history fixtures.
@@ -90,6 +93,8 @@ INSERT INTO pharmacy_refunds(id,"organizationId","branchId","saleId","originalTe
 SELECT 'f-'||id,'org_a','semantics','case-'||id,'t-'||id,refunded,refund_at::date,'Synthetic','synthetic',refund_at FROM repeat_cases WHERE refunded>0;
 INSERT INTO pharmacy_sale_returns(id,"organizationId","branchId","originalSaleId","actorId",reason,"createdAt")
 SELECT 'r-'||id,'org_a','semantics','case-'||id,'synthetic','Synthetic',header_at FROM repeat_cases WHERE returned>0;
+INSERT INTO pharmacy_sale_line_allocations(id,"organizationId","branchId","saleLineId","inventoryLotId","stockLocationId","canonicalUnits","stockMovementId")
+SELECT 'alloc-'||id,'org_a','semantics','case-'||id||'-line','semantics','synthetic',2,'sm-alloc-'||id FROM repeat_cases WHERE returned>0;
 INSERT INTO pharmacy_sale_return_lines(id,"organizationId","branchId","returnId","saleLineId","inventoryLotId","stockLocationId","canonicalUnits","integrityDecision","stockMovementId","createdAt")
 SELECT 'rl-'||id,'org_a','semantics','r-'||id,'case-'||id||'-line','semantics','synthetic',returned,'RESTOCK','sm-'||id,return_at FROM repeat_cases WHERE returned>0;
 COMMIT;
