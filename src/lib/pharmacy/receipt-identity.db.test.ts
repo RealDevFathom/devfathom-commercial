@@ -1,10 +1,9 @@
 /** Run only against a NEW disposable wha1364_* database, never an existing tenant. */
 import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
-import { PrismaClient } from '@/generated/prisma/client';
-import { PrismaPg } from '@prisma/adapter-pg';
+import { db } from '@/lib/db';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { addSaleLine, createSale, changeSaleStatus } from './sales';
+import { addSaleLine, createSale, changeSaleStatus, returnSaleLine } from './sales';
 import { receiveLot } from './stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender } from './settlement';
 import { readCounterReceipt } from './counter';
@@ -16,7 +15,10 @@ if (url && !new URL(url).pathname.startsWith('/wha1364_')) {
     'New isolated WHA1364_RECEIPT_TEST_DATABASE_URL required; no skipped DB acceptance'
   );
 }
-const client = url ? new PrismaClient({ adapter: new PrismaPg({ connectionString: url }) }) : null;
+// The app client, not a bare PrismaPg one: only it decodes the void result of the services'
+// `SELECT pg_advisory_xact_lock(...)`. It reads DATABASE_URL lazily, on first use.
+if (url) process.env.DATABASE_URL = url;
+const client = url ? db : null;
 const describeDatabase = url ? describe : describe.skip;
 const org = `org_${randomUUID()}`;
 const branch = `branch_${randomUUID()}`;
@@ -41,6 +43,16 @@ beforeAll(async () => {
     'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
   );
   expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
+  // Integrated tip (20261012120000_visibility_context_anchors): tenant rows must reference an
+  // existing organization, so anchor this suite's synthetic tenant first.
+  await client.$transaction(async (tx) => {
+    await tx.$queryRawUnsafe("SELECT set_config('app.is_platform_admin', 'true', true)");
+    await tx.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       VALUES ($1, $1, $1, $1, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now())`,
+      org
+    );
+  });
   await transaction((db) =>
     db.pharmacyBranch.create({
       data: {
@@ -193,6 +205,20 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
           data: { batchNumber: `Renamed ${batch.id}`, expiresAt: new Date('2040-01-01') },
         });
       const tender = await db.pharmacyTender.findFirstOrThrow({ where: { saleId: f.sale.id } });
+      // A refund on a COMPLETED sale is capped by the value of goods returned, so goods come
+      // back first: 2 of the 10 units return 190 of the 950 net.
+      const allocation = await db.pharmacySaleLineAllocation.findFirstOrThrow({
+        where: { saleLineId: before.lines[0]!.saleLineId, canonicalUnits: 3 },
+      });
+      await returnSaleLine(db, scope, {
+        saleLineId: allocation.saleLineId,
+        lotId: allocation.inventoryLotId,
+        canonicalUnits: 2,
+        disposition: 'RESTOCK',
+        reason: 'test original sale distinction',
+        integrityDecision: 'Sealed strip',
+        idempotencyKey: randomUUID(),
+      });
       await refundPharmacyTender(db, scope, {
         originalTenderId: tender.id,
         deviceId: f.input.deviceId,
