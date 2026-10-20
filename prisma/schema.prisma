@@ -14433,6 +14433,7 @@ model HotelProperty {
   roomStatusEvents HotelRoomStatusEvent[]
   roomBlocks       HotelRoomBlock[]
   mealPlans        HotelMealPlan[]
+  functionSpaces   HotelFunctionSpace[]
 
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
@@ -14820,6 +14821,110 @@ model HotelMealPlan {
   @@unique([organizationId, branchId, code], map: "hotel_meal_plans_org_branch_code_key")
   @@index([organizationId, branchId, active], map: "hotel_meal_plans_org_branch_active_idx")
   @@map("hotel_meal_plans")
+}
+
+/// PROP-07 / 05 §1.7. What holds a function space's time. `HOLD` is a tentative
+/// event's claim (05 §2: TENTATIVE holds functions with expiry); `FUNCTION` is a
+/// confirmed function. Both block the space, because a space double-sold to a
+/// tentative wedding and a confirmed one is the failure invariant 25 exists to
+/// prevent. The banquet lane (H6) owns what creates each kind.
+enum HotelSpaceBookingKind {
+  HOLD
+  FUNCTION
+}
+
+/// PROP-07 (`05-data-model` §1.1, PRD §5.5 / §5.20). A sellable function space —
+/// a hall, a lawn, a boardroom — with the layouts it can be set in, what it costs
+/// and how long it takes to turn around.
+///
+/// `layouts` is `[{ layout, capacity }]` and `pricing` is an object of PKR **minor
+/// unit** amounts; both are validated in the database by the immutable helpers the
+/// creating migration installs, so the shape is a constraint rather than a comment.
+///
+/// `setupMinutes` / `teardownMinutes` are the turnaround buffers PROP-07 requires.
+/// They are properties of the *space*, not of a booking, which is why the buffered
+/// range that invariant 25's exclusion constraint arbitrates is maintained on
+/// `HotelSpaceBooking` by trigger rather than generated inline (see that model).
+model HotelFunctionSpace {
+  id             String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  /// The property this space belongs to — `hotel_properties.branchId`.
+  branchId       String
+  name           String
+  /// Bilingual name (05: `name_ur`). Null until an operator supplies one.
+  nameUr         String?
+  /// `[{ layout: 'Theatre', capacity: 300 }, …]`. At least one, because a space
+  /// with no layout has no capacity and cannot be sold — so no column default:
+  /// `[]` would fail the database CHECK anyway.
+  layouts        Json
+  /// PROP-07 pricing. Every money member is PKR minor units, never a decimal.
+  pricing        Json    @default("{}")
+  /// Turnaround buffers in minutes, applied on both sides of every booking.
+  setupMinutes    Int     @default(0)
+  teardownMinutes Int     @default(0)
+  active          Boolean @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  property HotelProperty       @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_function_spaces_org_branch_fkey")
+  bookings HotelSpaceBooking[]
+
+  @@unique([organizationId, id], map: "hotel_function_spaces_org_id_key")
+  @@unique([organizationId, branchId, id], map: "hotel_function_spaces_org_branch_id_key")
+  @@unique([organizationId, branchId, name], map: "hotel_function_spaces_org_branch_name_key")
+  @@index([organizationId, branchId, active], map: "hotel_function_spaces_org_branch_active_idx")
+  @@map("hotel_function_spaces")
+}
+
+/// PROP-07 / invariant 25 — the booking skeleton that makes a function space
+/// exclusive. H6 owns events and the diary; this table owns only the claim on a
+/// space's time, so exclusivity is settled once, in the database, before any
+/// banquet code exists to get it wrong.
+///
+/// **The buffered range is trigger-maintained, not generated.** A generated column
+/// cannot read another table, and the buffers live on `hotel_function_spaces`; a
+/// `BEFORE INSERT OR UPDATE` trigger therefore reads the space's setup/teardown and
+/// writes `bufferedRange = tstzrange(startsAt − setup, endsAt + teardown, '[)')`,
+/// and an `AFTER UPDATE` trigger on the space recomputes every one of its bookings
+/// when a buffer changes — so widening a buffer into a collision is refused rather
+/// than silently leaving the constraint stale.
+///
+/// Prisma has no range type, so `bufferedRange` is `Unsupported` and REQUIRED, as
+/// the column is `NOT NULL`. A required `Unsupported` column removes `create`,
+/// `createMany` and `upsert` from this model's client API on purpose: every
+/// booking is inserted in SQL (the router's hold, the DB suite, the verifier)
+/// with the id the database generates, and only the trigger ever fills the
+/// range. Reads go through the client; `bufferedRange` is not selectable there.
+model HotelSpaceBooking {
+  id             String @id @default(dbgenerated("(gen_random_uuid())::text"))
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  spaceId        String
+  /// Absolute instants — a booking spans a property's timezone rules, so these are
+  /// `timestamptz` and the exclusion constraint compares them as such.
+  startsAt DateTime              @db.Timestamptz(3)
+  endsAt   DateTime              @db.Timestamptz(3)
+  kind     HotelSpaceBookingKind
+  /// What this claim is for, as the owning lane knows it (`{ eventId, … }`); a
+  /// hold placed from the spaces page carries `{ label }`. Deliberately not a
+  /// foreign key: H6's tables do not exist yet.
+  ref       Json    @default("{}")
+  /// The platform user who made the claim. Nullable for system-made holds.
+  createdBy String?
+
+  /// Trigger-maintained. See the model comment: never written by application code.
+  bufferedRange Unsupported("tstzrange")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  /// Pinned to the space AND its property: a booking's branch is its space's branch.
+  space HotelFunctionSpace @relation(fields: [organizationId, branchId, spaceId], references: [organizationId, branchId, id], onDelete: Restrict, map: "hotel_space_bookings_space_fkey")
+
+  @@index([organizationId, spaceId, startsAt], map: "hotel_space_bookings_org_space_start_idx")
+  @@index([organizationId, branchId, startsAt], map: "hotel_space_bookings_org_branch_start_idx")
+  @@map("hotel_space_bookings")
 }
 
 /// One-use bridge enrollment; the hash snapshot invalidates codes after rotation.

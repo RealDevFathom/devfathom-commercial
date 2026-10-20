@@ -306,6 +306,7 @@ const PHARMACY_CUSTOMER_ORDERING_TABLES = [
 const HOSPITALITY_TABLES = [
   'hotel_beds',
   'hotel_extras',
+  'hotel_function_spaces',
   'hotel_meal_plans',
   'hotel_properties',
   'hotel_property_assignments',
@@ -313,6 +314,7 @@ const HOSPITALITY_TABLES = [
   'hotel_room_status_events',
   'hotel_room_types',
   'hotel_rooms',
+  'hotel_space_bookings',
 ] as const;
 
 const M3_COLUMNS = {

@@ -61,7 +61,7 @@ async function expectDatabaseError(code: string, run: () => Promise<unknown>, co
 // DELETE policy decides which rows it reaches, and it must reach exactly the
 // rows the current scope can see. It runs inside a savepoint that is rolled
 // back, so the scope's own rows survive for the probes that follow.
-async function expectBlindWriteScoped(table: string, sql: string) {
+async function expectBlindWriteScoped(table: string, sql: string, before: string[] = []) {
   const visible = await client.query<{ count: number }>(
     `SELECT COUNT(*)::int AS count FROM "${table}"`
   );
@@ -71,6 +71,9 @@ async function expectBlindWriteScoped(table: string, sql: string) {
   }
   await client.query('SAVEPOINT blind_write');
   try {
+    // A RESTRICT child the probe table holds has to go first, inside the same
+    // rolled-back savepoint; the count under probe is still the parent's.
+    for (const statement of before) await client.query(statement);
     const written = await client.query(sql);
     assertEqual(
       written.rowCount,
@@ -2262,6 +2265,39 @@ async function main() {
         hotelPropertyB,
       ]
     );
+    // H1-05 — one function space per tenant (30 minutes of setup, 15 of
+    // teardown) and one booking of it, written in SQL as every booking is; the
+    // BEFORE trigger fills the buffered range the exclusion constraint judges.
+    const hotelSpaceA = `hotel_space_a_${suffix}`;
+    const hotelSpaceB = `hotel_space_b_${suffix}`;
+    await client.query(
+      `INSERT INTO "hotel_function_spaces" (
+        "id", "organizationId", "branchId", "name", "layouts", "setupMinutes", "teardownMinutes", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'Crystal Hall', $3::jsonb, 30, 15, CURRENT_TIMESTAMP),
+               ($4, $5, $6, 'Crystal Hall', $3::jsonb, 30, 15, CURRENT_TIMESTAMP)`,
+      [
+        hotelSpaceA,
+        hotelPropertyA,
+        JSON.stringify([{ layout: 'Theatre', capacity: 300 }]),
+        hotelSpaceB,
+        organizationB,
+        hotelPropertyB,
+      ]
+    );
+    const hotelBookings = await client.query<{ id: string; organizationId: string }>(
+      `INSERT INTO "hotel_space_bookings" (
+        "organizationId", "branchId", "spaceId", "startsAt", "endsAt", "kind", "ref", "createdBy", "updatedAt"
+      ) VALUES ('org_devfathom', $1, $2, TIMESTAMPTZ '2030-01-01 10:00:00+00', TIMESTAMPTZ '2030-01-01 11:00:00+00', 'FUNCTION', '{"label":"Isolation seed"}', $3, CURRENT_TIMESTAMP),
+               ($4, $5, $6, TIMESTAMPTZ '2030-01-01 10:00:00+00', TIMESTAMPTZ '2030-01-01 11:00:00+00', 'FUNCTION', '{"label":"Isolation seed"}', $7, CURRENT_TIMESTAMP)
+       RETURNING "id", "organizationId"`,
+      [hotelPropertyA, hotelSpaceA, userA, organizationB, hotelPropertyB, hotelSpaceB, userB]
+    );
+    const hotelBookingA = hotelBookings.rows.find(
+      (row) => row.organizationId === 'org_devfathom'
+    )!.id;
+    const hotelBookingB = hotelBookings.rows.find(
+      (row) => row.organizationId === organizationB
+    )!.id;
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
 
     // H1-03 — the five inventory tables, as the acting assigned user. Read,
@@ -2595,6 +2631,178 @@ async function main() {
     );
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     for (const [table, idA, idB] of hotelMealPlanRows) {
+      const both = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(both.rows[0]?.count, 2, `platform scope must read both tenants' "${table}" rows`);
+    }
+    await client.query(
+      `SELECT set_config('app.is_platform_admin', 'false', true),
+              set_config('app.current_user_id', '', true)`
+    );
+
+    // H1-05 — function spaces and the bookings that make them exclusive. Read,
+    // UPDATE and DELETE isolation; blind writes (a space's RESTRICT bookings go
+    // first inside the savepoint); the inserts that fail closed — an org-B space
+    // (42501), an org-B booking (P0001 from the BEFORE trigger, which cannot see
+    // the foreign space; 42501 once that guard is switched off), a same-tenant
+    // space on the other tenant's property and a booking naming its own space
+    // under another property (23503, the pins); then invariant 25: an overlap
+    // and a buffer-only collision both 23P01, a gap of teardown plus setup
+    // admitted, and widening a buffer into a collision refused; then platform
+    // reads of both tenants' rows.
+    await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [userA]);
+    const hotelSpaceRows: Array<[table: string, idA: string, idB: string]> = [
+      ['hotel_function_spaces', hotelSpaceA, hotelSpaceB],
+      ['hotel_space_bookings', hotelBookingA, hotelBookingB],
+    ];
+    for (const [table, idA, idB] of hotelSpaceRows) {
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(visible.rows[0]?.count, 1, `tenant A must only see its own "${table}" row`);
+      const updated = await client.query(
+        `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+        [idB]
+      );
+      assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
+      assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
+    await expectBlindWriteScoped(
+      'hotel_function_spaces',
+      `UPDATE "hotel_function_spaces" SET "updatedAt" = CURRENT_TIMESTAMP`
+    );
+    await expectBlindWriteScoped('hotel_function_spaces', `DELETE FROM "hotel_function_spaces"`, [
+      `DELETE FROM "hotel_space_bookings"`,
+    ]);
+    await expectBlindWriteScoped(
+      'hotel_space_bookings',
+      `UPDATE "hotel_space_bookings" SET "ref" = '{"label":"Blind probe"}'`
+    );
+    await expectBlindWriteScoped('hotel_space_bookings', `DELETE FROM "hotel_space_bookings"`);
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_function_spaces" (
+            "id", "organizationId", "branchId", "name", "layouts", "updatedAt"
+          ) VALUES ($1, $2, $3, 'Escape', '[{"layout":"Theatre","capacity":1}]'::jsonb, CURRENT_TIMESTAMP)`,
+          [`hotel_space_escape_${suffix}`, organizationB, hotelPropertyB]
+        ),
+      'tenant A inserting an org-B "hotel_function_spaces" row'
+    );
+    await expectDatabaseError(
+      '23503',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_function_spaces" (
+            "id", "organizationId", "branchId", "name", "layouts", "updatedAt"
+          ) VALUES ($1, 'org_devfathom', $2, 'Borrowed', '[{"layout":"Theatre","capacity":1}]'::jsonb, CURRENT_TIMESTAMP)`,
+          [`hotel_space_borrowed_${suffix}`, hotelPropertyB]
+        ),
+      'tenant A hanging a "hotel_function_spaces" row off tenant B\'s property'
+    );
+    // A booking carries its own buffered range here, so that with the trigger
+    // disabled below the row reaches the policy rather than a NOT NULL check.
+    const deniedBookingInsert = () =>
+      client.query(
+        `INSERT INTO "hotel_space_bookings" (
+          "organizationId", "branchId", "spaceId", "startsAt", "endsAt", "kind", "bufferedRange", "updatedAt"
+        ) VALUES ($1, $2, $3, TIMESTAMPTZ '2030-02-01 10:00:00+00', TIMESTAMPTZ '2030-02-01 11:00:00+00', 'HOLD',
+                  tstzrange(TIMESTAMPTZ '2030-02-01 10:00:00+00', TIMESTAMPTZ '2030-02-01 11:00:00+00', '[)'), CURRENT_TIMESTAMP)`,
+        [organizationB, hotelPropertyB, hotelSpaceB]
+      );
+    await expectDatabaseError(
+      'P0001',
+      deniedBookingInsert,
+      'guarded tenant A insert of an org-B "hotel_space_bookings" row'
+    );
+    await expectDatabaseError(
+      'P0001',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_space_bookings" (
+            "organizationId", "branchId", "spaceId", "startsAt", "endsAt", "kind", "updatedAt"
+          ) VALUES ('org_devfathom', $1, $2, TIMESTAMPTZ '2030-02-01 10:00:00+00', TIMESTAMPTZ '2030-02-01 11:00:00+00', 'HOLD', CURRENT_TIMESTAMP)`,
+          [hotelPropertyA, hotelSpaceB]
+        ),
+      "tenant A booking tenant B's space under its own property"
+    );
+    await expectDatabaseError(
+      '23503',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_space_bookings" (
+            "organizationId", "branchId", "spaceId", "startsAt", "endsAt", "kind", "updatedAt"
+          ) VALUES ('org_devfathom', $1, $2, TIMESTAMPTZ '2030-02-01 10:00:00+00', TIMESTAMPTZ '2030-02-01 11:00:00+00', 'HOLD', CURRENT_TIMESTAMP)`,
+          [hotelPropertyA2, hotelSpaceA]
+        ),
+      'tenant A booking its own space under another of its properties'
+    );
+    await client.query('RESET ROLE');
+    await client.query(
+      `ALTER TABLE "hotel_space_bookings" DISABLE TRIGGER "hotel_space_bookings_buffered_range"`
+    );
+    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    await expectDatabaseError(
+      '42501',
+      deniedBookingInsert,
+      'tenant A inserting an org-B "hotel_space_bookings" row'
+    );
+    await client.query('RESET ROLE');
+    await client.query(
+      `ALTER TABLE "hotel_space_bookings" ENABLE TRIGGER "hotel_space_bookings_buffered_range"`
+    );
+    await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
+    // Invariant 25. The seeded booking holds 10:00–11:00 with 30 minutes of
+    // setup and 15 of teardown, so its range is [09:30, 11:15).
+    const bookSpaceA = (startsAt: string, endsAt: string) =>
+      client.query(
+        `INSERT INTO "hotel_space_bookings" (
+          "organizationId", "branchId", "spaceId", "startsAt", "endsAt", "kind", "updatedAt"
+        ) VALUES ('org_devfathom', $1, $2, $3::timestamptz, $4::timestamptz, 'HOLD', CURRENT_TIMESTAMP)`,
+        [hotelPropertyA, hotelSpaceA, startsAt, endsAt]
+      );
+    await expectDatabaseError(
+      '23P01',
+      () => bookSpaceA('2030-01-01 10:30:00+00', '2030-01-01 11:30:00+00'),
+      'a booking overlapping another in the same space'
+    );
+    await expectDatabaseError(
+      '23P01',
+      () => bookSpaceA('2030-01-01 11:00:00+00', '2030-01-01 12:00:00+00'),
+      'a back-to-back booking that the buffers alone collide'
+    );
+    await client.query('SAVEPOINT hotel_space_gap');
+    try {
+      const admitted = await bookSpaceA('2030-01-01 11:45:00+00', '2030-01-01 12:45:00+00');
+      assertEqual(
+        admitted.rowCount,
+        1,
+        'a booking leaving exactly teardown plus setup must be admitted'
+      );
+      await expectDatabaseError(
+        '23P01',
+        () =>
+          client.query(`UPDATE "hotel_function_spaces" SET "setupMinutes" = 31 WHERE "id" = $1`, [
+            hotelSpaceA,
+          ]),
+        'widening a buffer into a collision between existing bookings'
+      );
+      const narrowed = await client.query(
+        `UPDATE "hotel_function_spaces" SET "setupMinutes" = 10 WHERE "id" = $1`,
+        [hotelSpaceA]
+      );
+      assertEqual(narrowed.rowCount, 1, 'narrowing a buffer must be admitted');
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT hotel_space_gap');
+      await client.query('RELEASE SAVEPOINT hotel_space_gap');
+    }
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    for (const [table, idA, idB] of hotelSpaceRows) {
       const both = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
         [idA, idB]
@@ -3211,7 +3419,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, hospitality property/assignment/catalog/inventory/meal-plan probes, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, hospitality property/assignment/catalog/inventory/meal-plan/function-space probes, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);
