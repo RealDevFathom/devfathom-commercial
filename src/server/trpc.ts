@@ -200,15 +200,27 @@ const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
 
+/**
+ * The entitlement refusal for `moduleKey`, worded with the catalog name. Used by
+ * the procedure-level gate below and by resolvers whose licence depends on the
+ * input (e.g. `team.getById`: reading your own profile is account self-service,
+ * reading another member is the licensed team directory).
+ */
+export function assertModuleLicensed(
+  ctx: Pick<TRPCContext, 'entitlements'>,
+  moduleKey: string
+): void {
+  if (hasModule(ctx.entitlements, moduleKey)) return;
+  const moduleName = ctx.entitlements.modules.find((module) => module.key === moduleKey)?.name;
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: `The ${moduleName ?? moduleKey} module is not enabled for this organization.`,
+  });
+}
+
 const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
   const moduleKey = moduleForProcedure(path);
-  if (moduleKey && !hasModule(ctx.entitlements, moduleKey)) {
-    const moduleName = ctx.entitlements.modules.find((module) => module.key === moduleKey)?.name;
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: `The ${moduleName ?? moduleKey} module is not enabled for this organization.`,
-    });
-  }
+  if (moduleKey) assertModuleLicensed(ctx, moduleKey);
   return next();
 });
 

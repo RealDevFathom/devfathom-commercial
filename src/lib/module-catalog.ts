@@ -241,9 +241,32 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   hotelProperty: 'hotel-core',
 };
 
+/**
+ * Procedures that act only on the caller's own account: profile, password,
+ * sessions and notification preferences, i.e. everything the Settings page
+ * offers every signed-in member. The account is part of every workspace in
+ * every vertical (the `/settings` route is not licensed), so these are never
+ * gated on a module even though they live in the `team` namespace that the
+ * `hr` module otherwise licenses. `team.getById` is listed because the
+ * Settings profile card reads the caller through it; its resolver re-applies
+ * the `hr` licence for any member other than the caller.
+ */
+export const ACCOUNT_PROCEDURES: ReadonlySet<string> = new Set([
+  'team.getById',
+  'team.updateProfile',
+  'team.changePassword',
+  'team.signOutEverywhere',
+  'team.mySignIns',
+  'team.getNotificationPrefs',
+  'team.updateNotificationPrefs',
+]);
+
 export function moduleForProcedure(path: string): string | null {
+  if (ACCOUNT_PROCEDURES.has(path)) return null;
   if (
-    /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(path)
+    /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
+      path
+    )
   ) {
     return 'pharmacy-reports';
   }

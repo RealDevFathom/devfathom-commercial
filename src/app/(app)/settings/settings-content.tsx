@@ -376,21 +376,25 @@ function AppearanceSection() {
   );
 }
 
-function ProfileSection() {
+export function ProfileSection() {
   const { data: session } = useSession();
   const utils = trpc.useUtils();
-  const { data: profile } = trpc.team.getById.useQuery(
-    { id: session?.user?.id ?? '' },
-    { enabled: !!session?.user?.id }
-  );
+  const {
+    data: profile,
+    error: profileError,
+    isLoading: profileLoading,
+  } = trpc.team.getById.useQuery({ id: session?.user?.id ?? '' }, { enabled: !!session?.user?.id });
 
   const updateProfile = trpc.team.updateProfile.useMutation({
     onSuccess: () => {
       utils.team.getById.invalidate();
       setEditing(false);
+      setError('');
       setSuccess(true);
       setTimeout(() => setSuccess(false), 2000);
     },
+    // A refused save stays visible on the open form; it is never a silent no-op.
+    onError: (err) => setError(err.message),
   });
 
   const [editing, setEditing] = useState(false);
@@ -400,13 +404,18 @@ function ProfileSection() {
   const [skillInput, setSkillInput] = useState('');
   const [skills, setSkills] = useState<string[]>([]);
   const [success, setSuccess] = useState(false);
+  const [error, setError] = useState('');
 
+  // Edit opens only once the profile has loaded; until then the button says why
+  // it is unavailable instead of doing nothing.
+  const canEdit = Boolean(profile);
   const startEdit = () => {
     if (!profile) return;
     setName(profile.name);
     setPhone(profile.phone || '');
     setBio(profile.bio || '');
     setSkills(profile.skills);
+    setError('');
     setEditing(true);
   };
 
@@ -432,7 +441,16 @@ function ProfileSection() {
           {!editing && (
             <button
               onClick={startEdit}
-              className="text-xs font-medium text-primary hover:underline"
+              disabled={!canEdit}
+              aria-disabled={!canEdit}
+              title={
+                profileError
+                  ? 'Your profile could not be loaded.'
+                  : profileLoading
+                    ? 'Loading your profile…'
+                    : undefined
+              }
+              className="text-xs font-medium text-primary hover:underline disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:no-underline"
             >
               Edit
             </button>
@@ -440,6 +458,14 @@ function ProfileSection() {
         </div>
       </CardHeader>
       <CardContent>
+        {profileError && !editing && (
+          <p
+            role="alert"
+            className="mb-3 rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+          >
+            Your profile could not be loaded, so it cannot be edited yet. {profileError.message}
+          </p>
+        )}
         {!editing ? (
           <div className="flex items-start gap-4">
             <Avatar className="h-16 w-16">
@@ -486,16 +512,28 @@ function ProfileSection() {
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Name</label>
+                <label
+                  htmlFor="profile-name"
+                  className="block text-xs font-medium text-foreground mb-1"
+                >
+                  Name
+                </label>
                 <input
+                  id="profile-name"
                   value={name}
                   onChange={(e) => setName(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-foreground mb-1">Phone</label>
+                <label
+                  htmlFor="profile-phone"
+                  className="block text-xs font-medium text-foreground mb-1"
+                >
+                  Phone
+                </label>
                 <input
+                  id="profile-phone"
                   value={phone}
                   onChange={(e) => setPhone(e.target.value)}
                   className="w-full rounded-xl border border-border bg-background px-3 py-2 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
@@ -503,8 +541,14 @@ function ProfileSection() {
               </div>
             </div>
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Bio</label>
+              <label
+                htmlFor="profile-bio"
+                className="block text-xs font-medium text-foreground mb-1"
+              >
+                Bio
+              </label>
               <textarea
+                id="profile-bio"
                 value={bio}
                 onChange={(e) => setBio(e.target.value)}
                 rows={2}
@@ -512,9 +556,15 @@ function ProfileSection() {
               />
             </div>
             <div>
-              <label className="block text-xs font-medium text-foreground mb-1">Skills</label>
+              <label
+                htmlFor="profile-skills"
+                className="block text-xs font-medium text-foreground mb-1"
+              >
+                Skills
+              </label>
               <div className="flex gap-2">
                 <input
+                  id="profile-skills"
                   value={skillInput}
                   onChange={(e) => setSkillInput(e.target.value)}
                   onKeyDown={(e) => {
@@ -549,6 +599,14 @@ function ProfileSection() {
                 </div>
               )}
             </div>
+            {error && (
+              <p
+                role="alert"
+                className="rounded-lg bg-destructive/10 px-3 py-2 text-sm text-destructive"
+              >
+                Your profile was not saved. {error}
+              </p>
+            )}
             <div className="flex justify-end gap-2">
               <button
                 onClick={() => setEditing(false)}

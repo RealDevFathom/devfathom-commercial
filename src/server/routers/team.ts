@@ -8,6 +8,7 @@ import {
   adminProcedure,
   hrProcedure,
   capabilityProcedure,
+  assertModuleLicensed,
 } from '../trpc';
 import { can, subjectFromSession } from '@/lib/abac';
 import { assertNotificationOwner } from '../authz';
@@ -113,7 +114,12 @@ export const teamRouter = router({
         // alex@company.com without the guard ever firing.
         email: emailSchema,
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
-        department: z.string().trim().min(2).max(80).regex(/^[A-Z0-9_]+$/),
+        department: z
+          .string()
+          .trim()
+          .min(2)
+          .max(80)
+          .regex(/^[A-Z0-9_]+$/),
         title: z.string().min(1),
         phone: z.string().optional(),
         bio: z.string().optional(),
@@ -210,6 +216,10 @@ export const teamRouter = router({
   getById: protectedProcedure.input(z.object({ id: z.string() })).query(async ({ ctx, input }) => {
     const isAdmin = ctx.session.user.role === 'ADMIN';
     const isSelf = ctx.session.user.id === input.id;
+    // Your own profile is account self-service (Settings) and needs no module;
+    // any other member is the team directory, which the `hr` module licenses.
+    // The procedure is therefore in ACCOUNT_PROCEDURES and the gate lives here.
+    if (!isSelf) assertModuleLicensed(ctx, 'hr');
 
     return ctx.db.user.findUnique({
       where: { id: input.id },
@@ -712,7 +722,13 @@ export const teamRouter = router({
         name: z.string().min(1).optional(),
         email: z.string().email().optional(),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).optional(),
-        department: z.string().trim().min(2).max(80).regex(/^[A-Z0-9_]+$/).optional(),
+        department: z
+          .string()
+          .trim()
+          .min(2)
+          .max(80)
+          .regex(/^[A-Z0-9_]+$/)
+          .optional(),
         title: z.string().min(1).optional(),
         phone: z.string().nullable().optional(),
         bio: z.string().nullable().optional(),
@@ -727,7 +743,8 @@ export const teamRouter = router({
           where: { key: input.department, active: true },
           select: { id: true },
         });
-        if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+        if (!department)
+          throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
       }
       const auditFields = [
         'name',
