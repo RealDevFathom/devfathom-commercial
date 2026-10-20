@@ -268,6 +268,18 @@ const FINAL_CORRECTION_TABLES = [
   'restaurant_time_adjustments',
   'restaurant_workforce_commands',
 ] as const;
+// 20261014000000_print_bridge_enrollment_only and
+// 20261014010000_printer_inventory_foundation; both forced-RLS tenant tables.
+const PRINTER_TABLES = ['restaurant_print_bridge_enrollment_codes', 'restaurant_printers'] as const;
+// 20261019213000_restaurant_wallet_passes (L2 wallet lane); all forced-RLS tenant tables.
+const WALLET_TABLES = [
+  'restaurant_wallet_enrollment_attempts',
+  'restaurant_wallet_enrollment_links',
+  'restaurant_wallet_pass_registrations',
+  'restaurant_wallet_pass_updates',
+  'restaurant_wallet_passes',
+  'restaurant_wallet_tenant_config',
+] as const;
 
 // MED-06 (WHA-1339): this governance file is also the cross-lane registration
 // point for newly introduced tenant tables. These remain outside the restaurant
@@ -625,6 +637,8 @@ describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
         ...PROMOTION_TABLES,
         ...COMPLETION_WAVE_TABLES,
         ...FINAL_CORRECTION_TABLES,
+        ...PRINTER_TABLES,
+        ...WALLET_TABLES,
       ].sort()
     );
 
