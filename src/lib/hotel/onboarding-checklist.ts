@@ -100,16 +100,14 @@ export const HOTEL_ONBOARDING_STEPS: readonly HotelOnboardingStep[] = [
   {
     key: 'ROOM_TYPES',
     step: 6,
-    // PROP-02 ships in H1-03. The step is listed now — an operator has to see
-    // the whole walk — and its resolver reports pending until that lane can
-    // answer it. It carries no link, because UX rule 12 forbids linking into a
-    // surface that does not exist in this build.
+    // PROP-02 (H1-03). Answered by counting the property's active room types;
+    // the rooms sold under them are added on the same page.
     label: 'At least one room type',
     blocking: true,
-    todo: 'Room types are not yet available in this build. Your DevFathom delivery team enables them; this step stays outstanding until then.',
+    todo: 'Add at least one room type — standard room, dorm bed, apartment — then the rooms sold under it. Nothing can be reserved until a type exists.',
     done: 'At least one sellable room type exists.',
-    href: null,
-    linkLabel: null,
+    href: '/hotel/settings/rooms',
+    linkLabel: 'Open rooms',
   },
 ];
 
@@ -216,20 +214,36 @@ export function hotelEvidence(
       property && nonEmpty(property.auditTime) && policyRecorded(property.businessDatePolicy)
     ),
     ROLES_ASSIGNED: requiredRoleKeyCount > 0 && seededRoleKeyCount >= requiredRoleKeyCount,
-    // H1-03 owns room types. Until it ships there is nothing to count, and
-    // `null` reports pending rather than being quietly read as satisfied.
+    // Only a real count of the property's active room types satisfies this
+    // step. `null` means the evidence was not gathered (no property to count
+    // under) and reports pending rather than being quietly read as satisfied.
     ROOM_TYPES: roomTypeCount !== null && roomTypeCount > 0,
   };
 }
 
 /**
+ * How many room types a property can sell under, counted the way the step is
+ * worded: active types of THIS property. Scoped by organization as well as by
+ * property, so forced row-level security is the second wall and never the only
+ * one.
+ */
+export function countSellableRoomTypes(
+  db: Pick<PrismaClient, 'hotelRoomType'>,
+  organizationId: string,
+  branchId: string
+): Promise<number> {
+  return db.hotelRoomType.count({ where: { organizationId, branchId, active: true } });
+}
+
+/**
  * Run the evidence queries for one organization and evaluate every step.
  *
- * Both queries carry an explicit `organizationId` predicate; forced row-level
+ * Every query carries an explicit `organizationId` predicate; forced row-level
  * security is the second wall and never the only one. The property read picks
  * the organization's first active property — PROP-04 multi-property arrives with
  * its own selector, and until then a hospitality organization holds exactly the
- * one property provisioning created.
+ * one property provisioning created. Room types are counted under that same
+ * property, never across the organization.
  */
 export async function evaluateHotelReadiness(
   db: PrismaClient,
@@ -242,6 +256,7 @@ export async function evaluateHotelReadiness(
       where: { organizationId, active: true },
       orderBy: { createdAt: 'asc' },
       select: {
+        branchId: true,
         mode: true,
         name: true,
         addressLine: true,
@@ -256,10 +271,13 @@ export async function evaluateHotelReadiness(
     }),
     db.organizationRole.count({ where: { organizationId, key: { in: requiredRoleKeys } } }),
   ]);
+  const roomTypeCount = property
+    ? await countSellableRoomTypes(db, organizationId, property.branchId)
+    : null;
 
   return evaluateHotelOnboarding(
     organizationId,
-    hotelEvidence(property, seededRoleKeys, requiredRoleKeys.length, null)
+    hotelEvidence(property, seededRoleKeys, requiredRoleKeys.length, roomTypeCount)
   );
 }
 

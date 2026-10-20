@@ -62,6 +62,7 @@ const db = {
   user: { findFirst: vi.fn() },
   organizationRole: { findFirst: vi.fn(), count: vi.fn() },
   hotelExtra: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
+  hotelRoomType: { count: vi.fn() },
 };
 const context = () => ({
   session: { user: { id: 'actor_1', organizationId: 'org_1', role: 'ADMIN' } },
@@ -97,6 +98,7 @@ beforeEach(() => {
   db.user.findFirst.mockResolvedValue({ id: 'user_2' });
   db.organizationRole.findFirst.mockResolvedValue({ id: 'role_1' });
   db.organizationRole.count.mockResolvedValue(15);
+  db.hotelRoomType.count.mockResolvedValue(0);
   db.hotelExtra.findFirst.mockResolvedValue(null);
   db.hotelExtra.findMany.mockResolvedValue([]);
   db.hotelExtra.create.mockImplementation(async (arg: { data: object }) => ({
@@ -116,6 +118,16 @@ describe('hotel property handlers with mocked transport authorization', () => {
       'hotel:property-admin'
     );
     expect(result.checklist.blocking.map((x) => x.key)).toEqual(['ROOM_TYPES']);
+    expect(db.hotelRoomType.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', branchId: 'property_1', active: true },
+    });
+  });
+  it('reports the property ready to activate once it holds an active room type', async () => {
+    db.hotelRoomType.count.mockResolvedValue(1);
+    const result = await caller().get({ branchId: 'property_1' });
+    expect(result.checklist.ready).toBe(true);
+    expect(result.checklist.blocking).toEqual([]);
+    expect(result.activationSummary).toContain('can be activated');
   });
   it('does not read property rows when effective scope is denied', async () => {
     mocks.scope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));

@@ -42,6 +42,7 @@ const db = {
   organizationRole: { findFirst: vi.fn(), count: vi.fn() },
   hotelProperty: { update: vi.fn(), findUniqueOrThrow: vi.fn() },
   hotelPropertyAssignment: { findFirst: vi.fn(), upsert: vi.fn(), count: vi.fn() },
+  hotelRoomType: { count: vi.fn() },
 };
 const client = db as unknown as PrismaClient;
 beforeEach(() => {
@@ -69,6 +70,7 @@ beforeEach(() => {
     active: true,
   });
   db.hotelPropertyAssignment.count.mockResolvedValue(1);
+  db.hotelRoomType.count.mockResolvedValue(1);
   db.hotelProperty.findUniqueOrThrow.mockResolvedValue(facts);
   db.hotelProperty.update.mockImplementation(async ({ data }: { data: { active: boolean } }) => ({
     branchId: 'property_1',
@@ -165,10 +167,11 @@ describe('platform Hotel property maintenance', () => {
       expect(db.hotelProperty.update).not.toHaveBeenCalled();
     }
   );
-  it.each(['no-manager', 'missing-tax', 'missing-policy', 'missing-roles'])(
+  it.each(['no-manager', 'missing-tax', 'missing-policy', 'missing-roles', 'missing-room-types'])(
     'refuses reactivation with %s',
     async (reason) => {
       if (reason === 'no-manager') db.hotelPropertyAssignment.count.mockResolvedValue(0);
+      if (reason === 'missing-room-types') db.hotelRoomType.count.mockResolvedValue(0);
       if (reason === 'missing-tax')
         db.hotelProperty.findUniqueOrThrow.mockResolvedValue({ ...facts, taxProfileId: null });
       if (reason === 'missing-policy')
@@ -178,9 +181,14 @@ describe('platform Hotel property maintenance', () => {
       expect(db.hotelProperty.update).not.toHaveBeenCalled();
     }
   );
-  it('restores an existing property only with concrete facts and eligible manager; does not activate the organization', async () => {
+  it('restores an existing property only with concrete facts, a room type and eligible manager; does not activate the organization', async () => {
     expect(await reactivateHotelProperty(client, 'org_1', 'property_1')).toMatchObject({
       active: true,
+    });
+    // Counted under the property being reactivated, which the organization's
+    // "first active property" read could never see.
+    expect(db.hotelRoomType.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', branchId: 'property_1', active: true },
     });
     expect(db.hotelPropertyAssignment.count).toHaveBeenCalledWith(
       expect.objectContaining({

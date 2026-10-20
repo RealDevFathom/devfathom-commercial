@@ -163,10 +163,11 @@ describe('hotel activation evidence', () => {
     });
     expect(hotelEvidence({ ...property, timezone: ' ' }, 15, 15, 1).PROPERTY_FACTS).toBe(false);
   });
-  it('recomputes scoped facts and keeps unavailable room types blocking even with complete other evidence', async () => {
+  it('recomputes scoped facts and keeps missing room types blocking even with complete other evidence', async () => {
     const db = {
-      hotelProperty: { findFirst: vi.fn(async () => property) },
+      hotelProperty: { findFirst: vi.fn(async () => ({ ...property, branchId: 'property_1' })) },
       organizationRole: { count: vi.fn(async () => 15) },
+      hotelRoomType: { count: vi.fn(async () => 0) },
     };
     const result = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
     expect(db.hotelProperty.findFirst).toHaveBeenCalledWith(
@@ -178,8 +179,38 @@ describe('hotel activation evidence', () => {
         key: { in: catalog.HOSPITALITY_ROLE_TEMPLATES.map((r) => r.key) },
       },
     });
+    // Counted under the property that was read, active types only.
+    expect(db.hotelRoomType.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', branchId: 'property_1', active: true },
+    });
     expect(result.ready).toBe(false);
     expect(result.blocking.map((item) => item.key)).toEqual(['ROOM_TYPES']);
+  });
+  it('is ready once the property holds one active room type, and links the step to the rooms page', async () => {
+    const db = {
+      hotelProperty: { findFirst: vi.fn(async () => ({ ...property, branchId: 'property_1' })) },
+      organizationRole: { count: vi.fn(async () => 15) },
+      hotelRoomType: { count: vi.fn(async () => 1) },
+    };
+    const result = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
+    expect(result.ready).toBe(true);
+    expect(result.blocking).toEqual([]);
+    const step = result.items.find((item) => item.key === 'ROOM_TYPES')!;
+    expect(step).toMatchObject({
+      state: 'DONE',
+      href: '/hotel/settings/rooms',
+      linkLabel: 'Open rooms',
+    });
+  });
+  it('does not count room types when there is no property to count under', async () => {
+    const db = {
+      hotelProperty: { findFirst: vi.fn(async () => null) },
+      organizationRole: { count: vi.fn(async () => 15) },
+      hotelRoomType: { count: vi.fn(async () => 99) },
+    };
+    const result = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
+    expect(db.hotelRoomType.count).not.toHaveBeenCalled();
+    expect(result.items.find((item) => item.key === 'ROOM_TYPES')?.state).toBe('NEEDS_YOU');
   });
   it('does not accept failed evidence queries as a stored readiness claim', async () => {
     const db = {
@@ -264,6 +295,7 @@ describe('hotel property timezone', () => {
     const db = {
       hotelProperty: { findFirst: vi.fn(async () => ({ ...property, timezone: 'Mars/Phobos' })) },
       organizationRole: { count: vi.fn(async () => 15) },
+      hotelRoomType: { count: vi.fn(async () => 0) },
     };
     const result = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
     expect(result.ready).toBe(false);

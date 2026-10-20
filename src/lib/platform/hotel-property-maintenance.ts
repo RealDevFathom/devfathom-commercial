@@ -2,10 +2,10 @@ import 'server-only';
 
 import type { PrismaClient } from '@/generated/prisma/client';
 import {
+  countSellableRoomTypes,
   evaluateHotelOnboarding,
   hotelEvidence,
   type HotelChecklistItem,
-  type HotelOnboardingItemKey,
 } from '@/lib/hotel/onboarding-checklist';
 import { PlatformSecurityError } from '@/lib/platform/security';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
@@ -73,16 +73,6 @@ export const HOSPITALITY_OWNER_ROLE_KEY = 'owner';
  * is precisely the bypass this check exists to refuse.
  */
 const REACTIVATABLE_ORGANIZATION_STATUSES = new Set(['ONBOARDING', 'ACTIVE', 'GRACE']);
-
-/**
- * Checklist steps this build cannot answer for ANY property, new or returning.
- * `ROOM_TYPES` is resolved by H1-03 (PROP-02) and `hotelEvidence` is handed
- * `null` for it here exactly as `evaluateHotelReadiness` does, so it reports
- * pending rather than satisfied. Reactivation does not hold a property to a bar
- * no property in this build could clear; it reports the step instead of hiding
- * it, and this list is one line to delete when H1-03 lands.
- */
-const REACTIVATION_DEFERRED_STEPS: readonly HotelOnboardingItemKey[] = ['ROOM_TYPES'];
 
 /** The exact tuple every write here names. Nothing is inferred from it. */
 export type HotelPropertyTuple = {
@@ -436,7 +426,7 @@ export async function reactivateHotelProperty(
   }
 
   const requiredRoleKeys = roleTemplatesForVertical('HOSPITALITY').map((template) => template.key);
-  const [facts, seededRoleKeys, eligibleManagers] = await Promise.all([
+  const [facts, seededRoleKeys, eligibleManagers, roomTypes] = await Promise.all([
     db.hotelProperty.findUniqueOrThrow({
       where: { branchId },
       select: {
@@ -462,15 +452,16 @@ export async function reactivateHotelProperty(
         role: { organizationId, key: { in: requiredRoleKeys } },
       },
     }),
+    // Counted against THIS property, like the facts: the readiness resolver's
+    // "first active property" cannot see the inactive row being reactivated.
+    countSellableRoomTypes(db, organizationId, branchId),
   ]);
 
   const checklist = evaluateHotelOnboarding(
     organizationId,
-    hotelEvidence(facts, seededRoleKeys, requiredRoleKeys.length, null)
+    hotelEvidence(facts, seededRoleKeys, requiredRoleKeys.length, roomTypes)
   );
-  const blocking = checklist.blocking.filter(
-    (item) => !REACTIVATION_DEFERRED_STEPS.includes(item.key)
-  );
+  const { blocking } = checklist;
   if (blocking.length) {
     throw new PlatformSecurityError(
       `This property is not ready to return to service: ${blocking

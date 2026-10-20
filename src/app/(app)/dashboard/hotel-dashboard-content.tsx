@@ -181,7 +181,7 @@ function Kpi({
 }
 
 function PropertySetup({ property }: { property: HotelLandingProperty }) {
-  const href = `/hotel/settings/property?branchId=${encodeURIComponent(property.branchId)}`;
+  const selection = `?branchId=${encodeURIComponent(property.branchId)}`;
   return (
     <ReadinessChecklist
       eyebrow="Property setup"
@@ -197,8 +197,9 @@ function PropertySetup({ property }: { property: HotelLandingProperty }) {
         label: item.label,
         state: item.state,
         why: item.why,
-        // Every property link carries the property, so the walk never lands on the chooser.
-        href: item.href === '/hotel/settings/property' ? href : item.href,
+        // Every property-scoped link carries the property, so the walk never
+        // lands on the chooser.
+        href: item.href?.startsWith('/hotel/settings/') ? `${item.href}${selection}` : item.href,
         linkLabel: item.linkLabel,
       }))}
     />

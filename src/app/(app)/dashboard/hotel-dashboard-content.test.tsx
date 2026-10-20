@@ -75,6 +75,10 @@ describe('HotelDashboardContent', () => {
     expect(within(walk).getAllByRole('listitem')).toHaveLength(6);
     for (const link of within(walk).getAllByRole('link', { name: /Open property settings/ }))
       expect(link).toHaveAttribute('href', '/hotel/settings/property?branchId=branch_lahore');
+    expect(within(walk).getByRole('link', { name: /Open rooms/ })).toHaveAttribute(
+      'href',
+      '/hotel/settings/rooms?branchId=branch_lahore'
+    );
     expect(within(walk).getByText('Tax profile')).toBeInTheDocument();
     // The property list names the property's facts, not its ids.
     const row = screen

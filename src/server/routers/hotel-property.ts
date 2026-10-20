@@ -32,6 +32,7 @@ import {
   type HotelExtraInput,
 } from '@/lib/hotel/extras';
 import {
+  countSellableRoomTypes,
   evaluateHotelOnboarding,
   hotelEvidence,
   hotelActivationSummary,
@@ -96,12 +97,14 @@ async function propertyReadiness(
   property: Awaited<ReturnType<typeof currentProperty>>
 ) {
   const keys = HOSPITALITY_ROLE_TEMPLATES.map((role) => role.key);
+  const organizationId = ctx.entitlements.organizationId;
   const count = await ctx.db.organizationRole.count({
-    where: { organizationId: ctx.entitlements.organizationId, key: { in: keys } },
+    where: { organizationId, key: { in: keys } },
   });
+  const roomTypes = await countSellableRoomTypes(ctx.db, organizationId, property.branchId);
   return evaluateHotelOnboarding(
-    ctx.entitlements.organizationId,
-    hotelEvidence(property, count, keys.length, null)
+    organizationId,
+    hotelEvidence(property, count, keys.length, roomTypes)
   );
 }
 
