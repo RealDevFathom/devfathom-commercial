@@ -105,9 +105,10 @@ describeIfDatabase('restaurant tax activation replay against PostgreSQL', () => 
     );
   });
 
+  // The organizations stay behind: activation writes append-only tax sources
+  // (tax_source_immutable) whose visibility FK restricts the organization
+  // delete. Every id is suffixed per run, so leftovers never collide.
   afterAll(async () => {
-    await owner.query('DELETE FROM organizations WHERE id = $1', [organizationId]);
-    await owner.query('DELETE FROM organizations WHERE id = $1', [otherOrganizationId]);
     await owner.end();
   });
 
