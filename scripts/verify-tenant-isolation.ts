@@ -2298,6 +2298,17 @@ async function main() {
     const hotelBookingB = hotelBookings.rows.find(
       (row) => row.organizationId === organizationB
     )!.id;
+    // H1-14 — one guest-message draft per tenant, in the shape provisioning
+    // writes (version 1, DRAFT, no approval facts).
+    const hotelJourneyA = `hotel_journey_a_${suffix}`;
+    const hotelJourneyB = `hotel_journey_b_${suffix}`;
+    await client.query(
+      `INSERT INTO "hotel_journey_templates" (
+        "id", "organizationId", "branchId", "moment", "channel", "language", "body", "createdByUserId", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'BOOKING_CONFIRMED', 'WHATSAPP', 'EN', 'Dear {{guest_name}}, your booking is confirmed.', $3, CURRENT_TIMESTAMP),
+               ($4, $5, $6, 'BOOKING_CONFIRMED', 'WHATSAPP', 'EN', 'Dear {{guest_name}}, your booking is confirmed.', $7, CURRENT_TIMESTAMP)`,
+      [hotelJourneyA, hotelPropertyA, userA, hotelJourneyB, organizationB, hotelPropertyB, userB]
+    );
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
 
     // H1-03 — the five inventory tables, as the acting assigned user. Read,
@@ -2803,6 +2814,108 @@ async function main() {
     }
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     for (const [table, idA, idB] of hotelSpaceRows) {
+      const both = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(both.rows[0]?.count, 2, `platform scope must read both tenants' "${table}" rows`);
+    }
+    await client.query(
+      `SELECT set_config('app.is_platform_admin', 'false', true),
+              set_config('app.current_user_id', '', true)`
+    );
+
+    // H1-14 — guest-message templates are property configuration under the
+    // standard policy: read, UPDATE and DELETE isolation; blind writes reaching
+    // exactly the tenant's rows; the org-B insert failing closed; a same-tenant
+    // row hung off the other tenant's property refused by the composite key;
+    // UPS-04's "one approved version per message", held by the partial unique
+    // index (a second APPROVED version is 23505, and admitted once the first is
+    // retired); then platform reads of both tenants' rows.
+    await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [userA]);
+    const hotelJourneyRows: Array<[table: string, idA: string, idB: string]> = [
+      ['hotel_journey_templates', hotelJourneyA, hotelJourneyB],
+    ];
+    for (const [table, idA, idB] of hotelJourneyRows) {
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(visible.rows[0]?.count, 1, `tenant A must only see its own "${table}" row`);
+      const updated = await client.query(
+        `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+        [idB]
+      );
+      assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
+      assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
+    await expectBlindWriteScoped(
+      'hotel_journey_templates',
+      `UPDATE "hotel_journey_templates" SET "updatedAt" = CURRENT_TIMESTAMP`
+    );
+    await expectBlindWriteScoped(
+      'hotel_journey_templates',
+      `DELETE FROM "hotel_journey_templates"`
+    );
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_journey_templates" (
+            "id", "organizationId", "branchId", "moment", "channel", "language", "body", "version", "createdByUserId", "updatedAt"
+          ) VALUES ($1, $2, $3, 'WELCOME', 'SMS', 'EN', 'Escape', 1, $4, CURRENT_TIMESTAMP)`,
+          [`hotel_journey_escape_${suffix}`, organizationB, hotelPropertyB, userA]
+        ),
+      'tenant A inserting an org-B "hotel_journey_templates" row'
+    );
+    // Same tenant, the other tenant's property: the composite foreign key is
+    // what refuses, because (org_devfathom, property B) is not a property.
+    await expectDatabaseError(
+      '23503',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_journey_templates" (
+            "id", "organizationId", "branchId", "moment", "channel", "language", "body", "version", "createdByUserId", "updatedAt"
+          ) VALUES ($1, 'org_devfathom', $2, 'WELCOME', 'SMS', 'EN', 'Borrowed', 1, $3, CURRENT_TIMESTAMP)`,
+          [`hotel_journey_borrowed_${suffix}`, hotelPropertyB, userA]
+        ),
+      'tenant A hanging a "hotel_journey_templates" row off tenant B\'s property'
+    );
+    // UPS-04. The seeded message is version 1, a draft; approving two further
+    // versions of it at once must fail on the partial unique index, and succeed
+    // once the first approval is retired.
+    const approveJourneyA = (id: string, version: number) =>
+      client.query(
+        `INSERT INTO "hotel_journey_templates" (
+          "id", "organizationId", "branchId", "moment", "channel", "language", "body", "version",
+          "status", "approvedByUserId", "approvedAt", "createdByUserId", "updatedAt"
+        ) VALUES ($1, 'org_devfathom', $2, 'BOOKING_CONFIRMED', 'WHATSAPP', 'EN', 'Approved wording', $3,
+                  'APPROVED', $4, CURRENT_TIMESTAMP, $4, CURRENT_TIMESTAMP)`,
+        [id, hotelPropertyA, version, userA]
+      );
+    await client.query('SAVEPOINT hotel_journey_approved');
+    try {
+      const first = await approveJourneyA(`hotel_journey_v2_${suffix}`, 2);
+      assertEqual(first.rowCount, 1, 'the first approved version of a message must be admitted');
+      await expectDatabaseError(
+        '23505',
+        () => approveJourneyA(`hotel_journey_v3_${suffix}`, 3),
+        'a second approved version of the same message'
+      );
+      const retired = await client.query(
+        `UPDATE "hotel_journey_templates" SET "status" = 'RETIRED' WHERE "id" = $1`,
+        [`hotel_journey_v2_${suffix}`]
+      );
+      assertEqual(retired.rowCount, 1, 'retiring the approved version must be admitted');
+      const next = await approveJourneyA(`hotel_journey_v3_${suffix}`, 3);
+      assertEqual(next.rowCount, 1, 'approving the next version after retirement must be admitted');
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT hotel_journey_approved');
+      await client.query('RELEASE SAVEPOINT hotel_journey_approved');
+    }
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    for (const [table, idA, idB] of hotelJourneyRows) {
       const both = await client.query<{ count: number }>(
         `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
         [idA, idB]
@@ -3419,7 +3532,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, hospitality property/assignment/catalog/inventory/meal-plan/function-space probes, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, hospitality property/assignment/catalog/inventory/meal-plan/function-space/journey-template probes, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);

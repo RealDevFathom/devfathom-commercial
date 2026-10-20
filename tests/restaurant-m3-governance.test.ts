@@ -307,6 +307,7 @@ const HOSPITALITY_TABLES = [
   'hotel_beds',
   'hotel_extras',
   'hotel_function_spaces',
+  'hotel_journey_templates',
   'hotel_meal_plans',
   'hotel_properties',
   'hotel_property_assignments',

@@ -14434,6 +14434,7 @@ model HotelProperty {
   roomBlocks       HotelRoomBlock[]
   mealPlans        HotelMealPlan[]
   functionSpaces   HotelFunctionSpace[]
+  journeyTemplates HotelJourneyTemplate[]
 
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
@@ -14925,6 +14926,80 @@ model HotelSpaceBooking {
   @@index([organizationId, spaceId, startsAt], map: "hotel_space_bookings_org_space_start_idx")
   @@index([organizationId, branchId, startsAt], map: "hotel_space_bookings_org_branch_start_idx")
   @@map("hotel_space_bookings")
+}
+
+/// UPS-04 §5.17 — the eight moments of the guest journey, in the order a stay
+/// runs, so a list rendered in enum order reads correctly.
+enum HotelJourneyMoment {
+  BOOKING_CONFIRMED
+  PRE_ARRIVAL_UPSELL
+  SELF_CHECKIN
+  WELCOME
+  IN_STAY
+  EXPRESS_CHECKOUT
+  INVOICE
+  REVIEW_REQUEST
+}
+
+enum HotelJourneyChannel {
+  WHATSAPP
+  EMAIL
+  SMS
+}
+
+/// EN/UR only: the property's `languages` default is ["en","ur"] and the pack is
+/// explicit that the guest journey is Urdu/English.
+enum HotelJourneyLanguage {
+  EN
+  UR
+}
+
+enum HotelJourneyTemplateStatus {
+  DRAFT
+  APPROVED
+  RETIRED
+}
+
+/// UPS-04 (H1-14) — one row is one **version** of one message: a moment, a
+/// channel, a language. Versioned rather than editable in place because the
+/// acceptance is "template approval before use": changing words a property
+/// already approved must produce a new version to approve, never a silent
+/// rewrite of the approved one. Sending is H4's lane; nothing here sends.
+///
+/// The database holds the rules a surface could get wrong: `version >= 1`, a
+/// non-blank body, a subject only on e-mail (and never blank), and the approval
+/// facts agreeing with the status (an APPROVED row names its approver and the
+/// moment, a DRAFT names neither, a RETIRED row keeps what it had). The partial
+/// unique index that allows at most one APPROVED version per (property, moment,
+/// channel, language) lives in the migration — Prisma's schema language has no
+/// partial-unique syntax, so it is SQL-only by necessity and is pinned by
+/// `src/lib/hotel/journey-templates.db.test.ts` rather than by this schema.
+model HotelJourneyTemplate {
+  id               String                     @id @default(cuid())
+  organizationId   String                     @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  /// In hospitality the branch IS the property (H1-01).
+  branchId         String
+  moment           HotelJourneyMoment
+  channel          HotelJourneyChannel
+  language         HotelJourneyLanguage
+  /// E-mail only; the database CHECK refuses a subject on WhatsApp and SMS.
+  subject          String?
+  body             String
+  version          Int                        @default(1)
+  status           HotelJourneyTemplateStatus @default(DRAFT)
+  /// Set together with `approvedAt`, and only once the row leaves DRAFT.
+  approvedByUserId String?
+  approvedAt       DateTime?
+  createdByUserId  String
+  createdAt        DateTime                   @default(now())
+  updatedAt        DateTime                   @updatedAt
+
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_journey_templates_property_fkey")
+
+  @@unique([organizationId, id], map: "hotel_journey_templates_org_id_key")
+  @@unique([organizationId, branchId, moment, channel, language, version], map: "hotel_journey_templates_version_key")
+  @@index([organizationId, branchId, moment, status], map: "hotel_journey_templates_board_idx")
+  @@map("hotel_journey_templates")
 }
 
 /// One-use bridge enrollment; the hash snapshot invalidates codes after rotation.

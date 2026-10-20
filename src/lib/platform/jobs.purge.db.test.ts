@@ -451,6 +451,21 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         tenant.userId
       )
     );
+    // H1-14 — a guest-message draft (RESTRICT child of the property), as
+    // provisioning seeds it.
+    await withPlatformDb((db) =>
+      db.hotelJourneyTemplate.create({
+        data: {
+          organizationId,
+          branchId: scope.branchId,
+          moment: 'WELCOME',
+          channel: 'WHATSAPP',
+          language: 'EN',
+          body: 'Dear {{guest_name}}, welcome to {{property_name}}.',
+          createdByUserId: tenant.userId,
+        },
+      })
+    );
     return { ...tenant, branchId: scope.branchId };
   }
 
@@ -463,6 +478,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     'hotel_meal_plans',
     'hotel_space_bookings',
     'hotel_function_spaces',
+    'hotel_journey_templates',
     'hotel_extras',
     'hotel_property_assignments',
     'hotel_properties',
@@ -495,6 +511,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       hotel_meal_plans: 1,
       hotel_space_bookings: 1,
       hotel_function_spaces: 1,
+      hotel_journey_templates: 1,
       hotel_extras: 1,
       hotel_property_assignments: 1,
       hotel_properties: 1,
@@ -540,6 +557,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
       hotel_meal_plans: 1,
       hotel_space_bookings: 1,
       hotel_function_spaces: 1,
+      hotel_journey_templates: 1,
       hotel_properties: 1,
     });
     const organization = await withPlatformDb((db) =>
