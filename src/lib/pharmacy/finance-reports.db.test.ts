@@ -61,6 +61,16 @@ beforeAll(async () => {
   const scoped = await import('@/lib/tenancy/scoped-db');
   const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
   await assertRlsEnforcingRole(scoped.withPlatformDb);
+  // Integrated tip (20261012120000_visibility_context_anchors): journal entries must reference an
+  // existing organization, so anchor this suite's synthetic tenants before posting.
+  await scoped.withPlatformDb((db) =>
+    db.$executeRawUnsafe(
+      `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
+       SELECT id, id, id, id, 'PHARMACY', 'ACTIVE', 'SHARED', now(), now() FROM unnest($1::text[]) AS id
+       ON CONFLICT (id) DO NOTHING`,
+      [org, otherOrg]
+    )
+  );
   withTenantDb = scoped.withTenantDb;
   await post(org, branchId, '2026-08-30T00:00:00Z', 10000, 500, 6000);
   await post(org, branchId, '2026-09-01T00:00:00Z', 12000, 1500, 8000);
