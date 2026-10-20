@@ -658,16 +658,37 @@ export async function openPharmacyDrawer(
   if (!Number.isSafeInteger(input.openingFloatMinor) || input.openingFloatMinor < 0)
     throw new PharmacySettlementError('INVALID_AMOUNT');
   await requirePharmacyDayOpen(db, scope, input.businessDate);
-  const drawer = await db.pharmacyDrawerSession.create({
-    data: {
+  // One OPEN drawer per counter device (the partial unique index
+  // `pharmacy_one_open_drawer_per_device`). The pre-check answers the ordinary
+  // second click with the typed reason; the P2002 translation below is the
+  // backstop for two opens racing past it, so neither surfaces as a 500.
+  const alreadyOpen = await db.pharmacyDrawerSession.findFirst({
+    where: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       deviceId: input.deviceId,
-      businessDate: input.businessDate,
-      openingFloatMinor: input.openingFloatMinor,
-      openedByActorId: scope.actorId,
+      status: 'OPEN',
     },
+    select: { id: true },
   });
+  if (alreadyOpen) throw new PharmacySettlementError('OPEN_DRAWER');
+  let drawer;
+  try {
+    drawer = await db.pharmacyDrawerSession.create({
+      data: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        deviceId: input.deviceId,
+        businessDate: input.businessDate,
+        openingFloatMinor: input.openingFloatMinor,
+        openedByActorId: scope.actorId,
+      },
+    });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002')
+      throw new PharmacySettlementError('OPEN_DRAWER');
+    throw error;
+  }
   if (input.openingFloatMinor > 0)
     await db.pharmacyDrawerMovement.create({
       data: {
@@ -679,6 +700,20 @@ export async function openPharmacyDrawer(
       },
     });
   return drawer;
+}
+
+/** The OPEN drawer for a counter device, if any: what the counter offers instead of "Open drawer". */
+export async function readOpenPharmacyDrawer(db: ScopedDb, scope: LedgerScope, deviceId: string) {
+  return db.pharmacyDrawerSession.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      deviceId,
+      status: 'OPEN',
+    },
+    select: { id: true, businessDate: true, openedAt: true, openingFloatMinor: true },
+    orderBy: { openedAt: 'desc' },
+  });
 }
 
 export async function recordPharmacyCashMovement(

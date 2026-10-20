@@ -2,7 +2,7 @@
 
 import { browserUuid } from '@/lib/browser-uuid';
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import Link from 'next/link';
 import { signIn, useSession } from 'next-auth/react';
 import { useEntitlements } from '@/components/entitlements-provider';
@@ -110,6 +110,24 @@ function counterDeviceId(): string {
   const created = `counter-${browserUuid()}`;
   window.localStorage.setItem(key, created);
   return created;
+}
+
+const subscribeToNothing = () => () => {};
+/** `null` when storage is unavailable: the tender path reports that case itself. */
+function readCounterDeviceId(): string | null {
+  try {
+    return counterDeviceId();
+  } catch {
+    return null;
+  }
+}
+/**
+ * The device id as render-time state: `null` on the server render (there is no
+ * storage), the stable browser id on the client. Lets the drawer status query
+ * key on the device without a setState-in-effect round trip.
+ */
+function useCounterDeviceId(): string | null {
+  return useSyncExternalStore(subscribeToNothing, readCounterDeviceId, () => null);
 }
 
 /** Today, as the date-only value the settlement tables store. */
@@ -415,6 +433,17 @@ function ScopedPharmacyCounterConsole({
     { branchId, saleId: saleId ?? '' },
     { enabled: Boolean(branchId && saleId), staleTime: 30_000 }
   );
+
+  // POS-07: one OPEN drawer per counter device. The header offers "Open drawer"
+  // only once the server has said this device has none; while one is open it
+  // shows the drawer instead, so a second open is never offered.
+  const deviceId = useCounterDeviceId();
+  const drawerQuery = trpc.pharmacySales.drawerStatus.useQuery(
+    { branchId, deviceId: deviceId ?? '' },
+    { enabled: Boolean(branchAuthorized && branchId && deviceId), staleTime: 30_000 }
+  );
+  const openDrawerSession = drawerQuery.data?.openDrawer ?? null;
+  const drawerStatusKnown = drawerQuery.isSuccess || drawerQuery.isError;
 
   const receiptQuery = trpc.pharmacySales.counterReceipt.useQuery(
     { branchId, saleId: saleId ?? '' },
@@ -1614,31 +1643,42 @@ function ScopedPharmacyCounterConsole({
             />
             {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
             {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
-            <Button
-              type="button"
-              variant="outline"
-              className="h-11"
-              disabled={busy}
-              onClick={() => {
-                setPending('drawer');
-                openDrawer
-                  .mutateAsync({
-                    branchId,
-                    deviceId: counterDeviceId(),
-                    businessDate: businessDate(),
-                    openingFloatMinor: 0,
-                  })
-                  .then(() =>
-                    setNotice({ tone: 'success', message: 'Cash drawer opened for this counter.' })
-                  )
-                  .catch((error: unknown) =>
-                    setNotice({ tone: 'warning', message: messageFrom(error) })
-                  )
-                  .finally(() => setPending(null));
-              }}
-            >
-              Open drawer
-            </Button>
+            {openDrawerSession ? (
+              <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+            ) : (
+              <Button
+                type="button"
+                variant="outline"
+                className="h-11"
+                disabled={busy || !drawerStatusKnown}
+                onClick={() => {
+                  setPending('drawer');
+                  openDrawer
+                    .mutateAsync({
+                      branchId,
+                      deviceId: counterDeviceId(),
+                      businessDate: businessDate(),
+                      openingFloatMinor: 0,
+                    })
+                    .then(() =>
+                      setNotice({
+                        tone: 'success',
+                        message: 'Cash drawer opened for this counter.',
+                      })
+                    )
+                    .catch((error: unknown) =>
+                      setNotice({ tone: 'warning', message: messageFrom(error) })
+                    )
+                    // Either way the server now holds the truth about this device's drawer.
+                    .finally(() => {
+                      setPending(null);
+                      void utils.pharmacySales.drawerStatus.invalidate();
+                    });
+                }}
+              >
+                Open drawer
+              </Button>
+            )}
           </div>
         }
       />

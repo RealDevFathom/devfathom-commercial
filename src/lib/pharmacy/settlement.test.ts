@@ -10,11 +10,14 @@ vi.mock('./finance-postings', async () => ({
   postSaleLineEntry: postings.postSaleLineEntry,
 }));
 
+import { Prisma } from '@/generated/prisma/client';
+
 import {
   applyPharmacyTender,
   assertRefundWithinTender,
   computePharmacyClose,
   foldExpectedCash,
+  openPharmacyDrawer,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
   requireReleaseSafeAdapter,
@@ -501,5 +504,70 @@ describe('readPharmacyTenderOutcome', () => {
     expect(await invisible).toEqual({ status: 'NOT_FOUND', replayUnsafe: true });
     expect(committed).toEqual({ status: 'ACCEPTED', replayUnsafe: true, result: partial });
     expect(f.tenderRead).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe('openPharmacyDrawer — one open drawer per counter device', () => {
+  const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };
+  const input = {
+    deviceId: 'counter-device',
+    businessDate: new Date('2026-10-20T00:00:00.000Z'),
+    openingFloatMinor: 0,
+  };
+  function fixture(existingOpen: { id: string } | null, createError?: unknown) {
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+      pharmacyDrawerSession: {
+        findFirst: vi.fn().mockResolvedValue(existingOpen),
+        create: createError
+          ? vi.fn().mockRejectedValue(createError)
+          : vi.fn().mockResolvedValue({ id: 'drawer-new', status: 'OPEN' }),
+      },
+      pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
+    };
+    return db;
+  }
+
+  it('opens a drawer when the device has none open', async () => {
+    const db = fixture(null);
+    await expect(openPharmacyDrawer(db as never, scope, input)).resolves.toMatchObject({
+      id: 'drawer-new',
+    });
+    expect(db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        deviceId: 'counter-device',
+        status: 'OPEN',
+      },
+      select: { id: true },
+    });
+  });
+
+  it('refuses a second open on the same device with the typed OPEN_DRAWER reason', async () => {
+    const db = fixture({ id: 'drawer-open' });
+    await expect(openPharmacyDrawer(db as never, scope, input)).rejects.toThrowError(
+      expect.objectContaining({ reason: 'OPEN_DRAWER' })
+    );
+    expect(db.pharmacyDrawerSession.create).not.toHaveBeenCalled();
+  });
+
+  it('translates the partial-unique race (P2002) into the same typed reason', async () => {
+    const race = new Prisma.PrismaClientKnownRequestError('Unique constraint failed', {
+      code: 'P2002',
+      clientVersion: 'test',
+      meta: { target: 'pharmacy_one_open_drawer_per_device' },
+    });
+    const db = fixture(null, race);
+    await expect(openPharmacyDrawer(db as never, scope, input)).rejects.toThrowError(
+      expect.objectContaining({ reason: 'OPEN_DRAWER' })
+    );
+  });
+
+  it('lets every other database failure through unchanged', async () => {
+    const failure = new Error('connection reset');
+    const db = fixture(null, failure);
+    await expect(openPharmacyDrawer(db as never, scope, input)).rejects.toBe(failure);
   });
 });

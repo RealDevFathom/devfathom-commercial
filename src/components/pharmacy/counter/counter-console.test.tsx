@@ -29,6 +29,7 @@ const mocks = vi.hoisted(() => ({
   khataStatement: vi.fn(),
   signIn: vi.fn(),
   receiptRefetch: vi.fn(),
+  drawerStatusInvalidate: vi.fn(),
   session: {
     status: 'authenticated',
     data: {
@@ -74,6 +75,7 @@ vi.mock('@/lib/trpc', () => {
       counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
+      drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
     },
   };
   return {
@@ -89,6 +91,7 @@ vi.mock('@/lib/trpc', () => {
         'counterLotOptions',
         'counterEvidence',
         'customerSnapshot',
+        'drawerStatus',
         'create',
         'addLine',
         'transition',
@@ -223,6 +226,7 @@ beforeEach(() => {
     'controlledPharmacists',
   ])
     mocks.queries[name] = query();
+  mocks.queries.drawerStatus = query({ openDrawer: null });
   mocks.queries.counterBranches = query({
     branches: [{ id: 'branch-a', name: 'Synthetic branch' }],
   });
@@ -1011,3 +1015,54 @@ it.each([404, 200])(
     );
   }
 );
+
+describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
+  const openDrawer = {
+    id: 'drawer-open',
+    businessDate: new Date('2026-10-20T00:00:00.000Z'),
+    openedAt: new Date('2026-10-20T04:05:00.000Z'),
+    openingFloatMinor: 0,
+  };
+
+  it('never offers "Open drawer" while this device already has one open', () => {
+    mocks.queries.drawerStatus = query({ openDrawer });
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.queryByRole('button', { name: 'Open drawer' })).not.toBeInTheDocument();
+    expect(screen.getByText('Drawer open')).toBeInTheDocument();
+  });
+
+  it('withholds the button until the drawer status is known', () => {
+    mocks.queries.drawerStatus = { ...query(), isSuccess: false, isLoading: true };
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    expect(screen.getByRole('button', { name: 'Open drawer' })).toBeDisabled();
+  });
+
+  it('opens the drawer for this device once, then refreshes the status', async () => {
+    mocks.mutations.openDrawer!.mockResolvedValue(openDrawer);
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    const button = screen.getByRole('button', { name: 'Open drawer' });
+    expect(button).toBeEnabled();
+    fireEvent.click(button);
+    await screen.findByText('Cash drawer opened for this counter.');
+    const deviceId = window.localStorage.getItem('devfathom.pharmacy.counter.device');
+    expect(deviceId).toMatch(/^counter-/);
+    expect(mocks.mutations.openDrawer).toHaveBeenCalledTimes(1);
+    expect(mocks.mutations.openDrawer).toHaveBeenCalledWith(
+      expect.objectContaining({ branchId: 'branch-a', deviceId, openingFloatMinor: 0 })
+    );
+    await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+  });
+
+  it('words a conflicting open for the operator instead of leaking the server failure', async () => {
+    mocks.mutations.openDrawer!.mockRejectedValue(refused('CONFLICT', 'OPEN_DRAWER'));
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+    fireEvent.click(screen.getByRole('button', { name: 'Open drawer' }));
+    expect(
+      await screen.findByText(
+        'A drawer is already open on this counter. Close it before opening another.'
+      )
+    ).toBeInTheDocument();
+    expect(screen.queryByText(/OPEN_DRAWER|prisma|Unique constraint/)).not.toBeInTheDocument();
+    await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+  });
+});

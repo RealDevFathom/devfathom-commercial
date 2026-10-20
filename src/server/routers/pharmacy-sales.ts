@@ -83,6 +83,7 @@ import {
   closePharmacyDrawer,
   cutPharmacyDailyClose,
   openPharmacyDrawer,
+  readOpenPharmacyDrawer,
   PharmacySettlementError,
   readPharmacyTenderOutcome,
   recordPharmacyCashMovement,
@@ -194,7 +195,11 @@ function fail(error: unknown): never {
     });
   }
   if (error instanceof PharmacySettlementError) {
-    throw new TRPCError({ code: 'BAD_REQUEST', message: error.reason });
+    // A drawer that is already open is a state conflict, not a malformed request.
+    throw new TRPCError({
+      code: error.reason === 'OPEN_DRAWER' ? 'CONFLICT' : 'BAD_REQUEST',
+      message: error.reason,
+    });
   }
   if (error instanceof PharmacyCounterError) {
     throw new TRPCError({
@@ -436,6 +441,19 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  /** The OPEN drawer for this counter device, so the counter never offers a second open. */
+  drawerStatus: protectedProcedure
+    .input(z.object({ branchId, deviceId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => ({
+      openDrawer: await readOpenPharmacyDrawer(
+        ctx.db,
+        scopeFor(ctx, input.branchId),
+        input.deviceId
+      ),
+    })),
+  // The drawer family raises typed `PharmacySettlementError`s (OPEN_DRAWER,
+  // DRAWER_NOT_OPEN, DAY_CLOSED, INVALID_AMOUNT); `fail` turns them into typed
+  // tRPC errors the counter can word, instead of a 500 with the raw reason.
   openDrawer: protectedProcedure
     .input(
       z
@@ -447,11 +465,15 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
-        openPharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          openPharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   drawerMovement: protectedProcedure
     .input(
       z
@@ -464,11 +486,15 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
-        recordPharmacyCashMovement(txDb(tx), scopeFor(ctx, input.branchId), input)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          recordPharmacyCashMovement(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   closeDrawer: protectedProcedure
     .input(
       z
@@ -480,11 +506,15 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
-        closePharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      try {
+        return await ctx.db.$transaction((tx) =>
+          closePharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
+    }),
   dailyClose: protectedProcedure
     .input(
       z
