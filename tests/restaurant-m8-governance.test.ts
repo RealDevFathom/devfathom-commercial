@@ -189,6 +189,12 @@ const INDEXES: Record<string, { unique: boolean; columns: string[]; predicate?: 
     columns: ['organizationId'],
   },
   restaurant_customer_identifiers_customerId_idx: { unique: false, columns: ['customerId'] },
+  // 20261019213000_restaurant_wallet_passes (L2): at most one WALLET identifier per customer.
+  restaurant_customer_identifiers_active_wallet_key: {
+    unique: true,
+    columns: ['organizationId', 'customerId'],
+    predicate: /wallet_identifier_kind_text\(kind\) = 'WALLET'/,
+  },
   restaurant_customer_identifiers_org_kind_value_key: {
     unique: true,
     columns: ['organizationId', 'kind', 'normalizedValue'],
