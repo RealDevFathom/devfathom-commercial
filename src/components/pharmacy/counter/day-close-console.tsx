@@ -15,6 +15,18 @@ import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-r
 import { printCounterBrowserZReport } from '@/lib/pharmacy/counter-browser-print';
 import { counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 
+/** "Opened 09:12 by Ayesha Karim", or just the time when the opener is no longer a member. */
+export function drawerOpenedLabel(drawer: {
+  openedAt: Date | string;
+  openedBy: string | null;
+}): string {
+  const time = new Date(drawer.openedAt).toLocaleTimeString('en-GB', {
+    hour: '2-digit',
+    minute: '2-digit',
+  });
+  return drawer.openedBy ? `Opened ${time} by ${drawer.openedBy}` : `Opened ${time}`;
+}
+
 export function cashMinor(value: string): number | null {
   if (!/^\d+(?:\.\d{1,2})?$/.test(value)) return null;
   const [whole, fraction = ''] = value.split('.');
@@ -242,8 +254,10 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
             )}
             {data.drawers.map((d, i) => (
               <div className="grid gap-2 border-b border-border-subtle pb-4" key={d.id}>
-                <p className="break-all text-sm">
-                  Drawer {i + 1} · {d.deviceId} · {d.status === 'OPEN' ? 'Open' : 'Closed'}
+                <p className="text-sm">
+                  {/* Named by who opened it and when; the device id names nothing to a cashier. */}
+                  Drawer {i + 1} · {drawerOpenedLabel(d)} ·{' '}
+                  {d.status === 'OPEN' ? 'Open' : 'Closed'}
                 </p>
                 <p className="text-sm">Expected: PKR {formatMinor(d.expectedMinor)}</p>
                 {d.status === 'OPEN' ? (

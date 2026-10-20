@@ -32,10 +32,22 @@ export async function readPharmacyClose(db: ScopedDb, scope: LedgerScope, busine
     }),
     db.pharmacyRefund.findMany({ where }),
   ]);
+  // Who opened each drawer, so the close screen can name the drawer by its
+  // opener and time rather than by the counter's device identifier.
+  const openerIds = [...new Set(drawers.map((d) => d.openedByActorId))];
+  const openers = openerIds.length
+    ? await db.user.findMany({
+        where: { organizationId: scope.organizationId, id: { in: openerIds } },
+        select: { id: true, name: true },
+      })
+    : [];
+  const openerNames = new Map(openers.map((user) => [user.id, user.name]));
   const rows = drawers.map((d) => ({
     id: d.id,
     deviceId: d.deviceId,
     status: d.status,
+    openedAt: d.openedAt,
+    openedBy: openerNames.get(d.openedByActorId) ?? null,
     expectedMinor: foldExpectedCash(
       d.movements.filter((m) => m.kind !== 'CLOSING_COUNT') as DrawerMovement[]
     ),

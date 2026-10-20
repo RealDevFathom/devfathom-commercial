@@ -17,12 +17,15 @@ function fixture() {
     },
     pharmacyBranch: { findFirst: vi.fn().mockResolvedValue({ name: 'Branch' }) },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
+    user: { findMany: vi.fn().mockResolvedValue([{ id: 'owner', name: 'Ayesha Karim' }]) },
     pharmacyDrawerSession: {
       findMany: vi.fn().mockResolvedValue([
         {
           id: 'drawer',
           deviceId: 'device',
           status: 'OPEN',
+          openedAt: new Date('2026-09-29T04:12:00Z'),
+          openedByActorId: 'owner',
           countedCashMinor: null,
           movements: [
             { kind: 'OPENING_FLOAT', amountMinor: 10000 },
@@ -48,6 +51,17 @@ describe('day close boundaries', () => {
     const { db, scoped } = fixture();
     const p = await readPharmacyClose(scoped, scope, date);
     expect(p.totals).toMatchObject({ cashExpectedMinor: 12500, grossSalesMinor: 2500 });
+    // Each drawer names its opener and time, read within the tenant, so the close
+    // screen never has to show the counter's device identifier.
+    expect(p.drawers[0]).toMatchObject({
+      id: 'drawer',
+      openedAt: new Date('2026-09-29T04:12:00Z'),
+      openedBy: 'Ayesha Karim',
+    });
+    expect(db.user.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org', id: { in: ['owner'] } },
+      select: { id: true, name: true },
+    });
     expect(db.pharmacySale.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: {
