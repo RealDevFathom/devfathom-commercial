@@ -154,6 +154,14 @@ Rules:
 
 Font delivery uses `next/font/local` with the 17 unchanged WOFF2 assets from the accepted build, preserving subsets, weights, Latin preloads, fallback metrics, and semantic variables. Full copyright/OFL notices ship at `/licenses/instrument-sans-OFL.txt` and `/licenses/ibm-plex-mono-OFL.txt` through the existing public-assets copy in the Dockerfile; standalone distributions must include `public` and `.next/static`. Original Google binary retrieval URLs, headers, time, and revision were not retained.
 
+The semantic tokens `--font-sans` and `--font-mono` are defined once, in the `@theme inline` block of
+`globals.css`, and name the families the `next/font/local` calls pin (`Instrument Sans`,
+`IBM Plex Mono`) followed by their metric-matched fallback faces. They are never mapped from the
+variables `next/font` generates (`--font-instrument-sans`, `--font-ibm-plex-mono`) and those
+variables never reuse a semantic token name: Turbopack fills the generated class with the call's
+JavaScript identifier, which matches no `@font-face`, and a token that references itself is a
+cycle. `src/app/font-tokens.test.ts` guards both rules.
+
 ## 5. Application geometry
 
 ### Desktop
