@@ -12,14 +12,20 @@ if (!databaseUrl) {
 }
 
 const parsedUrl = new URL(databaseUrl);
+// Guard the host pg actually dials: a `host` query parameter wins over the URL
+// authority, and WHATWG URL keeps the brackets on an IPv6 literal ('[::1]').
+const host = (parsedUrl.searchParams.get('host') || parsedUrl.hostname).replace(/^\[(.*)\]$/, '$1');
 if (
-  !['localhost', '127.0.0.1', '::1'].includes(parsedUrl.hostname) &&
+  !['localhost', '127.0.0.1', '::1'].includes(host) &&
+  !host.startsWith('/') &&
   process.env.ALLOW_REMOTE_RLS_TEST !== 'true'
 ) {
   throw new Error('Refusing to run the destructive RLS verifier against a non-local database.');
 }
+// pg-connection-string keeps those brackets too, and getaddrinfo rejects them.
+parsedUrl.searchParams.set('host', host);
 
-const client = new Client({ connectionString: databaseUrl });
+const client = new Client({ connectionString: parsedUrl.toString() });
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const runtimeRole = `devfathom_rls_${suffix}`;
 const organizationB = `org_rls_${suffix}`;
