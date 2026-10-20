@@ -28,6 +28,7 @@ const property: HotelLandingProperty = {
   name: 'Fathom Grand Lahore',
   city: 'Lahore',
   modeLabel: 'Hotel',
+  sellsFunctionSpaces: false,
   checkInTime: '14:00',
   checkOutTime: '12:00',
   currency: 'PKR',
@@ -111,6 +112,8 @@ describe('HotelDashboardContent', () => {
       'href',
       '/hotel/settings/meal-plans?branchId=branch_lahore'
     );
+    // A hotel sells no function space, so the spaces page is not offered.
+    expect(screen.queryByRole('link', { name: 'Set up the function spaces' })).toBeNull();
     expect(
       screen.getByRole('link', { name: 'Invite the team and assign Hotel roles' })
     ).toHaveAttribute('href', '/organization');
@@ -141,6 +144,17 @@ describe('HotelDashboardContent', () => {
     ).toBeInTheDocument();
     expect(screen.getByText('Ready to activate')).toBeInTheDocument();
     expect(screen.getByText(/Every property can be activated/)).toBeInTheDocument();
+  });
+
+  it('offers the function spaces page only for a property configured to sell them', () => {
+    mount({
+      kind: 'properties',
+      properties: [{ ...property, modeLabel: 'Venue', sellsFunctionSpaces: true }],
+    });
+    expect(screen.getByRole('link', { name: 'Set up the function spaces' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces?branchId=branch_lahore'
+    );
   });
 
   it('hides the admin-only step from a non-admin member', () => {

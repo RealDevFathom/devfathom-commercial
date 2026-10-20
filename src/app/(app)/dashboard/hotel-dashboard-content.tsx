@@ -51,6 +51,15 @@ export function HotelDashboardContent({
     properties.length === 1
       ? `/hotel/settings/meal-plans?branchId=${encodeURIComponent(properties[0]!.branchId)}`
       : '/hotel/settings/meal-plans';
+  // Offered only when a property's own configuration sells function space; the
+  // page re-checks the module and the configuration on every read.
+  const venues = properties.filter((property) => property.sellsFunctionSpaces);
+  const spacesHref =
+    venues.length === 0
+      ? null
+      : venues.length === 1
+        ? `/hotel/settings/spaces?branchId=${encodeURIComponent(venues[0]!.branchId)}`
+        : '/hotel/settings/spaces';
 
   return (
     <div className="space-y-6" data-testid="hotel-dashboard">
@@ -136,6 +145,7 @@ export function HotelDashboardContent({
               propertyHref={propertyHref}
               roomsHref={roomsHref}
               mealPlansHref={mealPlansHref}
+              spacesHref={spacesHref}
               extrasHref={extrasHref}
             />
           </div>
@@ -174,6 +184,7 @@ export function HotelDashboardContent({
             propertyHref={null}
             roomsHref={null}
             mealPlansHref={null}
+            spacesHref={null}
             extrasHref={null}
           />
         </div>
@@ -281,12 +292,14 @@ function NextSteps({
   propertyHref,
   roomsHref,
   mealPlansHref,
+  spacesHref,
   extrasHref,
 }: {
   isAdmin: boolean;
   propertyHref: string | null;
   roomsHref: string | null;
   mealPlansHref: string | null;
+  spacesHref: string | null;
   extrasHref: string | null;
 }) {
   const steps = [
@@ -310,6 +323,13 @@ function NextSteps({
           label: 'Check the meal plans you sell',
           detail:
             'Room only and bed & breakfast open on sale; half and full board wait until you enable them.',
+        }
+      : null,
+    spacesHref
+      ? {
+          href: spacesHref,
+          label: 'Set up the function spaces',
+          detail: 'Halls, lawns and boardrooms with their layouts, prices and turnaround times.',
         }
       : null,
     extrasHref

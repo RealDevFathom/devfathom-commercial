@@ -5,6 +5,7 @@ import { evaluateHotelOnboarding } from './onboarding-checklist';
 import {
   loadHotelLanding,
   modeLabelFor,
+  sellsFunctionSpaces,
   summarizeHotelLanding,
   type HotelLandingSource,
 } from './landing';
@@ -61,6 +62,7 @@ describe('loadHotelLanding', () => {
           name: 'Fathom Grand Lahore',
           city: 'Lahore',
           modeLabel: 'Hotel',
+          sellsFunctionSpaces: false,
           checkInTime: '14:00',
           checkOutTime: '12:00',
           currency: 'PKR',
@@ -115,6 +117,7 @@ describe('summarizeHotelLanding', () => {
       name: 'n',
       city: 'c',
       modeLabel: 'Hotel',
+      sellsFunctionSpaces: false,
       checkInTime: '14:00',
       checkOutTime: '12:00',
       currency: 'PKR',
@@ -137,5 +140,13 @@ describe('summarizeHotelLanding', () => {
   it('names a mode for the operator and never shows a bare enum it does not know', () => {
     expect(modeLabelFor('HOTEL')).toBe('Hotel');
     expect(modeLabelFor('UNKNOWN_MODE')).toBe('UNKNOWN_MODE');
+  });
+
+  it('reads function-space sales from the configuration, not the mode name', () => {
+    expect(sellsFunctionSpaces('VENUE', null)).toBe(true);
+    expect(sellsFunctionSpaces('HOTEL', null)).toBe(false);
+    expect(sellsFunctionSpaces('HOTEL', { functionSpaces: true })).toBe(true);
+    expect(sellsFunctionSpaces('VENUE', { functionSpaces: false })).toBe(false);
+    expect(sellsFunctionSpaces('UNKNOWN_MODE', null)).toBe(false);
   });
 });

@@ -5,6 +5,7 @@ import PropertyPage from './property/page';
 import ExtrasPage from './extras/page';
 import RoomsPage from './rooms/page';
 import MealPlansPage from './meal-plans/page';
+import SpacesPage from './spaces/page';
 const h = vi.hoisted(() => ({
   choices: vi.fn(),
   accessChoices: vi.fn(),
@@ -14,6 +15,7 @@ const h = vi.hoisted(() => ({
   roomTypes: vi.fn(),
   rooms: vi.fn(),
   mealPlans: vi.fn(),
+  spaces: vi.fn(),
   order: [] as string[],
 }));
 vi.mock('@/server/trpc', () => ({
@@ -26,6 +28,7 @@ vi.mock('@/server/routers/hotel-property', () => ({
       get: h.get,
       extras: { properties: h.choices, list: h.list },
       inventory: { roomTypes: { list: h.roomTypes }, rooms: { list: h.rooms } },
+      spaces: { list: h.spaces },
     }),
   },
 }));
@@ -52,7 +55,12 @@ vi.mock('@/components/hotel/meal-plans-panel', () => ({
     <div>Meal plans for {selection.branchId}</div>
   ),
 }));
-const reads = [h.get, h.list, h.roomTypes, h.rooms, h.mealPlans];
+vi.mock('@/components/hotel/function-spaces-panel', () => ({
+  HotelFunctionSpacesPanel: ({ selection }: { selection: { branchId: string } }) => (
+    <div>Function spaces for {selection.branchId}</div>
+  ),
+}));
+const reads = [h.get, h.list, h.roomTypes, h.rooms, h.mealPlans, h.spaces];
 beforeEach(() => {
   vi.clearAllMocks();
   h.order = [];
@@ -92,6 +100,10 @@ beforeEach(() => {
     h.order.push('mealPlans');
     return {};
   });
+  h.spaces.mockImplementation(async () => {
+    h.order.push('spaces');
+    return {};
+  });
 });
 afterEach(cleanup);
 const pages = [
@@ -105,6 +117,7 @@ const pages = [
   },
   // Meal plans are rate administration, so the page's gate and chooser use `hotel:rates`.
   { name: 'meal-plans', page: MealPlansPage, reads: ['mealPlans'], capability: 'hotel:rates' },
+  { name: 'spaces', page: SpacesPage, reads: ['spaces'], capability: 'hotel:property-admin' },
 ];
 describe('Explicit Hotel settings property selection', () => {
   it.each(pages)('$name never selects a default', async ({ page }) => {
@@ -168,6 +181,46 @@ describe('Explicit Hotel settings property selection', () => {
       'href',
       '/hotel/settings/meal-plans?branchId=two'
     );
+  });
+  it('mounts the spaces panel with the selection it was opened for', async () => {
+    render(await SpacesPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(screen.getByText('Function spaces for two')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Two Hotel' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Change property' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces'
+    );
+  });
+  it('tells a workspace without Banquets and Events apart from a member without access', async () => {
+    h.spaces.mockRejectedValueOnce(
+      new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          'Function spaces need the Banquets and Events module, which this workspace does not have.',
+      })
+    );
+    render(await SpacesPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(
+      screen.getByRole('heading', {
+        level: 2,
+        name: 'Function spaces are not part of this workspace’s package',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to the dashboard' })).toHaveAttribute(
+      'href',
+      '/dashboard'
+    );
+    expect(screen.queryByRole('link', { name: 'Choose another property' })).toBeNull();
+    cleanup();
+    h.select.mockRejectedValueOnce(new TRPCError({ code: 'FORBIDDEN' }));
+    render(await SpacesPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(
+      screen.getByRole('heading', {
+        level: 2,
+        name: 'You cannot manage this property’s function spaces',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Choose another property' })).toBeInTheDocument();
   });
   it('mounts the rooms panel with the selection it was opened for', async () => {
     render(await RoomsPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));

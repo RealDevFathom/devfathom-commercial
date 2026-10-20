@@ -12,6 +12,8 @@
  */
 import { TRPCError } from '@trpc/server';
 
+import { readHotelModeOverrides } from '@/lib/hotel/mode-overrides';
+import { applyHotelModeDefaults } from '@/lib/hotel/modes';
 import { HOTEL_PROPERTY_MODE_LABELS, type HotelPropertyModeValue } from '@/lib/hotel/property';
 import type { HotelOnboardingChecklist } from '@/lib/hotel/onboarding-checklist';
 
@@ -27,6 +29,8 @@ export type HotelLandingSource = {
       name: string;
       city: string;
       mode: string;
+      /** Explicit configuration; absent on an older read means the mode's defaults. */
+      modeOverrides?: unknown;
       checkInTime: string;
       checkOutTime: string;
       currency: string;
@@ -43,6 +47,12 @@ export type HotelLandingProperty = {
   city: string;
   /** Operator-facing mode name, never the enum value (UX rule 1). */
   modeLabel: string;
+  /**
+   * Whether the property's configuration (mode plus explicit overrides) sells
+   * function space — what decides whether the landing offers the spaces page.
+   * The page itself re-checks the module and the configuration.
+   */
+  sellsFunctionSpaces: boolean;
   checkInTime: string;
   checkOutTime: string;
   currency: string;
@@ -72,6 +82,15 @@ export type HotelLandingSummary = {
 
 export function modeLabelFor(mode: string): string {
   return HOTEL_PROPERTY_MODE_LABELS[mode as HotelPropertyModeValue] ?? mode;
+}
+
+/** The property's own configuration, never a mode name: VENUE by default, or an override. */
+export function sellsFunctionSpaces(mode: string, modeOverrides: unknown): boolean {
+  if (!(mode in HOTEL_PROPERTY_MODE_LABELS)) return false;
+  return applyHotelModeDefaults(
+    mode as HotelPropertyModeValue,
+    readHotelModeOverrides(modeOverrides)
+  ).functionSpaces;
 }
 
 /** The KPI ledger figures, from already-loaded properties. Pure, so it is testable alone. */
@@ -106,6 +125,7 @@ export async function loadHotelLanding(source: HotelLandingSource): Promise<Hote
           name: view.property.name,
           city: view.property.city,
           modeLabel: modeLabelFor(view.property.mode),
+          sellsFunctionSpaces: sellsFunctionSpaces(view.property.mode, view.property.modeOverrides),
           checkInTime: view.property.checkInTime,
           checkOutTime: view.property.checkOutTime,
           currency: view.property.currency,
