@@ -1,5 +1,5 @@
 import { cleanup, fireEvent, render, screen } from '@testing-library/react';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { EntitlementsProvider } from '@/components/entitlements-provider';
 import type { EntitlementView } from '@/lib/module-catalog';
@@ -9,6 +9,16 @@ const useSessionMock = vi.hoisted(() =>
   vi.fn(() => ({ data: { user: { role: 'ADMIN', name: 'Test operator' } } }))
 );
 const usePathnameMock = vi.hoisted(() => vi.fn(() => '/dashboard'));
+// The hospitality rail's one read; unanswered unless a hospitality case sets it.
+const railQuery = vi.hoisted(() => ({
+  data: undefined as
+    | undefined
+    | {
+        userId: string;
+        organizationId: string;
+        properties: { branchId: string; name: string; capabilities: string[] }[];
+      },
+}));
 
 vi.mock('next/link', () => ({
   default: ({ href, children, onClick, ...props }: React.ComponentProps<'a'>) => (
@@ -43,10 +53,10 @@ vi.mock('motion/react', () => ({
 vi.mock('@/lib/trpc', () => ({
   trpc: {
     hotelProperty: {
-      extras: {
-        properties: {
+      access: {
+        propertiesByCapability: {
           useQuery: () => ({
-            data: undefined,
+            data: railQuery.data,
             isError: false,
             isFetching: false,
             refetch: vi.fn(),
@@ -303,4 +313,125 @@ describe.each(['mobile', 'desktop'] as const)('%s Pharmacy navigation', (surface
     ).toHaveLength(1);
     expect(screen.getByRole('link', { name: /Onboarding$/ })).not.toHaveAttribute('aria-current');
   });
+});
+
+describe.each(['mobile', 'desktop'] as const)('%s Hospitality navigation', (surface) => {
+  const hotelModules = ['hotel-core', 'hotel-banquets', 'hotel-upsell'];
+  const everyRailCapability = ['hotel:property-admin', 'hotel:rates', 'hotel:marketing'];
+  const entries = [
+    ['Property', '/hotel/settings/property'],
+    ['Rooms', '/hotel/settings/rooms'],
+    ['Meal plans', '/hotel/settings/meal-plans'],
+    ['Function spaces', '/hotel/settings/spaces'],
+    ['Extras', '/hotel/settings/extras'],
+    ['Guest messages', '/hotel/settings/journey'],
+  ] as const;
+
+  /** Renders the rail for a member holding `capabilities` at one property; returns its hotel links. */
+  function renderRail({
+    capabilities,
+    vertical = 'HOSPITALITY',
+    granted = hotelModules,
+    pathname = '/dashboard',
+  }: {
+    capabilities: string[];
+    vertical?: EntitlementView['vertical'];
+    granted?: string[];
+    pathname?: string;
+  }) {
+    const user = {
+      id: 'member-1',
+      organizationId: 'hotel-1',
+      role: 'MEMBER',
+      status: 'ACTIVE',
+      name: 'Test operator',
+    };
+    useSessionMock.mockReturnValue({ data: { user } } as unknown as ReturnType<
+      typeof useSessionMock
+    >);
+    usePathnameMock.mockReturnValue(pathname);
+    railQuery.data = {
+      userId: user.id,
+      organizationId: user.organizationId,
+      properties: [{ branchId: 'property-1', name: 'Fathom Grand', capabilities }],
+    };
+    render(
+      <EntitlementsProvider
+        value={{
+          organizationId: 'hotel-1',
+          vertical,
+          seatLimit: 10,
+          activeSeats: 1,
+          enabledModules: granted,
+          modules: [],
+          limits: {},
+        }}
+      >
+        {surface === 'mobile' ? <Sidebar collapsible={false} /> : <TopNavigation />}
+      </EntitlementsProvider>
+    );
+    return screen
+      .getAllByRole('link')
+      .map((link) => link.getAttribute('href'))
+      .filter((href) => href?.startsWith('/hotel/'));
+  }
+
+  afterEach(() => {
+    railQuery.data = undefined;
+  });
+
+  it('renders every entry, named and focusable, to a member holding every rail capability', () => {
+    expect(renderRail({ capabilities: everyRailCapability })).toEqual(
+      entries.map(([, href]) => href)
+    );
+    for (const [label, href] of entries) {
+      const link = screen.getByRole('link', { name: new RegExp(`${label}$`) });
+      expect(link).toHaveAttribute('href', href);
+      expect(link.tabIndex).toBe(0);
+    }
+  });
+
+  it.each([
+    [['hotel:rates'], ['/hotel/settings/meal-plans']],
+    [['hotel:marketing'], ['/hotel/settings/journey']],
+    [
+      ['hotel:property-admin'],
+      [
+        '/hotel/settings/property',
+        '/hotel/settings/rooms',
+        '/hotel/settings/spaces',
+        '/hotel/settings/extras',
+        '/hotel/settings/journey',
+      ],
+    ],
+  ])('shows a member holding %j only the pages it opens', (capabilities, expected) => {
+    expect(renderRail({ capabilities })).toEqual(expected);
+  });
+
+  it('licenses Function spaces on Banquets and Guest messages on Guest Journey and Upsell', () => {
+    expect(renderRail({ capabilities: everyRailCapability, granted: ['hotel-core'] })).toEqual([
+      '/hotel/settings/property',
+      '/hotel/settings/rooms',
+      '/hotel/settings/meal-plans',
+      '/hotel/settings/extras',
+    ]);
+  });
+
+  it('marks only Guest messages current on its page', () => {
+    renderRail({ capabilities: ['hotel:marketing'], pathname: '/hotel/settings/journey' });
+    expect(screen.getByRole('link', { name: /Guest messages$/ })).toHaveAttribute(
+      'aria-current',
+      'page'
+    );
+    expect(
+      screen.getAllByRole('link').filter((link) => link.getAttribute('aria-current') === 'page')
+    ).toHaveLength(1);
+  });
+
+  it.each(['RESTAURANT', 'PHARMACY', 'AGENCY'] as const)(
+    'shows %s no hospitality entry even with every hotel module and capability',
+    (vertical) => {
+      expect(renderRail({ capabilities: everyRailCapability, vertical })).toEqual([]);
+    }
+  );
 });

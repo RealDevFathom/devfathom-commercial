@@ -187,3 +187,50 @@ describe('pharmacy navigation', () => {
     expect(visible).toEqual(expect.arrayContaining(pharmacyRoutes));
   });
 });
+
+describe('hospitality navigation', () => {
+  const hotelModules = ['hotel-core', 'hotel-banquets', 'hotel-upsell'];
+  const everyRailCapability = ['hotel:property-admin', 'hotel:rates', 'hotel:marketing'] as const;
+
+  it('defines the hospitality group in setup order, each entry with the capability its page checks', () => {
+    expect(
+      navigation
+        .filter((item) => item.group === 'Hospitality')
+        .map((item) => [item.href, item.hotelCapabilities])
+    ).toEqual([
+      ['/hotel/settings/property', ['hotel:property-admin']],
+      ['/hotel/settings/rooms', ['hotel:property-admin']],
+      ['/hotel/settings/meal-plans', ['hotel:rates']],
+      ['/hotel/settings/spaces', ['hotel:property-admin']],
+      ['/hotel/settings/extras', ['hotel:property-admin']],
+      ['/hotel/settings/journey', ['hotel:property-admin', 'hotel:marketing']],
+    ]);
+  });
+
+  it('keeps restaurant and pharmacy entries out of a hospitality workspace holding every hotel capability', () => {
+    const visible = visibleNavigation(
+      {
+        vertical: 'HOSPITALITY',
+        enabledModules: [...hotelModules, 'restaurant-core', 'pharmacy-core', 'pharmacy-counter'],
+      },
+      'ADMIN',
+      everyRailCapability
+    );
+    expect(
+      visible.filter((item) => item.group === 'Restaurant' || item.group === 'Pharmacy')
+    ).toEqual([]);
+    expect(visible.filter((item) => item.group === 'Hospitality')).toHaveLength(6);
+  });
+
+  it.each(['RESTAURANT', 'PHARMACY', 'AGENCY'] as const)(
+    'keeps every hospitality entry out of %s even with every hotel module and capability',
+    (vertical) => {
+      const visible = visibleNavigation(
+        { vertical, enabledModules: hotelModules },
+        'ADMIN',
+        everyRailCapability
+      );
+      expect(visible.filter((item) => item.group === 'Hospitality')).toEqual([]);
+    }
+  );
+});

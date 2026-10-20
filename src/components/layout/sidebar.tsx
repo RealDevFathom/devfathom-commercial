@@ -47,6 +47,8 @@ import {
   Pill,
   Tags,
   BedDouble,
+  DoorOpen,
+  MessageSquareText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -60,8 +62,12 @@ import { evaluateSessionUser } from '@/lib/auth/session-state';
 import type { TenantBrand } from '@/lib/tenant-brand';
 import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
 import type { EntitlementView } from '@/lib/module-catalog';
+import type { Action } from '@/lib/abac/policies';
 
 type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Hospitality' | 'Firm';
+
+/** A hospitality property capability, as the property scope check names it. */
+export type HotelCapability = Extract<Action, `hotel:${string}`>;
 
 interface NavItem {
   label: string;
@@ -72,6 +78,14 @@ interface NavItem {
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
   module?: string;
+  /**
+   * Hospitality entries only: the property capabilities that open this entry's
+   * page, exactly as the page checks them. The entry shows when the signed-in
+   * member holds any of them at some assigned property, so a member whose role
+   * grants rates or marketing alone sees those pages and nothing else. A
+   * Hospitality entry that names none never shows.
+   */
+  hotelCapabilities?: readonly HotelCapability[];
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -383,17 +397,48 @@ export const navigation: NavItem[] = [
   },
   // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
   // every operating surface arrives with its own lane, and a nav entry pointing
-  // at a route that does not exist is a dead end (UX rule 12). Gated on mandatory
-  // Hotel Core through explicit module ownership, so the vertical filter hides
-  // it from restaurant and pharmacy workspaces without a `/hotel` catch-all.
+  // at a route that does not exist is a dead end (UX rule 12). Gated through
+  // explicit module ownership, so the vertical filter hides it from restaurant
+  // and pharmacy workspaces without a `/hotel` catch-all, and per entry on the
+  // capability its page checks (`hotelCapabilities`), so each entry shows to
+  // whoever holds that capability at some property and to no one else.
   // Labelled by what it configures: the workspace "Settings" entry sits in the
-  // same rail, and two entries reading "Settings" named nothing.
+  // same rail, and two entries reading "Settings" named nothing. In the order a
+  // property is set up: the property, what it sells, then what it adds.
   {
     label: 'Property',
     href: '/hotel/settings/property',
     icon: BedDouble,
     group: 'Hospitality',
     module: 'hotel-core',
+    hotelCapabilities: ['hotel:property-admin'],
+  },
+  // PROP-02 / PROP-03 — room types, rooms, beds and units, their status and blocks.
+  {
+    label: 'Rooms',
+    href: '/hotel/settings/rooms',
+    icon: DoorOpen,
+    group: 'Hospitality',
+    module: 'hotel-core',
+    hotelCapabilities: ['hotel:property-admin'],
+  },
+  // MEAL-01 — the board bases a property sells: rates work, not property administration.
+  {
+    label: 'Meal plans',
+    href: '/hotel/settings/meal-plans',
+    icon: UtensilsCrossed,
+    group: 'Hospitality',
+    module: 'hotel-core',
+    hotelCapabilities: ['hotel:rates'],
+  },
+  // PROP-07 — halls, lawns and boardrooms; licensed by Banquets.
+  {
+    label: 'Function spaces',
+    href: '/hotel/settings/spaces',
+    icon: LayoutGrid,
+    group: 'Hospitality',
+    module: 'hotel-banquets',
+    hotelCapabilities: ['hotel:property-admin'],
   },
   // H1-06 (PROP-05) — the extras catalog every folio charge will name.
   {
@@ -402,6 +447,17 @@ export const navigation: NavItem[] = [
     icon: Tags,
     group: 'Hospitality',
     module: 'hotel-core',
+    hotelCapabilities: ['hotel:property-admin'],
+  },
+  // UPS-04 — what a property sends a guest at each step of a stay; licensed by
+  // Guest Journey and Upsell. Marketing drafts; property administration approves.
+  {
+    label: 'Guest messages',
+    href: '/hotel/settings/journey',
+    icon: MessageSquareText,
+    group: 'Hospitality',
+    module: 'hotel-upsell',
+    hotelCapabilities: ['hotel:property-admin', 'hotel:marketing'],
   },
   {
     label: 'Reviews',
@@ -442,10 +498,21 @@ export const navigation: NavItem[] = [
 
 const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospitality', 'Firm'];
 
+/** Every capability a hospitality entry names, asked about in one rail query. */
+const HOTEL_RAIL_CAPABILITIES: HotelCapability[] = [
+  ...new Set(navigation.flatMap((item) => item.hotelCapabilities ?? [])),
+];
+const NO_HOTEL_CAPABILITIES: readonly HotelCapability[] = [];
+
+/**
+ * `hotelCapabilities` are the property capabilities the member holds at one or
+ * more of their assigned properties (none by default). A Hospitality entry
+ * shows when it names one of them; every other entry ignores them.
+ */
 export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
   role?: string,
-  hotelPropertyAccess = false
+  hotelCapabilities: readonly HotelCapability[] = NO_HOTEL_CAPABILITIES
 ) {
   const isAdmin = role === 'ADMIN';
   const isHr = role === 'HR';
@@ -459,7 +526,10 @@ export function visibleNavigation(
       if (moduleVertical && entitlements.vertical && moduleVertical !== entitlements.vertical)
         return false;
       if (moduleKey && !isModuleGranted(moduleKey, entitlements.enabledModules)) return false;
-      if (item.group === 'Hospitality') return hotelPropertyAccess;
+      if (item.group === 'Hospitality')
+        return (item.hotelCapabilities ?? []).some((capability) =>
+          hotelCapabilities.includes(capability)
+        );
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;
       return true;
@@ -478,26 +548,36 @@ function useVisibleNavigation() {
     entitlements.vertical === 'HOSPITALITY' &&
     isModuleGranted('hotel-core', entitlements.enabledModules)
   );
-  const properties = trpc.hotelProperty.extras.properties.useQuery(undefined, {
-    enabled: propertiesEnabled,
-    retry: false,
-    staleTime: 0,
-    refetchOnMount: 'always',
-  });
+  // One read for the whole rail: the member's assigned properties, each with
+  // the capabilities this member holds there, every one resolved through the
+  // same scope check the pages repeat — so the rail never shows an entry its
+  // page would refuse.
+  const properties = trpc.hotelProperty.access.propertiesByCapability.useQuery(
+    { capabilities: HOTEL_RAIL_CAPABILITIES },
+    {
+      enabled: propertiesEnabled,
+      retry: false,
+      staleTime: 0,
+      refetchOnMount: 'always',
+    }
+  );
   const refetchProperties = properties.refetch;
   useEffect(() => {
     if (propertiesEnabled) void refetchProperties();
   }, [propertiesEnabled, session?.user.id, session?.user.organizationId, refetchProperties]);
-  // A cached response for another signed-in identity cannot expose this entry.
-  const hotelPropertyAccess = Boolean(
+  // A cached response for another signed-in identity cannot expose an entry.
+  const current = Boolean(
     propertiesEnabled &&
     !properties.isError &&
     !properties.isFetching &&
     properties.data?.userId === session?.user.id &&
-    properties.data?.organizationId === session?.user.organizationId &&
-    properties.data?.properties.length
+    properties.data?.organizationId === session?.user.organizationId
   );
-  const filteredNav = visibleNavigation(entitlements, session?.user?.role, hotelPropertyAccess);
+  const hotelCapabilities =
+    current && properties.data
+      ? [...new Set(properties.data.properties.flatMap((property) => property.capabilities))]
+      : NO_HOTEL_CAPABILITIES;
+  const filteredNav = visibleNavigation(entitlements, session?.user?.role, hotelCapabilities);
 
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
   const matchingHrefs = filteredNav
