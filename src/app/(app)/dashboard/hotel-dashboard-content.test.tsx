@@ -28,6 +28,7 @@ const property: HotelLandingProperty = {
   name: 'Fathom Grand Lahore',
   city: 'Lahore',
   modeLabel: 'Hotel',
+  sellsRooms: true,
   sellsFunctionSpaces: false,
   checkInTime: '14:00',
   checkOutTime: '12:00',
@@ -154,6 +155,83 @@ describe('HotelDashboardContent', () => {
     expect(screen.getByRole('link', { name: 'Set up the function spaces' })).toHaveAttribute(
       'href',
       '/hotel/settings/spaces?branchId=branch_lahore'
+    );
+  });
+
+  it('walks a venue to a function space instead of a room type, and offers no rooms page', () => {
+    const venueChecklist = evaluateHotelOnboarding('org_venue', {
+      MODE_CHOSEN: true,
+      PROPERTY_FACTS: true,
+      TAX_PROFILE: true,
+      BUSINESS_DATE_AND_AUDIT: true,
+      ROLES_ASSIGNED: true,
+      FUNCTION_SPACES: true,
+    });
+    mount({
+      kind: 'properties',
+      properties: [
+        {
+          ...property,
+          branchId: 'branch_venue',
+          name: 'Fathom Lawns',
+          modeLabel: 'Venue',
+          sellsRooms: false,
+          sellsFunctionSpaces: true,
+          checklist: venueChecklist,
+          activationSummary: 'Every readiness step is done. This property can be activated.',
+        },
+      ],
+    });
+    const walk = document
+      .querySelector('[data-slot="readiness-checklist"]')!
+      .closest<HTMLElement>('[data-slot="section-card"]')!;
+    expect(within(walk).getAllByRole('listitem')).toHaveLength(6);
+    expect(within(walk).getByText('At least one active function space')).toBeInTheDocument();
+    expect(within(walk).queryByText('At least one room type')).not.toBeInTheDocument();
+    expect(within(walk).getByRole('link', { name: /Open function spaces/ })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces?branchId=branch_venue'
+    );
+    expect(within(walk).queryByRole('link', { name: /Open rooms/ })).not.toBeInTheDocument();
+    expect(
+      screen.getByRole('heading', { level: 2, name: 'Fathom Lawns is ready to activate' })
+    ).toBeInTheDocument();
+    // The header and the next steps follow what the venue sells.
+    expect(screen.queryByRole('link', { name: 'Rooms' })).not.toBeInTheDocument();
+    expect(screen.queryByRole('link', { name: 'Add room types and rooms' })).toBeNull();
+    expect(screen.getByRole('link', { name: 'Function spaces' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces?branchId=branch_venue'
+    );
+    expect(screen.getByRole('link', { name: 'Set up the function spaces' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces?branchId=branch_venue'
+    );
+  });
+
+  it('offers rooms for the property that sells them when another property is a venue', () => {
+    mount({
+      kind: 'properties',
+      properties: [
+        property,
+        {
+          ...property,
+          branchId: 'branch_venue',
+          name: 'Fathom Lawns',
+          modeLabel: 'Venue',
+          sellsRooms: false,
+          sellsFunctionSpaces: true,
+        },
+      ],
+    });
+    expect(screen.getByRole('link', { name: 'Rooms' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/rooms?branchId=branch_lahore'
+    );
+    expect(screen.queryByRole('link', { name: 'Function spaces' })).not.toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Set up the function spaces' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/spaces?branchId=branch_venue'
     );
   });
 

@@ -43,6 +43,7 @@ const db = {
   hotelProperty: { update: vi.fn(), findUniqueOrThrow: vi.fn() },
   hotelPropertyAssignment: { findFirst: vi.fn(), upsert: vi.fn(), count: vi.fn() },
   hotelRoomType: { count: vi.fn() },
+  hotelFunctionSpace: { count: vi.fn() },
 };
 const client = db as unknown as PrismaClient;
 beforeEach(() => {
@@ -71,6 +72,7 @@ beforeEach(() => {
   });
   db.hotelPropertyAssignment.count.mockResolvedValue(1);
   db.hotelRoomType.count.mockResolvedValue(1);
+  db.hotelFunctionSpace.count.mockResolvedValue(0);
   db.hotelProperty.findUniqueOrThrow.mockResolvedValue(facts);
   db.hotelProperty.update.mockImplementation(async ({ data }: { data: { active: boolean } }) => ({
     branchId: 'property_1',
@@ -201,6 +203,55 @@ describe('platform Hotel property maintenance', () => {
         }),
       })
     );
+    expect(db.hotelFunctionSpace.count).not.toHaveBeenCalled();
+  });
+  it('returns a venue to service on an active function space, counted under that property, with no room type', async () => {
+    db.hotelProperty.findUniqueOrThrow.mockResolvedValue({
+      ...facts,
+      mode: 'VENUE',
+      modeOverrides: null,
+    });
+    db.hotelRoomType.count.mockResolvedValue(0);
+    db.hotelFunctionSpace.count.mockResolvedValue(1);
+    expect(await reactivateHotelProperty(client, 'org_1', 'property_1')).toMatchObject({
+      active: true,
+    });
+    expect(db.hotelProperty.findUniqueOrThrow).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ mode: true, modeOverrides: true }),
+      })
+    );
+    expect(db.hotelFunctionSpace.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', branchId: 'property_1', active: true },
+    });
+    expect(db.hotelRoomType.count).not.toHaveBeenCalled();
+  });
+  it('refuses a venue without an active function space, naming the step, whatever room types it holds', async () => {
+    db.hotelProperty.findUniqueOrThrow.mockResolvedValue({
+      ...facts,
+      mode: 'VENUE',
+      modeOverrides: null,
+    });
+    db.hotelRoomType.count.mockResolvedValue(5);
+    db.hotelFunctionSpace.count.mockResolvedValue(0);
+    await expect(reactivateHotelProperty(client, 'org_1', 'property_1')).rejects.toThrow(
+      'At least one active function space'
+    );
+    expect(db.hotelProperty.update).not.toHaveBeenCalled();
+  });
+  it('keeps the room-type step for a venue whose configuration sells rooms', async () => {
+    db.hotelProperty.findUniqueOrThrow.mockResolvedValue({
+      ...facts,
+      mode: 'VENUE',
+      modeOverrides: { inventoryKinds: ['UNIT'] },
+    });
+    db.hotelRoomType.count.mockResolvedValue(0);
+    db.hotelFunctionSpace.count.mockResolvedValue(3);
+    await expect(reactivateHotelProperty(client, 'org_1', 'property_1')).rejects.toThrow(
+      'At least one room type'
+    );
+    expect(db.hotelFunctionSpace.count).not.toHaveBeenCalled();
+    expect(db.hotelProperty.update).not.toHaveBeenCalled();
   });
 });
 

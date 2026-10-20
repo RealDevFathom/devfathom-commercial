@@ -17,9 +17,9 @@ import {
  * H1 — the hospitality landing page.
  *
  * A HOSPITALITY workspace has no revenue, projects, tasks or invoices to show,
- * and its operating surfaces (rooms, reservations, folios) arrive with later
- * lanes. What exists today is the property onboarding walk, the property list
- * and the extras catalog, so the landing is built from exactly those, in the
+ * and its operating surfaces (reservations, folios) arrive with later lanes.
+ * What exists today is the property onboarding walk, the property list and the
+ * configuration pages, so the landing is built from exactly those, in the
  * Studio dashboard order: header → KPI ledger → the setup walk as the decision
  * panel → the property list and next steps as the watch list. Every state
  * (no access, no property, load failure) says what happened and what to do.
@@ -43,10 +43,15 @@ export function HotelDashboardContent({
     properties.length === 1
       ? `/hotel/settings/extras?branchId=${encodeURIComponent(properties[0]!.branchId)}`
       : '/hotel/settings/extras';
+  // Offered only where a property sells rooms, beds or units: a venue's walk asks
+  // for a function space instead, and its rooms page could add nothing.
+  const roomSellers = properties.filter((property) => property.sellsRooms);
   const roomsHref =
-    properties.length === 1
-      ? `/hotel/settings/rooms?branchId=${encodeURIComponent(properties[0]!.branchId)}`
-      : '/hotel/settings/rooms';
+    roomSellers.length === 0
+      ? null
+      : roomSellers.length === 1
+        ? `/hotel/settings/rooms?branchId=${encodeURIComponent(roomSellers[0]!.branchId)}`
+        : '/hotel/settings/rooms';
   const mealPlansHref =
     properties.length === 1
       ? `/hotel/settings/meal-plans?branchId=${encodeURIComponent(properties[0]!.branchId)}`
@@ -82,9 +87,21 @@ export function HotelDashboardContent({
               >
                 Property settings
               </Link>
-              <Link className={buttonVariants({ variant: 'outline', size: 'lg' })} href={roomsHref}>
-                Rooms
-              </Link>
+              {roomsHref ? (
+                <Link
+                  className={buttonVariants({ variant: 'outline', size: 'lg' })}
+                  href={roomsHref}
+                >
+                  Rooms
+                </Link>
+              ) : spacesHref ? (
+                <Link
+                  className={buttonVariants({ variant: 'outline', size: 'lg' })}
+                  href={spacesHref}
+                >
+                  Function spaces
+                </Link>
+              ) : null}
               <Link className={buttonVariants({ size: 'lg' })} href={extrasHref}>
                 Extras catalog
               </Link>

@@ -60,6 +60,7 @@ const db = {
   hotelMealPlan: { createMany: mocks.mealPlanCreateMany },
   hotelJourneyTemplate: { createMany: mocks.journeyCreateMany },
   hotelRoomType: { count: vi.fn(async () => 0) },
+  hotelFunctionSpace: { count: vi.fn(async () => 0) },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },
   organizationDeployment: { create: record() },
@@ -191,6 +192,77 @@ describe('Hospitality provisioning foundation', () => {
       })
     );
     expect(db.organizationLifecycleEvent.create).toHaveBeenCalledTimes(1);
+  });
+
+  describe('a venue, whose configuration sells no room inventory', () => {
+    const venueOrganization = {
+      id: 'org_new',
+      status: 'ONBOARDING',
+      vertical: 'HOSPITALITY',
+      packageId: 'package_1',
+      package: { moduleLinks: [{ enabled: true }] },
+      modules: [],
+      users: [{ id: 'named_admin' }],
+      deployments: [{ status: 'READY' }],
+      activatedAt: null,
+    };
+    const venueProperty = {
+      branchId: 'created_property',
+      mode: 'VENUE',
+      modeOverrides: null,
+      name: 'Example Venue',
+      addressLine: 'Synthetic street',
+      city: 'Lahore',
+      timezone: 'Asia/Karachi',
+      checkInTime: '14:00',
+      checkOutTime: '12:00',
+      auditTime: '03:00',
+      taxProfileId: 'tax_1',
+      businessDatePolicy: { rollover: 'audit' },
+    };
+
+    it('refuses activation without an active function space, naming that step, even with room types', async () => {
+      db.organization.findUnique.mockResolvedValue(venueOrganization);
+      db.organizationRole.count.mockResolvedValue(15);
+      db.hotelProperty.findFirst.mockResolvedValue(venueProperty);
+      db.hotelRoomType.count.mockResolvedValue(2);
+      db.hotelFunctionSpace.count.mockResolvedValue(0);
+      await expect(
+        executePlatformCommand(
+          actor,
+          'organization.transition',
+          { id: 'org_new', status: 'ACTIVE', reason: 'Synthetic activation check' },
+          request
+        )
+      ).rejects.toThrow('hotel onboarding steps not done (FUNCTION_SPACES)');
+      expect(db.organization.update).not.toHaveBeenCalled();
+      expect(db.organizationLifecycleEvent.create).not.toHaveBeenCalled();
+    });
+
+    it('activates once the venue holds one active function space, counted under that property, with no room type', async () => {
+      db.organization.findUnique.mockResolvedValue(venueOrganization);
+      db.organizationRole.count.mockResolvedValue(15);
+      db.hotelProperty.findFirst.mockResolvedValue(venueProperty);
+      db.hotelRoomType.count.mockResolvedValue(0);
+      db.hotelFunctionSpace.count.mockResolvedValue(1);
+      await executePlatformCommand(
+        actor,
+        'organization.transition',
+        { id: 'org_new', status: 'ACTIVE', reason: 'Synthetic activation check' },
+        request
+      );
+      expect(db.hotelFunctionSpace.count).toHaveBeenCalledWith({
+        where: { organizationId: 'org_new', branchId: 'created_property', active: true },
+      });
+      expect(db.hotelRoomType.count).not.toHaveBeenCalled();
+      expect(db.organization.update).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: { id: 'org_new' },
+          data: expect.objectContaining({ status: 'ACTIVE' }),
+        })
+      );
+      expect(db.organizationLifecycleEvent.create).toHaveBeenCalledTimes(1);
+    });
   });
 
   it('assigns only the named administrator to the created property using this organization Owner role', async () => {

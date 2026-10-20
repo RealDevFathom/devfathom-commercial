@@ -5,10 +5,13 @@
  * already expose (`hotelProperty.extras.properties`, `hotelProperty.get`,
  * `hotelProperty.extras.list`), so the landing can never disagree with the
  * property settings page about readiness or access: the same router answers
- * both, through the same `hotel:property-admin` gate.
+ * both, through the same `hotel:property-admin` gate. That includes what the
+ * property sells: whether the landing offers the rooms page follows the walk
+ * the router chose — a room-type step for a property that sells room
+ * inventory, a function-space step for one that sells none (a venue).
  *
- * Reservations, rooms and folios are not shipped in this build; the landing
- * says so instead of rendering the agency widgets.
+ * Reservations and folios are not shipped in this build; the landing says so
+ * instead of rendering the agency widgets.
  */
 import { TRPCError } from '@trpc/server';
 
@@ -48,6 +51,13 @@ export type HotelLandingProperty = {
   /** Operator-facing mode name, never the enum value (UX rule 1). */
   modeLabel: string;
   /**
+   * Whether the property sells rooms, beds or units — read off the walk the
+   * router built for it (its step 6 asks for a room type), so the landing
+   * offers the rooms page exactly where readiness asks for a room type and
+   * never on a venue, whose step 6 asks for a function space instead.
+   */
+  sellsRooms: boolean;
+  /**
    * Whether the property's configuration (mode plus explicit overrides) sells
    * function space — what decides whether the landing offers the spaces page.
    * The page itself re-checks the module and the configuration.
@@ -82,6 +92,11 @@ export type HotelLandingSummary = {
 
 export function modeLabelFor(mode: string): string {
   return HOTEL_PROPERTY_MODE_LABELS[mode as HotelPropertyModeValue] ?? mode;
+}
+
+/** Does this walk ask for a room type? The venue walk asks for a function space instead. */
+export function walkSellsRooms(checklist: HotelOnboardingChecklist): boolean {
+  return checklist.items.some((item) => item.key === 'ROOM_TYPES');
 }
 
 /** The property's own configuration, never a mode name: VENUE by default, or an override. */
@@ -125,6 +140,7 @@ export async function loadHotelLanding(source: HotelLandingSource): Promise<Hote
           name: view.property.name,
           city: view.property.city,
           modeLabel: modeLabelFor(view.property.mode),
+          sellsRooms: walkSellsRooms(view.checklist),
           sellsFunctionSpaces: sellsFunctionSpaces(view.property.mode, view.property.modeOverrides),
           checkInTime: view.property.checkInTime,
           checkOutTime: view.property.checkOutTime,

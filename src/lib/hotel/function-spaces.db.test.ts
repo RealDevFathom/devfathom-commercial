@@ -38,6 +38,7 @@ import {
   releaseSpaceHold,
   spaceAvailability,
 } from '@/lib/hotel/function-spaces';
+import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -727,6 +728,119 @@ describeIfDatabase('function spaces: a booking and a buffer change on two connec
       constraint: 'hotel_space_bookings_space_no_overlap',
     });
     await second.query('ROLLBACK');
+  });
+});
+
+/**
+ * Step 6 of the onboarding walk at a venue — a property whose configuration
+ * sells no room inventory, so it could never add the room type the walk asks a
+ * hotel for. The step is answered by the property's own active function
+ * spaces, counted as the tenant under forced RLS: a space at the venue's other
+ * property, or one taken off sale, answers nothing.
+ */
+describeIfDatabase('function spaces: the onboarding walk at a venue', () => {
+  const venue: Tenant = {
+    organizationId: `hotel_spaces_v_${suffix}`,
+    userId: '',
+    branchId: '',
+    secondBranchId: '',
+  };
+  const layouts = [{ layout: 'Banquet', capacity: 300 }];
+
+  beforeAll(async () => {
+    assertLocal(TEST_DATABASE_URL!);
+    if (!db) await seedTenants();
+    const scoped = await import('@/lib/tenancy/scoped-db');
+    const { seedHotelTenant } = await import('@/lib/testing/hotel-tenant-fixture');
+    const seeded = await seedHotelTenant(scoped.withPlatformDb, {
+      organizationId: venue.organizationId,
+      properties: [{ name: 'Main lawns' }, { name: 'Second lawns' }],
+    });
+    venue.userId = seeded.userId;
+    venue.branchId = seeded.branchIds[0]!;
+    venue.secondBranchId = seeded.branchIds[1]!;
+    await scoped.withPlatformDb(async (tx) => {
+      await tx.hotelProperty.updateMany({
+        where: { organizationId: venue.organizationId },
+        data: { mode: 'VENUE' },
+      });
+      // The walk reads the organization's first active property; both were
+      // created in one transaction, so make that order explicit.
+      await tx.hotelProperty.update({
+        where: { branchId: venue.secondBranchId },
+        data: { createdAt: new Date(Date.now() + 60_000) },
+      });
+    });
+  }, 60_000);
+  afterAll(async () => {
+    if (db) await db.$disconnect();
+  });
+
+  const asVenue = <T>(work: (tx: PrismaClient) => Promise<T>) =>
+    withTenantDb(venue.organizationId, (tx) => work(tx), { userId: venue.userId });
+  const stepSix = () =>
+    asVenue(async (tx) => {
+      const checklist = await evaluateHotelReadiness(tx, venue.organizationId);
+      const step = checklist.items.find((item) => item.step === 6)!;
+      return {
+        keys: checklist.items.map((item) => item.key),
+        key: step.key,
+        state: step.state,
+      };
+    });
+
+  it('counts only the venue’s own active function spaces, read as the tenant', async () => {
+    const walk = [
+      'MODE_CHOSEN',
+      'PROPERTY_FACTS',
+      'TAX_PROFILE',
+      'BUSINESS_DATE_AND_AUDIT',
+      'ROLES_ASSIGNED',
+      'FUNCTION_SPACES',
+    ];
+    expect(await stepSix()).toEqual({ keys: walk, key: 'FUNCTION_SPACES', state: 'NEEDS_YOU' });
+
+    await asVenue(async (tx) => {
+      await tx.hotelFunctionSpace.create({
+        data: {
+          organizationId: venue.organizationId,
+          branchId: venue.secondBranchId,
+          name: `Other property hall ${suffix}`,
+          layouts,
+        },
+      });
+      await tx.hotelFunctionSpace.create({
+        data: {
+          organizationId: venue.organizationId,
+          branchId: venue.branchId,
+          name: `Retired hall ${suffix}`,
+          layouts,
+          active: false,
+        },
+      });
+    });
+    expect(await stepSix()).toEqual({ keys: walk, key: 'FUNCTION_SPACES', state: 'NEEDS_YOU' });
+
+    await asVenue((tx) =>
+      tx.hotelFunctionSpace.create({
+        data: {
+          organizationId: venue.organizationId,
+          branchId: venue.branchId,
+          name: `Main lawn ${suffix}`,
+          layouts,
+        },
+      })
+    );
+    expect(await stepSix()).toEqual({ keys: walk, key: 'FUNCTION_SPACES', state: 'DONE' });
+
+    // Configured to sell rooms after all, the same property is asked for a room type again.
+    await asVenue((tx) =>
+      tx.hotelProperty.updateMany({
+        where: { organizationId: venue.organizationId, branchId: venue.branchId },
+        data: { modeOverrides: { inventoryKinds: ['ROOM'] } },
+      })
+    );
+    expect(await stepSix()).toMatchObject({ key: 'ROOM_TYPES', state: 'NEEDS_YOU' });
   });
 });
 

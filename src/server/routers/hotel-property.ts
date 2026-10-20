@@ -32,7 +32,7 @@ import {
   type HotelExtraInput,
 } from '@/lib/hotel/extras';
 import {
-  countSellableRoomTypes,
+  countSellableInventory,
   evaluateHotelOnboarding,
   hotelEvidence,
   hotelActivationSummary,
@@ -103,10 +103,12 @@ async function propertyReadiness(
   const count = await ctx.db.organizationRole.count({
     where: { organizationId, key: { in: keys } },
   });
-  const roomTypes = await countSellableRoomTypes(ctx.db, organizationId, property.branchId);
+  // Room types, or active function spaces for a property whose configuration
+  // sells no room inventory — whichever step 6 of its walk asks for.
+  const sellable = await countSellableInventory(ctx.db, organizationId, property);
   return evaluateHotelOnboarding(
     organizationId,
-    hotelEvidence(property, count, keys.length, roomTypes)
+    hotelEvidence(property, count, keys.length, sellable.roomTypes, sellable.functionSpaces)
   );
 }
 

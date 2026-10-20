@@ -2,7 +2,7 @@ import 'server-only';
 
 import type { PrismaClient } from '@/generated/prisma/client';
 import {
-  countSellableRoomTypes,
+  countSellableInventory,
   evaluateHotelOnboarding,
   hotelEvidence,
   type HotelChecklistItem,
@@ -426,11 +426,14 @@ export async function reactivateHotelProperty(
   }
 
   const requiredRoleKeys = roleTemplatesForVertical('HOSPITALITY').map((template) => template.key);
-  const [facts, seededRoleKeys, eligibleManagers, roomTypes] = await Promise.all([
+  const [facts, seededRoleKeys, eligibleManagers] = await Promise.all([
     db.hotelProperty.findUniqueOrThrow({
       where: { branchId },
       select: {
         mode: true,
+        // Decides step 6: room types, or function spaces for a property whose
+        // configuration sells no room inventory.
+        modeOverrides: true,
         name: true,
         addressLine: true,
         city: true,
@@ -452,14 +455,22 @@ export async function reactivateHotelProperty(
         role: { organizationId, key: { in: requiredRoleKeys } },
       },
     }),
-    // Counted against THIS property, like the facts: the readiness resolver's
-    // "first active property" cannot see the inactive row being reactivated.
-    countSellableRoomTypes(db, organizationId, branchId),
   ]);
+  // Counted against THIS property, like the facts: the readiness resolver's
+  // "first active property" cannot see the inactive row being reactivated.
+  // Read after the facts, because the property's own configuration decides
+  // whether step 6 counts room types or function spaces.
+  const sellable = await countSellableInventory(db, organizationId, { ...facts, branchId });
 
   const checklist = evaluateHotelOnboarding(
     organizationId,
-    hotelEvidence(facts, seededRoleKeys, requiredRoleKeys.length, roomTypes)
+    hotelEvidence(
+      facts,
+      seededRoleKeys,
+      requiredRoleKeys.length,
+      sellable.roomTypes,
+      sellable.functionSpaces
+    )
   );
   const { blocking } = checklist;
   if (blocking.length) {

@@ -7,6 +7,7 @@ import {
   modeLabelFor,
   sellsFunctionSpaces,
   summarizeHotelLanding,
+  walkSellsRooms,
   type HotelLandingSource,
 } from './landing';
 
@@ -19,6 +20,15 @@ const evidence = {
   ROOM_TYPES: false,
 };
 const checklist = evaluateHotelOnboarding('org_hotel', evidence);
+// The same walk at a venue: step 6 asks for a function space, which it has.
+const venueChecklist = evaluateHotelOnboarding('org_venue', {
+  MODE_CHOSEN: true,
+  PROPERTY_FACTS: true,
+  TAX_PROFILE: false,
+  BUSINESS_DATE_AND_AUDIT: false,
+  ROLES_ASSIGNED: true,
+  FUNCTION_SPACES: true,
+});
 const property = {
   branchId: 'branch_lahore',
   name: 'Fathom Grand Lahore',
@@ -62,6 +72,7 @@ describe('loadHotelLanding', () => {
           name: 'Fathom Grand Lahore',
           city: 'Lahore',
           modeLabel: 'Hotel',
+          sellsRooms: true,
           sellsFunctionSpaces: false,
           checkInTime: '14:00',
           checkOutTime: '12:00',
@@ -117,6 +128,7 @@ describe('summarizeHotelLanding', () => {
       name: 'n',
       city: 'c',
       modeLabel: 'Hotel',
+      sellsRooms: true,
       sellsFunctionSpaces: false,
       checkInTime: '14:00',
       checkOutTime: '12:00',
@@ -148,5 +160,43 @@ describe('summarizeHotelLanding', () => {
     expect(sellsFunctionSpaces('HOTEL', { functionSpaces: true })).toBe(true);
     expect(sellsFunctionSpaces('VENUE', { functionSpaces: false })).toBe(false);
     expect(sellsFunctionSpaces('UNKNOWN_MODE', null)).toBe(false);
+  });
+
+  it('offers rooms exactly where the walk asks for a room type', () => {
+    expect(walkSellsRooms(checklist)).toBe(true);
+    expect(walkSellsRooms(venueChecklist)).toBe(false);
+  });
+});
+
+describe('loadHotelLanding for a venue', () => {
+  it('carries the function-space step the router chose and offers no rooms page', async () => {
+    const s = source({
+      get: vi.fn(async () => ({
+        property: { ...property, branchId: 'branch_venue', mode: 'VENUE', modeOverrides: null },
+        checklist: venueChecklist,
+        activationSummary: 'Activation is refused until these 2 steps are done.',
+      })),
+    });
+    const landing = await loadHotelLanding(s);
+    expect(landing.kind).toBe('properties');
+    if (landing.kind !== 'properties') return;
+    const [venue] = landing.properties;
+    expect(venue).toMatchObject({
+      modeLabel: 'Venue',
+      sellsRooms: false,
+      sellsFunctionSpaces: true,
+      checklist: venueChecklist,
+    });
+    expect(venue!.checklist.items.find((item) => item.step === 6)).toMatchObject({
+      key: 'FUNCTION_SPACES',
+      label: 'At least one active function space',
+      state: 'DONE',
+      href: '/hotel/settings/spaces',
+    });
+    expect(summarizeHotelLanding(landing.properties)).toMatchObject({
+      stepsDone: 4,
+      stepsTotal: 6,
+      blockingSteps: 2,
+    });
   });
 });

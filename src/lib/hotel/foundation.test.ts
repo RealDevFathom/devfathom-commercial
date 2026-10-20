@@ -12,9 +12,12 @@ import {
   isValidHotelTimezone,
 } from './property';
 import {
+  HOTEL_ONBOARDING_STEPS,
+  HOTEL_VENUE_ONBOARDING_STEPS,
   evaluateHotelReadiness,
   evaluateHotelOnboarding,
   hotelEvidence,
+  hotelSellableInventory,
 } from './onboarding-checklist';
 
 const priorCatalogDigests = {
@@ -25,6 +28,7 @@ const priorCatalogDigests = {
 
 const property = {
   mode: 'HOTEL',
+  modeOverrides: null,
   name: 'Example Hotel',
   addressLine: 'Synthetic street',
   city: 'Lahore',
@@ -224,6 +228,150 @@ describe('hotel activation evidence', () => {
     await expect(evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1')).rejects.toThrow(
       'unavailable'
     );
+  });
+});
+
+describe('step 6 for a property that sells no room inventory', () => {
+  const venue = { ...property, mode: 'VENUE' };
+
+  it('asks a venue for an active function space where a room seller is asked for a room type', () => {
+    expect(hotelSellableInventory(venue)).toBe('FUNCTION_SPACES');
+    expect(hotelSellableInventory(property)).toBe('ROOM_TYPES');
+    for (const mode of ['HOTEL', 'HOSTEL', 'APARTMENT', 'RESORT'])
+      expect(hotelSellableInventory({ ...property, mode })).toBe('ROOM_TYPES');
+    expect(HOTEL_VENUE_ONBOARDING_STEPS.map((step) => step.key)).toEqual([
+      'MODE_CHOSEN',
+      'PROPERTY_FACTS',
+      'TAX_PROFILE',
+      'BUSINESS_DATE_AND_AUDIT',
+      'ROLES_ASSIGNED',
+      'FUNCTION_SPACES',
+    ]);
+    // Every other step is the room seller's own step, unchanged.
+    expect(HOTEL_VENUE_ONBOARDING_STEPS.slice(0, 5)).toEqual(HOTEL_ONBOARDING_STEPS.slice(0, 5));
+    expect(HOTEL_ONBOARDING_STEPS.map((step) => step.key)).not.toContain('FUNCTION_SPACES');
+  });
+
+  it('is ready with one active function space and no room type, and links the step to the spaces page', () => {
+    const evidence = hotelEvidence(venue, 15, 15, null, 1);
+    expect(evidence).toEqual({
+      MODE_CHOSEN: true,
+      PROPERTY_FACTS: true,
+      TAX_PROFILE: true,
+      BUSINESS_DATE_AND_AUDIT: true,
+      ROLES_ASSIGNED: true,
+      FUNCTION_SPACES: true,
+    });
+    const checklist = evaluateHotelOnboarding('org_1', evidence);
+    expect(checklist.ready).toBe(true);
+    expect(checklist.totalCount).toBe(6);
+    expect(checklist.items.map((item) => item.key)).not.toContain('ROOM_TYPES');
+    expect(checklist.items.find((item) => item.key === 'FUNCTION_SPACES')).toMatchObject({
+      step: 6,
+      label: 'At least one active function space',
+      state: 'DONE',
+      blocking: true,
+      href: '/hotel/settings/spaces',
+      linkLabel: 'Open function spaces',
+    });
+  });
+
+  it('keeps a venue without an active function space blocking, whatever room types it holds', () => {
+    for (const [roomTypes, spaces] of [
+      [0, 0],
+      [5, 0],
+      [5, null],
+      [null, null],
+    ] as const) {
+      const checklist = evaluateHotelOnboarding(
+        'org_1',
+        hotelEvidence(venue, 15, 15, roomTypes, spaces)
+      );
+      expect(checklist.ready).toBe(false);
+      expect(checklist.blocking.map((item) => item.key)).toEqual(['FUNCTION_SPACES']);
+      expect(checklist.blocking[0]!.why).toMatch(/Add at least one function space/);
+    }
+  });
+
+  it('never lets function spaces stand in for a room type at a property that sells rooms', () => {
+    for (const subject of [
+      property,
+      { ...property, mode: 'RESORT' },
+      // An override can make a venue sell rooms; then it needs a room type too.
+      { ...venue, modeOverrides: { inventoryKinds: ['ROOM'] } },
+      { ...property, modeOverrides: { functionSpaces: true } },
+    ]) {
+      expect(hotelSellableInventory(subject)).toBe('ROOM_TYPES');
+      const checklist = evaluateHotelOnboarding('org_1', hotelEvidence(subject, 15, 15, 0, 3));
+      expect(checklist.ready).toBe(false);
+      expect(checklist.blocking.map((item) => item.key)).toEqual(['ROOM_TYPES']);
+      expect(checklist.items.map((item) => item.key)).not.toContain('FUNCTION_SPACES');
+    }
+  });
+
+  it('follows the configuration, not the mode name, and keeps the room-type step when it cannot be read', () => {
+    expect(hotelSellableInventory({ ...property, modeOverrides: { inventoryKinds: [] } })).toBe(
+      'FUNCTION_SPACES'
+    );
+    expect(hotelSellableInventory({ ...venue, modeOverrides: {} })).toBe('FUNCTION_SPACES');
+    expect(hotelSellableInventory({ ...venue, modeOverrides: { functionSpaces: false } })).toBe(
+      'FUNCTION_SPACES'
+    );
+    // Missing or damaged data never earns the exception.
+    expect(hotelSellableInventory(null)).toBe('ROOM_TYPES');
+    expect(hotelSellableInventory({ mode: null, modeOverrides: null })).toBe('ROOM_TYPES');
+    expect(hotelSellableInventory({ mode: 'UNKNOWN_MODE', modeOverrides: null })).toBe(
+      'ROOM_TYPES'
+    );
+    expect(hotelSellableInventory({ ...venue, modeOverrides: { inventoryKinds: 'none' } })).toBe(
+      'ROOM_TYPES'
+    );
+    expect(hotelSellableInventory({ ...venue, modeOverrides: { unknownKey: true } })).toBe(
+      'ROOM_TYPES'
+    );
+    expect(hotelSellableInventory({ ...venue, modeOverrides: [] })).toBe('ROOM_TYPES');
+  });
+
+  it('counts the active function spaces of the property it read, and never its room types', async () => {
+    const db = {
+      hotelProperty: {
+        findFirst: vi.fn(async () => ({ ...venue, branchId: 'venue_1' })),
+      },
+      organizationRole: { count: vi.fn(async () => 15) },
+      hotelRoomType: { count: vi.fn(async () => 9) },
+      hotelFunctionSpace: { count: vi.fn(async () => 0) },
+    };
+    const pending = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
+    expect(db.hotelProperty.findFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.objectContaining({ mode: true, modeOverrides: true }),
+      })
+    );
+    expect(db.hotelFunctionSpace.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', branchId: 'venue_1', active: true },
+    });
+    expect(db.hotelRoomType.count).not.toHaveBeenCalled();
+    expect(pending.ready).toBe(false);
+    expect(pending.blocking.map((item) => item.key)).toEqual(['FUNCTION_SPACES']);
+
+    db.hotelFunctionSpace.count.mockResolvedValue(1);
+    const ready = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
+    expect(ready.ready).toBe(true);
+    expect(db.hotelRoomType.count).not.toHaveBeenCalled();
+  });
+
+  it('counts room types, never function spaces, for a property that sells rooms', async () => {
+    const db = {
+      hotelProperty: {
+        findFirst: vi.fn(async () => ({ ...property, branchId: 'property_1' })),
+      },
+      organizationRole: { count: vi.fn(async () => 15) },
+      hotelRoomType: { count: vi.fn(async () => 0) },
+      hotelFunctionSpace: { count: vi.fn(async () => 4) },
+    };
+    const result = await evaluateHotelReadiness(db as unknown as PrismaClient, 'org_1');
+    expect(db.hotelFunctionSpace.count).not.toHaveBeenCalled();
+    expect(result.blocking.map((item) => item.key)).toEqual(['ROOM_TYPES']);
   });
 });
 

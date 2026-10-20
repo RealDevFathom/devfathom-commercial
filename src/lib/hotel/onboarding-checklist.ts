@@ -14,13 +14,27 @@
  * activate while any item is pending, which is the "no go-live while blocking
  * items pending" rule of PROP-01's acceptance criterion.
  *
+ * Step 6 asks for what the property sells. A property whose configuration
+ * (mode plus explicit overrides) sells rooms, beds or units needs a room type;
+ * one whose configuration resolves to no room inventory at all — a venue —
+ * could never add one, so it needs an active function space instead. Only a
+ * configuration that resolves to no room inventory earns that step: a property
+ * that sells rooms keeps the room-type step whatever else it sells, and a
+ * configuration that cannot be read keeps it too.
+ *
  * The types repeat the pharmacy checklist's row shape rather than importing it.
  * Two verticals sharing a *rendering* contract is intended; two verticals sharing
  * a module is not, because a hospitality change would then have to be safe for a
  * regulated pharmacy surface.
  */
 import type { PrismaClient } from '@/generated/prisma/client';
-import { isValidHotelTimezone } from '@/lib/hotel/property';
+import { readHotelModeOverrides } from '@/lib/hotel/mode-overrides';
+import { applyHotelModeDefaults } from '@/lib/hotel/modes';
+import {
+  HOTEL_PROPERTY_MODES,
+  isValidHotelTimezone,
+  type HotelPropertyModeValue,
+} from '@/lib/hotel/property';
 import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
 
 export type HotelOnboardingItemKey =
@@ -29,7 +43,10 @@ export type HotelOnboardingItemKey =
   | 'TAX_PROFILE'
   | 'BUSINESS_DATE_AND_AUDIT'
   | 'ROLES_ASSIGNED'
-  | 'ROOM_TYPES';
+  /** Step 6 for a property that sells rooms, beds or units. */
+  | 'ROOM_TYPES'
+  /** Step 6, instead, for a property that sells no room inventory (a venue). */
+  | 'FUNCTION_SPACES';
 
 export type HotelOnboardingStep = {
   key: HotelOnboardingItemKey;
@@ -111,7 +128,74 @@ export const HOTEL_ONBOARDING_STEPS: readonly HotelOnboardingStep[] = [
   },
 ];
 
-export type HotelOnboardingEvidence = Record<HotelOnboardingItemKey, boolean>;
+/**
+ * Step 6 for a property whose configuration sells no rooms, beds or units.
+ * PROP-07. Answered by counting the property's active function spaces; the
+ * room-type step it replaces could never be answered there, because such a
+ * property cannot add a room type at all.
+ */
+const FUNCTION_SPACES_STEP: HotelOnboardingStep = {
+  key: 'FUNCTION_SPACES',
+  step: 6,
+  label: 'At least one active function space',
+  blocking: true,
+  todo: 'Add at least one function space — a hall, lawn or boardroom — with its layouts and prices, and keep it active. This property sells function space rather than rooms, so nothing can be booked until one is active.',
+  done: 'At least one active function space is set up.',
+  href: '/hotel/settings/spaces',
+  linkLabel: 'Open function spaces',
+};
+
+/** The same walk for a property that sells no room inventory: step 6 asks for a function space. */
+export const HOTEL_VENUE_ONBOARDING_STEPS: readonly HotelOnboardingStep[] =
+  HOTEL_ONBOARDING_STEPS.map((step) => (step.key === 'ROOM_TYPES' ? FUNCTION_SPACES_STEP : step));
+
+type HotelWalkEvidence = Record<
+  Exclude<HotelOnboardingItemKey, 'ROOM_TYPES' | 'FUNCTION_SPACES'>,
+  boolean
+>;
+
+/**
+ * One answer per step of the walk the property follows: room types for a
+ * property that sells room inventory, function spaces for one that sells none.
+ * Exactly one of the two is present, so the walk is decided by the evidence and
+ * no caller can hold both answers at once.
+ */
+export type HotelOnboardingEvidence = HotelWalkEvidence &
+  (
+    | { ROOM_TYPES: boolean; FUNCTION_SPACES?: never }
+    | { FUNCTION_SPACES: boolean; ROOM_TYPES?: never }
+  );
+
+/** What step 6 of a property's walk counts. */
+export type HotelSellableInventory = 'ROOM_TYPES' | 'FUNCTION_SPACES';
+
+function isHotelPropertyMode(mode: string | null): mode is HotelPropertyModeValue {
+  return mode !== null && (HOTEL_PROPERTY_MODES as readonly string[]).includes(mode);
+}
+
+/**
+ * Which step 6 this property's walk has, from its own configuration — never
+ * from a mode name: VENUE resolves to no room inventory by default, and any
+ * mode can be overridden either way. Only a configuration that resolves to an
+ * empty `inventoryKinds` gets the function-space step. No property, an unknown
+ * mode or overrides that cannot be read all keep the room-type step, so the
+ * exception is never reached by missing or damaged data and the rule for a
+ * property that sells rooms is never loosened.
+ */
+export function hotelSellableInventory(
+  property: { mode: string | null; modeOverrides: unknown } | null
+): HotelSellableInventory {
+  if (!property || !isHotelPropertyMode(property.mode)) return 'ROOM_TYPES';
+  let overrides: ReturnType<typeof readHotelModeOverrides>;
+  try {
+    overrides = readHotelModeOverrides(property.modeOverrides);
+  } catch {
+    return 'ROOM_TYPES';
+  }
+  return applyHotelModeDefaults(property.mode, overrides).inventoryKinds.length === 0
+    ? 'FUNCTION_SPACES'
+    : 'ROOM_TYPES';
+}
 
 export type HotelChecklistItemState = 'DONE' | 'NEEDS_YOU';
 
@@ -135,14 +219,18 @@ export type HotelOnboardingChecklist = {
 
 /**
  * Turn evidence into the checklist. Pure, so the go-live rule is testable
- * without a database and so no caller can reach `ready` by another route.
+ * without a database and so no caller can reach `ready` by another route. The
+ * walk follows the evidence: a function-space answer means the venue walk.
  */
 export function evaluateHotelOnboarding(
   organizationId: string,
   evidence: HotelOnboardingEvidence
 ): HotelOnboardingChecklist {
-  const items = HOTEL_ONBOARDING_STEPS.map((step): HotelChecklistItem => {
-    const done = evidence[step.key];
+  const steps =
+    evidence.FUNCTION_SPACES === undefined ? HOTEL_ONBOARDING_STEPS : HOTEL_VENUE_ONBOARDING_STEPS;
+  const answers: Partial<Record<HotelOnboardingItemKey, boolean>> = evidence;
+  const items = steps.map((step): HotelChecklistItem => {
+    const done = answers[step.key] === true;
     return {
       ...step,
       state: done ? 'DONE' : 'NEEDS_YOU',
@@ -179,10 +267,18 @@ function policyRecorded(value: unknown): boolean {
  * The property facts and the roles this organization actually holds, read as the
  * tenant. Exported separately from the queries so the evidence rules can be
  * exercised without a database.
+ *
+ * Step 6 is answered by the count {@link hotelSellableInventory} names for this
+ * property and by no other: room types for a property that sells room
+ * inventory, active function spaces for one that sells none. Each count has
+ * its own parameter, so a count gathered for the wrong walk reads as not
+ * gathered (pending) rather than standing in for the other.
  */
 export function hotelEvidence(
   property: {
     mode: string | null;
+    /** Explicit configuration; decides which step 6 the walk has. */
+    modeOverrides: unknown;
     name: string | null;
     addressLine: string | null;
     city: string | null;
@@ -195,9 +291,10 @@ export function hotelEvidence(
   } | null,
   seededRoleKeyCount: number,
   requiredRoleKeyCount: number,
-  roomTypeCount: number | null
+  roomTypeCount: number | null,
+  functionSpaceCount: number | null = null
 ): HotelOnboardingEvidence {
-  return {
+  const walk: HotelWalkEvidence = {
     MODE_CHOSEN: nonEmpty(property?.mode),
     PROPERTY_FACTS: Boolean(
       property &&
@@ -214,11 +311,14 @@ export function hotelEvidence(
       property && nonEmpty(property.auditTime) && policyRecorded(property.businessDatePolicy)
     ),
     ROLES_ASSIGNED: requiredRoleKeyCount > 0 && seededRoleKeyCount >= requiredRoleKeyCount,
-    // Only a real count of the property's active room types satisfies this
-    // step. `null` means the evidence was not gathered (no property to count
-    // under) and reports pending rather than being quietly read as satisfied.
-    ROOM_TYPES: roomTypeCount !== null && roomTypeCount > 0,
   };
+  // Only a real count of what this property sells satisfies step 6. `null`
+  // means the evidence was not gathered (no property to count under, or the
+  // other walk's count) and reports pending rather than being quietly read as
+  // satisfied.
+  return hotelSellableInventory(property) === 'FUNCTION_SPACES'
+    ? { ...walk, FUNCTION_SPACES: functionSpaceCount !== null && functionSpaceCount > 0 }
+    : { ...walk, ROOM_TYPES: roomTypeCount !== null && roomTypeCount > 0 };
 }
 
 /**
@@ -236,14 +336,55 @@ export function countSellableRoomTypes(
 }
 
 /**
+ * How many function spaces a property has on sale: active spaces of THIS
+ * property, scoped by organization as well as by property like the room types.
+ */
+export function countActiveFunctionSpaces(
+  db: Pick<PrismaClient, 'hotelFunctionSpace'>,
+  organizationId: string,
+  branchId: string
+): Promise<number> {
+  return db.hotelFunctionSpace.count({ where: { organizationId, branchId, active: true } });
+}
+
+/** The step-6 counts for {@link hotelEvidence}; the walk the property does not follow stays `null`. */
+export type HotelSellableInventoryCounts = {
+  roomTypes: number | null;
+  functionSpaces: number | null;
+};
+
+/**
+ * Count what this property's step 6 asks for, and only that: its room types
+ * when its configuration sells room inventory, its active function spaces when
+ * it sells none. The property must carry its stored `modeOverrides`, because
+ * an override can turn a venue into a property that sells rooms.
+ */
+export async function countSellableInventory(
+  db: Pick<PrismaClient, 'hotelRoomType' | 'hotelFunctionSpace'>,
+  organizationId: string,
+  property: { branchId: string; mode: string | null; modeOverrides: unknown }
+): Promise<HotelSellableInventoryCounts> {
+  return hotelSellableInventory(property) === 'FUNCTION_SPACES'
+    ? {
+        roomTypes: null,
+        functionSpaces: await countActiveFunctionSpaces(db, organizationId, property.branchId),
+      }
+    : {
+        roomTypes: await countSellableRoomTypes(db, organizationId, property.branchId),
+        functionSpaces: null,
+      };
+}
+
+/**
  * Run the evidence queries for one organization and evaluate every step.
  *
  * Every query carries an explicit `organizationId` predicate; forced row-level
  * security is the second wall and never the only one. The property read picks
  * the organization's first active property — PROP-04 multi-property arrives with
  * its own selector, and until then a hospitality organization holds exactly the
- * one property provisioning created. Room types are counted under that same
- * property, never across the organization.
+ * one property provisioning created. Room types — or, for a property that sells
+ * no room inventory, function spaces — are counted under that same property,
+ * never across the organization.
  */
 export async function evaluateHotelReadiness(
   db: PrismaClient,
@@ -258,6 +399,7 @@ export async function evaluateHotelReadiness(
       select: {
         branchId: true,
         mode: true,
+        modeOverrides: true,
         name: true,
         addressLine: true,
         city: true,
@@ -271,13 +413,19 @@ export async function evaluateHotelReadiness(
     }),
     db.organizationRole.count({ where: { organizationId, key: { in: requiredRoleKeys } } }),
   ]);
-  const roomTypeCount = property
-    ? await countSellableRoomTypes(db, organizationId, property.branchId)
-    : null;
+  const sellable: HotelSellableInventoryCounts = property
+    ? await countSellableInventory(db, organizationId, property)
+    : { roomTypes: null, functionSpaces: null };
 
   return evaluateHotelOnboarding(
     organizationId,
-    hotelEvidence(property, seededRoleKeys, requiredRoleKeys.length, roomTypeCount)
+    hotelEvidence(
+      property,
+      seededRoleKeys,
+      requiredRoleKeys.length,
+      sellable.roomTypes,
+      sellable.functionSpaces
+    )
   );
 }
 

@@ -65,6 +65,7 @@ const db = {
   organizationRole: { findFirst: vi.fn(), count: vi.fn() },
   hotelExtra: { findFirst: vi.fn(), findMany: vi.fn(), create: vi.fn(), updateMany: vi.fn() },
   hotelRoomType: { count: vi.fn() },
+  hotelFunctionSpace: { count: vi.fn() },
 };
 const context = () => ({
   session: { user: { id: 'actor_1', organizationId: 'org_1', role: 'ADMIN' } },
@@ -101,6 +102,7 @@ beforeEach(() => {
   db.organizationRole.findFirst.mockResolvedValue({ id: 'role_1' });
   db.organizationRole.count.mockResolvedValue(15);
   db.hotelRoomType.count.mockResolvedValue(0);
+  db.hotelFunctionSpace.count.mockResolvedValue(0);
   db.hotelExtra.findFirst.mockResolvedValue(null);
   db.hotelExtra.findMany.mockResolvedValue([]);
   db.hotelExtra.create.mockImplementation(async (arg: { data: object }) => ({
@@ -130,6 +132,40 @@ describe('hotel property handlers with mocked transport authorization', () => {
     expect(result.checklist.ready).toBe(true);
     expect(result.checklist.blocking).toEqual([]);
     expect(result.activationSummary).toContain('can be activated');
+    expect(db.hotelFunctionSpace.count).not.toHaveBeenCalled();
+  });
+  it('asks a venue for an active function space instead of a room type', async () => {
+    const venue = { ...property, mode: 'VENUE', modeOverrides: null };
+    db.hotelProperty.findFirst.mockResolvedValue(venue);
+    db.hotelRoomType.count.mockResolvedValue(3);
+    const pending = await caller().get({ branchId: 'property_1' });
+    expect(pending.checklist.blocking.map((x) => x.key)).toEqual(['FUNCTION_SPACES']);
+    expect(pending.activationSummary).toContain('At least one active function space');
+    expect(db.hotelFunctionSpace.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', branchId: 'property_1', active: true },
+    });
+    expect(db.hotelRoomType.count).not.toHaveBeenCalled();
+
+    db.hotelFunctionSpace.count.mockResolvedValue(1);
+    const ready = await caller().get({ branchId: 'property_1' });
+    expect(ready.checklist.ready).toBe(true);
+    expect(ready.checklist.items.find((x) => x.key === 'FUNCTION_SPACES')).toMatchObject({
+      state: 'DONE',
+      href: '/hotel/settings/spaces',
+    });
+    expect(ready.activationSummary).toContain('can be activated');
+  });
+  it('keeps the room-type step for a venue whose configuration sells rooms', async () => {
+    db.hotelProperty.findFirst.mockResolvedValue({
+      ...property,
+      mode: 'VENUE',
+      modeOverrides: { inventoryKinds: ['ROOM'] },
+    });
+    db.hotelFunctionSpace.count.mockResolvedValue(4);
+    const result = await caller().get({ branchId: 'property_1' });
+    expect(result.checklist.ready).toBe(false);
+    expect(result.checklist.blocking.map((x) => x.key)).toEqual(['ROOM_TYPES']);
+    expect(db.hotelFunctionSpace.count).not.toHaveBeenCalled();
   });
   it('does not read property rows when effective scope is denied', async () => {
     mocks.scope.mockRejectedValue(new TRPCError({ code: 'FORBIDDEN' }));
