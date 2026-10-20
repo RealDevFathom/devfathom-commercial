@@ -50,6 +50,17 @@ const RESET_POLICY_TABLES = [
   'restaurant_time_adjustments',
   'restaurant_workforce_commands',
 ] as const;
+// 20261018000000_restaurant_demo_reset_compatibility: catering history admits the reset
+// DELETE through a narrower predicate, for the canonical synthetic demo seats only.
+const COMPATIBILITY_RESET_POLICY_TABLES = [
+  'restaurant_catering_branch_capacity',
+  'restaurant_catering_commands',
+  'restaurant_catering_dispositions',
+  'restaurant_catering_events',
+  'restaurant_catering_money_evidence',
+  'restaurant_catering_quote_approvals',
+  'restaurant_catering_quote_revisions',
+] as const;
 
 describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', () => {
   let pool: pg.Pool;
@@ -136,9 +147,10 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
             OR (p.schemaname = 'public' AND p.tablename = ANY($1::text[])
                 AND p.cmd IN ('DELETE', 'ALL'))
          ORDER BY p.tablename, p.policyname`,
-        [RESET_POLICY_TABLES]
+        [[...RESET_POLICY_TABLES, ...COMPATIBILITY_RESET_POLICY_TABLES]]
       );
       expect(RESET_POLICY_TABLES).toHaveLength(34);
+      expect(COMPATIBILITY_RESET_POLICY_TABLES).toHaveLength(7);
       expect(
         policies.rows.map((row) => ({
           ...row,
@@ -146,18 +158,27 @@ describeIfOptedIn('Restaurant demo reset database guard (real disposable DB)', (
           qual: row.qual?.replace(/^public\./, ''),
         }))
       ).toEqual(
-        RESET_POLICY_TABLES.map((tablename) => ({
-          schemaname: 'public',
-          tablename,
-          policyname: 'restaurant_demo_reset_delete',
-          cmd: 'DELETE',
-          permissive: 'PERMISSIVE',
-          roles: ['public'],
-          qual: 'restaurant_demo_reset_allowed("organizationId")',
-          with_check: null,
-          relrowsecurity: true,
-          relforcerowsecurity: true,
-        }))
+        [
+          ...RESET_POLICY_TABLES.map((tablename) => [tablename, 'restaurant_demo_reset_allowed']),
+          ...COMPATIBILITY_RESET_POLICY_TABLES.map((tablename) => [
+            tablename,
+            'restaurant_demo_reset_compatibility_allowed',
+          ]),
+        ]
+          // Same order as ORDER BY on the name type (C collation).
+          .sort(([a], [b]) => (a! < b! ? -1 : 1))
+          .map(([tablename, predicate]) => ({
+            schemaname: 'public',
+            tablename,
+            policyname: 'restaurant_demo_reset_delete',
+            cmd: 'DELETE',
+            permissive: 'PERMISSIVE',
+            roles: ['public'],
+            qual: `${predicate}("organizationId")`,
+            with_check: null,
+            relrowsecurity: true,
+            relforcerowsecurity: true,
+          }))
       );
 
       await insertOrganization(demoOrganizationId, true);
