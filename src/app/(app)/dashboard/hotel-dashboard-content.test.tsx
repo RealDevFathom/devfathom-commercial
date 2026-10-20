@@ -107,6 +107,10 @@ describe('HotelDashboardContent', () => {
       'href',
       '/hotel/settings/rooms?branchId=branch_lahore'
     );
+    expect(screen.getByRole('link', { name: 'Check the meal plans you sell' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/meal-plans?branchId=branch_lahore'
+    );
     expect(
       screen.getByRole('link', { name: 'Invite the team and assign Hotel roles' })
     ).toHaveAttribute('href', '/organization');

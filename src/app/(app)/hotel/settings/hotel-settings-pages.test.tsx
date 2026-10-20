@@ -4,13 +4,16 @@ import { TRPCError } from '@trpc/server';
 import PropertyPage from './property/page';
 import ExtrasPage from './extras/page';
 import RoomsPage from './rooms/page';
+import MealPlansPage from './meal-plans/page';
 const h = vi.hoisted(() => ({
   choices: vi.fn(),
+  accessChoices: vi.fn(),
   select: vi.fn(),
   get: vi.fn(),
   list: vi.fn(),
   roomTypes: vi.fn(),
   rooms: vi.fn(),
+  mealPlans: vi.fn(),
   order: [] as string[],
 }));
 vi.mock('@/server/trpc', () => ({
@@ -19,12 +22,15 @@ vi.mock('@/server/trpc', () => ({
 vi.mock('@/server/routers/hotel-property', () => ({
   hotelPropertyRouter: {
     createCaller: () => ({
-      access: { select: h.select },
+      access: { select: h.select, properties: h.accessChoices },
       get: h.get,
       extras: { properties: h.choices, list: h.list },
       inventory: { roomTypes: { list: h.roomTypes }, rooms: { list: h.rooms } },
     }),
   },
+}));
+vi.mock('@/server/routers/hotel-rates', () => ({
+  hotelRatesRouter: { createCaller: () => ({ mealPlans: { list: h.mealPlans } }) },
 }));
 vi.mock('@/components/hotel/property-settings-form', () => ({
   HotelPropertySettingsForm: ({ selection }: { selection: { branchId: string } }) => (
@@ -41,11 +47,22 @@ vi.mock('@/components/hotel/inventory-panel', () => ({
     <div>Rooms for {selection.branchId}</div>
   ),
 }));
-const reads = [h.get, h.list, h.roomTypes, h.rooms];
+vi.mock('@/components/hotel/meal-plans-panel', () => ({
+  HotelMealPlansPanel: ({ selection }: { selection: { branchId: string } }) => (
+    <div>Meal plans for {selection.branchId}</div>
+  ),
+}));
+const reads = [h.get, h.list, h.roomTypes, h.rooms, h.mealPlans];
 beforeEach(() => {
   vi.clearAllMocks();
   h.order = [];
   h.choices.mockResolvedValue({
+    properties: [
+      { branchId: 'one', name: 'One Hotel' },
+      { branchId: 'two', name: 'Two Hotel' },
+    ],
+  });
+  h.accessChoices.mockResolvedValue({
     properties: [
       { branchId: 'one', name: 'One Hotel' },
       { branchId: 'two', name: 'Two Hotel' },
@@ -71,12 +88,23 @@ beforeEach(() => {
     h.order.push('rooms');
     return {};
   });
+  h.mealPlans.mockImplementation(async () => {
+    h.order.push('mealPlans');
+    return {};
+  });
 });
 afterEach(cleanup);
 const pages = [
-  { name: 'property', page: PropertyPage, reads: ['get'] },
-  { name: 'extras', page: ExtrasPage, reads: ['list'] },
-  { name: 'rooms', page: RoomsPage, reads: ['roomTypes', 'rooms'] },
+  { name: 'property', page: PropertyPage, reads: ['get'], capability: 'hotel:property-admin' },
+  { name: 'extras', page: ExtrasPage, reads: ['list'], capability: 'hotel:property-admin' },
+  {
+    name: 'rooms',
+    page: RoomsPage,
+    reads: ['roomTypes', 'rooms'],
+    capability: 'hotel:property-admin',
+  },
+  // Meal plans are rate administration, so the page's gate and chooser use `hotel:rates`.
+  { name: 'meal-plans', page: MealPlansPage, reads: ['mealPlans'], capability: 'hotel:rates' },
 ];
 describe('Explicit Hotel settings property selection', () => {
   it.each(pages)('$name never selects a default', async ({ page }) => {
@@ -87,13 +115,10 @@ describe('Explicit Hotel settings property selection', () => {
   });
   it.each(pages)(
     '$name rechecks selected access before reading',
-    async ({ page, reads: expected }) => {
+    async ({ page, reads: expected, capability }) => {
       render(await page({ searchParams: Promise.resolve({ branchId: 'two' }) }));
       expect(h.order).toEqual(['select', ...expected]);
-      expect(h.select).toHaveBeenCalledWith({
-        branchId: 'two',
-        capability: 'hotel:property-admin',
-      });
+      expect(h.select).toHaveBeenCalledWith({ branchId: 'two', capability });
       for (const read of reads)
         for (const [input] of read.mock.calls) expect(input).toMatchObject({ branchId: 'two' });
     }
@@ -107,6 +132,42 @@ describe('Explicit Hotel settings property selection', () => {
     );
     for (const read of reads) expect(read).not.toHaveBeenCalled();
     expect(screen.queryByText(/finish provisioning/)).not.toBeInTheDocument();
+  });
+  it('offers the meal-plans chooser under hotel:rates, never the property-admin list', async () => {
+    render(await MealPlansPage({}));
+    expect(h.accessChoices).toHaveBeenCalledWith({ capability: 'hotel:rates' });
+    expect(h.choices).not.toHaveBeenCalled();
+    expect(screen.getByRole('combobox', { name: 'Property' })).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'Two Hotel' })).toBeInTheDocument();
+  });
+  it('mounts the meal-plans panel with the selection it was opened for', async () => {
+    render(await MealPlansPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(screen.getByText('Meal plans for two')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Two Hotel' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Change property' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/meal-plans'
+    );
+  });
+  it('explains a denied meal-plans read as missing rate administration', async () => {
+    h.select.mockRejectedValueOnce(new TRPCError({ code: 'FORBIDDEN' }));
+    render(await MealPlansPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(
+      screen.getByRole('heading', {
+        level: 2,
+        name: 'You cannot manage this property’s meal plans',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/rate administration/)).toBeInTheDocument();
+    expect(h.mealPlans).not.toHaveBeenCalled();
+  });
+  it('offers a retry when the meal-plans read itself fails', async () => {
+    h.mealPlans.mockRejectedValueOnce(new TRPCError({ code: 'INTERNAL_SERVER_ERROR' }));
+    render(await MealPlansPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(screen.getByRole('link', { name: 'Retry loading meal plans' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/meal-plans?branchId=two'
+    );
   });
   it('mounts the rooms panel with the selection it was opened for', async () => {
     render(await RoomsPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));

@@ -164,6 +164,46 @@ function catalogFields(input: HotelExtraInput) {
   };
 }
 
+/**
+ * The properties this identity may act on with `capability`, named for a
+ * chooser. Every candidate comes from the caller's own active assignments and
+ * is then put through the same effective scope check the selected page will
+ * repeat, so the chooser never offers a property the page would refuse.
+ */
+async function assignedProperties(
+  ctx: Parameters<typeof requireHotelPropertyScope>[0],
+  capability: Parameters<typeof requireHotelPropertyScope>[2]
+) {
+  const user = ctx.session?.user;
+  if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  if (user.organizationId !== ctx.entitlements.organizationId)
+    throw new TRPCError({ code: 'FORBIDDEN' });
+  const assignments = await ctx.db.hotelPropertyAssignment.findMany({
+    where: {
+      organizationId: ctx.entitlements.organizationId,
+      userId: user.id,
+      active: true,
+      user: {
+        organizationId: ctx.entitlements.organizationId,
+        status: { in: ['ACTIVE', 'ON_LEAVE'] },
+      },
+      property: { organizationId: ctx.entitlements.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  const properties: { branchId: string; name: string }[] = [];
+  for (const assignment of assignments) {
+    try {
+      const property = await requireHotelPropertyScope(ctx, assignment.branchId, capability);
+      properties.push({ branchId: property.branchId, name: property.name });
+    } catch (error) {
+      if (!(error instanceof TRPCError) || error.code !== 'FORBIDDEN') throw error;
+    }
+  }
+  properties.sort((a, b) => a.name.localeCompare(b.name) || a.branchId.localeCompare(b.branchId));
+  return { organizationId: user.organizationId, userId: user.id, properties };
+}
+
 /** The mode choices, already named for an operator (UX rule 1: no bare codes). */
 const modeOptions = HOTEL_PROPERTY_MODES.map((mode) => ({
   value: mode,
@@ -178,6 +218,16 @@ export const hotelPropertyRouter = router({
     select: protectedProcedure
       .input(hotelPropertySelectionInput.extend({ capability: hotelCapabilityInput }))
       .query(({ ctx, input }) => requireHotelPropertyScope(ctx, input.branchId, input.capability)),
+
+    /**
+     * Named choices for this identity under one capability — the chooser a
+     * page that is not property administration (meal plans under
+     * `hotel:rates`) opens with. The organization-level ABAC check for the
+     * capability is part of the scope resolution itself.
+     */
+    properties: protectedProcedure
+      .input(z.object({ capability: hotelCapabilityInput }))
+      .query(({ ctx, input }) => assignedProperties(ctx, input.capability)),
 
     assign: adminProcedure
       .input(
@@ -444,41 +494,7 @@ export const hotelPropertyRouter = router({
    */
   extras: router({
     /** Named choices for this identity, after the same effective capability check. */
-    properties: propertyAdmin.query(async ({ ctx }) => {
-      const user = ctx.session.user;
-      if (user.organizationId !== ctx.entitlements.organizationId)
-        throw new TRPCError({ code: 'FORBIDDEN' });
-      const assignments = await ctx.db.hotelPropertyAssignment.findMany({
-        where: {
-          organizationId: ctx.entitlements.organizationId,
-          userId: user.id,
-          active: true,
-          user: {
-            organizationId: ctx.entitlements.organizationId,
-            status: { in: ['ACTIVE', 'ON_LEAVE'] },
-          },
-          property: { organizationId: ctx.entitlements.organizationId, active: true },
-        },
-        select: { branchId: true },
-      });
-      const properties: { branchId: string; name: string }[] = [];
-      for (const assignment of assignments) {
-        try {
-          const property = await requireHotelPropertyScope(
-            ctx,
-            assignment.branchId,
-            'hotel:property-admin'
-          );
-          properties.push({ branchId: property.branchId, name: property.name });
-        } catch (error) {
-          if (!(error instanceof TRPCError) || error.code !== 'FORBIDDEN') throw error;
-        }
-      }
-      properties.sort(
-        (a, b) => a.name.localeCompare(b.name) || a.branchId.localeCompare(b.branchId)
-      );
-      return { organizationId: user.organizationId, userId: user.id, properties };
-    }),
+    properties: propertyAdmin.query(({ ctx }) => assignedProperties(ctx, 'hotel:property-admin')),
     /** The catalog, plus the named choices a form needs to add to it. */
     list: propertyAdmin
       .input(hotelPropertySelectionInput)

@@ -47,6 +47,10 @@ export function HotelDashboardContent({
     properties.length === 1
       ? `/hotel/settings/rooms?branchId=${encodeURIComponent(properties[0]!.branchId)}`
       : '/hotel/settings/rooms';
+  const mealPlansHref =
+    properties.length === 1
+      ? `/hotel/settings/meal-plans?branchId=${encodeURIComponent(properties[0]!.branchId)}`
+      : '/hotel/settings/meal-plans';
 
   return (
     <div className="space-y-6" data-testid="hotel-dashboard">
@@ -131,6 +135,7 @@ export function HotelDashboardContent({
               isAdmin={isAdmin}
               propertyHref={propertyHref}
               roomsHref={roomsHref}
+              mealPlansHref={mealPlansHref}
               extrasHref={extrasHref}
             />
           </div>
@@ -164,7 +169,13 @@ export function HotelDashboardContent({
               </a>
             ) : null}
           </SectionCard>
-          <NextSteps isAdmin={isAdmin} propertyHref={null} roomsHref={null} extrasHref={null} />
+          <NextSteps
+            isAdmin={isAdmin}
+            propertyHref={null}
+            roomsHref={null}
+            mealPlansHref={null}
+            extrasHref={null}
+          />
         </div>
       )}
     </div>
@@ -269,11 +280,13 @@ function NextSteps({
   isAdmin,
   propertyHref,
   roomsHref,
+  mealPlansHref,
   extrasHref,
 }: {
   isAdmin: boolean;
   propertyHref: string | null;
   roomsHref: string | null;
+  mealPlansHref: string | null;
   extrasHref: string | null;
 }) {
   const steps = [
@@ -289,6 +302,14 @@ function NextSteps({
           href: roomsHref,
           label: 'Add room types and rooms',
           detail: 'What the property sells, and the rooms, beds or units sold under each type.',
+        }
+      : null,
+    mealPlansHref
+      ? {
+          href: mealPlansHref,
+          label: 'Check the meal plans you sell',
+          detail:
+            'Room only and bed & breakfast open on sale; half and full board wait until you enable them.',
         }
       : null,
     extrasHref

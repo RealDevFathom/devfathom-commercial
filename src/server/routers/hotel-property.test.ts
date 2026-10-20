@@ -282,6 +282,42 @@ describe('hotel property handlers with mocked transport authorization', () => {
       { branchId: 'property_1', name: 'Synthetic' },
     ]);
   });
+  it('offers a chooser under the capability a page names, resolving each candidate with it', async () => {
+    db.hotelPropertyAssignment.findMany.mockResolvedValue([
+      { branchId: 'rates_denied' },
+      { branchId: 'property_1' },
+    ]);
+    mocks.scope
+      .mockRejectedValueOnce(new TRPCError({ code: 'FORBIDDEN' }))
+      .mockResolvedValueOnce(property);
+    const result = await caller().access.properties({ capability: 'hotel:rates' });
+    expect(result).toEqual({
+      organizationId: 'org_1',
+      userId: 'actor_1',
+      properties: [{ branchId: 'property_1', name: 'Synthetic' }],
+    });
+    expect(mocks.scope.mock.calls.map((call) => [call[1], call[2]])).toEqual([
+      ['rates_denied', 'hotel:rates'],
+      ['property_1', 'hotel:rates'],
+    ]);
+    expect(db.hotelPropertyAssignment.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org_1',
+          userId: 'actor_1',
+          active: true,
+        }),
+      })
+    );
+    // Any failure other than a denial is reported, never swallowed into "no properties".
+    mocks.scope.mockRejectedValueOnce(new TRPCError({ code: 'INTERNAL_SERVER_ERROR' }));
+    await expect(caller().access.properties({ capability: 'hotel:rates' })).rejects.toMatchObject({
+      code: 'INTERNAL_SERVER_ERROR',
+    });
+    await expect(
+      caller().access.properties({ capability: 'not:a-hotel-capability' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+  });
 });
 describe('Hotel mode and catalog value rules', () => {
   it('preserves explicit false/empty overrides without aliasing arrays', () => {
