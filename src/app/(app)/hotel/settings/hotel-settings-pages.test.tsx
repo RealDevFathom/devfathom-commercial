@@ -6,9 +6,11 @@ import ExtrasPage from './extras/page';
 import RoomsPage from './rooms/page';
 import MealPlansPage from './meal-plans/page';
 import SpacesPage from './spaces/page';
+import JourneyPage from './journey/page';
 const h = vi.hoisted(() => ({
   choices: vi.fn(),
   accessChoices: vi.fn(),
+  byCapability: vi.fn(),
   select: vi.fn(),
   get: vi.fn(),
   list: vi.fn(),
@@ -16,6 +18,7 @@ const h = vi.hoisted(() => ({
   rooms: vi.fn(),
   mealPlans: vi.fn(),
   spaces: vi.fn(),
+  journey: vi.fn(),
   order: [] as string[],
 }));
 vi.mock('@/server/trpc', () => ({
@@ -24,11 +27,16 @@ vi.mock('@/server/trpc', () => ({
 vi.mock('@/server/routers/hotel-property', () => ({
   hotelPropertyRouter: {
     createCaller: () => ({
-      access: { select: h.select, properties: h.accessChoices },
+      access: {
+        select: h.select,
+        properties: h.accessChoices,
+        propertiesByCapability: h.byCapability,
+      },
       get: h.get,
       extras: { properties: h.choices, list: h.list },
       inventory: { roomTypes: { list: h.roomTypes }, rooms: { list: h.rooms } },
       spaces: { list: h.spaces },
+      journeyTemplates: { list: h.journey },
     }),
   },
 }));
@@ -60,7 +68,12 @@ vi.mock('@/components/hotel/function-spaces-panel', () => ({
     <div>Function spaces for {selection.branchId}</div>
   ),
 }));
-const reads = [h.get, h.list, h.roomTypes, h.rooms, h.mealPlans, h.spaces];
+vi.mock('@/components/hotel/journey-templates-editor', () => ({
+  HotelJourneyTemplatesEditor: ({ selection }: { selection: { branchId: string } }) => (
+    <div>Guest messages for {selection.branchId}</div>
+  ),
+}));
+const reads = [h.get, h.list, h.roomTypes, h.rooms, h.mealPlans, h.spaces, h.journey];
 beforeEach(() => {
   vi.clearAllMocks();
   h.order = [];
@@ -74,6 +87,12 @@ beforeEach(() => {
     properties: [
       { branchId: 'one', name: 'One Hotel' },
       { branchId: 'two', name: 'Two Hotel' },
+    ],
+  });
+  h.byCapability.mockResolvedValue({
+    properties: [
+      { branchId: 'one', name: 'One Hotel', capabilities: ['hotel:marketing'] },
+      { branchId: 'two', name: 'Two Hotel', capabilities: ['hotel:property-admin'] },
     ],
   });
   h.select.mockImplementation(async () => {
@@ -104,6 +123,10 @@ beforeEach(() => {
     h.order.push('spaces');
     return {};
   });
+  h.journey.mockImplementation(async () => {
+    h.order.push('journey');
+    return {};
+  });
 });
 afterEach(cleanup);
 const pages = [
@@ -118,6 +141,9 @@ const pages = [
   // Meal plans are rate administration, so the page's gate and chooser use `hotel:rates`.
   { name: 'meal-plans', page: MealPlansPage, reads: ['mealPlans'], capability: 'hotel:rates' },
   { name: 'spaces', page: SpacesPage, reads: ['spaces'], capability: 'hotel:property-admin' },
+  // Guest messages open under property administration OR marketing; the page
+  // asks for property administration first, exactly as the router's resolver does.
+  { name: 'journey', page: JourneyPage, reads: ['journey'], capability: 'hotel:property-admin' },
 ];
 describe('Explicit Hotel settings property selection', () => {
   it.each(pages)('$name never selects a default', async ({ page }) => {
@@ -221,6 +247,81 @@ describe('Explicit Hotel settings property selection', () => {
       })
     ).toBeInTheDocument();
     expect(screen.getByRole('link', { name: 'Choose another property' })).toBeInTheDocument();
+  });
+  it('offers the guest-messages chooser under either capability, never the property-admin list', async () => {
+    render(await JourneyPage({}));
+    expect(h.byCapability).toHaveBeenCalledWith({
+      capabilities: ['hotel:property-admin', 'hotel:marketing'],
+    });
+    expect(h.choices).not.toHaveBeenCalled();
+    expect(h.accessChoices).not.toHaveBeenCalled();
+    expect(screen.getByRole('combobox', { name: 'Property' })).toHaveValue('');
+    expect(screen.getByRole('option', { name: 'One Hotel' })).toBeInTheDocument();
+    expect(screen.getByRole('option', { name: 'Two Hotel' })).toBeInTheDocument();
+  });
+  it('mounts the guest-messages editor with the selection it was opened for', async () => {
+    render(await JourneyPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(screen.getByText('Guest messages for two')).toBeInTheDocument();
+    expect(screen.getByRole('heading', { level: 2, name: 'Two Hotel' })).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Change property' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/journey'
+    );
+  });
+  it('falls back to marketing when property administration is denied, before the read', async () => {
+    h.select.mockImplementationOnce(async () => {
+      h.order.push('select');
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    });
+    render(await JourneyPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(h.order).toEqual(['select', 'select', 'journey']);
+    expect(h.select.mock.calls.map(([input]) => input)).toEqual([
+      { branchId: 'two', capability: 'hotel:property-admin' },
+      { branchId: 'two', capability: 'hotel:marketing' },
+    ]);
+    expect(screen.getByText('Guest messages for two')).toBeInTheDocument();
+  });
+  it('explains a member holding neither capability, and tells a workspace without the module apart', async () => {
+    h.select.mockRejectedValueOnce(new TRPCError({ code: 'FORBIDDEN' }));
+    h.select.mockRejectedValueOnce(new TRPCError({ code: 'FORBIDDEN' }));
+    render(await JourneyPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(
+      screen.getByRole('heading', {
+        level: 2,
+        name: 'You cannot work on this property’s guest messages',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByText(/property administration or marketing/)).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Choose another property' })).toBeInTheDocument();
+    expect(h.journey).not.toHaveBeenCalled();
+    cleanup();
+    h.journey.mockRejectedValueOnce(
+      new TRPCError({
+        code: 'FORBIDDEN',
+        message:
+          'Guest messages need the Guest Journey and Upsell module, which this workspace does not have.',
+      })
+    );
+    render(await JourneyPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(
+      screen.getByRole('heading', {
+        level: 2,
+        name: 'Guest messages are not part of this workspace’s package',
+      })
+    ).toBeInTheDocument();
+    expect(screen.getByRole('link', { name: 'Back to the dashboard' })).toHaveAttribute(
+      'href',
+      '/dashboard'
+    );
+    expect(screen.queryByRole('link', { name: 'Choose another property' })).toBeNull();
+  });
+  it('offers a retry when the guest-messages read itself fails', async () => {
+    h.journey.mockRejectedValueOnce(new TRPCError({ code: 'INTERNAL_SERVER_ERROR' }));
+    render(await JourneyPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));
+    expect(screen.getByRole('link', { name: 'Retry loading guest messages' })).toHaveAttribute(
+      'href',
+      '/hotel/settings/journey?branchId=two'
+    );
   });
   it('mounts the rooms panel with the selection it was opened for', async () => {
     render(await RoomsPage({ searchParams: Promise.resolve({ branchId: 'two' }) }));

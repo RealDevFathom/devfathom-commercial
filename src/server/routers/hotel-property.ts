@@ -166,15 +166,19 @@ function catalogFields(input: HotelExtraInput) {
   };
 }
 
+type HotelCapability = Parameters<typeof requireHotelPropertyScope>[2];
+
 /**
- * The properties this identity may act on with `capability`, named for a
- * chooser. Every candidate comes from the caller's own active assignments and
- * is then put through the same effective scope check the selected page will
- * repeat, so the chooser never offers a property the page would refuse.
+ * The properties this identity may act on under any of `capabilities`, each
+ * with the capabilities it holds there, named for a chooser or a rail. Every
+ * candidate comes from the caller's own active assignments and is then put
+ * through the same effective scope check the selected page will repeat, once
+ * per capability asked about, so a chooser never offers a property the page
+ * would refuse and a rail never shows an entry its page would deny.
  */
-async function assignedProperties(
+async function assignedPropertiesByCapability(
   ctx: Parameters<typeof requireHotelPropertyScope>[0],
-  capability: Parameters<typeof requireHotelPropertyScope>[2]
+  capabilities: readonly HotelCapability[]
 ) {
   const user = ctx.session?.user;
   if (!user) throw new TRPCError({ code: 'UNAUTHORIZED' });
@@ -193,18 +197,45 @@ async function assignedProperties(
     },
     select: { branchId: true },
   });
-  const properties: { branchId: string; name: string }[] = [];
+  const properties: { branchId: string; name: string; capabilities: HotelCapability[] }[] = [];
   for (const assignment of assignments) {
-    try {
-      const property = await requireHotelPropertyScope(ctx, assignment.branchId, capability);
-      properties.push({ branchId: property.branchId, name: property.name });
-    } catch (error) {
-      if (!(error instanceof TRPCError) || error.code !== 'FORBIDDEN') throw error;
+    const held: HotelCapability[] = [];
+    let name: string | null = null;
+    for (const capability of capabilities) {
+      try {
+        const property = await requireHotelPropertyScope(ctx, assignment.branchId, capability);
+        name = property.name;
+        held.push(capability);
+      } catch (error) {
+        if (!(error instanceof TRPCError) || error.code !== 'FORBIDDEN') throw error;
+      }
     }
+    if (held.length && name !== null)
+      properties.push({ branchId: assignment.branchId, name, capabilities: held });
   }
   properties.sort((a, b) => a.name.localeCompare(b.name) || a.branchId.localeCompare(b.branchId));
   return { organizationId: user.organizationId, userId: user.id, properties };
 }
+
+/** The properties this identity may act on with one `capability`, named for a chooser. */
+async function assignedProperties(
+  ctx: Parameters<typeof requireHotelPropertyScope>[0],
+  capability: HotelCapability
+) {
+  const result = await assignedPropertiesByCapability(ctx, [capability]);
+  return {
+    organizationId: result.organizationId,
+    userId: result.userId,
+    properties: result.properties.map(({ branchId, name }) => ({ branchId, name })),
+  };
+}
+
+/** A list of hotel capabilities, de-duplicated, for a chooser or a rail that spans more than one. */
+const hotelCapabilitiesInput = z
+  .array(hotelCapabilityInput)
+  .min(1)
+  .max(8)
+  .transform((capabilities) => [...new Set(capabilities)]);
 
 /** The mode choices, already named for an operator (UX rule 1: no bare codes). */
 const modeOptions = HOTEL_PROPERTY_MODES.map((mode) => ({
@@ -230,6 +261,17 @@ export const hotelPropertyRouter = router({
     properties: protectedProcedure
       .input(z.object({ capability: hotelCapabilityInput }))
       .query(({ ctx, input }) => assignedProperties(ctx, input.capability)),
+
+    /**
+     * The same choices under several capabilities at once, each property
+     * naming the ones this identity holds there — for a page two capabilities
+     * share (guest messages under property administration or marketing) and
+     * for the hospitality rail, which shows each entry to whoever holds that
+     * page's capability at some property.
+     */
+    propertiesByCapability: protectedProcedure
+      .input(z.object({ capabilities: hotelCapabilitiesInput }))
+      .query(({ ctx, input }) => assignedPropertiesByCapability(ctx, input.capabilities)),
 
     assign: adminProcedure
       .input(

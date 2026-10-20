@@ -320,6 +320,53 @@ describe('hotel property handlers with mocked transport authorization', () => {
       caller().access.properties({ capability: 'not:a-hotel-capability' } as never)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
+  it('offers a chooser under several capabilities, naming the ones held at each property', async () => {
+    db.hotelPropertyAssignment.findMany.mockResolvedValue([
+      { branchId: 'marketing_only' },
+      { branchId: 'neither' },
+      { branchId: 'property_1' },
+    ]);
+    mocks.scope.mockImplementation(async (_ctx: unknown, branchId: string, capability: string) => {
+      const held: Record<string, string[]> = {
+        marketing_only: ['hotel:marketing'],
+        neither: [],
+        property_1: ['hotel:property-admin', 'hotel:marketing'],
+      };
+      if (!held[branchId]?.includes(capability)) throw new TRPCError({ code: 'FORBIDDEN' });
+      return { ...property, branchId, name: branchId === 'property_1' ? 'Synthetic' : 'Annex' };
+    });
+    const result = await caller().access.propertiesByCapability({
+      // Repeated on purpose: the input is de-duplicated, so each is asked once per property.
+      capabilities: ['hotel:property-admin', 'hotel:marketing', 'hotel:marketing'],
+    });
+    expect(result).toEqual({
+      organizationId: 'org_1',
+      userId: 'actor_1',
+      properties: [
+        { branchId: 'marketing_only', name: 'Annex', capabilities: ['hotel:marketing'] },
+        {
+          branchId: 'property_1',
+          name: 'Synthetic',
+          capabilities: ['hotel:property-admin', 'hotel:marketing'],
+        },
+      ],
+    });
+    expect(mocks.scope.mock.calls.map((call) => [call[1], call[2]])).toEqual([
+      ['marketing_only', 'hotel:property-admin'],
+      ['marketing_only', 'hotel:marketing'],
+      ['neither', 'hotel:property-admin'],
+      ['neither', 'hotel:marketing'],
+      ['property_1', 'hotel:property-admin'],
+      ['property_1', 'hotel:marketing'],
+    ]);
+    await expect(
+      caller().access.propertiesByCapability({ capabilities: [] })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    mocks.scope.mockRejectedValueOnce(new TRPCError({ code: 'INTERNAL_SERVER_ERROR' }));
+    await expect(
+      caller().access.propertiesByCapability({ capabilities: ['hotel:rates'] })
+    ).rejects.toMatchObject({ code: 'INTERNAL_SERVER_ERROR' });
+  });
 });
 describe('Hotel mode and catalog value rules', () => {
   it('preserves explicit false/empty overrides without aliasing arrays', () => {
