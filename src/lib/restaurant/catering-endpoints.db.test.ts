@@ -18,6 +18,8 @@ import {
 
 const url = process.env.TEST_DATABASE_URL;
 if (url) process.env.DATABASE_URL = url;
+// Skipped, never silently passed, without a database; the slot guard below still applies.
+const describeIfDatabase = url ? describe : describe.skip;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 const org = `catering_endpoint_${randomUUID()}`,
   branch = randomUUID(),
@@ -71,7 +73,7 @@ async function caller() {
     audit: { detail: {} },
   } as unknown as TRPCContext).restaurantCatering;
 }
-describe('catering authenticated endpoints', () => {
+describeIfDatabase('catering authenticated endpoints', () => {
   beforeAll(async () => {
     if (process.env.RESTAURANT_ACCEPTANCE_ADMITTED === '1') {
       assertAcceptanceDatabase(url, readAcceptanceReceipt());
@@ -118,12 +120,13 @@ describe('catering authenticated endpoints', () => {
     c.confdeltype::text AS confdeltype,c.confupdtype::text AS confupdtype,pg_get_constraintdef(c.oid) AS definition
     FROM pg_constraint c WHERE c.conrelid::regclass::text LIKE 'restaurant_catering_%' ORDER BY 1,2`;
       const receipt = process.env.RESTAURANT_ACCEPTANCE_RUNTIME_RECEIPT;
-      writeFileSync(
-        process.env.RESTAURANT_ACCEPTANCE_ADMITTED === '1' && receipt
-          ? new URL('./catering-catalog.json', `file://${receipt}`)
-          : '../runtime-evidence/catering-catalog.json',
-        JSON.stringify(catalog, null, 2)
-      );
+      // Catalog evidence belongs beside an admitted acceptance run's receipt;
+      // any other run must not write outside the repository.
+      if (process.env.RESTAURANT_ACCEPTANCE_ADMITTED === '1' && receipt)
+        writeFileSync(
+          new URL('./catering-catalog.json', `file://${receipt}`),
+          JSON.stringify(catalog, null, 2)
+        );
     });
     await tenant(async (tx) => {
       for (const b of [branch, otherBranch])

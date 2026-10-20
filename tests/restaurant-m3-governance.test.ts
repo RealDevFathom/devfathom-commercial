@@ -3,14 +3,12 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
-const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
-if (!runtimeUrl || !ownerUrl) {
-  throw new Error(
-    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
-  );
-}
-if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL ?? '';
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL ?? '';
+// Skipped, never silently passed, until both URLs name a disposable database.
+const describeIfDatabase = runtimeUrl && ownerUrl ? describe : describe.skip;
+if (runtimeUrl && runtimeUrl === ownerUrl)
+  throw new Error('Runtime and owner database URLs must differ');
 const client = new pg.Client({ connectionString: runtimeUrl });
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 
@@ -269,6 +267,18 @@ const FINAL_CORRECTION_TABLES = [
   'restaurant_shift_events',
   'restaurant_time_adjustments',
   'restaurant_workforce_commands',
+] as const;
+// 20261014000000_print_bridge_enrollment_only and
+// 20261014010000_printer_inventory_foundation; both forced-RLS tenant tables.
+const PRINTER_TABLES = ['restaurant_print_bridge_enrollment_codes', 'restaurant_printers'] as const;
+// 20261019213000_restaurant_wallet_passes (L2 wallet lane); all forced-RLS tenant tables.
+const WALLET_TABLES = [
+  'restaurant_wallet_enrollment_attempts',
+  'restaurant_wallet_enrollment_links',
+  'restaurant_wallet_pass_registrations',
+  'restaurant_wallet_pass_updates',
+  'restaurant_wallet_passes',
+  'restaurant_wallet_tenant_config',
 ] as const;
 
 // MED-06 (WHA-1339): this governance file is also the cross-lane registration
@@ -582,7 +592,7 @@ async function readM3Columns() {
   ) as Record<M3Table, string[]>;
 }
 
-describe('M3 schema governance (real PostgreSQL)', () => {
+describeIfDatabase('M3 schema governance (real PostgreSQL)', () => {
   beforeAll(async () => {
     const parsed = new URL(runtimeUrl);
     if (
@@ -627,6 +637,8 @@ describe('M3 schema governance (real PostgreSQL)', () => {
         ...PROMOTION_TABLES,
         ...COMPLETION_WAVE_TABLES,
         ...FINAL_CORRECTION_TABLES,
+        ...PRINTER_TABLES,
+        ...WALLET_TABLES,
       ].sort()
     );
 

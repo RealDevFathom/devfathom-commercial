@@ -94,6 +94,10 @@ async function main() {
     await client.query(
       `GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO "${runtimeRole}"`
     );
+    // The runtime role's sequence grants too (docs/LOCAL_SETUP.md). Without them
+    // an insert that draws a sequence default (restaurant_branches.code) fails
+    // 42501 on the sequence before RLS WITH CHECK runs, masking the policy.
+    await client.query(`GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO "${runtimeRole}"`);
 
     await client.query(
       `INSERT INTO "organizations" (

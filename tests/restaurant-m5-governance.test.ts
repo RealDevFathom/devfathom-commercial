@@ -1,14 +1,12 @@
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
-const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
-if (!runtimeUrl || !ownerUrl) {
-  throw new Error(
-    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
-  );
-}
-if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL ?? '';
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL ?? '';
+// Skipped, never silently passed, until both URLs name a disposable database.
+const describeIfDatabase = runtimeUrl && ownerUrl ? describe : describe.skip;
+if (runtimeUrl && runtimeUrl === ownerUrl)
+  throw new Error('Runtime and owner database URLs must differ');
 const client = new pg.Client({ connectionString: runtimeUrl });
 
 const M5_COLUMNS = {
@@ -430,7 +428,7 @@ const M8_MUTABLE_TABLES = M8_TABLES.filter(
   (table) => !(M8_APPEND_ONLY_TABLES as readonly string[]).includes(table)
 );
 
-describe('M5 schema governance (real PostgreSQL)', () => {
+describeIfDatabase('M5 schema governance (real PostgreSQL)', () => {
   beforeAll(async () => {
     const parsed = new URL(runtimeUrl);
     if (

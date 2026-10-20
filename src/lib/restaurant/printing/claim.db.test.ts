@@ -1,11 +1,13 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { acknowledgePrintJob, claimNextPrintJob, PrintBridgeService } from './service';
 import type { PrintJob } from './contract';
 
-if (!process.env.TEST_DATABASE_URL) throw new Error('Disposable TEST_DATABASE_URL required.');
-process.env.DATABASE_URL = process.env.TEST_DATABASE_URL;
+const databaseUrl = process.env.TEST_DATABASE_URL;
+if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
+// Skipped, never silently passed, without a disposable database.
+const describeIfDatabase = databaseUrl ? describe : describe.skip;
 const org = `claim-${randomUUID()}`;
 const otherOrg = `other-${org}`;
 const branch = `branch-${org}`;
@@ -36,8 +38,10 @@ const ack = (jobId: string, claimToken: string, extra = {}) =>
     })
   );
 
-describe('durable claim authorization', () => {
+describeIfDatabase('durable claim authorization', () => {
   beforeAll(async () => {
+    // Claim tokens are HMACs keyed by AUTH_SECRET; claims refuse to run without one.
+    vi.stubEnv('AUTH_SECRET', 'synthetic-claim-db-test-key');
     tenancy = await import('@/lib/tenancy/scoped-db');
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
     await assertRlsEnforcingRole(tenancy.withPlatformDb);

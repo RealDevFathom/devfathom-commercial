@@ -3,14 +3,12 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
-const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
-if (!runtimeUrl || !ownerUrl) {
-  throw new Error(
-    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
-  );
-}
-if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL ?? '';
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL ?? '';
+// Skipped, never silently passed, until both URLs name a disposable database.
+const describeIfDatabase = runtimeUrl && ownerUrl ? describe : describe.skip;
+if (runtimeUrl && runtimeUrl === ownerUrl)
+  throw new Error('Runtime and owner database URLs must differ');
 const client = new pg.Client({ connectionString: runtimeUrl });
 const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const ids = {
@@ -230,7 +228,7 @@ async function expectDatabaseError(code: string, run: () => Promise<unknown>) {
   }
 }
 
-describe('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
+describeIfDatabase('M4 cross-tenant RLS probes (real PostgreSQL)', () => {
   beforeAll(async () => {
     const parsed = new URL(runtimeUrl);
     if (
