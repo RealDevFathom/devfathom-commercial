@@ -299,7 +299,9 @@ function NextSteps({
             </span>
             <div className="min-w-0">
               <Link
-                className="text-sm font-medium text-primary underline underline-offset-4 hover:text-accent-brand focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
+                // `text-foreground`, not `text-primary`: a tenant brand overrides
+                // `--primary` in both themes with an unchecked colour (Studio §3).
+                className="text-sm font-medium text-foreground underline underline-offset-4 hover:text-accent-brand focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none"
                 href={step.href}
               >
                 {step.label}

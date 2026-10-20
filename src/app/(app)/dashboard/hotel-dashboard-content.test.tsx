@@ -135,6 +135,20 @@ describe('HotelDashboardContent', () => {
     ).toBeInTheDocument();
   });
 
+  it('keeps next-step links readable under a tenant brand colour', () => {
+    mount({ kind: 'properties', properties: [property] });
+    const steps = screen
+      .getByRole('heading', { level: 2, name: 'What to do next' })
+      .closest<HTMLElement>('[data-slot="section-card"]')!;
+    const links = within(steps).getAllByRole('link');
+    expect(links.length).toBeGreaterThanOrEqual(3);
+    for (const link of links) {
+      // A tenant brand overrides `--primary` with an unchecked colour in both themes.
+      expect(link.className).not.toMatch(/\btext-primary\b/);
+      expect(link.className).toMatch(/\bunderline\b/);
+    }
+  });
+
   it.each([
     [
       'denied',
