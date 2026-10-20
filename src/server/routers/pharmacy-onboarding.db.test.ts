@@ -12,12 +12,14 @@ import { randomUUID } from 'node:crypto';
 import pg from 'pg';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
-const runtimeUrl = process.env.WHA1198_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL;
-const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL;
-if (!runtimeUrl) throw new Error('WHA1198_TEST_RUNTIME_DATABASE_URL or TEST_DATABASE_URL required');
-if (!ownerUrl) throw new Error('PHARMACY_TEST_OWNER_DATABASE_URL required');
-if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
-process.env.DATABASE_URL = runtimeUrl;
+const runtimeUrl =
+  process.env.WHA1198_TEST_RUNTIME_DATABASE_URL ?? process.env.TEST_DATABASE_URL ?? '';
+const ownerUrl = process.env.PHARMACY_TEST_OWNER_DATABASE_URL ?? '';
+// Skipped, never silently passed, until both URLs name a disposable database.
+const describeIfDatabase = runtimeUrl && ownerUrl ? describe : describe.skip;
+if (runtimeUrl && runtimeUrl === ownerUrl)
+  throw new Error('Runtime and owner database URLs must differ');
+if (runtimeUrl) process.env.DATABASE_URL = runtimeUrl;
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
 vi.mock('@/lib/abac', async () => {
@@ -101,7 +103,7 @@ const profile = {
   retentionControlledRegisterYears: 10,
 };
 
-describe('pharmacy onboarding router against PostgreSQL', () => {
+describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
   beforeAll(async () => {
     ({ withTenantDb } = await import('@/lib/tenancy/scoped-db'));
     ({ pharmacyOnboardingRouter } = await import('./pharmacy-onboarding'));
