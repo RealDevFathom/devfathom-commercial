@@ -1,6 +1,6 @@
 // @vitest-environment node
 import { randomUUID } from 'node:crypto';
-import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 import { acknowledgePrintJob, claimNextPrintJob, PrintBridgeService } from './service';
 import type { PrintJob } from './contract';
 
@@ -40,6 +40,8 @@ const ack = (jobId: string, claimToken: string, extra = {}) =>
 
 describeIfDatabase('durable claim authorization', () => {
   beforeAll(async () => {
+    // Claim tokens are HMACs keyed by AUTH_SECRET; claims refuse to run without one.
+    vi.stubEnv('AUTH_SECRET', 'synthetic-claim-db-test-key');
     tenancy = await import('@/lib/tenancy/scoped-db');
     const { assertRlsEnforcingRole } = await import('@/lib/testing/rls-role-guard');
     await assertRlsEnforcingRole(tenancy.withPlatformDb);
