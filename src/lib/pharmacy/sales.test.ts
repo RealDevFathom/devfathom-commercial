@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import {
   addSaleLine,
@@ -12,6 +12,12 @@ import {
   returnSaleLine,
   validateDiscount,
 } from './sales';
+
+// Finance posting is outside these physical return-disposition assertions.
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  postSaleReturnEntry: vi.fn(async () => undefined),
+}));
 
 const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
 
@@ -311,6 +317,8 @@ describe('POS-04 discount guardrails', () => {
 describe('POS-06 linked returns', () => {
   it('refuses cumulative returns above the quantity sold', async () => {
     const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacySaleEvent: { findFirst: vi.fn().mockResolvedValue(null) },
       pharmacySaleLine: {
         findFirst: async () => ({
           id: 'line-a',
@@ -340,17 +348,31 @@ describe('POS-06 linked returns', () => {
     const model = {
       create: async ({ data }: { data: Record<string, unknown> }) => {
         created.push(data);
-        return { id: `new-${created.length}`, ...data };
+        return {
+          id: `new-${created.length}`,
+          createdAt: new Date('2026-09-04T10:00:00Z'),
+          ...data,
+        };
       },
     };
     const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacyStockLocation: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'quarantine',
+          organizationId: 'org-a',
+          branchId: 'branch-a',
+          active: true,
+          kind: 'QUARANTINE',
+        }),
+      },
       pharmacySaleLine: {
         findFirst: async () => ({
           id: 'line-a',
           saleId: 'sale-a',
           canonicalUnits: 10,
           sale: { status: 'COMPLETED' },
-          allocations: [{ inventoryLotId: 'lot-a', canonicalUnits: 10 }],
+          allocations: [{ id: 'allocation-a', inventoryLotId: 'lot-a', canonicalUnits: 10 }],
           unidentifiedReturnHolds: [],
           returnLines: [],
         }),
@@ -358,7 +380,7 @@ describe('POS-06 linked returns', () => {
       pharmacySaleReturn: model,
       pharmacyStockMovement: model,
       pharmacySaleReturnLine: model,
-      pharmacySaleEvent: model,
+      pharmacySaleEvent: { ...model, findFirst: vi.fn().mockResolvedValue(null) },
     };
     await returnSaleLine(db as never, scope, {
       saleLineId: 'line-a',

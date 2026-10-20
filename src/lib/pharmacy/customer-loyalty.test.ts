@@ -132,6 +132,8 @@ describe('CRM-L01 pharmacy loyalty', () => {
       },
       pharmacyLoyaltyPointsEntry: {
         aggregate: vi.fn().mockResolvedValue({ _sum: { points: 35 } }),
+        findMany: vi.fn().mockResolvedValue([]),
+        count: vi.fn().mockResolvedValue(0),
       },
       pharmacySale: {
         findMany: vi.fn().mockResolvedValue([

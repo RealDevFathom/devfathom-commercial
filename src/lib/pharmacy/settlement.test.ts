@@ -2,6 +2,13 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+const postings = vi.hoisted(() => ({ postTenderEntry: vi.fn(), postSaleLineEntry: vi.fn() }));
+// Keep settlement, receipt identity, idempotency and evidence logic real.
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  postTenderEntry: postings.postTenderEntry,
+  postSaleLineEntry: postings.postSaleLineEntry,
+}));
 
 import {
   applyPharmacyTender,
@@ -78,7 +85,10 @@ describe('pharmacy settlement invariants', () => {
 
   it('replays one idempotency result without duplicating tender or receipt', async () => {
     let idempotency: Record<string, unknown> | null = null;
-    const tenderCreate = vi.fn().mockResolvedValue({ id: 'tender-1' });
+    postings.postTenderEntry.mockClear();
+    postings.postSaleLineEntry.mockClear();
+    const tenderCreatedAt = new Date('2026-09-02T10:00:00Z');
+    const tenderCreate = vi.fn().mockResolvedValue({ id: 'tender-1', createdAt: tenderCreatedAt });
     const saleUpdate = vi.fn().mockResolvedValue({});
     const db = {
       pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
@@ -149,7 +159,11 @@ describe('pharmacy settlement invariants', () => {
         }),
         update: saleUpdate,
       },
-      pharmacyTender: { create: tenderCreate },
+      pharmacyTender: {
+        create: tenderCreate,
+        findFirst: vi.fn().mockResolvedValue({ saleId: 'sale-1' }),
+      },
+      camera: { findFirst: vi.fn().mockResolvedValue(null) },
       pharmacySaleEvent: { create: vi.fn().mockResolvedValue({}) },
     };
     const input = {
@@ -195,6 +209,31 @@ describe('pharmacy settlement invariants', () => {
     expect(tenderCreate).toHaveBeenCalledTimes(1);
     expect(saleUpdate).toHaveBeenCalledTimes(1);
     expect(db.pharmacySaleEvent.create).toHaveBeenCalledTimes(1);
+    const scope = { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' };
+    expect(postings.postTenderEntry).toHaveBeenCalledExactlyOnceWith(db, scope, {
+      tenderId: 'tender-1',
+      at: tenderCreatedAt,
+    });
+    expect(postings.postSaleLineEntry).toHaveBeenCalledExactlyOnceWith(db, scope, {
+      saleLineId: 'line-1',
+      at: expect.any(Date),
+    });
+    expect(db.pharmacyTender.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: { id: 'tender-1', organizationId: 'org-1', branchId: 'branch-1' },
+      select: { saleId: true },
+    });
+    expect(db.camera.findFirst).toHaveBeenCalledExactlyOnceWith({
+      where: {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        enabled: true,
+        counterEvidence: true,
+        gateway: { status: 'ACTIVE', revokedAt: null },
+      },
+      orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+      select: { id: true },
+    });
+    expect(db.$queryRaw).toHaveBeenCalledTimes(3);
   });
 });
 
