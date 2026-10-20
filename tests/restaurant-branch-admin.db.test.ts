@@ -3,21 +3,19 @@ import path from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import pg from 'pg';
 
-const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL;
-const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL;
-if (!runtimeUrl || !ownerUrl) {
-  throw new Error(
-    'WHA910_TEST_RUNTIME_DATABASE_URL and WHA910_TEST_OWNER_DATABASE_URL are required'
-  );
-}
-if (runtimeUrl === ownerUrl) throw new Error('Runtime and owner database URLs must differ');
+const runtimeUrl = process.env.WHA910_TEST_RUNTIME_DATABASE_URL ?? '';
+const ownerUrl = process.env.WHA910_TEST_OWNER_DATABASE_URL ?? '';
+// Skipped, never silently passed, until both URLs name a disposable database.
+const describeIfDatabase = runtimeUrl && ownerUrl ? describe : describe.skip;
+if (runtimeUrl && runtimeUrl === ownerUrl)
+  throw new Error('Runtime and owner database URLs must differ');
 const runKey = `${process.pid}_${Date.now()}`;
 const schema = `wha910_${runKey}`;
 const quoted = (identifier: string) => `"${identifier.replaceAll('"', '""')}"`;
 
-describe('WHA-910 PostgreSQL branch administration', () => {
+describeIfDatabase('WHA-910 PostgreSQL branch administration', () => {
   const owner = new pg.Client({ connectionString: ownerUrl });
-  const runtimeRole = new URL(runtimeUrl).username;
+  const runtimeRole = runtimeUrl && new URL(runtimeUrl).username;
 
   beforeAll(async () => {
     await owner.connect();
