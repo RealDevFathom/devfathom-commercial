@@ -63,6 +63,7 @@ import {
 import { adminProcedure, capabilityProcedure, protectedProcedure, router } from '../trpc';
 import { hotelFunctionSpacesRouter } from './hotel-function-spaces';
 import { hotelInventoryRouter } from './hotel-inventory';
+import { hotelJourneyTemplatesRouter } from './hotel-journey-templates';
 
 const propertyAdmin = capabilityProcedure('hotel:property-admin');
 const expectedVersionInput = z.object({ expectedUpdatedAt: z.coerce.date() });
@@ -486,6 +487,14 @@ export const hotelPropertyRouter = router({
    * `hotel-core`.
    */
   spaces: hotelFunctionSpacesRouter,
+
+  /**
+   * UPS-04 — the guest messages a property sends at each step of a stay, one
+   * row per version, and their approval. Gated on the `hotel-upsell` module
+   * inside the router; property administration may do everything, marketing
+   * may draft and preview.
+   */
+  journeyTemplates: hotelJourneyTemplatesRouter,
 
   /**
    * PROP-05 — the extras and services catalog.

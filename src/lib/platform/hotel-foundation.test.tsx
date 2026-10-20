@@ -1,6 +1,11 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { renderToStaticMarkup } from 'react-dom/server';
 import type { ComponentProps } from 'react';
+import {
+  HOTEL_JOURNEY_MOMENTS,
+  validateJourneyTemplate,
+  type HotelJourneyTemplateSeed,
+} from '@/lib/hotel/journey-templates';
 import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
 import { HOSPITALITY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import type { PlatformCommandForm } from '@/components/platform/platform-command-form';
@@ -13,6 +18,7 @@ const mocks = vi.hoisted(() => ({
   propertyCreate: vi.fn(),
   assignmentCreate: vi.fn(),
   mealPlanCreateMany: vi.fn(),
+  journeyCreateMany: vi.fn(),
   orgCreate: vi.fn(),
 }));
 vi.mock('server-only', () => ({}));
@@ -52,6 +58,7 @@ const db = {
   hotelProperty: { create: mocks.propertyCreate, findFirst: vi.fn() },
   hotelPropertyAssignment: { create: mocks.assignmentCreate },
   hotelMealPlan: { createMany: mocks.mealPlanCreateMany },
+  hotelJourneyTemplate: { createMany: mocks.journeyCreateMany },
   hotelRoomType: { count: vi.fn(async () => 0) },
   organizationBrand: { create: record() },
   organizationEmailSettings: { create: record() },
@@ -94,6 +101,7 @@ beforeEach(() => {
   mocks.propertyCreate.mockResolvedValue({ branchId: 'created_property' });
   mocks.assignmentCreate.mockResolvedValue({ id: 'assignment_1' });
   mocks.mealPlanCreateMany.mockResolvedValue({ count: DEFAULT_HOTEL_MEAL_PLANS.length });
+  mocks.journeyCreateMany.mockResolvedValue({ count: 20 });
   mocks.packageFindMany.mockResolvedValue([
     { id: 'package_1', name: 'Hotel Essentials', defaultSeats: 10 },
   ]);
@@ -250,6 +258,55 @@ describe('Hospitality provisioning foundation', () => {
       executePlatformCommand(actor, 'organization.create', payload, request)
     ).rejects.toThrow('assignment refused');
     expect(mocks.mealPlanCreateMany).not.toHaveBeenCalled();
+    expect(mocks.journeyCreateMany).not.toHaveBeenCalled();
+  });
+  it('opens the created property with English and Urdu guest-message drafts, every one a draft to approve', async () => {
+    await executePlatformCommand(actor, 'organization.create', payload, request);
+    // H1-14 / UPS-04 — hung off the property row that was just created and
+    // attributed to the named administrator, written after the assignment so a
+    // failed assignment leaves no draft behind; never an APPROVED row, because
+    // nobody at the property has read these words yet.
+    expect(mocks.journeyCreateMany).toHaveBeenCalledTimes(1);
+    const seeded = (
+      mocks.journeyCreateMany.mock.calls[0]![0] as {
+        data: (HotelJourneyTemplateSeed & {
+          organizationId: string;
+          branchId: string;
+          createdByUserId: string;
+        })[];
+      }
+    ).data;
+    expect(seeded).toHaveLength(20);
+    for (const seed of seeded) {
+      expect(seed).toMatchObject({
+        organizationId: 'org_new',
+        branchId: 'created_property',
+        createdByUserId: 'named_admin',
+        status: 'DRAFT',
+        version: 1,
+      });
+      expect(() => validateJourneyTemplate(seed)).not.toThrow();
+    }
+    for (const moment of HOTEL_JOURNEY_MOMENTS) {
+      for (const language of ['EN', 'UR'] as const) {
+        expect(seeded).toContainEqual(
+          expect.objectContaining({ moment, language, channel: 'WHATSAPP', subject: null })
+        );
+      }
+    }
+    expect(
+      seeded.filter((seed) => seed.channel === 'EMAIL').map((seed) => [seed.moment, seed.language])
+    ).toEqual([
+      ['BOOKING_CONFIRMED', 'EN'],
+      ['BOOKING_CONFIRMED', 'UR'],
+      ['INVOICE', 'EN'],
+      ['INVOICE', 'UR'],
+    ]);
+    for (const seed of seeded.filter((entry) => entry.channel === 'EMAIL'))
+      expect(seed.subject?.trim().length).toBeGreaterThan(0);
+    expect(mocks.assignmentCreate.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.journeyCreateMany.mock.invocationCallOrder[0]!
+    );
   });
   it.each(['firstBranchName', 'firstBranchAddress', 'firstBranchCity'])(
     'rejects missing %s before provisioning writes',
@@ -266,6 +323,7 @@ describe('Hospitality provisioning foundation', () => {
       expect(mocks.propertyCreate).not.toHaveBeenCalled();
       expect(mocks.assignmentCreate).not.toHaveBeenCalled();
       expect(mocks.mealPlanCreateMany).not.toHaveBeenCalled();
+      expect(mocks.journeyCreateMany).not.toHaveBeenCalled();
     }
   );
   it('fails closed before property creation when the Owner role did not return an identity', async () => {

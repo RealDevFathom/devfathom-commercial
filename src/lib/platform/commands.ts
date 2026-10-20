@@ -43,6 +43,7 @@ import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
+import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
 import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
 import { defaultBookingEngineSlug } from '@/lib/hotel/property';
 import {
@@ -1024,6 +1025,21 @@ async function bootstrapOrganization(
         nameUr: plan.nameUr,
         meals: plan.meals,
         active: plan.active,
+      })),
+    });
+    // H1-14 / UPS-04 — the English and Urdu guest-message drafts, so a new
+    // property opens on real wording to edit rather than empty boxes. Every
+    // seed is a DRAFT: UPS-04's acceptance is "template approval before use",
+    // so seeding APPROVED copy would hand a guest words nobody at the property
+    // had read — the same "seed data fakes readiness" move the checklist
+    // refuses. Seeded whatever the package: the table is Hotel Core's, and the
+    // page that edits them is gated on the Guest Journey and Upsell module.
+    await db.hotelJourneyTemplate.createMany({
+      data: defaultJourneyTemplateSeeds().map((seed) => ({
+        ...seed,
+        organizationId: organization.id,
+        branchId: property.branchId,
+        createdByUserId: admin.id,
       })),
     });
   }

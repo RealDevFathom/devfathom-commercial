@@ -30,6 +30,7 @@ import pg from 'pg';
 import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { PrismaClient } from '@/generated/prisma/client';
+import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
 
 const TEST_DATABASE_URL = process.env.TEST_DATABASE_URL;
 if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
@@ -452,6 +453,39 @@ describeIfDatabase('journey templates: database rules and tenant boundaries', ()
     );
     // Its own second property is a property: the same message may be drafted there.
     await insertTemplate(client, tenantA, { branchId: tenantA.secondBranchId });
+  });
+
+  it('stores the twenty drafts a property opens with, written the way provisioning does', async () => {
+    // Seeded onto tenant B's second property, which holds nothing else, so the
+    // count is exact. Every seed clears the CHECKs: WhatsApp without a subject,
+    // e-mail with one, version 1, DRAFT without approval facts.
+    await withPlatformDb((db) =>
+      db.hotelJourneyTemplate.createMany({
+        data: defaultJourneyTemplateSeeds().map((seed) => ({
+          ...seed,
+          organizationId: tenantB.organizationId,
+          branchId: tenantB.secondBranchId,
+          createdByUserId: tenantB.userId,
+        })),
+      })
+    );
+    const seeded = await withTenantDb(
+      tenantB.organizationId,
+      (db) =>
+        db.hotelJourneyTemplate.findMany({
+          where: { branchId: tenantB.secondBranchId },
+          orderBy: [{ moment: 'asc' }, { channel: 'asc' }, { language: 'asc' }],
+        }),
+      { userId: tenantB.userId }
+    );
+    expect(seeded).toHaveLength(20);
+    expect(new Set(seeded.map((row) => row.status))).toEqual(new Set(['DRAFT']));
+    expect(new Set(seeded.map((row) => row.version))).toEqual(new Set([1]));
+    expect(seeded.filter((row) => row.channel === 'WHATSAPP')).toHaveLength(16);
+    expect(seeded.filter((row) => row.channel === 'EMAIL').every((row) => row.subject)).toBe(true);
+    expect(seeded.every((row) => row.approvedByUserId === null && row.approvedAt === null)).toBe(
+      true
+    );
   });
 
   it('reads its own templates through the scoped client and never the other tenant’s, even by primary key', async () => {

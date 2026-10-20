@@ -26,6 +26,8 @@ vi.mock('../trpc', async () => {
     protectedProcedure,
     adminProcedure,
     capabilityProcedure: () => protectedProcedure,
+    // The journey router mounted beside these audits its reads too; same stub here.
+    auditedProtectedProcedure: protectedProcedure,
   };
 });
 import { hotelPropertyRouter } from './hotel-property';
