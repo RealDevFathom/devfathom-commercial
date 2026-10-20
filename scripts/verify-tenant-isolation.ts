@@ -2812,6 +2812,42 @@ async function main() {
       await client.query('ROLLBACK TO SAVEPOINT hotel_space_gap');
       await client.query('RELEASE SAVEPOINT hotel_space_gap');
     }
+    // 20261021104000 (a): the range cannot be written around the trigger. A
+    // direct overwrite of "bufferedRange" is recomputed from the booking's own
+    // bounds and the space's buffers, so the collision it tried to hide is
+    // still refused.
+    await client.query('SAVEPOINT hotel_space_overwrite');
+    try {
+      const overwritten = await client.query(
+        `UPDATE "hotel_space_bookings" SET "bufferedRange" = 'empty' WHERE "id" = $1`,
+        [hotelBookingA]
+      );
+      assertEqual(
+        overwritten.rowCount,
+        1,
+        'tenant A must reach its own booking for the range-overwrite probe'
+      );
+      const recomputed = await client.query<{ intact: boolean | null }>(
+        `SELECT "bufferedRange" = tstzrange(
+                  "startsAt" - interval '30 minutes', "endsAt" + interval '15 minutes', '[)'
+                ) AS intact
+           FROM "hotel_space_bookings" WHERE "id" = $1`,
+        [hotelBookingA]
+      );
+      assertEqual(
+        recomputed.rows[0]?.intact,
+        true,
+        'a direct write to "bufferedRange" must be recomputed by the trigger'
+      );
+      await expectDatabaseError(
+        '23P01',
+        () => bookSpaceA('2030-01-01 10:30:00+00', '2030-01-01 11:30:00+00'),
+        'a booking overlapping another whose range was written around the trigger'
+      );
+    } finally {
+      await client.query('ROLLBACK TO SAVEPOINT hotel_space_overwrite');
+      await client.query('RELEASE SAVEPOINT hotel_space_overwrite');
+    }
     await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
     for (const [table, idA, idB] of hotelSpaceRows) {
       const both = await client.query<{ count: number }>(

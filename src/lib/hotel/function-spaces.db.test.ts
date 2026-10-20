@@ -287,6 +287,31 @@ describeIfDatabase('function spaces: database overlap and tenant boundaries', ()
     ]);
   });
 
+  it('recomputes a range written around the trigger, so the collision it hid is still refused', async () => {
+    // 20261021104000 (a). The trigger fires on every update, so a direct write
+    // to the column is overwritten from the booking's bounds and the buffers.
+    const id = await book(client, one, '2030-01-01T10:00:00Z', '2030-01-01T11:00:00Z');
+    const overwritten = await client.query(
+      `UPDATE hotel_space_bookings SET "bufferedRange" = 'empty' WHERE id = $1`,
+      [id]
+    );
+    expect(overwritten.rowCount).toBe(1);
+    const range = await client.query(
+      `SELECT lower("bufferedRange") AS start, upper("bufferedRange") AS finish
+         FROM hotel_space_bookings WHERE id = $1`,
+      [id]
+    );
+    expect(range.rows).toEqual([
+      { start: new Date('2030-01-01T09:30:00Z'), finish: new Date('2030-01-01T11:15:00Z') },
+    ]);
+    await rejectedWrite(
+      client,
+      () => book(client, one, '2030-01-01T10:30:00Z', '2030-01-01T11:30:00Z'),
+      '23P01',
+      'hotel_space_bookings_space_no_overlap'
+    );
+  });
+
   it('refuses a document the layouts validator cannot read, including an entry with a member missing', async () => {
     for (const layouts of [
       '[]',
@@ -572,6 +597,136 @@ describeIfDatabase('function spaces: the lib against the database', () => {
     expect(
       await inA((tx) => releaseSpaceHold(tx, tenantB.organizationId, tenantB.branchId, theirs.id))
     ).toBe(0);
+  });
+});
+
+/**
+ * 20261021104000 (b). The booking trigger reads the space's buffers FOR SHARE,
+ * which conflicts with the FOR NO KEY UPDATE a buffer change takes, so a hold
+ * and a widening of the same space on two connections commit in one order or
+ * the other — never on different views of the buffers. Each case starts one
+ * side, shows the other waiting, releases the first and reads the range the
+ * database settled on: always the widened one.
+ */
+describeIfDatabase('function spaces: a booking and a buffer change on two connections', () => {
+  let first: pg.Client;
+  let second: pg.Client;
+  let space: Space;
+  const connect = async () => {
+    const client = new pg.Client({
+      connectionString: TEST_DATABASE_URL,
+      connectionTimeoutMillis: 5000,
+      statement_timeout: 5000,
+    });
+    await client.connect();
+    return client;
+  };
+  /** Whether a statement has returned within `ms`, without giving up on it. */
+  const settles = (statement: Promise<unknown>, ms: number) =>
+    Promise.race([
+      statement.then(
+        () => 'settled' as const,
+        () => 'settled' as const
+      ),
+      new Promise<'waiting'>((resolve) => {
+        setTimeout(() => resolve('waiting'), ms);
+      }),
+    ]);
+  /** The lower bound of a booking's range, read as the tenant in its own transaction. */
+  const rangeStart = async (id: string) => {
+    await first.query('BEGIN');
+    try {
+      await actAs(first, tenantA);
+      const range = await first.query<{ start: Date }>(
+        `SELECT lower("bufferedRange") AS start FROM hotel_space_bookings WHERE id = $1`,
+        [id]
+      );
+      return range.rows[0]?.start;
+    } finally {
+      await first.query('COMMIT');
+    }
+  };
+
+  beforeAll(async () => {
+    assertLocal(TEST_DATABASE_URL!);
+    if (!db) await seedTenants();
+    first = await connect();
+    second = await connect();
+  }, 60_000);
+  beforeEach(async () => {
+    // Committed, so both connections see the space: 30 minutes of setup.
+    await first.query('BEGIN');
+    space = await spaceFixture(first, tenantA);
+    await first.query('COMMIT');
+  });
+  afterEach(async () => {
+    for (const client of [first, second]) await client.query('ROLLBACK').catch(() => undefined);
+    await first.query('BEGIN');
+    await actAs(first, tenantA);
+    await first.query('DELETE FROM hotel_space_bookings WHERE "spaceId" = $1', [space.spaceId]);
+    await first.query('DELETE FROM hotel_function_spaces WHERE id = $1', [space.spaceId]);
+    await first.query('COMMIT');
+  });
+  afterAll(async () => {
+    if (first) await first.end();
+    if (second) await second.end();
+    if (db) await db.$disconnect();
+  });
+
+  it('makes a buffer change wait for an uncommitted booking, then re-ranges that booking', async () => {
+    await first.query('BEGIN');
+    await actAs(first, tenantA);
+    const id = await book(first, space, '2030-02-01T10:00:00Z', '2030-02-01T11:00:00Z');
+    await second.query('BEGIN');
+    await actAs(second, tenantA);
+    const widening = second.query(
+      'UPDATE hotel_function_spaces SET "setupMinutes" = 60 WHERE id = $1',
+      [space.spaceId]
+    );
+    expect(await settles(widening, 400)).toBe('waiting');
+    await first.query('COMMIT');
+    expect((await widening).rowCount).toBe(1);
+    await second.query('COMMIT');
+    // The re-range ran after the booking was committed and visible to it.
+    expect(await rangeStart(id)).toEqual(new Date('2030-02-01T09:00:00Z'));
+  });
+
+  it('makes a booking wait for an uncommitted buffer change, then ranges it with the new buffers', async () => {
+    await second.query('BEGIN');
+    await actAs(second, tenantA);
+    await second.query('UPDATE hotel_function_spaces SET "setupMinutes" = 60 WHERE id = $1', [
+      space.spaceId,
+    ]);
+    await first.query('BEGIN');
+    await actAs(first, tenantA);
+    const booking = book(first, space, '2030-02-01T10:00:00Z', '2030-02-01T11:00:00Z');
+    expect(await settles(booking, 400)).toBe('waiting');
+    await second.query('COMMIT');
+    const id = await booking;
+    await first.query('COMMIT');
+    expect(await rangeStart(id)).toEqual(new Date('2030-02-01T09:00:00Z'));
+  });
+
+  it('lets two bookings of one space proceed together and leaves the collision to the constraint', async () => {
+    await first.query('BEGIN');
+    await actAs(first, tenantA);
+    await book(first, space, '2030-02-01T10:00:00Z', '2030-02-01T11:00:00Z');
+    await second.query('BEGIN');
+    await actAs(second, tenantA);
+    // A non-colliding booking is not held up by the first connection's FOR SHARE.
+    const beside = book(second, space, '2030-02-01T14:00:00Z', '2030-02-01T15:00:00Z');
+    expect(await settles(beside, 400)).toBe('settled');
+    await beside;
+    // A colliding one waits for the first to decide, then the exclusion
+    // constraint refuses it once the first commits.
+    const colliding = book(second, space, '2030-02-01T10:30:00Z', '2030-02-01T11:30:00Z');
+    expect(await settles(colliding, 400)).toBe('waiting');
+    await first.query('COMMIT');
+    await expect(colliding).rejects.toMatchObject({
+      code: '23P01',
+      constraint: 'hotel_space_bookings_space_no_overlap',
+    });
+    await second.query('ROLLBACK');
   });
 });
 
