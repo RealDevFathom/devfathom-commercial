@@ -169,10 +169,13 @@ function mapSpaceWriteError(error: unknown, name: string): never {
     });
   }
   if (hasSqlState(error, '23P01')) {
+    // BAD_REQUEST, not CONFLICT: the transport publishes `data.validation` for
+    // BAD_REQUEST alone, and this refusal belongs on the Setup field — the
+    // operator changes a number, nobody reloads anything.
     const message =
       'Those setup and teardown times would overlap bookings this space already has. Move the bookings first, or choose shorter buffers.';
     throw new TRPCError({
-      code: 'CONFLICT',
+      code: 'BAD_REQUEST',
       message,
       cause: fieldError('setupMinutes', message),
     });
@@ -436,8 +439,11 @@ export const hotelFunctionSpacesRouter = router({
           instantFormatter(property.timezone)
         );
         if (reason) {
+          // The courtesy refusal lands on the From field (BAD_REQUEST carries
+          // `data.validation`); the race below, which no field can fix, is the
+          // CONFLICT.
           throw new TRPCError({
-            code: 'CONFLICT',
+            code: 'BAD_REQUEST',
             message: reason,
             cause: fieldError('startsAt', reason),
           });
@@ -468,11 +474,10 @@ export const hotelFunctionSpacesRouter = router({
           return { booking };
         } catch (error) {
           if (hasSqlState(error, '23P01')) {
-            const message = `${space.name} was booked for that time a moment ago. Reload the diary and choose another time.`;
             throw new TRPCError({
               code: 'CONFLICT',
-              message,
-              cause: fieldError('startsAt', message),
+              message: `${space.name} was booked for that time a moment ago. Reload the diary and choose another time.`,
+              cause: error,
             });
           }
           throw error;

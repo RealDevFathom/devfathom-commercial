@@ -420,8 +420,9 @@ describe('hotelProperty.spaces writes', () => {
         expectedUpdatedAt: version,
       })
       .catch((caught: TRPCError) => caught);
+    // BAD_REQUEST so the transport carries the field: this lands on Setup.
     expect(error).toMatchObject({
-      code: 'CONFLICT',
+      code: 'BAD_REQUEST',
       message: expect.stringContaining('overlap bookings'),
     });
     expect((error as TRPCError).cause).toMatchObject({
@@ -485,8 +486,9 @@ describe('hotelProperty.spaces bookings', () => {
     const error = await caller()
       .bookings.hold(hold)
       .catch((caught: TRPCError) => caught);
+    // BAD_REQUEST so the transport carries the field: this lands on From.
     expect(error).toMatchObject({
-      code: 'CONFLICT',
+      code: 'BAD_REQUEST',
       message: expect.stringContaining('next free at'),
     });
     expect((error as TRPCError).cause).toMatchObject({

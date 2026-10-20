@@ -284,7 +284,7 @@ describe('HotelFunctionSpacesPanel', () => {
     );
     act(() => {
       lastCallbacks('hold').onError!(
-        error('CONFLICT', {
+        error('BAD_REQUEST', {
           startsAt: [
             'Crystal Hall is already booked for this time. Including setup and teardown it is next free at 1 Oct 2026, 00:00.',
           ],
@@ -347,7 +347,7 @@ describe('HotelFunctionSpacesPanel', () => {
     );
     act(() => {
       lastCallbacks('update').onError!(
-        error('CONFLICT', {
+        error('BAD_REQUEST', {
           setupMinutes: [
             'Those setup and teardown times would overlap bookings this space already has.',
           ],
