@@ -2244,6 +2244,24 @@ async function main() {
       `SELECT set_config('app.current_user_id', '', true),
               set_config('app.hotel_inventory_reason', '', true)`
     );
+    // H1-07 — one meal plan per tenant, in the shape provisioning writes
+    // (`hotel_meal_plan_meals_valid` validates the document on the way in).
+    const hotelMealPlanA = `hotel_meal_plan_a_${suffix}`;
+    const hotelMealPlanB = `hotel_meal_plan_b_${suffix}`;
+    await client.query(
+      `INSERT INTO "hotel_meal_plans" (
+        "id", "organizationId", "branchId", "code", "name", "nameUr", "meals", "active", "updatedAt"
+      ) VALUES ($1, 'org_devfathom', $2, 'CP', 'Bed & breakfast', 'کمرہ اور ناشتہ', $3::jsonb, true, CURRENT_TIMESTAMP),
+               ($4, $5, $6, 'CP', 'Bed & breakfast', 'کمرہ اور ناشتہ', $3::jsonb, true, CURRENT_TIMESTAMP)`,
+      [
+        hotelMealPlanA,
+        hotelPropertyA,
+        JSON.stringify([{ meal: 'BREAKFAST', outlets: [], cutoff_time: null, per_person: true }]),
+        hotelMealPlanB,
+        organizationB,
+        hotelPropertyB,
+      ]
+    );
     await client.query(`SET LOCAL ROLE "${runtimeRole}"`);
 
     // H1-03 — the five inventory tables, as the acting assigned user. Read,
@@ -2523,6 +2541,69 @@ async function main() {
       `SELECT set_config('app.is_platform_admin', 'false', true),
               set_config('app.current_user_id', '', true),
               set_config('app.hotel_inventory_reason', '', true)`
+    );
+
+    // H1-07 — meal plans are organization-scoped configuration (no assignment
+    // rule): read, UPDATE and DELETE isolation, blind writes reaching exactly
+    // the tenant's rows, the org-B insert failing closed, and platform reads.
+    await client.query(`SELECT set_config('app.current_user_id', $1, true)`, [userA]);
+    const hotelMealPlanRows: Array<[table: string, idA: string, idB: string]> = [
+      ['hotel_meal_plans', hotelMealPlanA, hotelMealPlanB],
+    ];
+    for (const [table, idA, idB] of hotelMealPlanRows) {
+      const visible = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(visible.rows[0]?.count, 1, `tenant A must only see its own "${table}" row`);
+      const updated = await client.query(
+        `UPDATE "${table}" SET "organizationId" = "organizationId" WHERE "id" = $1`,
+        [idB]
+      );
+      assertEqual(updated.rowCount, 0, `tenant A must not update tenant B's "${table}" row`);
+      const deleted = await client.query(`DELETE FROM "${table}" WHERE "id" = $1`, [idB]);
+      assertEqual(deleted.rowCount, 0, `tenant A must not delete tenant B's "${table}" row`);
+    }
+    await expectBlindWriteScoped(
+      'hotel_meal_plans',
+      `UPDATE "hotel_meal_plans" SET "active" = false`
+    );
+    await expectBlindWriteScoped('hotel_meal_plans', `DELETE FROM "hotel_meal_plans"`);
+    await expectDatabaseError(
+      '42501',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_meal_plans" (
+            "id", "organizationId", "branchId", "code", "name", "meals", "updatedAt"
+          ) VALUES ($1, $2, $3, 'ESCAPE', 'Escape', '[]'::jsonb, CURRENT_TIMESTAMP)`,
+          [`hotel_meal_plan_escape_${suffix}`, organizationB, hotelPropertyB]
+        ),
+      'tenant A inserting an org-B "hotel_meal_plans" row'
+    );
+    // Same tenant, the other tenant's property: the composite foreign key is
+    // what refuses, because (org_devfathom, property B) is not a property.
+    await expectDatabaseError(
+      '23503',
+      () =>
+        client.query(
+          `INSERT INTO "hotel_meal_plans" (
+            "id", "organizationId", "branchId", "code", "name", "meals", "updatedAt"
+          ) VALUES ($1, 'org_devfathom', $2, 'BORROWED', 'Borrowed', '[]'::jsonb, CURRENT_TIMESTAMP)`,
+          [`hotel_meal_plan_borrowed_${suffix}`, hotelPropertyB]
+        ),
+      'tenant A hanging a "hotel_meal_plans" row off tenant B\'s property'
+    );
+    await client.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
+    for (const [table, idA, idB] of hotelMealPlanRows) {
+      const both = await client.query<{ count: number }>(
+        `SELECT COUNT(*)::int AS count FROM "${table}" WHERE "id" IN ($1, $2)`,
+        [idA, idB]
+      );
+      assertEqual(both.rows[0]?.count, 2, `platform scope must read both tenants' "${table}" rows`);
+    }
+    await client.query(
+      `SELECT set_config('app.is_platform_admin', 'false', true),
+              set_config('app.current_user_id', '', true)`
     );
 
     // MEET-01: one read-isolation case per new meeting table. Each query names
@@ -3130,7 +3211,7 @@ async function main() {
     assertEqual(platformVisible.rows[0]?.count, 1, 'platform scope must unlock control-plane rows');
 
     console.log(
-      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, hospitality property/assignment/catalog/inventory probes, platform-only policies, and pending-login-intent control-plane isolation.'
+      'RLS verification passed: forced policies, cross-tenant isolation, fail-closed writes, composite ownership, append-only ledgers, tenant-local customer dedupe, immutable effective loyalty versions, wallet/printer/pharmacy-return-hold/pack-price cross-tenant probes, hospitality property/assignment/catalog/inventory/meal-plan probes, platform-only policies, and pending-login-intent control-plane isolation.'
     );
   } finally {
     await client.query('ROLLBACK').catch(() => undefined);

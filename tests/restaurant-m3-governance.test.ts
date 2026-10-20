@@ -306,6 +306,7 @@ const PHARMACY_CUSTOMER_ORDERING_TABLES = [
 const HOSPITALITY_TABLES = [
   'hotel_beds',
   'hotel_extras',
+  'hotel_meal_plans',
   'hotel_properties',
   'hotel_property_assignments',
   'hotel_room_blocks',
