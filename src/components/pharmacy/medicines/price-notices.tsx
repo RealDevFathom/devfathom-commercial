@@ -148,7 +148,7 @@ export function PriceNoticesView({
                     'Selling policy',
                     'Variance',
                   ].map((h) => (
-                    <th key={h} className="p-3">
+                    <th key={h} scope="col" className="p-3">
                       {h}
                     </th>
                   ))}
@@ -305,7 +305,7 @@ export function PriceNoticesView({
                     'Notified MRP',
                     'Status',
                   ].map((h) => (
-                    <th key={h} className="p-3">
+                    <th key={h} scope="col" className="p-3">
                       {h}
                     </th>
                   ))}
@@ -448,7 +448,7 @@ export function PriceOverridesView({
                     'Override selling',
                     'Review',
                   ].map((h) => (
-                    <th key={h} className="p-3">
+                    <th key={h} scope="col" className="p-3">
                       {h}
                     </th>
                   ))}
