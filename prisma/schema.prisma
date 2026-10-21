@@ -234,11 +234,29 @@ model PharmacyBranch {
   visibilityPharmacyTaxProfileVersion      PharmacyTaxProfileVersion[]       @relation("PharmacyTaxProfileVersionVisibilityAnchor")
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
+  branchAssignments                        PharmacyBranchAssignment[]
 
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
   @@map("pharmacy_branches")
+}
+
+model PharmacyBranchAssignment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  userId         String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+  user   User           @relation(fields: [organizationId, userId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, branchId, userId], map: "pharmacy_branch_assignments_org_branch_user_key")
+  @@index([organizationId, userId, active])
+  @@map("pharmacy_branch_assignments")
 }
 
 /// INV-10 — the deliberately narrow doorway into the chain purchasing view.
@@ -2768,6 +2786,8 @@ model User {
   // "Sign out everywhere" bumps it too. passwordChangedAt is kept for display/audit.
   tokenVersion       Int        @default(0)
   passwordChangedAt  DateTime?
+  /// Set when an administrator chooses the password. Cleared when the member sets their own.
+  mustChangePassword Boolean    @default(false)
   // IMP-DASH-02: per-user dashboard widget layout/visibility prefs (JSON blob).
   preferences        Json?
   // IMP-AUTH-04: per-type/channel notification opt-outs, honored by notify().
@@ -2848,6 +2868,7 @@ model User {
   pharmacyDeliveryEvidence PharmacyOrderDeliveryEvidence[] @relation("PharmacyDeliveryEvidenceActor")
 
   hotelPropertyAssignments HotelPropertyAssignment[]
+  pharmacyBranchAssignments PharmacyBranchAssignment[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])
