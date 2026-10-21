@@ -28,6 +28,9 @@ function fixture(capability: string) {
         .fn()
         .mockResolvedValue({ branchId: 'draft-branch', qualifiedPersonUserId: 'qualified-user' }),
     },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'draft-branch' }]),
+    },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
   };
   const ctx = {
@@ -116,6 +119,24 @@ it('scopes purchasing witnesses to the tenant draft branch', async () => {
       }),
     })
   );
+});
+it('refuses to enumerate witnesses for a branch the actor is not assigned to', async () => {
+  const f = fixture('pharmacy:procurement');
+  f.db.pharmacyBranchAssignment.findMany.mockResolvedValueOnce([
+    { branchId: 'other-branch' },
+  ] as never);
+  await expect(
+    (
+      f.caller.purchasing as unknown as {
+        controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+      }
+    ).controlledWitnesses({ goodsReceiptId: 'draft' })
+  ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  expect(f.db.pharmacyBranchAssignment.findMany).toHaveBeenCalledWith({
+    where: { organizationId: 'org', userId: 'actor', active: true },
+    select: { branchId: true },
+  });
+  expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
 });
 it('does not enumerate witnesses for a missing or foreign draft', async () => {
   const f = fixture('pharmacy:procurement');
