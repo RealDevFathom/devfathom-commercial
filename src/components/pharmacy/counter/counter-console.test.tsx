@@ -1065,4 +1065,93 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(screen.queryByText(/OPEN_DRAWER|prisma|Unique constraint/)).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
   });
+
+  it('adds a barcode on Enter only when the search returns that single medicine', async () => {
+    const row = {
+      medicineId: 'med-barcode',
+      displayName: 'Paracetamol',
+      brandName: null,
+      manufacturer: null,
+      strength: '500 mg',
+      presentationId: 'presentation-a',
+      presentation: 'Tablet',
+      dosageForm: 'Tablet',
+      route: 'Oral',
+      matchedOn: 'BARCODE',
+      recommendedLotId: 'lot-a',
+      packLevelId: 'pack-a',
+      unitsPerPack: 1,
+      printedMrpMinor: 10000,
+      roundingIncrementMinor: 1,
+      batchNumber: 'B-1',
+      nearestSafeExpiry: '2028-06-30T00:00:00.000Z',
+      onHandUnits: 10,
+      saleableUnits: [],
+      saleUnits: [
+        {
+          kind: 'UNIT',
+          packLevelId: 'pack-a',
+          levelLabel: 'UNIT',
+          canonicalUnitsPerSaleUnit: 1,
+        },
+      ],
+      restriction: {
+        rx: false,
+        otc: true,
+        restricted: false,
+        controlled: false,
+        highAlert: false,
+        lasa: false,
+      },
+      storage: {
+        coldChain: false,
+        locationKind: 'STORE',
+        locationCode: 'A',
+        locationName: 'Store',
+      },
+      blocked: [],
+    };
+    mocks.queries.counterSearch = query({ rows: [row] });
+    mocks.mutations.addLine!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    fireEvent.change(search, { target: { value: '123456' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await waitFor(() =>
+      expect(mocks.mutations.addLine).toHaveBeenCalledWith(
+        expect.objectContaining({ medicineId: 'med-barcode', quantity: 1 })
+      )
+    );
+
+    mocks.mutations.addLine!.mockClear();
+    mocks.queries.counterSearch = query({ rows: [row, { ...row, medicineId: 'med-other' }] });
+    fireEvent.change(search, { target: { value: '654321' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    await act(async () => {
+      await Promise.resolve();
+    });
+    expect(mocks.mutations.addLine).not.toHaveBeenCalled();
+  });
+
+  it('does not run F9 while a field is focused or a dialog is open', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const amount = screen.getByLabelText('Amount');
+    const tender = amount.closest('[tabindex="-1"]');
+    amount.focus();
+    fireEvent.keyDown(amount, { key: 'F9' });
+    expect(document.activeElement).toBe(amount);
+
+    amount.blur();
+    screen.getByLabelText('Scan or search').blur();
+    fireEvent.keyDown(window, { key: 'F9' });
+    expect(document.activeElement).toBe(tender);
+
+    const dialog = document.createElement('div');
+    dialog.setAttribute('role', 'dialog');
+    document.body.append(dialog);
+    if (tender instanceof HTMLElement) tender.blur();
+    fireEvent.keyDown(window, { key: 'F9' });
+    expect(document.activeElement).not.toBe(tender);
+    dialog.remove();
+  });
 });

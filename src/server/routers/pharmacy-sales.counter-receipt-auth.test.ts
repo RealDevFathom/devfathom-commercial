@@ -91,6 +91,14 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
       })),
     },
     pharmacyBranch: {
+      findMany: vi.fn(
+        async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
+          args.where.organizationId && args.where.organizationId !== 'org-a'
+            ? []
+            : args.where.id.in
+                .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
+                .map((id) => ({ id }))
+      ),
       findFirst: vi.fn(async (args?: { where?: { id?: string; organizationId?: string } }) => {
         const id = args?.where?.id;
         const organizationId = args?.where?.organizationId;
@@ -466,10 +474,10 @@ describe('counter receipt authorization', () => {
       f.caller().counterReceipt({ branchId: 'foreign-branch', saleId: 'sibling-sale' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(readCounterReceipt).not.toHaveBeenCalled();
-    expect(f.db.pharmacyBranch.findFirst).toHaveBeenCalledWith(
+    expect(f.db.pharmacyBranch.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({
-          id: 'foreign-branch',
+          id: { in: ['foreign-branch'] },
           organizationId: 'org-a',
           active: true,
         }),

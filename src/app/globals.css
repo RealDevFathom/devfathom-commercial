@@ -1303,6 +1303,33 @@
   }
 }
 
+/* Unlayered so these beat Tailwind hover/active transforms on POS controls. */
+.pos-calm [data-slot='button'],
+.pos-calm button {
+  box-shadow: none;
+  transform: none;
+  transition-property: background-color, border-color, color, opacity;
+  transition-duration: 120ms;
+}
+
+.pos-calm [data-slot='button']:hover,
+.pos-calm [data-slot='button']:active,
+.pos-calm [data-slot='button']:focus-visible,
+.pos-calm button:hover,
+.pos-calm button:active,
+.pos-calm button:focus-visible {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pos-calm,
+  .pos-calm * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
+  }
+}
+
 @media (min-width: 768px) {
   .studio-greeting-panel {
     flex-direction: row;

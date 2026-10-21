@@ -81,6 +81,11 @@ function makeDb(status = 'DRAFT') {
     restaurantStaffProfile: {
       findMany: vi.fn().mockResolvedValue([{ id: 'staff_1', primaryBranchId: 'branch_1' }]),
     },
+    restaurantBranch: {
+      findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+        (where?.id?.in ?? []).map((id) => ({ id }))
+      ),
+    },
     restaurantBranchAssignment: { findMany: vi.fn().mockResolvedValue([]) },
     restaurantStockItem: { findFirst: vi.fn().mockResolvedValue({ id: 'stock_rice' }) },
     restaurantCateringOrder: {
@@ -462,7 +467,12 @@ describe('restaurant catering production and cost', () => {
     }));
     db.restaurantCateringOrder.update.mockImplementation(async ({ data }: { data: object }) => {
       persistedStatus = (data as { status?: string }).status ?? persistedStatus;
-      return { id: 'order_1', organizationId: 'org_1', branchId: 'branch_1', status: persistedStatus };
+      return {
+        id: 'order_1',
+        organizationId: 'org_1',
+        branchId: 'branch_1',
+        status: persistedStatus,
+      };
     });
     db.$transaction.mockImplementation(async (work) => {
       const result = queue.then(() => work(db));

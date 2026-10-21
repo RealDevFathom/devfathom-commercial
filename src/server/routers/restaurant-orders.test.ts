@@ -62,12 +62,18 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const db = {
   restaurantOrder: { findMany: mocks.orderFindMany, findUnique: mocks.orderFindUnique },
   restaurantKitchenTicket: { findMany: mocks.ticketFindMany },
+  restaurantBranch: {
+    findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
+      (where.id?.in ?? []).map((id) => ({ id }))
+    ),
+  },
 } as unknown as ScopedDb;
 
 function caller() {
   return restaurantOrdersRouter.createCaller({
     db,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-pos'],
       activeSeats: 1,
       seatLimit: 50,
@@ -282,6 +288,17 @@ describe('mutation wiring', () => {
     expect(result.orderId).toBe('o9');
     expect(result.businessDate).toBe('2026-08-19');
     expect(mocks.annotateAudit).toHaveBeenCalled();
+  });
+
+  it('refuses to open an order on a branch outside the session organization', async () => {
+    vi.mocked(db.restaurantBranch.findMany).mockResolvedValueOnce([]);
+    await expect(
+      caller().open({ branchId: 'other_org_branch', channel: 'DINE_IN', actor: ACTOR })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(mocks.openOrder).not.toHaveBeenCalled();
   });
 
   it('rejects delivery at the tRPC schema before command or audit work', async () => {

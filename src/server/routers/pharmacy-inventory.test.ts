@@ -69,6 +69,11 @@ function makeDb() {
     pharmacyInterbranchTransfer: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
+    pharmacyBranch: {
+      findMany: vi.fn(async ({ where }: { where: { id?: { in: string[] } } }) =>
+        (where.id?.in ?? []).map((id) => ({ id }))
+      ),
+    },
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -196,6 +201,22 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyStockMovement.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a branch that is not an active branch in the session organization', async () => {
+    db.pharmacyBranch.findMany.mockResolvedValueOnce([]);
+    await expect(
+      caller().createLocation({
+        branchId: 'branch_other',
+        code: 'MAIN',
+        name: 'Main store',
+        kind: 'STORE',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
   });
 
   it('refuses every mutation when there is no tenant actor to attribute it to', async () => {

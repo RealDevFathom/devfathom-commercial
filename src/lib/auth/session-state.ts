@@ -114,6 +114,18 @@ export function isSessionUsable(user: SessionUserState | null | undefined): bool
   return evaluateSessionUser(user).ok;
 }
 
+export const TEMPORARY_PASSWORD_MESSAGE = 'Change your temporary password before continuing.';
+
+/** The only authenticated call a temporary password may make. */
+const TEMPORARY_PASSWORD_ALLOWED_PATHS = new Set(['team.changePassword']);
+
+export function temporaryPasswordBlocks(
+  user: { mustChangePassword?: boolean | null } | null | undefined,
+  path: string
+): boolean {
+  return user?.mustChangePassword === true && !TEMPORARY_PASSWORD_ALLOWED_PATHS.has(path);
+}
+
 /** Query string the login page reads to explain why the session ended. */
 export function signInRedirectPath(kind: SessionDenialKind): string {
   return `/login?reason=${kind}`;

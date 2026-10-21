@@ -2788,6 +2788,8 @@ model User {
   // "Sign out everywhere" bumps it too. passwordChangedAt is kept for display/audit.
   tokenVersion       Int        @default(0)
   passwordChangedAt  DateTime?
+  /// Set when an administrator chooses the password. Cleared when the member sets their own.
+  mustChangePassword Boolean    @default(false)
   // IMP-DASH-02: per-user dashboard widget layout/visibility prefs (JSON blob).
   preferences        Json?
   // IMP-AUTH-04: per-type/channel notification opt-outs, honored by notify().
@@ -12554,6 +12556,13 @@ model PharmacyGoodsReceiptLine {
   /// A human, never OCR confidence, confirms the regulated facts before posting.
   ocrRegulatedConfirmedAt   DateTime?
   ocrRegulatedConfirmedById String?
+  /// DRAP 2D stock-in. Null when the pack was typed by hand.
+  gtin                      String?
+  /// Case-preserved serial from AI 21.
+  serialNumber              String?
+  /// Uppercase serial. Duplicate stock-in is rejected per organization and GTIN.
+  serialKey                 String?
+  gs1Warnings               String[]                @default([])
   createdAt                 DateTime                @default(now())
 
   goodsReceipt       PharmacyGoodsReceipt         @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_receipt_fkey")
@@ -12571,6 +12580,7 @@ model PharmacyGoodsReceiptLine {
   @@index([organizationId, goodsReceiptId], map: "pharmacy_grl_org_receipt_idx")
   @@index([organizationId, purchaseOrderLineId], map: "pharmacy_grl_org_order_line_idx")
   @@index([organizationId, medicineId], map: "pharmacy_grl_org_medicine_idx")
+  @@index([organizationId, gtin, serialKey], map: "pharmacy_grl_org_gtin_serial_idx")
   @@map("pharmacy_goods_receipt_lines")
 }
 
@@ -15243,4 +15253,35 @@ model PharmacyPackPrice {
   @@unique([organizationId, proposalId])
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
+}
+
+/// Cross-instance fixed-window counters. Not tenant data and not under RLS:
+/// a limit is taken before a tenant scope exists. Startup still refuses a
+/// SUPERUSER or BYPASSRLS application role.
+model RateLimitBucket {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+  @@map("rate_limit_buckets")
+}
+
+/// Work committed with a tenant mutation and delivered after that transaction.
+/// SMTP and outbound HTTP must not run on the request's pooled connection.
+model OutboundEffect {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind           String
+  payload        Json
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  lastError      String?
+  availableAt    DateTime @default(now())
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, status, createdAt])
+  @@index([status, availableAt])
+  @@map("outbound_effects")
 }

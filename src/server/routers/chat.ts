@@ -3,6 +3,7 @@ import { TRPCError } from '@trpc/server';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
 import { assertChannelMember } from '../authz';
+import { assertInOrganization, workspaceId } from '../org-refs';
 import { notify } from '@/lib/notifications';
 import { emitToChannel, emitToUser } from '@/lib/realtime-emit';
 import { tiptapToPlainText, extractMentionIds } from '@/lib/chat/tiptap';
@@ -371,7 +372,13 @@ export const chatRouter = router({
       const existing = await ctx.db.message.findUnique({
         where: { id: input.messageId },
         // RT-02: also grab the current content so we can snapshot it before overwrite.
-        select: { senderId: true, channelId: true, deletedAt: true, content: true, contentJson: true },
+        select: {
+          senderId: true,
+          channelId: true,
+          deletedAt: true,
+          content: true,
+          contentJson: true,
+        },
       });
       if (!existing) throw new TRPCError({ code: 'NOT_FOUND', message: 'Message not found' });
       if (existing.senderId !== me)
@@ -556,6 +563,7 @@ export const chatRouter = router({
     .mutation(async ({ ctx, input }) => {
       const me = ctx.session.user.id;
       const others = [...new Set(input.memberIds)].filter((id) => id !== me);
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), [me, ...others]);
       const ch = await ctx.db.channel.create({
         data: {
           name: input.name,
@@ -672,6 +680,7 @@ export const chatRouter = router({
         ))
       )
         throw new TRPCError({ code: 'FORBIDDEN', message: 'Only channel admins can add members' });
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), input.userIds);
       await ctx.db.channelMember.createMany({
         data: input.userIds.map((userId) => ({
           channelId: input.channelId,
@@ -711,6 +720,7 @@ export const chatRouter = router({
       const me = ctx.session.user.id;
       if (input.userId === me)
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot DM yourself' });
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
       const candidates = await ctx.db.channel.findMany({
         where: {
           type: 'DM',

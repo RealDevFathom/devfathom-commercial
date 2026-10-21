@@ -102,10 +102,16 @@ function caller() {
     db: {
       restaurantStaffProfile: { findMany: mocks.findStaffProfiles },
       restaurantBranchAssignment: { findMany: mocks.findBranchAssignments },
+      restaurantBranch: {
+        findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+          (where?.id?.in ?? []).map((id) => ({ id }))
+        ),
+      },
       restaurantPurchaseOrder: { findUnique: mocks.findPurchaseOrder },
       restaurantStockLocation: { findUnique: mocks.findStockLocation },
     } as never,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-pos'],
       activeSeats: 1,
       seatLimit: 50,
@@ -113,7 +119,13 @@ function caller() {
     },
     session: {
       expires: 'later',
-      user: { id: 'user_po', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+      user: {
+        id: 'user_po',
+        role: 'EMPLOYEE',
+        department: 'OPERATIONS',
+        status: 'ACTIVE',
+        organizationId: 'org_1',
+      },
     },
     organization: null,
     support: null,

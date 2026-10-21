@@ -42,7 +42,7 @@ export async function POST(
   context: { params: Promise<{ source: string }> }
 ): Promise<Response> {
   const ip = clientIp(request);
-  const gate = rateLimit(`restaurant-webhook:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
+  const gate = await rateLimit(`restaurant-webhook:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
   if (!gate.ok) {
     return NextResponse.json(
       { error: 'Too many requests' },

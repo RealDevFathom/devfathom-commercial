@@ -26,13 +26,10 @@ import { rateLimit, type RateLimitResult } from '@/lib/rate-limit';
  *    repeats often enough to trip. It is set well above any plausible legitimate
  *    volume for these five procedures, so it should only ever fire under attack.
  *
- * KNOWN LIMITATION, deliberately not addressed here. `rateLimit` is an in-process
- * fixed-window counter, so these limits are per server instance, and `clientIp`
- * trusts the first `x-forwarded-for` entry, which a client can set. A distributed
- * limiter and trusted-proxy address extraction are PR C. This is a real
- * mitigation of the amplification this PR introduces, not a claim of a global
- * guarantee — and the token-fingerprint limit, which is the one that matters for
- * guessing a token, does not depend on the address at all.
+ * The counter is the shared store behind `rateLimit` (Postgres outside tests).
+ * `ip` must already be the address from `clientIp`, which ignores forwarded
+ * headers unless a trusted proxy is configured. The token fingerprint does not
+ * depend on that address.
  */
 
 /** Per token, per window. Generous for a human retrying, useless for guessing. */
@@ -43,7 +40,7 @@ const TOKEN_WINDOW_MS = 10 * 60_000;
 const IP_LIMIT = 60;
 const IP_WINDOW_MS = 10 * 60_000;
 
-/** All anonymous traffic through this transport, per instance, per window. */
+/** All anonymous traffic through this transport, per window. */
 const GLOBAL_LIMIT = 600;
 const GLOBAL_WINDOW_MS = 60_000;
 
@@ -59,19 +56,23 @@ function tokenFingerprint(token: string | null): string {
 
 export type AnonymousAdmission = { ok: true } | { ok: false; retryAfter: number };
 
-export function admitAnonymousRequest(input: {
+export async function admitAnonymousRequest(input: {
   kind: 'token' | 'host';
   token: string | null;
   ip: string;
-}): AnonymousAdmission {
+}): Promise<AnonymousAdmission> {
   const gates: RateLimitResult[] = [
-    rateLimit('anon:trpc:global', GLOBAL_LIMIT, GLOBAL_WINDOW_MS),
-    rateLimit(`anon:trpc:ip:${input.ip}`, IP_LIMIT, IP_WINDOW_MS),
+    await rateLimit('anon:trpc:global', GLOBAL_LIMIT, GLOBAL_WINDOW_MS),
+    await rateLimit(`anon:trpc:ip:${input.ip}`, IP_LIMIT, IP_WINDOW_MS),
   ];
 
   if (input.kind === 'token') {
     gates.push(
-      rateLimit(`anon:trpc:token:${tokenFingerprint(input.token)}`, TOKEN_LIMIT, TOKEN_WINDOW_MS)
+      await rateLimit(
+        `anon:trpc:token:${tokenFingerprint(input.token)}`,
+        TOKEN_LIMIT,
+        TOKEN_WINDOW_MS
+      )
     );
   }
 
