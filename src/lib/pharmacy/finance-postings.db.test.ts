@@ -342,6 +342,18 @@ async function completedSaleLine(
     approvalPolicy: options.discountMinor ? 'branch-manager' : undefined,
     idempotencyKey: `sale-${tag(options.label)}`,
   });
+  await db.pharmacyTender.create({
+    data: {
+      organizationId: f.organizationId,
+      branchId: f.branchId,
+      saleId: sale.id,
+      type: 'BANK_TRANSFER',
+      amountMinor: line.quantity * line.unitPriceMinor - line.discountMinor,
+      businessDate: SOLD_AT,
+      actorId: ACTOR,
+      deviceId: 'finance-postings-test',
+    },
+  });
   await deps.sales.changeSaleStatus(db, scopeOf(f), sale.id, 'complete');
   return { sale, line, allocation };
 }

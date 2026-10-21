@@ -131,6 +131,8 @@ describe('POS sale voiding', () => {
       receiptNumber: null as number | null,
       receiptDeviceId: null as string | null,
       businessDate: null as Date | null,
+      lines: [{ quantity: 2, unitPriceMinor: 100, discountMinor: 10 }],
+      tenders: [{ amountMinor: 190 }],
     };
     const db = {
       pharmacySale: {
@@ -164,6 +166,28 @@ describe('POS sale voiding', () => {
       receiptNumber: 7,
       receiptDeviceId: 'counter-1',
     });
+  });
+
+  it('refuses to complete or issue a receipt when persisted tenders do not cover the sale', async () => {
+    const sale = {
+      id: 'sale-a',
+      status: 'OPEN',
+      receiptNumber: null,
+      lines: [{ quantity: 2, unitPriceMinor: 100, discountMinor: 10 }],
+      tenders: [{ amountMinor: 189 }],
+    };
+    const updateMany = vi.fn();
+    const issueReceipt = vi.fn();
+    const db = {
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue(sale), updateMany },
+      $queryRaw: issueReceipt,
+    };
+
+    await expect(
+      changeSaleStatus(db as never, scope, 'sale-a', 'complete', undefined, 'counter-1')
+    ).rejects.toMatchObject({ reason: 'INSUFFICIENT_TENDER' });
+    expect(updateMany).not.toHaveBeenCalled();
+    expect(issueReceipt).not.toHaveBeenCalled();
   });
 
   it('stops a losing add-line race before stock allocation', async () => {

@@ -146,10 +146,22 @@ export class PharmacySaleError extends Error {
       | 'IDEMPOTENCY_CONFLICT'
       | 'CONSENT_REQUIRED'
       | 'UNSAFE_STOCK'
+      | 'INSUFFICIENT_TENDER'
       | 'CROSS_BRANCH_REFERENCE'
   ) {
     super(reason);
   }
+}
+
+export function tendersCoverSaleTotal(sale: {
+  lines: readonly { quantity: number; unitPriceMinor: number; discountMinor: number }[];
+  tenders: readonly { amountMinor: number }[];
+}) {
+  const totalMinor = sale.lines.reduce(
+    (total, line) => total + line.quantity * line.unitPriceMinor - line.discountMinor,
+    0
+  );
+  return sale.tenders.reduce((total, tender) => total + tender.amountMinor, 0) >= totalMinor;
 }
 
 export function validateDiscount(input: {
@@ -173,7 +185,7 @@ export function validateDiscount(input: {
 async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
-    include: { lines: { include: { medicine: true } } },
+    include: { lines: { include: { medicine: true } }, tenders: { select: { amountMinor: true } } },
   });
   if (!sale) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   return sale;
@@ -385,6 +397,8 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  if (action === 'complete' && !tendersCoverSaleTotal(sale))
+    throw new PharmacySaleError('INSUFFICIENT_TENDER');
   const witness =
     action === 'void' && sale.lines.some((line) => line.medicine.controlled)
       ? await authorizeControlledRestoration(db, scope, controlledWitness)

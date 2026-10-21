@@ -363,7 +363,21 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('legacy/status-only completion reports unavailable history without live catalog backfill', async () => {
     const f = await fixture();
-    await transaction((db) => changeSaleStatus(db, scope, f.sale.id, 'complete'));
+    await transaction(async (db) => {
+      await db.pharmacyTender.create({
+        data: {
+          organizationId: org,
+          branchId: branch,
+          saleId: f.sale.id,
+          type: f.input.type,
+          amountMinor: f.input.amountMinor,
+          businessDate: f.input.businessDate,
+          actorId: scope.actorId,
+          deviceId: f.input.deviceId,
+        },
+      });
+      await changeSaleStatus(db, scope, f.sale.id, 'complete');
+    });
     const receipt = await read(f.sale.id);
     expect(receipt.receiptNumber).toBeGreaterThan(0);
     expect(receipt.lines[0]).toMatchObject({
