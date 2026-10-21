@@ -257,3 +257,13 @@ describe('partitionWindows', () => {
     expect(itemWindows[0].startMinutes).toBe(660);
   });
 });
+
+it('treats 1440 as end of day, including the final minute', () => {
+  expect(
+    windowMatches(win({ startMinutes: 0, endMinutes: 1440 }), {
+      dateKey: '2026-06-15',
+      dayOfWeek: 1,
+      minutes: 1439,
+    })
+  ).toBe(true);
+});

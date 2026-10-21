@@ -30,6 +30,7 @@ const mocks = vi.hoisted(() => ({
   pubFindUnique: vi.fn(),
   pubCreate: vi.fn(),
   pubUpdate: vi.fn(),
+  windowCreate: vi.fn(),
   windowFindMany: vi.fn(),
   exceptionFindMany: vi.fn(),
   overrideFindMany: vi.fn(),
@@ -76,7 +77,7 @@ const db = {
     create: mocks.pubCreate,
     update: mocks.pubUpdate,
   },
-  restaurantMenuAvailabilityWindow: { findMany: mocks.windowFindMany },
+  restaurantMenuAvailabilityWindow: { findMany: mocks.windowFindMany, create: mocks.windowCreate },
   restaurantMenuAvailabilityException: { findMany: mocks.exceptionFindMany },
   restaurantBranchMenuItemOverride: {
     findMany: mocks.overrideFindMany,
@@ -621,4 +622,26 @@ describe('effectiveMenu — branch-timezone availability (C5, through the router
     });
     expect(await availabilityOf(pub, 'DINE_IN', new Date('2026-06-01T12:00:00Z'))).toBe(false);
   });
+});
+
+describe('availability minute bounds', () => {
+  const input = { publicationId: 'pub_1', daysOfWeek: [], startMinutes: 0, endMinutes: 1440 };
+  it('persists 1440 as the exclusive end of day', async () => {
+    mocks.pubFindUnique.mockResolvedValue({ id: 'pub_1', menuId: 'menu_1' });
+    mocks.windowCreate.mockResolvedValue({ id: 'window_1', ...input });
+    await caller().addAvailabilityWindow(input);
+    expect(mocks.windowCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ endMinutes: 1440 }) })
+    );
+  });
+  it.each([-1, 1441, 1.5])(
+    'rejects invalid endMinutes %s before persistence',
+    async (endMinutes) => {
+      mocks.windowCreate.mockClear();
+      await expect(caller().addAvailabilityWindow({ ...input, endMinutes })).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+      });
+      expect(mocks.windowCreate).not.toHaveBeenCalled();
+    }
+  );
 });
