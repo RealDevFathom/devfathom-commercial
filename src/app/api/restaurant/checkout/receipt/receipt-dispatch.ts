@@ -4,6 +4,7 @@ import { getRestaurantReceiptLayout } from '@/lib/receipts/restaurant-settings';
 
 import type { MoneyCommandArgs } from '@/lib/restaurant/checkout-routes';
 import { buildReceiptForBranch } from '@/lib/restaurant/checkout-routes';
+import { loyaltyReceiptLines } from '@/lib/restaurant/loyalty-receipt';
 import { appendOrderEvent } from '@/lib/restaurant/outbox';
 import {
   PrintDocumentSchema,
@@ -117,6 +118,7 @@ async function receiptFacts(
           ]),
       `Rounding ${receipt.totals.roundingAdjustment}`,
       `TOTAL ${receipt.totals.grandTotal}`,
+      ...loyaltyReceiptLines(receipt.loyalty),
       `Split ${receipt.splitKind}${receipt.fractionNumerator !== null && receipt.fractionDenominator !== null ? ` ${receipt.fractionNumerator}/${receipt.fractionDenominator}` : ''}`,
       ...(reason ? [`Reprint: ${reason}`] : []),
     ],
@@ -305,7 +307,13 @@ export async function dispatchReceipt({
       {
         branchId: ctx.device.branchId,
         routes: [
-          { documentType: 'RECEIPT', stationId: null, printerId: state.printerId, registeredPrinterId: state.registeredPrinterId, enabled: true },
+          {
+            documentType: 'RECEIPT',
+            stationId: null,
+            printerId: state.printerId,
+            registeredPrinterId: state.registeredPrinterId,
+            enabled: true,
+          },
         ],
       },
       { branchId: ctx.device.branchId, stationId: null, idempotencyKey, document }

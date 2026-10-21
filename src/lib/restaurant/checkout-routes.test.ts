@@ -132,6 +132,66 @@ describe('checkout money serialization', () => {
         roundingAdjustment: expected,
         grandTotal: expected,
       },
+      loyalty: null,
+    });
+  });
+
+  it('attaches the customer wallet balance to a settled receipt', async () => {
+    const receiptDb = {
+      restaurantBill: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'bill-1',
+          orderId: 'order-1',
+          branchId: 'branch-1',
+          businessDate: new Date('2026-09-01T00:00:00.000Z'),
+          status: 'SETTLED',
+          splitKind: 'NONE',
+          fractionNumerator: null,
+          fractionDenominator: null,
+          subtotal: decimal('100'),
+          taxTotal: decimal('0'),
+          serviceChargeTotal: decimal('0'),
+          deliveryFeeTotal: decimal('0'),
+          compTotal: decimal('0'),
+          roundingAdjustment: decimal('0'),
+          grandTotal: decimal('100'),
+          receiptNumber: 1,
+          settledAt: new Date('2026-09-01T01:00:00.000Z'),
+          branch: { name: 'Branch', timezone: 'UTC' },
+          order: { orderNumber: 9, channel: 'DINE_IN', customerId: 'cust-1' },
+          lines: [],
+          tenders: [],
+        }),
+      },
+      restaurantCustomer: {
+        findUnique: vi.fn().mockResolvedValue({
+          id: 'cust-1',
+          loyaltyAccount: { id: 'acct-1', active: true },
+        }),
+      },
+      loyaltyPointsEntry: {
+        aggregate: vi
+          .fn()
+          .mockImplementation(async ({ where }: { where: { kind?: string } }) =>
+            where.kind === 'EARN' ? { _sum: { points: 100 } } : { _sum: { points: 250 } }
+          ),
+      },
+      loyaltyProgramVersion: {
+        findFirst: vi.fn().mockResolvedValue({
+          id: 'program-1',
+          earnRate: decimal('1'),
+          redemptionValue: decimal('1'),
+        }),
+      },
+    } as unknown as ScopedDb;
+
+    const receipt = await buildReceiptForBranch(receiptDb, 'bill-1', 'branch-1');
+
+    expect(receipt?.loyalty).toEqual({
+      pointsBalance: 250,
+      pointsEarned: 100,
+      pointsPerPkr: '1',
+      balancePkr: '250.00',
     });
   });
 });
