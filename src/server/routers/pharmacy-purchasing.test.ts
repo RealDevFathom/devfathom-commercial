@@ -684,6 +684,33 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it('resolves the pack conversion as of the receipt date, not today (#173)', async () => {
+    // The box hierarchy was superseded after this receipt; today it has no conversion.
+    const supersededAt = new Date('2026-09-10T00:00:00.000Z');
+    db.packLevel.findMany.mockResolvedValue([
+      {
+        id: 'pack_a',
+        level: 'BOX',
+        unitsPerParent: 1,
+        parentPackLevelId: null,
+        effectiveFrom: PAST,
+        effectiveTo: supersededAt,
+      },
+      {
+        id: 'unit_a',
+        level: 'UNIT',
+        unitsPerParent: 10,
+        parentPackLevelId: 'pack_a',
+        effectiveFrom: PAST,
+        effectiveTo: supersededAt,
+      },
+    ]);
+    await caller().createGoodsReceipt(RECEIPT);
+    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      receivedCanonicalUnits: 100,
+    });
+  });
+
   it('takes the receiver from the session, never from the payload', async () => {
     await caller('user_counter').createGoodsReceipt(RECEIPT);
     expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data).toMatchObject({
@@ -995,5 +1022,72 @@ describe('server-owned purchasing conversions', () => {
       })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('procurement gate on requisitions, quotes and purchase orders (#173 security)', () => {
+  beforeEach(() => {
+    mocks.can.mockImplementation(
+      async (_user: unknown, action: string) => action !== 'pharmacy:procurement'
+    );
+  });
+  const line = { medicineId: 'medicine_a', packLevelId: 'pack_a' };
+  it.each([
+    [
+      'createRequisition',
+      () =>
+        caller('cashier_a').createRequisition({
+          reference: 'REQ-1',
+          lines: [{ ...line, quantityPacks: 1, canonicalUnitsPerPack: 10 }],
+        }),
+      () => db.pharmacyRequisition.create,
+    ],
+    [
+      'recordQuote',
+      () =>
+        caller('cashier_a').recordQuote({
+          requisitionId: 'req_a',
+          supplierId: 'supplier_a',
+          quotedAt: PAST,
+          validUntil: FUTURE,
+          lines: [
+            { requisitionLineId: 'reqline_a', pricePerPackMinor: 100, canonicalUnitsPerPack: 10 },
+          ],
+        }),
+      () => db.pharmacyQuote.create,
+    ],
+    [
+      'createPurchaseOrder',
+      () =>
+        caller('cashier_a').createPurchaseOrder({
+          reference: 'PO-1',
+          supplierId: 'supplier_a',
+          lines: [ORDER_LINE],
+        }),
+      () => db.pharmacyPurchaseOrder.create,
+    ],
+    [
+      'createCentralPurchaseOrder',
+      () =>
+        caller('cashier_a').createCentralPurchaseOrder({
+          reference: 'CPO-1',
+          supplierId: 'supplier_a',
+          receivingBranchId: 'branch_a',
+          lines: [
+            { ...line, orderedPacks: 1, canonicalUnitsPerPack: 10, listPricePerPackMinor: 100 },
+          ],
+        }),
+      () => db.pharmacyPurchaseOrder.create,
+    ],
+  ] as const)('refuses a cashier on %s before reading or writing', async (_name, call, write) => {
+    await expect(call()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(write()).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:procurement',
+      undefined,
+      expect.anything()
+    );
   });
 });

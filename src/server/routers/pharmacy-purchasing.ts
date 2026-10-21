@@ -202,7 +202,9 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
 /** Resolve conversions only from the tenant's configured medicine pack hierarchy. */
 async function resolvePurchasingLine<T extends { medicineId: string; packLevelId: string }>(
   ctx: TRPCContext,
-  line: T
+  line: T,
+  /** The instant the conversion must be effective at (the receipt date when receiving). */
+  at: Date = new Date()
 ): Promise<T & { canonicalUnitsPerPack: number }> {
   const { organizationId } = tenantScope(ctx);
   const pack = await ctx.db.packLevel.findFirst({
@@ -216,7 +218,7 @@ async function resolvePurchasingLine<T extends { medicineId: string; packLevelId
   const levels = await ctx.db.packLevel.findMany({
     where: { organizationId, presentationId: pack.presentationId },
   });
-  const conversion = packConversions(levels).find((row) => row.packLevelId === pack.id);
+  const conversion = packConversions(levels, at).find((row) => row.packLevelId === pack.id);
   if (!conversion) throw new TRPCError({ code: 'BAD_REQUEST', message: 'MISSING_PACK_CONVERSION' });
   return { ...line, canonicalUnitsPerPack: conversion.canonicalUnitsPerPack };
 }
@@ -338,7 +340,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 requisition -----
 
-  createRequisition: protectedProcedure
+  createRequisition: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -417,7 +419,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 quotes and comparison -----
 
-  recordQuote: protectedProcedure
+  recordQuote: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -541,7 +543,7 @@ const purchasingRouter = router({
 
   // ----- PUR-02 purchase order and approval -----
 
-  createPurchaseOrder: protectedProcedure
+  createPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -919,7 +921,7 @@ const purchasingRouter = router({
             }))
           )
             throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
-          const line = await resolvePurchasingLine(ctx, inputLine);
+          const line = await resolvePurchasingLine(ctx, inputLine, input.receivedAt);
           // An ordered line borrowed from another order — or from another
           // tenant — would make the three-way match compare the goods against
           // something they were never ordered on.
@@ -1413,7 +1415,7 @@ const purchasingRouter = router({
     }),
 
   /** INV-10 — one human-created central draft PO; never auto-orders. */
-  createCentralPurchaseOrder: auditedProtectedProcedure
+  createCentralPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
