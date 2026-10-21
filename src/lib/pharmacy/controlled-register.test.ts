@@ -136,7 +136,6 @@ describe('appendControlledCorrection', () => {
         patientAddress: '12 Mall Road',
         manufacturer: 'Maker',
       }),
-      select: { id: true },
     });
     expect(incident).not.toHaveBeenCalled();
     expect(db.pharmacyControlledRegisterEntry.update).not.toHaveBeenCalled();
@@ -160,8 +159,8 @@ describe('appendControlledCorrection', () => {
     expect(calls.indexOf('lock')).toBeLessThan(calls.indexOf('serial'));
   });
 
-  it('opens an incident when the corrected balance does not match sellable stock', async () => {
-    const { db, incident } = correctionDb({ sellable: 8 });
+  it('refuses a correction whose balance does not match sellable stock', async () => {
+    const { db, create, incident } = correctionDb({ sellable: 8 });
     await expect(
       appendControlledCorrection(db, {
         organizationId: 'org',
@@ -173,35 +172,9 @@ describe('appendControlledCorrection', () => {
         witnessedByUserId: 'pharmacist',
         signatureRef: 'pin:pharmacist',
       })
-    ).resolves.toMatchObject({ incidentOpened: true });
-    expect(incident).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        registerEntryId: 'new',
-        expectedBalance: 9,
-        actualBalance: 8,
-      }),
-    });
-  });
-
-  it('accepts a mismatch when a stock adjustment covers the gap', async () => {
-    const { db, incident } = correctionDb({ sellable: 8, adjustment: { id: 'adj' } });
-    await expect(
-      appendControlledCorrection(db, {
-        organizationId: 'org',
-        branchId: 'branch',
-        correctsEntryId: 'entry_1',
-        correctionReason: 'Adjustment already posted.',
-        quantityCanonicalUnits: 1,
-        recordedByUserId: 'cashier',
-        witnessedByUserId: 'pharmacist',
-        signatureRef: 'pin:pharmacist',
-      })
-    ).resolves.toMatchObject({ incidentOpened: false });
+    ).rejects.toThrow('STOCK');
+    expect(create).not.toHaveBeenCalled();
     expect(incident).not.toHaveBeenCalled();
-    expect(db.pharmacyStockMovement.findFirst).toHaveBeenCalledWith({
-      where: expect.objectContaining({ kind: 'ADJUSTMENT', quantityUnits: 1 }),
-      select: { id: true },
-    });
   });
 
   it('refuses a second correction and a correction of a correction', async () => {

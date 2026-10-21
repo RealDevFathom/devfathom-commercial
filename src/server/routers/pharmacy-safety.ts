@@ -1,11 +1,14 @@
-import { can } from '@/lib/abac';
+import { can, subjectFromSession } from '@/lib/abac';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { annotateAudit } from '@/server/audit';
 import {
   appendControlledCorrection,
+  assignedRegisterBranchIds,
   listControlledPinWitnesses,
+  userHoldsDispense,
 } from '@/lib/pharmacy/controlled-register';
+import { chooseRegisterPersonName } from '@/lib/pharmacy/register-print';
 import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
 import { createInspectionPack } from '@/lib/pharmacy/inspection-pack';
 import { installPharmacySopLibrary } from '@/lib/pharmacy/sop-library';
@@ -21,7 +24,12 @@ import { protectedProcedure, capabilityProcedure, router, type TRPCContext } fro
 
 async function organizationBranch(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements?.organizationId;
-  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const userId = ctx.session?.user?.id;
+  if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, userId);
+  if (!assigned.includes(branchId)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
+  }
   const branch = await ctx.db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
     select: { id: true },
@@ -35,14 +43,27 @@ async function organizationBranch(ctx: TRPCContext, branchId: string) {
 const safety = capabilityProcedure('pharmacy:safety');
 
 export const pharmacySafetyRouter = router({
+  access: protectedProcedure.query(async ({ ctx }) => {
+    const user = ctx.session?.user;
+    if (!user) return { allowed: false };
+    return {
+      allowed: await can(subjectFromSession(user), 'pharmacy:safety', undefined, {
+        db: ctx.db,
+        source: 'TRPC',
+      }),
+    };
+  }),
   controlledPharmacists: protectedProcedure.query(({ ctx }) =>
     listControlledPinWitnesses(ctx.db, ctx.session!.user.id)
   ),
   branches: safety.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const userId = ctx.session?.user?.id;
+    if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const assigned = await assignedRegisterBranchIds(ctx.db, organizationId, userId);
+    if (assigned.length === 0) return [];
     return ctx.db.pharmacyBranch.findMany({
-      where: { organizationId, active: true },
+      where: { organizationId, active: true, id: { in: assigned } },
       select: { id: true, name: true },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
     });
@@ -66,20 +87,39 @@ export const pharmacySafetyRouter = router({
         },
       });
       const witnessIds = [...new Set(entries.map((entry) => entry.witnessedByUserId))];
-      const witnesses = witnessIds.length
-        ? await ctx.db.user.findMany({
-            where: { organizationId, id: { in: witnessIds } },
-            select: { id: true, name: true },
-          })
-        : [];
-      const witnessNames = new Map(witnesses.map((user) => [user.id, user.name]));
+      const [witnesses, staff] = witnessIds.length
+        ? await Promise.all([
+            ctx.db.user.findMany({
+              where: { organizationId, id: { in: witnessIds } },
+              select: { id: true, name: true },
+            }),
+            ctx.db.restaurantStaffProfile.findMany({
+              where: { organizationId, userId: { in: witnessIds } },
+              select: { userId: true, displayName: true },
+            }),
+          ])
+        : [[], []];
+      const userNames = new Map(witnesses.map((user) => [user.id, user.name]));
+      const staffNames = new Map<string, string[]>();
+      for (const profile of staff) {
+        if (!profile.userId) continue;
+        const names = staffNames.get(profile.userId) ?? [];
+        names.push(profile.displayName);
+        staffNames.set(profile.userId, names);
+      }
       return {
         entries: entries.map((entry) => ({
           ...entry,
           patient: entry.patient
             ? { displayName: entry.patient.displayName, cnic: maskCnic(entry.patient.cnic) }
             : null,
-          witnessName: witnessNames.get(entry.witnessedByUserId) ?? null,
+          witnessName: chooseRegisterPersonName(
+            [
+              ...(staffNames.get(entry.witnessedByUserId) ?? []),
+              userNames.get(entry.witnessedByUserId),
+            ],
+            entry.witnessedByUserId
+          ),
         })),
       };
     }),
@@ -123,7 +163,8 @@ export const pharmacySafetyRouter = router({
             pharmacist.status === 'ACTIVE' &&
             pharmacist.id !== actorId &&
             !isLockedOut(credential, now) &&
-            (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
+            ((await can(pharmacist, 'pharmacy:dispense', undefined, { db, now })) ||
+              (await userHoldsDispense(db, pharmacist.id, now)));
           if (!eligible || !credential || !pharmacist) {
             return { blocked: 'A different qualified person must enter their PIN.' };
           }
@@ -172,6 +213,18 @@ export const pharmacySafetyRouter = router({
           throw new TRPCError({
             code: 'CONFLICT',
             message: 'That register entry has already been corrected.',
+          });
+        }
+        if (error instanceof Error && error.message === 'STOCK') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'That correction does not match the stock on hand.',
+          });
+        }
+        if (error instanceof Error && error.message === 'CONFLICT') {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'That register serial is already on this branch.',
           });
         }
         throw error;

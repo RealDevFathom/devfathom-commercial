@@ -20,6 +20,7 @@
  */
 
 import { z } from 'zod';
+import { holdsDispenseCapability } from './dispense-capability';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
 import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
@@ -323,7 +324,18 @@ export async function purchasingWorkspace(
         ...(scope.actorId ? { id: { not: scope.actorId } } : {}),
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true, email: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        organizationRole: {
+          select: { permissions: { select: { capability: true, effect: true } } },
+        },
+        permissionOverrides: {
+          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
+          select: { capability: true, effect: true },
+        },
+      },
     }),
   ]);
 
@@ -331,7 +343,9 @@ export async function purchasingWorkspace(
     branches,
     stockLocations,
     suppliers,
-    approvers,
+    approvers: approvers
+      .filter((user) => holdsDispenseCapability(user))
+      .map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,

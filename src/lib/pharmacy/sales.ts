@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -9,6 +9,7 @@ import { checkEnvelope } from './offline-snapshot-envelope';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { checkSafetyLease } from './offline-safety-lease';
 import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
+import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry } from './finance-postings';
@@ -365,7 +366,8 @@ export async function changeSaleStatus(
   scope: LedgerScope,
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'complete' | 'void',
-  reason?: string
+  reason?: string,
+  deviceId?: string
 ) {
   const sale = await saleInScope(db, scope, saleId);
   const transitions = {
@@ -403,6 +405,50 @@ export async function changeSaleStatus(
       reason: reason ?? 'Sale voided',
       at: new Date(),
     });
+    const movements = await db.pharmacyStockMovement.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: { in: allocations.map((allocation) => allocation.stockMovementId) },
+      },
+      select: { id: true, quantityUnits: true },
+    });
+    await appendControlledRestorations(db, {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      recordedByUserId: scope.actorId,
+      reason: reason ?? 'Sale voided',
+      lines: movements.map((movement) => ({
+        sourceMovementId: movement.id,
+        quantityCanonicalUnits: -movement.quantityUnits,
+        restoreSellable: true,
+      })),
+    });
+  }
+
+  if (action === 'complete') {
+    const completed = await saleInScope(db, scope, saleId);
+    if (completed.receiptNumber == null) {
+      const receiptDeviceId = deviceId?.trim() || completed.receiptDeviceId || 'counter';
+      const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
+        INSERT INTO pharmacy_receipt_number_sequences (id, "organizationId", "branchId", "deviceId", "nextNumber", "updatedAt")
+        VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${receiptDeviceId}, 2, now())
+        ON CONFLICT ("organizationId", "branchId", "deviceId")
+        DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + 1, "updatedAt" = now()
+        RETURNING "nextNumber" - 1 AS receipt_number`);
+      const receiptNumber = rows[0]?.receipt_number;
+      if (!Number.isSafeInteger(receiptNumber) || receiptNumber < 1) {
+        throw new PharmacySaleError('INVALID_STATE');
+      }
+      await db.pharmacySale.update({
+        where: { organizationId_id: { organizationId: scope.organizationId, id: saleId } },
+        data: {
+          receiptNumber,
+          receiptDeviceId,
+          businessDate: completed.businessDate ?? new Date(),
+        },
+      });
+    }
   }
 
   await event(db, scope, saleId, kind, reason);
@@ -718,6 +764,11 @@ export async function returnSaleLine(
   let remaining = input.canonicalUnits;
   let firstReturnLine: Awaited<ReturnType<typeof db.pharmacySaleReturnLine.create>> | undefined;
   let firstMovement: Awaited<ReturnType<typeof db.pharmacyStockMovement.create>> | undefined;
+  const restorations: Array<{
+    sourceMovementId: string;
+    quantityCanonicalUnits: number;
+    restoreSellable: boolean;
+  }> = [];
   const consumed = new Map<string, number>();
   for (const row of line.returnLines)
     consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
@@ -787,9 +838,23 @@ export async function returnSaleLine(
     });
     firstReturnLine ??= returnedLine;
     firstMovement ??= movement;
+    if (allocation.stockMovementId) {
+      restorations.push({
+        sourceMovementId: allocation.stockMovementId,
+        quantityCanonicalUnits: units,
+        restoreSellable: disposition === 'RESTOCK',
+      });
+    }
     remaining -= units;
     if (!remaining) break;
   }
+  await appendControlledRestorations(db, {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    recordedByUserId: scope.actorId,
+    reason: disposition === 'RESTOCK' ? 'Returned to stock' : 'Returned to quarantine',
+    lines: restorations,
+  });
   if (remaining || !firstReturnLine || !firstMovement)
     throw new PharmacySaleError('INVALID_QUANTITY');
   await event(db, scope, line.saleId, 'RETURNED', input.reason, {

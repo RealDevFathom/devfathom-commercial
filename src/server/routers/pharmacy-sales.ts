@@ -12,6 +12,7 @@ import {
   earlierRegisterEntry,
   EMERGENCY_NO_RX_WINDOW_MS,
   emergencyNoRxDecision,
+  userHoldsDispense,
 } from '@/lib/pharmacy/controlled-register';
 import { annotateAudit } from '@/server/audit';
 import {
@@ -230,6 +231,18 @@ function fail(error: unknown): never {
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
       message: error.reason,
+    });
+  }
+  if (error instanceof Error && (error.message === 'BALANCE' || error.message === 'STOCK')) {
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'The controlled register balance does not match the stock on hand.',
+    });
+  }
+  if (error instanceof Error && error.message === 'CONFLICT') {
+    throw new TRPCError({
+      code: 'CONFLICT',
+      message: 'That register serial is already on this branch.',
     });
   }
   throw error;
@@ -769,6 +782,12 @@ export const pharmacySalesRouter = router({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
           if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          if (!(await userHoldsDispense(db, scope.actorId))) {
+            throw new TRPCError({
+              code: 'FORBIDDEN',
+              message: 'You do not have permission to dispense a controlled medicine.',
+            });
+          }
           const authorization = input.controlledAuthorization;
           const blocked = {
             blocked:
@@ -799,7 +818,11 @@ export const pharmacySalesRouter = router({
             isLockedOut(credential, now)
           )
             return blocked;
-          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
+          if (
+            !(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now })) &&
+            !(await userHoldsDispense(db, pharmacist.id, now))
+          )
+            return blocked;
           if (
             !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
           ) {
@@ -1024,6 +1047,7 @@ export const pharmacySalesRouter = router({
           saleId: z.string().min(1),
           action: z.enum(['hold', 'resume', 'convertQuotation', 'complete', 'void']),
           reason: z.string().trim().min(1).optional(),
+          deviceId: z.string().trim().min(1).max(200).optional(),
         })
         .strict()
     )
@@ -1035,7 +1059,8 @@ export const pharmacySalesRouter = router({
             scopeFor(ctx, input.branchId),
             input.saleId,
             input.action,
-            input.reason
+            input.reason,
+            input.deviceId
           )
         );
       } catch (error) {

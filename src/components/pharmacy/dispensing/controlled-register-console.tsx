@@ -3,12 +3,13 @@
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
+import { registerPrintTotals } from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { WorkspaceState } from './field';
 
-const cell = 'px-2 py-1.5 align-top text-xs text-text-body';
+const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
 const head =
   'px-2 py-1.5 text-left font-mono text-[0.65rem] tracking-wide text-text-muted uppercase';
 
@@ -54,8 +55,10 @@ export function ControlledRegisterConsole() {
     popup.document.title = 'Controlled medicine register';
     const heading = popup.document.createElement('h1');
     heading.textContent = 'Controlled medicine register';
+    const branchName =
+      branches.data?.find((branch) => branch.id === selected)?.name ?? 'This branch';
     const stamp = popup.document.createElement('p');
-    stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · branch ${selected}`;
+    stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · ${branchName}`;
     const style = popup.document.createElement('style');
     style.textContent =
       '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } thead { display: table-header-group; } tr { break-inside: avoid; }';
@@ -67,7 +70,7 @@ export function ControlledRegisterConsole() {
   }
 
   return (
-    <div className="space-y-4">
+    <div className="min-w-0 space-y-4">
       <PageHeader
         actions={
           <Button
@@ -125,118 +128,122 @@ export function ControlledRegisterConsole() {
               No rows yet. A sale or purchase of a controlled medicine adds the first one.
             </p>
           ) : (
-            <div ref={page} className="overflow-x-auto">
-              <table className="w-full min-w-[72rem] border-collapse text-left">
-                <thead>
-                  <tr className="border-b border-border-subtle">
-                    {[
-                      'S. No.',
-                      'Date',
-                      'Prescriber',
-                      'Patient',
-                      'Drug',
-                      'Manufacturer',
-                      'Qty',
-                      'Batch',
-                      'Qualified person',
-                      'Balance',
-                    ].map((label) => (
-                      <th className={head} key={label}>
-                        {label}
-                      </th>
-                    ))}
-                  </tr>
-                </thead>
-                <tbody>
-                  {register.data.entries.map((entry) => {
-                    const drug =
-                      entry.medicine?.productName ?? entry.line?.medicine.productName ?? '—';
-                    const prescriber = entry.prescriber?.name ?? entry.prescriberName ?? '—';
-                    const regNo =
-                      entry.prescriber?.registrationNumber ?? entry.prescriberRegNo ?? '';
-                    const open = entry.incidents.find((incident) => incident.status === 'OPEN');
-                    return (
-                      <tr className="border-b border-border-subtle" key={entry.id}>
-                        <td className={`${cell} font-mono tabular-nums`}>{entry.serial}</td>
-                        <td className={cell}>
-                          {formatKarachiDateTime(entry.createdAt)}
-                          <span className="mt-0.5 block text-text-muted">
-                            {entry.entryKind === 'PURCHASE'
-                              ? 'Purchase'
-                              : entry.entryKind === 'CORRECTION'
-                                ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
-                                : entry.emergency
-                                  ? 'Emergency sale'
-                                  : 'Sale'}
-                            {entry.refEntry ? ` · repeats ${entry.refEntry.serial}` : ''}
-                          </span>
-                        </td>
-                        <td className={cell}>
-                          {prescriber}
-                          {regNo ? (
-                            <span className="mt-0.5 block text-text-muted">{regNo}</span>
-                          ) : null}
-                        </td>
-                        <td className={cell}>
-                          {entry.patient?.displayName ?? entry.counterpartyName ?? '—'}
-                          {entry.patient?.cnic ? (
+            <>
+              <RegisterCards entries={register.data.entries} />
+              <div ref={page} className="hidden max-w-full overflow-x-auto md:block">
+                <table className="w-full border-collapse text-left">
+                  <thead>
+                    <tr className="border-b border-border-subtle">
+                      {[
+                        'S. No.',
+                        'Date',
+                        'Prescriber',
+                        'Patient',
+                        'Drug',
+                        'Manufacturer',
+                        'Qty',
+                        'Batch',
+                        'Qualified person',
+                        'Balance',
+                      ].map((label) => (
+                        <th className={head} key={label}>
+                          {label}
+                        </th>
+                      ))}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {register.data.entries.map((entry) => {
+                      const drug =
+                        entry.medicine?.productName ?? entry.line?.medicine.productName ?? '—';
+                      const prescriber = entry.prescriber?.name ?? entry.prescriberName ?? '—';
+                      const regNo =
+                        entry.prescriber?.registrationNumber ?? entry.prescriberRegNo ?? '';
+                      const open = entry.incidents.find((incident) => incident.status === 'OPEN');
+                      return (
+                        <tr className="border-b border-border-subtle" key={entry.id}>
+                          <td className={`${cell} font-mono tabular-nums`}>{entry.serial}</td>
+                          <td className={cell}>
+                            {formatKarachiDateTime(entry.createdAt)}
                             <span className="mt-0.5 block text-text-muted">
-                              {entry.patient.cnic}
+                              {entry.entryKind === 'PURCHASE'
+                                ? 'Purchase'
+                                : entry.entryKind === 'CORRECTION'
+                                  ? `Correction of ${entry.correctsEntry?.serial ?? '—'}`
+                                  : entry.emergency
+                                    ? 'Emergency sale'
+                                    : 'Sale'}
+                              {entry.refEntry ? ` · repeats ${entry.refEntry.serial}` : ''}
                             </span>
-                          ) : null}
-                          {entry.patientAddress ? (
-                            <span className="mt-0.5 block text-text-muted">
-                              {entry.patientAddress}
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className={cell}>
-                          {drug}
-                          {entry.prescription?.sourceFileRef ? (
-                            <span className="mt-0.5 block text-text-muted">
-                              Rx {entry.prescription.sourceFileRef}
-                              {entry.rxSerialWritten ? ' · serial written on Rx' : ''}
-                            </span>
-                          ) : null}
-                          {entry.correctionReason ? (
-                            <span className="mt-0.5 block text-text-muted">
-                              {entry.correctionReason}
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className={cell}>
-                          {entry.manufacturer ?? entry.medicine?.manufacturer ?? '—'}
-                        </td>
-                        <td className={`${cell} text-right font-mono tabular-nums`}>
-                          {entry.quantityCanonicalUnits}
-                          {entry.balanceDelta ? (
-                            <span className="mt-0.5 block text-text-muted">
-                              {entry.balanceDelta > 0 ? '+' : ''}
-                              {entry.balanceDelta}
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className={`${cell} font-mono`}>{entry.batchNumber}</td>
-                        <td className={cell}>
-                          {entry.witnessName ?? '—'}
-                          {entry.signatureRef ? (
-                            <span className="mt-0.5 block text-text-muted">PIN witnessed</span>
-                          ) : null}
-                          {open ? (
-                            <span className="mt-0.5 block text-destructive">
-                              Balance incident open
-                            </span>
-                          ) : null}
-                        </td>
-                        <td className={`${cell} text-right font-mono tabular-nums`}>
-                          {entry.runningBalance}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                          </td>
+                          <td className={cell}>
+                            {prescriber}
+                            {regNo ? (
+                              <span className="mt-0.5 block text-text-muted">{regNo}</span>
+                            ) : null}
+                          </td>
+                          <td className={cell}>
+                            {entry.patient?.displayName ?? entry.counterpartyName ?? '—'}
+                            {entry.patient?.cnic ? (
+                              <span className="mt-0.5 block text-text-muted">
+                                {entry.patient.cnic}
+                              </span>
+                            ) : null}
+                            {entry.patientAddress ? (
+                              <span className="mt-0.5 block text-text-muted">
+                                {entry.patientAddress}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className={cell}>
+                            {drug}
+                            {entry.prescription?.sourceFileRef ? (
+                              <span className="mt-0.5 block text-text-muted">
+                                Rx {entry.prescription.sourceFileRef}
+                                {entry.rxSerialWritten ? ' · serial written on Rx' : ''}
+                              </span>
+                            ) : null}
+                            {entry.correctionReason ? (
+                              <span className="mt-0.5 block text-text-muted">
+                                {entry.correctionReason}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className={cell}>
+                            {entry.manufacturer ?? entry.medicine?.manufacturer ?? '—'}
+                          </td>
+                          <td className={`${cell} text-right font-mono tabular-nums`}>
+                            {entry.quantityCanonicalUnits}
+                            {entry.balanceDelta ? (
+                              <span className="mt-0.5 block text-text-muted">
+                                {entry.balanceDelta > 0 ? '+' : ''}
+                                {entry.balanceDelta}
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className={`${cell} font-mono`}>{entry.batchNumber}</td>
+                          <td className={cell}>
+                            {entry.witnessName ?? '—'}
+                            {entry.signatureRef ? (
+                              <span className="mt-0.5 block text-text-muted">PIN witnessed</span>
+                            ) : null}
+                            {open ? (
+                              <span className="mt-0.5 block text-destructive">
+                                Balance incident open
+                              </span>
+                            ) : null}
+                          </td>
+                          <td className={`${cell} text-right font-mono tabular-nums`}>
+                            {entry.runningBalance}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                  <RegisterTotals entries={register.data.entries} />
+                </table>
+              </div>
+            </>
           )}
           {register.data.entries.length > 0 ? (
             <form
@@ -358,6 +365,79 @@ export function ControlledRegisterConsole() {
           ) : null}
         </SectionCard>
       ) : null}
+    </div>
+  );
+}
+
+type ShownEntry = {
+  id: string;
+  serial: number;
+  createdAt: Date;
+  entryKind: string;
+  emergency: boolean;
+  balanceDelta: number;
+  runningBalance: number;
+  quantityCanonicalUnits: number;
+  batchNumber: string;
+  inventoryLotId: string;
+  witnessName: string | null;
+  correctionReason: string | null;
+  patientAddress: string | null;
+  counterpartyName: string | null;
+  prescriberName: string | null;
+  manufacturer: string | null;
+  medicine: { productName: string; manufacturer: string | null } | null;
+  patient: { displayName: string; cnic: string | null } | null;
+  prescriber: { name: string; registrationNumber: string } | null;
+  line: { medicine: { productName: string } } | null;
+  correctsEntry: { serial: number } | null;
+  refEntry: { serial: number } | null;
+};
+
+function RegisterTotals({ entries }: { entries: readonly ShownEntry[] }) {
+  const totals = registerPrintTotals(entries);
+  const closing = totals.closing
+    .map((row) => `${row.batchNumber} balance ${row.runningBalance}`)
+    .join(' · ');
+  return (
+    <tfoot>
+      <tr className="border-t border-border-subtle">
+        <td className={cell} colSpan={10}>
+          {totals.rows} rows · in {totals.unitsIn} · out {totals.unitsOut}
+          {closing ? ` · ${closing}` : ''}
+        </td>
+      </tr>
+    </tfoot>
+  );
+}
+
+function RegisterCards({ entries }: { entries: readonly ShownEntry[] }) {
+  const totals = registerPrintTotals(entries);
+  return (
+    <div className="space-y-2 md:hidden">
+      {entries.map((entry) => {
+        const drug = entry.medicine?.productName ?? entry.line?.medicine.productName ?? '—';
+        return (
+          <article className="rounded-md border border-border-subtle p-3 text-xs" key={entry.id}>
+            <p className="font-mono text-text-strong">
+              {entry.serial} · {formatKarachiDateTime(entry.createdAt)}
+            </p>
+            <p className="mt-1 text-text-body">
+              {drug} · {entry.batchNumber} · qty {entry.quantityCanonicalUnits}
+            </p>
+            <p className="mt-1 text-text-muted">
+              {entry.patient?.displayName ?? entry.counterpartyName ?? '—'} ·{' '}
+              {entry.witnessName ?? '—'} · balance {entry.runningBalance}
+            </p>
+          </article>
+        );
+      })}
+      <p className="text-xs text-text-muted">
+        {totals.rows} rows · in {totals.unitsIn} · out {totals.unitsOut}
+        {totals.closing
+          .map((row) => ` · ${row.batchNumber} balance ${row.runningBalance}`)
+          .join('')}
+      </p>
     </div>
   );
 }

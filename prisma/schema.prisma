@@ -241,6 +241,20 @@ model PharmacyBranch {
   @@map("pharmacy_branches")
 }
 
+/// Which branches of this pharmacy a person may open. An empty set is not a grant.
+model PharmacyBranchAssignment {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId       String
+  userId         String
+  active         Boolean  @default(true)
+  createdAt      DateTime @default(now())
+
+  @@unique([organizationId, userId, branchId], map: "pharmacy_branch_assignments_org_user_branch_key")
+  @@index([organizationId, userId, active], map: "pharmacy_branch_assignments_user_idx")
+  @@map("pharmacy_branch_assignments")
+}
+
 /// INV-10 — the deliberately narrow doorway into the chain purchasing view.
 /// A null branch grants this user the organization view; a non-null branch
 /// grants only that branch. It is not consulted by any other pharmacy screen.

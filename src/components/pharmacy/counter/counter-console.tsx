@@ -970,7 +970,13 @@ function ScopedPharmacyCounterConsole({
       setPending(action);
       setNotice(null);
       try {
-        await transition.mutateAsync({ branchId, saleId: target, action, reason });
+        await transition.mutateAsync({
+          branchId,
+          saleId: target,
+          action,
+          reason,
+          deviceId: readCounterDeviceId() ?? undefined,
+        });
         if (action === 'hold') {
           setHeldSaleId(target);
           setActiveSale(null);

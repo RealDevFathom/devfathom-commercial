@@ -1,5 +1,26 @@
-import { can } from '@/lib/abac';
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { holdsDispenseCapability } from './dispense-capability';
+
+export { holdsDispenseCapability } from './dispense-capability';
+
+export async function userHoldsDispense(db: ScopedDb, userId: string, now = new Date()) {
+  const user = await db.user.findUnique({
+    where: { id: userId },
+    select: {
+      status: true,
+      organizationRole: {
+        select: { permissions: { select: { capability: true, effect: true } } },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (!user || user.status !== 'ACTIVE') return false;
+  return holdsDispenseCapability(user);
+}
 
 /** Running balance after applying a signed delta. Null when the result is not a safe non-negative integer. */
 export function registerBalanceAfter(previous: number, delta: number): number | null {
@@ -117,6 +138,20 @@ async function nextSerial(db: ScopedDb, organizationId: string, branchId: string
   return (latest._max.serial ?? 0) + 1;
 }
 
+async function createRegisterRow(
+  db: ScopedDb,
+  data: Parameters<ScopedDb['pharmacyControlledRegisterEntry']['create']>[0]['data']
+) {
+  try {
+    return await db.pharmacyControlledRegisterEntry.create({ data });
+  } catch (error) {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new Error('CONFLICT');
+    }
+    throw error;
+  }
+}
+
 type SaleRegisterInput = {
   organizationId: string;
   branchId: string;
@@ -166,34 +201,32 @@ export async function appendControlledSaleEntries(db: ScopedDb, input: SaleRegis
       },
       balanceDelta
     );
-    await db.pharmacyControlledRegisterEntry.create({
-      data: {
-        organizationId: input.organizationId,
-        branchId: input.branchId,
-        serial: ++serial,
-        entryKind: 'SALE',
-        prescriptionId: input.prescriptionId,
-        prescriptionLineId: input.prescriptionLineId,
-        patientId: input.patientId,
-        prescriberId: input.prescriberId,
-        prescriberName: input.prescriberName,
-        prescriberRegNo: input.prescriberRegNo,
-        patientAddress: input.patientAddress,
-        medicineId: input.medicineId,
-        manufacturer: input.manufacturer,
-        inventoryLotId: lot.id,
-        stockMovementId: movement.id,
-        batchNumber: lot.batch.batchNumber,
-        quantityCanonicalUnits,
-        balanceDelta,
-        runningBalance,
-        recordedByUserId: input.recordedByUserId,
-        witnessedByUserId: input.witnessedByUserId,
-        signatureRef: input.signatureRef,
-        rxSerialWritten: input.rxSerialWritten,
-        emergency: input.emergency,
-        refEntryId: input.refEntryId,
-      },
+    await createRegisterRow(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      serial: ++serial,
+      entryKind: 'SALE',
+      prescriptionId: input.prescriptionId,
+      prescriptionLineId: input.prescriptionLineId,
+      patientId: input.patientId,
+      prescriberId: input.prescriberId,
+      prescriberName: input.prescriberName,
+      prescriberRegNo: input.prescriberRegNo,
+      patientAddress: input.patientAddress,
+      medicineId: input.medicineId,
+      manufacturer: input.manufacturer,
+      inventoryLotId: lot.id,
+      stockMovementId: movement.id,
+      batchNumber: lot.batch.batchNumber,
+      quantityCanonicalUnits,
+      balanceDelta,
+      runningBalance,
+      recordedByUserId: input.recordedByUserId,
+      witnessedByUserId: input.witnessedByUserId,
+      signatureRef: input.signatureRef,
+      rxSerialWritten: input.rxSerialWritten,
+      emergency: input.emergency,
+      refEntryId: input.refEntryId,
     });
   }
 }
@@ -232,27 +265,25 @@ export async function appendControlledPurchaseEntries(
       },
       balanceDelta
     );
-    await db.pharmacyControlledRegisterEntry.create({
-      data: {
-        organizationId: input.organizationId,
-        branchId: input.branchId,
-        serial: ++serial,
-        entryKind: 'PURCHASE',
-        medicineId: line.medicineId,
-        manufacturer: line.manufacturer,
-        inventoryLotId: line.inventoryLotId,
-        stockMovementId: line.stockMovementId,
-        batchNumber: line.batchNumber,
-        quantityCanonicalUnits: line.quantityCanonicalUnits,
-        balanceDelta,
-        runningBalance,
-        recordedByUserId: input.recordedByUserId,
-        witnessedByUserId: input.witnessedByUserId,
-        signatureRef: input.signatureRef,
-        counterpartyName: line.counterpartyName,
-        rxSerialWritten: false,
-        emergency: false,
-      },
+    await createRegisterRow(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      serial: ++serial,
+      entryKind: 'PURCHASE',
+      medicineId: line.medicineId,
+      manufacturer: line.manufacturer,
+      inventoryLotId: line.inventoryLotId,
+      stockMovementId: line.stockMovementId,
+      batchNumber: line.batchNumber,
+      quantityCanonicalUnits: line.quantityCanonicalUnits,
+      balanceDelta,
+      runningBalance,
+      recordedByUserId: input.recordedByUserId,
+      witnessedByUserId: input.witnessedByUserId,
+      signatureRef: input.signatureRef,
+      counterpartyName: line.counterpartyName,
+      rxSerialWritten: false,
+      emergency: false,
     });
   }
 }
@@ -329,67 +360,138 @@ export async function appendControlledCorrection(db: ScopedDb, input: Correction
     branchId: input.branchId,
     inventoryLotId: original.inventoryLotId,
   });
-  const gap = runningBalance - sellable;
-  const adjustment =
-    gap === 0
-      ? null
-      : await db.pharmacyStockMovement.findFirst({
-          where: {
-            organizationId: input.organizationId,
-            branchId: input.branchId,
-            inventoryLotId: original.inventoryLotId,
-            kind: 'ADJUSTMENT',
-            quantityUnits: gap,
-          },
-          select: { id: true },
-        });
+  if (runningBalance !== sellable) throw new Error('STOCK');
   const serial = await nextSerial(db, input.organizationId, input.branchId);
-  const created = await db.pharmacyControlledRegisterEntry.create({
-    data: {
+  await createRegisterRow(db, {
+    organizationId: input.organizationId,
+    branchId: input.branchId,
+    serial,
+    entryKind: 'CORRECTION',
+    prescriptionId: original.prescriptionId,
+    prescriptionLineId: original.prescriptionLineId,
+    patientId: original.patientId,
+    prescriberId: original.prescriberId,
+    prescriberName: original.prescriberName,
+    prescriberRegNo: original.prescriberRegNo,
+    patientAddress: original.patientAddress,
+    medicineId: original.medicineId,
+    manufacturer: original.manufacturer,
+    inventoryLotId: original.inventoryLotId,
+    stockMovementId: null,
+    batchNumber: original.batchNumber,
+    quantityCanonicalUnits: input.quantityCanonicalUnits,
+    balanceDelta,
+    runningBalance,
+    recordedByUserId: input.recordedByUserId,
+    witnessedByUserId: input.witnessedByUserId,
+    signatureRef: input.signatureRef,
+    rxSerialWritten: original.rxSerialWritten,
+    emergency: original.emergency,
+    counterpartyName: original.counterpartyName,
+    correctionReason: input.correctionReason,
+    correctsEntryId: original.id,
+    refEntryId: original.refEntryId,
+  });
+  return { serial, runningBalance, incidentOpened: false };
+}
+
+/**
+ * A void or return puts units back. Append one correction row per original sale
+ * movement so the running balance stays equal to sellable stock.
+ * Quarantine does not change the sellable balance, so that row's delta is zero.
+ */
+export async function appendControlledRestorations(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    branchId: string;
+    recordedByUserId: string;
+    reason: string;
+    lines: readonly {
+      sourceMovementId: string;
+      quantityCanonicalUnits: number;
+      restoreSellable: boolean;
+    }[];
+  }
+) {
+  const sourceIds = input.lines.map((line) => line.sourceMovementId).filter(Boolean);
+  if (sourceIds.length === 0) return;
+  const sources = await db.pharmacyControlledRegisterEntry.findMany({
+    where: {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      entryKind: 'SALE',
+      stockMovementId: { in: sourceIds },
+    },
+  });
+  if (sources.length === 0) return;
+  await lockRegister(db, input.organizationId, input.branchId);
+  for (const line of input.lines) {
+    const source = sources.find((entry) => entry.stockMovementId === line.sourceMovementId);
+    if (!source?.medicineId || !Number.isSafeInteger(line.quantityCanonicalUnits)) continue;
+    if (line.quantityCanonicalUnits <= 0) throw new Error('BALANCE');
+    const balanceDelta = line.restoreSellable ? line.quantityCanonicalUnits : 0;
+    const runningBalance = await runningFromLot(
+      db,
+      {
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        medicineId: source.medicineId,
+        inventoryLotId: source.inventoryLotId,
+      },
+      balanceDelta
+    );
+    const sellable = await sellableOnHand(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      inventoryLotId: source.inventoryLotId,
+    });
+    if (runningBalance !== sellable) throw new Error('BALANCE');
+    const serial = await nextSerial(db, input.organizationId, input.branchId);
+    await createRegisterRow(db, {
       organizationId: input.organizationId,
       branchId: input.branchId,
       serial,
       entryKind: 'CORRECTION',
-      prescriptionId: original.prescriptionId,
-      prescriptionLineId: original.prescriptionLineId,
-      patientId: original.patientId,
-      prescriberId: original.prescriberId,
-      prescriberName: original.prescriberName,
-      prescriberRegNo: original.prescriberRegNo,
-      patientAddress: original.patientAddress,
-      medicineId: original.medicineId,
-      manufacturer: original.manufacturer,
-      inventoryLotId: original.inventoryLotId,
+      prescriptionId: source.prescriptionId,
+      prescriptionLineId: source.prescriptionLineId,
+      patientId: source.patientId,
+      prescriberId: source.prescriberId,
+      prescriberName: source.prescriberName,
+      prescriberRegNo: source.prescriberRegNo,
+      patientAddress: source.patientAddress,
+      medicineId: source.medicineId,
+      manufacturer: source.manufacturer,
+      inventoryLotId: source.inventoryLotId,
       stockMovementId: null,
-      batchNumber: original.batchNumber,
-      quantityCanonicalUnits: input.quantityCanonicalUnits,
+      batchNumber: source.batchNumber,
+      quantityCanonicalUnits: line.quantityCanonicalUnits,
       balanceDelta,
       runningBalance,
       recordedByUserId: input.recordedByUserId,
-      witnessedByUserId: input.witnessedByUserId,
-      signatureRef: input.signatureRef,
-      rxSerialWritten: original.rxSerialWritten,
-      emergency: original.emergency,
-      counterpartyName: original.counterpartyName,
-      correctionReason: input.correctionReason,
-      correctsEntryId: original.id,
-      refEntryId: original.refEntryId,
-    },
-    select: { id: true },
-  });
-  const incidentOpened = gap !== 0 && !adjustment;
-  if (incidentOpened) {
-    await db.pharmacyRegisterIncident.create({
-      data: {
-        organizationId: input.organizationId,
-        branchId: input.branchId,
-        registerEntryId: created.id,
-        expectedBalance: runningBalance,
-        actualBalance: sellable,
-      },
+      witnessedByUserId: source.witnessedByUserId,
+      signatureRef: source.signatureRef,
+      rxSerialWritten: source.rxSerialWritten,
+      emergency: source.emergency,
+      counterpartyName: source.counterpartyName,
+      correctionReason: input.reason,
+      correctsEntryId: source.id,
+      refEntryId: source.refEntryId,
     });
   }
-  return { serial, runningBalance, incidentOpened };
+}
+
+/** Active branch ids this person may open inside the tenant. An empty set grants nothing. */
+export async function assignedRegisterBranchIds(
+  db: ScopedDb,
+  organizationId: string,
+  userId: string
+) {
+  const rows = await db.pharmacyBranchAssignment.findMany({
+    where: { organizationId, userId, active: true },
+    select: { branchId: true },
+  });
+  return rows.map((row) => row.branchId);
 }
 
 /** Pharmacists who can witness a controlled purchase or correction with a PIN. */
@@ -400,14 +502,18 @@ export async function listControlledPinWitnesses(db: ScopedDb, actorId: string) 
       userId: { not: actorId },
       credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
     },
-    include: { user: true },
+    include: {
+      user: {
+        include: {
+          organizationRole: { include: { permissions: true } },
+          permissionOverrides: true,
+        },
+      },
+    },
   });
   const eligible: Array<{ id: string; name: string }> = [];
   for (const profile of staff) {
-    if (
-      profile.user?.status === 'ACTIVE' &&
-      (await can(profile.user, 'pharmacy:dispense', undefined, { db }))
-    ) {
+    if (profile.user?.status === 'ACTIVE' && holdsDispenseCapability(profile.user)) {
       eligible.push({ id: profile.id, name: profile.displayName });
     }
   }
