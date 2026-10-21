@@ -158,6 +158,7 @@ describe('CRM-L04 explainable health suggestion', () => {
       ownerAuthorizedByUserId: scope.actorId,
       ownerReauthenticatedAt: now,
       overrideLimitMinor: 15_000,
+      overrideReason: 'Festival advance approved by owner',
     });
     expect(update).toHaveBeenCalledWith(
       expect.objectContaining({ data: { creditLimitMinor: 15_000 } })
@@ -173,10 +174,36 @@ describe('CRM-L04 explainable health suggestion', () => {
             ownerAuthorizedByUserId: scope.actorId,
             ownerReauthenticatedAt: now.toISOString(),
             ownerAuthorizedAt: now.toISOString(),
+            overrideReason: 'Festival advance approved by owner',
           },
         }),
       })
     );
+  });
+
+  it('refuses to override the limit without an auditable reason', async () => {
+    const update = vi.fn();
+    const create = vi.fn();
+    await expect(
+      applyKhataLimitDecision(
+        {
+          pharmacyFamilyAccount: { update },
+          pharmacyKhataLimitDecision: { create },
+        } as never,
+        scope,
+        {
+          familyAccountId: 'family_1',
+          suggestion,
+          ownerAuthorized: true,
+          ownerAuthorizedByUserId: scope.actorId,
+          ownerReauthenticatedAt: now,
+          overrideLimitMinor: 15_000,
+          overrideReason: '   ',
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'OVERRIDE_REASON_REQUIRED' });
+    expect(update).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it.each([
@@ -289,12 +316,17 @@ describe('counter Khata ledger gate', () => {
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
     expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
   });
-  it('records the freshly reauthenticated owner and raised limit', async () => {
+  it('records the freshly reauthenticated owner, raised limit and override reason', async () => {
     const db = fixture();
     await authorizeKhataCharge(
       db as never,
       scope,
-      { ...input, amountMinor: 600, ownerOverride: true },
+      {
+        ...input,
+        amountMinor: 600,
+        ownerOverride: true,
+        overrideReason: 'Long-standing customer, owner approved',
+      },
       { authorized: true, passwordAuthenticatedAt: Date.now() }
     );
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
@@ -304,9 +336,24 @@ describe('counter Khata ledger gate', () => {
         reasons: expect.objectContaining({
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
+          overrideReason: 'Long-standing customer, owner approved',
         }),
       }),
     });
+  });
+
+  it('rejects an over-limit override that carries no reason before any write', async () => {
+    const db = fixture();
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, amountMinor: 600, ownerOverride: true },
+        { authorized: true, passwordAuthenticatedAt: Date.now() }
+      )
+    ).rejects.toMatchObject({ reason: 'OVERRIDE_REASON_REQUIRED' });
+    expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+    expect(db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
   });
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
     const db = fixture();

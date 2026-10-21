@@ -116,6 +116,9 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    // Required (enforced server-side) whenever an owner/manager approves charging
+    // over the credit limit; recorded on the audited limit decision (#313).
+    overrideReason: z.string().trim().min(1).max(500).optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -707,10 +710,13 @@ export const pharmacySalesRouter = router({
       const scope = await khataScope(ctx, input.branchId);
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
+      // #313: charging over the credit limit may be approved by an Owner or a
+      // Manager — not only a platform ADMIN. Both carry `pharmacy:manage`
+      // (Owner via `pharmacy:*`, Manager explicitly); a Cashier does not.
+      // Authority is proven by the capability, not the coarse session role.
       const ownerAuthorized =
         input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
+        (await can(subjectFromSession(ctx.session!.user), 'pharmacy:manage', undefined, {
           db: ctx.db,
           source: 'TRPC',
         }));
