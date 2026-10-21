@@ -12409,8 +12409,9 @@ model PharmacyControlledRegisterEntry {
   stockMovementId        String?
   batchNumber            String
   quantityCanonicalUnits Int
-  /// Signed adjustment for a correction. Sales and purchases keep this at 0 and
-  /// store the stock balance in `runningBalance`.
+  /// Signed change in the sellable balance. Sales store the units removed,
+  /// purchases store the units accepted, and a correction stores the
+  /// server-derived difference from the original quantity.
   balanceDelta           Int                             @default(0)
   runningBalance         Int
   recordedByUserId       String
@@ -12471,6 +12472,27 @@ model PharmacyRegisterIncidentApproval {
   @@unique([organizationId, id])
   @@unique([organizationId, incidentId])
   @@map("pharmacy_register_incident_approvals")
+}
+
+/// One row per emergency controlled supply that has no prescription yet.
+/// The counter refuses another no-prescription supply of the same medicine
+/// while this follow-up is open.
+model PharmacyEmergencyRxFollowUp {
+  id                     String   @id @default(cuid())
+  organizationId         String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId               String
+  patientId              String
+  medicineId             String
+  saleLineId             String
+  quantityCanonicalUnits Int
+  recordedByUserId       String
+  witnessedByUserId      String
+  status                 String   @default("OPEN")
+  createdAt              DateTime @default(now())
+
+  @@unique([organizationId, saleLineId])
+  @@index([organizationId, patientId, medicineId, createdAt])
+  @@map("pharmacy_emergency_rx_follow_ups")
 }
 
 /// PUR-02 receiving / PUR-05 — the document that turns an order or a supplier

@@ -25,6 +25,13 @@
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
+import { appendControlledPurchaseEntries } from './controlled-register';
+import {
+  clearLockout,
+  isLockedOut,
+  registerFailedAttempt,
+  verifyOperatorCredential,
+} from '@/lib/restaurant/operator-credentials';
 
 import { PharmacyInventoryError } from './inventory';
 import {
@@ -67,10 +74,86 @@ export type PostGoodsReceiptResult = {
  *
  * Must run inside the caller's transaction.
  */
+const WITNESS_BLOCKED = 'A different qualified person must enter their PIN.';
+
+/**
+ * PIN witness for a controlled purchase. A receipt with no controlled line
+ * returns `{ pharmacistId: null }`. A failed PIN updates the lockout counter
+ * and returns `{ blocked }` so the caller can commit that counter without
+ * posting stock.
+ */
+export async function verifyControlledPurchaseWitness(
+  db: ScopedDb,
+  scope: ReceivingScope,
+  input: { goodsReceiptId: string; staffProfileId?: string; pin?: string }
+): Promise<{ blocked: string } | { pharmacistId: string | null }> {
+  const receipt = await db.pharmacyGoodsReceipt.findFirst({
+    where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
+    select: {
+      branchId: true,
+      qualifiedPersonUserId: true,
+      lines: { select: { medicineId: true, acceptedCanonicalUnits: true } },
+    },
+  });
+  if (!receipt || receipt.branchId !== scope.branchId) return { pharmacistId: null };
+  const controlled = await db.medicine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      id: { in: receipt.lines.map((line) => line.medicineId) },
+      controlled: true,
+    },
+    select: { id: true },
+  });
+  const controlledIds = new Set(controlled.map((medicine) => medicine.id));
+  const needsRegister = receipt.lines.some(
+    (line) => controlledIds.has(line.medicineId) && line.acceptedCanonicalUnits > 0
+  );
+  if (!needsRegister) return { pharmacistId: null };
+  if (!input.staffProfileId || !input.pin || !receipt.qualifiedPersonUserId) {
+    return { blocked: WITNESS_BLOCKED };
+  }
+  await db.$queryRaw`SELECT id FROM restaurant_operator_credentials WHERE "organizationId"=${scope.organizationId} AND "staffProfileId"=${input.staffProfileId} AND type='PIN' AND "revokedAt" IS NULL AND "deviceId" IS NULL FOR UPDATE`;
+  const credential = await db.restaurantOperatorCredential.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      staffProfileId: input.staffProfileId,
+      type: 'PIN',
+      revokedAt: null,
+      deviceId: null,
+    },
+    include: { staffProfile: { include: { user: true } } },
+  });
+  const pharmacist = credential?.staffProfile.user;
+  const now = new Date();
+  const eligible =
+    credential &&
+    credential.staffProfile.status === 'ACTIVE' &&
+    pharmacist &&
+    pharmacist.id === receipt.qualifiedPersonUserId &&
+    pharmacist.organizationId === scope.organizationId &&
+    pharmacist.status === 'ACTIVE' &&
+    pharmacist.id !== scope.actorId &&
+    !isLockedOut(credential, now) &&
+    (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
+  if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
+  if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
+    await db.restaurantOperatorCredential.update({
+      where: { id: credential.id },
+      data: registerFailedAttempt(credential, now),
+    });
+    return { blocked: WITNESS_BLOCKED };
+  }
+  await db.restaurantOperatorCredential.update({
+    where: { id: credential.id },
+    data: clearLockout(),
+  });
+  return { pharmacistId: pharmacist.id };
+}
+
 export async function postGoodsReceipt(
   db: ScopedDb,
   scope: ReceivingScope,
-  input: { goodsReceiptId: string; at: Date }
+  input: { goodsReceiptId: string; at: Date; staffProfileId?: string; pin?: string }
 ): Promise<PostGoodsReceiptResult> {
   const receipt = await db.pharmacyGoodsReceipt.findFirst({
     where: { id: input.goodsReceiptId, organizationId: scope.organizationId },
@@ -98,18 +181,10 @@ export async function postGoodsReceipt(
   const needsRegister = receipt.lines.some(
     (line) => controlledIds.has(line.medicineId) && line.acceptedCanonicalUnits > 0
   );
-  if (needsRegister) {
-    const witnessId = receipt.qualifiedPersonUserId;
-    const witness =
-      witnessId && witnessId !== scope.actorId
-        ? await db.user.findFirst({
-            where: { id: witnessId, organizationId: scope.organizationId, status: 'ACTIVE' },
-            select: { id: true, role: true, status: true },
-          })
-        : null;
-    if (!witness || !(await can(witness, 'pharmacy:dispense', undefined, { db }))) {
-      throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
-    }
+  const witness = await verifyControlledPurchaseWitness(db, scope, input);
+  if ('blocked' in witness) throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
+  if (needsRegister && !witness.pharmacistId) {
+    throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
   }
 
   // Fail closed on the whole receipt before a single lot exists: a receipt that
@@ -219,49 +294,31 @@ export async function postGoodsReceipt(
     }
   }
 
-  if (needsRegister && receipt.qualifiedPersonUserId) {
-    await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-    const latest = await db.pharmacyControlledRegisterEntry.aggregate({
-      where: { organizationId: scope.organizationId, branchId: scope.branchId },
-      _max: { serial: true },
-    });
-    let serial = latest._max.serial ?? 0;
+  if (needsRegister && witness.pharmacistId) {
+    const purchaseLines = [];
     for (const posted of lines) {
       const source = receipt.lines.find((line) => line.id === posted.goodsReceiptLineId);
       const medicine = controlledMedicines.find((item) => item.id === source?.medicineId);
       if (!source || !medicine || source.acceptedCanonicalUnits <= 0) continue;
       if (!posted.acceptedMovementId) throw new PharmacyReceivingError('INVALID_QUANTITY');
-      const balance = await db.pharmacyStockBalance.aggregate({
-        where: {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          inventoryLotId: posted.inventoryLotId,
-        },
-        _sum: { onHandUnits: true },
-      });
-      await db.pharmacyControlledRegisterEntry.create({
-        data: {
-          organizationId: scope.organizationId,
-          branchId: scope.branchId,
-          serial: ++serial,
-          entryKind: 'PURCHASE',
-          medicineId: medicine.id,
-          manufacturer: medicine.manufacturer,
-          inventoryLotId: posted.inventoryLotId,
-          stockMovementId: posted.acceptedMovementId,
-          batchNumber: source.batchNumber,
-          quantityCanonicalUnits: source.acceptedCanonicalUnits,
-          balanceDelta: 0,
-          runningBalance: balance._sum.onHandUnits ?? 0,
-          recordedByUserId: scope.actorId,
-          witnessedByUserId: receipt.qualifiedPersonUserId,
-          signatureRef: `user:${receipt.qualifiedPersonUserId}`,
-          counterpartyName: receipt.supplier.name,
-          rxSerialWritten: false,
-          emergency: false,
-        },
+      purchaseLines.push({
+        medicineId: medicine.id,
+        manufacturer: medicine.manufacturer,
+        inventoryLotId: posted.inventoryLotId,
+        stockMovementId: posted.acceptedMovementId,
+        batchNumber: source.batchNumber,
+        quantityCanonicalUnits: source.acceptedCanonicalUnits,
+        counterpartyName: receipt.supplier.name,
       });
     }
+    await appendControlledPurchaseEntries(db, {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      recordedByUserId: scope.actorId,
+      witnessedByUserId: witness.pharmacistId,
+      signatureRef: `pin:${witness.pharmacistId}`,
+      lines: purchaseLines,
+    });
   }
 
   await db.pharmacyGoodsReceipt.update({

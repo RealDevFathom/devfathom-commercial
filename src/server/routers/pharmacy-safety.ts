@@ -2,7 +2,11 @@ import { can } from '@/lib/abac';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { annotateAudit } from '@/server/audit';
-import { appendControlledCorrection } from '@/lib/pharmacy/controlled-register';
+import {
+  appendControlledCorrection,
+  listControlledPinWitnesses,
+} from '@/lib/pharmacy/controlled-register';
+import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
 import { createInspectionPack } from '@/lib/pharmacy/inspection-pack';
 import { installPharmacySopLibrary } from '@/lib/pharmacy/sop-library';
 import { activeLegalHoldKeys } from '@/lib/pharmacy/retention';
@@ -31,25 +35,9 @@ async function organizationBranch(ctx: TRPCContext, branchId: string) {
 const safety = capabilityProcedure('pharmacy:safety');
 
 export const pharmacySafetyRouter = router({
-  controlledPharmacists: protectedProcedure.query(async ({ ctx }) => {
-    const staff = await ctx.db.restaurantStaffProfile.findMany({
-      where: {
-        status: 'ACTIVE',
-        userId: { not: ctx.session!.user.id },
-        credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
-      },
-      include: { user: true },
-    });
-    const eligible: Array<{ id: string; name: string }> = [];
-    for (const profile of staff) {
-      if (
-        profile.user?.status === 'ACTIVE' &&
-        (await can(profile.user, 'pharmacy:dispense', undefined, { db: ctx.db }))
-      )
-        eligible.push({ id: profile.id, name: profile.displayName });
-    }
-    return eligible;
-  }),
+  controlledPharmacists: protectedProcedure.query(({ ctx }) =>
+    listControlledPinWitnesses(ctx.db, ctx.session!.user.id)
+  ),
   branches: safety.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
@@ -63,21 +51,36 @@ export const pharmacySafetyRouter = router({
     .input(z.object({ branchId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       const organizationId = await organizationBranch(ctx, input.branchId);
+      const entries = await ctx.db.pharmacyControlledRegisterEntry.findMany({
+        where: { organizationId, branchId: input.branchId },
+        orderBy: { serial: 'asc' },
+        include: {
+          patient: { select: { displayName: true, cnic: true } },
+          prescriber: true,
+          prescription: true,
+          medicine: { select: { productName: true, manufacturer: true } },
+          line: { include: { medicine: true } },
+          correctsEntry: { select: { serial: true } },
+          refEntry: { select: { serial: true } },
+          incidents: { include: { approvals: true } },
+        },
+      });
+      const witnessIds = [...new Set(entries.map((entry) => entry.witnessedByUserId))];
+      const witnesses = witnessIds.length
+        ? await ctx.db.user.findMany({
+            where: { organizationId, id: { in: witnessIds } },
+            select: { id: true, name: true },
+          })
+        : [];
+      const witnessNames = new Map(witnesses.map((user) => [user.id, user.name]));
       return {
-        entries: await ctx.db.pharmacyControlledRegisterEntry.findMany({
-          where: { organizationId, branchId: input.branchId },
-          orderBy: { serial: 'asc' },
-          include: {
-            patient: true,
-            prescriber: true,
-            prescription: true,
-            medicine: { select: { productName: true, manufacturer: true } },
-            line: { include: { medicine: true } },
-            correctsEntry: { select: { serial: true } },
-            refEntry: { select: { serial: true } },
-            incidents: { include: { approvals: true } },
-          },
-        }),
+        entries: entries.map((entry) => ({
+          ...entry,
+          patient: entry.patient
+            ? { displayName: entry.patient.displayName, cnic: maskCnic(entry.patient.cnic) }
+            : null,
+          witnessName: witnessNames.get(entry.witnessedByUserId) ?? null,
+        })),
       };
     }),
   recordCorrection: safety
@@ -88,7 +91,6 @@ export const pharmacySafetyRouter = router({
           correctsEntryId: z.string().min(1),
           correctionReason: z.string().trim().min(3).max(500),
           quantityCanonicalUnits: z.number().int().positive(),
-          balanceDelta: z.number().int(),
           staffProfileId: z.string().min(1),
           pin: z.string().regex(/^\d{4,8}$/),
         })
@@ -142,7 +144,6 @@ export const pharmacySafetyRouter = router({
             correctsEntryId: input.correctsEntryId,
             correctionReason: input.correctionReason,
             quantityCanonicalUnits: input.quantityCanonicalUnits,
-            balanceDelta: input.balanceDelta,
             recordedByUserId: actorId,
             witnessedByUserId: pharmacist.id,
             signatureRef: `pin:${pharmacist.id}`,
@@ -159,6 +160,18 @@ export const pharmacySafetyRouter = router({
           throw new TRPCError({
             code: 'BAD_REQUEST',
             message: 'That correction would make the balance negative.',
+          });
+        }
+        if (error instanceof Error && error.message === 'CAP') {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'That correction is larger than the original quantity.',
+          });
+        }
+        if (error instanceof Error && error.message === 'ALREADY_CORRECTED') {
+          throw new TRPCError({
+            code: 'CONFLICT',
+            message: 'That register entry has already been corrected.',
           });
         }
         throw error;
@@ -229,31 +242,6 @@ export const pharmacySafetyRouter = router({
       const holdKeys = await activeLegalHoldKeys(ctx.db, input.recordClass, input.recordId);
       return { held: holdKeys.length > 0, holdKeys };
     }),
-  recordControlledEntry: safety
-    .input(
-      z
-        .object({
-          id: z.string().min(1),
-          branchId: z.string().min(1),
-          serial: z.number().int().positive(),
-          prescriptionId: z.string().min(1),
-          prescriptionLineId: z.string().min(1),
-          patientId: z.string().min(1),
-          prescriberId: z.string().min(1),
-          inventoryLotId: z.string().min(1),
-          stockMovementId: z.string().min(1),
-          batchNumber: z.string().trim().min(1),
-          quantityCanonicalUnits: z.number().int().positive(),
-          runningBalance: z.number().int().nonnegative(),
-          witnessedByUserId: z.string().min(1),
-        })
-        .strict()
-    )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyControlledRegisterEntry.create({
-        data: { ...input, recordedByUserId: ctx.session!.user.id },
-      })
-    ),
   approveRegisterIncident: safety
     .input(z.object({ incidentId: z.string().min(1), reason: z.string().trim().min(1) }).strict())
     .mutation(({ ctx, input }) =>

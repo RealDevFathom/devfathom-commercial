@@ -7,7 +7,9 @@ import {
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
+  verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
+import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -956,20 +958,51 @@ const purchasingRouter = router({
    * status and the order's move to RECEIVING commit together or not at all.
    */
   postGoodsReceipt: protectedProcedure
-    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+          staffProfileId: z.string().trim().min(1).optional(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       const scope = receivingScope(ctx, input.branchId);
+      // Lockout counters commit even when the PIN is refused. Stock posting is
+      // a second transaction, so a refused PIN never leaves a half-posted receipt.
+      const attempt = await ctx.db.$transaction((tx) =>
+        verifyControlledPurchaseWitness(txDb(tx), scope, {
+          goodsReceiptId: input.goodsReceiptId,
+          staffProfileId: input.staffProfileId,
+          pin: input.pin,
+        })
+      );
+      if ('blocked' in attempt) return attempt;
       try {
         return await ctx.db.$transaction((tx) =>
           postGoodsReceipt(txDb(tx), scope, {
             goodsReceiptId: input.goodsReceiptId,
             at: new Date(),
+            staffProfileId: input.staffProfileId,
+            pin: input.pin,
           })
         );
       } catch (error) {
         domainError(error);
       }
     }),
+
+  /** Qualified people who can enter a PIN when a controlled receipt is posted. */
+  controlledWitnesses: protectedProcedure.query(({ ctx }) => {
+    const actorId = ctx.session?.user?.id;
+    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    return listControlledPinWitnesses(ctx.db, actorId);
+  }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was

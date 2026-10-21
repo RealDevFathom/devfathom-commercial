@@ -10,6 +10,8 @@ import { can, subjectFromSession } from '@/lib/abac';
 import {
   appendControlledSaleEntries,
   earlierRegisterEntry,
+  EMERGENCY_NO_RX_WINDOW_MS,
+  emergencyNoRxDecision,
 } from '@/lib/pharmacy/controlled-register';
 import { annotateAudit } from '@/server/audit';
 import {
@@ -815,15 +817,38 @@ export const pharmacySalesRouter = router({
           if (authorization.refSerial && !refEntry) {
             return { blocked: 'That earlier register serial is not on this branch.' };
           }
-          await db.pharmacyPatient.updateMany({
-            where: { id: authorization.patientId, organizationId: scope.organizationId },
-            data: { address: authorization.patientAddress },
-          });
           if (authorization.emergency) {
             const patient = await db.pharmacyPatient.findFirst({
               where: { id: authorization.patientId, organizationId: scope.organizationId },
             });
             if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
+            const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+            const since = new Date(now.getTime() - EMERGENCY_NO_RX_WINDOW_MS);
+            const recentSupplies = await db.pharmacyControlledRegisterEntry.count({
+              where: {
+                organizationId: scope.organizationId,
+                patientId: authorization.patientId,
+                medicineId: medicine.id,
+                entryKind: 'SALE',
+                emergency: true,
+                createdAt: { gte: since },
+              },
+            });
+            const openFollowUp = await db.pharmacyEmergencyRxFollowUp.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                patientId: authorization.patientId,
+                medicineId: medicine.id,
+                status: 'OPEN',
+              },
+              select: { id: true },
+            });
+            const emergencyRefusal = emergencyNoRxDecision({
+              units,
+              recentSupplies,
+              openFollowUp: Boolean(openFollowUp),
+            });
+            if (emergencyRefusal) return { blocked: emergencyRefusal };
             const consent = await db.patientConsent.findFirst({
               where: {
                 organizationId: scope.organizationId,
@@ -856,6 +881,18 @@ export const pharmacySalesRouter = router({
               recordedByUserId: scope.actorId,
               witnessedByUserId: pharmacist.id,
               signatureRef: `pin:${pharmacist.id}`,
+            });
+            await db.pharmacyEmergencyRxFollowUp.create({
+              data: {
+                organizationId: scope.organizationId,
+                branchId: scope.branchId,
+                patientId: authorization.patientId,
+                medicineId: medicine.id,
+                saleLineId: result.line.id,
+                quantityCanonicalUnits: units,
+                recordedByUserId: scope.actorId,
+                witnessedByUserId: pharmacist.id,
+              },
             });
             return result;
           }

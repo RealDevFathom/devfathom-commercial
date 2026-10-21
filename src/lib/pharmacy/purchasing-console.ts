@@ -463,7 +463,7 @@ export async function listGoodsReceipts(db: ScopedDb, scope: BranchScope) {
       lines: {
         orderBy: { lineNumber: 'asc' },
         include: {
-          medicine: { select: { id: true, productName: true } },
+          medicine: { select: { id: true, productName: true, controlled: true } },
           packLevel: { select: { id: true, level: true } },
           stockLocation: { select: { id: true, name: true } },
           quarantineLocation: { select: { id: true, name: true } },

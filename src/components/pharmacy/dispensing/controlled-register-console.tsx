@@ -2,6 +2,7 @@
 
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
+import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -18,7 +19,6 @@ export function ControlledRegisterConsole() {
   const [correctsEntryId, setCorrectsEntryId] = useState('');
   const [reason, setReason] = useState('');
   const [quantity, setQuantity] = useState('1');
-  const [balanceDelta, setBalanceDelta] = useState('0');
   const [staffProfileId, setStaffProfileId] = useState('');
   const [pin, setPin] = useState('');
   const [formError, setFormError] = useState<string | null>(null);
@@ -55,7 +55,7 @@ export function ControlledRegisterConsole() {
     const heading = popup.document.createElement('h1');
     heading.textContent = 'Controlled medicine register';
     const stamp = popup.document.createElement('p');
-    stamp.textContent = `Printed ${new Date().toLocaleString()} · branch ${selected}`;
+    stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · branch ${selected}`;
     const style = popup.document.createElement('style');
     style.textContent =
       '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } thead { display: table-header-group; } tr { break-inside: avoid; }';
@@ -159,7 +159,7 @@ export function ControlledRegisterConsole() {
                       <tr className="border-b border-border-subtle" key={entry.id}>
                         <td className={`${cell} font-mono tabular-nums`}>{entry.serial}</td>
                         <td className={cell}>
-                          {entry.createdAt.toLocaleString()}
+                          {formatKarachiDateTime(entry.createdAt)}
                           <span className="mt-0.5 block text-text-muted">
                             {entry.entryKind === 'PURCHASE'
                               ? 'Purchase'
@@ -179,6 +179,11 @@ export function ControlledRegisterConsole() {
                         </td>
                         <td className={cell}>
                           {entry.patient?.displayName ?? entry.counterpartyName ?? '—'}
+                          {entry.patient?.cnic ? (
+                            <span className="mt-0.5 block text-text-muted">
+                              {entry.patient.cnic}
+                            </span>
+                          ) : null}
                           {entry.patientAddress ? (
                             <span className="mt-0.5 block text-text-muted">
                               {entry.patientAddress}
@@ -212,12 +217,10 @@ export function ControlledRegisterConsole() {
                           ) : null}
                         </td>
                         <td className={`${cell} font-mono`}>{entry.batchNumber}</td>
-                        <td className={`${cell} font-mono`}>
-                          {entry.witnessedByUserId}
+                        <td className={cell}>
+                          {entry.witnessName ?? '—'}
                           {entry.signatureRef ? (
-                            <span className="mt-0.5 block text-text-muted">
-                              {entry.signatureRef}
-                            </span>
+                            <span className="mt-0.5 block text-text-muted">PIN witnessed</span>
                           ) : null}
                           {open ? (
                             <span className="mt-0.5 block text-destructive">
@@ -242,13 +245,8 @@ export function ControlledRegisterConsole() {
                 event.preventDefault();
                 setFormError(null);
                 const quantityCanonicalUnits = Number(quantity);
-                const delta = Number(balanceDelta);
-                if (
-                  !correctsEntryId ||
-                  !Number.isInteger(quantityCanonicalUnits) ||
-                  !Number.isInteger(delta)
-                ) {
-                  setFormError('Choose an entry and whole numbers for quantity and balance.');
+                if (!correctsEntryId || !Number.isInteger(quantityCanonicalUnits)) {
+                  setFormError('Choose an entry and a whole number for the corrected quantity.');
                   return;
                 }
                 correct.mutate({
@@ -256,14 +254,15 @@ export function ControlledRegisterConsole() {
                   correctsEntryId,
                   correctionReason: reason.trim(),
                   quantityCanonicalUnits,
-                  balanceDelta: delta,
                   staffProfileId,
                   pin,
                 });
               }}
             >
               <p className="text-xs text-text-muted">
-                Corrections are new rows. Earlier rows stay as they were written.
+                Corrections are new rows. Earlier rows stay as they were written. The quantity is
+                the amount that should have been recorded. The balance change is calculated from
+                that amount and cannot exceed the original quantity.
               </p>
               <div className="grid gap-2 sm:grid-cols-2">
                 <label className="text-xs text-text-muted" htmlFor="correct-entry">
@@ -276,11 +275,17 @@ export function ControlledRegisterConsole() {
                     required
                   >
                     <option value="">Select serial</option>
-                    {register.data.entries.map((entry) => (
-                      <option key={entry.id} value={entry.id}>
-                        {entry.serial} · {entry.entryKind} · {entry.batchNumber}
-                      </option>
-                    ))}
+                    {register.data.entries
+                      .filter(
+                        (entry) =>
+                          entry.entryKind !== 'CORRECTION' &&
+                          !register.data.entries.some((other) => other.correctsEntryId === entry.id)
+                      )
+                      .map((entry) => (
+                        <option key={entry.id} value={entry.id}>
+                          {entry.serial} · {entry.entryKind} · {entry.batchNumber}
+                        </option>
+                      ))}
                   </select>
                 </label>
                 <label className="text-xs text-text-muted" htmlFor="correct-pharmacist">
@@ -312,24 +317,13 @@ export function ControlledRegisterConsole() {
                   />
                 </label>
                 <label className="text-xs text-text-muted" htmlFor="correct-qty">
-                  Quantity
+                  Corrected quantity
                   <input
                     id="correct-qty"
                     className="mt-1 h-9 w-full rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
                     inputMode="numeric"
                     value={quantity}
                     onChange={(event) => setQuantity(event.target.value)}
-                    required
-                  />
-                </label>
-                <label className="text-xs text-text-muted" htmlFor="correct-delta">
-                  Balance change
-                  <input
-                    id="correct-delta"
-                    className="mt-1 h-9 w-full rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
-                    inputMode="numeric"
-                    value={balanceDelta}
-                    onChange={(event) => setBalanceDelta(event.target.value)}
                     required
                   />
                 </label>

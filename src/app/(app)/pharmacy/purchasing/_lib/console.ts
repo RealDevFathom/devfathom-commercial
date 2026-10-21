@@ -117,8 +117,8 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
   NOT_FOUND: { message: 'That record no longer exists. Reload the page.' },
   CONTROLLED_WITNESS_REQUIRED: {
     message:
-      'A controlled medicine needs a different person who is allowed to dispense. Choose them on the receipt before posting.',
-    field: 'qualifiedPersonUserId',
+      'A controlled medicine needs the qualified person named on the receipt to enter their PIN before it can be posted.',
+    field: 'witnessPin',
   },
 };
 
