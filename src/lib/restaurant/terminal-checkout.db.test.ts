@@ -874,6 +874,21 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(cardTender.status, JSON.stringify(cardTender.json)).toBe(200);
       expect(cardTender.json.settled).toBe(true);
       eqMoney(cardTender.json.remainingDue, '0.00');
+      const cardSettled = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId: cardOrder.orderId },
+      });
+      expect(cardSettled.status, JSON.stringify(cardSettled.json)).toBe(200);
+      expect(cardSettled.json.settled).toBe(true);
+      expect(cardSettled.json.blocker).toBeNull();
+      expect((cardSettled.json.bills as Record<string, unknown>[])[0]).toMatchObject({
+        status: 'SETTLED',
+        taxTotal: '18.00',
+        grandTotal: '138.00',
+        remainingDue: '0.00',
+      });
     });
   });
 

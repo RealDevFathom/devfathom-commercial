@@ -18,7 +18,12 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { deriveOrderTotal, planBills, validateTenderTaxAllocations } from './bills';
+import {
+  deriveOrderTotal,
+  exclusiveTaxOutsideOrderTotal,
+  planBills,
+  validateTenderTaxAllocations,
+} from './bills';
 import type { FinalizeBillSettlementInput } from './bills';
 
 // ── Pure fixtures ────────────────────────────────────────────────────────────
@@ -138,6 +143,38 @@ describe('deriveOrderTotal (pure, C4)', () => {
       { id: 'c', unitPrice: '9.99', quantity: 1, status: 'VOIDED' }, // excluded
     ]);
     expect(deriveOrderTotal(o.items.filter((i) => i.status !== 'VOIDED')).toString()).toBe('31.25');
+  });
+});
+
+describe('exclusiveTaxOutsideOrderTotal', () => {
+  it('subtracts only exclusive bucket tax, which is what settlement adds to grandTotal', () => {
+    expect(
+      exclusiveTaxOutsideOrderTotal({
+        taxTotal: D('6.50'),
+        buckets: [
+          { priceMode: 'EXCLUSIVE', taxAmount: D('1.50') },
+          { priceMode: 'INCLUSIVE', taxAmount: D('5.00') },
+        ],
+        rulePriceModes: ['EXCLUSIVE', 'INCLUSIVE'],
+      }).toString()
+    ).toBe('1.5');
+  });
+
+  it('uses the snapshot tax when a bucket-less fractional bill is uniformly exclusive', () => {
+    expect(
+      exclusiveTaxOutsideOrderTotal({
+        taxTotal: D('145.50'),
+        buckets: [],
+        rulePriceModes: ['EXCLUSIVE', 'EXCLUSIVE'],
+      }).toString()
+    ).toBe('145.5');
+    expect(
+      exclusiveTaxOutsideOrderTotal({
+        taxTotal: D('10.00'),
+        buckets: [],
+        rulePriceModes: ['INCLUSIVE'],
+      }).toString()
+    ).toBe('0');
   });
 });
 

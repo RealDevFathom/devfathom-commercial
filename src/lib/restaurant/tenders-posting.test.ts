@@ -255,6 +255,7 @@ function fixture() {
       create: vi.fn(async () => ({ id: 'refund' })),
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
+    restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
     restaurantPayment: { create: vi.fn(async () => ({ id: 'payment' })) },
     restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
