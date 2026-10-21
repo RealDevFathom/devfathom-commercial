@@ -263,6 +263,23 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it.each([
+    ['expired', '2026-01-01', '2026-06-01'],
+    ['reversed', day(30), day(20)],
+  ])('refuses a %s licence window without storing a profile', async (_, validFrom, validTo) => {
+    await withTenantDb(organizationId, async (db) => {
+      const before = await db.branchRegulatoryProfile.count({ where: { organizationId } });
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          licenceValidFrom: validFrom,
+          licenceValidTo: validTo,
+        })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(await db.branchRegulatoryProfile.count({ where: { organizationId } })).toBe(before);
+    });
+  });
+
   it('refuses a backdated effective date (#162)', async () => {
     await withTenantDb(organizationId, async (db) => {
       await expect(
@@ -437,17 +454,17 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
-  // Runs last: a passing licences gate raises this organization's doneCount, so
-  // the earlier attestation test that asserts an exact count would see it.
+  // Use the other tenant so earlier Punjab profiles cannot tie with the Sindh
+  // profile on effectiveFrom when readiness chooses a branch.
   it('lets a Sindh branch record an operable profile that passes the licences gate (QA-129)', async () => {
-    await withTenantDb(organizationId, async (db) => {
+    await withTenantDb(otherOrganizationId, async (db) => {
       // Sindh publishes RETAIL/WHOLESALE licence categories and G/H schedules,
       // so a complete profile on that confirmed rule set is one the regulatory
       // guard allows the branch to operate on — unlike the provisional Punjab a
       // Karachi branch used to be forced onto.
-      const saved = await caller(db).saveRegulatoryProfile({
+      const saved = await caller(db, otherOrganizationId).saveRegulatoryProfile({
         ...profile,
-        branchId: sindhBranchId,
+        branchId: otherBranchId,
         effectiveFrom: day(0),
         provinceCode: 'PK-SD',
         premisesCity: 'Karachi',
@@ -464,7 +481,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       const licences = saved.readiness.items.find((item) => item.key === 'PREMISES_AND_LICENCES');
       expect(licences?.state).toBe('DONE');
 
-      const listed = await caller(db).regulatory({ branchId: sindhBranchId });
+      const listed = await caller(db, otherOrganizationId).regulatory({ branchId: otherBranchId });
       expect(listed.versions).toHaveLength(1);
       expect(listed.versions[0]).toMatchObject({
         version: 1,

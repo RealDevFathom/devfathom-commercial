@@ -347,6 +347,10 @@ export const pharmacyOnboardingRouter = router({
         throw badRequest('effectiveFrom', 'The effective date cannot be in the past.');
       }
 
+      if (midnightUtc(input.licenceValidTo) < today) {
+        throw badRequest('licenceValidTo', 'The licence expiry date cannot be in the past.');
+      }
+
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
         select: { id: true, provinceCode: true },
