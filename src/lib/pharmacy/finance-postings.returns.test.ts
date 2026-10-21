@@ -116,3 +116,60 @@ it('reverses revenue but not inventory for an unidentified return hold', async (
   expect(posted.lines.some((line) => line.accountCode === 'INVENTORY')).toBe(false);
   expect(posted.lines.some((line) => line.accountCode === 'COST_OF_GOODS_SOLD')).toBe(false);
 });
+
+it('records a zero-minor-unit slice and assigns the rounding remainder to a later hold', async () => {
+  const saleLine = {
+    id: 'line',
+    medicineId: 'medicine',
+    unitPriceMinor: 1,
+    quantity: 1,
+    discountMinor: 0,
+    canonicalUnits: 3,
+    returnLines: [],
+    unidentifiedReturnHolds: [{ canonicalUnits: 1 }],
+  };
+  const findFirst = vi
+    .fn()
+    .mockResolvedValueOnce({
+      id: 'early-hold',
+      branchId: 'branch',
+      quarantineLocationId: 'quarantine',
+      canonicalUnits: 1,
+      saleLine,
+    })
+    .mockResolvedValueOnce({
+      id: 'later-hold',
+      branchId: 'branch',
+      quarantineLocationId: 'quarantine',
+      canonicalUnits: 2,
+      saleLine: {
+        ...saleLine,
+        unidentifiedReturnHolds: [{ canonicalUnits: 1 }, { canonicalUnits: 2 }],
+      },
+    });
+  const db = {
+    pharmacyUnidentifiedReturnHold: { findFirst },
+    financeJournalEntry: { findFirst: vi.fn().mockResolvedValue(null) },
+  } as unknown as ScopedDb;
+  const scope = { organizationId: 'org', branchId: 'branch', actorId: 'actor' };
+
+  await postUnidentifiedSaleReturnEntry(db, scope, {
+    holdingId: 'early-hold',
+    at: new Date('2026-10-21T10:00:00Z'),
+  });
+  const early = vi.mocked(postJournalEntry).mock.calls.at(-1)![2];
+  expect(early.lines).toEqual([
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 }),
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 }),
+  ]);
+
+  await postUnidentifiedSaleReturnEntry(db, scope, {
+    holdingId: 'later-hold',
+    at: new Date('2026-10-21T11:00:00Z'),
+  });
+  const later = vi.mocked(postJournalEntry).mock.calls.at(-1)![2];
+  expect(later.lines).toEqual([
+    expect.objectContaining({ accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: 1 }),
+    expect.objectContaining({ accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 }),
+  ]);
+});

@@ -402,6 +402,32 @@ export async function postUnidentifiedSaleReturnEntry(
     locationId: holding.quarantineLocationId,
     sourceLineId: saleLine.id,
   };
+  const monetaryLines = nonZero([
+    {
+      ...dimensions,
+      accountCode: 'SALES_REVENUE' as const,
+      side: 'DEBIT' as const,
+      amountMinor: gross,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_CLEARING' as const,
+      side: 'CREDIT' as const,
+      amountMinor: gross,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_CLEARING' as const,
+      side: 'DEBIT' as const,
+      amountMinor: discount,
+    },
+    {
+      ...dimensions,
+      accountCode: 'SALES_DISCOUNT' as const,
+      side: 'CREDIT' as const,
+      amountMinor: discount,
+    },
+  ]);
 
   return postJournalEntry(
     db,
@@ -413,12 +439,17 @@ export async function postUnidentifiedSaleReturnEntry(
       occurredAt: input.at,
       idempotencyKey: postingKey(sourceKind, holding.id),
       branchId: holding.branchId,
-      lines: nonZero([
-        { ...dimensions, accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: gross },
-        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: gross },
-        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: discount },
-        { ...dimensions, accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: discount },
-      ]),
+      // Canonical units can be finer than a minor currency unit. Keep a
+      // balanced, net-zero clearing marker for those slices: the journal row
+      // remains the durable idempotency/completeness receipt without inventing
+      // revenue, discount, inventory, or COGS.
+      lines:
+        monetaryLines.length > 0
+          ? monetaryLines
+          : [
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: 1 },
+              { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: 1 },
+            ],
     }
   );
 }

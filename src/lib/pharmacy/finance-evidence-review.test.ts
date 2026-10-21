@@ -525,9 +525,11 @@ describe('growth sandbox diagnostic (growth-evidence.ts)', () => {
     expect(calls[1]?.values).toContain('insight-1');
   });
 
-  it('growthReceiptMoney binds the cutoff to all four time predicates', () => {
+  it('growthReceiptMoney includes posted unidentified holds and verifies their completeness', () => {
     const query = growthReceiptMoney(cutoff) as unknown as CapturedSql;
-    expect(query.values).toEqual([cutoff, cutoff, cutoff, cutoff]);
+    expect(query.values).toEqual([cutoff, cutoff, cutoff, cutoff, cutoff, cutoff, cutoff]);
     expect(query.sql).toContain(`e."sourceKind"='PHARMACY_SALE_RETURN_LINE'`);
+    expect(query.sql).toContain(`e."sourceKind"='PHARMACY_UNIDENTIFIED_RETURN_HOLD'`);
+    expect(query.sql).toContain('pharmacy_unidentified_return_holds');
   });
 });
