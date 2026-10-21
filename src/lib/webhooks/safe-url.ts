@@ -24,10 +24,15 @@ const blocked = new BlockList();
 for (const [addr, bits] of [
   ['0.0.0.0', 8],
   ['10.0.0.0', 8],
+  ['100.64.0.0', 10],
   ['127.0.0.0', 8],
   ['169.254.0.0', 16],
   ['172.16.0.0', 12],
+  ['192.0.2.0', 24],
   ['192.168.0.0', 16],
+  ['198.18.0.0', 15],
+  ['198.51.100.0', 24],
+  ['203.0.113.0', 24],
   ['224.0.0.0', 4],
   ['240.0.0.0', 4],
 ] as const) {
@@ -35,6 +40,9 @@ for (const [addr, bits] of [
 }
 blocked.addAddress('::', 'ipv6');
 blocked.addAddress('::1', 'ipv6');
+blocked.addSubnet('::', 96, 'ipv6');
+blocked.addSubnet('64:ff9b::', 96, 'ipv6');
+blocked.addSubnet('2002::', 16, 'ipv6');
 blocked.addSubnet('fc00::', 7, 'ipv6');
 blocked.addSubnet('fe80::', 10, 'ipv6');
 blocked.addSubnet('ff00::', 8, 'ipv6');

@@ -22,7 +22,14 @@ describe('webhook URL policy', () => {
     'http://127.0.0.1/hook',
     'http://169.254.169.254/latest/meta-data/',
     'http://10.1.2.3/hook',
+    'http://100.64.0.1/hook',
+    'http://192.0.2.1/hook',
+    'http://198.18.0.1/hook',
+    'http://198.51.100.1/hook',
+    'http://203.0.113.1/hook',
     'http://[::1]/hook',
+    'http://[64:ff9b::1]/hook',
+    'http://[2002:db8::1]/hook',
     'http://[fd00::1]/hook',
     'http://0177.0.0.1/hook',
   ])('rejects %s before any connection', (raw) => {
@@ -36,13 +43,30 @@ describe('webhook URL policy', () => {
       '172.16.0.1',
       '192.168.1.1',
       '169.254.169.254',
+      '100.64.0.1',
+      '100.127.255.255',
+      '192.0.2.1',
+      '198.18.0.1',
+      '198.19.255.1',
+      '198.51.100.1',
+      '203.0.113.1',
       '::1',
+      '::192.0.2.1',
+      '64:ff9b::1',
+      '64:ff9b::808:808',
+      '2002:808:808::',
       'fe80::1',
       '::ffff:127.0.0.1',
+      '::ffff:100.64.0.1',
+      '::ffff:203.0.113.1',
     ]) {
       expect(isBlockedAddress(address)).toBe(true);
     }
     expect(isBlockedAddress('8.8.8.8')).toBe(false);
+    expect(isBlockedAddress('100.128.0.1')).toBe(false);
+    expect(isBlockedAddress('198.20.0.1')).toBe(false);
+    expect(isBlockedAddress('192.0.3.1')).toBe(false);
+    expect(isBlockedAddress('2001:4860:4860::8888')).toBe(false);
   });
 
   it('rejects a public name when any DNS answer is private', async () => {
