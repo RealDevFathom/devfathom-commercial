@@ -139,11 +139,18 @@ describe('STOP and START', () => {
     expect(sendText).toHaveBeenCalledOnce();
   });
 
-  it.each(['START', 'yes', 'haan', 'ہاں'])('opts in for %s', async (text) => {
+  it.each(['START', 'yes', 'haan', 'ہاں', '  START \t', ' ہاں '])('opts in for %s', async (text) => {
     const { store, sendText, result } = await inbound(text, customer({ whatsappOptIn: false }));
     expect(result).toBe('opt_in');
     expect((await store.customer('org_1', 'c1'))?.whatsappOptIn).toBe(true);
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it.each(["Yes, I'll pick it up tomorrow", 'yes please', 'START offers', 'haan kal', 'ہاں کل', 'START.', 'yes!', `START${' '.repeat(1000)}tomorrow`])('does not re-subscribe for %s', async (text) => {
+    const { store, result } = await inbound(text, customer({ whatsappOptIn: false, whatsappOptOutAt: now }));
+    expect(result).toBe('logged');
+    expect(await store.customer('org_1', 'c1')).toMatchObject({ whatsappOptIn: false, whatsappOptOutAt: now });
+    expect(await (await inbound(text)).store.customerByPhone('org_1', from)).toBeNull();
   });
 
   it('does not treat stopwatch as an opt-out', async () => {

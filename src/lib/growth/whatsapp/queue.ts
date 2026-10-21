@@ -7,6 +7,7 @@ import {
   MissingStop,
   ProhibitedDrugInCopy,
   ORDER_READY_BODIES,
+  isOrderReadyName,
   productFamiliesFromMedicines,
   renderTemplate,
   type OrderReadyLanguage,
@@ -84,7 +85,9 @@ async function attemptRow(
   });
   if (!claimed) return 'skipped';
   let result;
-  const utility = claimed.row.direction === 'out' && Object.values(ORDER_READY_BODIES).some(
+  const utility = claimed.row.direction === 'out' &&
+    isOrderReadyName(claimed.customer?.displayName ?? '') &&
+    isOrderReadyName(claimed.organization?.displayName ?? '') && Object.values(ORDER_READY_BODIES).some(
     (template) => claimed.row.body === renderTemplate(template, {
       name: claimed.customer?.displayName ?? '',
       business: claimed.organization?.displayName ?? '',

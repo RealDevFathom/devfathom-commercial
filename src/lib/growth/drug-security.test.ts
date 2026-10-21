@@ -56,7 +56,7 @@ const blocked = [
   'ويليم',
   'انسولين',
   'insulin',
-  'Kodeen',
+  'Kodeen', 'زانیکس', 'لیریکا',
 ];
 describe('PR 175 regression corpus', () => {
   it.each(blocked)('blocks %s', (body) => {
@@ -85,10 +85,17 @@ describe('PR 175 regression corpus', () => {
   it.each([
     'Rx discount', 'prescription', 'nuskha', 'dawai discount', 'dawa discount',
     'دوائی کی رعایت', 'ask your doctor', 'medicine sale', 'نسخہ پر رعایت',
+    '℞ discount', 'tablets', 'pills', 'syrup', 'antibiotics', 'زانیکس', 'لیریکا',
     'دوا کی رعایت', 'ڈاکٹر سے پوچھیں', 'xan ax',
   ])('refuses generic medicine or split drug promo: %s', async (body) => {
     await expect(assertMarketingCopyAllowed(db, 'tenant', body)).rejects.toThrow();
   });
+  it.each(['Medicine box organizer', 'Prescription glasses', 'Nuskhay ki kitaab'])(
+    'allows non-medicine product %s', async (body) => {
+      await expect(assertMarketingCopyAllowed(db, 'tenant', body)).resolves.toBeUndefined();
+      await expect(assertMarketingCopyAllowed(db, 'tenant', `${body} and medicine sale`)).rejects.toThrow();
+    }
+  );
   it('still blocks insulin outside the accessory phrase', async () => {
     await expect(
       assertMarketingCopyAllowed(db, 'tenant', 'insulin pen needles and insulin')

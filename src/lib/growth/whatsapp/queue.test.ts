@@ -668,6 +668,25 @@ describe('business local time', () => {
 });
 
 describe('campaign drain copy gate', () => {
+  it.each(['A'.repeat(81), 'Shop\nXanax offer', 'Shop 💊'])(
+    'does not exempt an order-ready body with an unsafe name: %s', async (name) => {
+      const store = createMemoryStore();
+      store.putCustomer({ ...customer('drain', '+923001234567'), displayName: name });
+      await enqueueOrderReady(store, {
+        organizationId: 'org_1', customerId: 'drain', language: 'en',
+        name, business: 'Demo Pharmacy',
+      });
+      const sendText = vi.fn();
+      const result = await drainQueue({
+        unit: (run) => run(store),
+        provider: { sendText, getStatus: async () => 'connected' },
+        organizationId: 'org_1', settings: settings(), now: day,
+        clock: { now: () => day, sleep: async () => {}, random: () => 0 },
+      });
+      expect(result.sent).toBe(0);
+      expect(sendText).not.toHaveBeenCalled();
+    }
+  );
   it.each(['prohibited copy', 'catalog unavailable', 'missing gate', 'no campaign'])(
     'fails closed before provider send: %s',
     async (reason) => {

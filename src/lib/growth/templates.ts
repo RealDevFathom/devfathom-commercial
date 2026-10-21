@@ -39,6 +39,11 @@ export const ORDER_READY_BODIES = {
   ur: '{{name}}، {{business}} سے آپ کا آرڈر لینے کے لیے تیار ہے۔ Reply STOP to opt out.',
 } as const;
 
+/** Only short, single-line display names qualify for the pickup notice exemption. */
+export function isOrderReadyName(value: string): boolean {
+  return value.length > 0 && value.length <= 80 && /^[\p{L}\p{M}\p{N} .&'’-]+$/u.test(value);
+}
+
 export type OrderReadyLanguage = keyof typeof ORDER_READY_BODIES;
 
 /** Seed bodies. Every one names STOP so the renderer can send it. */
@@ -329,11 +334,17 @@ export async function assertMarketingCopyAllowed(
   organizationId: string,
   body: string
 ): Promise<void> {
+  // Exempt only the named non-medicine products, keeping other text checked.
+  const genericBody = body.replace(
+    /\b(?:medicine\s+box\s+organizer|prescription\s+glasses|nuskhay\s+ki\s+kitaab)\b/giu,
+    'front shop accessory'
+  );
   // Generic medicine language is prohibited even when no catalog drug is named.
   if (
-    /(?<![\p{L}\p{N}])r\s*x(?![\p{L}\p{N}])/u.test(foldDrugText(body)) ||
-    bodyNamesProhibitedDrug(body, [
+    /(?<![\p{L}\p{N}])r\s*x(?![\p{L}\p{N}])/u.test(foldDrugText(genericBody)) || body.includes("℞") ||
+    bodyNamesProhibitedDrug(genericBody, [
       'prescription', 'nuskha', 'dawai', 'dawa', 'medicine',
+      'tablets', 'pills', 'syrup', 'antibiotics',
       'دوائی', 'دوا', 'نسخہ', 'ask your doctor', 'ڈاکٹر سے پوچھیں',
     ])
   ) throw new ProhibitedDrugInCopy();
