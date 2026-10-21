@@ -263,11 +263,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
     }
 
     return (
-      <div ref={ref} tabIndex={-1} className="space-y-2 focus-visible:outline-none">
+      <div ref={ref} tabIndex={-1} className="space-y-4 focus-visible:outline-none">
         <div className="flex flex-wrap items-center justify-between gap-2">
           <p className="text-sm text-text-body">
             Balance due{' '}
-            <span className="inline-block min-w-24 text-right font-mono text-sm tabular-nums text-text-strong">
+            <span className="font-mono tabular-nums text-text-strong">
               {balanceKnown && (state === 'ready' || state === 'settled') && !unknown
                 ? formatMinor(balanceMinor)
                 : 'Unavailable'}
@@ -307,7 +307,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           <Button
             type="button"
             variant="outline"
-            className="h-9"
+            className="h-11"
             disabled={checkingOutcome || takingPayment}
             aria-describedby="tender-status tender-error"
             onClick={() => void checkOutcome()}
@@ -316,7 +316,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           </Button>
         ) : null}
         {!takingPayment && ['error', 'stale', 'unavailable'].includes(state) ? (
-          <Button type="button" variant="outline" className="h-9" onClick={onRetry}>
+          <Button type="button" variant="outline" className="h-11" onClick={onRetry}>
             Refresh bill
           </Button>
         ) : null}
@@ -335,7 +335,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             value={type}
             disabled={!editable}
             onChange={(event) => setType(event.target.value as CounterTenderType)}
-            className="h-9 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+            className="h-11 w-full rounded-md border border-input bg-surface-card px-3 text-sm text-text-strong outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
           >
             {TENDER_TYPES.map((entry) => (
               <option key={entry.value} value={entry.value}>
@@ -363,7 +363,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             aria-invalid={state === 'ready' && amount.trim() !== '' && !amountValid}
             aria-describedby="tender-status tender-error tender-amount-error"
             onChange={(event) => setAmount(event.target.value)}
-            className="h-9"
+            className="h-11"
           />
           {state === 'ready' && amount.trim() !== '' && !amountValid ? (
             <p id="tender-amount-error" className="text-sm text-destructive" role="alert">
@@ -428,7 +428,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       value={password}
                       disabled={!editable}
                       onChange={(event) => setPassword(event.target.value)}
-                      className="h-9"
+                      className="h-11"
                     />
                     <Label htmlFor="khata-totp">Authentication or recovery code (if enabled)</Label>
                     <Input
@@ -437,7 +437,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                       value={totp}
                       disabled={!editable}
                       onChange={(event) => setTotp(event.target.value)}
-                      className="h-9"
+                      className="h-11"
                     />
                   </>
                 ) : null}
@@ -481,7 +481,7 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
               aria-invalid={cashShort || cashInvalid || undefined}
               aria-describedby="tender-status tender-error tender-cash-error"
               onChange={(event) => setCashReceived(event.target.value)}
-              className="h-9"
+              className="h-11"
             />
             {cashInvalid ? (
               <p id="tender-cash-error" className="text-sm text-destructive" role="alert">

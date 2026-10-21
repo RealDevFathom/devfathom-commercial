@@ -89,97 +89,38 @@ export function CounterCartPanel({
   }
 
   return (
-    <div className="space-y-2">
+    <div className="space-y-4">
       <ul className="divide-y divide-border-subtle" aria-label="Cart lines">
         {cart.lines.map((line) => (
-          <li key={line.saleLineId} className="py-2">
-            <div className="flex items-baseline justify-between gap-2">
-              <span className="min-w-0 truncate text-sm font-semibold text-text-strong">
+          <li key={line.saleLineId} className="py-3">
+            <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
+              <span className="min-w-0 text-sm font-semibold text-text-strong">
                 {line.quantity} × {line.medicineName}
                 {line.strength ? (
                   <span className="ml-1 font-normal text-text-body">{line.strength}</span>
                 ) : null}
               </span>
-              <span className="w-24 shrink-0 text-right font-mono text-sm tabular-nums text-text-strong">
+              <span className="font-mono text-sm tabular-nums text-text-strong">
                 {formatMinor(line.lineTotalMinor)}
               </span>
             </div>
-            <p className="truncate text-xs text-text-muted">
+            <p className="mt-0.5 text-xs text-text-muted">
               {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits} units @{' '}
               {formatMinor(line.unitPriceMinor)}
               {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
             </p>
-            {line.controlled ||
-            line.rx ||
-            line.restricted ||
-            line.highAlert ||
-            line.lasa ||
-            line.coldChain ? (
-              <div className="mt-1 flex flex-wrap gap-1">
-                {line.controlled ? (
-                  <StatusPill
-                    status="controlled"
-                    tone="danger"
-                    label="Controlled"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.rx ? (
-                  <StatusPill
-                    status="prescription"
-                    tone="warning"
-                    label="Prescription only"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.restricted ? (
-                  <StatusPill
-                    status="restricted"
-                    tone="warning"
-                    label="Restricted"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.highAlert ? (
-                  <StatusPill
-                    status="high-alert"
-                    tone="danger"
-                    label="High alert"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.lasa ? (
-                  <StatusPill
-                    status="look-alike"
-                    tone="warning"
-                    label="Look-alike"
-                    className="shrink-0"
-                  />
-                ) : null}
-                {line.coldChain ? (
-                  <StatusPill
-                    status="cold-chain"
-                    tone="info"
-                    label="Cold chain"
-                    className="shrink-0"
-                  />
-                ) : null}
-              </div>
-            ) : null}
 
-            <ul className="mt-1" aria-label={`FEFO allocation for ${line.medicineName}`}>
+            <ul className="mt-2 space-y-1" aria-label={`FEFO allocation for ${line.medicineName}`}>
               {line.allocations.map((allocation) => (
                 <li
                   key={allocation.inventoryLotId}
-                  className="flex flex-wrap items-center gap-x-2 text-xs text-text-muted"
+                  className="flex flex-wrap items-center gap-x-3 gap-y-1 rounded-md bg-surface-sunken px-3 py-1.5 font-mono text-xs tabular-nums text-text-body"
                 >
-                  <span className="font-mono tabular-nums">Batch {allocation.batchNumber}</span>
-                  <span className="font-mono tabular-nums">
-                    Exp {formatReceiptDate(allocation.expiresAt)}
-                  </span>
-                  <span className="font-mono tabular-nums">{allocation.canonicalUnits} units</span>
+                  <span>Batch {allocation.batchNumber}</span>
+                  <span>Exp {formatReceiptDate(allocation.expiresAt)}</span>
+                  <span>{allocation.canonicalUnits} units</span>
                   {allocation.stockLocationCode ? (
-                    <span className="font-mono tabular-nums">{allocation.stockLocationCode}</span>
+                    <span>{allocation.stockLocationCode}</span>
                   ) : null}
                   {allocation.overridden ? (
                     <StatusPill status="override" tone="warning" label="Batch override" />
@@ -190,11 +131,27 @@ export function CounterCartPanel({
                 </li>
               ))}
             </ul>
+
+            <div className="mt-2 flex flex-wrap gap-1.5">
+              {line.controlled ? (
+                <StatusPill status="controlled" tone="danger" label="Controlled" />
+              ) : null}
+              {line.rx ? <StatusPill status="rx" tone="warning" label="Prescription only" /> : null}
+              {line.restricted ? (
+                <StatusPill status="restricted" tone="warning" label="Restricted" />
+              ) : null}
+              {line.highAlert ? (
+                <StatusPill status="high-alert" tone="danger" label="High alert" />
+              ) : null}
+              {line.coldChain ? (
+                <StatusPill status="cold-chain" tone="info" label="Cold chain" />
+              ) : null}
+            </div>
           </li>
         ))}
       </ul>
 
-      <dl className="space-y-1 border-t border-border-subtle pt-2 text-sm">
+      <dl className="space-y-1 border-t border-border-subtle pt-3 text-sm">
         {(
           [
             ['Gross', cart.totals.grossMinor],
@@ -204,11 +161,9 @@ export function CounterCartPanel({
             ['Balance', cart.totals.netMinor - cart.totals.tenderedMinor],
           ] as const
         ).map(([label, value]) => (
-          <div key={label} className="flex justify-between gap-2">
+          <div key={label} className="flex justify-between gap-3">
             <dt className="text-text-muted">{label}</dt>
-            <dd className="w-24 shrink-0 text-right font-mono tabular-nums text-text-strong">
-              {formatMinor(value)}
-            </dd>
+            <dd className="font-mono tabular-nums text-text-strong">{formatMinor(value)}</dd>
           </div>
         ))}
       </dl>

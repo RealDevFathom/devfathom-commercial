@@ -34,8 +34,6 @@ function transport(extra: (path: string, init?: RequestInit) => Promise<Response
     if (path.endsWith('/layout')) return json({ floors: [], sections: [] });
     if (path.endsWith('/open-orders')) return json({ orders: [] });
     if (path.endsWith('/delivery/zones')) return json({ zones: [] });
-    if (path.endsWith('/commercial-terms'))
-      return json({ profiles: [], rules: [], serviceChargeRate: null });
     if (path.includes('/effective-menu'))
       return json({
         version: 'version-1',

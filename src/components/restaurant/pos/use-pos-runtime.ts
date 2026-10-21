@@ -42,11 +42,6 @@ import {
 } from '@/lib/restaurant/pos-client-store';
 import { countQueuedCommands, type PosQueueSnapshot } from '@/lib/restaurant/pos-command-queue';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
-import {
-  type BranchCommercialTerms,
-  type CommercialTermsQuote,
-  reviveCommercialTerms,
-} from '@/lib/restaurant/commercial-terms';
 
 type Channel = OrderChannel;
 type OpenOrder = {
@@ -159,7 +154,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     'idle'
   );
   const [draftMenu, setDraftMenu] = useState<EffectiveMenu | null>(null);
-  const [commercialTerms, setCommercialTerms] = useState<CommercialTermsQuote | null>(null);
   const [orderMenu, setOrderMenu] = useState<EffectiveMenu | null>(null);
   const [openOrders, setOpenOrders] = useState<OpenOrder[]>([]);
   const [order, setOrder] = useState<OrderDetail | null>(null);
@@ -176,20 +170,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     queue?.drafts.filter(
       (draft) => draft.status === 'NEEDS_REVIEW' || draft.status === 'QUARANTINED'
     ) ?? [];
-
-  const loadCommercialTerms = useCallback(async (activeRuntime: Runtime) => {
-    const epoch = stateEpoch.current;
-    try {
-      const data = await request<BranchCommercialTerms>('/api/restaurant/orders/commercial-terms', {
-        headers: authHeaders(activeRuntime),
-      });
-      if (epoch !== stateEpoch.current) return;
-      setCommercialTerms(reviveCommercialTerms(data));
-    } catch {
-      if (epoch !== stateEpoch.current) return;
-      setCommercialTerms(null);
-    }
-  }, []);
 
   const loadLayout = useCallback(async (activeRuntime: Runtime) => {
     setLayoutState('loading');
@@ -228,7 +208,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     setOpenOrders([]);
     setLayout(null);
     setLayoutState('idle');
-    setCommercialTerms(null);
     clearDeliveryState(false);
   }, [clearDeliveryState]);
 
@@ -412,11 +391,10 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         loadMenu(channel, activeRuntime, false),
         loadOpenOrders(activeRuntime, false),
         loadLayout(activeRuntime),
-        loadCommercialTerms(activeRuntime),
       ]);
       await replayQueue(activeRuntime);
     },
-    [channel, loadCommercialTerms, loadLayout, loadMenu, loadOpenOrders, replayQueue]
+    [channel, loadLayout, loadMenu, loadOpenOrders, replayQueue]
   );
 
   function terminalRecovery() {
@@ -434,7 +412,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     setOpenOrders([]);
     setLayout(null);
     setLayoutState('idle');
-    setCommercialTerms(null);
     clearDeliveryState();
   }
 
@@ -779,7 +756,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     layout,
     layoutState,
     draftMenu,
-    commercialTerms,
     openOrders,
     order,
     draftLines,
@@ -965,15 +941,6 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       (() =>
         setDraftLines((current) =>
           current.filter((item) => item.lineId !== line.lineId)
-        )) satisfies MouseEventHandler<HTMLButtonElement>,
-    adjustDraftQuantity: (lineId: string, delta: number) =>
-      (() =>
-        setDraftLines((current) =>
-          current.map((item) =>
-            item.lineId === lineId
-              ? { ...item, quantity: Math.max(1, item.quantity + delta) }
-              : item
-          )
         )) satisfies MouseEventHandler<HTMLButtonElement>,
     discardDraft: (() => setDraftLines([])) satisfies MouseEventHandler<HTMLButtonElement>,
     refreshOrders: (() => void loadOpenOrders()) satisfies MouseEventHandler<HTMLButtonElement>,

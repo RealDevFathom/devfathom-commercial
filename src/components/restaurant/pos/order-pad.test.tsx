@@ -4,35 +4,6 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
-import { reviveCommercialTerms } from '@/lib/restaurant/commercial-terms';
-import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
-
-const commercialTerms = {
-  profiles: [
-    {
-      id: 'profile-1',
-      effectiveFrom: '2020-01-01T00:00:00.000Z',
-      effectiveTo: '2099-01-01T00:00:00.000Z',
-      status: 'PUBLISHED' as const,
-      approvalReference: 'TAX-1',
-      approvedAt: '2019-12-01T00:00:00.000Z',
-    },
-  ],
-  rules: (['CASH', 'CARD', 'OTHER'] as const).map((category) => ({
-    id: `rule-${category}`,
-    profileVersionId: 'profile-1',
-    paymentCategory: category,
-    priceMode: 'EXCLUSIVE' as const,
-    rate: '0.05',
-    effectiveFrom: '2020-01-01T00:00:00.000Z',
-    effectiveTo: '2099-01-01T00:00:00.000Z',
-    status: 'PUBLISHED' as const,
-    approvalReference: 'TAX-1',
-    approvedAt: '2019-12-01T00:00:00.000Z',
-    sourceExpiresAt: '2099-01-01T00:00:00.000Z',
-  })),
-  serviceChargeRate: '0.10',
-};
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -48,18 +19,8 @@ const detail = {
   channel: 'DINE_IN',
   publicationId: 'publication-1',
   coverCount: 2,
+  items: [],
   tables: [{ id: 'link-1', tableId: 'table-1', active: true }],
-  kitchenTickets: [] as Array<{ id: string; ticketNumber: number; stationId: string }>,
-  items: [] as Array<{
-    id: string;
-    course: number;
-    seatNumber: number | null;
-    name: string;
-    unitPrice: string;
-    quantity: number;
-    status: string;
-    modifiers: { id: string; name: string; priceDelta: string }[];
-  }>,
   totals: { subtotal: '0.00', tax: '0.00', serviceCharge: '0.00' },
 };
 
@@ -231,9 +192,6 @@ function transport({
     }
     if (path.endsWith('/orders/delivery/attach')) {
       return json({ fulfillmentId: 'fulfillment-1' }, 201);
-    }
-    if (path.endsWith('/orders/commercial-terms')) {
-      return json(commercialTerms);
     }
     if (path.includes('/orders/effective-menu')) {
       const publicationId = new URL(path, 'http://localhost').searchParams.get('publicationId');
@@ -1161,82 +1119,5 @@ describe('OrderPad transport', () => {
       '00000000-0000-4000-8000-000000000062',
       '00000000-0000-4000-8000-000000000063',
     ]);
-  });
-
-  it('keeps the open-order form uncapped and prices modifiers into the draft total', async () => {
-    await unlock(transport());
-    const card = screen
-      .getByRole('heading', { name: 'Open order' })
-      .closest('[data-slot="section-card"]');
-    expect(card?.className).not.toContain('max-h-40');
-    expect(screen.getByRole('button', { name: 'Open order' })).toBeVisible();
-
-    fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
-    fireEvent.click(screen.getByRole('checkbox', { name: /Oat milk/ }));
-    fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
-    const terms = reviveCommercialTerms(commercialTerms);
-    const priced = quoteDraftCheckTotal({
-      profiles: terms.profiles,
-      rules: terms.rules,
-      serviceChargeRate: terms.serviceChargeRate,
-      lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
-    });
-    expect(priced).toBe('5.18');
-    expect(await screen.findByText(priced)).toBeVisible();
-  });
-
-  it('does not let F9 close the check while a void dialog is open or a field is focused', async () => {
-    const fetch = transport({
-      openOrders: [
-        {
-          id: 'order-1',
-          orderNumber: 42,
-          status: 'OPEN',
-          channel: 'DINE_IN',
-          activeTableIds: ['table-1'],
-          itemCount: 1,
-          subtotal: '24.00',
-        },
-      ],
-      detailResponse: {
-        ...detail,
-        kitchenTickets: [],
-        items: [
-          {
-            id: 'item-1',
-            course: 1,
-            seatNumber: null,
-            name: 'Steak',
-            unitPrice: '24.00',
-            quantity: 1,
-            status: 'QUEUED',
-            modifiers: [],
-          },
-        ],
-      },
-    });
-    await unlock(fetch);
-    fireEvent.click(screen.getByRole('button', { name: /#42/ }));
-    const pay = await screen.findByRole('button', { name: 'Close order' });
-    const click = vi.spyOn(pay, 'click');
-
-    fireEvent.click(screen.getByRole('button', { name: 'Void Steak' }));
-    expect(await screen.findByRole('dialog', { name: 'Void Steak' })).toBeVisible();
-    fireEvent.keyDown(window, { key: 'F9' });
-    expect(click).not.toHaveBeenCalled();
-
-    fireEvent.click(screen.getByRole('button', { name: 'Cancel' }));
-    await waitFor(() =>
-      expect(screen.queryByRole('dialog', { name: 'Void Steak' })).not.toBeInTheDocument()
-    );
-    const covers = screen.getByLabelText('Covers');
-    covers.focus();
-    fireEvent.keyDown(covers, { key: 'F9' });
-    expect(click).not.toHaveBeenCalled();
-
-    covers.blur();
-    screen.getByLabelText('Menu search').blur();
-    fireEvent.keyDown(window, { key: 'F9' });
-    expect(click).toHaveBeenCalledTimes(1);
   });
 });

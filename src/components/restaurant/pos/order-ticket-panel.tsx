@@ -155,7 +155,7 @@ export function OrderTicketPanel({
 
   if (!order) {
     return (
-      <SectionCard compact eyebrow="Order ticket" title="No active order" className="h-full">
+      <SectionCard eyebrow="Order ticket" title="No active order">
         <p className="text-sm text-text-muted">Open or resume an order to build its ticket.</p>
       </SectionCard>
     );
@@ -173,34 +173,21 @@ export function OrderTicketPanel({
   return (
     <>
       <SectionCard
-        compact
         eyebrow="Order ticket"
         title={`Order ${order.orderNumber}`}
         actions={<StatusPill status={order.status} tone={tone(order.status)} />}
-        className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
+        className="min-w-0"
       >
-        <div className="flex min-h-0 flex-1 flex-col">
-        <div className="mb-2 flex shrink-0 flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-2 text-xs text-text-muted">
-          <span>
-            {order.channel === 'DINE_IN'
-              ? 'Dine in'
-              : order.channel === 'TAKEAWAY'
-                ? 'Takeaway'
-                : 'Delivery'}
-          </span>
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-2 border-b border-border-subtle pb-4 text-sm text-text-muted">
+          <span>{order.channel.replaceAll('_', ' ')}</span>
           <span>{activeTables.length ? activeTables.map(tableLabel).join(', ') : 'No table'}</span>
-          <Button
-            type="button"
-            onClick={onSend}
-            disabled={pending}
-            className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-          >
+          <Button type="button" onClick={onSend} disabled={pending} className="h-11">
             Send whole order
           </Button>
         </div>
 
         {(order.kitchenTickets?.length ?? 0) > 0 ? (
-          <div className="mb-2 flex shrink-0 flex-wrap gap-1" aria-label="Kitchen ticket reprints">
+          <div className="mb-4 flex flex-wrap gap-2" aria-label="Kitchen ticket reprints">
             {order.kitchenTickets?.map((ticket) => (
               <Button
                 key={ticket.id}
@@ -208,7 +195,7 @@ export function OrderTicketPanel({
                 variant="outline"
                 onClick={() => onReprint(ticket.id)}
                 disabled={pending}
-                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                className="h-11"
               >
                 Reprint KOT {ticket.ticketNumber}
               </Button>
@@ -216,17 +203,16 @@ export function OrderTicketPanel({
           </div>
         ) : null}
 
-        <div className="min-h-0 flex-1 space-y-2 overflow-y-auto">
         {courses.length === 0 ? (
-          <p className="py-2 text-center text-sm text-text-muted">
+          <p className="py-6 text-center text-sm text-text-muted">
             Ticket empty. Select menu items.
           </p>
         ) : (
-          <div className="space-y-2">
+          <div className="space-y-4">
             {courses.map(([course, items]) => (
               <section
                 key={course}
-                className="rounded-md border border-border-subtle p-2"
+                className="rounded-lg border border-border-subtle bg-surface-sunken p-3"
               >
                 <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
                   <h3 className="font-mono text-xs font-semibold tracking-wide text-text-muted uppercase">
@@ -238,7 +224,7 @@ export function OrderTicketPanel({
                       variant="outline"
                       onClick={() => onHold(course)}
                       disabled={pending}
-                      className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                      className="h-11"
                     >
                       Hold
                     </Button>
@@ -247,7 +233,7 @@ export function OrderTicketPanel({
                       variant="outline"
                       onClick={() => onFire(course)}
                       disabled={pending}
-                      className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                      className="h-11"
                     >
                       Fire
                     </Button>
@@ -257,7 +243,7 @@ export function OrderTicketPanel({
                   {items.map((item) => {
                     const canRemake = ['PREPARED', 'SERVED'].includes(item.status);
                     return (
-                      <li key={item.id} className="space-y-1 py-2 first:pt-0 last:pb-0">
+                      <li key={item.id} className="space-y-2 py-3 first:pt-0 last:pb-0">
                         <div className="flex min-w-0 items-start justify-between gap-3">
                           <div className="min-w-0">
                             <p className="font-medium text-text-strong">
@@ -279,7 +265,7 @@ export function OrderTicketPanel({
                               variant="outline"
                               onClick={() => onServed(item.id)}
                               disabled={pending}
-                              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                              className="h-11"
                             >
                               Mark served
                             </Button>
@@ -289,7 +275,7 @@ export function OrderTicketPanel({
                             variant="destructive"
                             onClick={() => openVoid(item)}
                             disabled={pending || item.status === 'VOIDED'}
-                            className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                            className="h-11"
                           >
                             Void {item.name}
                           </Button>
@@ -310,7 +296,7 @@ export function OrderTicketPanel({
                                   }))
                                 }
                                 placeholder="Remake reason"
-                                className="h-8"
+                                className="h-11"
                               />
                             </div>
                             <Button
@@ -318,7 +304,7 @@ export function OrderTicketPanel({
                               variant="outline"
                               disabled={pending || !remakeReasons[item.id]?.trim()}
                               onClick={() => onRemake(item.id, remakeReasons[item.id].trim())}
-                              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                              className="h-11"
                             >
                               Request remake
                             </Button>
@@ -422,23 +408,17 @@ export function OrderTicketPanel({
             </div>
           </div>
         ) : null}
-        </div>
 
-        <div className="mt-2 flex shrink-0 items-center justify-between gap-2 border-t border-border-subtle bg-card pt-2">
-          <div className="min-w-0 text-xs text-text-muted">
-            <span className="inline-block min-w-16 text-right font-mono text-sm tabular-nums text-text-strong">
-              {order.totals.subtotal}
-            </span>
-            <span className="ml-2 font-mono tabular-nums">
-              Tax {order.totals.tax} · Service {order.totals.serviceCharge}
-              {order.channel === 'DELIVERY'
-                ? ` · Delivery fee ${order.totals.deliveryFee ?? '0'}`
-                : ''}
-            </span>
+        <div className="mt-4 flex flex-wrap items-center justify-between gap-3 border-t border-border-subtle pt-4">
+          <div className="font-mono text-sm tabular-nums text-text-muted">
+            Subtotal {order.totals.subtotal} · Tax {order.totals.tax} · Service{' '}
+            {order.totals.serviceCharge}
+            {order.channel === 'DELIVERY'
+              ? ` · Delivery fee ${order.totals.deliveryFee ?? '0'}`
+              : ''}
           </div>
           <Button
             type="button"
-            data-pos-pay
             variant={
               order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
                 ? 'default'
@@ -450,13 +430,12 @@ export function OrderTicketPanel({
                 : onClose
             }
             disabled={pending}
-            className="h-11 shrink-0 shadow-none hover:translate-y-0 active:translate-y-0"
+            className="h-11"
           >
             {order.status === 'PAYMENT_PENDING' || order.channel === 'DELIVERY'
               ? 'Collect payment'
               : 'Close order'}
           </Button>
-        </div>
         </div>
       </SectionCard>
 

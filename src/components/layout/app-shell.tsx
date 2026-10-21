@@ -167,9 +167,7 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
   const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled =
     !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
-  const counterPos = pathname === '/pharmacy/counter';
-  const immersive =
-    counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
+  const immersive = pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
   const brandStyle = tenantBrandTokens(brand) as CSSProperties;
 
   useEffect(() => {
@@ -234,13 +232,9 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
         <TopNavigation />
         <main
           data-slot="app-canvas"
-          className={cn(
-            'studio-canvas relative min-h-0 flex-1 scroll-pt-24',
-            counterPos ? 'overflow-hidden' : 'overflow-y-auto'
-          )}
+          className="studio-canvas relative min-h-0 flex-1 overflow-y-auto scroll-pt-24"
         >
           <PageTransition
-            travel={!counterPos}
             className={cn(
               'studio-stage mx-auto w-full',
               immersive

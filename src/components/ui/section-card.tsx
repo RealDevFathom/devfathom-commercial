@@ -13,8 +13,6 @@ interface SectionCardProps extends Omit<React.ComponentProps<'div'>, 'title'> {
   titleLevel?: 2 | 3;
   /** Optional right-aligned actions slot in the header row. */
   actions?: React.ReactNode;
-  /** Tighter padding and a quieter title for dense operational surfaces. */
-  compact?: boolean;
 }
 
 /**
@@ -27,7 +25,6 @@ function SectionCard({
   title,
   titleLevel = 3,
   actions,
-  compact = false,
   className,
   children,
   ...props
@@ -38,23 +35,17 @@ function SectionCard({
     <div
       data-slot="section-card"
       className={cn(
-        'min-w-0 border border-border-subtle bg-card text-card-foreground shadow-none',
-        compact ? 'rounded-md p-2' : 'rounded-lg p-5',
+        'min-w-0 rounded-lg border border-border-subtle bg-card p-5 text-card-foreground shadow-none',
         className
       )}
       {...props}
     >
       {hasHeader ? (
-        <div className={cn('flex items-start justify-between', compact ? 'mb-2 gap-2' : 'mb-4 gap-4')}>
+        <div className="mb-4 flex items-start justify-between gap-4">
           <div className="min-w-0 space-y-1">
             {eyebrow != null ? <Eyebrow accent={eyebrowAccent}>{eyebrow}</Eyebrow> : null}
             {title != null ? (
-              <Title
-                className={cn(
-                  'font-display font-semibold tracking-tight text-text-strong',
-                  compact ? 'text-sm leading-5' : 'text-lg leading-snug'
-                )}
-              >
+              <Title className="font-display text-lg leading-snug font-semibold tracking-tight text-text-strong">
                 {title}
               </Title>
             ) : null}
