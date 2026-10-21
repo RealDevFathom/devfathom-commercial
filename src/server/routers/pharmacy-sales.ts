@@ -1452,10 +1452,25 @@ export const pharmacySalesRouter = router({
   /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
+    const user = ctx.session.user;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    if (!user.organizationId || user.organizationId !== organizationId) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    }
+    const orgAdmin = user.role === 'ADMIN';
     const [branches, organization] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
-        where: { organizationId, active: true },
+        where: {
+          organizationId,
+          active: true,
+          ...(orgAdmin
+            ? {}
+            : {
+                branchAssignments: {
+                  some: { organizationId, userId: user.id, active: true },
+                },
+              }),
+        },
         select: { id: true, code: true, name: true, city: true },
         orderBy: [{ name: 'asc' }, { id: 'asc' }],
       }),
@@ -1467,7 +1482,7 @@ export const pharmacySalesRouter = router({
     return {
       branches,
       currency: organization?.currency ?? 'PKR',
-      paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
+      paymentSandboxAvailable: orgAdmin && paymentSandboxAdmitted(),
     };
   }),
 

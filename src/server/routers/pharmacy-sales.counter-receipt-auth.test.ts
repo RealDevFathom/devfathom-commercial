@@ -92,12 +92,13 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
     },
     pharmacyBranch: {
       findMany: vi.fn(
-        async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
-          args.where.organizationId && args.where.organizationId !== 'org-a'
-            ? []
-            : args.where.id.in
-                .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
-                .map((id) => ({ id }))
+        async (args: { where: { id?: { in: string[] }; organizationId?: string } }) => {
+          if (args.where.organizationId && args.where.organizationId !== 'org-a') return [];
+          if (!args.where.id) return [];
+          return args.where.id.in
+            .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
+            .map((id) => ({ id }));
+        }
       ),
       findFirst: vi.fn(async (args?: { where?: { id?: string; organizationId?: string } }) => {
         const id = args?.where?.id;
@@ -212,6 +213,44 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('lists only branches assigned to a non-admin counter user', async () => {
+    const f = fixture(dispense);
+    f.db.pharmacyBranch.findMany.mockResolvedValue([{ id: 'branch-a' }]);
+
+    await expect(f.caller().counterBranches()).resolves.toMatchObject({
+      branches: [{ id: 'branch-a' }],
+      currency: 'PKR',
+    });
+    expect(f.db.pharmacyBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: {
+          organizationId: 'org-a',
+          active: true,
+          branchAssignments: {
+            some: { organizationId: 'org-a', userId: 'user-a', active: true },
+          },
+        },
+      })
+    );
+  });
+
+  it('lets an organization admin list all active tenant branches', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    await f.caller().counterBranches();
+
+    expect(f.db.pharmacyBranch.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { organizationId: 'org-a', active: true } })
+    );
+  });
+
+  it('rejects branch discovery when the session organization differs from entitlements', async () => {
+    const f = fixture(dispense);
+    f.user.organizationId = 'org-b';
+
+    await expect(f.caller().counterBranches()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyBranch.findMany).not.toHaveBeenCalled();
+  });
+
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
