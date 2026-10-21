@@ -329,5 +329,6 @@ describe('organization member creation', () => {
     expect(mocks.invitationUpdateMany.mock.invocationCallOrder[0]).toBeLessThan(
       mocks.userUpdate.mock.invocationCallOrder[0]!
     );
+    expect(mocks.userCount).not.toHaveBeenCalled();
   });
 });
