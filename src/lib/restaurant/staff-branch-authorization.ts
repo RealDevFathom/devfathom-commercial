@@ -6,7 +6,23 @@ import { can, subjectFromSession } from '@/lib/abac';
 import { resolveStaffCapabilities } from '@/lib/restaurant/job-roles';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-type SessionUser = Parameters<typeof subjectFromSession>[0];
+type SessionUser = Parameters<typeof subjectFromSession>[0] & {
+  organizationId?: string | null;
+};
+
+async function activeBranchIds(db: ScopedDb, organizationId: string, ids?: string[]) {
+  const rows = await db.restaurantBranch.findMany({
+    where: {
+      organizationId,
+      active: true,
+      ...(ids ? { id: { in: ids } } : {}),
+    },
+    select: { id: true },
+  });
+  if (!ids) return rows.map((row) => row.id);
+  const present = new Set(rows.map((row) => row.id));
+  return ids.filter((id) => present.has(id));
+}
 
 const DENIED = new TRPCError({
   code: 'FORBIDDEN',
@@ -54,18 +70,20 @@ export async function resolveCapabilityBranchAuthorization(
       ]
     : [];
 
+  const organizationId = user.organizationId;
+  if (!organizationId) denyStaffBranchAccess();
+
   if (
     await can(subjectFromSession(user), 'restaurant:configure', undefined, {
       db,
       source: 'TRPC',
     })
   ) {
-    const branches = await db.restaurantBranch.findMany({ select: { id: true } });
     return {
       actorStaffProfileId: actor?.id ?? null,
       actorBranchIds,
       organizationWide: true,
-      branchIds: branches.map((branch) => branch.id),
+      branchIds: await activeBranchIds(db, organizationId),
     };
   }
 
@@ -82,8 +100,14 @@ export async function resolveCapabilityBranchAuthorization(
     }))
   );
   const branchIds = decisions.filter((row) => row.allowed).map((row) => row.branchId);
-  if (branchIds.length === 0) denyStaffBranchAccess();
-  return { actorStaffProfileId: actor.id, actorBranchIds, organizationWide: false, branchIds };
+  const activeIds = await activeBranchIds(db, organizationId, branchIds);
+  if (activeIds.length === 0) denyStaffBranchAccess();
+  return {
+    actorStaffProfileId: actor.id,
+    actorBranchIds,
+    organizationWide: false,
+    branchIds: activeIds,
+  };
 }
 
 /** Resolve the authenticated actor's staff-administration scope, failing closed. */
@@ -158,7 +182,6 @@ export async function assertAuthorizedStaffProfile(
     denyStaffBranchAccess();
   }
 }
-
 
 export type DemoDirectoryPolicy = {
   seatFromOrganizationId: (organizationId: string) => number | null;

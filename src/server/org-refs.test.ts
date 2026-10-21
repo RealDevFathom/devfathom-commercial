@@ -30,6 +30,23 @@ describe('assertInOrganization', () => {
     });
   });
 
+  it('requires the row to be active when the caller asks for an active record', async () => {
+    const branches = delegate(['branch_a']);
+    await assertInOrganization(branches, 'org_1', ['branch_a'], { active: true });
+    expect(branches.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['branch_a'] }, organizationId: 'org_1', active: true },
+      select: { id: true },
+    });
+
+    const missing = delegate([]);
+    await expect(
+      assertInOrganization(missing, 'org_1', ['branch_inactive'], { active: true })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+  });
+
   it('does nothing when the caller supplied no ids', async () => {
     const users = delegate([]);
     await assertInOrganization(users, 'org_1', [undefined, null, '']);

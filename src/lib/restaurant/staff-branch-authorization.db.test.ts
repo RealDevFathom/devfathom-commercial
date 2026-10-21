@@ -32,7 +32,12 @@ const ids = {
   role: `role_wha856_manager_${suffix}`,
 };
 
-const sessionUser = (id: string) => ({ id, role: 'EMPLOYEE' as const, status: 'ACTIVE' as const });
+const sessionUser = (id: string) => ({
+  id,
+  role: 'EMPLOYEE' as const,
+  status: 'ACTIVE' as const,
+  organizationId: ids.orgA,
+});
 let client: pg.Client;
 let deps: {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];

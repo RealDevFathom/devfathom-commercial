@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { publicProcedure, protectedProcedure, router } from '../trpc';
+import { assertInOrganization } from '../org-refs';
+import { publicProcedure, protectedProcedure, router, type TRPCContext } from '../trpc';
 import {
   SupplierLinkError,
   getSupplierActionPage,
@@ -23,6 +24,12 @@ const genericLinkError = () =>
     code: 'NOT_FOUND',
     message: 'This supplier link is invalid, expired, or revoked.',
   });
+async function assertBranch(ctx: TRPCContext, branchId: string) {
+  const organizationId = ctx.entitlements.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branchId], { active: true });
+}
+
 function mapError(error: unknown): never {
   if (!(error instanceof SupplierLinkError)) throw error;
   if (error.reason === 'INVALID_LINK') throw genericLinkError();
@@ -83,11 +90,12 @@ export const pharmacySupplierLinksRouter = router({
     }),
   createRelationship: protectedProcedure
     .input(z.object({ branchId: id, supplierId: id }).strict())
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacySupplierRelationship.create({
+    .mutation(async ({ ctx, input }) => {
+      await assertBranch(ctx, input.branchId);
+      return ctx.db.pharmacySupplierRelationship.create({
         data: { ...input, organizationId: ctx.entitlements.organizationId },
-      })
-    ),
+      });
+    }),
   issue: protectedProcedure
     .input(
       z
@@ -97,6 +105,7 @@ export const pharmacySupplierLinksRouter = router({
     .mutation(async ({ ctx, input }) => {
       if (input.expiresAt <= new Date())
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'Expiry must be in the future.' });
+      await assertBranch(ctx, input.branchId);
       try {
         return await issueSupplierActionLink(ctx.db, {
           ...input,
@@ -128,6 +137,7 @@ export const pharmacySupplierLinksRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertBranch(ctx, input.branchId);
       try {
         return await recordManualSupplierEvidence(ctx.db, input);
       } catch (error) {
@@ -146,6 +156,7 @@ export const pharmacySupplierLinksRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertBranch(ctx, input.branchId);
       const submission = await ctx.db.pharmacySupplierSubmission.findFirst({
         where: { id: input.submissionId, branchId: input.branchId },
       });

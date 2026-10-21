@@ -17,7 +17,12 @@ import {
   resolveStaffBranchAuthorization,
 } from './staff-branch-authorization';
 
-const user = { id: 'user_actor', role: 'EMPLOYEE', status: 'ACTIVE' };
+const user = {
+  id: 'user_actor',
+  role: 'EMPLOYEE',
+  status: 'ACTIVE',
+  organizationId: 'org_1',
+};
 const database = () => ({
   restaurantBranch: { findMany: vi.fn(async () => [{ id: 'a' }, { id: 'b' }]) },
   restaurantStaffProfile: {
@@ -46,14 +51,17 @@ beforeEach(() => {
 });
 
 describe('staff branch authorization', () => {
-  it('gives restaurant:configure administrators every in-tenant branch', async () => {
+  it('gives restaurant:configure administrators every active in-tenant branch', async () => {
     mocks.can.mockResolvedValue(true);
-    await expect(resolveStaffBranchAuthorization(database() as never, user)).resolves.toMatchObject(
-      {
-        organizationWide: true,
-        branchIds: ['a', 'b'],
-      }
-    );
+    const db = database();
+    await expect(resolveStaffBranchAuthorization(db as never, user)).resolves.toMatchObject({
+      organizationWide: true,
+      branchIds: ['a', 'b'],
+    });
+    expect(db.restaurantBranch.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', active: true },
+      select: { id: true },
+    });
   });
 
   it('keeps only effective staff:manage branches, including DENY subtraction', async () => {

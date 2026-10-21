@@ -338,8 +338,10 @@ export const restaurantDevicesRouter = router({
         'devices:manage'
       );
       assertAuthorizedBranch(authorization, input.branchId);
-      const branch = await ctx.db.restaurantBranch.findUnique({
-        where: { id: input.branchId },
+      const organizationId = ctx.session!.user.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const branch = await ctx.db.restaurantBranch.findFirst({
+        where: { id: input.branchId, organizationId, active: true },
         select: { id: true },
       });
       if (!branch) {

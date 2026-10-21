@@ -4,6 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { router, capabilityProcedure } from '../trpc';
+import { assertInOrganization } from '../org-refs';
 import { annotateAudit } from '../audit';
 import { businessDateToUtcDate } from '@/lib/restaurant/business-date';
 import { CoAuthorizationError } from '@/lib/restaurant/co-authorization';
@@ -200,6 +201,11 @@ export const restaurantOrdersRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      await assertInOrganization(ctx.db.restaurantBranch, organizationId, [input.branchId], {
+        active: true,
+      });
       const result = await run(() =>
         openOrder(ctx.db, {
           organizationId: ctx.entitlements.organizationId,
