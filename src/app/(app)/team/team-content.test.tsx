@@ -2,6 +2,7 @@ import { act, cleanup, fireEvent, render, screen } from '@testing-library/react'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const state = vi.hoisted(() => ({
+  vertical: 'AGENCY',
   departments: {
     data: [] as Array<{ key: string; name: string; active: boolean }>,
     isFetching: false,
@@ -9,6 +10,9 @@ const state = vi.hoisted(() => ({
     refetch: vi.fn(),
   },
   invite: { mutate: vi.fn(), isPending: false },
+}));
+vi.mock('@/components/entitlements-provider', () => ({
+  useEntitlements: () => ({ vertical: state.vertical }),
 }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -21,6 +25,7 @@ import { AddMemberModal } from './team-content';
 
 beforeEach(() => {
   vi.clearAllMocks();
+  state.vertical = 'AGENCY';
   state.departments.data = [
     { key: 'COUNTER', name: 'Counter', active: true },
     { key: 'OLD', name: 'Old department', active: false },
@@ -94,4 +99,18 @@ describe('tenant department invitation', () => {
     expect(screen.getByLabelText('Department')).toHaveValue('COUNTER');
     expect(screen.getByPlaceholderText('John Doe')).toHaveValue('Second operator');
   });
+});
+
+it.each(['Cashier', 'Kitchen', 'Server'])('offers and submits the restaurant %s role', (label) => {
+  state.vertical = 'RESTAURANT';
+  state.departments.data = [{ key: 'FRONT_OF_HOUSE', name: 'Front of house', active: true }];
+  render(<AddMemberModal onClose={vi.fn()} />);
+  fill();
+  fireEvent.change(screen.getByLabelText('Department'), { target: { value: 'FRONT_OF_HOUSE' } });
+  fireEvent.click(screen.getByRole('button', { name: label }));
+  fireEvent.click(screen.getByRole('button', { name: 'Send Invite' }));
+  expect(state.invite.mutate).toHaveBeenCalledWith(
+    expect.objectContaining({ role: label.toLowerCase() }),
+    expect.any(Object)
+  );
 });

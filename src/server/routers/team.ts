@@ -19,6 +19,8 @@ import type { NotificationPrefs } from '@/lib/notifications';
 import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
+import { tenantInviteUrl } from '@/lib/tenancy/invite-url';
+import { enumLabel } from '@/lib/enum-label';
 import { generateInviteToken } from '@/lib/invite-token';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
@@ -114,7 +116,9 @@ export const teamRouter = router({
         // case-sensitive, so ALEX@COMPANY.COM could be created alongside
         // alex@company.com without the guard ever firing.
         email: emailSchema,
-        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']).default('EMPLOYEE'),
+        role: z
+          .enum(['ADMIN', 'HR', 'EMPLOYEE', 'cashier', 'kitchen', 'server'])
+          .default('EMPLOYEE'),
         department: z
           .string()
           .trim()
@@ -128,6 +132,19 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      const restaurantRole = ['cashier', 'kitchen', 'server'].includes(input.role);
+      const organizationId = ctx.session.user.organizationId;
+      if (!organizationId)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+      const assignedRole = restaurantRole
+        ? await ctx.db.organizationRole.findFirst({
+            where: { organizationId, key: input.role, organization: { vertical: 'RESTAURANT' } },
+            select: { id: true },
+          })
+        : null;
+      if (restaurantRole && (!organizationId || !assignedRole)) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid restaurant role.' });
+      }
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { key: input.department, active: true },
@@ -153,13 +170,16 @@ export const teamRouter = router({
       const expiresAt = new Date(Date.now() + INVITE_TTL_MS);
       const profile = {
         name: input.name,
-        role: input.role,
+        role: restaurantRole ? ('EMPLOYEE' as const) : (input.role as 'ADMIN' | 'HR' | 'EMPLOYEE'),
+        organizationRoleId: assignedRole?.id ?? null,
         department: input.department,
         title: input.title,
         phone: input.phone ?? null,
         bio: input.bio ?? null,
         skills: input.skills,
       };
+
+      const inviteUrl = await tenantInviteUrl(ctx.db, organizationId, token);
 
       const user = await ctx.db.$transaction(async (tx) => {
         // Upsert the user (re-invite refreshes the seeded details), then replace
@@ -188,14 +208,12 @@ export const teamRouter = router({
         return u;
       });
 
-      const inviteUrl = `${appUrl()}/invite/${token}`;
-
       // Best-effort send — never fail the mutation on an email hiccup; the admin
       // still gets the inviteUrl back to share manually if delivery is unverified.
       const mail = templates.inviteMember({
         name: user.name,
         inviterName: ctx.session.user.name ?? undefined,
-        role: `${titleCase(input.role)} · ${titleCase(input.department)}`,
+        role: `${enumLabel(input.role)} · ${enumLabel(input.department)}`,
         workspace: 'DevFathom',
         acceptUrl: inviteUrl,
         expiresLabel: 'in 7 days',
