@@ -18,12 +18,10 @@ const app = router({ safety: pharmacySafetyRouter, purchasing: pharmacyPurchasin
 function fixture(capability: string) {
   const db = {
     user: {
-      findUnique: vi
-        .fn()
-        .mockResolvedValue({
-          organizationRole: { permissions: [{ capability, effect: 'ALLOW' }] },
-          permissionOverrides: [],
-        }),
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: { permissions: [{ capability, effect: 'ALLOW' }] },
+        permissionOverrides: [],
+      }),
     },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
   };
@@ -50,6 +48,14 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
   it.each(['pharmacy:safety', 'pharmacy:dispense'])('allows %s', async (capability) => {
     const f = fixture(capability);
     await expect(query(f)).resolves.toEqual([]);
-    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledOnce();
+    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          organizationId: 'org',
+          user: { organizationId: 'org', status: 'ACTIVE' },
+          userId: { not: 'actor' },
+        }),
+      })
+    );
   });
 });

@@ -60,7 +60,9 @@ export const pharmacySafetyRouter = router({
     ) {
       throw new TRPCError({ code: 'FORBIDDEN' });
     }
-    return listControlledPinWitnesses(ctx.db, actor.id);
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    return listControlledPinWitnesses(ctx.db, organizationId, actor.id);
   }),
   branches: safety.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;

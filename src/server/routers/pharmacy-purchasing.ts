@@ -1008,7 +1008,9 @@ const purchasingRouter = router({
     ) {
       throw new TRPCError({ code: 'FORBIDDEN' });
     }
-    return listControlledPinWitnesses(ctx.db, actorId);
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
   }),
 
   /**

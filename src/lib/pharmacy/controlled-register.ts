@@ -479,9 +479,15 @@ export async function assignedRegisterBranchIds(
 }
 
 /** Pharmacists who can witness a controlled purchase or correction with a PIN. */
-export async function listControlledPinWitnesses(db: ScopedDb, actorId: string) {
+export async function listControlledPinWitnesses(
+  db: ScopedDb,
+  organizationId: string,
+  actorId: string
+) {
   const staff = await db.restaurantStaffProfile.findMany({
     where: {
+      organizationId,
+      user: { organizationId, status: 'ACTIVE' },
       status: 'ACTIVE',
       userId: { not: actorId },
       credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
@@ -498,7 +504,8 @@ export async function listControlledPinWitnesses(db: ScopedDb, actorId: string) 
   const eligible: Array<{ id: string; name: string }> = [];
   for (const profile of staff) {
     if (
-      profile.user?.status === 'ACTIVE' &&
+      profile.user?.organizationId === organizationId &&
+      profile.user.status === 'ACTIVE' &&
       (await can(profile.user, 'pharmacy:dispense', undefined, { db }))
     ) {
       eligible.push({ id: profile.id, name: profile.displayName });
