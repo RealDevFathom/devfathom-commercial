@@ -1,9 +1,7 @@
-// =====================================}
-
+// ============================================
 // DevFathom — Complete Database Schema
 // All models for all modules
-// =====================================}
-
+// ============================================
 
 generator client {
   provider = "prisma-client"
@@ -763,11 +761,9 @@ model PharmacyReferenceConnectorProposal {
   @@map("pharmacy_reference_connector_proposals")
 }
 
-// =====================================}
-
+// ============================================
 // PH-INV — batch/lot stock ledger (INV-01..04)
-// =====================================}
-
+// ============================================
 
 enum PharmacyStockLocationKind {
   STORE
@@ -2273,11 +2269,9 @@ model PharmacyStockDiscrepancy {
   @@map("pharmacy_stock_discrepancies")
 }
 
-// =====================================}
-
+// ============================================
 // ENUMS
-// =====================================}
-
+// ============================================
 
 enum Role {
   ADMIN
@@ -2511,11 +2505,9 @@ enum NotePermission {
   EDIT
 }
 
-// =====================================}
-
+// ============================================
 // AUDIT LOG (admin-only, append-only)
-// =====================================}
-
+// ============================================
 
 enum AuditActorType {
   USER // a logged-in session user
@@ -2549,11 +2541,9 @@ enum AuditOutcome {
   FAILURE
 }
 
-// =====================================}
-
+// ============================================
 // PLATFORM CONTROL PLANE
-// =====================================}
-
+// ============================================
 
 enum PlatformRole {
   SUPER_ADMIN
@@ -2775,11 +2765,9 @@ enum MeetingSessionSource {
   MANUAL
 }
 
-// =====================================}
-
+// ============================================
 // AUTH & USERS
-// =====================================}
-
+// ============================================
 
 model User {
   id                 String     @id @default(cuid())
@@ -3007,11 +2995,9 @@ model Review {
   @@map("reviews")
 }
 
-// =====================================}
-
+// ============================================
 // CLIENTS
-// =====================================}
-
+// ============================================
 
 model Client {
   id             String       @id @default(cuid())
@@ -3088,11 +3074,9 @@ model Contract {
   @@map("contracts")
 }
 
-// =====================================}
-
+// ============================================
 // PROJECTS
-// =====================================}
-
+// ============================================
 
 model Project {
   id             String        @id @default(cuid())
@@ -3142,11 +3126,9 @@ model ProjectMember {
   @@map("project_members")
 }
 
-// =====================================}
-
+// ============================================
 // KANBAN BOARDS
-// =====================================}
-
+// ============================================
 
 model Board {
   id             String   @id @default(cuid())
@@ -3369,11 +3351,9 @@ model TaskAttachment {
   @@map("task_attachments")
 }
 
-// =====================================}
-
+// ============================================
 // TIME TRACKING
-// =====================================}
-
+// ============================================
 
 model TimeEntry {
   id             String   @id @default(cuid())
@@ -3395,11 +3375,9 @@ model TimeEntry {
   @@map("time_entries")
 }
 
-// =====================================}
-
+// ============================================
 // FINANCE
-// =====================================}
-
+// ============================================
 
 model Invoice {
   id             String        @id @default(cuid())
@@ -3777,11 +3755,9 @@ model PharmacyTaxRuleVersion {
   @@map("pharmacy_tax_rule_versions")
 }
 
-// =====================================}
-
+// ============================================
 // CHAT & MESSAGING
-// =====================================}
-
+// ============================================
 
 model Channel {
   id             String      @id @default(cuid())
@@ -3957,11 +3933,9 @@ model SavedMessage {
   @@map("saved_messages")
 }
 
-// =====================================}
-
+// ============================================
 // HR & LEAVE MANAGEMENT
-// =====================================}
-
+// ============================================
 
 model LeaveRequest {
   id             String      @id @default(cuid())
@@ -4001,11 +3975,9 @@ model PerformanceNote {
   @@map("performance_notes")
 }
 
-// =====================================}
-
+// ============================================
 // DOCUMENTS & FILES
-// =====================================}
-
+// ============================================
 
 model Document {
   id             String   @id @default(cuid())
@@ -4043,11 +4015,9 @@ model ProjectFile {
   @@map("project_files")
 }
 
-// =====================================}
-
+// ============================================
 // MILESTONES
-// =====================================}
-
+// ============================================
 
 model Milestone {
   id             String    @id @default(cuid())
@@ -4067,11 +4037,9 @@ model Milestone {
   @@map("milestones")
 }
 
-// =====================================}
-
+// ============================================
 // ACTIVITY LOG & NOTIFICATIONS
-// =====================================}
-
+// ============================================
 
 model Activity {
   id             String   @id @default(cuid())
@@ -4112,11 +4080,9 @@ model Notification {
   @@map("notifications")
 }
 
-// =====================================}
-
+// ============================================
 // AUDIT LOG
-// =====================================}
-
+// ============================================
 
 /// Extreme-granular, admin-only audit trail. Every mutation (tRPC + REST),
 /// every authentication event, and every sensitive read appends one immutable
@@ -4189,11 +4155,9 @@ model AuditLog {
   @@map("audit_logs")
 }
 
-// =====================================}
-
+// ============================================
 // MEETINGS
-// =====================================}
-
+// ============================================
 
 /// A meeting SERIES. `startTime`/`endTime` describe the first instance and the
 /// duration; every joinable instance is a MeetingOccurrence. A Meeting has no
@@ -4586,11 +4550,9 @@ model MeetingEntityLink {
   @@map("meeting_entity_links")
 }
 
-// =====================================}
-
+// ============================================
 // API TOKENS
-// =====================================}
-
+// ============================================
 
 model ApiToken {
   id             String    @id @default(cuid())
@@ -4612,11 +4574,9 @@ model ApiToken {
   @@map("api_tokens")
 }
 
-// =====================================}
-
+// ============================================
 // NOTES (Obsidian-style with backlinks)
-// =====================================}
-
+// ============================================
 
 model Note {
   id             String         @id @default(cuid())
@@ -4793,13 +4753,11 @@ model NoteLink {
   @@map("note_links")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // EMAIL INTEGRATION — unified inbox over a Mailbox abstraction with per-provider
 // adapters. GMAIL/OUTLOOK are implemented now; HOSTED (@domain) is reserved for
 // a future self-hosted mailbox and must plug in WITHOUT touching the router/UI.
-// ====================================================================}
-
+// ===========================================================================
 
 enum MailboxType {
   GMAIL
@@ -4859,11 +4817,9 @@ model EmailMessage {
   @@map("email_messages")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // PLATFORM CONTROL PLANE — commercial, tenant configuration, identity and ops
-// ====================================================================}
-
+// ===========================================================================
 
 /// §2: the operating model an organization runs under. Deliberately a two-value
 /// enum, not a generic vertical builder — a new vertical still needs purpose-built
@@ -5381,15 +5337,13 @@ model RestaurantBranchAssignment {
   @@map("restaurant_branch_assignments")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // M2 — Restaurant staff, operator credentials, devices, terminal sessions and
 // co-authorization. Every model below is org-scoped under forced RLS (C1); the
 // credential/token/secret material is stored hashed-at-rest only (C2/C4/C5);
 // the co-authorization record is the C7 evidence primitive shared by the L2
 // back-office and L3 terminal paths.
-// ====================================================================}
-
+// ===========================================================================
 
 /// M2/C4/§9: lifecycle of a staff operator profile. A profile is never a User —
 /// suspension and archival gate operator sign-in without touching any web login.
@@ -5672,8 +5626,7 @@ model RestaurantCoAuthorization {
   @@map("restaurant_co_authorizations")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // M3-L1 — Brands, canonical catalog, recipes/BOM, effective-dated pricing,
 // brand-owned menus and branch-menu publications for the Restaurant vertical.
 //
@@ -5699,8 +5652,7 @@ model RestaurantCoAuthorization {
 //   C6  Exactly one default RestaurantBrand per organization (partial unique
 //       index in the migration); the default brand is ensured lazily by the
 //       catalog server (no onboarding edit, no SQL backfill).
-// ====================================================================}
-
+// ===========================================================================
 
 /// M3/C6: brand lifecycle. Archived brands are retained (history), not deleted.
 enum RestaurantBrandStatus {
@@ -6454,8 +6406,7 @@ model RestaurantBranchMenuItemOverride {
   @@map("restaurant_branch_menu_item_overrides")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // M4-L1 — Orders, kitchen (KOT/KDS), floor & service sections/stations, the
 // append-only order event ledger + transactional outbox, device idempotency,
 // and per-branch business-day order numbering for the Restaurant vertical
@@ -6497,8 +6448,7 @@ model RestaurantBranchMenuItemOverride {
 //   C7  Every terminal-submitted mutating command carries a device-scoped
 //       idempotency key (unique (deviceId, key)); replays return the original
 //       result and create nothing.
-// ====================================================================}
-
+// ===========================================================================
 
 /// M4/C3/§11.1: the EXACT order status domain (no additions, renames, or
 /// omissions). The four kitchen-facing states (SENT/IN_PREPARATION/READY/SERVED)
@@ -7101,8 +7051,7 @@ model RestaurantOrderNumberSequence {
   @@map("restaurant_order_number_sequences")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // M5-L1 — Money: bills & splits, tenders & tips, a capability-shaped MOCK
 // payment adapter, refunds, register drawer sessions, the immutable daily
 // close, and the receipt-number seam for the Restaurant vertical
@@ -7135,8 +7084,7 @@ model RestaurantOrderNumberSequence {
 //   C11 Money commands carry a device-scoped idempotency key in
 //       restaurant_money_idempotency_keys (unique (deviceId, key)); every money
 //       record carries operator (staffProfile) + device attribution.
-// ====================================================================}
-
+// ===========================================================================
 
 /// M5/C4: bill lifecycle. OPEN checks accept splits/comps/tenders; a bill flips
 /// to SETTLED (receipt allocated) once covered, or VOID (reason + co-auth). A
@@ -7718,8 +7666,7 @@ model RestaurantMoneyIdempotencyKey {
   @@map("restaurant_money_idempotency_keys")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // M6 — Inventory & purchasing (restaurant/m6-inventory-purchasing). Every model
 // below is org-scoped under forced RLS (C1) with a bare, RLS-guarded
 // organizationId that defaults from the transaction-local setting. Quantities
@@ -7729,8 +7676,7 @@ model RestaurantMoneyIdempotencyKey {
 // DERIVED by folding the ledger (D07). Costing is read-time weighted-average from
 // intrinsic-cost movements; negative derived stock is permitted and flagged, not
 // blocked at posting (D07 conservative defaults — BUILD-ASSUMPTIONS §M6).
-// ====================================================================}
-
+// ===========================================================================
 
 /// M6/§11.4: the ten canonical stock-movement reasons — the CLOSED set of ways a
 /// signed quantity enters or leaves a (stockItem, location). Intrinsic-cost
@@ -8269,8 +8215,7 @@ model RestaurantInventoryIdempotencyKey {
   @@map("restaurant_inventory_idempotency_keys")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // M7-L1 — Scheduler primitive, SOP compliance engine, and notifications for the
 // Restaurant vertical (restaurant/m7-scheduler-sop-notifications).
 //
@@ -8291,8 +8236,7 @@ model RestaurantInventoryIdempotencyKey {
 //   UTC   Every timestamp is stored UTC; branch-local rendering (SOP due windows,
 //       quiet hours) is derived at read time from the branch timezone
 //       (business-date.ts) — never recomputed from a stored local value.
-// ====================================================================}
-
+// ===========================================================================
 
 /// M7/D13: a durable background job's lifecycle. QUEUED is claimable when due;
 /// RUNNING is claimed by a worker; SUCCEEDED is a completed attempt; FAILED is a
@@ -9157,14 +9101,12 @@ model RestaurantNotificationDelivery {
   @@map("restaurant_notification_deliveries")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // M8 — Restaurant customers, loyalty and insight read models. Customer PII is
 // isolated from agency Client records; consent and loyalty history are event
 // ledgers; insight rows are rebuildable projections. Every model is org-scoped
 // under forced RLS in the M8 migration.
-// ====================================================================}
-
+// ===========================================================================
 
 enum CustomerIdentifierKind {
   EMAIL
@@ -9782,8 +9724,7 @@ model LabourCostFact {
   @@map("restaurant_labour_cost_facts")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // R-lane / WHA-194 — OCR menu import. A restaurant uploads the menu it already
 // has; extraction fills a REVIEW QUEUE; only rows a human confirms become
 // catalog records. Nothing here is ever a live catalog row: an import holds
@@ -9791,8 +9732,7 @@ model LabourCostFact {
 //
 // Org-scoped under forced RLS in the accompanying migration, like every other
 // restaurant table.
-// ====================================================================}
-
+// ===========================================================================
 
 enum RestaurantMenuImportStatus {
   PENDING_EXTRACTION
@@ -10483,14 +10423,12 @@ model RestaurantPromotionAuditEvent {
   @@map("restaurant_promotion_audit_events")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // Completion wave — branch scheduling and employee timekeeping.
 // Org-scoped under forced RLS (C1) and branch-scoped like every other operating
 // surface. This bounded workforce record does not introduce payroll, pay rates,
 // labour optimization, or another financial source of truth.
-// ====================================================================}
-
+// ===========================================================================
 
 /// A scheduled shift is either still on the roster (SCHEDULED) or withdrawn
 /// (CANCELLED). Cancellation is a soft, auditable state rather than a delete, so
@@ -11559,11 +11497,9 @@ model PlatformAuditLog {
   @@map("platform_audit_logs")
 }
 
-// =====================================}
-
+// ============================================
 // PH-MIG — pharmacy migration (PRD §6.10 MIG-01, MIG-02)
-// =====================================}
-
+// ============================================
 
 enum PharmacyMigrationSourceKind {
   ABUZAR
@@ -11706,11 +11642,9 @@ model PharmacyMigrationException {
   @@map("pharmacy_migration_exceptions")
 }
 
-// =====================================}
-
+// ============================================
 // PH-PUR — pharmacy procurement (PRD §6.3 PUR-01, PUR-02, PUR-03)
-// =====================================}
-
+// ============================================
 
 enum PharmacyRequisitionStatus {
   DRAFT
@@ -12746,12 +12680,10 @@ model PharmacyReceivingException {
   @@map("pharmacy_receiving_exceptions")
 }
 
-// ====================================================================}
-
+// ===========================================================================
 // PH-PUR/PH-INV — supplier returns and the stock action centre
 // (PRD §6.3 PUR-06, PUR-07; §8A invariants 9 and 29)
-// ====================================================================}
-
+// ===========================================================================
 
 /// PUR-06 — why stock is going back. The two kinds share one document because
 /// they share one settlement path; they differ only in what opened the return
@@ -13108,8 +13040,7 @@ model PharmacyStockSignalAction {
   @@map("pharmacy_stock_signal_actions")
 }
 
-// =====================================}
-
+// ============================================
 // PH-MIG — opening stock, parallel run and cutover
 // (PRD §6.10 MIG-03, MIG-04, MIG-05)
 //
@@ -13119,8 +13050,7 @@ model PharmacyStockSignalAction {
 // only, matching the SQL-only composite tenant foreign keys already used across
 // this schema. Modelling them as Prisma relations would add relation scalars to
 // models this lane does not own.
-// =====================================}
-
+// ============================================
 
 enum PharmacyOpeningSessionStatus {
   DRAFT
@@ -14515,11 +14445,9 @@ model PharmacyOrderDeliveryEvidence {
   @@map("pharmacy_order_delivery_evidence")
 }
 
-// =====================================}
-
+// ============================================
 // HOSPITALITY — PROP-01 property registry
-// =====================================}
-
+// ============================================
 
 /// HSP-MODE (PRD §5.16 / MODE-01). The mode selects DEFAULTS — inventory kinds,
 /// billing cycles, day-use, function spaces, booking-engine layout, report set.
@@ -14625,11 +14553,9 @@ model HotelPropertyAssignment {
   @@map("hotel_property_assignments")
 }
 
-// =====================================}
-
+// ============================================
 // HOSPITALITY — PROP-05 extras and services catalog
-// =====================================}
-
+// ============================================
 
 /// The posting department a hospitality charge belongs to. One closed vocabulary
 /// for the whole vertical, because three contracts group by it: "revenue by
@@ -14721,11 +14647,9 @@ model HotelExtra {
   @@map("hotel_extras")
 }
 
-// =====================================}
-
+// ============================================
 // HOSPITALITY — PROP-02 / PROP-03 / HK-03 inventory (H1-03)
-// =====================================}
-
+// ============================================
 
 /// PROP-02. What a type sells: a whole room, one berth in a shared room, or a
 /// self-contained unit. A BED type declares `bedsPerRoom`; the others must not.
@@ -15389,29 +15313,6 @@ model PharmacyPackPrice {
   @@unique([organizationId, proposalId])
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
-}
-
-/// FBR mock-only transactional outbox. Composite sale FK and FORCE RLS in SQL.
-model FiscalInvoiceOutbox {
-  id String @id
-  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  branchId String
-  saleId String
-  authority String @default("FBR")
-  mode String @default("MOCK")
-  usin String @db.VarChar(50)
-  payload Json
-  status String @default("PENDING")
-  attempts Int @default(0)
-  nextAttemptAt DateTime @default(now())
-  lastError String?
-  createdAt DateTime @default(now())
-  submittedAt DateTime?
-
-  @@unique([organizationId, saleId])
-  @@unique([organizationId, usin])
-  @@index([organizationId, branchId, status, nextAttemptAt], map: "fiscal_invoice_outbox_due")
-  @@map("fiscal_invoice_outbox")
 }
 
 /// Cross-instance fixed-window counters. Not tenant data and not under RLS:
