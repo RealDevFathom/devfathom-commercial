@@ -73,7 +73,11 @@ function makeDb() {
     restaurantNotificationDelivery: model(),
     restaurantStaffProfile: model(),
     restaurantBranchAssignment: model(),
-    restaurantBranch: model(),
+    restaurantBranch: Object.assign(model(), {
+      findMany: vi.fn(async (args?: { where?: { id?: { in?: string[] } } }) =>
+        (args?.where?.id?.in ?? []).map((id) => ({ id }))
+      ),
+    }),
   };
   db.$transaction = vi.fn(async (fn: (tx: unknown) => unknown) => fn(db));
   return db as Record<string, Delegate> & { $transaction: ReturnType<typeof vi.fn> };
@@ -111,7 +115,7 @@ const FULL_ENTITLEMENTS = entitlementsForPackage('restaurant-enterprise');
 function caller(entitlements: ReturnType<typeof entitlementsForPackage> = FULL_ENTITLEMENTS) {
   return restaurantSopExecutionRouter.createCaller({
     db: db as never,
-    entitlements,
+    entitlements: { organizationId: 'org_1', ...entitlements },
     session: {
       expires: 'later',
       user: { id: 'user_1', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },

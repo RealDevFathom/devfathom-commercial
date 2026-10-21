@@ -90,6 +90,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 
+import { assertInOrganization } from '../org-refs';
 import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
@@ -125,15 +126,16 @@ const demandReason = z.enum([
 ]);
 const txDb = (tx: unknown) => tx as ScopedDb;
 
-function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
+async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const organizationId = ctx.entitlements?.organizationId;
   const actorId = ctx.session?.user?.id;
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
 }
 
 async function khataScope(ctx: TRPCContext, branch: string) {
-  const scope = scopeFor(ctx, branch);
+  const scope = await scopeFor(ctx, branch);
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
@@ -269,8 +271,8 @@ export const pharmacySalesRouter = router({
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
-      return await ctx.db.$transaction((tx) =>
-        executeSandboxPayment(txDb(tx), scopeFor(ctx, input.branchId), input)
+      return await ctx.db.$transaction(async (tx) =>
+        executeSandboxPayment(txDb(tx), await scopeFor(ctx, input.branchId), input)
       );
     } catch (error) {
       fail(error);
@@ -280,7 +282,7 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, query: z.string().trim().max(100).default('') }).strict())
     .query(async ({ ctx, input }) => {
       if (!hasModule(ctx.entitlements, 'pharmacy-crm')) throw new TRPCError({ code: 'FORBIDDEN' });
-      const scope = scopeFor(ctx, input.branchId);
+      const scope = await scopeFor(ctx, input.branchId);
       if (
         !(await ctx.db.pharmacyBranch.findFirst({
           where: { id: input.branchId, organizationId: scope.organizationId, active: true },
@@ -302,15 +304,15 @@ export const pharmacySalesRouter = router({
   // from cashier receipt access. Tenant and branch filters apply before storage.
   counterEvidence: adminProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
-    .query(({ ctx, input }) => {
+    .query(async ({ ctx, input }) => {
       if (!hasModule(ctx.entitlements, 'pharmacy-core')) throw new TRPCError({ code: 'FORBIDDEN' });
-      return readCounterEvidence(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+      return readCounterEvidence(ctx.db, await scopeFor(ctx, input.branchId), input.saleId);
     }),
   dailyCloseEvidence: adminProcedure
     .input(z.object({ branchId, closeId: z.string().min(1) }).strict())
-    .query(({ ctx, input }) => {
+    .query(async ({ ctx, input }) => {
       if (!hasModule(ctx.entitlements, 'pharmacy-core')) throw new TRPCError({ code: 'FORBIDDEN' });
-      return readDailyCloseEvidence(ctx.db, scopeFor(ctx, input.branchId), input.closeId);
+      return readDailyCloseEvidence(ctx.db, await scopeFor(ctx, input.branchId), input.closeId);
     }),
   khataAccounts: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
@@ -340,10 +342,10 @@ export const pharmacySalesRouter = router({
     }),
   closePreview: protectedProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
-    .query(({ ctx, input }) => {
+    .query(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction((tx) =>
-        readPharmacyClose(txDb(tx), scopeFor(ctx, input.branchId), input.businessDate)
+      return ctx.db.$transaction(async (tx) =>
+        readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
       );
     }),
   closeDay: protectedProcedure
@@ -367,10 +369,10 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction((tx) =>
-        closePharmacyDay(txDb(tx), scopeFor(ctx, input.branchId), input)
+      return ctx.db.$transaction(async (tx) =>
+        closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
       );
     }),
   customerSnapshot: protectedProcedure
@@ -387,7 +389,7 @@ export const pharmacySalesRouter = router({
       try {
         return await readCustomerSnapshot(
           ctx.db,
-          scopeFor(ctx, input.branchId),
+          await scopeFor(ctx, input.branchId),
           input.customerId,
           input.page
         );
@@ -412,8 +414,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          linkCustomerToSale(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          linkCustomerToSale(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -434,8 +436,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          redeemSalePoints(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          redeemSalePoints(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -447,7 +449,7 @@ export const pharmacySalesRouter = router({
     .query(async ({ ctx, input }) => ({
       openDrawer: await readOpenPharmacyDrawer(
         ctx.db,
-        scopeFor(ctx, input.branchId),
+        await scopeFor(ctx, input.branchId),
         input.deviceId
       ),
     })),
@@ -467,8 +469,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          openPharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          openPharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -488,8 +490,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          recordPharmacyCashMovement(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          recordPharmacyCashMovement(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -508,8 +510,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          closePharmacyDrawer(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          closePharmacyDrawer(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -526,17 +528,17 @@ export const pharmacySalesRouter = router({
         })
         .strict()
     )
-    .mutation(({ ctx, input }) => {
+    .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction((tx) =>
-        cutPharmacyDailyClose(txDb(tx), scopeFor(ctx, input.branchId), input)
+      return ctx.db.$transaction(async (tx) =>
+        cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
       );
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =
       input.type === 'KHATA' || input.familyAccountId
         ? await khataScope(ctx, input.branchId)
-        : scopeFor(ctx, input.branchId);
+        : await scopeFor(ctx, input.branchId);
     return readPharmacyTenderOutcome(ctx.db, scope, ledgerTender(input));
   }),
   tender: protectedProcedure.input(tenderInput).mutation(async ({ ctx, input }) => {
@@ -547,8 +549,8 @@ export const pharmacySalesRouter = router({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
           });
-        return await ctx.db.$transaction((tx) =>
-          applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), ledgerTender(input))
+        return await ctx.db.$transaction(async (tx) =>
+          applyPharmacyTender(txDb(tx), await scopeFor(ctx, input.branchId), ledgerTender(input))
         );
       }
       const scope = await khataScope(ctx, input.branchId);
@@ -623,7 +625,7 @@ export const pharmacySalesRouter = router({
       try {
         return await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = scopeFor(ctx, input.branchId);
+          const scope = await scopeFor(ctx, input.branchId);
           const tender = await db.pharmacyTender.findFirst({
             where: {
               id: input.originalTenderId,
@@ -676,9 +678,9 @@ export const pharmacySalesRouter = router({
     }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
-    .mutation(({ ctx, input }) =>
-      ctx.db.$transaction((tx) =>
-        createSale(txDb(tx), scopeFor(ctx, input.branchId), input.quotation)
+    .mutation(async ({ ctx, input }) =>
+      ctx.db.$transaction(async (tx) =>
+        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
       )
     ),
   addLine: protectedProcedure
@@ -744,7 +746,7 @@ export const pharmacySalesRouter = router({
       try {
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = scopeFor(ctx, input.branchId);
+          const scope = await scopeFor(ctx, input.branchId);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
@@ -949,10 +951,10 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
+        return await ctx.db.$transaction(async (tx) =>
           changeSaleStatus(
             txDb(tx),
-            scopeFor(ctx, input.branchId),
+            await scopeFor(ctx, input.branchId),
             input.saleId,
             input.action,
             input.reason
@@ -965,7 +967,7 @@ export const pharmacySalesRouter = router({
   lookupReceiptByNumber: protectedProcedure
     .input(z.object({ branchId, receiptNumber: z.number().int().positive() }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = scopeFor(ctx, input.branchId);
+      const scope = await scopeFor(ctx, input.branchId);
       // Receipt sequences are per device/date: never pick an arbitrary matching sale.
       return ctx.db.pharmacySale.findMany({
         where: {
@@ -983,7 +985,7 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        return await readReturnHistory(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+        return await readReturnHistory(ctx.db, await scopeFor(ctx, input.branchId), input.saleId);
       } catch (error) {
         fail(error);
       }
@@ -1007,8 +1009,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          returnSaleLine(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          returnSaleLine(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -1038,7 +1040,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await captureDemand(ctx.db, scopeFor(ctx, input.branchId), input);
+        return await captureDemand(ctx.db, await scopeFor(ctx, input.branchId), input);
       } catch (error) {
         fail(error);
       }
@@ -1057,7 +1059,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await findSubstituteProposals(ctx.db, scopeFor(ctx, input.branchId), input);
+        return await findSubstituteProposals(ctx.db, await scopeFor(ctx, input.branchId), input);
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });
@@ -1084,7 +1086,7 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const scope = scopeFor(ctx, input.branchId);
+        const scope = await scopeFor(ctx, input.branchId);
         return await ctx.db.$transaction(async (tx) => {
           const event = await captureDemand(txDb(tx), scope, {
             ...input,
@@ -1107,7 +1109,7 @@ export const pharmacySalesRouter = router({
       try {
         return await recoverDemandWithAlternate(
           ctx.db,
-          scopeFor(ctx, input.branchId),
+          await scopeFor(ctx, input.branchId),
           input.demandId,
           input.saleLineId
         );
@@ -1117,8 +1119,8 @@ export const pharmacySalesRouter = router({
     }),
   demandAggregate: protectedProcedure
     .input(z.object({ branchId, from: z.date(), to: z.date() }).strict())
-    .query(({ ctx, input }) =>
-      demandAggregate(ctx.db, scopeFor(ctx, input.branchId), input.from, input.to)
+    .query(async ({ ctx, input }) =>
+      demandAggregate(ctx.db, await scopeFor(ctx, input.branchId), input.from, input.to)
     ),
   addRestockInterest: protectedProcedure
     .input(
@@ -1136,8 +1138,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          addRestockInterest(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          addRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -1147,8 +1149,8 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, inventoryLotId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          captureSafeRestockArrival(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          captureSafeRestockArrival(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -1158,8 +1160,8 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, interestId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          optOutRestockInterest(txDb(tx), scopeFor(ctx, input.branchId), input.interestId)
+        return await ctx.db.$transaction(async (tx) =>
+          optOutRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input.interestId)
         );
       } catch (error) {
         fail(error);
@@ -1171,8 +1173,8 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          recoverRestockInterest(txDb(tx), scopeFor(ctx, input.branchId), input)
+        return await ctx.db.$transaction(async (tx) =>
+          recoverRestockInterest(txDb(tx), await scopeFor(ctx, input.branchId), input)
         );
       } catch (error) {
         fail(error);
@@ -1182,8 +1184,8 @@ export const pharmacySalesRouter = router({
     .input(
       z.object({ branchId, campaignKey: z.string().trim().min(1).max(160).optional() }).strict()
     )
-    .query(({ ctx, input }) =>
-      restockRecoveryReport(ctx.db, scopeFor(ctx, input.branchId), input.campaignKey)
+    .query(async ({ ctx, input }) =>
+      restockRecoveryReport(ctx.db, await scopeFor(ctx, input.branchId), input.campaignKey)
     ),
 
   // ── PH-POS counter reads (POS-01, POS-02, POS-08) ─────────────────────────
@@ -1223,7 +1225,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await searchCounterCatalog(ctx.db, scopeFor(ctx, input.branchId), {
+        return await searchCounterCatalog(ctx.db, await scopeFor(ctx, input.branchId), {
           query: input.query,
           limit: input.limit,
         });
@@ -1236,7 +1238,7 @@ export const pharmacySalesRouter = router({
   authenticatePack: auditedProtectedProcedure
     .input(z.object({ branchId, payload: z.string().max(512) }).strict())
     .mutation(async ({ ctx, input }) => {
-      const scope = scopeFor(ctx, input.branchId);
+      const scope = await scopeFor(ctx, input.branchId);
       ctx.audit.detail = { category: 'PHARMACY_SAFETY', action: 'dispensing_pack_scan' };
       return authenticatePharmacyPack(ctx.db, {
         ...scope,
@@ -1254,7 +1256,7 @@ export const pharmacySalesRouter = router({
   counterLotOptions: protectedProcedure
     .input(z.object({ branchId, medicineId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = scopeFor(ctx, input.branchId);
+      const scope = await scopeFor(ctx, input.branchId);
       // `onHand` returns balance buckets already in FEFO order (expiry, then
       // receipt), so first appearance is the order the allocator would use.
       const buckets = await onHand(ctx.db, scope, input.medicineId, new Date());
@@ -1297,7 +1299,7 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        return await readCounterCart(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+        return await readCounterCart(ctx.db, await scopeFor(ctx, input.branchId), input.saleId);
       } catch (error) {
         fail(error);
       }
@@ -1312,7 +1314,7 @@ export const pharmacySalesRouter = router({
   counterReceipt: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = scopeFor(ctx, input.branchId);
+      const scope = await scopeFor(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
@@ -1343,7 +1345,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const scope = scopeFor(ctx, input.branchId);
+      const scope = await scopeFor(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         if (receipt.receiptNumber === null || !receipt.completedAt) {
@@ -1383,13 +1385,15 @@ export const pharmacySalesRouter = router({
   /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */
   counterReceiptFormat: protectedProcedure
     .input(z.object({ branchId }).strict())
-    .query(({ ctx, input }) => readPharmacyReceiptFormat(ctx.db, scopeFor(ctx, input.branchId))),
+    .query(async ({ ctx, input }) =>
+      readPharmacyReceiptFormat(ctx.db, await scopeFor(ctx, input.branchId))
+    ),
 
   /** PH-A7: save the branch receipt format. Optimistic revision; admins only. */
   counterSaveReceiptFormat: adminProcedure
     .input(SaveReceiptLayoutSchema)
-    .mutation(({ ctx, input }) =>
-      savePharmacyReceiptFormat(ctx.db, scopeFor(ctx, input.branchId).organizationId, input)
+    .mutation(async ({ ctx, input }) =>
+      savePharmacyReceiptFormat(ctx.db, (await scopeFor(ctx, input.branchId)).organizationId, input)
     ),
 
   // ── POS-01 configurable shortcuts ─────────────────────────────────────────

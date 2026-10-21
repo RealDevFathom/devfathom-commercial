@@ -1,6 +1,6 @@
 # Running DevFathom Locally
 
-Last reviewed: 2026-07-29
+Last reviewed: 2026-10-21
 
 ## Prerequisites
 
@@ -19,7 +19,8 @@ cp .env.example .env.local
 Open `.env.local` and replace every placeholder used by your local setup. The minimum values are:
 
 ```dotenv
-DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom
+DATABASE_URL=postgresql://devfathom_app:replace-with-local-app-password@localhost:5432/devfathom
+MIGRATION_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom
 SHADOW_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom_shadow
 
 AUTH_SECRET=<random-secret>
@@ -51,14 +52,61 @@ createdb devfathom
 createdb devfathom_shadow
 ```
 
-If your PostgreSQL username, password, host, or port differs, update both database URLs in
+If your PostgreSQL username, password, host, or port differs, update the database URLs in
 `.env.local`.
+
+The application role and the migration role are different logins:
+
+```sql
+-- Run as a superuser. Replace the password before executing.
+CREATE ROLE devfathom_app LOGIN PASSWORD 'replace-with-local-app-password'
+  NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+GRANT CONNECT, TEMPORARY ON DATABASE devfathom TO devfathom_app;
+```
+
+`DATABASE_URL` must use `devfathom_app`. `MIGRATION_DATABASE_URL` is the role that applies
+migrations and seed (a local superuser is enough). Prisma CLI and the seed read
+`MIGRATION_DATABASE_URL` from `.env` and `.env.local` when it is set, and otherwise fall
+back to `DATABASE_URL`. The running server reads `DATABASE_URL` only.
+
+`next start` and any production process refuse to boot when that application role is
+`SUPERUSER` or `BYPASSRLS`, and when `CLIENT_IP_HEADER`, `TRUSTED_PROXY_CIDRS`, and
+`TRUSTED_PROXY_HOPS` are all unset. `bun run dev` does not run either check. IPv4 entries
+in `TRUSTED_PROXY_CIDRS` must be plain IPv4, such as `10.0.0.0/8`. `::ffff:` addresses are
+unwrapped to IPv4 before the trust check, so a mapped form in that list does not match.
+Confirm the application role with:
+
+```sql
+SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
+```
+
+Both columns must be `f` on the `DATABASE_URL` connection.
 
 ## 3. Install and initialize
 
 ```bash
 bun install --frozen-lockfile
 bunx prisma migrate deploy
+```
+
+Prisma and the seed load `.env`, then `.env.local`. After migrate, grant the application role
+access to the objects the migration role owns:
+
+```sql
+GRANT USAGE ON SCHEMA public TO devfathom_app;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO devfathom_app;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO devfathom_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO devfathom_app;
+ALTER DEFAULT PRIVILEGES IN SCHEMA public
+  GRANT USAGE, SELECT ON SEQUENCES TO devfathom_app;
+```
+
+`ALTER DEFAULT PRIVILEGES` applies to objects the current user creates later. Run it as the
+migration role. Then seed. The seed reads `MIGRATION_DATABASE_URL` when that variable is set,
+and it sets the platform-admin tenant setting inside its transaction:
+
+```bash
 bun run db:seed
 ```
 

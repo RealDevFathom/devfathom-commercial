@@ -59,7 +59,7 @@ export async function GET(request: Request) {
 }
 
 export async function POST(request: Request) {
-  const gate = rateLimit(`pharmacy-whatsapp:ip:${clientIp(request)}`, IP_LIMIT, IP_WINDOW_MS);
+  const gate = await rateLimit(`pharmacy-whatsapp:ip:${clientIp(request)}`, IP_LIMIT, IP_WINDOW_MS);
   if (!gate.ok) {
     return NextResponse.json(
       { error: 'Too many requests' },
