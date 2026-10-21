@@ -80,11 +80,11 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
-  it('leaves existing owners without new clinical or report grants', async () => {
+  it('preserves legacy owner pharmacy wildcard grants without adding report grants', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        action === 'pharmacy:orders'
+        action.startsWith('pharmacy:')
       );
     }
   });
