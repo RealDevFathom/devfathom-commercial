@@ -52,7 +52,8 @@ describe('refund GET demo approval metadata', () => {
       expect.anything(),
       candidate.staffProfileId,
       'coauth:approve',
-      expect.any(Date)
+      expect.any(Date),
+      'branch_demo'
     );
     expect(JSON.stringify(body)).not.toContain('secret');
   });

@@ -80,6 +80,13 @@ const ctx = {
   managerA: `staff_m_${suffix}`,
   managerForeign: `staff_fm_${suffix}`,
   staffNoCap: `staff_n_${suffix}`,
+  // QA-145: PIN-only approvers with NO linked user, carrying capabilities only via
+  // SOP-1 job roles. `floorApprover` holds a role with coauth:approve; `floorNoCoauth`
+  // holds a role without it.
+  jobRoleApprover: `jobrole_approver_${suffix}`,
+  jobRoleFloor: `jobrole_floor_${suffix}`,
+  floorApprover: `staff_floor_approver_${suffix}`,
+  floorNoCoauth: `staff_floor_nocoauth_${suffix}`,
   customerA: `customer_a_${suffix}`,
   productA: `prod_a_${suffix}`,
   posA: { deviceId: '', secret: '' },
@@ -450,6 +457,44 @@ beforeAll(async () => {
       where: { id: ctx.managerForeign },
       data: { primaryBranchId: ctx.branchDay },
     });
+
+    // QA-145: SOP-1 job roles carry capabilities independently of any linked `User`.
+    await tx.restaurantJobRole.create({
+      data: {
+        id: ctx.jobRoleApprover,
+        key: `owner_${suffix}`,
+        name: 'Owner',
+        capabilities: { create: [{ capability: 'coauth:approve' }] },
+      },
+    });
+    await tx.restaurantJobRole.create({
+      data: {
+        id: ctx.jobRoleFloor,
+        key: `floor_${suffix}`,
+        name: 'Floor',
+        capabilities: { create: [{ capability: 'orders:take' }] },
+      },
+    });
+    // Two PIN-only approvers: NO linked user, so the pre-fix linked-user-only gate would
+    // refuse both. The job role is what makes `floorApprover` eligible to co-authorize.
+    for (const [id, jobRoleId, name] of [
+      [ctx.floorApprover, ctx.jobRoleApprover, 'Floor Owner'],
+      [ctx.floorNoCoauth, ctx.jobRoleFloor, 'Floor Server'],
+    ] as const) {
+      await tx.restaurantStaffProfile.create({
+        data: { id, displayName: name, primaryBranchId: ctx.branchA, status: 'ACTIVE' },
+      });
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: id,
+          type: 'PIN',
+          credentialHash: await deps.hashOperatorCredential('PIN', PIN),
+        },
+      });
+      await tx.restaurantStaffJobRole.create({
+        data: { staffProfileId: id, jobRoleId, branchId: ctx.branchA },
+      });
+    }
   });
   await deps.withTenantDb(orgB, (tx) =>
     tx.restaurantBranch.create({ data: { id: ctx.orgBBranch, name: 'Other tenant' } })
@@ -1693,6 +1738,117 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         },
       });
       expect(res.status).toBe(403);
+    });
+  });
+
+  // QA-145 (SEV1): co-authorization must honour SOP-1 job-role capabilities, not only the
+  // linked `User` org-role permissions. A PIN-only floor manager holding the Owner job
+  // role (which carries `coauth:approve`) must be able to approve a refund and a comp;
+  // one whose job role lacks it stays denied and writes nothing.
+  describe('QA-145 job-role co-authorization', () => {
+    it('lets a PIN-only approver with the coauth:approve job role authorize a refund', async () => {
+      const token = await establishUnlock(ctx.posA.secret);
+      const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['12.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      const billId = (cut.json.billIds as string[])[0]!;
+      const tender = await call(deps.routes.tender, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-tender'),
+        body: { billId, tender: { type: 'CARD', amount: '12.00' } },
+      });
+      expect(tender.status, JSON.stringify(tender.json)).toBe(200);
+
+      const res = await call(deps.routes.refund, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-refund'),
+        body: {
+          originalTenderId: tender.json.tenderId as string,
+          amount: '12.00',
+          reason: 'guest complaint',
+          approving: { staffProfileId: ctx.floorApprover, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(res.status, JSON.stringify(res.json)).toBe(200);
+      eqMoney(res.json.amount, '12.00');
+      const coAuth = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantCoAuthorization.findFirst({
+          where: { approvingStaffProfileId: ctx.floorApprover, capability: 'payments:refund' },
+          select: { actingStaffProfileId: true },
+        })
+      );
+      expect(coAuth?.actingStaffProfileId).toBe(ctx.staffA);
+    });
+
+    it('lets the same PIN-only approver authorize a comp', async () => {
+      const token = await establishUnlock(ctx.posA.secret);
+      const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-comp-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      const billId = (cut.json.billIds as string[])[0]!;
+      const line = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantBillLine.findFirst({ where: { billId }, select: { id: true } })
+      );
+
+      const res = await call(deps.routes.comp, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-comp'),
+        body: {
+          billId,
+          billLineId: line!.id,
+          reason: 'kitchen error',
+          approving: { staffProfileId: ctx.floorApprover, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(res.status, JSON.stringify(res.json)).toBe(200);
+      expect(res.json.billId).toBe(billId);
+    });
+
+    it('still denies a PIN-only approver whose job role lacks coauth:approve, writing nothing', async () => {
+      const token = await establishUnlock(ctx.posA.secret);
+      const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['6.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-deny-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      const billId = (cut.json.billIds as string[])[0]!;
+      const tender = await call(deps.routes.tender, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-deny-tender'),
+        body: { billId, tender: { type: 'CARD', amount: '6.00' } },
+      });
+      expect(tender.status).toBe(200);
+
+      const before = await deps.withTenantDb(orgA, (tx) => tx.restaurantRefund.count());
+      const res = await call(deps.routes.refund, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-deny-refund'),
+        body: {
+          originalTenderId: tender.json.tenderId as string,
+          amount: '6.00',
+          reason: 'no capability',
+          approving: { staffProfileId: ctx.floorNoCoauth, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(res.status).toBe(403);
+      expect(res.json.error).toContain('coauth:approve');
+      const after = await deps.withTenantDb(orgA, (tx) => tx.restaurantRefund.count());
+      expect(after).toBe(before);
     });
   });
 });

@@ -4,6 +4,7 @@ import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
+import { passwordSchema } from '@/lib/password-policy';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
@@ -533,7 +534,7 @@ export const organizationAdminRouter = router({
           .email()
           .max(254)
           .transform((value) => value.trim().toLowerCase()),
-        password: z.string().min(12).max(256),
+        password: passwordSchema.min(12).max(256),
         title: z.string().trim().min(1).max(150),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']),
         department: departmentKey,
@@ -630,7 +631,7 @@ export const organizationAdminRouter = router({
     }),
 
   resetMemberPassword: adminProcedure
-    .input(z.object({ id: z.string(), password: z.string().min(12).max(256) }))
+    .input(z.object({ id: z.string(), password: passwordSchema.min(12).max(256) }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
       const user = await ctx.db.user.findFirst({

@@ -4,7 +4,11 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { evaluateOrderSettlement } from './bills';
-import { buildReceiptForBranch, getOrderSettlementForBranch } from './checkout-routes';
+import {
+  buildReceiptForBranch,
+  getOrderSettlementForBranch,
+  moneyErrorResponse,
+} from './checkout-routes';
 import { quoteOpenBillSettlement } from './tenders';
 
 vi.mock('./bills', async (importOriginal) => ({
@@ -12,6 +16,11 @@ vi.mock('./bills', async (importOriginal) => ({
   evaluateOrderSettlement: vi.fn(),
 }));
 
+import {
+  TaxConfigurationError,
+  TaxProfileResolutionError,
+  resolveTaxProfile,
+} from './tax-calculator';
 vi.mock('./tenders', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./tenders')>()),
   quoteOpenBillSettlement: vi.fn(),
@@ -190,5 +199,44 @@ describe('checkout money serialization', () => {
       taxTotal: '145.50',
       remainingDue: '145.50',
     });
+  });
+});
+
+describe('tax configuration checkout refusal (#148)', () => {
+  it('maps a real missing-profile failure to actionable 409', async () => {
+    let failure: unknown;
+    try {
+      resolveTaxProfile([], new Date('2026-10-21T00:00:00Z'));
+    } catch (error) {
+      failure = error;
+    }
+    const response = moneyErrorResponse(failure)!;
+    expect(response.status).toBe(409);
+    expect(await response.json()).toEqual({
+      code: 'TAX_PROFILE_UNAVAILABLE',
+      error: expect.stringContaining('publish a tax profile before tendering'),
+    });
+  });
+  it.each(['MISSING', 'EXPIRED', 'AMBIGUOUS'] as const)(
+    'refuses %s profiles without leaking domain internals',
+    async (reason) => {
+      const response = moneyErrorResponse(
+        new TaxProfileResolutionError(reason, 'private-profile-id')
+      )!;
+      expect(response.status).toBe(409);
+      const body = await response.json();
+      expect(body.code).toBe(
+        reason === 'AMBIGUOUS' ? 'TAX_RULE_CONFLICT' : 'TAX_PROFILE_UNAVAILABLE'
+      );
+      expect(body.error).not.toContain('private-profile-id');
+    }
+  );
+  it('sanitizes other tax configuration failures and preserves unexpected 500 handling', async () => {
+    const response = moneyErrorResponse(
+      new TaxConfigurationError('Tax rule private-rule-id is not approved')
+    )!;
+    expect(response.status).toBe(409);
+    expect((await response.json()).error).not.toContain('private-rule-id');
+    expect(moneyErrorResponse(new Error('database failure'))).toBeNull();
   });
 });

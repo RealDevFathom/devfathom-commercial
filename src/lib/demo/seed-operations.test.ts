@@ -234,7 +234,8 @@ describe('seedDemoRestaurantOperations', () => {
       database,
       'approver_staff',
       'coauth:approve',
-      new Date(seed.generatedAt)
+      new Date(seed.generatedAt),
+      catalog.branch[seed.branches[0].id]
     );
 
     const expectedBranches = Object.values(catalog.branch).sort();

@@ -124,6 +124,45 @@ describe('RestaurantNotificationsPage tenancy resolution', () => {
     expect(screen.getByText(/Email, SMS, push, and WhatsApp are unavailable/)).toBeDefined();
   });
 
+  it('renders notification meta text with the contrast-checked token, never text-faint', async () => {
+    mocks.resolveTenantActor.mockResolvedValue(actor);
+    mocks.createTRPCContext.mockResolvedValue(contextStub());
+    mocks.can.mockResolvedValue(false);
+    const readAt = new Date('2026-10-20T12:00:00Z');
+    mocks.createCaller.mockReturnValue({
+      list: vi.fn().mockResolvedValue({
+        items: [
+          {
+            id: 'ntf_1',
+            branchId: null,
+            category: 'sop.escalation',
+            title: 'Escalation acknowledged',
+            body: 'The overdue checklist was acknowledged.',
+            entityType: 'checklist',
+            entityId: 'chk_1',
+            isRead: true,
+            readAt,
+            createdAt: new Date('2026-10-20T11:00:00Z'),
+            deliveries: [],
+          },
+        ],
+        nextCursor: null,
+      }),
+      unreadCount: vi.fn().mockResolvedValue({ count: 0 }),
+    });
+
+    render(await RestaurantNotificationsPage({ searchParams }));
+
+    // `text-text-faint` (slate-400) sits at ~2:1 on the card surface and is not
+    // in the contrast-checked token set; the meta lines must use `text-text-muted`.
+    const readLine = screen.getByText(/^Read /);
+    expect(readLine.className).toContain('text-text-muted');
+    expect(readLine.className).not.toContain('text-text-faint');
+    const relatedLine = screen.getByText(/^Related:/);
+    expect(relatedLine.className).toContain('text-text-muted');
+    expect(relatedLine.className).not.toContain('text-text-faint');
+  });
+
   it('exposes enabled test, redacted error, and keyboard-reachable dead-letter retry states', async () => {
     mocks.resolveTenantActor.mockResolvedValue(actor);
     mocks.createTRPCContext.mockResolvedValue(contextStub());

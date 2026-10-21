@@ -76,6 +76,10 @@ function context(
       : { id: options.approverId ?? 'staff_demo_approver', displayName: 'Demo Approver' }
   );
   const approverFindUnique = vi.fn(async () => ({
+    status: 'ACTIVE',
+    primaryBranchId: 'branch_demo',
+    jobRoles: [],
+    directCapabilityGrants: [],
     user: {
       permissionOverrides: [],
       organizationRole: {
@@ -88,6 +92,8 @@ function context(
     demoActor,
     db: {
       organization: { findFirst: organizationFindFirst },
+      restaurantStaffJobRole: { findMany: vi.fn(async () => []) },
+      restaurantStaffCapabilityGrant: { findMany: vi.fn(async () => []) },
       restaurantStaffProfile: {
         findFirst: approverFindFirst,
         findUnique: approverFindUnique,
