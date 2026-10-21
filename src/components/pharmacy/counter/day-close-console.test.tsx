@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
   loading: false,
   error: null as Error | null,
+  closeError: null as Error | null,
   mutate: vi.fn(),
 }));
 vi.mock('next-auth/react', () => ({
@@ -52,7 +53,15 @@ vi.mock('@/lib/trpc', () => ({
           },
         }),
       },
-      closeDay: { useMutation: () => ({ mutate: mocks.mutate, reset: vi.fn() }) },
+      closeDay: {
+        useMutation: () => ({
+          mutate: mocks.mutate,
+          reset: vi.fn(),
+          error: mocks.closeError,
+          data: undefined,
+          isPending: false,
+        }),
+      },
     },
   },
 }));
@@ -62,6 +71,7 @@ beforeEach(() => {
   mocks.role = 'ADMIN';
   mocks.loading = false;
   mocks.error = null;
+  mocks.closeError = null;
   mocks.mutate.mockReset();
 });
 describe('day-close console', () => {
@@ -116,5 +126,13 @@ describe('day-close console', () => {
         varianceNote: 'Short by one rupee',
       })
     );
+  });
+  it('shows the friendly close error supplied by the router', () => {
+    mocks.closeError = new Error(
+      'The day could not be closed safely. Refresh the preview and try again. If it still fails, ask a supervisor.'
+    );
+    render(<PharmacyDayCloseConsole />);
+    expect(screen.getByRole('alert')).toHaveTextContent('The day could not be closed safely.');
+    expect(screen.getByRole('alert')).not.toHaveTextContent('append-only');
   });
 });

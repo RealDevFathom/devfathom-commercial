@@ -12,6 +12,72 @@ const enabled = process.env.PHARMACY_E2E === '1' && !!process.env.PHARMACY_E2E_D
 if (enabled) process.env.DATABASE_URL = process.env.PHARMACY_E2E_DATABASE_URL;
 
 describe.skipIf(!enabled)('pharmacy day close database boundaries', () => {
+  it.each([
+    ['an empty day', false, 0],
+    ['a day with completed sales', true, 1_250],
+  ] as const)(
+    'closes %s without mutating append-only rows',
+    async (_label, withSale, grossMinor) => {
+      const id = randomUUID();
+      const branchId = `branch_close_case_${id}`;
+      const businessDate = new Date('2036-10-20T00:00:00.000Z');
+      const scope = { organizationId: fixture.organizationId, branchId, actorId: fixture.adminId };
+
+      const close = await withTenantDb(scope.organizationId, async (db) => {
+        await db.pharmacyBranch.create({
+          data: {
+            id: branchId,
+            organizationId: scope.organizationId,
+            code: `CASE-${id}`,
+            name: 'Day close case branch',
+            addressLine: '1 Test Road',
+            city: 'Lahore',
+            provinceCode: 'PB',
+          },
+        });
+        if (withSale) {
+          const sale = await db.pharmacySale.create({
+            data: {
+              organizationId: scope.organizationId,
+              branchId,
+              createdByUserId: scope.actorId,
+              status: 'COMPLETED',
+              completedAt: new Date(),
+              businessDate,
+            },
+          });
+          await db.pharmacySaleLine.create({
+            data: {
+              organizationId: scope.organizationId,
+              branchId,
+              saleId: sale.id,
+              medicineId: fixture.medicines.otc.id,
+              presentationId: fixture.medicines.otc.presentationId,
+              packLevelId: fixture.medicines.otc.packLevelIds.unit,
+              saleUnit: 'UNIT',
+              quantity: 1,
+              canonicalUnitsPerSaleUnit: 1,
+              canonicalUnits: 1,
+              unitPriceMinor: grossMinor,
+              proRataCeilingMinor: grossMinor,
+              unitCostMinor: 500,
+              idempotencyKey: `close-sale-${id}`,
+            },
+          });
+        }
+        const preview = await readPharmacyClose(db, scope, businessDate);
+        return closePharmacyDay(db, scope, {
+          businessDate,
+          sourceHash: preview.totals.sourceHash,
+          counts: [],
+          varianceNote: '',
+        });
+      });
+
+      expect(close).toMatchObject({ sequence: 1, grossSalesMinor: grossMinor });
+    }
+  );
+
   it('closes and locks a day with one immutable close insert', async () => {
     const id = randomUUID();
     const branchId = `branch_day_close_${id}`;
