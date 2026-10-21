@@ -239,6 +239,7 @@ export type CounterKeyEvent = {
   metaKey?: boolean;
   altKey?: boolean;
   shiftKey?: boolean;
+  target?: EventTarget | null;
 };
 
 /**
@@ -264,15 +265,23 @@ export function matchCounterAction(
   return null;
 }
 
+/** A field the operator is typing in owns the keyboard. F-keys wait. */
+export function counterChordTargetIsField(target: EventTarget | null | undefined): boolean {
+  if (typeof HTMLElement === 'undefined' || !(target instanceof HTMLElement)) return false;
+  const tag = target.tagName;
+  return tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT' || target.isContentEditable;
+}
+
 /**
- * Whether the counter should still act on a chord raised inside `target`.
+ * Whether a counter chord may run.
  *
- * The scan field must keep focus for the whole bill (POS-01), so F-keys stay
- * live inside inputs. A plain printable key typed into a field is the operator
- * scanning, never a shortcut — but no binding here is printable, so the only
- * rule that matters is: never steal a chord from a native text-editing control
- * that legitimately uses it.
+ * Printable keys stay with the field. Named chords, including F-keys, also stay
+ * with the field while focus is in an input, textarea, or select, and they stay
+ * silent while a dialog is open so a void or tender step cannot be skipped.
  */
-export function shouldHandleCounterKey(event: CounterKeyEvent): boolean {
+export function shouldHandleCounterKey(event: CounterKeyEvent, dialogOpen = false): boolean {
+  const focused =
+    typeof document !== 'undefined' ? counterChordTargetIsField(document.activeElement) : false;
+  if (dialogOpen || focused || counterChordTargetIsField(event.target)) return false;
   return event.key.length > 1;
 }

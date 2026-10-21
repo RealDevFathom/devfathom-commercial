@@ -1,9 +1,8 @@
-import { Prisma } from '@/generated/prisma/client';
+import { Decimal } from '@prisma/client/runtime/index-browser.js';
 
-const Decimal = Prisma.Decimal;
 const ZERO = new Decimal(0);
 const HUNDRED = new Decimal(100);
-type DecimalInput = Prisma.Decimal | string;
+type DecimalInput = Decimal | string;
 
 export const PAYMENT_CATEGORIES = ['CASH', 'CARD', 'OTHER'] as const;
 export type PaymentCategory = (typeof PAYMENT_CATEGORIES)[number];
@@ -44,19 +43,19 @@ export interface TaxLineInput {
 
 export interface TaxBucketResult {
   category: PaymentCategory;
-  consideration: Prisma.Decimal;
-  net: Prisma.Decimal;
-  tax: Prisma.Decimal;
-  gross: Prisma.Decimal;
+  consideration: Decimal;
+  net: Decimal;
+  tax: Decimal;
+  gross: Decimal;
   ruleId: string;
 }
 
 export interface TaxLineResult {
   id: string;
-  consideration: Prisma.Decimal;
-  net: Prisma.Decimal;
-  tax: Prisma.Decimal;
-  gross: Prisma.Decimal;
+  consideration: Decimal;
+  net: Decimal;
+  tax: Decimal;
+  gross: Decimal;
   buckets: TaxBucketResult[];
 }
 
@@ -84,18 +83,18 @@ export interface TaxQuoteInput {
 
 export interface TaxQuoteResult {
   proposedCategory: PaymentCategory;
-  weights: Record<PaymentCategory, Prisma.Decimal>;
+  weights: Record<PaymentCategory, Decimal>;
   lines: TaxLineResult[];
   serviceCharge: TaxBucketResult | null;
-  net: Prisma.Decimal;
-  tax: Prisma.Decimal;
-  merchandisePayable: Prisma.Decimal;
-  afterTaxDiscount: Prisma.Decimal;
-  serviceChargePayable: Prisma.Decimal;
-  roundingAdjustment: Prisma.Decimal;
-  grandTotal: Prisma.Decimal;
-  acceptedPrincipal: Prisma.Decimal;
-  remainingDue: Prisma.Decimal;
+  net: Decimal;
+  tax: Decimal;
+  merchandisePayable: Decimal;
+  afterTaxDiscount: Decimal;
+  serviceChargePayable: Decimal;
+  roundingAdjustment: Decimal;
+  grandTotal: Decimal;
+  acceptedPrincipal: Decimal;
+  remainingDue: Decimal;
 }
 
 export class TaxConfigurationError extends Error {}
@@ -272,7 +271,7 @@ export function calculateTax(
   rules: TaxRule[],
   at: Date,
   tenderType: RestaurantTenderType
-): { lines: TaxLineResult[]; net: Prisma.Decimal; tax: Prisma.Decimal; gross: Prisma.Decimal } {
+): { lines: TaxLineResult[]; net: Decimal; tax: Decimal; gross: Decimal } {
   const category = mapTenderTypeToPaymentCategory(tenderType);
   const profile = resolveTaxProfile(profiles, at);
   const results = lines.map((line) => {
@@ -298,7 +297,7 @@ export function calculateTax(
   );
 }
 
-export function splitMoney(total: DecimalInput, shares: DecimalInput[]): Prisma.Decimal[] {
+export function splitMoney(total: DecimalInput, shares: DecimalInput[]): Decimal[] {
   const exactShares = shares.map((share) => decimal(share, 'Share'));
   if (exactShares.length === 0 || exactShares.some((share) => !share.isPositive()))
     throw new RangeError('Shares must be positive');
@@ -325,10 +324,7 @@ export function splitMoney(total: DecimalInput, shares: DecimalInput[]): Prisma.
 
 /** Fractional-bill allocation uses the same largest-remainder rule, with a stable
  * last-fraction tie break so the final sibling absorbs an otherwise equal remainder. */
-export function splitFractionalMoney(
-  total: DecimalInput,
-  shares: DecimalInput[]
-): Prisma.Decimal[] {
+export function splitFractionalMoney(total: DecimalInput, shares: DecimalInput[]): Decimal[] {
   const exactShares = shares.map((share) => decimal(share, 'Fraction'));
   if (exactShares.length === 0 || exactShares.some((share) => !share.isPositive()))
     throw new RangeError('Fractions must be positive');
@@ -353,7 +349,7 @@ export function splitFractionalMoney(
   return allocated.map((value) => value.div(HUNDRED));
 }
 
-function zeroWeights(): Record<PaymentCategory, Prisma.Decimal> {
+function zeroWeights(): Record<PaymentCategory, Decimal> {
   return { CASH: new Decimal(0), CARD: new Decimal(0), OTHER: new Decimal(0) };
 }
 
