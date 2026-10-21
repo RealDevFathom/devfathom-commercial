@@ -30,6 +30,7 @@ import {
 import { PaymentAdapterError } from './payment-adapter';
 import { RefundError, type RefundTenderResult } from './refunds';
 import { TenderError, type ApplyTenderResult } from './tenders';
+import { TaxConfigurationError, TaxProfileResolutionError } from './tax-calculator';
 import { OrderCommandError } from './orders';
 import {
   authenticateApprover,
@@ -383,6 +384,24 @@ const json = (body: unknown, status: number): NextResponse => NextResponse.json(
  * generic 500.
  */
 export function moneyErrorResponse(err: unknown): NextResponse | null {
+  // Map only after the terminal transaction rolls back. Configuration errors
+  // may contain internal profile/rule IDs, so return fixed operator guidance.
+  if (err instanceof TaxProfileResolutionError) {
+    const error =
+      err.reason === 'AMBIGUOUS'
+        ? 'Conflicting effective tax profiles. Ask an administrator to correct the branch tax configuration before tendering.'
+        : 'The branch has no current effective tax profile. Ask an administrator to publish a tax profile before tendering.';
+    return json({ error, code: err.code }, 409);
+  }
+  if (err instanceof TaxConfigurationError) {
+    return json(
+      {
+        error:
+          'The branch tax configuration is invalid. Ask an administrator to correct it before tendering.',
+      },
+      409
+    );
+  }
   if (err instanceof MoneyIdempotencyError) {
     return json({ error: err.message }, 409);
   }
