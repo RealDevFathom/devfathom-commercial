@@ -23,6 +23,7 @@ vi.mock('@/lib/restaurant/staff', () => ({
   updateStaffProfile: mocks.updateStaff,
 }));
 vi.mock('@/lib/restaurant/job-roles', () => ({
+  resolveStaffCapabilityDecision: async () => ({ denied: new Set(), effective: new Set() }),
   createJobRole: mocks.createRole,
   grantJobRole: mocks.grantRole,
 }));
@@ -231,7 +232,17 @@ describe('demo persona ABAC least privilege', () => {
       department: DEMO_PERSONAS[persona].department,
     });
     const operatorDb = {
-      restaurantStaffProfile: { findUnique: async () => ({ user: await db.user.findUnique() }) },
+      restaurantStaffJobRole: { findMany: async () => [] },
+      restaurantStaffCapabilityGrant: { findMany: async () => [] },
+      restaurantStaffProfile: {
+        findUnique: async () => ({
+          status: 'ACTIVE',
+          primaryBranchId: 'branch',
+          jobRoles: [],
+          directCapabilityGrants: [],
+          user: await db.user.findUnique(),
+        }),
+      },
     };
     for (const [actions, expected] of [
       [allowed, true],
@@ -239,7 +250,7 @@ describe('demo persona ABAC least privilege', () => {
     ] as const) {
       for (const action of actions) {
         expect(
-          await operatorHasCapability(operatorDb as never, 'staff', action, new Date()),
+          await operatorHasCapability(operatorDb as never, 'staff', action, new Date(), 'branch'),
           action
         ).toBe(expected);
         if (ALL_ACTIONS.includes(action as Action)) {
