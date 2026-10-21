@@ -21,6 +21,7 @@ const mocks = vi.hoisted(() => ({
   mutations: {} as Record<string, ReturnType<typeof vi.fn>>,
   refetch: vi.fn(),
   cancel: vi.fn(),
+  cartInvalidate: vi.fn(),
   receiptInvalidate: vi.fn(),
   mutationOptions: vi.fn(),
   receiptProps: vi.fn(),
@@ -72,7 +73,7 @@ vi.mock('@/lib/trpc', () => {
       },
     },
     pharmacySales: {
-      counterCart: { cancel: mocks.cancel, invalidate: vi.fn() },
+      counterCart: { cancel: mocks.cancel, invalidate: mocks.cartInvalidate },
       counterReceipt: { invalidate: mocks.receiptInvalidate },
       counterEvidence: { reset: vi.fn() },
       drawerStatus: { invalidate: mocks.drawerStatusInvalidate },
@@ -101,6 +102,7 @@ vi.mock('@/lib/trpc', () => {
         'declineSubstitute',
         'linkCustomer',
         'redeemPoints',
+        'redeemCode',
         'authenticatePack',
         'substituteProposals',
       ]),
@@ -243,6 +245,7 @@ beforeEach(() => {
     'declineSubstitute',
     'linkCustomer',
     'redeemPoints',
+    'redeemCode',
     'authenticatePack',
   ])
     mocks.mutations[name] = vi.fn();
@@ -1064,5 +1067,38 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     ).toBeInTheDocument();
     expect(screen.queryByText(/OPEN_DRAWER|prisma|Unique constraint/)).not.toBeInTheDocument();
     await waitFor(() => expect(mocks.drawerStatusInvalidate).toHaveBeenCalled());
+  });
+});
+
+describe('G5 counter campaign code', () => {
+  it('hides the field when growth is disabled', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByLabelText('Campaign code')).not.toBeInTheDocument();
+  });
+  it('applies the code through POS and refreshes the existing bill', async () => {
+    mocks.entitlements.enabledModules.push('growth_ai');
+    mocks.mutations.redeemCode!.mockResolvedValue({ customerId: 'customer-a', discountMinor: 100 });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByRole('button', { name: 'Apply code' })).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Campaign code'), { target: { value: 'DEMO-ABCDEF' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply code' }));
+    await waitFor(() =>
+      expect(mocks.mutations.redeemCode).toHaveBeenCalledWith({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        code: 'DEMO-ABCDEF',
+      })
+    );
+    await waitFor(() => expect(screen.getByLabelText('Campaign code')).toHaveValue(''));
+    expect(mocks.cartInvalidate).toHaveBeenCalled();
+  });
+  it('preserves a refused code and reports the error', async () => {
+    mocks.entitlements.enabledModules.push('growth_ai');
+    mocks.mutations.redeemCode!.mockRejectedValue(new Error('Campaign budget exceeded.'));
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    fireEvent.change(screen.getByLabelText('Campaign code'), { target: { value: 'DEMO-ABCDEF' } });
+    fireEvent.click(screen.getByRole('button', { name: 'Apply code' }));
+    await waitFor(() => expect(screen.getByText('Campaign budget exceeded.')).toBeInTheDocument());
+    expect(screen.getByLabelText('Campaign code')).toHaveValue('DEMO-ABCDEF');
   });
 });
