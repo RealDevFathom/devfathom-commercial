@@ -7,7 +7,7 @@
  *     (`login:acct:` / `login:ip:`), so an attacker cannot switch to the
  *     authenticated change-password endpoint to dodge the login lockout — and a
  *     burst of wrong-current-password attempts feeds that same lockout. A
- *     successful change refunds the account and IP budgets.
+ *     successful change refunds only its own account budget.
  *  2. BOTH the failed and the successful attempt leave an audit trail: the tRPC
  *     audit middleware records every call with the annotated AUTH detail and the
  *     real outcome (FAILURE vs SUCCESS).
@@ -116,9 +116,13 @@ describe('team.changePassword rate limiting', () => {
     expect(mocks.update).not.toHaveBeenCalled();
   });
 
-  it('records a SUCCESS audit event and refunds the account/IP login budgets', async () => {
+  it('records SUCCESS, refunds its account budget, and preserves shared IP failures', async () => {
     const who = identity();
     const { call, detail } = caller(who);
+    const ipKey = `login:ip:${who.ip}`;
+    await clearRateLimit(ipKey);
+    for (let i = 0; i < 7; i += 1) await rateLimit(ipKey, 30, 5 * 60_000);
+    await rateLimit(`login:acct:${who.email}`, 10, 5 * 60_000);
 
     await expect(
       call.changePassword({ currentPassword: CURRENT, newPassword: NEXT })
@@ -132,10 +136,12 @@ describe('team.changePassword rate limiting', () => {
     });
     expect(mocks.update).toHaveBeenCalledTimes(1);
 
-    // A successful change cleared the shared login budgets, so login has its
-    // full per-account allowance back (first of 10 succeeds).
+    // Only this account is refunded. Other users' failures at the IP survive.
     const acct = await rateLimit(`login:acct:${who.email}`, 10, 5 * 60_000);
     expect(acct).toMatchObject({ ok: true, remaining: 9 });
+    const ip = await rateLimit(ipKey, 30, 5 * 60_000);
+    expect(ip).toMatchObject({ ok: true, remaining: 21 });
+    await clearRateLimit(ipKey);
   });
 
   it('shares the login lockout budget: an exhausted login:acct blocks the change', async () => {

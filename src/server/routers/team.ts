@@ -682,7 +682,6 @@ export const teamRouter = router({
         },
       });
       await clearRateLimit(accountKey);
-      await clearRateLimit(ipKey);
       annotateAudit(ctx, { description: 'Password changed successfully' });
       return { success: true };
     }),
