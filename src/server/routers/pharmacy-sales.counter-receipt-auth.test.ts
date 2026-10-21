@@ -79,6 +79,7 @@ const app = router({ pharmacySales: pharmacySalesRouter });
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 const dispense: Permission[] = [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }];
+const counter: Permission[] = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
 
 function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE') {
   const db = {
@@ -329,7 +330,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
-    const f = fixture(dispense);
+    // Khata is gated by the counter capability (not dispense); a cashier reaches
+    // the Khata path without hitting the receipt branch-assignment guard.
+    const f = fixture(counter);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({

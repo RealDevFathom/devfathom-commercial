@@ -442,4 +442,49 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       }
     );
   });
+
+  it('keeps a cashier on the counter gate after the canonical capability migration', async () => {
+    // The cashier role is seeded with the legacy dotted grant.
+    const before = await withTenantDb(ids.orgA, (tx) =>
+      tx.organizationRolePermission.findMany({
+        where: { organizationRoleId: ids.roleCashier },
+        select: { capability: true },
+      })
+    );
+    expect(before.map((row) => row.capability)).toEqual(['pharmacy.counter']);
+
+    // Applying the canonical migration renames pharmacy.counter -> pharmacy:counter.
+    const canonical = readFileSync(
+      join(
+        process.cwd(),
+        'prisma/migrations/20261021110000_canonical_pharmacy_capabilities/migration.sql'
+      ),
+      'utf8'
+    );
+    await withPlatformDb((tx) => runMigrationSql(tx, canonical));
+    await withPlatformDb((tx) => runMigrationSql(tx, canonical));
+
+    const after = await withTenantDb(ids.orgA, (tx) =>
+      tx.organizationRolePermission.findMany({
+        where: { organizationRoleId: ids.roleCashier },
+        select: { capability: true },
+      })
+    );
+    expect(after.map((row) => row.capability)).toEqual(['pharmacy:counter']);
+
+    // With only the canonical pharmacy:counter grant, the cashier still clears the
+    // counter-sale authorization gate (RECEIPT_READ_CAPABILITIES accepts it).
+    await act(
+      ids.orgA,
+      { id: ids.cashier, role: 'EMPLOYEE', organizationId: ids.orgA },
+      async (api) => {
+        await expect(
+          api.counterCart({ branchId: ids.branchA, saleId: ids.saleA })
+        ).resolves.toMatchObject({ saleId: ids.saleA, lines: [] });
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.branchA, receiptNumber: 7 })
+        ).resolves.toEqual([expect.objectContaining({ id: ids.saleA })]);
+      }
+    );
+  });
 });

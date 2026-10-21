@@ -144,12 +144,15 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 
 async function khataScope(ctx: TRPCContext, branch: string) {
   const scope = await scopeFor(ctx, branch);
+  // Khata is a counter tender, not a clinical dispensing decision. Cashiers may
+  // charge within the account limit; pharmacy:manage is checked separately only
+  // when an over-limit override is requested.
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
       db: ctx.db,
       source: 'TRPC',
     }))
@@ -276,6 +279,9 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy.dispense',
   'pharmacy:receipt',
   'pharmacy.receipt',
+  // Cashiers hold the counter capability; accept the canonical colon name
+  // (post-migration grant) alongside the legacy dotted form.
+  'pharmacy:counter',
   'pharmacy.counter',
 ] as const;
 

@@ -130,6 +130,33 @@ describe('Khata router trust and recovery boundary', () => {
       }),
     });
   });
+  it.each([1, 99, 100])(
+    'lets a cashier with only pharmacy:counter charge %i minor units without a dispense check',
+    async (amountMinor) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      vi.mocked(can).mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+
+      await expect(f.caller().tender({ ...input, amountMinor })).resolves.toMatchObject({
+        tenderId: 'tender-a',
+      });
+
+      expect(can).toHaveBeenCalledWith(
+        f.user,
+        'pharmacy:counter',
+        undefined,
+        expect.objectContaining({ db: f.db, source: 'TRPC' })
+      );
+      expect(can).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:dispense',
+        expect.anything(),
+        expect.anything()
+      );
+      expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
     await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
