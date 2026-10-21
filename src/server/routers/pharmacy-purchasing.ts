@@ -350,7 +350,7 @@ async function resolvePurchasingLine<T extends { medicineId: string; packLevelId
 function assertOrderableSupplier(
   supplier: {
     authorized: boolean;
-    licences: { expiresAt: Date; verifiedAt: Date | null }[];
+    licences: { id: string; expiresAt: Date; verifiedAt: Date | null; supersedesId: string | null }[];
   } | null,
   at: Date
 ) {
@@ -360,6 +360,7 @@ function assertOrderableSupplier(
     licences: supplier.licences.map((licence) => ({
       expiresAt: licence.expiresAt,
       verified: licence.verifiedAt !== null,
+      superseded: supplier.licences.some((candidate) => candidate.supersedesId === licence.id),
     })),
     at,
   });
@@ -634,6 +635,9 @@ const purchasingRouter = router({
           supplierLicences: line.quote.supplier.licences.map((licence) => ({
             expiresAt: licence.expiresAt,
             verified: licence.verifiedAt !== null,
+            superseded: line.quote.supplier.licences.some(
+              (candidate) => candidate.supersedesId === licence.id
+            ),
           })),
           validUntil: line.quote.validUntil,
           pricePerPackMinor: line.pricePerPackMinor,
