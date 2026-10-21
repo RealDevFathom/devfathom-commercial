@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { capabilityMatches } from '@/lib/abac/capabilities';
 import 'server-only';
 
@@ -402,6 +403,7 @@ const json = (body: unknown, status: number): NextResponse => NextResponse.json(
  * generic 500.
  */
 export function moneyErrorResponse(err: unknown): NextResponse | null {
+  if (err instanceof TRPCError && err.code === 'CONFLICT') return json({ error: err.message }, 409);
   // Map only after the terminal transaction rolls back. Configuration errors
   // may contain internal profile/rule IDs, so return fixed operator guidance.
   if (err instanceof TaxProfileResolutionError) {

@@ -19,6 +19,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import {
+  compLine,
   deriveOrderTotal,
   evaluateOrderSettlement,
   exclusiveTaxFromSettlementSnapshots,
@@ -32,6 +33,32 @@ import type { FinalizeBillSettlementInput } from './bills';
 // ── Pure fixtures ────────────────────────────────────────────────────────────
 
 const D = (v: string | number) => new Prisma.Decimal(v);
+
+describe('comp constraint errors', () => {
+  it('maps a wrapped PostgreSQL CHECK violation to a clear TRPCError', async () => {
+    const db = {
+      $transaction: async () => {
+        throw new Error('Prisma constraint failure', {
+          cause: { meta: { driverAdapterError: { cause: { originalCode: '23514' } } } },
+        });
+      },
+    } as unknown as ScopedDb;
+    await expect(
+      compLine(db, {
+        billId: 'bill',
+        branchId: 'branch',
+        billLineId: 'line',
+        reason: 'comp',
+        approvingStaffProfileId: 'manager',
+        actor: { staffProfileId: 'staff', deviceId: 'device', idempotencyKey: 'key' },
+      })
+    ).rejects.toMatchObject({
+      name: 'TRPCError',
+      code: 'CONFLICT',
+      message: expect.stringContaining('service-charge evidence'),
+    });
+  });
+});
 
 describe('tender tax allocation validation', () => {
   const merchandise = {
@@ -878,6 +905,67 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(settlement.accountedTotal.toString()).toBe(settlement.derivedOrderTotal.toString());
     expect(settlement.unbilledItemIds).toEqual([]);
     expect(settlement.blocker).toBe('BILLS_OPEN'); // bills exist, not yet settled
+  });
+
+  it('comps the last policy service-bearing line with valid zero-service evidence (QA-271)', async () => {
+    const policy = await read((tx) =>
+      tx.restaurantServiceChargePolicyVersion.create({
+        data: {
+          branchId: ids.branch,
+          rate: D('0.10'),
+          effectiveFrom: new Date('2030-01-01T00:00:00.000Z'),
+          acknowledgedAt: AT,
+          acknowledgementRef: 'QA-271',
+          idempotencyKey: key(),
+          payloadHash: key(),
+        },
+      })
+    );
+    for (const count of [1, 2]) {
+      const { orderId, db } = await openWithItems(Array.from({ length: count }, () => ({})));
+      await read((tx) =>
+        tx.restaurantOrder.update({
+          where: { id: orderId },
+          data: { serviceChargePolicyVersionId: policy.id },
+        })
+      );
+      const { billIds } = await deps.bills.cutBills(db, {
+        orderId,
+        branchId: ids.branch,
+        split: { kind: 'NONE' },
+        actor: actor(),
+      });
+      const lines = await read((tx) =>
+        tx.restaurantBillLine.findMany({ where: { billId: billIds[0]! } })
+      );
+      for (const line of lines) {
+        await deps.bills.compLine(db, {
+          billId: billIds[0]!,
+          branchId: ids.branch,
+          billLineId: line.id,
+          reason: 'QA-271 comp',
+          approvingStaffProfileId: ids.manager,
+          actor: actor(),
+        });
+      }
+      const bill = await read((tx) =>
+        tx.restaurantBill.findUniqueOrThrow({
+          where: { id: billIds[0]! },
+          include: { lines: true },
+        })
+      );
+      expect(bill.grandTotal.toFixed(2)).toBe('0.00');
+      expect(bill.serviceChargeTotal.toFixed(2)).toBe('0.00');
+      expect(bill.serviceChargeBasis.toFixed(2)).toBe('0.00');
+      expect(bill.serviceChargePolicyVersionId).toBeNull();
+      expect(bill.serviceChargeRate).toBeNull();
+      expect(bill.serviceChargeTaxTreatment).toBeNull();
+      expect(
+        bill.lines.every(
+          (line) => line.serviceChargeAmount.isZero() && line.compAmount.equals(line.lineSubtotal)
+        )
+      ).toBe(true);
+    }
   });
 
   it('comps a line to zero: retains snapshot price, records reason + co-auth, updates totals', async () => {
