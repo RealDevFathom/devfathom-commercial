@@ -484,8 +484,9 @@ export const financeRouter = router({
         });
       }
 
+      const paidAt = next === 'PAID' ? new Date() : null;
       const data: Record<string, unknown> = { status: next };
-      if (next === 'PAID') data.paidAt = new Date();
+      if (paidAt) data.paidAt = paidAt;
       if (next === 'SENT') data.sentAt = new Date();
       // Clear stamps when the invoice leaves the corresponding state.
       if (prior === 'PAID' && next !== 'PAID') data.paidAt = null;
@@ -494,10 +495,33 @@ export const financeRouter = router({
         data.paidAt = null;
       }
 
-      const invoice = await ctx.db.invoice.update({
-        where: { id: input.id },
-        data,
-        include: { client: { select: { name: true } } },
+      const invoice = await ctx.db.$transaction(async (tx) => {
+        const updated = await tx.invoice.update({
+          where: { id: input.id },
+          data,
+          include: { client: { select: { name: true } } },
+        });
+
+        if (paidAt) {
+          const prior = await tx.payment.aggregate({
+            where: { invoiceId: updated.id },
+            _sum: { amount: true },
+          });
+          const amount = round2(Number(updated.total) - Number(prior._sum.amount ?? 0));
+          if (amount > PAYMENT_EPSILON) {
+            await tx.payment.create({
+              data: {
+                invoiceId: updated.id,
+                amount,
+                currency: updated.currency,
+                method: 'Manual status update',
+                paidAt,
+              },
+            });
+          }
+        }
+
+        return updated;
       });
 
       if (next === 'SENT') {

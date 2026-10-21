@@ -624,8 +624,9 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         };
       }
 
+      const paidAt = status === 'PAID' ? now() : null;
       const data: Prisma.InvoiceUpdateInput = { status };
-      if (status === 'PAID') data.paidAt = now();
+      if (paidAt) data.paidAt = paidAt;
       if (status === 'SENT') data.sentAt = now();
       // Clear stamps when the invoice leaves the corresponding state.
       if (priorStatus === 'PAID' && status !== 'PAID') data.paidAt = null;
@@ -634,10 +635,33 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
         data.paidAt = null;
       }
 
-      const invoice = await db.invoice.update({
-        where: { id: matches[0].id },
-        data,
-        include: { client: { select: { name: true } } },
+      const invoice = await db.$transaction(async (tx) => {
+        const updated = await tx.invoice.update({
+          where: { id: matches[0].id },
+          data,
+          include: { client: { select: { name: true } } },
+        });
+
+        if (paidAt) {
+          const prior = await tx.payment.aggregate({
+            where: { invoiceId: updated.id },
+            _sum: { amount: true },
+          });
+          const amount = round2(Number(updated.total) - Number(prior._sum.amount ?? 0));
+          if (amount > 0.005) {
+            await tx.payment.create({
+              data: {
+                invoiceId: updated.id,
+                amount,
+                currency: updated.currency,
+                method: 'Manual status update',
+                paidAt,
+              },
+            });
+          }
+        }
+
+        return updated;
       });
 
       const totalLabel = `$${Number(invoice.total).toLocaleString()}`;
