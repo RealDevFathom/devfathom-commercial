@@ -63,7 +63,7 @@ async function persistEvent(
   if (organization?.isDemo) return;
   const hooks = await db.webhook.findMany({
     where: { active: true, events: { has: event } },
-    select: { id: true, url: true, secret: true },
+    select: { id: true },
   });
   if (hooks.length === 0) return;
   const body = JSON.stringify({ event, data: payload, timestamp: new Date().toISOString() });
@@ -73,8 +73,6 @@ async function persistEvent(
       status: 'PENDING',
       payload: {
         webhookId: hook.id,
-        url: hook.url,
-        secret: hook.secret,
         event,
         body,
         payload: payload ?? {},
@@ -114,29 +112,36 @@ async function deliver(
   payload: unknown,
   body: string
 ): Promise<void> {
+  const recorded = await db.webhookDelivery.create({
+    data: {
+      webhookId: hook.id,
+      event,
+      payload: (payload ?? {}) as never,
+      statusCode: null,
+      success: false,
+      error: null,
+    },
+    select: { id: true },
+  });
   const signature = createHmac('sha256', hook.secret).update(body).digest('hex');
   const result = await deliverWebhookRequest(hook.url, {
     headers: {
       'Content-Type': 'application/json',
       'X-DevFathom-Event': event,
+      'X-DevFathom-Delivery-Id': recorded.id,
       'X-DevFathom-Signature': `sha256=${signature}`,
     },
     body,
     timeoutMs: DELIVERY_TIMEOUT_MS,
   });
-  const statusCode = result.statusCode;
-  const success = result.success;
-  const error = result.error;
 
   await db.webhookDelivery
-    .create({
+    .update({
+      where: { id: recorded.id },
       data: {
-        webhookId: hook.id,
-        event,
-        payload: (payload ?? {}) as never,
-        statusCode,
-        success,
-        error,
+        statusCode: result.statusCode,
+        success: result.success,
+        error: result.error,
       },
     })
     .catch((e) => {

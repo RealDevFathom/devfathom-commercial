@@ -89,9 +89,24 @@ describe('tenant transaction side effects', () => {
     );
     expect(tx.outboundEffect.createMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        data: [expect.objectContaining({ kind: 'webhook', status: 'PENDING' })],
+        data: [
+          expect.objectContaining({
+            kind: 'webhook',
+            status: 'PENDING',
+            payload: expect.not.objectContaining({
+              secret: expect.anything(),
+              url: expect.anything(),
+            }),
+          }),
+        ],
       })
     );
+    const webhookWrite = tx.outboundEffect.createMany.mock.calls.find((call) =>
+      JSON.stringify(call[0]).includes('"kind":"webhook"')
+    );
+    expect(webhookWrite?.[0].data[0].payload).toMatchObject({ webhookId: 'webhook_1' });
+    expect(webhookWrite?.[0].data[0].payload).not.toHaveProperty('secret');
+    expect(webhookWrite?.[0].data[0].payload).not.toHaveProperty('url');
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(mocks.deliver).not.toHaveBeenCalled();
     expect(mocks.drain).toHaveBeenCalledWith('org_1');

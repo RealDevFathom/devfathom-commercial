@@ -2,11 +2,13 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearRateLimit,
   assertProductionClientIpConfig,
+  assertProductionRateLimitHmacSecret,
   clientIp,
   interpretRateLimitRow,
   RATE_LIMIT_UPSERT_SQL,
   rateLimit,
   rateLimitBackend,
+  rateLimitStorageKey,
   rateLimitQuery,
 } from '@/lib/rate-limit';
 
@@ -48,6 +50,7 @@ describe('restaurant integrated flood-limit opt-in', () => {
     vi.stubEnv('NODE_ENV', nodeEnv);
     vi.stubEnv('RESTAURANT_INTEGRATED_E2E', lane);
     vi.stubEnv('RESTAURANT_E2E_RELAX_TERMINAL_FLOOD_LIMITS', flag);
+    vi.stubEnv('RATE_LIMIT_HMAC_SECRET', 'rate-limit-test-secret');
   }
 
   it.each([
@@ -131,6 +134,21 @@ describe('shared rate-limit store', () => {
     expect(RATE_LIMIT_UPSERT_SQL).not.toContain('${');
   });
 
+  it('stores an HMAC instead of a raw address or email', async () => {
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    const seen: string[] = [];
+    rateLimitQuery.current = async (_sql, params) => {
+      seen.push(String(params[0]));
+      return [{ count: 1, resetAt: new Date(Date.now() + 60_000) }];
+    };
+    const raw = 'login:acct:person@example.com';
+    await rateLimit(raw, 5, 60_000);
+    await clearRateLimit(raw);
+    expect(seen[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(seen[0]).not.toContain('person@example.com');
+    expect(seen[1]).toBe(seen[0]);
+  });
+
   it('fails closed when the shared store errors', async () => {
     vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
     rateLimitQuery.current = async () => {
@@ -175,6 +193,63 @@ describe('assertProductionClientIpConfig', () => {
     expect(() =>
       assertProductionClientIpConfig({ NODE_ENV: 'production', TRUSTED_PROXY_HOPS: '1' })
     ).not.toThrow();
+  });
+});
+
+describe('assertProductionRateLimitHmacSecret', () => {
+  afterEach(() => vi.unstubAllEnvs());
+
+  it('refuses production startup when neither secret is set', () => {
+    expect(() => assertProductionRateLimitHmacSecret({ NODE_ENV: 'production' })).toThrow(
+      /RATE_LIMIT_HMAC_SECRET/
+    );
+    expect(() =>
+      assertProductionRateLimitHmacSecret({ NODE_ENV: 'production', RATE_LIMIT_HMAC_SECRET: '   ' })
+    ).toThrow(/AUTH_SECRET/);
+    expect(() => assertProductionRateLimitHmacSecret({ NODE_ENV: 'development' })).not.toThrow();
+    expect(() => assertProductionRateLimitHmacSecret({ NODE_ENV: 'test' })).not.toThrow();
+    expect(() =>
+      assertProductionRateLimitHmacSecret({
+        NODE_ENV: 'production',
+        NEXT_PHASE: 'phase-production-build',
+      })
+    ).not.toThrow();
+  });
+
+  it('accepts either the dedicated HMAC secret or AUTH_SECRET', () => {
+    expect(() =>
+      assertProductionRateLimitHmacSecret({
+        NODE_ENV: 'production',
+        RATE_LIMIT_HMAC_SECRET: 'hmac-secret',
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertProductionRateLimitHmacSecret({ NODE_ENV: 'production', AUTH_SECRET: 'auth-secret' })
+    ).not.toThrow();
+  });
+
+  it('keeps a stable non-production key and refuses to sign with a missing production secret', () => {
+    vi.stubEnv('NODE_ENV', 'test');
+    vi.stubEnv('RATE_LIMIT_HMAC_SECRET', '');
+    vi.stubEnv('AUTH_SECRET', '');
+    const first = rateLimitStorageKey('login:acct:person@example.com');
+    const second = rateLimitStorageKey('login:acct:person@example.com');
+    expect(first).toBe(second);
+    expect(first).toMatch(/^[0-9a-f]{64}$/);
+    expect(first).not.toContain('person@example.com');
+
+    vi.stubEnv('RATE_LIMIT_HMAC_SECRET', 'secret-a');
+    const signedA = rateLimitStorageKey('login:acct:person@example.com');
+    vi.stubEnv('RATE_LIMIT_HMAC_SECRET', 'secret-b');
+    const signedB = rateLimitStorageKey('login:acct:person@example.com');
+    expect(signedA).not.toBe(signedB);
+
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('RATE_LIMIT_HMAC_SECRET', '');
+    vi.stubEnv('AUTH_SECRET', '');
+    expect(() => rateLimitStorageKey('login:acct:person@example.com')).toThrow(
+      /RATE_LIMIT_HMAC_SECRET/
+    );
   });
 });
 

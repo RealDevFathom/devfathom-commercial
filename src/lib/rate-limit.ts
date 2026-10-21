@@ -1,3 +1,4 @@
+import { createHmac, randomBytes } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
 import { env as runtimeEnv } from 'node:process';
 
@@ -48,7 +49,12 @@ type RateLimitEnv = {
   CLIENT_IP_HEADER?: string;
   TRUSTED_PROXY_CIDRS?: string;
   TRUSTED_PROXY_HOPS?: string;
+  RATE_LIMIT_HMAC_SECRET?: string;
+  AUTH_SECRET?: string;
 };
+
+/** Non-production processes may rate-limit without a configured secret. The value is not a credential. */
+const devRateLimitHmacFallback = randomBytes(32).toString('hex');
 
 export function rateLimitBackend(env: RateLimitEnv = runtimeEnv): 'memory' | 'postgres' {
   if (env.NODE_ENV === 'production' && env.VITEST !== 'true') return 'postgres';
@@ -136,24 +142,54 @@ async function postgresRateLimit(
   }
 }
 
+function rateLimitHmacSecret(env: RateLimitEnv = runtimeEnv): string {
+  const secret = env.RATE_LIMIT_HMAC_SECRET?.trim() || env.AUTH_SECRET?.trim();
+  if (secret) return secret;
+  if (env.NODE_ENV === 'production') {
+    throw new Error('Refusing to rate-limit: set RATE_LIMIT_HMAC_SECRET or AUTH_SECRET.');
+  }
+  return devRateLimitHmacFallback;
+}
+
+/**
+ * Production must HMAC rate-limit keys. A missing secret would either store raw
+ * addresses and emails or sign every bucket with a value an attacker can read.
+ * Development and test keep an ephemeral process fallback.
+ */
+export function assertProductionRateLimitHmacSecret(env: RateLimitEnv = runtimeEnv): void {
+  if (env.NODE_ENV !== 'production') return;
+  if (env.NEXT_PHASE === 'phase-production-build') return;
+  if (env.RATE_LIMIT_HMAC_SECRET?.trim() || env.AUTH_SECRET?.trim()) return;
+  throw new Error(
+    'Refusing to start: set RATE_LIMIT_HMAC_SECRET or AUTH_SECRET. Production rate-limit keys must be HMAC-signed so raw addresses and emails are not stored.'
+  );
+}
+
+/** Bucket identity stored in memory and Postgres. The raw address or email is not kept. */
+export function rateLimitStorageKey(key: string): string {
+  return createHmac('sha256', rateLimitHmacSecret()).update(key).digest('hex');
+}
+
 export async function rateLimit(
   key: string,
   limit: number,
   windowMs: number
 ): Promise<RateLimitResult> {
   if (terminalFloodBypass(key)) return { ok: true, retryAfter: 0, remaining: limit - 1 };
-  if (rateLimitBackend() === 'memory') return memoryRateLimit(key, limit, windowMs);
-  return postgresRateLimit(key, limit, windowMs);
+  const stored = rateLimitStorageKey(key);
+  if (rateLimitBackend() === 'memory') return memoryRateLimit(stored, limit, windowMs);
+  return postgresRateLimit(stored, limit, windowMs);
 }
 
 export async function clearRateLimit(key: string): Promise<void> {
+  const stored = rateLimitStorageKey(key);
   if (rateLimitBackend() === 'memory') {
-    buckets.delete(key);
+    buckets.delete(stored);
     return;
   }
   const query = rateLimitQuery.current ?? defaultQuery;
   try {
-    await query(CLEAR_SQL, [key]);
+    await query(CLEAR_SQL, [stored]);
   } catch (error) {
     console.error('[rate-limit] clear failed', error instanceof Error ? error.name : 'error');
   }

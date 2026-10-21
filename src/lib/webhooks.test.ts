@@ -38,17 +38,19 @@ describe('emitEvent entitlement enforcement', () => {
   const findOrganization = vi.fn(async () => ({ isDemo: demo }));
   const findMany = vi.fn();
   const createDelivery = vi.fn();
+  const updateDelivery = vi.fn();
   const db = {
     organization: { findUnique: findOrganization },
     webhook: { findMany },
-    webhookDelivery: { create: createDelivery },
+    webhookDelivery: { create: createDelivery, update: updateDelivery },
   };
 
   beforeEach(() => {
     vi.clearAllMocks();
     demo = false;
     mocks.deliver.mockResolvedValue({ statusCode: 200, success: true, error: null });
-    createDelivery.mockResolvedValue({});
+    createDelivery.mockResolvedValue({ id: 'delivery_1' });
+    updateDelivery.mockResolvedValue({});
   });
 
   it('does no lookup, network call, or delivery write when webhooks are disabled', () => {
@@ -69,10 +71,24 @@ describe('emitEvent entitlement enforcement', () => {
     await vi.waitFor(() => expect(findMany).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(mocks.deliver).toHaveBeenCalledOnce());
     await vi.waitFor(() => expect(createDelivery).toHaveBeenCalledOnce());
+    await vi.waitFor(() => expect(updateDelivery).toHaveBeenCalledOnce());
+    expect(createDelivery.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.deliver.mock.invocationCallOrder[0]
+    );
     expect(mocks.deliver).toHaveBeenCalledWith(
       'https://example.com/hook',
-      expect.objectContaining({ body: expect.any(String), timeoutMs: 5_000 })
+      expect.objectContaining({
+        body: expect.any(String),
+        timeoutMs: 5_000,
+        headers: expect.objectContaining({
+          'X-DevFathom-Delivery-Id': 'delivery_1',
+        }),
+      })
     );
+    expect(updateDelivery).toHaveBeenCalledWith({
+      where: { id: 'delivery_1' },
+      data: { statusCode: 200, success: true, error: null },
+    });
   });
 
   it('stores the sanitized delivery error, not the poster exception', async () => {
@@ -87,8 +103,9 @@ describe('emitEvent entitlement enforcement', () => {
 
     emitEvent(db as never, entitlements(true), 'task.created', { taskId: 'task_1' });
 
-    await vi.waitFor(() => expect(createDelivery).toHaveBeenCalledOnce());
-    expect(createDelivery.mock.calls[0]?.[0].data.error).toBe('Delivery failed');
+    await vi.waitFor(() => expect(updateDelivery).toHaveBeenCalledOnce());
+    expect(updateDelivery.mock.calls[0]?.[0].data.error).toBe('Delivery failed');
+    expect(mocks.deliver.mock.calls[0]?.[1].headers['X-DevFathom-Delivery-Id']).toBe('delivery_1');
   });
 
   it('sinks enabled outbound webhooks for a demo organization', async () => {

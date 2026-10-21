@@ -2,8 +2,8 @@
  * Next.js server startup hook.
  *
  * Production refuses to serve when the database role can bypass row level
- * security, or when no trusted-proxy setting is configured. `next build`
- * skips both checks.
+ * security, when no trusted-proxy setting is configured, or when neither
+ * rate-limit HMAC secret nor `AUTH_SECRET` is set. `next build` skips the checks.
  *
  * `next start` catches a thrown `register()` and keeps listening, so a failed
  * check exits the process.
@@ -14,7 +14,9 @@ export async function register() {
   if (process.env.NODE_ENV !== 'production') return;
 
   try {
-    const { assertProductionClientIpConfig } = await import('@/lib/rate-limit');
+    const { assertProductionClientIpConfig, assertProductionRateLimitHmacSecret } =
+      await import('@/lib/rate-limit');
+    assertProductionRateLimitHmacSecret();
     assertProductionClientIpConfig();
     const { assertProductionDatabaseRole } = await import('@/lib/db/rls-role');
     await assertProductionDatabaseRole();
