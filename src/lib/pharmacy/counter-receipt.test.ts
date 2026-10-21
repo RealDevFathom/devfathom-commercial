@@ -64,6 +64,11 @@ describe('formatMinor', () => {
     const total = Array.from({ length: 1_000 }, () => 1).reduce((sum, value) => sum + value, 0);
     expect(formatMinor(total)).toBe('10.00');
   });
+
+  it('uses Urdu digits and decimal punctuation for an Urdu receipt', () => {
+    expect(formatMinor(123_456, 'ur')).toBe('۱۲۳۴٫۵۶');
+    expect(formatMinor(-250, 'ur')).toBe('-۲٫۵۰');
+  });
 });
 
 describe('counterReceiptTotals', () => {
@@ -162,6 +167,7 @@ describe('buildCounterReceiptDocument (printing seam)', () => {
     const document = buildCounterReceiptDocument(receipt(), 'ur');
     expect(document.title).toContain(COUNTER_RECEIPT_STRINGS.ur.receipt);
     expect(document.footer).toContain(COUNTER_RECEIPT_STRINGS.ur.net);
+    expect(document.footer).toContain('۵۰٫۰۰');
   });
 
   it('refuses an empty receipt rather than printing a blank slip', () => {

@@ -69,23 +69,25 @@ export function buildCounterReceiptPreview(
         const presentation = counterLinePresentation(line, locale);
         return [
           presentation.identity,
-          `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor)}`,
+          `${line.quantity} ${strings.saleUnit[line.saleUnit]} × ${formatMinor(line.unitPriceMinor, locale)}`,
           ...presentation.allocations,
-          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor)}`,
+          `${strings.lineTotal}: ${formatMinor(line.lineTotalMinor, locale)}`,
         ].join('\n');
       }),
       // The Pharmacy model supplies no tax breakdown. Never invent zero tax.
       taxLines: [labels[locale].tax],
       totals: [
         receipt.currency,
-        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor)}`,
-        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor)}`,
-        `${strings.net}: ${formatMinor(receipt.totals.netMinor)}`,
-        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor)}`,
-        `${strings.change}: ${formatMinor(receipt.totals.changeMinor)}`,
+        `${strings.gross}: ${formatMinor(receipt.totals.grossMinor, locale)}`,
+        `${strings.discount}: ${formatMinor(receipt.totals.discountMinor, locale)}`,
+        `${strings.net}: ${formatMinor(receipt.totals.netMinor, locale)}`,
+        `${strings.tendered}: ${formatMinor(receipt.totals.tenderedMinor, locale)}`,
+        `${strings.change}: ${formatMinor(receipt.totals.changeMinor, locale)}`,
       ],
       payments: receipt.tenders.length
-        ? receipt.tenders.map((tender) => `${tender.type}: ${formatMinor(tender.amountMinor)}`)
+        ? receipt.tenders.map(
+            (tender) => `${tender.type}: ${formatMinor(tender.amountMinor, locale)}`
+          )
         : [labels[locale].payments],
     }
   );
@@ -151,7 +153,7 @@ export function buildCounterZReportPreview(
     `${labels[1]}: ${report.businessDate}`,
     `#${report.sequence} · ${report.id}`,
     'PKR',
-    ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount)}`),
+    ...amounts.map((amount, i) => `${labels[i + 2]}: ${formatMinor(amount, locale)}`),
     `${labels[8]}: ${report.reason ?? '—'}`,
     report.isFinal ? 'Final' : 'Provisional — migration reconciliation pending',
   ].join('\n');
