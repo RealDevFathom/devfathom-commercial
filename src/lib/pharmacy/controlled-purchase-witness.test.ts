@@ -86,7 +86,8 @@ describe('verifyControlledPurchaseWitness', () => {
         { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
       )
     ).resolves.toEqual({
-      blocked: 'A different qualified person must enter their PIN.',
+      blocked:
+        'The receipt’s designated qualified person must be a different active pharmacist with an unlocked PIN. Ask them to enter their PIN.',
     });
     expect(update).not.toHaveBeenCalled();
   });
@@ -100,7 +101,7 @@ describe('verifyControlledPurchaseWitness', () => {
         { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
       )
     ).resolves.toEqual({
-      blocked: 'A different qualified person must enter their PIN.',
+      blocked: 'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.',
     });
     expect(update).toHaveBeenCalledWith({
       where: { id: 'cred' },

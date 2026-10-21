@@ -23,19 +23,23 @@ function fixture(capability: string) {
         permissionOverrides: [],
       }),
     },
-    pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue({ branchId: 'draft-branch' }) },
+    pharmacyGoodsReceipt: {
+      findFirst: vi
+        .fn()
+        .mockResolvedValue({ branchId: 'draft-branch', qualifiedPersonUserId: 'qualified-user' }),
+    },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
   };
   const ctx = {
     db,
     entitlements: { organizationId: 'org', modules: [] },
     session: {
-      user: { id: 'actor', organizationId: 'session-org', role: 'EMPLOYEE', status: 'ACTIVE' },
+      user: { id: 'actor', organizationId: 'org', role: 'EMPLOYEE', status: 'ACTIVE' },
     },
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
-  return { db, caller: app.createCaller(ctx) };
+  return { db, ctx, caller: app.createCaller(ctx) };
 }
 describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surface) => {
   function query(f: ReturnType<typeof fixture>) {
@@ -60,7 +64,10 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
         where: expect.objectContaining({
           organizationId: 'org',
           user: expect.objectContaining({ organizationId: 'org', status: 'ACTIVE' }),
-          userId: { not: 'actor' },
+          userId:
+            surface === 'purchasing'
+              ? { equals: 'qualified-user', not: 'actor' }
+              : { not: 'actor' },
         }),
       })
     );
@@ -96,7 +103,7 @@ it('scopes purchasing witnesses to the tenant draft branch', async () => {
   ).controlledWitnesses({ goodsReceiptId: 'draft' });
   expect(f.db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith({
     where: { id: 'draft', organizationId: 'org' },
-    select: { branchId: true },
+    select: { branchId: true, qualifiedPersonUserId: true },
   });
   expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
     expect.objectContaining({
@@ -121,4 +128,59 @@ it('does not enumerate witnesses for a missing or foreign draft', async () => {
     ).controlledWitnesses({ goodsReceiptId: 'foreign' })
   ).rejects.toMatchObject({ code: 'NOT_FOUND' });
   expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+});
+
+it.each([null, 'actor'])(
+  'offers no purchase witnesses when the designated person is %s',
+  async (qualifiedPersonUserId) => {
+    const f = fixture('pharmacy:procurement');
+    f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce({
+      branchId: 'draft-branch',
+      qualifiedPersonUserId,
+    } as never);
+    await expect(
+      (
+        f.caller.purchasing as unknown as {
+          controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+        }
+      ).controlledWitnesses({ goodsReceiptId: 'draft' })
+    ).resolves.toEqual([]);
+    expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+  }
+);
+it('restricts the picker to the designated person with an unlocked PIN', async () => {
+  const f = fixture('pharmacy:procurement');
+  await (
+    f.caller.purchasing as unknown as {
+      controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+    }
+  ).controlledWitnesses({ goodsReceiptId: 'draft' });
+  expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        userId: { equals: 'qualified-user', not: 'actor' },
+        credentials: {
+          some: expect.objectContaining({
+            type: 'PIN',
+            revokedAt: null,
+            deviceId: null,
+            OR: [{ lockedUntil: null }, { lockedUntil: { lte: expect.any(Date) } }],
+          }),
+        },
+      }),
+    })
+  );
+});
+
+it('derives purchasing witness tenant scope from the session', async () => {
+  const f = fixture('pharmacy:procurement');
+  f.ctx.entitlements!.organizationId = 'other-entitlement-org';
+  await (
+    f.caller.purchasing as unknown as {
+      controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+    }
+  ).controlledWitnesses({ goodsReceiptId: 'draft' });
+  expect(f.db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith(
+    expect.objectContaining({ where: { id: 'draft', organizationId: 'org' } })
+  );
 });

@@ -483,7 +483,8 @@ export async function listControlledPinWitnesses(
   db: ScopedDb,
   organizationId: string,
   actorId: string,
-  branchId?: string
+  branchId?: string,
+  qualifiedPersonUserId?: string
 ) {
   const staff = await db.restaurantStaffProfile.findMany({
     where: {
@@ -496,8 +497,19 @@ export async function listControlledPinWitnesses(
           : {}),
       },
       status: 'ACTIVE',
-      userId: { not: actorId },
-      credentials: { some: { type: 'PIN', revokedAt: null, deviceId: null } },
+      userId: qualifiedPersonUserId
+        ? { equals: qualifiedPersonUserId, not: actorId }
+        : { not: actorId },
+      credentials: {
+        some: {
+          type: 'PIN',
+          revokedAt: null,
+          deviceId: null,
+          ...(qualifiedPersonUserId
+            ? { OR: [{ lockedUntil: null }, { lockedUntil: { lte: new Date() } }] }
+            : {}),
+        },
+      },
     },
     include: {
       user: {

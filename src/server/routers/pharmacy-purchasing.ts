@@ -1232,14 +1232,21 @@ const purchasingRouter = router({
       ) {
         throw new TRPCError({ code: 'FORBIDDEN' });
       }
-      const organizationId = ctx.entitlements?.organizationId;
+      const organizationId = ctx.session?.user?.organizationId;
       if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
         where: { id: input.goodsReceiptId, organizationId },
-        select: { branchId: true },
+        select: { branchId: true, qualifiedPersonUserId: true },
       });
       if (!receipt) throw new TRPCError({ code: 'NOT_FOUND' });
-      return listControlledPinWitnesses(ctx.db, organizationId, actorId, receipt.branchId);
+      if (!receipt.qualifiedPersonUserId || receipt.qualifiedPersonUserId === actorId) return [];
+      return listControlledPinWitnesses(
+        ctx.db,
+        organizationId,
+        actorId,
+        receipt.branchId,
+        receipt.qualifiedPersonUserId
+      );
     }),
 
   /**

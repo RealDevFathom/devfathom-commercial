@@ -767,9 +767,13 @@ it.each(['pending', 'uncertain'] as const)(
   }
 );
 
-it.each([false, true])(
-  'opens controlled drafts safely when witness lookup fails=%s',
-  async (fails) => {
+it.each([
+  [false, false],
+  [true, false],
+  [false, true],
+])(
+  'opens controlled drafts safely when witness lookup fails=%s, PIN rejected=%s',
+  async (fails, blocked) => {
     const receipt = {
       id: 'gr-controlled',
       reference: 'GR-C',
@@ -782,7 +786,9 @@ it.each([false, true])(
       lines: [],
       exceptions: [],
     };
-    const post = vi.fn().mockResolvedValue({});
+    const rejection =
+      'Incorrect witness PIN. Ask the receipt’s designated qualified person to try again.';
+    const post = vi.fn().mockResolvedValue(blocked ? { blocked: rejection } : {});
     const witnesses = fails
       ? vi.fn().mockRejectedValue(new Error('FORBIDDEN'))
       : vi.fn().mockResolvedValue([{ id: 'staff-witness', name: 'Qualified witness' }]);
@@ -815,7 +821,12 @@ it.each([false, true])(
         staffProfileId: 'staff-witness',
         pin: '1234',
       });
-      expect(screen.getByRole('status')).toHaveTextContent('posted');
+      if (blocked) {
+        expect(screen.getByRole('alert')).toHaveTextContent(rejection);
+        expect(revalidatePath).not.toHaveBeenCalled();
+      } else {
+        expect(screen.getByRole('status')).toHaveTextContent('posted');
+      }
     }
   }
 );
