@@ -1,5 +1,7 @@
 # Restaurant SOP notification webhooks
 
+Inbound card-terminal webhooks are a separate contract: [Restaurant terminal webhooks](restaurant-terminal-webhooks.md).
+
 Restaurant admins configure one organization-scoped HTTPS endpoint from **Restaurant → Notifications**. The signing secret is supplied by the receiver, encrypted at rest, never displayed again, and can be rotated by saving a new value.
 
 ## Request contract (version 1.0)
