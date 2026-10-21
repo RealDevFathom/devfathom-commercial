@@ -33,6 +33,7 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  addSaleLine: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -64,7 +65,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { readReturnHistory } from '@/lib/pharmacy/sales';
+import { addSaleLine, readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -125,6 +126,7 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
         },
       ]),
     },
+    medicine: { findFirst: vi.fn(async () => ({ controlled: false })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
   };
@@ -212,6 +214,42 @@ const paths: {
 ];
 
 describe('counter receipt authorization', () => {
+  it('lets an administrator with no capability rows read the cart after adding a line', async () => {
+    const f = fixture([], 'ADMIN');
+    const line = { id: 'line-a' };
+    vi.mocked(addSaleLine).mockResolvedValue({ line } as never);
+    vi.mocked(readCounterCart).mockResolvedValueOnce({ saleId: 'sale-a', lines: [line] } as never);
+    const caller = f.caller();
+    await expect(
+      caller.addLine({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        packLevelId: 'pack-a',
+        saleUnit: 'STRIP',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 10,
+        idempotencyKey: 'admin-add-line',
+      })
+    ).resolves.toMatchObject({ line });
+    await expect(
+      caller.counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ saleId: 'sale-a', lines: [line] });
+    const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' };
+    expect(addSaleLine).toHaveBeenCalledWith(f.db, scope, expect.any(Object));
+    expect(readCounterCart).toHaveBeenCalledWith(f.db, scope, 'sale-a');
+  });
+
+  it('denies an employee with no capability rows even with a branch assignment', async () => {
+    const f = fixture([]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(readCounterCart).not.toHaveBeenCalled();
+  });
+
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);

@@ -352,7 +352,9 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     if (override === 'ALLOW') return true;
     return capabilityDecision(roleRules, action) === 'ALLOW';
   });
-  if (!capable) {
+  // Match the write path's session administrator access without granting other roles access.
+  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  if (!orgAdmin && !capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
@@ -381,7 +383,6 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   // Session role only. An organization-role key is not an administrator grant.
   // An assigned admin still reaches every other active branch of this organization.
-  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
   if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
