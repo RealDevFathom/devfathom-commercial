@@ -33,6 +33,7 @@ vi.mock('@/lib/pharmacy/counter', async (original) => ({
 vi.mock('@/lib/pharmacy/sales', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/sales')>()),
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
+  createSale: vi.fn(),
   addSaleLine: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
@@ -65,7 +66,7 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { addSaleLine, readReturnHistory } from '@/lib/pharmacy/sales';
+import { addSaleLine, createSale, readReturnHistory } from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -92,13 +93,12 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
       })),
     },
     pharmacyBranch: {
-      findMany: vi.fn(
-        async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
-          args.where.organizationId && args.where.organizationId !== 'org-a'
-            ? []
-            : args.where.id.in
-                .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
-                .map((id) => ({ id }))
+      findMany: vi.fn(async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
+        args.where.organizationId && args.where.organizationId !== 'org-a'
+          ? []
+          : args.where.id.in
+              .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
+              .map((id) => ({ id }))
       ),
       findFirst: vi.fn(async (args?: { where?: { id?: string; organizationId?: string } }) => {
         const id = args?.where?.id;
@@ -250,6 +250,55 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).not.toHaveBeenCalled();
   });
 
+  it.each(['role', 'user'] as const)(
+    'denies an administrator when a %s rule explicitly denies receipt access',
+    async (source) => {
+      const denied = [{ capability: 'pharmacy:receipt', effect: 'DENY' as const }];
+      const f = fixture(source === 'role' ? denied : dispense, 'ADMIN');
+      if (source === 'user') {
+        f.db.user.findUnique.mockResolvedValue({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: dispense },
+          permissionOverrides: denied,
+        });
+      }
+
+      await expect(
+        f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
+      expect(readCounterReceipt).not.toHaveBeenCalled();
+    }
+  );
+
+  it('gates sale creation and line addition for an employee without counter capability', async () => {
+    const f = fixture([]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().create({ branchId: 'branch-a', quotation: false })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      f.caller().addLine({
+        branchId: 'branch-a',
+        saleId: 'sale-a',
+        medicineId: 'medicine-a',
+        presentationId: 'presentation-a',
+        packLevelId: 'pack-a',
+        saleUnit: 'STRIP',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 10,
+        idempotencyKey: 'employee-add-line',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(createSale).not.toHaveBeenCalled();
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
     const f = fixture(dispense);
     assign(f, ['branch-a']);
@@ -292,6 +341,27 @@ describe('counter receipt authorization', () => {
     expect(f.db.pharmacyBranchAssignment.findMany).not.toHaveBeenCalled();
     for (const read of reads()) expect(read).not.toHaveBeenCalled();
     expect(f.db.pharmacySale.findMany).not.toHaveBeenCalled();
+  });
+
+  it('does not carry a support administrator role into another organization', async () => {
+    const f = fixture(dispense, 'ADMIN');
+    f.user.organizationId = 'org-b';
+    Object.assign(f.context, {
+      support: {
+        supportSessionId: 'support-1',
+        organizationId: 'org-b',
+        platformUserId: 'platform-1',
+        tenantUserId: 'user-a',
+        tenantUserRole: 'ADMIN',
+        expiresAt: new Date('2026-11-01T00:00:00.000Z'),
+        reason: 'Investigating an authorized support request.',
+      },
+    });
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.user.findUnique).not.toHaveBeenCalled();
+    expect(readCounterReceipt).not.toHaveBeenCalled();
   });
 
   it.each(paths)('$name denies when the pharmacy module is off', async (path) => {

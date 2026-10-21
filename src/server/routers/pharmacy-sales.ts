@@ -346,13 +346,24 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
+  const explicitlyDenied = RECEIPT_READ_CAPABILITIES.some(
+    (action) =>
+      capabilityDecision(overrides, action) === 'DENY' ||
+      capabilityDecision(roleRules, action) === 'DENY'
+  );
+  if (explicitlyDenied) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
   const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
     const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
     if (override === 'ALLOW') return true;
     return capabilityDecision(roleRules, action) === 'ALLOW';
   });
-  // Match the write path's session administrator access without granting other roles access.
+  // A same-organization session administrator may proceed only after both
+  // user and role rules have been checked for an explicit receipt denial.
   const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
   if (!orgAdmin && !capable) {
     throw new TRPCError({
@@ -830,11 +841,10 @@ export const pharmacySalesRouter = router({
     }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return ctx.db.$transaction(async (tx) => createSale(txDb(tx), scope, input.quotation));
+    }),
   addLine: protectedProcedure
     .input(
       z
@@ -910,9 +920,9 @@ export const pharmacySalesRouter = router({
         });
       }
       try {
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
-          const scope = await scopeFor(ctx, input.branchId);
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
