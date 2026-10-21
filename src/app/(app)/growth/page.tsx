@@ -21,7 +21,7 @@ import { GrowthFrame } from './frame';
 export const metadata = { title: 'Growth' };
 
 const description =
-  'Salaam. Approve what should go out on WhatsApp. Only customers who said haan are included.';
+  'Salaam. Approve what should go out on WhatsApp. Only customers who opted in at the counter or replied START / شروع are included.';
 
 function defaultSendAt() {
   const today = karachiInputValue(new Date()).slice(0, 10);
