@@ -35,6 +35,8 @@ jobs:
           --health-retries 20
     env:
       OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      # Prisma migrate prefers this URL. The app DATABASE_URL below stays on gate_runtime.
+      MIGRATION_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       RUNTIME_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       COHORT_OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/pharmacy_cohort_test
       COHORT_SETUP_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/pharmacy_cohort_test
@@ -159,8 +161,8 @@ jobs:
           SQL
           record database-bootstrap "$?"
 
-          DATABASE_URL="$OWNER_URL" EXTENSION_ADMIN_DATABASE_URL="$OWNER_URL" run prepare-extensions bun prisma/prepare-extensions.ts
-          DATABASE_URL="$OWNER_URL" run migrate-deploy bunx prisma migrate deploy
+          DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" EXTENSION_ADMIN_DATABASE_URL="$OWNER_URL" run prepare-extensions bun prisma/prepare-extensions.ts
+          DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" run migrate-deploy bunx prisma migrate deploy
           run prisma-generate bunx prisma generate
           run runtime-grants psql "$OWNER_URL" -v ON_ERROR_STOP=1 \
             -c 'GRANT USAGE ON SCHEMA public TO gate_runtime;' \
@@ -168,12 +170,22 @@ jobs:
             -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gate_runtime;' \
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
-          DATABASE_URL="$OWNER_URL" run seed bunx prisma db seed
+          role_attributes=$(psql "$RUNTIME_URL" -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text FROM pg_roles WHERE rolname = current_user")
+          if [ "$role_attributes" = 'false:false' ]; then
+            printf '%s\n' "$role_attributes" >gate/runtime-role-check.stdout.log
+            : > gate/runtime-role-check.stderr.log
+            record runtime-role-check 0
+          else
+            echo "Runtime database role is not restricted: ${role_attributes:-<empty>}" >gate/runtime-role-check.stderr.log
+            : > gate/runtime-role-check.stdout.log
+            record runtime-role-check 1
+          fi
+          DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" run seed bunx prisma db seed
           # These suites require isolated fixtures and different runtime privileges.
           for lane in cohort receipt; do
             if [ "$lane" = cohort ]; then owner_url="$COHORT_OWNER_URL"; else owner_url="$RECEIPT_OWNER_URL"; fi
-            DATABASE_URL="$owner_url" EXTENSION_ADMIN_DATABASE_URL="$owner_url" run "$lane-prepare-extensions" bun prisma/prepare-extensions.ts
-            DATABASE_URL="$owner_url" run "$lane-migrate-deploy" bunx prisma migrate deploy
+            DATABASE_URL="$owner_url" MIGRATION_DATABASE_URL="$owner_url" EXTENSION_ADMIN_DATABASE_URL="$owner_url" run "$lane-prepare-extensions" bun prisma/prepare-extensions.ts
+            DATABASE_URL="$owner_url" MIGRATION_DATABASE_URL="$owner_url" run "$lane-migrate-deploy" bunx prisma migrate deploy
           done
           # The mixed-tenant fixture needs setup authority; sales RLS has no platform-admin exception.
           run cohort-fixture psql "$COHORT_SETUP_URL" -v ON_ERROR_STOP=1 \
@@ -188,6 +200,7 @@ jobs:
           DATABASE_URL="$COHORT_RUNTIME_URL" TEST_DATABASE_URL="$COHORT_RUNTIME_URL" run vitest-cohort bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-cohort.json
           DATABASE_URL="$RECEIPT_RUNTIME_URL" TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" WHA1364_RECEIPT_TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" run vitest-receipt bunx vitest run src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-receipt.json
           RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          # test:rls creates its own NOLOGIN role and does not start the app.
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 
@@ -330,16 +343,21 @@ jobs:
               -c "CREATE DATABASE $db OWNER gate_owner;" \
               -c "REVOKE ALL ON DATABASE $db FROM PUBLIC;" \
               -c "GRANT CONNECT, TEMPORARY ON DATABASE $db TO gate_runtime;"
-            EXTENSION_ADMIN_DATABASE_URL="$owner_base/$db" DATABASE_URL="$owner_base/$db" bun prisma/prepare-extensions.ts
-            DATABASE_URL="$owner_base/$db" bunx prisma migrate deploy
+            EXTENSION_ADMIN_DATABASE_URL="$owner_base/$db" DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bun prisma/prepare-extensions.ts
+            DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bunx prisma migrate deploy
             psql "$owner_base/$db" -v ON_ERROR_STOP=1 \
               -c 'GRANT USAGE ON SCHEMA public TO gate_runtime;' \
               -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gate_runtime;' \
               -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gate_runtime;' \
               -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
               -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
-            DATABASE_URL="$owner_base/$db" bunx prisma db seed
+            DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bunx prisma db seed
           done
+          role_attributes=$(PGPASSWORD=gate-runtime-ci-only psql -h 127.0.0.1 -p 55432 -U gate_runtime -d restaurant_e2e_gate -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text FROM pg_roles WHERE rolname = current_user")
+          if [ "$role_attributes" != 'false:false' ]; then
+            echo "Runtime database role is not restricted: ${role_attributes:-<empty>}" >&2
+            exit 1
+          fi
       - name: Record 01-provision
         if: always()
         run: printf '01-provision=%s\n' '${{ steps.provision.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt

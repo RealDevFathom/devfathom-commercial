@@ -13,16 +13,16 @@ The route requires `CRON_SECRET`. An Azure scheduler/recurring trigger is a prod
 
 ## Job types
 
-| Type                  | Behavior                                                 | Required external configuration                |
-| --------------------- | -------------------------------------------------------- | ---------------------------------------------- |
-| `PROVISION_SHARED`    | records/updates shared deployment state                  | Azure environment and approved base domain    |
-| `PROVISION_DEDICATED` | records a contracted dedicated deployment and polls      | approved Azure resources and rollout           |
-| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to the deployment       | DNS and Azure ingress                          |
-| `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                           |
-| `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                         |
-| `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                        |
-| `PURGE_DATA`          | retention-gated tenant-row deletion                      | approved lifecycle state/time                  |
-| `SUSPEND` / `RESUME`  | deployment availability and support revocation           | none                                           |
+| Type                  | Behavior                                                 | Required external configuration            |
+| --------------------- | -------------------------------------------------------- | ------------------------------------------ |
+| `PROVISION_SHARED`    | records/updates shared deployment state                  | Azure environment and approved base domain |
+| `PROVISION_DEDICATED` | records a contracted dedicated deployment and polls      | approved Azure resources and rollout       |
+| `CONFIGURE_DOMAIN`    | verifies TXT and attaches domain to the deployment       | DNS and Azure ingress                      |
+| `APPLY_BRAND`         | records deterministic brand version in deployment health | none                                       |
+| `SYNC_IDENTITY`       | validates OIDC discovery or SAML configuration           | reachable IdP metadata                     |
+| `EXPORT_DATA`         | writes private JSON snapshot                             | `BLOB_READ_WRITE_TOKEN`                    |
+| `PURGE_DATA`          | retention-gated tenant-row deletion                      | approved lifecycle state/time              |
+| `SUSPEND` / `RESUME`  | deployment availability and support revocation           | none                                       |
 
 Jobs are idempotency-keyed where commands can be retried. Operators can inspect payload/result/error, retry failed jobs, or cancel queued/running work.
 
@@ -52,7 +52,8 @@ Use `.env.example` as the machine-copyable template.
 
 | Variable                           | Sensitive | Purpose                                                                                 |
 | ---------------------------------- | --------- | --------------------------------------------------------------------------------------- |
-| `DATABASE_URL`                     | yes       | PostgreSQL application connection                                                       |
+| `DATABASE_URL`                     | yes       | PostgreSQL application connection. Production requires `NOSUPERUSER` and `NOBYPASSRLS`. |
+| `MIGRATION_DATABASE_URL`           | yes       | Migrations, extensions, and seed. The running server does not use this URL.             |
 | `AUTH_SECRET`                      | yes       | Auth.js JWT encryption/signing secret                                                   |
 | `AUTH_URL` / `NEXT_PUBLIC_APP_URL` | no        | canonical application URL — set to the SHARED host so reset and invite links land there |
 | `PLATFORM_BASE_DOMAIN`             | no        | base domain; admin host is `admin.<value>`                                              |
