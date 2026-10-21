@@ -466,7 +466,12 @@ export default async function PharmacyInventoryPage({
             </span>
           </Empty>
         ) : (
-          <div className="overflow-x-auto">
+          <div
+            className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring [&_[data-slot=table-container]]:overflow-visible"
+            role="region"
+            aria-label="Inventory lots"
+            tabIndex={0}
+          >
             <Table>
               <TableHeader>
                 <TableRow>

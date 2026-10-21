@@ -316,7 +316,12 @@ export default async function PharmacyMarketingPage({
             No campaigns yet. Approve a template, then save your first draft below.
           </p>
         ) : (
-          <div className="relative overflow-x-auto">
+          <div
+            className="relative overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring"
+            role="region"
+            aria-label="Campaign history"
+            tabIndex={0}
+          >
             <table className="w-full text-left text-sm">
               <thead className="font-mono text-xs uppercase text-text-muted">
                 <tr>

@@ -106,7 +106,12 @@ export async function FinancialStatements({
         <p className="mt-3 text-sm">No recorded balance postings; completeness unknown.</p>
       )}
       <h3 className="mt-6 font-semibold">Trial balance</h3>
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring"
+        role="region"
+        aria-label="Trial balance"
+        tabIndex={0}
+      >
         <table className="mt-3 w-full text-sm">
           <thead className="font-mono text-xs uppercase">
             <tr>
@@ -144,7 +149,12 @@ export async function FinancialStatements({
         Net cash and bank movement per journal event; internal cash-to-bank transfers contribute
         zero. This is not a classified statutory cash-flow statement.
       </p>
-      <div className="overflow-x-auto">
+      <div
+        className="overflow-x-auto focus-visible:outline-2 focus-visible:outline-ring"
+        role="region"
+        aria-label="Cash flow"
+        tabIndex={0}
+      >
         <table className="mt-3 w-full text-sm">
           <thead>
             <tr>
