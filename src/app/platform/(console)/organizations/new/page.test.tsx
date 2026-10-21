@@ -1,4 +1,4 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewOrganizationPage from './page';
@@ -298,4 +298,36 @@ describe('NewOrganizationPage package step', () => {
       '/platform/catalog'
     );
   });
+});
+
+it('submits the selected package default and a super admin override within its ceiling', async () => {
+  mocks.packageFindMany.mockResolvedValue([
+    { id: 'chain', name: 'Pharmacy Chain', defaultSeats: 2500 },
+    { id: 'professional', name: 'Pharmacy Professional', defaultSeats: 50 },
+  ]);
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue({ ok: true, json: async () => ({ data: { id: 'org' } }) });
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
+    fireEvent.change(screen.getByLabelText('Commercial package'), {
+      target: { value: 'professional' },
+    });
+    const seats = screen.getByLabelText('Seat limit');
+    expect(seats).toHaveValue(50);
+    expect(seats).toHaveAttribute('max', '50');
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const first = JSON.parse(fetchMock.mock.calls[0]![1].body).payload;
+    expect(first.packageId).toBe('professional');
+    expect(first.seatLimit).toBe(50);
+    await waitFor(() => expect(screen.queryByText('Working…')).not.toBeInTheDocument());
+    fireEvent.change(seats, { target: { value: '25' } });
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body).payload.seatLimit).toBe(25);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

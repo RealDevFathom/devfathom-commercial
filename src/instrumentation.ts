@@ -9,19 +9,13 @@
  * check exits the process.
  */
 export async function register() {
-  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
   if (process.env.NEXT_PHASE === 'phase-production-build') return;
   if (process.env.NODE_ENV !== 'production') return;
 
-  try {
-    const { assertProductionClientIpConfig, assertProductionRateLimitHmacSecret } =
-      await import('@/lib/rate-limit');
-    assertProductionRateLimitHmacSecret();
-    assertProductionClientIpConfig();
-    const { assertProductionDatabaseRole } = await import('@/lib/db/rls-role');
-    await assertProductionDatabaseRole();
-  } catch (error) {
-    console.error(error);
-    process.exit(1);
+  // Keep the import inside a positive runtime branch so Next can eliminate
+  // the Node-only dependency graph from its Edge compilation.
+  if (process.env.NEXT_RUNTIME === 'nodejs') {
+    const { assertProductionStartup } = await import('./instrumentation-node');
+    await assertProductionStartup();
   }
 }
