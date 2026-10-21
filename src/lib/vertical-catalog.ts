@@ -722,19 +722,16 @@ export const AGENCY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
 ];
 
 export const PHARMACY_CAPABILITIES: readonly string[] = [
-  'pharmacy.*',
-  'pharmacy.dispense',
+  'pharmacy:*',
+  'pharmacy:dispense',
   'pharmacy:catalogue-review',
-  'pharmacy.manage',
-  'pharmacy.counter',
-  'pharmacy.procurement',
-  'pharmacy.inventory',
-  'pharmacy.finance',
-  'pharmacy.audit',
+  'pharmacy:manage',
+  'pharmacy:counter',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
   'pharmacy:orders',
   'reports:operational',
   'reports:financial',
-  'pharmacy:dispense',
   'pharmacy:safety',
 ];
 
@@ -743,7 +740,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'owner',
     name: 'Owner',
     isSystem: true,
-    capabilities: ['pharmacy.*', 'pharmacy:orders'],
+    capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'],
   },
   {
     // Optional, explicitly assigned proprietor role. Pair with tenant UserRole.ADMIN
@@ -766,29 +763,29 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy.dispense', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'],
   },
   {
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy.manage', 'pharmacy:orders'],
+    capabilities: ['pharmacy:manage', 'pharmacy:orders'],
   },
   {
     key: 'cashier',
     name: 'Cashier',
     isSystem: true,
-    capabilities: ['pharmacy.counter', 'pharmacy:orders'],
+    capabilities: ['pharmacy:counter', 'pharmacy:orders'],
   },
   {
     key: 'procurement',
     name: 'Procurement',
     isSystem: true,
-    capabilities: ['pharmacy.procurement'],
+    capabilities: ['pharmacy:procurement'],
   },
-  { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy.inventory'] },
-  { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['pharmacy.finance'] },
-  { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['pharmacy.audit'] },
+  { key: 'inventory', name: 'Inventory', isSystem: true, capabilities: ['pharmacy:inventory'] },
+  { key: 'finance', name: 'Finance', isSystem: true, capabilities: ['reports:financial'] },
+  { key: 'auditor', name: 'Auditor', isSystem: true, capabilities: ['reports:operational'] },
 ];
 
 /**

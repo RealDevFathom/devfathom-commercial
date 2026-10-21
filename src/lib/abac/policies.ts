@@ -69,6 +69,10 @@ export const ALL_ACTIONS = [
   'workforce:rates', // restaurant M8: restricted labour-cost facts — org-role driven, default deny
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
+  'pharmacy:counter',
+  'pharmacy:manage',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
@@ -226,6 +230,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   // no static agency-role policy, so it is DEFAULT DENY until an organization
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
+  'pharmacy:counter': [],
+  'pharmacy:manage': [],
+  'pharmacy:procurement': [],
+  'pharmacy:inventory': [],
   'pharmacy:dispense': [],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],

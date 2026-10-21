@@ -64,7 +64,7 @@ import {
 import type { ReceivingScope } from '@/lib/pharmacy/goods-receipt';
 import { authenticatePharmacyPack } from '@/lib/pharmacy/pack-authentication-operations';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import { auditedProtectedProcedure, capabilityProcedure, protectedProcedure, router } from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 /**
@@ -953,7 +953,7 @@ const purchasingRouter = router({
    * One transaction: the lot, both dispositions, every exception, the receipt
    * status and the order's move to RECEIVING commit together or not at all.
    */
-  postGoodsReceipt: protectedProcedure
+  postGoodsReceipt: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = receivingScope(ctx, input.branchId);
