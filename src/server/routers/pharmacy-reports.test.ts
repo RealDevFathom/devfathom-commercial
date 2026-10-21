@@ -17,6 +17,8 @@ const mocks = vi.hoisted(() => ({
   creditsRead: vi.fn(),
   refresh: vi.fn(),
   createDraft: vi.fn(),
+  queryRaw: vi.fn().mockResolvedValue([]),
+  count: vi.fn().mockResolvedValue(0),
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -78,6 +80,11 @@ function caller(role = 'ADMIN') {
         update: mocks.reportUpdate,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+      pharmacyRecallNotice: { count: mocks.count },
+      pharmacySupplierClaim: { count: mocks.count },
+      pharmacyReceivingException: { count: mocks.count },
+      branchRegulatoryProfile: { count: mocks.count },
+      $queryRaw: mocks.queryRaw,
     },
     entitlements: {
       organizationId: 'org_1',
@@ -395,5 +402,51 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner command centre overdue Khata + access (#247)', () => {
+  const input = { from: '2026-09-01', to: '2026-09-30' };
+  beforeEach(() => {
+    mocks.can.mockReset();
+    mocks.queryRaw.mockReset();
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.count.mockResolvedValue(0);
+    // The overdue-Khata aggregate carries a value; every other query is empty.
+    mocks.queryRaw.mockImplementation(async (query: { strings: readonly string[] }) =>
+      query.strings.join('?').includes('GREATEST(0, e."amountMinor"') ? [{ amount: BigInt(4200) }] : []
+    );
+  });
+
+  // The command-centre gate calls `can` in order: admin:access (ADMIN role only),
+  // then reports:operational, then reports:financial.
+  it('admits a pharmacy owner via reports:operational and exposes overdue Khata', async () => {
+    // Pharmacy owner is an ADMIN without platform admin:access but holds reports:*.
+    mocks.can
+      .mockResolvedValueOnce(false) // admin:access
+      .mockResolvedValueOnce(true) // reports:operational
+      .mockResolvedValueOnce(true); // reports:financial
+    const result = await caller().commandCentre(input);
+    expect(result.permissions).toEqual({ operational: true, financial: true });
+    expect(result.metrics.khataAgingMinor).toBe(4200);
+  });
+
+  it('masks Khata aging when financial permission is absent', async () => {
+    mocks.can
+      .mockResolvedValueOnce(false) // admin:access
+      .mockResolvedValueOnce(true) // reports:operational
+      .mockResolvedValueOnce(false); // reports:financial
+    const result = await caller().commandCentre(input);
+    expect(result.permissions.financial).toBe(false);
+    expect(result.metrics.khataAgingMinor).toBeNull();
+  });
+
+  it('forbids a caller without operational or admin access', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().commandCentre(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
   });
 });
