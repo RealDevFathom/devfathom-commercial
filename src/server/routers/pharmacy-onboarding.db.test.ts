@@ -47,6 +47,7 @@ const organizationId = `ph1198_org_${suffix}`;
 const otherOrganizationId = `ph1198_other_${suffix}`;
 const branchId = `ph1198_branch_${suffix}`;
 const secondBranchId = `ph1198_branch2_${suffix}`;
+const sindhBranchId = `ph1198_sindh_${suffix}`;
 const otherBranchId = `ph1198_otherbranch_${suffix}`;
 const userId = `ph1198_user_${suffix}`;
 const owner = new pg.Client({ connectionString: ownerUrl });
@@ -118,10 +119,11 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     }
     await owner.query(
       `INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode","updatedAt")
-       VALUES ($1,$2,$1,'Gulberg','12 Mall Road','Lahore','PB',now()),
-              ($3,$2,$3,'Model Town','9 Link Road','Lahore','PB',now()),
-              ($4,$5,$4,'Other tenant','1 Elsewhere','Karachi','SD',now())`,
-      [branchId, organizationId, secondBranchId, otherBranchId, otherOrganizationId]
+       VALUES ($1,$2,$1,'Gulberg','12 Mall Road','Lahore','PK-PB',now()),
+              ($3,$2,$3,'Model Town','9 Link Road','Lahore','PK-PB',now()),
+              ($6,$2,$6,'Clifton','5 Clifton Road','Karachi','PK-SD',now()),
+              ($4,$5,$4,'Other tenant','1 Elsewhere','Karachi','PK-SD',now())`,
+      [branchId, organizationId, secondBranchId, otherBranchId, otherOrganizationId, sindhBranchId]
     );
   });
 
@@ -181,7 +183,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     await withTenantDb(organizationId, async (db) => {
       const result = await caller(db).regulatory();
       expect(result.branches.map((branch) => branch.id).sort()).toEqual(
-        [branchId, secondBranchId].sort()
+        [branchId, secondBranchId, sindhBranchId].sort()
       );
       // The other tenant's branch is absent from the picker, by an explicit
       // organization predicate — RLS is the second wall, not the only one.
@@ -400,6 +402,44 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       const result = await caller(db, otherOrganizationId).regulatory();
       expect(result.branches.map((branch) => branch.id)).toEqual([otherBranchId]);
       expect(result.versions).toEqual([]);
+    });
+  });
+
+  // Runs last: a passing licences gate raises this organization's doneCount, so
+  // the earlier attestation test that asserts an exact count would see it.
+  it('lets a Sindh branch record an operable profile that passes the licences gate (QA-129)', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      // Sindh publishes RETAIL/WHOLESALE licence categories and G/H schedules,
+      // so a complete profile on that confirmed rule set is one the regulatory
+      // guard allows the branch to operate on — unlike the provisional Punjab a
+      // Karachi branch used to be forced onto.
+      const saved = await caller(db).saveRegulatoryProfile({
+        ...profile,
+        branchId: sindhBranchId,
+        effectiveFrom: '2026-10-15',
+        provinceCode: 'PK-SD',
+        premisesCity: 'Karachi',
+        licenceCategory: 'RETAIL',
+        licenceNumber: 'SD-LIC-1001',
+        permittedSchedules: ['G', 'H'],
+        fiscalStatus: 'REGISTERED',
+      });
+      expect(saved.version).toBe(1);
+
+      // The gate the operator came for: with published rules and a complete
+      // profile, premises-and-licences is done and activation is no longer
+      // blocked on it.
+      const licences = saved.readiness.items.find((item) => item.key === 'PREMISES_AND_LICENCES');
+      expect(licences?.state).toBe('DONE');
+
+      const listed = await caller(db).regulatory({ branchId: sindhBranchId });
+      expect(listed.versions).toHaveLength(1);
+      expect(listed.versions[0]).toMatchObject({
+        version: 1,
+        inForce: true,
+        provinceName: 'Sindh',
+        licenceCategory: 'RETAIL',
+      });
     });
   });
 });

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { formatValidationError } from '@/lib/validation-error';
 import {
+  defaultProvinceCode,
   FISCAL_STATUSES,
   fieldError,
   provinceName,
@@ -132,5 +133,17 @@ describe('branch regulatory profile input', () => {
       expect(status.label).not.toBe(status.value);
       expect(status.label).toMatch(/[a-z]/);
     }
+  });
+
+  it('starts the form on the branch’s own province when its rules are published (QA-129)', () => {
+    const jurisdictions = [{ provinceCode: 'PK-PB' }, { provinceCode: 'PK-SD' }];
+    // A Karachi branch opens on Sindh even though Punjab sorts first.
+    expect(defaultProvinceCode(jurisdictions, 'PK-SD')).toBe('PK-SD');
+    expect(defaultProvinceCode(jurisdictions, 'PK-PB')).toBe('PK-PB');
+    // A branch whose province has no published rules falls back to the first
+    // published jurisdiction rather than leaving the select empty.
+    expect(defaultProvinceCode(jurisdictions, 'PK-KP')).toBe('PK-PB');
+    expect(defaultProvinceCode(jurisdictions, null)).toBe('PK-PB');
+    expect(defaultProvinceCode([], 'PK-SD')).toBe('');
   });
 });

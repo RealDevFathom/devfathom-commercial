@@ -116,22 +116,29 @@ describeIfDatabase('pharmacy regulatory persistence', () => {
     }
   });
 
-  it('seeds only provisional PK-PB and rejects regulated-record rewrites', async () => {
+  it('seeds provisional PK-PB and published PK-SD, and rejects regulated-record rewrites', async () => {
     const client = new Client({ connectionString: runtimeUrl });
     await client.connect();
     try {
       const rules = await client.query<{ code: string; provisional: boolean }>(
         `SELECT code, ("licenceCategories"->>'provisional')::boolean provisional
-           FROM pharmacy_jurisdiction_rule_sets`
+           FROM pharmacy_jurisdiction_rule_sets
+          WHERE code IN ('PK-PB', 'PK-SD')
+          ORDER BY code`
       );
-      expect(rules.rows).toEqual([{ code: 'PK-PB', provisional: true }]);
+      // PK-PB ships provisional, so no Punjab branch may operate yet; PK-SD ships
+      // published (QA-129), so a Sindh branch can record an operable profile.
+      expect(rules.rows).toEqual([
+        { code: 'PK-PB', provisional: true },
+        { code: 'PK-SD', provisional: false },
+      ]);
       await expect(
         client.query(
           `INSERT INTO pharmacy_jurisdiction_rule_sets
            (id, code, version, "effectiveFrom", "licenceCategories", "permittedSchedules",
             "prescriptionOnlyClasses", "prescriptionRetentionDays", "controlledRegisterFlags",
             "pharmacistCoverageRule", "recordRetentionByClass")
-           VALUES ('forbidden', 'PK-SD', 1, now(), '{}', '{}', '{}', '{}', '{}', '{}', '{}')`
+           VALUES ('forbidden', 'PK-KP', 1, now(), '{}', '{}', '{}', '{}', '{}', '{}', '{}')`
         )
       ).rejects.toMatchObject({ code: '42501' });
       await client.query(`SELECT set_config('app.current_organization_id', $1, false)`, [orgA]);
