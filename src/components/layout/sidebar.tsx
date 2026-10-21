@@ -49,6 +49,7 @@ import {
   BedDouble,
   DoorOpen,
   MessageSquareText,
+  Megaphone,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -96,6 +97,13 @@ export const navigation: NavItem[] = [
     href: '/dashboard',
     icon: LayoutDashboard,
     group: 'Workspace',
+  },
+  {
+    label: 'Growth',
+    href: '/growth',
+    icon: Megaphone,
+    group: 'Workspace',
+    module: 'growth_ai',
   },
   {
     label: 'Projects',
