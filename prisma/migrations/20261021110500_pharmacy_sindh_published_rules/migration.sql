@@ -1,6 +1,6 @@
 -- PK-SD v1 is flagged "pendingLegalReview": usable in staging/pilots, refused by
 -- production enforcement until counsel signs off (docs/ops/production-checklist.md);
--- clearing it requires a follow-up migration that sets the flag false.
+-- clearing it requires appending a new rule-set version after legal review.
 -- QA-129: a Sindh (PK-SD) pharmacy had no published jurisdiction rules to
 -- operate on. The original pharmacy-regulatory migration shipped only a
 -- provisional Punjab (PK-PB) set, so the regulatory form offered Sindh branches
@@ -19,6 +19,7 @@
 -- INSERT policy. The migration role is not a superuser on the gate cluster or
 -- on AWS, so we assert the platform-admin flag for this transaction before
 -- the INSERT — exactly the predicate the policy's WITH CHECK reads.
+BEGIN;
 SELECT set_config('app.is_platform_admin', 'true', true);
 
 INSERT INTO "pharmacy_jurisdiction_rule_sets" (
@@ -36,3 +37,5 @@ INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   '{"values":{"prescription":1825},"provisional":false,"pendingLegalReview":true}'
 )
 ON CONFLICT ("code", "version") DO NOTHING;
+
+COMMIT;
