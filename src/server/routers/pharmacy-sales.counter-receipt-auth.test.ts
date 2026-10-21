@@ -35,6 +35,7 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   readReturnHistory: vi.fn(async () => [{ id: 'return-1' }]),
   createSale: vi.fn(),
   addSaleLine: vi.fn(),
+  changeSaleStatus: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
@@ -66,7 +67,12 @@ vi.mock('@/lib/pharmacy/receipt-print', () => ({
 import { hasModule } from '@/lib/entitlements';
 import { readCounterCart, readCounterReceipt } from '@/lib/pharmacy/counter';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
-import { addSaleLine, createSale, readReturnHistory } from '@/lib/pharmacy/sales';
+import {
+  addSaleLine,
+  changeSaleStatus,
+  createSale,
+  readReturnHistory,
+} from '@/lib/pharmacy/sales';
 import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
@@ -297,6 +303,62 @@ describe('counter receipt authorization', () => {
     expect(createSale).not.toHaveBeenCalled();
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it.each(['role', 'user'] as const)(
+    'denies a sale transition when a %s rule explicitly denies receipt access, even for an administrator',
+    async (source) => {
+      const denied = [{ capability: 'pharmacy:receipt', effect: 'DENY' as const }];
+      const f = fixture(source === 'role' ? denied : dispense, 'ADMIN');
+      assign(f, ['branch-a']);
+      if (source === 'user') {
+        f.db.user.findUnique.mockResolvedValue({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: dispense },
+          permissionOverrides: denied,
+        });
+      }
+      await expect(
+        f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+      ).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(changeSaleStatus).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it('gates a sale transition for an employee without counter capability', async () => {
+    const f = fixture([]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(changeSaleStatus).not.toHaveBeenCalled();
+    expect(f.db.$transaction).not.toHaveBeenCalled();
+  });
+
+  it('lets an assigned dispenser transition a sale after the access check', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    vi.mocked(changeSaleStatus).mockResolvedValue({ status: 'HELD' } as never);
+    await expect(
+      f.caller().transition({ branchId: 'branch-a', saleId: 'sale-a', action: 'hold' })
+    ).resolves.toMatchObject({ status: 'HELD' });
+    expect(changeSaleStatus).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      'sale-a',
+      'hold',
+      undefined,
+      undefined,
+      undefined
+    );
   });
 
   it.each(paths)('$name allows an assigned dispenser on their own branch', async (path) => {
