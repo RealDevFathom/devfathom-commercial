@@ -34,6 +34,7 @@ import {
   type MatchException,
   type OrderedTerms,
 } from './receiving';
+import { nearExpiryWarning, packIsExpired } from './gs1-datamatrix';
 import { expiryInstant, receiveLot, reverseMovements } from './stock-ledger';
 import type { LedgerScope } from './stock-ledger';
 
@@ -95,6 +96,9 @@ export async function postGoodsReceipt(
     ) {
       throw new PharmacyReceivingError('OCR_CONFIRMATION_REQUIRED');
     }
+    if (line.acceptedCanonicalUnits > 0 && packIsExpired(line.printedExpiry, input.at)) {
+      throw new PharmacyReceivingError('EXPIRED_PACK');
+    }
     assertSaleableOnReceipt({
       batchNumber: line.batchNumber,
       printedExpiry: line.printedExpiry,
@@ -152,9 +156,16 @@ export async function postGoodsReceipt(
           : undefined,
     });
 
+    const expiryDate = line.printedExpiry.toISOString().slice(0, 10);
+    const near = line.acceptedCanonicalUnits > 0 ? nearExpiryWarning(expiryDate, input.at) : null;
     await db.pharmacyGoodsReceiptLine.update({
       where: { id: line.id },
-      data: { inventoryLotId: posted.lot.id },
+      data: {
+        inventoryLotId: posted.lot.id,
+        ...(near && !line.gs1Warnings.includes(near.code)
+          ? { gs1Warnings: [...line.gs1Warnings, near.code] }
+          : {}),
+      },
     });
     lines.push({
       goodsReceiptLineId: line.id,

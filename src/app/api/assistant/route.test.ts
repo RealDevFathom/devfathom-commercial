@@ -25,6 +25,8 @@ vi.mock('ai', async (importOriginal) => ({
   ...(await importOriginal<typeof import('ai')>()),
   streamText: mocks.stream,
 }));
+import { clearRateLimit } from '@/lib/rate-limit';
+import { ASSISTANT_LIMITS, assistantRateKeys } from '@/lib/ai/assistant-request';
 import { POST } from './route';
 
 const user = { id: 'u', role: 'user', parts: [{ type: 'text', text: 'show my chat' }] };
@@ -57,10 +59,13 @@ function approval(toolName: string) {
   };
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.stubEnv('AI_PROVIDER', 'google');
   vi.clearAllMocks();
   vi.spyOn(console, 'error').mockImplementation(() => {});
+  const [userKey, orgKey] = assistantRateKeys('server-user', 'server-org');
+  await clearRateLimit(userKey);
+  await clearRateLimit(orgKey);
   mocks.actor.mockResolvedValue(actor());
   mocks.entitlements.mockResolvedValue({ vertical: 'RESTAURANT', enabledModules: ['chat'] });
   mocks.findOrganization.mockResolvedValue({ id: 'server-org', askFathomEnabled: true });
@@ -394,4 +399,28 @@ describe('global availability', () => {
       expect((await POST(request({ messages: [user] }))).status).toBe(403);
     }
   );
+});
+
+describe('assistant request limits', () => {
+  it('stops one user after the per-minute budget', async () => {
+    for (let attempt = 0; attempt < ASSISTANT_LIMITS.userPerMinute; attempt += 1) {
+      expect((await POST(request({ messages: [user] }))).status).toBe(200);
+    }
+    const blocked = await POST(request({ messages: [user] }));
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBeTruthy();
+  });
+
+  it('rejects a body or message over the cap', async () => {
+    const oversized = await POST(
+      request({ messages: [user], pad: 'x'.repeat(ASSISTANT_LIMITS.bodyBytes) })
+    );
+    expect(oversized.status).toBe(413);
+
+    const longMessage = {
+      ...user,
+      parts: [{ type: 'text', text: 'x'.repeat(ASSISTANT_LIMITS.messageChars + 1) }],
+    };
+    expect((await POST(request({ messages: [longMessage] }))).status).toBe(413);
+  });
 });

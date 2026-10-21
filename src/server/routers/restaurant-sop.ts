@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
+import { assertInOrganization } from '../org-refs';
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
@@ -393,6 +394,11 @@ export const restaurantSopRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const organizationId = ctx.entitlements.organizationId ?? ctx.session?.user.organizationId;
+        if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+        await assertInOrganization(ctx.db.restaurantBranch, organizationId, [input.branchId], {
+          active: true,
+        });
         const assignment = await createAssignment(ctx.db, input);
         const targetLabel =
           input.assigneeTarget.type === 'person'
@@ -839,7 +845,11 @@ export const restaurantSopRouter = router({
   // ── Audit history ───────────────────────────────────────────────────────────
 
   listRecentOccurrences: manageProcedure.query(async ({ ctx }) => {
-    const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+    const authorization = await resolveStaffBranchAuthorization(
+      ctx.db,
+      ctx.session!.user,
+      ctx.entitlements.organizationId
+    );
     return ctx.db.restaurantSopOccurrence.findMany({
       where: { branchId: { in: authorization.branchIds } },
       select: {
@@ -861,7 +871,11 @@ export const restaurantSopRouter = router({
   occurrenceAuditTrail: manageProcedure
     .input(z.object({ occurrenceId: z.string() }).strict())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       const accessible = await ctx.db.restaurantSopOccurrence.findFirst({
         where: { id: input.occurrenceId, branchId: { in: authorization.branchIds } },
         select: { id: true },
