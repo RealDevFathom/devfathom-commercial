@@ -2,8 +2,27 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import vercel from '../../../../../vercel.json';
 
-const mocks = vi.hoisted(() => ({ withPlatformDb: vi.fn(), isGrowthEnabled: vi.fn() }));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
+const mocks = vi.hoisted(() => ({
+  withPlatformDb: vi.fn(),
+  withTenantDb: vi.fn(),
+  isGrowthEnabled: vi.fn(),
+  runWeeklyPlanner: vi.fn(),
+  plannerAvailable: vi.fn(),
+  advanceCampaigns: vi.fn(),
+  dispatchCampaignMessages: vi.fn(),
+}));
+vi.mock('@/lib/growth/planner', () => ({
+  runWeeklyPlanner: mocks.runWeeklyPlanner,
+  plannerAvailable: mocks.plannerAvailable,
+}));
+vi.mock('@/lib/growth/campaigns', () => ({
+  advanceCampaigns: mocks.advanceCampaigns,
+  dispatchCampaignMessages: mocks.dispatchCampaignMessages,
+}));
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withPlatformDb: mocks.withPlatformDb,
+  withTenantDb: mocks.withTenantDb,
+}));
 vi.mock('@/lib/growth', () => ({ isGrowthEnabled: mocks.isGrowthEnabled }));
 
 import { GET, POST } from './route';
@@ -18,6 +37,8 @@ describe.each([
   beforeEach(() => {
     vi.clearAllMocks();
     vi.stubEnv('CRON_SECRET', secret);
+    mocks.plannerAvailable.mockReturnValue(true);
+    mocks.withTenantDb.mockImplementation((_id, run) => run({}));
     vi.spyOn(console, 'info').mockImplementation(() => {});
     mocks.withPlatformDb.mockImplementation((run) => run({ organization: { findMany } }));
     findMany.mockResolvedValue([{ id: 'org_enabled' }, { id: 'org_disabled' }]);
@@ -74,6 +95,22 @@ describe.each([
     expect(console.info).toHaveBeenCalledExactlyOnceWith(
       '[growth] tick organizationId=org_enabled'
     );
+  });
+
+  it('runs the planner only in enabled tenant scope and still advances sends on planner failure', async () => {
+    mocks.runWeeklyPlanner.mockRejectedValueOnce(new Error('Provider unavailable'));
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const response = await handler(
+      new Request('http://localhost/api/growth/tick', {
+        method,
+        headers: { authorization: `Bearer ${secret}` },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.runWeeklyPlanner).toHaveBeenCalledExactlyOnceWith({}, 'org_enabled');
+    expect(mocks.advanceCampaigns).toHaveBeenCalledExactlyOnceWith({}, 'org_enabled');
+    expect(mocks.dispatchCampaignMessages).toHaveBeenCalledExactlyOnceWith('org_enabled');
+    expect(error).toHaveBeenCalledTimes(1);
   });
 
   it('logs nothing when no organizations are enabled', async () => {

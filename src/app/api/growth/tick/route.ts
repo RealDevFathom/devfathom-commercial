@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
+import { plannerAvailable, runWeeklyPlanner } from '@/lib/growth/planner';
 import { isGrowthEnabled } from '@/lib/growth';
 import { advanceCampaigns, dispatchCampaignMessages } from '@/lib/growth/campaigns';
 import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
@@ -23,6 +24,18 @@ export async function POST(request: Request) {
   );
   for (const organization of organizations) {
     if (await isGrowthEnabled(organization.id)) {
+      console.info(`[growth] tick organizationId=${organization.id}`);
+      if (plannerAvailable()) {
+        try {
+          await withTenantDb(organization.id, (db) => runWeeklyPlanner(db, organization.id));
+        } catch (error) {
+          console.error(
+            '[growth.planner] failed',
+            organization.id,
+            error instanceof Error ? error.name : 'UnknownError'
+          );
+        }
+      }
       await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
       await dispatchCampaignMessages(organization.id);
     }
