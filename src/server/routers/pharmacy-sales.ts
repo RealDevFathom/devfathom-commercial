@@ -1,3 +1,5 @@
+import { configuredFiscalAdapter } from '@/lib/fiscal/adapter';
+import { dispatchFbrInvoices } from '@/lib/fiscal/outbox';
 import { hasModule } from '@/lib/entitlements';
 import {
   executeSandboxPayment,
@@ -126,7 +128,7 @@ const demandReason = z.enum([
 const txDb = (tx: unknown) => tx as ScopedDb;
 
 function scopeFor(ctx: TRPCContext, branch: string): LedgerScope {
-  const organizationId = ctx.entitlements?.organizationId;
+  const organizationId = ctx.session?.user?.organizationId;
   const actorId = ctx.session?.user?.id;
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   return { organizationId, branchId: branch, actorId };
@@ -266,6 +268,16 @@ function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
+  retryFbrInvoices: adminProcedure
+    .input(z.object({ branchId }).strict())
+    .mutation(async ({ ctx, input }) => {
+      if (!hasModule(ctx.entitlements, 'pharmacy-core')) throw new TRPCError({ code: 'FORBIDDEN' });
+      const organizationId = ctx.session?.user?.organizationId;
+      if (!organizationId || organizationId !== ctx.entitlements.organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const adapter = configuredFiscalAdapter();
+      if (!adapter) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'FBR mock mode is disabled.' });
+      return ctx.db.$transaction((tx) => dispatchFbrInvoices(txDb(tx), { organizationId, branchId: input.branchId }, adapter));
+    }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -1190,7 +1202,7 @@ export const pharmacySalesRouter = router({
 
   /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
-    const organizationId = ctx.entitlements?.organizationId;
+    const organizationId = ctx.session?.user?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     const [branches, organization] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
@@ -1396,7 +1408,7 @@ export const pharmacySalesRouter = router({
 
   /** This operator's resolved keymap, falling back to the shipped default. */
   counterKeymap: protectedProcedure.query(async ({ ctx }) => {
-    const organizationId = ctx.entitlements?.organizationId;
+    const organizationId = ctx.session?.user?.organizationId;
     const userId = ctx.session?.user?.id;
     if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     const stored = await ctx.db.pharmacyCounterKeymapPreference.findFirst({
@@ -1448,7 +1460,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const organizationId = ctx.entitlements?.organizationId;
+      const organizationId = ctx.session?.user?.organizationId;
       const userId = ctx.session?.user?.id;
       if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       try {

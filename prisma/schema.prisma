@@ -1060,6 +1060,8 @@ enum PharmacyCustomerOrderEventKind {
 }
 
 model PharmacySale {
+  fbrStatus                 String?
+  fbrInvoiceNumber          String?
   id                        String                       @id @default(cuid())
   organizationId            String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   branchId                  String
@@ -15222,4 +15224,27 @@ model PharmacyPackPrice {
   @@unique([organizationId, proposalId])
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
+}
+
+/// FBR mock-only transactional outbox. Composite sale FK and FORCE RLS in SQL.
+model FiscalInvoiceOutbox {
+  id String @id
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  saleId String
+  authority String @default("FBR")
+  mode String @default("MOCK")
+  usin String @db.VarChar(50)
+  payload Json
+  status String @default("PENDING")
+  attempts Int @default(0)
+  nextAttemptAt DateTime @default(now())
+  lastError String?
+  createdAt DateTime @default(now())
+  submittedAt DateTime?
+
+  @@unique([organizationId, saleId])
+  @@unique([organizationId, usin])
+  @@index([organizationId, branchId, status, nextAttemptAt], map: "fiscal_invoice_outbox_due")
+  @@map("fiscal_invoice_outbox")
 }
