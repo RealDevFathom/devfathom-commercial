@@ -15235,3 +15235,20 @@ model RateLimitBucket {
   @@index([resetAt])
   @@map("rate_limit_buckets")
 }
+
+/// Work committed with a tenant mutation and delivered after that transaction.
+/// SMTP and outbound HTTP must not run on the request's pooled connection.
+model OutboundEffect {
+  id             String   @id @default(cuid())
+  organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  kind           String
+  payload        Json
+  status         String   @default("PENDING")
+  attempts       Int      @default(0)
+  lastError      String?
+  createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
+
+  @@index([organizationId, status, createdAt])
+  @@map("outbound_effects")
+}
