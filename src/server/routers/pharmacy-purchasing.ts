@@ -774,6 +774,7 @@ const purchasingRouter = router({
             .strict()
             .optional(),
           note: z.string().trim().max(2000).optional(),
+          qualifiedPersonUserId: z.string().trim().min(1).optional(),
           lines: z
             .array(
               z
@@ -937,6 +938,7 @@ const purchasingRouter = router({
             bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
             bypassApprovedAt: input.directPurchase ? new Date() : null,
             note: input.note,
+            qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
             lines: { create: lines },
           },
           include: { lines: { orderBy: { lineNumber: 'asc' } } },

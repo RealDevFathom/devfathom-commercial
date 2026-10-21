@@ -51,6 +51,7 @@ export class PharmacyReceivingError extends Error {
       | 'NOT_FOUND'
       | 'CROSS_TENANT_REFERENCE'
       | 'CROSS_BRANCH_REFERENCE'
+      | 'CONTROLLED_WITNESS_REQUIRED'
   ) {
     super(reason);
   }

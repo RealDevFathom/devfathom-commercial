@@ -282,9 +282,15 @@ function ScopedPharmacyCounterConsole({
     prescriptionLineId: '',
     staffProfileId: '',
     pin: '',
+    rxSerialWritten: false,
+    emergency: false,
+    prescriberName: '',
+    prescriberRegNo: '',
+    refSerial: '',
   });
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
   const [patientId, setPatientId] = useState<string | null>(null);
+  const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
   const [redeemPoints, setRedeemPoints] = useState(0);
   const [receiptLocale, setReceiptLocale] = useState<CounterReceiptLocale>('en');
@@ -518,6 +524,7 @@ function ScopedPharmacyCounterConsole({
 
   const cart = cartQuery.data ?? null;
   const patient = patientPanelQuery.data ?? null;
+  const patientAddress = patientAddressDraft ?? patient?.address ?? '';
 
   const selectedOption = useMemo(
     () => activeRow?.saleUnits.find((option) => option.kind === saleUnit) ?? null,
@@ -850,10 +857,16 @@ function ScopedPharmacyCounterConsole({
     try {
       const activeSaleId = await ensureSale();
       const controlled = activeRow.restriction.controlled;
+      const addressOk = patientAddress.trim().length >= 3;
+      const prescriptionOk = controlledAuth.emergency || Boolean(controlledAuth.prescriptionLineId);
+      const emergencyOk =
+        !controlledAuth.emergency || controlledAuth.prescriberName.trim().length > 0;
       if (
         controlled &&
         (!patient ||
-          !controlledAuth.prescriptionLineId ||
+          !addressOk ||
+          !prescriptionOk ||
+          !emergencyOk ||
           !controlledAuth.staffProfileId ||
           !/^\d{4,8}$/.test(controlledAuth.pin) ||
           !navigator.onLine)
@@ -861,14 +874,28 @@ function ScopedPharmacyCounterConsole({
         setNotice({
           tone: 'warning',
           message:
-            'Controlled medicine needs a patient with ID, prescription and independent pharmacist PIN. Connect online, then complete the authorization panel.',
+            'Controlled medicine needs the patient address, a pharmacist PIN, and a prescription or an emergency prescriber. Connect online, then complete the authorization panel.',
         });
         rxPanelRef.current?.focus();
         return;
       }
+      const refSerial = Number(controlledAuth.refSerial);
       const added = await addLine.mutateAsync({
         controlledAuthorization:
-          controlled && patient ? { ...controlledAuth, patientId: patient.patientId } : undefined,
+          controlled && patient
+            ? {
+                patientId: patient.patientId,
+                patientAddress: patientAddress.trim(),
+                staffProfileId: controlledAuth.staffProfileId,
+                pin: controlledAuth.pin,
+                rxSerialWritten: controlledAuth.rxSerialWritten,
+                emergency: controlledAuth.emergency,
+                prescriptionLineId: controlledAuth.prescriptionLineId || undefined,
+                prescriberName: controlledAuth.prescriberName.trim() || undefined,
+                prescriberRegNo: controlledAuth.prescriberRegNo.trim() || undefined,
+                refSerial: Number.isInteger(refSerial) && refSerial > 0 ? refSerial : undefined,
+              }
+            : undefined,
         branchId,
         saleId: activeSaleId,
         medicineId: activeRow.medicineId,
@@ -923,6 +950,7 @@ function ScopedPharmacyCounterConsole({
     addLine,
     controlledAuth,
     patient,
+    patientAddress,
     branchId,
     busy,
     ensureSale,
@@ -2198,8 +2226,20 @@ function ScopedPharmacyCounterConsole({
                 pharmacists: pharmacistsQuery.data ?? [],
                 loading: pharmacistsQuery.isLoading,
                 error: pharmacistsQuery.isError,
-                onChange: (field, value) =>
-                  setControlledAuth((current) => ({ ...current, [field]: value })),
+                patientAddress,
+                onChange: (field, value) => {
+                  if (field === 'patientAddress') {
+                    setPatientAddressDraft(typeof value === 'string' ? value : '');
+                    return;
+                  }
+                  setControlledAuth((current) => {
+                    if (field === 'emergency' || field === 'rxSerialWritten') {
+                      return { ...current, [field]: value === true };
+                    }
+                    if (typeof value !== 'string') return current;
+                    return { ...current, [field]: value };
+                  });
+                },
               }}
               alerts={alerts}
               patient={patient}
@@ -2228,9 +2268,13 @@ function ScopedPharmacyCounterConsole({
               disabled={busy}
               onQueryChange={setPatientQuery}
               onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
-              onSelectPatient={setPatientId}
+              onSelectPatient={(id) => {
+                setPatientId(id);
+                setPatientAddressDraft(null);
+              }}
               onClearPatient={() => {
                 setPatientId(null);
+                setPatientAddressDraft(null);
                 setSubmittedPatientQuery('');
                 setPatientQuery('');
               }}

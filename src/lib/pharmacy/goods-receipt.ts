@@ -24,6 +24,7 @@
  * in its place.
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { can } from '@/lib/abac';
 
 import { PharmacyInventoryError } from './inventory';
 import {
@@ -84,6 +85,32 @@ export async function postGoodsReceipt(
   }
   assertGoodsReceiptTransition(receipt.status, 'POSTED');
   if (receipt.lines.length === 0) throw new PharmacyReceivingError('INVALID_QUANTITY');
+
+  const controlledMedicines = await db.medicine.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      id: { in: receipt.lines.map((line) => line.medicineId) },
+      controlled: true,
+    },
+    select: { id: true, manufacturer: true },
+  });
+  const controlledIds = new Set(controlledMedicines.map((medicine) => medicine.id));
+  const needsRegister = receipt.lines.some(
+    (line) => controlledIds.has(line.medicineId) && line.acceptedCanonicalUnits > 0
+  );
+  if (needsRegister) {
+    const witnessId = receipt.qualifiedPersonUserId;
+    const witness =
+      witnessId && witnessId !== scope.actorId
+        ? await db.user.findFirst({
+            where: { id: witnessId, organizationId: scope.organizationId, status: 'ACTIVE' },
+            select: { id: true, role: true, status: true },
+          })
+        : null;
+    if (!witness || !(await can(witness, 'pharmacy:dispense', undefined, { db }))) {
+      throw new PharmacyReceivingError('CONTROLLED_WITNESS_REQUIRED');
+    }
+  }
 
   // Fail closed on the whole receipt before a single lot exists: a receipt that
   // posted three good lines and then refused the fourth would leave stock on
@@ -189,6 +216,51 @@ export async function postGoodsReceipt(
         },
       });
       exceptions.push({ id: created.id, kind: exception.kind, detail: exception.detail });
+    }
+  }
+
+  if (needsRegister && receipt.qualifiedPersonUserId) {
+    await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+    const latest = await db.pharmacyControlledRegisterEntry.aggregate({
+      where: { organizationId: scope.organizationId, branchId: scope.branchId },
+      _max: { serial: true },
+    });
+    let serial = latest._max.serial ?? 0;
+    for (const posted of lines) {
+      const source = receipt.lines.find((line) => line.id === posted.goodsReceiptLineId);
+      const medicine = controlledMedicines.find((item) => item.id === source?.medicineId);
+      if (!source || !medicine || source.acceptedCanonicalUnits <= 0) continue;
+      if (!posted.acceptedMovementId) throw new PharmacyReceivingError('INVALID_QUANTITY');
+      const balance = await db.pharmacyStockBalance.aggregate({
+        where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          inventoryLotId: posted.inventoryLotId,
+        },
+        _sum: { onHandUnits: true },
+      });
+      await db.pharmacyControlledRegisterEntry.create({
+        data: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          serial: ++serial,
+          entryKind: 'PURCHASE',
+          medicineId: medicine.id,
+          manufacturer: medicine.manufacturer,
+          inventoryLotId: posted.inventoryLotId,
+          stockMovementId: posted.acceptedMovementId,
+          batchNumber: source.batchNumber,
+          quantityCanonicalUnits: source.acceptedCanonicalUnits,
+          balanceDelta: 0,
+          runningBalance: balance._sum.onHandUnits ?? 0,
+          recordedByUserId: scope.actorId,
+          witnessedByUserId: receipt.qualifiedPersonUserId,
+          signatureRef: `user:${receipt.qualifiedPersonUserId}`,
+          counterpartyName: receipt.supplier.name,
+          rxSerialWritten: false,
+          emergency: false,
+        },
+      });
     }
   }
 

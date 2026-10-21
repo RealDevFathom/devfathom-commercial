@@ -115,6 +115,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'stockLocationId',
   },
   NOT_FOUND: { message: 'That record no longer exists. Reload the page.' },
+  CONTROLLED_WITNESS_REQUIRED: {
+    message:
+      'A controlled medicine needs a different person who is allowed to dispense. Choose them on the receipt before posting.',
+    field: 'qualifiedPersonUserId',
+  },
 };
 
 export type ActionFailure = { message: string; field?: string };

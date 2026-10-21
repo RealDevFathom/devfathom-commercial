@@ -230,6 +230,7 @@ export default async function PharmacyReceivingPage({
         warrantyEvidenceRef: field(form, 'warrantyEvidenceRef'),
         receivedAt: dateField(form, 'receivedAt', 'Received on'),
         note: optionalField(form, 'note'),
+        qualifiedPersonUserId: optionalField(form, 'qualifiedPersonUserId'),
         lines,
       });
       revalidatePath(ROUTE);
@@ -292,6 +293,7 @@ export default async function PharmacyReceivingPage({
           approvedByUserId: field(form, 'bypassApprovedByUserId'),
         },
         note: optionalField(form, 'directNote'),
+        qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
         lines,
       });
       revalidatePath(ROUTE);
@@ -650,6 +652,18 @@ export default async function PharmacyReceivingPage({
                   })}
                 </div>
 
+                <SelectField
+                  emptyHint="No other active user can sign a controlled-medicine purchase."
+                  hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you."
+                  label="Qualified person"
+                  name="qualifiedPersonUserId"
+                  notice={notice}
+                  options={workspace.approvers.map((approver) => ({
+                    value: approver.id,
+                    label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
+                  }))}
+                  placeholder="Not a controlled medicine"
+                />
                 <TextAreaField label="Receipt note" name="note" notice={notice} />
                 <SubmitButton>File receipt (draft)</SubmitButton>
                 <p className="text-sm text-text-muted">
@@ -777,6 +791,18 @@ export default async function PharmacyReceivingPage({
                 </div>
               ))}
             </div>
+            <SelectField
+              emptyHint="No other active user can sign a controlled-medicine purchase."
+              hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you."
+              label="Qualified person"
+              name="directQualifiedPersonUserId"
+              notice={notice}
+              options={workspace.approvers.map((approver) => ({
+                value: approver.id,
+                label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
+              }))}
+              placeholder="Not a controlled medicine"
+            />
             <TextAreaField label="Direct purchase note" name="directNote" notice={notice} />
             <SubmitButton>File direct purchase (draft)</SubmitButton>
           </PurchasingActionForm>

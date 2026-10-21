@@ -7,6 +7,10 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import {
+  appendControlledSaleEntries,
+  earlierRegisterEntry,
+} from '@/lib/pharmacy/controlled-register';
 import { annotateAudit } from '@/server/audit';
 import {
   isLockedOut,
@@ -687,12 +691,26 @@ export const pharmacySalesRouter = router({
         .object({
           controlledAuthorization: z
             .object({
-              prescriptionLineId: z.string().min(1),
+              prescriptionLineId: z.string().min(1).optional(),
               patientId: z.string().min(1),
+              patientAddress: z.string().trim().min(3).max(300),
               staffProfileId: z.string().min(1),
               pin: z.string().regex(/^\d{4,8}$/),
+              rxSerialWritten: z.boolean(),
+              emergency: z.boolean(),
+              prescriberName: z.string().trim().min(1).max(160).optional(),
+              prescriberRegNo: z.string().trim().max(80).optional(),
+              refSerial: z.number().int().positive().optional(),
             })
             .strict()
+            .refine((value) => value.emergency || Boolean(value.prescriptionLineId), {
+              message: 'A prescription line is required unless this is an emergency supply.',
+              path: ['prescriptionLineId'],
+            })
+            .refine((value) => !value.emergency || Boolean(value.prescriberName), {
+              message: 'An emergency supply needs the prescriber name.',
+              path: ['prescriberName'],
+            })
             .optional(),
           branchId,
           saleId: z.string().min(1),
@@ -752,7 +770,7 @@ export const pharmacySalesRouter = router({
           const authorization = input.controlledAuthorization;
           const blocked = {
             blocked:
-              'Controlled medicine requires a valid prescription, patient ID and an independent pharmacist PIN.',
+              'Controlled medicine requires the patient address, an independent pharmacist PIN, and either a valid prescription or an emergency supply with the prescriber name.',
           } as const;
           if (!authorization) return blocked;
           // Serialize credential attempts; returning a denial commits durable lockout counters.
@@ -793,6 +811,55 @@ export const pharmacySalesRouter = router({
             where: { id: credential.id },
             data: clearLockout(),
           });
+          const refEntry = await earlierRegisterEntry(db, scope, authorization.refSerial);
+          if (authorization.refSerial && !refEntry) {
+            return { blocked: 'That earlier register serial is not on this branch.' };
+          }
+          await db.pharmacyPatient.updateMany({
+            where: { id: authorization.patientId, organizationId: scope.organizationId },
+            data: { address: authorization.patientAddress },
+          });
+          if (authorization.emergency) {
+            const patient = await db.pharmacyPatient.findFirst({
+              where: { id: authorization.patientId, organizationId: scope.organizationId },
+            });
+            if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
+            const consent = await db.patientConsent.findFirst({
+              where: {
+                organizationId: scope.organizationId,
+                patientId: authorization.patientId,
+                purpose: 'DISPENSING',
+              },
+              orderBy: { version: 'desc' },
+            });
+            if (!consent?.granted || consent.revokedAt) {
+              return { blocked: 'Patient dispensing consent is required.' };
+            }
+            await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
+            const result = await addSaleLine(db, scope, input);
+            await appendControlledSaleEntries(db, {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              movementIds: result.allocation.movementIds,
+              patientId: authorization.patientId,
+              patientAddress: authorization.patientAddress,
+              medicineId: medicine.id,
+              manufacturer: medicine.manufacturer,
+              prescriberId: null,
+              prescriberName: authorization.prescriberName,
+              prescriberRegNo: authorization.prescriberRegNo ?? null,
+              prescriptionId: null,
+              prescriptionLineId: null,
+              emergency: true,
+              rxSerialWritten: authorization.rxSerialWritten,
+              refEntryId: refEntry?.id ?? null,
+              recordedByUserId: scope.actorId,
+              witnessedByUserId: pharmacist.id,
+              signatureRef: `pin:${pharmacist.id}`,
+            });
+            return result;
+          }
+          if (!authorization.prescriptionLineId) return blocked;
           // Lock prescription and branch before stock allocation, fill numbering and register numbering.
           await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${authorization.prescriptionLineId} FOR UPDATE`;
           await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
@@ -867,7 +934,7 @@ export const pharmacySalesRouter = router({
               requestedByUserId: scope.actorId,
             },
           });
-          await db.pharmacyPharmacistReviewDecision.create({
+          const decision = await db.pharmacyPharmacistReviewDecision.create({
             data: {
               organizationId: scope.organizationId,
               reviewItemId: review.id,
@@ -876,50 +943,26 @@ export const pharmacySalesRouter = router({
               signedAt: now,
             },
           });
-          const latest = await db.pharmacyControlledRegisterEntry.aggregate({
-            where: { organizationId: scope.organizationId, branchId: scope.branchId },
-            _max: { serial: true },
+          await appendControlledSaleEntries(db, {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            movementIds: result.allocation.movementIds,
+            patientId: authorization.patientId,
+            patientAddress: authorization.patientAddress,
+            medicineId: medicine.id,
+            manufacturer: medicine.manufacturer,
+            prescriberId: rx.prescription.prescriberId,
+            prescriberName: rx.prescription.prescriber.name,
+            prescriberRegNo: rx.prescription.prescriber.registrationNumber,
+            prescriptionId: rx.prescriptionId,
+            prescriptionLineId: rx.id,
+            emergency: false,
+            rxSerialWritten: authorization.rxSerialWritten,
+            refEntryId: refEntry?.id ?? null,
+            recordedByUserId: scope.actorId,
+            witnessedByUserId: pharmacist.id,
+            signatureRef: decision.id,
           });
-          let serial = latest._max.serial ?? 0;
-          for (const movementId of result.allocation.movementIds) {
-            const movement = await db.pharmacyStockMovement.findFirstOrThrow({
-              where: {
-                id: movementId,
-                organizationId: scope.organizationId,
-                branchId: scope.branchId,
-              },
-            });
-            const lot = await db.pharmacyInventoryLot.findFirstOrThrow({
-              where: { id: movement.inventoryLotId, organizationId: scope.organizationId },
-              include: { batch: true },
-            });
-            const balance = await db.pharmacyStockBalance.aggregate({
-              where: {
-                organizationId: scope.organizationId,
-                branchId: scope.branchId,
-                inventoryLotId: lot.id,
-              },
-              _sum: { onHandUnits: true },
-            });
-            await db.pharmacyControlledRegisterEntry.create({
-              data: {
-                organizationId: scope.organizationId,
-                branchId: scope.branchId,
-                serial: ++serial,
-                prescriptionId: rx.prescriptionId,
-                prescriptionLineId: rx.id,
-                patientId: authorization.patientId,
-                prescriberId: rx.prescription.prescriberId,
-                inventoryLotId: lot.id,
-                stockMovementId: movement.id,
-                batchNumber: lot.batch.batchNumber,
-                quantityCanonicalUnits: -movement.quantityUnits,
-                runningBalance: balance._sum.onHandUnits ?? 0,
-                recordedByUserId: scope.actorId,
-                witnessedByUserId: pharmacist.id,
-              },
-            });
-          }
           return result;
         });
         if (input.override && 'line' in outcome) {
