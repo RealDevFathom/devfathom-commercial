@@ -268,6 +268,7 @@ beforeEach(() => {
   ]);
   mocks.signIn.mockResolvedValue({ ok: true });
   window.localStorage.clear();
+  window.history.replaceState(null, '', '/pharmacy/counter');
 });
 
 afterEach(() => vi.restoreAllMocks());
@@ -597,6 +598,16 @@ function savedAttempt(): TenderAttempt {
 }
 
 describe('PharmacyCounterConsole durable tender recovery', () => {
+  it('puts a recovered active bill in the URL so another reload can restore it', async () => {
+    persistTenderAttempt(savedAttempt());
+
+    render(<PharmacyCounterConsole />);
+
+    await waitFor(() => {
+      expect(window.location.search).toBe('?branchId=branch-a&orderSaleId=sale-a');
+    });
+  });
+
   it('persists and reads back before dispatching money', async () => {
     mocks.mutations.tender!.mockImplementation(async (input) => {
       expect(readTenderAttempt(scope)).toEqual({
