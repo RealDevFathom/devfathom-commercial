@@ -123,7 +123,13 @@ export function RestaurantBranchesConsole() {
                         <h2 className="font-medium text-text-strong">{branch.name}</h2>
                         <span className="font-mono text-xs text-text-muted">{branch.code}</span>
                         <StatusPill status={branch.active ? 'Active' : 'Inactive'} />
-                        {branch.isDefault ? <StatusPill status="Primary" tone="info" /> : null}
+                        {branch.isDefault ? (
+                          <StatusPill
+                            status="Primary"
+                            tone="info"
+                            className="bg-primary text-primary-foreground"
+                          />
+                        ) : null}
                       </div>
                       <p className="mt-1 text-sm text-text-muted">
                         {branch.timezone} · business day {branch.businessDayCutoff}

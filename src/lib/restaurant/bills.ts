@@ -74,6 +74,8 @@ export type BillCommandErrorReason =
   | 'BILL_NOT_OPEN'
   | 'LINE_NOT_FOUND'
   | 'ALREADY_COMPED'
+  | 'NOT_COMPED'
+  | 'BILL_TENDERED'
   | 'COMP_EXCEEDS_BILL'
   | 'INVALID_SPLIT'
   | 'PARTITION_INCOMPLETE'
@@ -850,6 +852,8 @@ export type CompLineInput = {
   billLineId: string;
   reason: string;
   approvingStaffProfileId: string;
+  /** Trusted session id from the authenticated terminal transport. */
+  terminalSessionId?: string;
   actor: MoneyCommandActor;
 };
 
@@ -997,6 +1001,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       targetType: 'RestaurantBillLine',
       targetId: line.id,
       deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
     });
 
     await tx.restaurantBillLine.update({
@@ -1019,6 +1024,81 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
+  });
+}
+
+export type UncompLineInput = CompLineInput;
+
+/** Reverse a mistaken comp while its bill is still OPEN and has no tender history. */
+export async function uncompLine(db: ScopedDb, input: UncompLineInput): Promise<CompLineResult> {
+  return runInTransaction(db, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
+    const bill = await tx.restaurantBill.findFirst({
+      where: { id: input.billId, branchId: input.branchId },
+      select: {
+        id: true,
+        status: true,
+        compTotal: true,
+        grandTotal: true,
+        _count: { select: { tenders: true } },
+      },
+    });
+    if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+
+    const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.uncomp');
+    if (idem.replay) {
+      return {
+        billLineId: input.billLineId,
+        billId: bill.id,
+        releasedDiscount: ZERO,
+        replayed: true,
+      };
+    }
+    const reason = requireReason(input.reason);
+    if (bill.status !== 'OPEN') {
+      throw new BillCommandError('Only an OPEN bill can be uncomped.', 'BILL_NOT_OPEN');
+    }
+    if (bill._count.tenders !== 0) {
+      throw new BillCommandError('A bill with tender history cannot be uncomped.', 'BILL_TENDERED');
+    }
+    const line = await tx.restaurantBillLine.findUnique({
+      where: { id: input.billLineId },
+      select: { id: true, billId: true, lineSubtotal: true, compAmount: true },
+    });
+    if (!line || line.billId !== bill.id) {
+      throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
+    }
+    if (line.compAmount.isZero()) {
+      throw new BillCommandError('The line is not comped.', 'NOT_COMPED');
+    }
+    const coAuthorizationId = await persistCoAuth(tx, {
+      actingStaffProfileId: input.actor.staffProfileId,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      capability: 'orders:complimentary',
+      reason,
+      targetType: 'RestaurantBillLine',
+      targetId: line.id,
+      deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
+    });
+    await tx.restaurantBillLine.update({
+      where: { id: line.id },
+      data: {
+        compAmount: ZERO,
+        lineTotal: line.lineSubtotal,
+        compReason: null,
+        compCoAuthorizationId: null,
+      },
+    });
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        compTotal: sub(bill.compTotal, line.compAmount),
+        grandTotal: add(bill.grandTotal, line.compAmount),
+      },
+    });
+    await recordMoneyIdempotentResult(tx, input.actor, `${line.id}:${coAuthorizationId}`);
+    return { billLineId: line.id, billId: bill.id, releasedDiscount: ZERO, replayed: false };
   });
 }
 

@@ -147,6 +147,8 @@ export const compBody = z
   })
   .strict();
 
+export const uncompBody = compBody;
+
 const CASH_TENDER = z
   .object({ type: z.literal('CASH'), amount: MONEY, cashReceived: MONEY })
   .strict();
@@ -201,10 +203,15 @@ export const dayCorrectBody = z
 
 // ── Capability gate (C11) ────────────────────────────────────────────────────
 
-/** The five money capabilities a terminal route may gate on, plus the approver's
+/** The money capabilities a terminal route may gate on, plus the approver's
  * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
 export type MoneyCapability =
-  'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
+  | 'payments:collect'
+  | 'payments:refund'
+  | 'cash:open'
+  | 'cash:adjust'
+  | 'cash:close'
+  | 'orders:complimentary';
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
@@ -434,8 +441,10 @@ export function moneyErrorResponse(err: unknown): NextResponse | null {
     const conflict =
       err.reason === 'ORDER_NOT_BILLABLE' ||
       err.reason === 'BILL_NOT_OPEN' ||
+      err.reason === 'BILL_TENDERED' ||
       err.reason === 'RESPLIT_LOCKED' ||
-      err.reason === 'ALREADY_COMPED';
+      err.reason === 'ALREADY_COMPED' ||
+      err.reason === 'NOT_COMPED';
     return json({ error: err.message }, notFound ? 404 : conflict ? 409 : 400);
   }
   if (err instanceof TenderError) {
@@ -764,6 +773,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       serviceChargeTotal: money(bill.serviceChargeTotal),
       deliveryFeeTotal: money(bill.deliveryFeeTotal),
       compTotal: money(bill.compTotal),
+      discountTotal: money(bill.discountTotal),
       roundingAdjustment: money(bill.roundingAdjustment),
       grandTotal: money(bill.grandTotal),
     },

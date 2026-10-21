@@ -68,6 +68,9 @@ describe('OrderTicketPanel', () => {
 
     expect(actions.onHold).toHaveBeenCalledWith(2);
     expect(actions.onFire).toHaveBeenCalledWith(2);
+    for (const name of ['Hold', 'Fire', 'Void Steak']) {
+      expect(screen.getByRole('button', { name })).toHaveClass('h-11');
+    }
     expect(actions.onSend).toHaveBeenCalledOnce();
     expect(actions.onReprint).toHaveBeenCalledWith('ticket-1');
   });

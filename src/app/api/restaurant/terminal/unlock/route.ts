@@ -7,6 +7,7 @@ import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { describeShiftDenial } from '@/lib/restaurant/shifts';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
 import { bindOperator } from '@/lib/restaurant/terminal-session';
+import { staffHasCapability } from '@/lib/restaurant/job-roles';
 
 const bodySchema = z.object({
   staffProfileId: z.string().min(1),
@@ -79,6 +80,20 @@ export const POST = withTerminalAuth(async (ctx, request) => {
         { status: 403 }
       );
     }
+    return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
+  }
+
+  // Verify the secret before checking authorization so this endpoint cannot be
+  // used to discover which staff profiles carry kitchen access.
+  if (
+    ctx.device.kind === 'KDS' &&
+    !(await staffHasCapability(
+      ctx.db,
+      staffProfileId,
+      ctx.device.branchId,
+      'kitchen:operate'
+    ))
+  ) {
     return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
   }
 

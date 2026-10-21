@@ -1183,6 +1183,7 @@ describe('OrderPad transport', () => {
     });
     expect(priced).toBe('5.18');
     expect(await screen.findByText(priced)).toBeVisible();
+    expect(screen.getByText('Estimated cash total')).toBeVisible();
   });
 
   it('does not let F9 close the check while a void dialog is open or a field is focused', async () => {
