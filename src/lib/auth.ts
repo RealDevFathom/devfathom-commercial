@@ -222,7 +222,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         return withTenantDb(organization.id, async (tenantDb) => {
           const user = await tenantDb.user.findFirst({
-            where: { email },
+            where: { email, organizationId: organization.id },
             select: {
               id: true,
               organizationId: true,
@@ -248,7 +248,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // cases an attacker who doesn't know the password could probe. Crucially,
           // a WRONG password against a deactivated account also lands here, so the
           // "suspended" signal below can never be used to enumerate accounts.
-          if (!user || !isValid) {
+          if (!user || user.organizationId !== organization.id || !isValid) {
             // The client sees a uniform null, but the admin-only audit log records
             // the precise reason (it never leaks back to the would-be attacker).
             const reason = !user ? 'No such account' : 'Incorrect password';

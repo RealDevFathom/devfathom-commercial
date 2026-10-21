@@ -39,8 +39,10 @@ vi.mock('@/lib/tenancy/support-session', () => ({
   getSupportSession: mocks.getSupportSession,
 }));
 
+import { headers } from 'next/headers';
+import { resolveOrganizationByHost } from '@/lib/tenancy/host';
 import { TenantHostError } from '@/lib/tenancy/host';
-import { resolveTenantActor } from './tenant-actor';
+import { resolveTenantActor, resolveTenantMismatchLoginPath } from './tenant-actor';
 
 function sessionFor(user: Record<string, unknown>): Session {
   return {
@@ -179,5 +181,37 @@ describe('resolveTenantActor', () => {
 
       expect(actor?.organization).toEqual({ id: 'org_other' });
     });
+  });
+});
+
+describe('wrong-host session login destination', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.isSharedHost.mockReturnValue(false);
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000' }) as never
+    );
+    mocks.auth.mockResolvedValue(session);
+    vi.mocked(resolveOrganizationByHost).mockResolvedValue({ id: 'org_agency' } as never);
+    mocks.resolveOrganizationById.mockResolvedValue({
+      id: 'org_other',
+      slug: 'karahi-house',
+      status: 'ACTIVE',
+    });
+  });
+  it('redirects to the session organization database slug before rendering a shell', async () => {
+    await expect(resolveTenantMismatchLoginPath()).resolves.toBe(
+      'http://karahi-house.localhost:3000/login'
+    );
+    expect(mocks.resolveOrganizationById).toHaveBeenCalledWith('org_other');
+  });
+  it('does not redirect a matching host', async () => {
+    vi.mocked(resolveOrganizationByHost).mockResolvedValue({ id: 'org_other' } as never);
+    await expect(resolveTenantMismatchLoginPath()).resolves.toBeNull();
+  });
+  it('does not use revoked sessions to select a tenant host', async () => {
+    mocks.auth.mockResolvedValue(sessionFor({ status: 'ACTIVE', sessionRevoked: true }));
+    await expect(resolveTenantMismatchLoginPath()).resolves.toBeNull();
+    expect(mocks.resolveOrganizationById).not.toHaveBeenCalled();
   });
 });
