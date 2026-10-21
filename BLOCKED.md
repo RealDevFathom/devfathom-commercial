@@ -28,3 +28,29 @@ on every read (node_modules/@auth/core/src/lib/actions/session.ts). Throttling i
 requires a custom refresh policy; simply dropping Set-Cookie can lose updated
 revocation/role claims or cookie cleanup. Keep upstream JWT behavior in this
 minimal batch. The misleading updateAge comment is corrected alongside this note.
+
+## PLATFORM daily QA — #76 (2026-10-21): two-attempt stop
+
+Stopped and reverted this issue's uncommitted implementation after two failed
+focused checks, as requested:
+
+1. The 16-case login keyboard matrix found missing visible focus and a WCAG
+   target-size failure after making the password visibility toggle tabbable.
+2. A broader authenticated platform keyboard walk checked 307 focus stops across
+   ten routes. The audit ledger's `from` and `through` date inputs still failed
+   the visible-focus check. Other checked platform controls passed.
+
+The base already has shared platform button/link/summary focus styles. Remaining
+work includes login controls, input/select/textarea focus, date-input keyboard
+segments, and retesting. Restaurant/terminal routes were outside this PLATFORM
+batch and were not changed or claimed verified. No #76 product change is retained.
+
+### Visual QA evidence and limits
+
+#58 passed 16 browser cases: 375/768/1024/1440px, light/dark, normal/reduced motion;
+measured placeholder contrast >=4.5:1, axe WCAG checks, no horizontal overflow or
+console errors. Screenshots are local ignored artifacts under
+`playwright-artifacts/platform-login/`. An initial HMR-stale CSS case failed, then
+all 16 cases passed on the retry. Login keyboard expansion is blocked under #76.
+#193 passed focused form/server tests; full live onboarding state/viewport QA was
+not completed before the mandatory stop. No production build or full suite ran.
