@@ -42,6 +42,18 @@ type Regulatory = inferRouterOutputs<AppRouter>['pharmacyOnboarding']['regulator
 type Jurisdiction = Regulatory['jurisdictions'][number];
 type Version = Regulatory['versions'][number];
 
+function provinceForBranch(data: Regulatory, selectedBranchId: string): string {
+  const branchProvince = data.branches.find(
+    (branch) => branch.id === selectedBranchId
+  )?.provinceCode;
+  return (
+    data.jurisdictions.find((jurisdiction) => jurisdiction.provinceCode === branchProvince)
+      ?.provinceCode ??
+    data.jurisdictions[0]?.provinceCode ??
+    ''
+  );
+}
+
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 const controlClass =
@@ -91,7 +103,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
   const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
+    provinceForBranch(initial, initial.selectedBranchId ?? '')
   );
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -99,7 +111,10 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const refresh = (nextBranchId = branchId) => {
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
+      .then((next) => {
+        setData(next);
+        setProvinceCode(provinceForBranch(next, nextBranchId));
+      })
       .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
   };
 

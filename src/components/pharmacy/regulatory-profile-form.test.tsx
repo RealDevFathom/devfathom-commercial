@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from '@testing-library/react';
+import { cleanup, fireEvent, render, screen, waitFor } from '@testing-library/react';
 import type { inferRouterOutputs } from '@trpc/server';
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
@@ -72,6 +72,63 @@ const initial = {
 } as unknown as Regulatory;
 
 describe('PharmacyRegulatoryProfileForm version history', () => {
+  it("defaults the province to the selected branch's published jurisdiction", () => {
+    const sindh = {
+      ...initial,
+      branches: [
+        { ...initial.branches[0], provinceCode: 'PK-SD', city: 'Karachi' },
+      ],
+      jurisdictions: [
+        initial.jurisdictions[0],
+        {
+          provinceCode: 'PK-SD',
+          provinceName: 'Sindh',
+          licenceCategories: ['RETAIL', 'WHOLESALE'],
+          permittedSchedules: ['G', 'H'],
+          provisional: false,
+        },
+      ],
+    } as unknown as Regulatory;
+
+    render(<PharmacyRegulatoryProfileForm initial={sindh} />);
+
+    expect(screen.getByLabelText<HTMLSelectElement>('Province')).toHaveValue('PK-SD');
+  });
+
+  it("updates the province when the operator selects a branch in another province", async () => {
+    const branches = [
+      initial.branches[0],
+      {
+        id: 'branch_2',
+        name: 'Clifton',
+        city: 'Karachi',
+        addressLine: '12 Marine Drive',
+        provinceCode: 'PK-SD',
+      },
+    ];
+    const jurisdictions = [
+      initial.jurisdictions[0],
+      {
+        provinceCode: 'PK-SD',
+        provinceName: 'Sindh',
+        licenceCategories: ['RETAIL', 'WHOLESALE'],
+        permittedSchedules: ['G', 'H'],
+        provisional: false,
+      },
+    ];
+    const data = { ...initial, branches, jurisdictions } as unknown as Regulatory;
+    mocks.fetch.mockResolvedValueOnce({ ...data, selectedBranchId: 'branch_2' });
+    render(<PharmacyRegulatoryProfileForm initial={data} />);
+
+    fireEvent.change(screen.getByLabelText('Which branch is this profile for?'), {
+      target: { value: 'branch_2' },
+    });
+
+    await waitFor(() =>
+      expect(screen.getByLabelText<HTMLSelectElement>('Province')).toHaveValue('PK-SD')
+    );
+  });
+
   it('exposes the horizontal version-history scroll as a keyboard-reachable region', () => {
     render(<PharmacyRegulatoryProfileForm initial={initial} />);
 
