@@ -2,7 +2,14 @@ import { describe, expect, it, vi } from 'vitest';
 
 import type { AuthzDb } from '@/lib/authz';
 import { isAdmin } from '@/lib/authz';
-import { roleTemplatesForVertical } from '@/lib/vertical-catalog';
+import {
+  AGENCY_ROLE_TEMPLATES,
+  HOSPITALITY_ROLE_TEMPLATES,
+  PHARMACY_ROLE_TEMPLATES,
+  RESTAURANT_ROLE_TEMPLATES,
+  roleTemplatesForVertical,
+  type RoleTemplate,
+} from '@/lib/vertical-catalog';
 
 import { can, subjectFromSession } from '.';
 import { ALL_ACTIONS, POLICIES, type Action } from './policies';
@@ -175,13 +182,67 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(41);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(42);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);
       await expect(can(employee, action, undefined, { db: authorizationDb({}) })).resolves.toBe(
         false
       );
+    }
+  });
+});
+
+describe('growth.manage', () => {
+  function permissionsFor(templates: readonly RoleTemplate[], key: string) {
+    return templates
+      .find((role) => role.key === key)!
+      .capabilities.map((capability): Permission => ({ capability, effect: 'ALLOW' }));
+  }
+
+  it.each([
+    ['restaurant', 'owner', RESTAURANT_ROLE_TEMPLATES],
+    ['hospitality', 'owner', HOSPITALITY_ROLE_TEMPLATES],
+    ['agency', 'admin', AGENCY_ROLE_TEMPLATES],
+  ] as const)('allows the existing %s %s wildcard', async (_label, key, templates) => {
+    await expect(
+      can(employee, 'growth.manage', undefined, {
+        db: authorizationDb({ rolePermissions: permissionsFor(templates, key) }),
+      })
+    ).resolves.toBe(true);
+  });
+
+  it('allows tenant ADMIN, including the restricted pharmacy owner template', async () => {
+    const db = authorizationDb({ rolePermissions: permissionsFor(PHARMACY_ROLE_TEMPLATES, 'owner') });
+    await expect(
+      can({ ...employee, role: 'ADMIN' }, 'growth.manage', undefined, { db })
+    ).resolves.toBe(true);
+    await expect(can(employee, 'growth.manage', undefined, { db })).resolves.toBe(false);
+  });
+
+  it.each([
+    ['restaurant', RESTAURANT_ROLE_TEMPLATES],
+    ['pharmacy', PHARMACY_ROLE_TEMPLATES],
+  ] as const)(
+    'denies the %s cashier template',
+    async (_label, templates) => {
+      await expect(
+        can(employee, 'growth.manage', undefined, {
+          db: authorizationDb({ rolePermissions: permissionsFor(templates, 'cashier') }),
+        })
+      ).resolves.toBe(false);
+    }
+  );
+
+  it('preserves explicit user and role DENY over wildcard and static ADMIN grants', async () => {
+    const admin = { ...employee, role: 'ADMIN' };
+    const deny: Permission = { capability: 'growth.manage', effect: 'DENY' };
+    const ownerPermissions = permissionsFor(RESTAURANT_ROLE_TEMPLATES, 'owner');
+    for (const db of [
+      authorizationDb({ rolePermissions: ownerPermissions, overrides: [deny] }),
+      authorizationDb({ rolePermissions: [...ownerPermissions, deny] }),
+    ]) {
+      await expect(can(admin, 'growth.manage', undefined, { db })).resolves.toBe(false);
     }
   });
 });

@@ -1,6 +1,7 @@
 import { pharmacyCamerasRouter } from './pharmacy-cameras';
 import { pharmacyMarketingRouter } from './pharmacy-marketing';
 import { router } from '../trpc';
+import { growthRouter } from './growth';
 import { hotelPropertyRouter } from './hotel-property';
 import { hotelRatesRouter } from './hotel-rates';
 import { restaurantPromotionsRouter } from './restaurant-promotions';
@@ -69,6 +70,7 @@ import { pharmacyOrderingRouter } from './pharmacy-ordering';
 import { pharmacySupplierLinksRouter } from './pharmacy-supplier-links';
 
 export const appRouter = router({
+  growth: growthRouter,
   hotelProperty: hotelPropertyRouter,
   hotelRates: hotelRatesRouter,
   restaurantPromotions: restaurantPromotionsRouter,
