@@ -413,11 +413,10 @@ type VarianceReceiptInput = {
 };
 
 /**
- * The closing receipt of a transfer. Every open line is answered with what
- * physically arrived; what did not is written off out of IN_TRANSIT at the
- * source branch, where dispatch left it. The transfer then closes RECEIVED, so
- * the line-by-line receipt path can never draw written-off units back out of
- * transit. Runs inside the caller's transaction.
+ * Receive some or all of a transfer. A short count without variance evidence is
+ * a partial receipt and leaves the remainder in transit for a later receipt.
+ * Supplying variance evidence explicitly closes the transfer and writes off any
+ * remainder. Runs inside the caller's transaction.
  */
 async function receiveTransferWithVariance(
   db: ScopedDb,
@@ -498,7 +497,10 @@ async function receiveTransferWithVariance(
   }
 
   const short = plan.some((step) => step.varianceUnits > 0);
-  if (short) {
+  const closingWithVariance = short && input.variance !== undefined;
+  if (short && !closingWithVariance && !plan.some((step) => step.receivedUnits > 0))
+    throw new PharmacyInventoryError('INVALID_UNITS');
+  if (closingWithVariance) {
     const evidence = input.variance;
     if (!evidence || evidence.witnessId === scope.actorId)
       throw new PharmacyInventoryError('COAUTH_REQUIRED');
@@ -519,7 +521,7 @@ async function receiveTransferWithVariance(
         idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${step.line.id}`,
       });
     }
-    if (step.varianceUnits === 0) continue;
+    if (step.varianceUnits === 0 || !closingWithVariance) continue;
     const evidence = input.variance!;
     const movement = await db.pharmacyStockMovement.create({
       data: {
@@ -551,11 +553,13 @@ async function receiveTransferWithVariance(
     postedVariances.push({ lineId: step.line.id, units: step.varianceUnits, movement, custody });
   }
 
-  const closed = await db.pharmacyInterbranchTransfer.update({
+  const received = await db.pharmacyInterbranchTransfer.update({
     where: { id: transfer.id },
-    data: { status: 'RECEIVED', receivedAt: new Date() },
+    data: short && !closingWithVariance
+      ? { status: 'PARTIALLY_RECEIVED', receivedAt: null }
+      : { status: 'RECEIVED', receivedAt: new Date() },
   });
-  return { transfer: closed, variances: postedVariances };
+  return { transfer: received, variances: postedVariances };
 }
 
 export const pharmacyInventoryRouter = router({

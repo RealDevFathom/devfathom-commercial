@@ -41,6 +41,7 @@ import type { TRPCContext } from '../trpc';
 function model() {
   return {
     findFirst: vi.fn().mockResolvedValue(null),
+    findFirstOrThrow: vi.fn().mockRejectedValue(new Error('Test record not configured')),
     create: vi
       .fn()
       .mockImplementation(async ({ data }: { data: object }) => ({ id: 'new', ...data })),
@@ -72,6 +73,7 @@ function makeDb() {
     pharmacyRequisition: model(),
     pharmacyRequisitionLine: model(),
     pharmacyInterbranchTransfer: model(),
+    pharmacyInterbranchTransferLine: model(),
     pharmacyPurchaseReturn: model(),
     pharmacyPurchaseReturnLine: model(),
     pharmacyBranch: {
@@ -267,6 +269,66 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       })
     ).rejects.toMatchObject({ code: 'UNAUTHORIZED' });
     expect(db.pharmacyStockLocation.create).not.toHaveBeenCalled();
+  });
+
+  it('keeps the unreceived balance in transit so a transfer can be finished later', async () => {
+    const transfer = {
+      id: 'transfer_1',
+      organizationId: 'org_a',
+      fromBranchId: 'branch_source',
+      toBranchId: 'branch_a',
+      status: 'DISPATCHED',
+      lines: [
+        {
+          id: 'line_1',
+          sourceLotId: 'lot_1',
+          sourceStockLocationId: 'source_location',
+          destinationStockLocationId: 'destination_location',
+          quantityUnits: 10,
+          receivedUnits: 0,
+        },
+      ],
+    };
+    db.$queryRaw
+      .mockResolvedValueOnce([{ id: transfer.id }])
+      .mockResolvedValueOnce([
+        { onHandUnits: 10, sealedPacks: 1, looseUnits: 0, unitsPerPack: 10 },
+      ]);
+    db.pharmacyInterbranchTransfer.findFirst.mockResolvedValue(transfer);
+    db.pharmacyInventoryLot.findFirstOrThrow.mockResolvedValue({
+      id: 'lot_1',
+      manufacturingBatchId: 'batch_1',
+      packLevelId: 'pack_1',
+      unitsPerPack: 10,
+      supplierName: 'Supplier',
+      supplierInvoiceRef: 'invoice_1',
+      unitCostMinor: 100,
+      printedMrpMinor: 150,
+      receivedExpiresAt: new Date('2027-01-01T00:00:00.000Z'),
+      receivedExpiryPrecision: 'DAY',
+      batch: {},
+    });
+    db.pharmacyInterbranchTransfer.update.mockImplementation(async ({ data }) => ({
+      ...transfer,
+      ...data,
+    }));
+
+    const result = await caller().receiveTransferWithVariance({
+      branchId: 'branch_a',
+      transferId: transfer.id,
+      lines: [{ lineId: 'line_1', receivedUnits: 4 }],
+      idempotencyKeyPrefix: 'partial-receipt-1',
+    });
+
+    expect(result.transfer).toMatchObject({ status: 'PARTIALLY_RECEIVED', receivedAt: null });
+    expect(result.variances).toEqual([]);
+    expect(db.pharmacyInterbranchTransferLine.update).toHaveBeenCalledWith({
+      where: { id: 'line_1' },
+      data: { receivedUnits: { increment: 4 } },
+    });
+    expect(db.pharmacyStockMovement.create).not.toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ kind: 'WRITE_OFF' }) })
+    );
   });
 });
 
