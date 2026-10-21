@@ -26,6 +26,7 @@ import {
   Monitor,
   BookOpen,
   UtensilsCrossed,
+  FileUp,
   LayoutGrid,
   ReceiptText,
   CookingPot,
@@ -245,6 +246,17 @@ export const navigation: NavItem[] = [
     href: '/restaurant/menus',
     icon: UtensilsCrossed,
     group: 'Restaurant',
+  },
+  {
+    // R-lane (WHA-210): the OCR menu-import console. Gated to admins because
+    // `menu:import` is held only by templates carrying `*` (the restaurant
+    // Owner), which is the same set the page itself admits.
+    label: 'Menu import',
+    href: '/restaurant/menu-import',
+    icon: FileUp,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-menu',
   },
   {
     label: 'Offers',
