@@ -4,7 +4,7 @@ import { createHash, randomUUID } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import sharp from 'sharp';
 import { z } from 'zod';
-import { getUpload, putUpload } from '@/lib/storage';
+import { getUpload, putUpload, StorageUnavailableError } from '@/lib/storage';
 
 export const MAX_PRESCRIPTION_FILE_BYTES = 5 * 1024 * 1024;
 const maxBase64Length = 4 * Math.ceil(MAX_PRESCRIPTION_FILE_BYTES / 3);
@@ -108,7 +108,14 @@ export async function persistPrescriptionFile(
       Buffer.from(JSON.stringify(stored)),
       'application/json'
     );
-  } catch {
+  } catch (error) {
+    if (error instanceof StorageUnavailableError) {
+      throw new TRPCError({
+        code: 'PRECONDITION_FAILED',
+        message: 'Prescription storage is not configured for this workspace.',
+        cause: error,
+      });
+    }
     throw new TRPCError({
       code: 'INTERNAL_SERVER_ERROR',
       message: 'Prescription upload failed. Retry the upload.',

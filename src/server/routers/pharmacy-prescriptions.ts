@@ -48,10 +48,8 @@ const fileProcedure = publicProcedure
     const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
     if (
       !hasModule(ctx.entitlements, 'pharmacy-dispensing') ||
-      !(
-        (await can(subject, 'pharmacy:orders', undefined, options)) ||
-        (await can(subject, 'pharmacy:dispense', undefined, options))
-      )
+      (ctx.session.user.role !== 'ADMIN' &&
+        !(await can(subject, 'pharmacy:dispense', undefined, options)))
     ) {
       throw new TRPCError({
         code: 'FORBIDDEN',

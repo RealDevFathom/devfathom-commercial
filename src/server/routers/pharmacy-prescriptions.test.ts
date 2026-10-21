@@ -27,7 +27,11 @@ vi.mock('@/lib/entitlements', () => ({
   hasModule: mocks.hasModule,
   resolveOrganizationEntitlements: vi.fn(),
 }));
-vi.mock('@/lib/storage', () => ({ putUpload: mocks.putUpload, getUpload: mocks.getUpload }));
+vi.mock('@/lib/storage', () => ({
+  putUpload: mocks.putUpload,
+  getUpload: mocks.getUpload,
+  StorageUnavailableError: class StorageUnavailableError extends Error {},
+}));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
   isAuditExcludedPath: vi.fn(() => false),
@@ -42,8 +46,14 @@ import type { TRPCContext } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
+import { StorageUnavailableError } from '@/lib/storage';
 
-function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE') {
+function context(
+  userId = 'user-a',
+  organizationId = 'org-a',
+  status = 'ACTIVE',
+  role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE'
+) {
   return {
     db: {
       pharmacyPatient: { findFirst: mocks.patient },
@@ -52,7 +62,7 @@ function context(userId = 'user-a', organizationId = 'org-a', status = 'ACTIVE')
       medicine: { findMany: mocks.medicines },
     },
     entitlements: { organizationId, modules: [], enabledModules: ['pharmacy-dispensing'] },
-    session: { expires: 'later', user: { id: userId, organizationId, role: 'EMPLOYEE', status } },
+    session: { expires: 'later', user: { id: userId, organizationId, role, status } },
     organization: { id: organizationId },
     support: null,
     requestMeta: { ip: null, userAgent: null },
@@ -190,6 +200,23 @@ describe('prescription capture and private delivery', () => {
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
+  it('denies cashier upload with orders capability but allows pharmacists and tenant admins', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
+    await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.putUpload).not.toHaveBeenCalled();
+
+    mocks.can.mockResolvedValue(false);
+    await expect(caller(context('admin-a', 'org-a', 'ACTIVE', 'ADMIN')).uploadSource({
+      patientId: 'patient-a',
+      contentType: 'image/png',
+      dataBase64: (
+        await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } })
+          .png()
+          .toBuffer()
+      ).toString('base64'),
+    })).resolves.toHaveProperty('url');
+  });
+
   it.each(['capture://rx.png', '/api/files/foreign.png', 'https://foreign.test/image.png'])(
     'rejects fake or shared references: %s',
     async (ref) => {
@@ -271,6 +298,11 @@ describe('prescription capture and private delivery', () => {
     await expect(caller().capture(captureInput(receipt.url))).resolves.toHaveProperty('id');
     expect(mocks.putUpload).toHaveBeenCalledOnce();
     expect(mocks.objects.size).toBe(1);
+  });
+
+  it('returns a configured-service error instead of an upload 500 when storage is disabled', async () => {
+    mocks.putUpload.mockRejectedValueOnce(new StorageUnavailableError('disabled'));
+    await expect(upload()).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
   });
 
   it('returns the existing capture on exact retry and rejects changed payload', async () => {

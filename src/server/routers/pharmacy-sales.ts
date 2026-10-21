@@ -22,6 +22,7 @@ import {
   prescriptionSalePatientStatus,
 } from '@/lib/pharmacy/rx-quantity';
 import { needsPrescription, PharmacySafetyBlockError } from '@/lib/pharmacy/rx-gate';
+import { assertStoredBranchMayOperate, BranchOperationDeniedError } from '@/lib/pharmacy/regulatory';
 import {
   isLockedOut,
   registerFailedAttempt,
@@ -500,7 +501,9 @@ function requireCloseAccess(ctx: TRPCContext) {
 
 export const pharmacySalesRouter = router({
   rxOverridePermission: protectedProcedure.query(({ ctx }) =>
-    can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, { db: ctx.db })
+    ctx.session!.user.role === 'ADMIN'
+      ? true
+      : can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, { db: ctx.db })
   ),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
@@ -974,7 +977,6 @@ export const pharmacySalesRouter = router({
           packLevelId: z.string().min(1),
           saleUnit,
           quantity: z.number().int().positive(),
-          canonicalUnitsPerSaleUnit: z.number().int().positive(),
           discountKind: z.enum(['DISCOUNT', 'PROMOTION', 'COMPLIMENTARY']).optional(),
           discountMinor: z.number().int().nonnegative().optional(),
           approvedByUserId: z.string().min(1).optional(),
@@ -1021,8 +1023,41 @@ export const pharmacySalesRouter = router({
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
+          const presentation = await db.presentation.findFirst({
+            where: {
+              id: input.presentationId,
+              medicineId: input.medicineId,
+              organizationId: scope.organizationId,
+            },
+            include: { packLevels: true },
+          });
+          const selectedPack = presentation?.packLevels.find((pack) => pack.id === input.packLevelId);
+          if (!selectedPack) return { blocked: 'The selected medicine pack is unavailable.' };
+          const children = new Map<string, Array<typeof selectedPack>>();
+          for (const pack of presentation.packLevels) {
+            if (!pack.parentPackLevelId) continue;
+            children.set(pack.parentPackLevelId, [
+              ...(children.get(pack.parentPackLevelId) ?? []),
+              pack,
+            ]);
+          }
+          let canonicalUnitsPerSaleUnit = 1;
+          let current = selectedPack;
+          const visited = new Set([current.id]);
+          for (;;) {
+            const next = children.get(current.id) ?? [];
+            if (next.length === 0) break;
+            if (next.length !== 1 || visited.has(next[0]!.id))
+              return { blocked: 'The selected medicine pack conversion is invalid.' };
+            current = next[0]!;
+            visited.add(current.id);
+            canonicalUnitsPerSaleUnit *= current.unitsPerParent;
+            if (!Number.isSafeInteger(canonicalUnitsPerSaleUnit) || canonicalUnitsPerSaleUnit <= 0)
+              return { blocked: 'The selected medicine pack conversion is invalid.' };
+          }
+          const saleLineInput = { ...input, canonicalUnitsPerSaleUnit };
           if (!medicine?.controlled) {
-            if (!needsPrescription(medicine)) return addSaleLine(db, scope, input);
+            if (!needsPrescription(medicine)) return addSaleLine(db, scope, saleLineInput);
             const rxBlocked = {
               blocked:
                 'Prescription-only or restricted medicine needs a valid prescription or a pharmacist override with a reason.',
@@ -1050,7 +1085,7 @@ export const pharmacySalesRouter = router({
                 },
                 include: { prescription: true, fills: true },
               });
-              const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+              const units = input.quantity * canonicalUnitsPerSaleUnit;
               if (
                 !rx ||
                 rx.prescription.validFrom > now ||
@@ -1083,7 +1118,7 @@ export const pharmacySalesRouter = router({
                     kind: 'PRESCRIPTION',
                   },
                 });
-                if (authorization) return addSaleLine(db, scope, input);
+                if (authorization) return addSaleLine(db, scope, saleLineInput);
                 return rxBlocked;
               }
               if (
@@ -1129,7 +1164,7 @@ export const pharmacySalesRouter = router({
                 },
               });
             }
-            const result = await addSaleLine(db, scope, input);
+            const result = await addSaleLine(db, scope, saleLineInput);
             const existing = await db.pharmacyRxLineAuthorization.findFirst({
               where: { organizationId: scope.organizationId, saleLineId: result.line.id },
               select: { id: true },
@@ -1193,11 +1228,21 @@ export const pharmacySalesRouter = router({
             return { blocked: 'That earlier register serial is not on this branch.' };
           }
           if (authorization.emergency) {
+            try {
+              await assertStoredBranchMayOperate(db, scope.organizationId, scope.branchId, {
+                name: 'emergency controlled medicine supply',
+                schedule: 'CONTROLLED',
+              });
+            } catch (error) {
+              if (error instanceof BranchOperationDeniedError)
+                return { blocked: 'This branch is not permitted to supply this medicine schedule.' };
+              throw error;
+            }
             const patient = await db.pharmacyPatient.findFirst({
               where: { id: authorization.patientId, organizationId: scope.organizationId },
             });
             if (!patient?.cnic?.trim() || !authorization.prescriberName) return blocked;
-            const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+            const units = input.quantity * canonicalUnitsPerSaleUnit;
             const since = new Date(now.getTime() - EMERGENCY_NO_RX_WINDOW_MS);
             const recentSupplies = await db.pharmacyControlledRegisterEntry.count({
               where: {
@@ -1236,7 +1281,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addSaleLine(db, scope, saleLineInput);
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1302,7 +1347,7 @@ export const pharmacySalesRouter = router({
             rx.prescription.validUntil <= now
           )
             return blocked;
-          const units = input.quantity * input.canonicalUnitsPerSaleUnit;
+          const units = input.quantity * canonicalUnitsPerSaleUnit;
           const previous = await db.pharmacySaleLine.findFirst({
             where: {
               organizationId: scope.organizationId,
@@ -1332,7 +1377,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addSaleLine(db, scope, saleLineInput);
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
