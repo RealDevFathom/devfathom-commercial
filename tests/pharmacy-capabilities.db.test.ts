@@ -21,6 +21,8 @@ const migration = readFileSync(
 )
   .replace(/^BEGIN;$/m, '')
   .replace(/^COMMIT;$/m, '');
+const expiry = new Date('2035-01-02T00:00:00.000Z');
+const expired = new Date('2020-01-02T00:00:00.000Z');
 const legacy: Record<string, string[]> = {
   owner: ['pharmacy.*', 'pharmacy:orders'],
   pharmacist: ['pharmacy.dispense', 'pharmacy:catalogue-review'],
@@ -49,7 +51,10 @@ const legacy: Record<string, string[]> = {
         [organizationId]
       );
     }
-    await client.query(`INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'Pharmacy','Pharmacy',now())`, [id('department'), org]);
+    await client.query(
+      `INSERT INTO organization_departments (id,"organizationId",key,name,"updatedAt") VALUES ($1,$2,'Pharmacy','Pharmacy',now())`,
+      [id('department'), org]
+    );
     for (const template of PHARMACY_ROLE_TEMPLATES) {
       await client.query(
         `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,true,now())`,
@@ -72,9 +77,37 @@ const legacy: Record<string, string[]> = {
       [id('deny'), org, id('cashier')]
     );
     await client.query(
-      `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"expiresAt","updatedAt") VALUES ($1,$3,$4,'pharmacy.dispense','ALLOW','legacy',now()+interval '1 day',now()),($2,$3,$4,'pharmacy:dispense','DENY','canonical',now()+interval '2 days',now())`,
-      [id('override_old'), id('override_new'), org, id('user_auditor')]
+      `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"expiresAt","updatedAt") VALUES ($1,$3,$4,'pharmacy.dispense','ALLOW','legacy',now()+interval '1 day',now()),($2,$3,$4,'pharmacy:dispense','DENY','canonical',$5,now())`,
+      [id('override_old'), id('override_new'), org, id('user_auditor'), expiry]
     );
+    // Both collision directions, expired grants, and wildcard/dispense no-fanout.
+    for (const [key, grants] of [
+      ['owner', [['pharmacy.*', 'ALLOW', expiry]]],
+      ['pharmacist', [['pharmacy.dispense', 'ALLOW', expiry]]],
+      [
+        'manager',
+        [
+          ['pharmacy.manage', 'DENY', expiry],
+          ['pharmacy:manage', 'ALLOW', null],
+        ],
+      ],
+      ['inventory', [['pharmacy.inventory', 'ALLOW', expired]]],
+      ['procurement', [['pharmacy.procurement', 'DENY', expired]]],
+    ] as const) {
+      for (const [capability, effect, expiresAt] of grants) {
+        await client.query(
+          `INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"expiresAt","updatedAt") VALUES ($1,$2,$3,$4,$5,'legacy',$6,now())`,
+          [
+            id(`override_${key}_${capability}`),
+            org,
+            id(`user_${key}`),
+            capability,
+            effect,
+            expiresAt,
+          ]
+        );
+      }
+    }
     await client.query(migration);
   }, 60_000);
   afterAll(async () => {
@@ -102,10 +135,35 @@ const legacy: Record<string, string[]> = {
       [id('user_auditor')]
     );
     expect(overrides.rows).toEqual([
-      { capability: 'pharmacy:dispense', effect: 'DENY', expiresAt: null, reason: 'canonical' },
+      { capability: 'pharmacy:dispense', effect: 'DENY', expiresAt: expiry, reason: 'canonical' },
     ]);
+    for (const [key, capability, effect, expiresAt] of [
+      ['owner', 'pharmacy:*', 'ALLOW', expiry],
+      ['pharmacist', 'pharmacy:dispense', 'ALLOW', expiry],
+      ['manager', 'pharmacy:manage', 'DENY', expiry],
+      ['inventory', 'pharmacy:inventory', 'ALLOW', expired],
+      ['procurement', 'pharmacy:procurement', 'DENY', expired],
+    ]) {
+      const result = await client.query(
+        `SELECT capability,effect,"expiresAt",reason FROM user_permission_overrides WHERE "userId"=$1`,
+        [id(`user_${key}`)]
+      );
+      expect(result.rows).toEqual([{ capability, effect, expiresAt, reason: 'legacy' }]);
+    }
+    const before = await client.query(
+      `SELECT * FROM user_permission_overrides WHERE "organizationId"=$1 ORDER BY id`,
+      [org]
+    );
     await client.query('DROP TABLE pharmacy_capability_aliases');
     await client.query(migration);
+    expect(
+      (
+        await client.query(
+          `SELECT * FROM user_permission_overrides WHERE "organizationId"=$1 ORDER BY id`,
+          [org]
+        )
+      ).rows
+    ).toEqual(before.rows);
   });
 
   it('enforces tenant RLS and authorizes migrated grants without coarse ADMIN authority', async () => {

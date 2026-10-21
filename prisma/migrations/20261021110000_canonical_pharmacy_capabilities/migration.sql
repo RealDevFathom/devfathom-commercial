@@ -14,15 +14,32 @@ ON CONFLICT ("organizationRoleId",capability) DO UPDATE SET effect =
  CASE WHEN organization_role_permissions.effect='DENY' OR EXCLUDED.effect='DENY'
  THEN 'DENY'::"PermissionEffect" ELSE 'ALLOW'::"PermissionEffect" END;
 
+END LOOP;
+-- User overrides rename one grant only; template additions must not fan out here.
+FOR a IN SELECT * FROM (VALUES
+ ('pharmacy.*','pharmacy:*'),
+ ('pharmacy.dispense','pharmacy:dispense'),
+ ('pharmacy.manage','pharmacy:manage'),
+ ('pharmacy.counter','pharmacy:counter'),
+ ('pharmacy.procurement','pharmacy:procurement'),
+ ('pharmacy.inventory','pharmacy:inventory'),
+ ('pharmacy.finance','reports:financial'),
+ ('pharmacy.audit','reports:operational')
+) AS aliases(legacy, canonical) LOOP
 INSERT INTO user_permission_overrides (id,"organizationId","userId",capability,effect,reason,"expiresAt","createdById","createdAt","updatedAt")
 SELECT 'qa130_' || md5(p.id || a.canonical),p."organizationId",p."userId",a.canonical,p.effect,p.reason,p."expiresAt",p."createdById",p."createdAt",p."updatedAt"
 FROM user_permission_overrides p WHERE p.capability=a.legacy
 ON CONFLICT ("userId",capability) DO UPDATE SET
- effect = CASE WHEN user_permission_overrides.effect='DENY' OR EXCLUDED.effect='DENY'
- THEN 'DENY'::"PermissionEffect" ELSE 'ALLOW'::"PermissionEffect" END,
- -- Ambiguous collisions narrow access: never extend an ALLOW or expire a DENY.
- "expiresAt" = CASE WHEN user_permission_overrides.effect='DENY' OR EXCLUDED.effect='DENY'
- THEN NULL ELSE LEAST(user_permission_overrides."expiresAt",EXCLUDED."expiresAt") END;
+ -- Keep the winning row's expiry and metadata. Existing DENY wins ties;
+ -- a legacy DENY replaces canonical ALLOW without becoming permanent.
+ effect = EXCLUDED.effect,
+ reason = EXCLUDED.reason,
+ "expiresAt" = EXCLUDED."expiresAt",
+ "createdById" = EXCLUDED."createdById",
+ "createdAt" = EXCLUDED."createdAt",
+ "updatedAt" = EXCLUDED."updatedAt"
+ WHERE user_permission_overrides.effect <> 'DENY'
+   AND EXCLUDED.effect = 'DENY';
 END LOOP;
 END $$;
 DELETE FROM organization_role_permissions WHERE capability IN (SELECT legacy FROM pharmacy_capability_aliases);
