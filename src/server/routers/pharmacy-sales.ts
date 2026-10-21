@@ -23,6 +23,7 @@ import {
   verifyOperatorCredential,
 } from '@/lib/restaurant/operator-credentials';
 import { closePharmacyDay, readPharmacyClose } from '@/lib/pharmacy/day-close';
+import { workspaceTimezone } from '@/lib/timezone';
 import { readDispensingLabelSources } from '@/lib/pharmacy/dispensing-label-source';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
@@ -1476,12 +1477,15 @@ export const pharmacySalesRouter = router({
       }),
       ctx.db.organization.findUnique({
         where: { id: organizationId },
-        select: { currency: true },
+        select: { currency: true, timezone: true },
       }),
     ]);
     return {
       branches,
       currency: organization?.currency ?? 'PKR',
+      // The workspace's zone: the day close picks "today" in it before any
+      // close has been read. A stored value Intl refuses is handed over as UTC.
+      timezone: workspaceTimezone(organization?.timezone),
       paymentSandboxAvailable: ctx.session.user.role === 'ADMIN' && paymentSandboxAdmitted(),
     };
   }),

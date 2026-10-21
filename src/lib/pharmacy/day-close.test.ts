@@ -43,6 +43,8 @@ function fixture() {
         ]),
     },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
+    // The workspace's zone, which the close screen formats every time in.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'America/Chicago' }) },
   };
   return { db, scoped: db as unknown as ScopedDb };
 }
@@ -73,6 +75,26 @@ describe('day close boundaries', () => {
       })
     );
   });
+  it('carries the workspace zone, read for the scope’s organization, with the close', async () => {
+    const { db, scoped } = fixture();
+    await expect(readPharmacyClose(scoped, scope, date)).resolves.toMatchObject({
+      timezone: 'America/Chicago',
+    });
+    expect(db.organization.findUnique).toHaveBeenCalledWith({
+      where: { id: 'org' },
+      select: { timezone: true },
+    });
+  });
+  it.each([[{ timezone: 'PKT' }], [{ timezone: 'UTC+5' }], [null]])(
+    'hands over UTC for a stored zone Intl refuses or a missing one (%j)',
+    async (organization) => {
+      const { db, scoped } = fixture();
+      db.organization.findUnique.mockResolvedValue(organization);
+      await expect(readPharmacyClose(scoped, scope, date)).resolves.toMatchObject({
+        timezone: 'UTC',
+      });
+    }
+  );
   it('refuses an unknown or foreign branch', async () => {
     const { db, scoped } = fixture();
     db.pharmacyBranch.findFirst.mockResolvedValue(null);

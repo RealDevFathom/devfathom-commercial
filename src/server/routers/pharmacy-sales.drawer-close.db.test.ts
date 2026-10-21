@@ -146,6 +146,10 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
         [ORG, OTHER_ORG]
       )
     );
+    // A workspace zone other than the default, the runner's and Asia/Karachi.
+    await withPlatformDb((db) =>
+      db.organization.update({ where: { id: ORG }, data: { timezone: 'America/Chicago' } })
+    );
     await createBranch(ORG, ACTIVE);
     await createBranch(ORG, RETIRED);
     await createBranch(OTHER_ORG, FOREIGN);
@@ -283,9 +287,17 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
         c.closeDrawer({ branchId: ACTIVE, drawerSessionId: drawer!.id, countedCashMinor: 1250 })
       )
     ).resolves.toMatchObject({ expectedCashMinor: 1250, varianceMinor: 0 });
+    // The close read, like the branch list before it, carries the workspace's zone.
     await expect(
       asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
-    ).resolves.toMatchObject({ branchName: `Branch ${ACTIVE}`, close: null });
+    ).resolves.toMatchObject({
+      branchName: `Branch ${ACTIVE}`,
+      close: null,
+      timezone: 'America/Chicago',
+    });
+    await expect(asAdmin((c) => c.counterBranches())).resolves.toMatchObject({
+      timezone: 'America/Chicago',
+    });
     expect(await rowsFor(ACTIVE)).toEqual({ drawers: 1, movements: 3, closed: 1, closes: 0 });
   });
 
@@ -311,5 +323,24 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       asAdmin((c) => c.dailyClose({ branchId: ACTIVE, businessDate: day }))
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'REOPEN_REASON_REQUIRED' });
     expect(await rowsFor(ACTIVE)).toMatchObject({ closes: 1 });
+  });
+
+  it('hands the screens UTC for a stored zone Intl refuses, never the value itself', async () => {
+    // The workspace profile saved free text before it checked the zone.
+    await withPlatformDb((db) =>
+      db.organization.update({ where: { id: ORG }, data: { timezone: 'PKT' } })
+    );
+    try {
+      await expect(
+        asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
+      ).resolves.toMatchObject({ timezone: 'UTC' });
+      await expect(asAdmin((c) => c.counterBranches())).resolves.toMatchObject({
+        timezone: 'UTC',
+      });
+    } finally {
+      await withPlatformDb((db) =>
+        db.organization.update({ where: { id: ORG }, data: { timezone: 'America/Chicago' } })
+      );
+    }
   });
 });

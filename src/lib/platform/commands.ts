@@ -21,6 +21,7 @@ import { demoApproverEmail } from '@/lib/demo/approval';
 import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
+import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
 import { OrganizationVertical } from '@/generated/prisma/enums';
 import {
@@ -110,19 +111,6 @@ const businessDayCutoff = z
   .string()
   .trim()
   .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'Use 24-hour time, e.g. 09:30');
-const ianaTimezone = z
-  .string()
-  .trim()
-  .min(1)
-  .max(100)
-  .refine((value) => {
-    try {
-      new Intl.DateTimeFormat('en', { timeZone: value }).format();
-      return true;
-    } catch {
-      return false;
-    }
-  }, 'Choose a valid IANA timezone.');
 
 const COMMAND_CAPABILITY: Record<string, string> = {
   organization: 'organizations:write',

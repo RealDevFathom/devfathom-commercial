@@ -56,6 +56,8 @@ function fixture() {
       // The close read's own branch lookup.
       findFirst: vi.fn().mockResolvedValue({ id: BRANCH, name: 'Main' }),
     },
+    // The close read names the workspace's zone.
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'UTC' }) },
     pharmacyDailyClose: {
       findFirst: vi.fn().mockResolvedValue(null),
       create: vi.fn(),
