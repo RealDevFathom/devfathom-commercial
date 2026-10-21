@@ -153,11 +153,28 @@ describe('clientIp', () => {
   it('ignores a client-supplied forwarding header when no proxy is trusted', () => {
     const req = request({ 'x-forwarded-for': '1.2.3.4, 10.0.0.8', 'x-real-ip': '1.2.3.4' });
     expect(clientIp(req, {})).toBe('unknown');
+    expect(clientIp(req, { NODE_ENV: 'development' })).toBe('unknown');
+    expect(clientIp(req, { NODE_ENV: 'production' })).toBe('unknown');
+  });
+
+  it('uses one socket-provided address outside production', () => {
+    const req = request({ 'x-forwarded-for': '127.0.0.1', 'x-real-ip': '203.0.113.10' });
+    expect(clientIp(req, { NODE_ENV: 'development' })).toBe('127.0.0.1');
+    expect(clientIp(req, { NODE_ENV: 'test' })).toBe('127.0.0.1');
+    expect(clientIp(req, {})).toBe('127.0.0.1');
+  });
+
+  it('ignores one forwarded address in production when no proxy is configured', () => {
+    const req = request({ 'x-forwarded-for': '127.0.0.1' });
+    expect(clientIp(req, { NODE_ENV: 'production' })).toBe('unknown');
   });
 
   it('uses the rightmost untrusted hop after trusted proxies', () => {
     const req = request({ 'x-forwarded-for': '8.8.8.8, 203.0.113.10, 10.0.0.8' });
     expect(clientIp(req, { TRUSTED_PROXY_CIDRS: '10.0.0.0/8' })).toBe('203.0.113.10');
+    expect(clientIp(req, { NODE_ENV: 'production', TRUSTED_PROXY_CIDRS: '10.0.0.0/8' })).toBe(
+      '203.0.113.10'
+    );
   });
 
   it('rejects a forwarding list whose closest hop is not a trusted proxy', () => {

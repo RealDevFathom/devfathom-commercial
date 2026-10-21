@@ -217,7 +217,9 @@ function isTrusted(ip: string, list: BlockList): boolean {
  * skips trusted proxies. The rightmost hop must itself be trusted, or the
  * header is ignored. `TRUSTED_PROXY_HOPS` selects the address that many hops
  * from the right (the one the outermost proxy appended). With neither setting,
- * forwarded headers are ignored.
+ * production ignores forwarded headers. Development and test accept one address,
+ * which is the socket address Next copies into `X-Forwarded-For` when the client
+ * did not send the header. A multi-hop list stays ignored.
  */
 export function clientIp(request: Request, env: RateLimitEnv = runtimeEnv): string {
   const configured = env.CLIENT_IP_HEADER?.trim();
@@ -240,6 +242,14 @@ export function clientIp(request: Request, env: RateLimitEnv = runtimeEnv): stri
   if (Number.isInteger(hops) && hops > 0) {
     if (forwarded.length < hops) return 'unknown';
     return forwarded[forwarded.length - hops]!;
+  }
+
+  // Next copies socket.remoteAddress into X-Forwarded-For only when the header
+  // is absent. A single value is that socket address on a proxy-less dev server.
+  // Production still requires an explicit proxy setting, and a multi-hop list
+  // without one stays untrusted.
+  if (env.NODE_ENV !== 'production' && forwarded.length === 1) {
+    return forwarded[0]!;
   }
 
   return 'unknown';
