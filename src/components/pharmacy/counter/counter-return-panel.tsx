@@ -56,27 +56,6 @@ type Props = {
 const selectClass =
   'h-11 w-full rounded-md border border-input bg-surface-card px-3 text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50';
 
-const RETURN_STORAGE_MESSAGE =
-  'Another return or refund needs reconciliation. Reload this form and retry its saved attempt before starting a new one.';
-
-function persistAttempt(storageKey: string, attempt: Attempt): void {
-  const raw = JSON.stringify(attempt);
-  const existing = localStorage.getItem(storageKey);
-  // A second tab may have created an attempt after this form mounted. Never
-  // replace that evidence; the operator must reconcile it first.
-  if (existing !== null && existing !== raw) throw new Error(RETURN_STORAGE_MESSAGE);
-  if (existing === null) localStorage.setItem(storageKey, raw);
-  if (localStorage.getItem(storageKey) !== raw) throw new Error(RETURN_STORAGE_MESSAGE);
-}
-
-function clearAttempt(storageKey: string, attempt: Attempt): void {
-  const raw = JSON.stringify(attempt);
-  // Do not let an older request erase a newer attempt saved by another tab.
-  if (localStorage.getItem(storageKey) !== raw) throw new Error(RETURN_STORAGE_MESSAGE);
-  localStorage.removeItem(storageKey);
-  if (localStorage.getItem(storageKey) !== null) throw new Error(RETURN_STORAGE_MESSAGE);
-}
-
 export function CounterReturnPanel(props: Props) {
   const [open, setOpen] = useState(false);
   return (
@@ -195,7 +174,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
     setMessage('');
     try {
       // Write before sending; an ambiguous network outcome can only replay this exact request.
-      persistAttempt(storageKey, next);
+      localStorage.setItem(storageKey, JSON.stringify(next));
       setAttempt(next);
       if (next.kind === 'return') await returnLine.mutateAsync(next.input);
       else
@@ -204,7 +183,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
           businessDate: new Date(next.input.businessDate),
         });
       await history.refetch({ throwOnError: true });
-      clearAttempt(storageKey, next);
+      localStorage.removeItem(storageKey);
       setAttempt(null);
       setConfirmed(false);
       setUnits('1');
@@ -218,7 +197,7 @@ export function ReturnForm({ branchId, organizationId, accountId, deviceId, busi
       const code = (cause as { data?: { code?: string } })?.data?.code;
       if (['BAD_REQUEST', 'FORBIDDEN', 'NOT_FOUND', 'UNAUTHORIZED'].includes(code ?? '')) {
         try {
-          clearAttempt(storageKey, next);
+          localStorage.removeItem(storageKey);
           setAttempt(null);
         } catch {
           /* Keep recovery locked. */

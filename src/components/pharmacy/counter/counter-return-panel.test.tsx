@@ -171,22 +171,6 @@ describe('counter returns', () => {
     expect(screen.getByRole('alert')).toHaveTextContent('recovery is unavailable');
     expect(screen.getByRole('button', { name: 'Find receipt' })).toBeDisabled();
   });
-  it('does not overwrite an attempt created by another tab after mounting', async () => {
-    render(<ReturnForm {...props} />);
-    chooseReceipt();
-    fireEvent.change(screen.getByLabelText('Original tender'), { target: { value: 'cash' } });
-    fireEvent.change(screen.getByLabelText('Refund amount (PKR)'), { target: { value: '2.00' } });
-    const concurrentAttempt = JSON.stringify({ concurrent: true });
-    localStorage.setItem('pharmacy-return:o:a:b', concurrentAttempt);
-
-    fireEvent.click(screen.getByRole('button', { name: 'Confirm refund' }));
-
-    await waitFor(() =>
-      expect(screen.getByRole('alert')).toHaveTextContent('Another return or refund')
-    );
-    expect(mocks.refund).not.toHaveBeenCalled();
-    expect(localStorage.getItem('pharmacy-return:o:a:b')).toBe(concurrentAttempt);
-  });
 });
 
 it('offers sold lots, prevents unsafe restock and caps the selected lot', async () => {
