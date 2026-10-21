@@ -8,7 +8,6 @@ import {
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
-  verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
 import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
@@ -1194,16 +1193,9 @@ const purchasingRouter = router({
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
-      // Lockout counters commit even when the PIN is refused. Stock posting is
-      // a second transaction, so a refused PIN never leaves a half-posted receipt.
-      const attempt = await ctx.db.$transaction((tx) =>
-        verifyControlledPurchaseWitness(txDb(tx), scope, {
-          goodsReceiptId: input.goodsReceiptId,
-          staffProfileId: input.staffProfileId,
-          pin: input.pin,
-        })
-      );
-      if ('blocked' in attempt) return attempt;
+      // Verification and posting share one transaction. A rejected PIN returns
+      // normally so its lockout counter commits; an accepted PIN is verified
+      // exactly once before any stock is written.
       try {
         return await ctx.db.$transaction((tx) =>
           postGoodsReceipt(txDb(tx), scope, {
@@ -1211,6 +1203,7 @@ const purchasingRouter = router({
             at: new Date(),
             staffProfileId: input.staffProfileId,
             pin: input.pin,
+            returnBlocked: true,
           })
         );
       } catch (error) {

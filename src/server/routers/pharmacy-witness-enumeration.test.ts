@@ -172,6 +172,40 @@ it('restricts the picker to the designated person with an unlocked PIN', async (
   );
 });
 
+it.each(['admin', 'manager'])(
+  'does not offer a designated %s who lacks the posting eligibility grant',
+  async (role) => {
+    const f = fixture('pharmacy:procurement');
+    f.db.restaurantStaffProfile.findMany.mockResolvedValueOnce([
+      {
+        id: `${role}-staff`,
+        userId: 'qualified-user',
+        displayName: `${role} user`,
+        status: 'ACTIVE',
+        credentials: [
+          { revokedAt: null, deviceId: null, lockedUntil: null },
+        ],
+        user: {
+          id: 'qualified-user',
+          organizationId: 'org',
+          role: role === 'admin' ? 'ADMIN' : 'EMPLOYEE',
+          department: 'operations',
+          status: 'ACTIVE',
+          organizationRole: { permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+          permissionOverrides: [],
+        },
+      },
+    ] as never);
+    await expect(
+      (
+        f.caller.purchasing as unknown as {
+          controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+        }
+      ).controlledWitnesses({ goodsReceiptId: 'draft' })
+    ).resolves.toEqual([]);
+  }
+);
+
 it('derives purchasing witness tenant scope from the session', async () => {
   const f = fixture('pharmacy:procurement');
   f.ctx.entitlements!.organizationId = 'other-entitlement-org';

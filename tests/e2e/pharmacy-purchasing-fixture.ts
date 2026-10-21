@@ -12,6 +12,7 @@ export const FIXTURE = {
   organizationName: 'PH-PUR Acceptance Pharmacy',
   receiver: { email: 'receiver@ph-pur.test', name: 'Rabia Receiver', password: 'PhPurBench!2026' },
   approver: { email: 'approver@ph-pur.test', name: 'Adnan Approver', password: 'PhPurBench!2026' },
+  witnessPin: '2746',
   branch: { code: 'MAIN', name: 'Saddar branch', city: 'Karachi' },
   shelf: { code: 'SHELF', name: 'Front shelf' },
   quarantine: { code: 'QUAR', name: 'Quarantine cage' },

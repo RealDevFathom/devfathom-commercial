@@ -54,7 +54,7 @@ function witnessDb() {
 describe('verifyControlledPurchaseWitness', () => {
   beforeEach(() => {
     vi.mocked(can).mockResolvedValue(true);
-    vi.mocked(verifyOperatorCredential).mockResolvedValue(false);
+    vi.mocked(verifyOperatorCredential).mockReset().mockResolvedValue(false);
   });
 
   it('does not ask for a PIN when the receipt has no controlled line', async () => {
@@ -119,5 +119,21 @@ describe('verifyControlledPurchaseWitness', () => {
         { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
       )
     ).resolves.toEqual({ pharmacistId: 'pharmacist' });
+  });
+
+  it('uses the same eligibility check before comparing the PIN', async () => {
+    const { db } = witnessDb();
+    vi.mocked(can).mockResolvedValueOnce(false);
+    await expect(
+      verifyControlledPurchaseWitness(
+        db,
+        { organizationId: 'org', branchId: 'branch', actorId: 'receiver' },
+        { goodsReceiptId: 'receipt', staffProfileId: 'staff', pin: '1234' }
+      )
+    ).resolves.toEqual({
+      blocked:
+        'The receipt’s designated qualified person must be a different active pharmacist with an unlocked PIN. Ask them to enter their PIN.',
+    });
+    expect(verifyOperatorCredential).not.toHaveBeenCalled();
   });
 });
