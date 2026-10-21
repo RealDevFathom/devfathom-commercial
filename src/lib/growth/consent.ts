@@ -41,8 +41,7 @@ export function consentKeyword(text: string): 'stop' | 'start' | null {
     const pattern = new RegExp(`^${letters.join('\\s*')}(?: |$)`, 'u');
     if (pattern.test(normalized)) return 'stop';
   }
-  const first = normalized.split(' ')[0] ?? '';
-  if (START_KEYWORDS.has(first)) return 'start';
+  if (START_KEYWORDS.has(text.trim().toLowerCase())) return 'start';
   return null;
 }
 
@@ -131,7 +130,7 @@ export async function handleInboundText(input: {
 }): Promise<'duplicate' | 'opt_out' | 'opt_in' | 'logged'> {
   const text = input.text.normalize('NFKC').slice(0, 1000);
   if (await input.store.findInbound(input.organizationId, input.waMessageId)) return 'duplicate';
-  const keyword = consentKeyword(text);
+  const keyword = consentKeyword(input.text);
   const known = await input.store.customerByPhone(input.organizationId, input.fromE164);
   try {
     await input.store.insertMessage({

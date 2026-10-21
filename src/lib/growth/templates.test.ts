@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStore } from './whatsapp/memory-store';
 import {
   assertCampaignProducts,
+  isOrderReadyName,
   assertMarketingCopyAllowed,
   DEFAULT_TEMPLATES,
   DrugCategoryInPromo,
@@ -209,5 +210,14 @@ describe('message templates', () => {
       'slow_day:ur-en',
       'winback:ur-en',
     ]);
+  });
+});
+
+describe('order-ready display name bounds', () => {
+  it.each(['Ayesha', 'Sehat Pharmacy', 'عائشہ', 'A'.repeat(80)])('allows %s', (name) => {
+    expect(isOrderReadyName(name)).toBe(true);
+  });
+  it.each(['', 'A'.repeat(81), 'Shop\nXanax offer', 'Shop: buy now!', 'Shop {{product}}', 'Shop 💊'])('refuses %s', (name) => {
+    expect(isOrderReadyName(name)).toBe(false);
   });
 });

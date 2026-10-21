@@ -247,7 +247,7 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     expect(evidence.map((row) => row.evidenceKind)).toEqual(['customer', 'inbound']);
     for (const row of evidence) {
       expect(Object.keys(row.evidence).sort()).toEqual(
-        (row.evidenceKind === 'inbound' ? ['id', 'waMessageId', 'phone', 'timestamp', 'keyword'] : ['id', 'phone', 'timestamp', 'keyword']).sort()
+        (row.evidenceKind === 'inbound' ? ['id', 'waMessageId', 'phone', 'timestamp', 'keyword'] : ['id', 'phone', 'timestamp', 'keyword', 'optOutAt']).sort()
       );
       expect(row.expiresAt.getTime() - row.retainedAt.getTime()).toBe(365 * 24 * 60 * 60 * 1000);
     }
