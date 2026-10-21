@@ -22,9 +22,13 @@ export async function POST(request: Request) {
     db.organization.findMany({ where: { status: 'ACTIVE' }, select: { id: true } })
   );
   for (const organization of organizations) {
-    if (await isGrowthEnabled(organization.id)) {
-      await runCustomerMetrics(organization.id);
-      console.info(`[growth] tick organizationId=${organization.id}`);
+    try {
+      if (await isGrowthEnabled(organization.id)) {
+        await runCustomerMetrics(organization.id);
+        console.info(`[growth] tick organizationId=${organization.id}`);
+      }
+    } catch (error) {
+      console.error(`[growth] tick failed organizationId=${organization.id}`, error);
     }
   }
   return NextResponse.json({ ok: true });
