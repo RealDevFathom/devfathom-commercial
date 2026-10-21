@@ -156,7 +156,14 @@ describe('controlled register replay', () => {
       recordedByUserId: 'pharmacist',
       witness: { witnessedByUserId: 'new-witness', signatureRef: 'pin:fresh-void' },
       reason: 'Sale voided',
-      lines: [{ sourceMovementId: 'm-sale-2', quantityCanonicalUnits: 2, restoreSellable: true }],
+      lines: [
+        {
+          sourceMovementId: 'm-sale-2',
+          restorationMovementId: 'm-void-2',
+          quantityCanonicalUnits: 2,
+          restoreSellable: true,
+        },
+      ],
     });
     expectOnHand('lot-a');
     expect(rows.at(-1)).toMatchObject({
@@ -175,7 +182,14 @@ describe('controlled register replay', () => {
       recordedByUserId: 'pharmacist',
       witness: { witnessedByUserId: 'return-witness', signatureRef: 'pin:fresh-return' },
       reason: 'Returned to stock',
-      lines: [{ sourceMovementId: 'm-sale-1', quantityCanonicalUnits: 1, restoreSellable: true }],
+      lines: [
+        {
+          sourceMovementId: 'm-sale-1',
+          restorationMovementId: 'm-return-1',
+          quantityCanonicalUnits: 1,
+          restoreSellable: true,
+        },
+      ],
     });
     expectOnHand('lot-a');
     expect(rows.filter((row) => row.correctionReason === 'Returned to stock')).toHaveLength(1);

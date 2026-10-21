@@ -390,6 +390,7 @@ export async function appendControlledRestorations(
     witness?: import('./controlled-restoration-authorization').ControlledRestorationWitness;
     lines: readonly {
       sourceMovementId: string;
+      restorationMovementId: string;
       quantityCanonicalUnits: number;
       restoreSellable: boolean;
     }[];
@@ -446,6 +447,7 @@ export async function appendControlledRestorations(
       manufacturer: source.manufacturer,
       inventoryLotId: source.inventoryLotId,
       stockMovementId: null,
+      restorationMovementId: line.restorationMovementId,
       batchNumber: source.batchNumber,
       quantityCanonicalUnits: line.quantityCanonicalUnits,
       balanceDelta,

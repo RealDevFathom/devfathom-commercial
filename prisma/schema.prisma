@@ -12436,6 +12436,8 @@ model PharmacyControlledRegisterEntry {
   counterpartyName       String?
   correctionReason       String?
   correctsEntryId        String?
+  /// Stock-backed void/return; null identifies a manual quantity correction.
+  restorationMovementId  String?
   refEntryId             String?
   createdAt              DateTime                        @default(now())
   prescription           Prescription?                   @relation(fields: [organizationId, prescriptionId], references: [organizationId, id], onDelete: Restrict, map: "pharmacy_controlled_register_prescription_fkey")

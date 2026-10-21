@@ -410,7 +410,7 @@ export async function changeSaleStatus(
       orderBy: { createdAt: 'asc' },
       select: { stockMovementId: true },
     });
-    await reverseMovements(db, scope, {
+    const reversals = await reverseMovements(db, scope, {
       movementIds: allocations.map((allocation) => allocation.stockMovementId),
       reason: reason ?? 'Sale voided',
       at: new Date(),
@@ -431,6 +431,7 @@ export async function changeSaleStatus(
       reason: reason ?? 'Sale voided',
       lines: movements.map((movement) => ({
         sourceMovementId: movement.id,
+        restorationMovementId: reversals.find((row) => row.reversesMovementId === movement.id)!.id,
         quantityCanonicalUnits: -movement.quantityUnits,
         restoreSellable: true,
       })),
@@ -785,6 +786,7 @@ export async function returnSaleLine(
   let firstMovement: Awaited<ReturnType<typeof db.pharmacyStockMovement.create>> | undefined;
   const restorations: Array<{
     sourceMovementId: string;
+    restorationMovementId: string;
     quantityCanonicalUnits: number;
     restoreSellable: boolean;
   }> = [];
@@ -860,6 +862,7 @@ export async function returnSaleLine(
     if (allocation.stockMovementId) {
       restorations.push({
         sourceMovementId: allocation.stockMovementId,
+        restorationMovementId: movement.id,
         quantityCanonicalUnits: units,
         restoreSellable: disposition === 'RESTOCK',
       });
