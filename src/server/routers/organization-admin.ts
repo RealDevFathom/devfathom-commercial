@@ -499,6 +499,26 @@ export const organizationAdminRouter = router({
       if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
+      const removingActiveAdmin =
+        before.role === 'ADMIN' &&
+        before.status === 'ACTIVE' &&
+        (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
+      if (removingActiveAdmin) {
+        const otherActiveAdmins = await ctx.db.user.count({
+          where: {
+            organizationId: id,
+            id: { not: before.id },
+            role: 'ADMIN',
+            status: 'ACTIVE',
+          },
+        });
+        if (otherActiveAdmins === 0) {
+          throw new TRPCError({
+            code: 'BAD_REQUEST',
+            message: 'Cannot demote or deactivate the last active admin.',
+          });
+        }
+      }
       const saved = await ctx.db.$transaction(async (tx) => {
         if (activating) await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
         // Withdrawing an invitation must invalidate its token in the same

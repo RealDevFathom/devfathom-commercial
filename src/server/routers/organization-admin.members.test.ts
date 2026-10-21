@@ -102,6 +102,62 @@ const input = {
   organizationRoleId: null,
 };
 
+const updateInput = {
+  id: 'admin_a',
+  role: 'EMPLOYEE' as const,
+  status: 'ACTIVE' as const,
+  organizationRoleId: null,
+  title: 'Cashier',
+  department: 'COUNTER',
+};
+
+describe('organization member updates', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
+    mocks.userFindFirst.mockResolvedValue({
+      id: 'admin_a',
+      email: 'admin@example.com',
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    });
+    mocks.userUpdate.mockResolvedValue({
+      id: 'admin_a',
+      email: 'admin@example.com',
+      role: 'EMPLOYEE',
+      status: 'ACTIVE',
+    });
+  });
+
+  it('refuses to demote the last active admin through the organization admin path', async () => {
+    mocks.userCount.mockResolvedValue(0);
+
+    await expect(caller().updateMember(updateInput)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'Cannot demote or deactivate the last active admin.',
+    });
+    expect(mocks.userCount).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        id: { not: 'admin_a' },
+        role: 'ADMIN',
+        status: 'ACTIVE',
+      },
+    });
+    expect(mocks.userUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows an admin demotion when another active admin remains', async () => {
+    mocks.userCount.mockResolvedValue(1);
+
+    await expect(caller().updateMember(updateInput)).resolves.toMatchObject({
+      id: 'admin_a',
+      role: 'EMPLOYEE',
+    });
+    expect(mocks.userUpdate).toHaveBeenCalledOnce();
+  });
+});
+
 describe('organization member creation', () => {
   beforeEach(() => {
     vi.clearAllMocks();
