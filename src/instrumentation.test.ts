@@ -93,8 +93,10 @@ describe('register', () => {
     expect(exit).toHaveBeenCalledWith(1);
     exit.mockClear();
     vi.stubEnv('APP_ENV', 'staging');
+    const info = vi.spyOn(console, 'info').mockImplementation(() => undefined);
     await register();
     expect(exit).not.toHaveBeenCalled();
+    expect(info).toHaveBeenCalledWith('[startup] APP_ENV=staging');
     exit.mockRestore();
     vi.restoreAllMocks();
   });

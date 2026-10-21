@@ -23,6 +23,7 @@ export async function register() {
     await assertProductionDatabaseRole();
     const { assertProductionAppEnv } = await import('@/lib/app-env');
     assertProductionAppEnv();
+    console.info(`[startup] APP_ENV=${process.env.APP_ENV}`);
   } catch (error) {
     console.error(error);
     process.exit(1);
