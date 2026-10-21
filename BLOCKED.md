@@ -1,21 +1,11 @@
-# Growth G5 blocked: dependency installation
+# Blocked: Git metadata is read-only
 
-Work was attempted only on `improve/ai-growth-g5` in `/workspace/wt/improve/ai-growth-g5`.
+The required first step, `git fetch origin && git merge origin/improve/ai-growth-g1`, failed twice with:
 
-Dependency installation failed twice because required filesystem locations are read-only:
+```
+error: cannot open '/workspace/devfathom/.git/worktrees/ai-growth-g5/FETCH_HEAD': Read-only file system
+```
 
-1. `bun install`: `bun is unable to write files to tempdir: EROFS`.
-2. `TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/bun-growth-cache bun install`: the Prisma postinstall failed with `EROFS: read-only file system, utime '/home/box/.cache/prisma/master/e922089b7d7502aff4249d5da3420f6fa55fc6ad/debian-openssl-3.0.x/schema-engine'`.
+This worktree is on `improve/ai-growth-g5`, but its Git metadata lives outside the writable repository root. The session permits writes only inside `/workspace/wt/improve/ai-growth-g5` and `/tmp`, and escalation is unavailable.
 
-The user requires stopping after two failures at the same problem. No further installation attempts, implementation, or checks were performed. Resume with writable Bun temporary and Prisma cache directories.
-
-## Inspection findings
-
-The existing tenant key is `organizationId`. G1 provides `Campaign`, `CampaignRecipient`, `CustomerMetrics`, `GrowthSettings`, and `MessageTemplate`, linked to `PharmacyCustomer`, `PharmacySale`, and `PharmacyMessageLog`. The growth router is empty; the tick currently only logs enabled organizations. G2/G4 metrics, consent, template renderer, and WhatsApp queue/provider modules are absent under `src/lib/growth`; implementation must provide minimal integration rather than import absent modules. Tenant scoping uses `withTenantDb`; FORCE RLS must remain intact.
-
-## Checks and manual verification
-
-- Dependency installation: failed twice as above.
-- Typecheck, relevant tests, lint, full tests, build: not run because installation failed and the stop rule applied.
-- Live WhatsApp send and demo POS redemption: skipped; no campaign implementation or configured live service was verified.
-- No UI, schema, production, integration, or main-branch changes were made.
+Stopped per the requested two-failure rule. No merge, dependency installation, implementation, tests, or PR changes were performed. Git metadata must be writable before retrying. Committing this blocker and pushing also require writable Git metadata.
