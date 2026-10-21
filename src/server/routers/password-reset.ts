@@ -68,8 +68,8 @@ export const passwordResetRouter = router({
       // Throttle per IP (broad) and per email so the endpoint can't be used to
       // flood inboxes or probe for accounts. Limiting still leaks nothing about
       // existence — both hit/miss paths are throttled identically.
-      const ipGate = rateLimit(`pwreset:ip:${ip}`, 10, 15 * 60_000);
-      const emailGate = rateLimit(`pwreset:email:${email}`, 5, 15 * 60_000);
+      const ipGate = await rateLimit(`pwreset:ip:${ip}`, 10, 15 * 60_000);
+      const emailGate = await rateLimit(`pwreset:email:${email}`, 5, 15 * 60_000);
       if (!ipGate.ok || !emailGate.ok) {
         throw new TRPCError({
           code: 'TOO_MANY_REQUESTS',
@@ -173,6 +173,7 @@ export const passwordResetRouter = router({
           data: {
             password: hashed,
             passwordChangedAt: new Date(),
+            mustChangePassword: false,
             tokenVersion: { increment: 1 },
           },
         });

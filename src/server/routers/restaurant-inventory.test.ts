@@ -107,7 +107,13 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 const db = {
   restaurantStaffProfile: { findMany: mocks.findStaffProfiles },
   restaurantBranchAssignment: { findMany: mocks.findBranchAssignments },
-  restaurantBranch: { findUnique: mocks.findBranch },
+  restaurantBranch: {
+    findUnique: mocks.findBranch,
+    findFirst: mocks.findBranch,
+    findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+      (where?.id?.in ?? []).map((id) => ({ id }))
+    ),
+  },
   restaurantStockLocation: {
     findUnique: mocks.findStockLocation,
     count: mocks.countStockLocations,

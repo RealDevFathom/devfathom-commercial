@@ -14,16 +14,18 @@ import { createTenantDb } from '@/lib/tenancy/scoped-db';
  * M7-L2 / D21 — the inbound-webhook receiver seam. An external provider (`[source]`)
  * POSTs a strict envelope; the receiver resolves the tenant STRICTLY from the
  * request host (an explicit tenant host, never the default organization), records
- * the envelope in that org's `restaurant_webhook_inbox` (deduplicated by
- * `(org, source, externalEventId)`), records a STUB signature verification status,
- * and enqueues a `webhook.process` job for the scheduler to drain inside the
- * tenant's RLS context. No provider event is processed on the request path.
+ * the envelope in that org's `restaurant_webhook_inbox` (deduplicated by the
+ * `(organization, source, externalEventId)` unique constraint), records signature
+ * verification status, and enqueues a `webhook.process` job for the scheduler to
+ * drain inside the tenant's RLS context. No provider event is processed on the
+ * request path. A repeat of the same event id returns 200 and enqueues nothing.
  *
  * This is an UNAUTHENTICATED public endpoint (a webhook source carries no session),
  * so it is IP rate-limited and never trusts a client-supplied organization — the
  * host is the only tenant signal, and an unknown host is a flat 404 (no tenant
- * enumeration). Real signature verification is a documented stub in M7 (no provider
- * secret configured); the seam a provider adapter fills is `verifyWebhookSignatureStub`.
+ * enumeration). Terminal events require `x-webhook-timestamp` and an HMAC over
+ * that timestamp, the source, and the raw body, and are rejected outside ±5
+ * minutes. Other sources still record the M7 stub status.
  */
 
 /** A provider slug: lowercase-ish, no path traversal. */
@@ -34,6 +36,7 @@ const SOURCE = z
   .regex(/^[a-zA-Z0-9][a-zA-Z0-9._-]*$/);
 
 const SIGNATURE_HEADER = 'x-webhook-signature';
+const TIMESTAMP_HEADER = 'x-webhook-timestamp';
 const IP_LIMIT = 120;
 const IP_WINDOW_MS = 60_000;
 
@@ -42,7 +45,7 @@ export async function POST(
   context: { params: Promise<{ source: string }> }
 ): Promise<Response> {
   const ip = clientIp(request);
-  const gate = rateLimit(`restaurant-webhook:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
+  const gate = await rateLimit(`restaurant-webhook:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
   if (!gate.ok) {
     return NextResponse.json(
       { error: 'Too many requests' },
@@ -82,13 +85,18 @@ export async function POST(
   }
 
   const signature = request.headers.get(SIGNATURE_HEADER);
+  const timestamp = request.headers.get(TIMESTAMP_HEADER);
   const terminalEvent = parsed.data.eventType?.startsWith('terminal.') ?? false;
   if (terminalEvent && !terminalEventSchema.safeParse(parsed.data.payload).success) {
     return NextResponse.json({ error: 'Invalid terminal event.' }, { status: 400 });
   }
   const verificationStatus = terminalEvent
-    ? verifyTerminalSignature(source.data, rawBody, signature)
+    ? verifyTerminalSignature(source.data, rawBody, signature, timestamp)
     : undefined;
+  // Reject before insert so a bad signature cannot occupy the event-id unique key.
+  if (terminalEvent && verificationStatus === 'FAILED') {
+    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
+  }
   const result = await recordInboundWebhook(createTenantDb(organization.id), {
     source: source.data,
     externalEventId: parsed.data.externalEventId,
@@ -97,10 +105,6 @@ export async function POST(
     signature,
     verificationStatus,
   });
-
-  if (terminalEvent && verificationStatus === 'FAILED') {
-    return NextResponse.json({ error: 'Invalid webhook signature.' }, { status: 401 });
-  }
 
   // 202 for a freshly-accepted envelope (enqueued for processing); 200 for a
   // duplicate that was already received (idempotent, nothing enqueued).

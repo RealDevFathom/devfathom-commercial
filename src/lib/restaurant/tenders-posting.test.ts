@@ -72,6 +72,18 @@ function fixture() {
     lines: [{ orderItemId: 'item' }],
     tenders,
   };
+  // The register summary re-quotes each OPEN bill by id (QA-143), so bills and their
+  // lines resolve from id-keyed registries; unregistered ids fall back to the base bill.
+  const defaultLine = {
+    id: 'line',
+    orderItemId: 'item',
+    quantity: 1,
+    unitPrice: D('4000'),
+    compAmount: D('140'),
+    orderItem: { modifiers: [] },
+  };
+  const billsById = new Map<string, typeof bill>([[bill.id, bill]]);
+  const linesByBill = new Map<string, (typeof defaultLine)[]>([[bill.id, [defaultLine]]]);
   const drawer = {
     id: 'drawer',
     branchId: 'branch',
@@ -152,7 +164,7 @@ function fixture() {
       ),
     },
     restaurantBill: {
-      findUnique: vi.fn(async () => bill),
+      findUnique: vi.fn(async ({ where }: { where: Where }) => billsById.get(where.id!) ?? bill),
       findMany: vi.fn(async ({ where }: { where: Where }) => (matches(bill, where) ? [bill] : [])),
     },
     restaurantTender: {
@@ -231,16 +243,10 @@ function fixture() {
       ]),
     },
     restaurantBillLine: {
-      findMany: vi.fn(async () => [
-        {
-          id: 'line',
-          orderItemId: 'item',
-          quantity: 1,
-          unitPrice: D('4000'),
-          compAmount: D('140'),
-          orderItem: { modifiers: [] },
-        },
-      ]),
+      findMany: vi.fn(
+        async ({ where }: { where: { billId: string } }) =>
+          linesByBill.get(where.billId) ?? [defaultLine]
+      ),
     },
     restaurantPromotionBillApplicationSnapshot: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
@@ -249,6 +255,7 @@ function fixture() {
       create: vi.fn(async () => ({ id: 'refund' })),
     },
     restaurantTaxTenderAllocationSnapshot: { findMany: vi.fn(async () => []) },
+    restaurantTaxTransactionSnapshot: { findMany: vi.fn(async () => []) },
     restaurantCoAuthorization: { create: vi.fn(async () => ({ id: 'approval' })) },
     restaurantPayment: { create: vi.fn(async () => ({ id: 'payment' })) },
     restaurantPaymentEvent: { create: vi.fn(async () => ({ id: 'event' })) },
@@ -268,7 +275,20 @@ function fixture() {
       tender: { type: 'CASH', amount: '3860', cashReceived: '4000' },
       ...overrides,
     });
-  return { db, raw, bill, drawer, tenders, movements, collect, closedDays, locks };
+  return {
+    db,
+    raw,
+    bill,
+    drawer,
+    tenders,
+    movements,
+    collect,
+    closedDays,
+    locks,
+    billsById,
+    linesByBill,
+    defaultLine,
+  };
 }
 
 beforeEach(() => vi.clearAllMocks());
@@ -328,22 +348,24 @@ describe('collection posting and authoritative recorded balances (no DB)', () =>
 
   it('keeps split-bill balances separate and returns zero for a fully comped bill', async () => {
     const f = fixture();
+    const partialTender = {
+      id: 'paid',
+      billId: 'partial',
+      type: 'OTHER' as const,
+      amount: D('0.01'),
+      tipAmount: D('0'),
+      businessDate: D1,
+      createdAt: NOW,
+    };
+    // Two live OPEN bills: one partially paid (0.01 of 3860), one fully comped (nets 0).
+    // Each is re-quoted by id, so register its own bill row, lines and tenders (QA-143).
+    f.billsById.set('partial', { ...f.bill, id: 'partial' });
+    f.billsById.set('comped', { ...f.bill, id: 'comped', compTotal: D('4000'), grandTotal: D('0') });
+    f.linesByBill.set('partial', [f.defaultLine]);
+    f.linesByBill.set('comped', [{ ...f.defaultLine, compAmount: D('4000') }]);
+    f.tenders.push(partialTender);
     f.raw.restaurantBill.findMany.mockResolvedValue([
-      {
-        ...f.bill,
-        id: 'partial',
-        tenders: [
-          {
-            id: 'paid',
-            billId: 'partial',
-            type: 'OTHER',
-            amount: D('0.01'),
-            tipAmount: D('0'),
-            businessDate: D1,
-            createdAt: NOW,
-          },
-        ],
-      },
+      { ...f.bill, id: 'partial', tenders: [partialTender] },
       { ...f.bill, id: 'comped', compTotal: D('4000'), grandTotal: D('0'), tenders: [] },
     ]);
     expect(

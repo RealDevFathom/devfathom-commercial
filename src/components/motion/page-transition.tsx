@@ -14,9 +14,12 @@ const subscribeToHydration = () => () => {};
 export function PageTransition({
   children,
   className,
+  travel = true,
 }: {
   children: React.ReactNode;
   className?: string;
+  /** When false, the route does not fade or travel. POS surfaces opt out. */
+  travel?: boolean;
 }) {
   const pathname = usePathname();
   const reduceMotion = useReducedMotion();
@@ -25,15 +28,16 @@ export function PageTransition({
     () => true,
     () => false
   );
+  const still = !travel || reduceMotion;
 
   return (
     <m.div
       data-slot="page-transition"
       key={pathname}
       className={className}
-      initial={mounted && !reduceMotion ? { opacity: 0, y: 10 } : false}
+      initial={mounted && !still ? { opacity: 0, y: 10 } : false}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: reduceMotion ? 0 : 0.42, ease: easeOutExpo }}
+      transition={{ duration: still ? 0 : 0.42, ease: easeOutExpo }}
     >
       {children}
     </m.div>

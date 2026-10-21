@@ -1,6 +1,7 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
 
+import { assertInOrganization } from '../org-refs';
 import { router, capabilityProcedure, type TRPCContext } from '../trpc';
 import { annotateAudit } from '../audit';
 import {
@@ -132,14 +133,18 @@ async function requireReportBranch(ctx: TRPCContext, branchId: string) {
       select: { id: true },
     }),
   ]);
-  if (staff || assignment) return;
-  const allowed = await can(subjectFromSession(user), 'restaurant:configure', undefined, {
-    db: ctx.db,
-    source: 'TRPC',
-  });
+  const allowed =
+    Boolean(staff || assignment) ||
+    (await can(subjectFromSession(user), 'restaurant:configure', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+    }));
   if (!allowed) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'You are not authorized for this branch.' });
   }
+  const organizationId = ctx.entitlements.organizationId ?? user.organizationId;
+  if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.restaurantBranch, organizationId, [branchId], { active: true });
 }
 
 // ── Read: branch board ────────────────────────────────────────────────────────

@@ -1,6 +1,7 @@
-import type { PrismaClient } from '@/generated/prisma/client';
+import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { sendEmail } from '@/lib/email';
 import type { EmailContent } from '@/lib/email';
+import { inSideEffectScope, trackSideEffect } from '@/lib/side-effects/scope';
 
 /* ============================================================
    IMP-AUTH-04 — per-user notification preferences
@@ -89,93 +90,135 @@ export interface NotifyArgs {
   email?: (recipient: { id: string; name: string; email: string }) => EmailContent | null;
 }
 
+type Recipient = {
+  id: string;
+  name: string;
+  email: string;
+  status: string;
+  notificationPrefs: unknown;
+  organization?: { isDemo: boolean };
+};
+
+type EmailJob = {
+  to: { email: string; name: string };
+  subject: string;
+  html: string;
+  text: string;
+};
+
+type PlannedNotification = { inAppUserIds: string[]; emails: EmailJob[] };
+
 /**
  * Notify one or more users: write an in-app Notification row for each and,
  * when `args.email` is provided, send each recipient a branded email.
  *
- * Fire-and-forget — mirrors logActivity(). It never blocks or rejects the
- * surrounding mutation: the user's action already succeeded, so a failed
- * notification or email must not surface an error to the client.
+ * Inside a tenant transaction the rows (and an outbox row per email) commit
+ * with the mutation. SMTP runs after commit. Outside a transaction this stays
+ * fire-and-forget and never rejects the caller.
  */
 export function notify(db: PrismaClient, userIds: string[], args: NotifyArgs): void {
   const recipients = [...new Set(userIds)].filter(Boolean);
   if (recipients.length === 0) return;
+  if (inSideEffectScope()) {
+    trackSideEffect(persistNotify(db, recipients, args));
+    return;
+  }
   void deliver(db, recipients, args).catch((err) => {
     console.error('[notify] failed', args.type, err);
   });
 }
 
-async function deliver(db: PrismaClient, userIds: string[], args: NotifyArgs): Promise<void> {
+async function loadRecipients(db: PrismaClient, userIds: string[]): Promise<Recipient[]> {
+  return db.user.findMany({
+    where: { id: { in: userIds } },
+    select: {
+      id: true,
+      name: true,
+      email: true,
+      status: true,
+      notificationPrefs: true,
+      organization: { select: { isDemo: true } },
+    },
+  });
+}
+
+function planFrom(userIds: string[], users: Recipient[], args: NotifyArgs): PlannedNotification {
   const category = categoryForType(args.type);
-
-  // IMP-AUTH-04: load each recipient's prefs once (also reused for the email
-  // step's name/email/status). If the lookup itself fails, fall back to the
-  // legacy behaviour — deliver everything — so prefs never silence a real event.
-  let users: Array<{
-    id: string;
-    name: string;
-    email: string;
-    status: string;
-    notificationPrefs: unknown;
-    organization?: { isDemo: boolean };
-  }> = [];
-  try {
-    users = await db.user.findMany({
-      where: { id: { in: userIds } },
-      select: {
-        id: true,
-        name: true,
-        email: true,
-        status: true,
-        notificationPrefs: true,
-        organization: { select: { isDemo: true } },
-      },
-    });
-  } catch (err) {
-    console.error('[notify] prefs lookup failed', args.type, err);
-  }
-  const byId = new Map(users.map((u) => [u.id, u] as const));
-
-  // 1) In-app notification rows (best-effort). Drop recipients who opted OUT of
-  // the in-app channel for this category. Unknown ids (lookup miss/failure)
-  // default to ON so existing behaviour is preserved.
+  const byId = new Map(users.map((user) => [user.id, user] as const));
   const inAppUserIds = userIds.filter((id) =>
     isChannelAllowed(byId.get(id)?.notificationPrefs, category, 'inApp')
   );
-  if (inAppUserIds.length > 0) {
+  const emails: EmailJob[] = [];
+  if (args.email) {
+    for (const user of users) {
+      if (user.status === 'INACTIVE' || user.organization?.isDemo) continue;
+      if (!isChannelAllowed(user.notificationPrefs, category, 'email')) continue;
+      const content = args.email(user);
+      if (!content) continue;
+      emails.push({
+        to: { email: user.email, name: user.name },
+        subject: content.subject,
+        html: content.html,
+        text: content.text,
+      });
+    }
+  }
+  return { inAppUserIds, emails };
+}
+
+function notificationRows(userIds: string[], args: NotifyArgs) {
+  return userIds.map((userId) => ({
+    userId,
+    title: args.title,
+    message: args.message,
+    type: args.type,
+    entityType: args.entityType ?? null,
+    entityId: args.entityId ?? null,
+  }));
+}
+
+async function planOrFallback(
+  db: PrismaClient,
+  userIds: string[],
+  args: NotifyArgs
+): Promise<PlannedNotification> {
+  try {
+    return planFrom(userIds, await loadRecipients(db, userIds), args);
+  } catch (err) {
+    console.error('[notify] prefs lookup failed', args.type, err);
+    return { inAppUserIds: userIds, emails: [] };
+  }
+}
+
+async function persistNotify(db: PrismaClient, userIds: string[], args: NotifyArgs): Promise<void> {
+  const planned = await planOrFallback(db, userIds, args);
+  if (planned.inAppUserIds.length > 0) {
+    await db.notification.createMany({ data: notificationRows(planned.inAppUserIds, args) });
+  }
+  if (planned.emails.length > 0) {
+    await db.outboundEffect.createMany({
+      data: planned.emails.map((payload) => ({
+        kind: 'email',
+        payload: payload as Prisma.InputJsonValue,
+        status: 'PENDING',
+      })),
+    });
+  }
+}
+
+async function deliver(db: PrismaClient, userIds: string[], args: NotifyArgs): Promise<void> {
+  const planned = await planOrFallback(db, userIds, args);
+  if (planned.inAppUserIds.length > 0) {
     await db.notification
-      .createMany({
-        data: inAppUserIds.map((userId) => ({
-          userId,
-          title: args.title,
-          message: args.message,
-          type: args.type,
-          entityType: args.entityType ?? null,
-          entityId: args.entityId ?? null,
-        })),
-      })
+      .createMany({ data: notificationRows(planned.inAppUserIds, args) })
       .catch((err) => console.error('[notify] notification insert failed', args.type, err));
   }
-
-  // 2) Emails (best-effort, per recipient). Skip deactivated accounts and
-  // anyone who opted OUT of the email channel for this category.
-  if (!args.email) return;
   await Promise.all(
-    users.map(async (u) => {
-      if (u.status === 'INACTIVE') return;
-      if (u.organization?.isDemo) return;
-      if (!isChannelAllowed(u.notificationPrefs, category, 'email')) return;
-      const content = args.email?.(u);
-      if (!content) return;
+    planned.emails.map(async (email) => {
       try {
-        await sendEmail({
-          to: { email: u.email, name: u.name },
-          subject: content.subject,
-          html: content.html,
-          text: content.text,
-        });
+        await sendEmail(email);
       } catch (err) {
-        console.error('[notify] email failed for', u.email, args.type, err);
+        console.error('[notify] email failed for', email.to.email, args.type, err);
       }
     })
   );

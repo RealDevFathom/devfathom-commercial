@@ -304,7 +304,7 @@ export function CateringEvidence({
                   if (command.current?.fingerprint !== fingerprint)
                     command.current = {
                       fingerprint,
-                      body: { ...body, idempotencyKey: crypto.randomUUID() },
+                      body: { ...body, idempotencyKey: browserUuid() },
                     };
                   pending.current = true;
                   setSaved(false);

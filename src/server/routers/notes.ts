@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { router, protectedProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { notify } from '@/lib/notifications';
+import { assertInOrganization, workspaceId } from '../org-refs';
 
 const NoteVisibilityEnum = z.enum(['PRIVATE', 'SHARED', 'TEAM']);
 const NotePermissionEnum = z.enum(['VIEW', 'EDIT']);
@@ -452,6 +453,9 @@ export const notesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const userId = ctx.session.user.id;
+      const orgId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
+      await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
       const contentJson = input.contentJson ?? { type: 'doc', content: [{ type: 'paragraph' }] };
       const contentText = extractPlainText(contentJson);
 
@@ -539,20 +543,21 @@ export const notesRouter = router({
       // collaborators out). Enforced only when the value actually changes, so a
       // collaborator's ordinary content save (which may echo the current
       // visibility) is never rejected.
-      const isAuthorOrAdmin =
-        existing.authorId === userId || ctx.session.user.role === 'ADMIN';
+      const isAuthorOrAdmin = existing.authorId === userId || ctx.session.user.role === 'ADMIN';
       const changesVisibility =
         input.visibility !== undefined && input.visibility !== existing.visibility;
       const changesProject =
         input.projectId !== undefined && input.projectId !== existing.projectId;
-      const changesClient =
-        input.clientId !== undefined && input.clientId !== existing.clientId;
+      const changesClient = input.clientId !== undefined && input.clientId !== existing.clientId;
       if ((changesVisibility || changesProject || changesClient) && !isAuthorOrAdmin) {
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Only the note author can change its visibility or linked project/client.',
         });
       }
+      const orgId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
+      await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
 
       const data: Prisma.NoteUpdateInput = {};
       if (input.title !== undefined) data.title = input.title;

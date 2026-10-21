@@ -1,3 +1,5 @@
+import { afterTenantTransaction } from '@/lib/side-effects/scope';
+import { clientIp } from '@/lib/rate-limit';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -220,9 +222,8 @@ function operationForMethod(method: string): AuditOperationT {
 /** Best-effort client IP from standard proxy headers (Vercel sets these). */
 export function ipFromHeaders(headers: Headers | null | undefined): string | null {
   if (!headers) return null;
-  const fwd = headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]?.trim() ?? null;
-  return headers.get('x-real-ip') ?? headers.get('cf-connecting-ip') ?? null;
+  const ip = clientIp(new Request('http://localhost', { headers }));
+  return ip === 'unknown' ? null : ip;
 }
 
 function extractError(err: unknown): { code: string | null; message: string | null } {
@@ -408,41 +409,47 @@ export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<v
       },
     });
   if (db) return writeTenant(db).then(() => undefined);
-  const write = row.organizationId
-    ? withTenantDb(row.organizationId, writeTenant)
-    : withPlatformDb((platformDb) =>
-        platformDb.platformAuditLog.create({
-          data: {
-            actorTenantUserId: row.actorId ?? null,
-            action: row.action,
-            targetType: row.targetType ?? null,
-            targetId: row.targetId ?? null,
-            metadata: {
-              source: row.source,
-              category: row.category,
-              operation: row.operation ?? 'OTHER',
-              description: row.description ?? null,
-              input: toAuditJson(row.input),
-              outcome: row.outcome ?? 'SUCCESS',
-            } as never,
-            requestId: null,
-            success: (row.outcome ?? 'SUCCESS') === 'SUCCESS',
-            error: row.errorMessage ?? null,
-            ip: row.ip ?? null,
-            userAgent: row.userAgent ?? null,
-          },
+  afterTenantTransaction(() => {
+    const write = row.organizationId
+      ? withTenantDb(row.organizationId, writeTenant, {
+          maxWait: 1_000,
+          timeout: 5_000,
+          skipDrain: true,
         })
-      );
+      : withPlatformDb((platformDb) =>
+          platformDb.platformAuditLog.create({
+            data: {
+              actorTenantUserId: row.actorId ?? null,
+              action: row.action,
+              targetType: row.targetType ?? null,
+              targetId: row.targetId ?? null,
+              metadata: {
+                source: row.source,
+                category: row.category,
+                operation: row.operation ?? 'OTHER',
+                description: row.description ?? null,
+                input: toAuditJson(row.input),
+                outcome: row.outcome ?? 'SUCCESS',
+              } as never,
+              requestId: null,
+              success: (row.outcome ?? 'SUCCESS') === 'SUCCESS',
+              error: row.errorMessage ?? null,
+              ip: row.ip ?? null,
+              userAgent: row.userAgent ?? null,
+            },
+          })
+        );
 
-  if (AUDIT_FAIL_LOUD) {
-    // Tests: do not swallow. Track so `flushAuditWritesForTest()` can await and
-    // surface a rejection; an un-flushed failure still raises as unhandled.
-    pendingAuditWrites.push(write);
-    return;
-  }
+    if (AUDIT_FAIL_LOUD) {
+      // Tests: do not swallow. Track so `flushAuditWritesForTest()` can await and
+      // surface a rejection; an un-flushed failure still raises as unhandled.
+      pendingAuditWrites.push(write);
+      return;
+    }
 
-  void write.catch((err) => {
-    console.error('[audit] failed to record', row.action, err);
+    void write.catch((err) => {
+      console.error('[audit] failed to record', row.action, err);
+    });
   });
 }
 

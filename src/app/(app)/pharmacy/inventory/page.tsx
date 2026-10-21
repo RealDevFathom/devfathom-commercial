@@ -1,3 +1,4 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
@@ -305,7 +306,7 @@ export default async function PharmacyInventoryPage({
           witnessId: field(data, 'witnessId'),
           reason: field(data, 'reason'),
           evidenceRef: field(data, 'evidenceRef'),
-          idempotencyKey: `ui-writeoff:${crypto.randomUUID()}`,
+          idempotencyKey: `ui-writeoff:${browserUuid()}`,
         });
       else if (action === 'allocate-transfer')
         await actionCaller.allocateTransfer({
@@ -397,7 +398,10 @@ export default async function PharmacyInventoryPage({
         heading="Inventory"
         description="FEFO lots, controlled stock movements, chain operations, and the ranked work queue."
         actions={
-          <Link href="/pharmacy/inventory/imports" className={buttonVariants({ variant: 'secondary' })}>
+          <Link
+            href="/pharmacy/inventory/imports"
+            className={buttonVariants({ variant: 'secondary' })}
+          >
             Imported stock / Awaiting verification
           </Link>
         }

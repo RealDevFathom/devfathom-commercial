@@ -258,7 +258,9 @@ export default async function NewOrganizationPage({
                 required: true,
                 help: `Only active ${definition.label} packages are listed.`,
                 options: packages.map((item) => ({
-                  label: `${item.name} · ${item.defaultSeats} default seats`,
+                  label: `${item.name} · ${item.defaultSeats} default seat${
+                    item.defaultSeats === 1 ? '' : 's'
+                  }`,
                   value: item.id,
                 })),
               },
@@ -271,7 +273,15 @@ export default async function NewOrganizationPage({
                 min: 1,
                 max: 100000,
               },
-              { name: 'currency', label: 'Currency', required: true, defaultValue: 'USD' },
+              {
+                name: 'currency',
+                label: 'Currency',
+                required: true,
+                // A pharmacy launches in the Pakistan market (its province list is
+                // Pakistan), so it starts on PKR rather than the commercial USD
+                // default the operator would otherwise have to override by hand.
+                defaultValue: vertical === 'PHARMACY' ? 'PKR' : 'USD',
+              },
               {
                 name: 'timezone',
                 label: 'Timezone',
@@ -279,9 +289,14 @@ export default async function NewOrganizationPage({
                 required: true,
                 // A hospitality property dates its business days, audit and
                 // cut-offs in this zone, so it starts on the launch market's
-                // rather than on UTC.
+                // rather than on UTC. A pharmacy launches in the same Pakistan
+                // market, so it defaults to Asia/Karachi too.
                 defaultValue:
-                  vertical === 'RESTAURANT' || vertical === 'HOSPITALITY' ? 'Asia/Karachi' : 'UTC',
+                  vertical === 'RESTAURANT' ||
+                  vertical === 'HOSPITALITY' ||
+                  vertical === 'PHARMACY'
+                    ? 'Asia/Karachi'
+                    : 'UTC',
                 help: 'Search by city or IANA name. Timezones are grouped by region.',
                 options: timezoneOptions,
               },
