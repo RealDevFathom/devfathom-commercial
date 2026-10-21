@@ -191,6 +191,97 @@ SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
 role with `CREATE ROLE … NOLOGIN` and `SET LOCAL ROLE`s into it, so it never asserts through the
 connection role. Do not reuse the superuser URL from that example for `bun run test`.
 
+### Repeat purchasing, RLS, and catering preconditions
+
+These suites fail in `beforeAll` or stay skipped until the database matches the harness they
+check. The application runtime role stays `NOSUPERUSER NOBYPASSRLS NOCREATEROLE`. `CREATEROLE`
+belongs only to the ephemeral owner that the RLS suites use to create a throwaway role.
+
+Repeat purchasing needs its own migrated database, the fixture, and a SELECT-only role:
+
+```bash
+createdb pharmacy_cohort_test
+DATABASE_URL='postgresql://postgres@localhost:5432/pharmacy_cohort_test' \
+  MIGRATION_DATABASE_URL="$DATABASE_URL" \
+  bunx prisma migrate deploy
+psql 'postgresql://postgres@localhost:5432/pharmacy_cohort_test' \
+  -f src/lib/pharmacy/repeat-purchasing.fixture.sql
+```
+
+```sql
+CREATE ROLE cohort_runtime LOGIN PASSWORD 'CHANGE_ME'
+  NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+GRANT CONNECT ON DATABASE pharmacy_cohort_test TO cohort_runtime;
+GRANT USAGE ON SCHEMA public TO cohort_runtime;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;
+REVOKE ALL ON ALL TABLES IN SCHEMA public FROM cohort_runtime;
+GRANT SELECT ON pharmacy_sales, pharmacy_sale_lines, pharmacy_sale_returns,
+  pharmacy_sale_return_lines, pharmacy_refunds TO cohort_runtime;
+```
+
+```bash
+PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL='postgresql://cohort_runtime:CHANGE_ME@localhost:5432/pharmacy_cohort_test' \
+  bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts
+```
+
+The tax, pharmacy-medicine, delivery, and wallet RLS suites connect as an owner that can
+`CREATE ROLE` and a separate runtime that cannot. Point the owner URLs at the CREATEROLE login
+and the runtime URLs at `devfathom_test`:
+
+```sql
+CREATE ROLE devfathom_test_owner LOGIN PASSWORD 'CHANGE_ME_OWNER'
+  NOSUPERUSER NOBYPASSRLS NOCREATEDB CREATEROLE NOINHERIT;
+```
+
+```bash
+OWNER='postgresql://devfathom_test_owner:CHANGE_ME_OWNER@localhost:5432/devfathom_test_db'
+RUNTIME='postgresql://devfathom_test:CHANGE_ME@localhost:5432/devfathom_test_db'
+M8_TEST_OWNER_DATABASE_URL="$OWNER" \
+PHARMACY_TEST_OWNER_DATABASE_URL="$OWNER" \
+DELIVERY_TEST_OWNER_DATABASE_URL="$OWNER" \
+WALLET_TEST_OWNER_DATABASE_URL="$OWNER" \
+WALLET_TEST_RUNTIME_DATABASE_URL="$RUNTIME" \
+TEST_DATABASE_URL="$RUNTIME" \
+  bunx vitest run \
+    tests/restaurant-tax-core-rls.test.ts \
+    tests/pharmacy-medicine-rls.test.ts \
+    tests/restaurant-delivery-rls.test.ts \
+    tests/restaurant-wallet-rls.test.ts
+```
+
+Catering uses a reserved database whose name contains `disposable`, served on port **55675**,
+and a pre-created runtime role with no `CREATEROLE`. `CATERING_MONEY_DB_SLOT=reserved` is
+required. Seed one organization, branch, and staff profile before the restricted-role file:
+
+```sql
+CREATE ROLE catering_runtime LOGIN PASSWORD 'CHANGE_ME'
+  NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+-- After migrating devfathom_catering_disposable, as a superuser:
+GRANT USAGE ON SCHEMA public TO catering_runtime;
+GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO catering_runtime;
+GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO catering_runtime;
+INSERT INTO organizations (id, slug, "legalName", "displayName", status, "deploymentMode", "createdAt", "updatedAt")
+  VALUES ('org_catering_ci', 'org_catering_ci', 'Catering CI', 'Catering CI', 'ACTIVE', 'SHARED', now(), now());
+INSERT INTO restaurant_branches (id, "organizationId", name, timezone, "businessDayCutoff", "updatedAt")
+  VALUES ('branch_catering_ci', 'org_catering_ci', 'Kitchen', 'UTC', '00:00', now());
+INSERT INTO restaurant_staff_profiles (id, "organizationId", "displayName", "primaryBranchId", "updatedAt")
+  VALUES ('staff_catering_ci', 'org_catering_ci', 'Cook', 'branch_catering_ci', now());
+```
+
+```bash
+SLOT='postgresql://catering_runtime:CHANGE_ME@127.0.0.1:55675/devfathom_catering_disposable'
+CATERING_MONEY_DB_SLOT=reserved TEST_DATABASE_URL="$SLOT" DATABASE_URL="$SLOT" \
+CATERING_TEST_DATABASE_URL="$SLOT" \
+CATERING_TEST_ORG_ID=org_catering_ci \
+CATERING_TEST_BRANCH_ID=branch_catering_ci \
+CATERING_TEST_STAFF_ID=staff_catering_ci \
+  bunx vitest run \
+    src/lib/restaurant/catering-money.db.test.ts \
+    src/lib/restaurant/catering-runtime.db.test.ts \
+    src/lib/restaurant/catering-endpoints.db.test.ts \
+    src/lib/restaurant/catering-postgres.test.ts
+```
+
 ## Common problems
 
 ### Port 3000 is already in use
