@@ -1,7 +1,9 @@
 import {
   assertBodyHasStop,
   assertCampaignProducts,
+  assertMarketingCopyAllowed,
   DrugCategoryInPromo,
+  fillAllowlistedProduct,
   MissingStop,
   ORDER_READY_BODIES,
   productFamiliesFromMedicines,
@@ -25,6 +27,14 @@ import {
 const WALL_MS = 60_000;
 const ATTEMPTS = /^attempts=(\d+)\s+/;
 const MAX_ATTEMPTS = 3;
+const CUSTOMER_MARKETING_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+export class CustomerDailyCap extends Error {
+  constructor() {
+    super('This customer already has a marketing message in the last 24 hours.');
+    this.name = 'CustomerDailyCap';
+  }
+}
 
 export type QueueClock = {
   now(): Date;
@@ -195,6 +205,7 @@ export async function enqueueMarketing(
     medicineIds: readonly string[];
     campaignId?: string | null;
     recipientId?: string | null;
+    now?: Date;
   }
 ): Promise<MessageLogRow> {
   const productCategories = await productFamiliesFromMedicines(
@@ -203,11 +214,30 @@ export async function enqueueMarketing(
     input.medicineIds
   );
   assertCampaignProducts({ templateKey: input.templateKey, productCategories });
-  return enqueueOutbound(store, { ...input, productCategories });
+  const body = await fillAllowlistedProduct(
+    db,
+    input.organizationId,
+    input.body,
+    input.medicineIds
+  );
+  await assertMarketingCopyAllowed(db, input.organizationId, body);
+  const at = input.now ?? new Date();
+  const recent = await store.countMarketingSince(
+    input.organizationId,
+    input.customerId,
+    new Date(at.getTime() - CUSTOMER_MARKETING_WINDOW_MS)
+  );
+  if (recent >= 1) throw new CustomerDailyCap();
+  return enqueueOutbound(store, {
+    ...input,
+    body,
+    productCategories,
+    campaignId: input.campaignId ?? 'marketing',
+  });
 }
 
 /** Never enqueues a customer who is not opted in, or a body without STOP. */
-export async function enqueueOutbound(
+async function enqueueOutbound(
   store: GrowthWhatsAppStore,
   input: {
     organizationId: string;

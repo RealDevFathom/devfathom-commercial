@@ -1,9 +1,11 @@
+import { randomBytes } from 'node:crypto';
+
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
 import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
-import { CustomerNotFound, setCustomerOptIn } from '@/lib/growth/consent';
+import { CustomerNotFound, RecordedOptOut, setCustomerOptIn } from '@/lib/growth/consent';
 import {
   DEFAULT_TEMPLATE_LANGUAGE,
   ensureDefaultTemplates,
@@ -14,7 +16,15 @@ import {
 } from '@/lib/growth/templates';
 import { InvalidWhatsAppPhone } from '@/lib/growth/whatsapp/phone';
 import { growthStore } from '@/lib/growth/whatsapp/store';
-import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '@/server/trpc';
+import { sealWebhookSecret } from '@/lib/growth/whatsapp/webhook-secret';
+import { annotateAudit } from '@/server/audit';
+import {
+  adminProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+  type TRPCContext,
+} from '@/server/trpc';
 
 function assertGrowthEnabled(ctx: TRPCContext) {
   if (!hasModule(ctx.entitlements, 'growth_ai')) {
@@ -43,6 +53,9 @@ function fail(error: unknown): never {
   }
   if (error instanceof CustomerNotFound) {
     throw new TRPCError({ code: 'NOT_FOUND', message: error.message });
+  }
+  if (error instanceof RecordedOptOut) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   }
   throw error;
 }
@@ -126,5 +139,22 @@ export const growthRouter = router({
           fail(error);
         }
       }),
+  }),
+  whatsapp: router({
+    /** Generates 32 random bytes, returns them once, and stores only the hash and ciphertext. */
+    rotateWebhookSecret: adminProcedure.mutation(async ({ ctx }) => {
+      assertGrowthEnabled(ctx);
+      const organizationId = organizationIdFrom(ctx);
+      const secret = randomBytes(32).toString('base64url');
+      await growthStore(ctx.db).saveWebhookSecret(organizationId, sealWebhookSecret(secret));
+      annotateAudit(ctx, {
+        action: 'growth.whatsapp.rotateWebhookSecret',
+        targetType: 'GrowthWaSettings',
+        targetId: organizationId,
+        metadata: { rotated: true },
+        skipInput: true,
+      });
+      return { secret };
+    }),
   }),
 });

@@ -15,8 +15,27 @@ export class CustomerNotFound extends Error {
   }
 }
 
+/** A recorded STOP cannot be reversed from the till. The customer replies START. */
+export class RecordedOptOut extends Error {
+  constructor() {
+    super('This number opted out. Only the customer can opt back in.');
+    this.name = 'RecordedOptOut';
+  }
+}
+
 export function consentKeyword(text: string): 'stop' | 'start' | null {
-  const normalized = text.normalize('NFKC').replace(/\s+/g, ' ').trim().toLowerCase();
+  const normalized = text
+    .normalize('NFKC')
+    .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .toLowerCase();
+  if (!normalized) return null;
+  if (normalized === 'band karo' || normalized.startsWith('band karo ')) return 'stop';
+  if (normalized === 'بند' || normalized.startsWith('بند ')) return 'stop';
+  const first = normalized.split(' ')[0] ?? '';
+  if (first === 'stop' || first === 'unsubscribe') return 'stop';
+  if (first === 'start' || first === 'yes' || first === 'haan' || first === 'ہاں') return 'start';
   if (STOP_KEYWORDS.has(normalized)) return 'stop';
   if (START_KEYWORDS.has(normalized)) return 'start';
   return null;
@@ -49,6 +68,9 @@ export async function setCustomerOptIn(
     whatsappE164 = parsed;
   }
   if (input.whatsappOptIn && !whatsappE164) throw new InvalidWhatsAppPhone();
+  if (input.whatsappOptIn && existing.whatsappOptOutAt && !existing.whatsappOptIn) {
+    throw new RecordedOptOut();
+  }
   if (!input.whatsappOptIn) await store.cancelQueued(input.organizationId, input.customerId);
   return store.saveCustomer({
     id: existing.id,
@@ -124,6 +146,7 @@ export async function handleInboundText(input: {
   }
 
   if (keyword === 'stop') {
+    let customerId = known?.id ?? null;
     if (known) {
       await setCustomerOptIn(input.store, {
         organizationId: input.organizationId,
@@ -131,6 +154,16 @@ export async function handleInboundText(input: {
         whatsappOptIn: false,
         now: input.now,
       });
+    } else {
+      const created = await input.store.createCustomer({
+        organizationId: input.organizationId,
+        displayName: input.fromE164,
+        whatsappE164: input.fromE164,
+        whatsappOptIn: false,
+        whatsappOptInAt: null,
+        whatsappOptOutAt: input.now,
+      });
+      customerId = created.id;
     }
     const business = input.businessName.trim() || 'this shop';
     const body = optOutConfirmation(business);
@@ -139,7 +172,7 @@ export async function handleInboundText(input: {
       const sent = await input.provider.sendText(input.fromE164, body);
       await input.store.insertMessage({
         organizationId: input.organizationId,
-        customerId: known?.id ?? null,
+        customerId,
         direction: 'out',
         waMessageId: sent.providerMessageId,
         body,
@@ -152,7 +185,7 @@ export async function handleInboundText(input: {
       const message = error instanceof Error ? error.message : 'send failed';
       await input.store.insertMessage({
         organizationId: input.organizationId,
-        customerId: known?.id ?? null,
+        customerId,
         direction: 'out',
         waMessageId: null,
         body,

@@ -1,7 +1,7 @@
 /**
- * Narrow stand-in for the WP-G1 Prisma models. The tenant key is
- * `organizationId`. Production code talks to these shapes; the Prisma adapter
- * casts the client until `prisma generate` includes the growth models.
+ * WhatsApp channel rows. Prisma models are `GrowthWa*` (`growth_wa_*` tables)
+ * so a later G1 growth schema can use its own names. The tenant key is
+ * `organizationId`.
  */
 
 export type MessageDirection = 'out' | 'in';
@@ -32,6 +32,7 @@ export type GrowthSettings = {
   waApiKeyEnc: string | null;
   /** SHA-256 hex of the per-instance webhook secret. The ciphertext is not required to authenticate. */
   waWebhookSecretHash?: string | null;
+  waWebhookSecretEnc?: string | null;
   churnThreshold: number;
   /** Pairing proxy: the model has no pairedAt, so warm-up starts here. */
   createdAt: Date | null;
@@ -98,6 +99,12 @@ export type GrowthWhatsAppStore = {
   /** Commits a queued row to `sending` so a later rollback cannot return it to the queue. */
   claimQueued(organizationId: string, id: string): Promise<MessageLogRow | null>;
   countSentToday(organizationId: string, since: Date): Promise<number>;
+  /** Outbound marketing rows for one customer since `since`. Utility sends leave `campaignId` null. */
+  countMarketingSince(organizationId: string, customerId: string, since: Date): Promise<number>;
+  saveWebhookSecret(
+    organizationId: string,
+    secret: { waWebhookSecretHash: string; waWebhookSecretEnc: string }
+  ): Promise<void>;
   markMessage(
     id: string,
     patch: Partial<Pick<MessageLogRow, 'status' | 'waMessageId' | 'error'>>

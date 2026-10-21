@@ -119,6 +119,15 @@ describe('Evolution base URL', () => {
     await expect(isPublicHttpsUrl('https://evolution.example/path', lookup)).resolves.toBe(true);
     await expect(isPublicHttpsUrl('https://10.0.0.8', lookup)).resolves.toBe(false);
   });
+
+  it('uses the shared webhook blocklist for documentation and benchmark ranges', async () => {
+    await expect(isPublicHttpsUrl('https://192.0.2.1', lookup)).resolves.toBe(false);
+    await expect(isPublicHttpsUrl('https://198.51.100.10', lookup)).resolves.toBe(false);
+    await expect(isPublicHttpsUrl('https://203.0.113.5', lookup)).resolves.toBe(false);
+    await expect(isPublicHttpsUrl('https://192.0.0.8', lookup)).resolves.toBe(false);
+    await expect(isPublicHttpsUrl('https://[2002::1]', lookup)).resolves.toBe(false);
+    await expect(isPublicHttpsUrl('https://[64:ff9b::8.8.8.8]', lookup)).resolves.toBe(false);
+  });
 });
 
 describe('pinned Evolution fetch', () => {

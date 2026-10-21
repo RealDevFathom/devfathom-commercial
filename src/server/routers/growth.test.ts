@@ -11,6 +11,9 @@ vi.mock('@/server/audit', () => ({
   diffChanges: vi.fn(() => ({})),
 }));
 
+import { decryptSecret } from '@/lib/secret-crypto';
+import { webhookSecretHash } from '@/lib/growth/whatsapp/webhook-secret';
+import { annotateAudit } from '@/server/audit';
 import { PHARMACY_ROLE_TEMPLATES, RESTAURANT_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
 import { growthRouter } from './growth';
@@ -54,7 +57,7 @@ function dbFor(rolePermissions: Permission[]) {
           permissionOverrides: [],
         }),
       },
-      customer: {
+      growthWaCustomer: {
         findFirst: async () => customer,
         updateMany,
       },
@@ -62,7 +65,7 @@ function dbFor(rolePermissions: Permission[]) {
   };
 }
 
-function caller(db: ReturnType<typeof dbFor>['db']) {
+function caller(db: ReturnType<typeof dbFor>['db'], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE') {
   return growthRouter.createCaller({
     db,
     entitlements: {
@@ -76,7 +79,7 @@ function caller(db: ReturnType<typeof dbFor>['db']) {
       expires: 'later',
       user: {
         id: 'user_1',
-        role: 'EMPLOYEE',
+        role,
         department: 'OPERATIONS',
         status: 'ACTIVE',
         organizationId: 'org_1',
@@ -121,5 +124,58 @@ describe('growth.customers.setOptIn', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(fixture.customer.whatsappOptIn).toBe(false);
     expect(fixture.updateMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a till opt-in after the customer sent STOP', async () => {
+    fixture = dbFor(permissionsFor(PHARMACY_ROLE_TEMPLATES, 'cashier'));
+    fixture.customer.whatsappOptIn = false;
+    fixture.customer.whatsappOptOutAt = new Date('2026-10-21T05:00:00.000Z');
+    await expect(
+      caller(fixture.db).customers.setOptIn({ customerId: 'c1', whatsappOptIn: true })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(fixture.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('growth.whatsapp.rotateWebhookSecret', () => {
+  it('shows 32 random bytes once to an admin and stores only the sealed secret', async () => {
+    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'growth-test-key');
+    const writes: Array<{ waWebhookSecretHash: string; waWebhookSecretEnc: string }> = [];
+    const db = {
+      ...dbFor([]).db,
+      growthWaSettings: {
+        upsert: async (args: {
+          create: { waWebhookSecretHash: string; waWebhookSecretEnc: string };
+        }) => {
+          writes.push(args.create);
+          return args.create;
+        },
+      },
+    };
+    await expect(caller(db).whatsapp.rotateWebhookSecret()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(writes).toHaveLength(0);
+
+    const first = await caller(db, 'ADMIN').whatsapp.rotateWebhookSecret();
+    const second = await caller(db, 'ADMIN').whatsapp.rotateWebhookSecret();
+    expect(Buffer.from(first.secret, 'base64url')).toHaveLength(32);
+    expect(first.secret).not.toBe(second.secret);
+    expect(writes[0]?.waWebhookSecretHash).toBe(webhookSecretHash(first.secret));
+    expect(decryptSecret(writes[0]!.waWebhookSecretEnc)).toBe(first.secret);
+    expect(writes[0]?.waWebhookSecretEnc).not.toContain(first.secret);
+    expect(writes[1]?.waWebhookSecretHash).not.toBe(writes[0]?.waWebhookSecretHash);
+    expect(vi.mocked(annotateAudit).mock.calls.map((call) => JSON.stringify(call))).not.toEqual(
+      expect.arrayContaining([expect.stringContaining(first.secret)])
+    );
+    expect(annotateAudit).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({
+        targetType: 'GrowthWaSettings',
+        targetId: 'org_1',
+        metadata: { rotated: true },
+      })
+    );
+    vi.unstubAllEnvs();
   });
 });

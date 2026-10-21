@@ -23,7 +23,7 @@ function presentedSecret(request: Request): string | null {
 }
 
 export async function POST(request: Request) {
-  const gate = rateLimit(`growth-whatsapp:ip:${clientIp(request)}`, IP_LIMIT, IP_WINDOW_MS);
+  const gate = await rateLimit(`growth-whatsapp:ip:${clientIp(request)}`, IP_LIMIT, IP_WINDOW_MS);
   if (!gate.ok) {
     return NextResponse.json(
       { error: 'Too many requests' },

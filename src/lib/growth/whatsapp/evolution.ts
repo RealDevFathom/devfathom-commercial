@@ -1,35 +1,37 @@
 import { lookup } from 'node:dns/promises';
 import { request as httpRequest } from 'node:http';
 import { request as httpsRequest } from 'node:https';
-import { BlockList, isIP } from 'node:net';
+import { isIP } from 'node:net';
 
 import { decryptSecret } from '@/lib/secret-crypto';
+import {
+  assertWebhookUrl,
+  isBlockedAddress as webhookAddressBlocked,
+  resolveWebhookAddresses,
+  type WebhookLookup,
+} from '@/lib/webhooks/safe-url';
 
 import type { GrowthSettings } from './types';
 import type { WhatsAppConnection, WhatsAppProvider, WhatsAppSendResult } from './provider';
 
-const blockedAddresses = new BlockList();
-blockedAddresses.addSubnet('0.0.0.0', 8, 'ipv4');
-blockedAddresses.addSubnet('10.0.0.0', 8, 'ipv4');
-blockedAddresses.addSubnet('100.64.0.0', 10, 'ipv4');
-blockedAddresses.addSubnet('127.0.0.0', 8, 'ipv4');
-blockedAddresses.addSubnet('169.254.0.0', 16, 'ipv4');
-blockedAddresses.addSubnet('172.16.0.0', 12, 'ipv4');
-blockedAddresses.addSubnet('192.168.0.0', 16, 'ipv4');
-blockedAddresses.addSubnet('224.0.0.0', 4, 'ipv4');
-blockedAddresses.addAddress('::', 'ipv6');
-blockedAddresses.addAddress('::1', 'ipv6');
-blockedAddresses.addSubnet('fc00::', 7, 'ipv6');
-blockedAddresses.addSubnet('fe80::', 10, 'ipv6');
-blockedAddresses.addSubnet('ff00::', 8, 'ipv6');
+/** Hex IPv4-mapped forms are not a dotted address, so they fail closed. */
+function isBlockedAddress(address: string): boolean {
+  if (
+    address.toLowerCase().startsWith('::ffff:') &&
+    !/^::ffff:(?:\d{1,3}\.){3}\d{1,3}$/i.test(address)
+  ) {
+    return true;
+  }
+  return webhookAddressBlocked(address);
+}
 
-const BLOCKED_HOSTS = new Set([
-  'localhost',
-  'localhost.localdomain',
-  'metadata',
-  'metadata.google.internal',
-  'metadata.google.com',
-]);
+function webhookLookup(resolve: HostLookup): WebhookLookup {
+  return async (hostname) =>
+    (await resolve(hostname)).map((address) => ({
+      address,
+      family: isIP(address) === 6 ? 6 : 4,
+    }));
+}
 
 export type HostLookup = (hostname: string) => Promise<readonly string[]>;
 
@@ -72,22 +74,6 @@ function sameOrigin(left: string, right: string): boolean {
   const a = httpUrl(left);
   const b = httpUrl(right);
   return Boolean(a && b && a.origin === b.origin);
-}
-
-function isBlockedAddress(address: string): boolean {
-  const value = address.toLowerCase();
-  if (value.startsWith('::ffff:')) {
-    const mapped = value.slice('::ffff:'.length);
-    return isIP(mapped) !== 4 || isBlockedAddress(mapped);
-  }
-  const kind = isIP(value);
-  if (kind === 0) return true;
-  return blockedAddresses.check(value, kind === 4 ? 'ipv4' : 'ipv6');
-}
-
-function blockedHost(hostname: string): boolean {
-  const host = hostname.toLowerCase().replace(/\.$/, '');
-  return !host || BLOCKED_HOSTS.has(host) || host.endsWith('.localhost') || /^\d+$/.test(host);
 }
 
 type NodeRequest = typeof httpsRequest;
@@ -164,16 +150,14 @@ export function createPinnedFetch(
 
 /** True for an https origin whose host does not resolve to a private or metadata address. */
 export async function isPublicHttpsUrl(value: string, resolve: HostLookup): Promise<boolean> {
-  const url = httpUrl(value);
-  if (!url || url.protocol !== 'https:' || blockedHost(url.hostname)) return false;
-  if (isIP(url.hostname) !== 0) return !isBlockedAddress(url.hostname);
-  let addresses: readonly string[];
   try {
-    addresses = await resolve(url.hostname);
+    const url = assertWebhookUrl(value);
+    if (url.protocol !== 'https:') return false;
+    await resolveWebhookAddresses(url, webhookLookup(resolve));
+    return true;
   } catch {
     return false;
   }
-  return addresses.length > 0 && addresses.every((address) => !isBlockedAddress(address));
 }
 
 /**

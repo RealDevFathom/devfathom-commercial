@@ -16,7 +16,7 @@ function recordingDb() {
             calls.push({ model, op, args });
             if (op === 'findMany' || op === 'count') return op === 'count' ? 0 : [];
             if (op === 'updateMany') return { count: 1 };
-            if (op === 'findFirst' && model === 'customer') {
+            if (op === 'findFirst' && model === 'growthWaCustomer') {
               return {
                 id: 'c1',
                 organizationId: 'org_1',
@@ -64,7 +64,7 @@ describe('growth WhatsApp Prisma adapter', () => {
     });
     expect(calls.map((call) => call.model)).not.toContain('business');
     expect(calls[0]).toMatchObject({
-      model: 'messageLog',
+      model: 'growthWaMessage',
       op: 'findMany',
       args: {
         where: { organizationId: 'org_1', status: 'queued', direction: 'out' },
@@ -72,13 +72,13 @@ describe('growth WhatsApp Prisma adapter', () => {
       },
     });
     expect(calls[1]).toMatchObject({
-      model: 'messageLog',
+      model: 'growthWaMessage',
       op: 'count',
       args: { where: expect.objectContaining({ organizationId: 'org_1', direction: 'out' }) },
     });
     await store.claimQueued('org_1', 'msg_1');
     expect(calls.filter((call) => call.op === 'updateMany').at(-1)).toMatchObject({
-      model: 'messageLog',
+      model: 'growthWaMessage',
       op: 'updateMany',
       args: {
         where: { id: 'msg_1', organizationId: 'org_1', direction: 'out', status: 'queued' },
@@ -86,7 +86,7 @@ describe('growth WhatsApp Prisma adapter', () => {
       },
     });
     expect(calls[2]).toMatchObject({
-      model: 'customer',
+      model: 'growthWaCustomer',
       op: 'updateMany',
       args: {
         where: { id: 'c1', organizationId: 'org_1' },
@@ -99,14 +99,14 @@ describe('growth WhatsApp Prisma adapter', () => {
     const { db, calls } = recordingDb();
     await expect(growthStore(db).organizationForWebhookSecret('hash-1')).resolves.toBeNull();
     expect(calls.at(-1)).toMatchObject({
-      model: 'growthSettings',
+      model: 'growthWaSettings',
       op: 'findMany',
       args: { where: { waWebhookSecretHash: 'hash-1' }, take: 2 },
     });
 
     const matched = {
       organization: { findUnique: async () => null },
-      growthSettings: {
+      growthWaSettings: {
         findMany: async () => [
           { organizationId: 'org_1', waWebhookSecretHash: 'hash-1' },
           { organizationId: 'org_2', waWebhookSecretHash: 'hash-1' },
@@ -114,7 +114,7 @@ describe('growth WhatsApp Prisma adapter', () => {
       },
     };
     await expect(growthStore(matched).organizationForWebhookSecret('hash-1')).resolves.toBeNull();
-    matched.growthSettings.findMany = async () => [
+    matched.growthWaSettings.findMany = async () => [
       { organizationId: 'org_1', waWebhookSecretHash: 'hash-1' },
     ];
     await expect(growthStore(matched).organizationForWebhookSecret('hash-1')).resolves.toEqual({
@@ -127,7 +127,7 @@ describe('growth WhatsApp Prisma adapter', () => {
     const conflict = Object.assign(new Error('unique'), { code: 'P2002' });
     const db = {
       organization: { findUnique: async () => null },
-      messageLog: { create: async () => Promise.reject(conflict) },
+      growthWaMessage: { create: async () => Promise.reject(conflict) },
     };
     const message = {
       organizationId: 'org_1',
@@ -145,5 +145,35 @@ describe('growth WhatsApp Prisma adapter', () => {
     await expect(
       growthStore(db).insertMessage({ ...message, direction: 'out', status: 'queued' })
     ).rejects.toBe(conflict);
+  });
+
+  it('counts one customer marketing window and upserts the webhook secret', async () => {
+    const { db, calls } = recordingDb();
+    const since = new Date('2026-10-20T05:00:00.000Z');
+    await expect(growthStore(db).countMarketingSince('org_1', 'c1', since)).resolves.toBe(0);
+    expect(calls.at(-1)).toMatchObject({
+      model: 'growthWaMessage',
+      op: 'count',
+      args: {
+        where: expect.objectContaining({
+          organizationId: 'org_1',
+          customerId: 'c1',
+          campaignId: { not: null },
+          createdAt: { gte: since },
+        }),
+      },
+    });
+    await growthStore(db).saveWebhookSecret('org_1', {
+      waWebhookSecretHash: 'hash-1',
+      waWebhookSecretEnc: 'cipher-1',
+    });
+    expect(calls.at(-1)).toMatchObject({
+      model: 'growthWaSettings',
+      op: 'upsert',
+      args: {
+        where: { organizationId: 'org_1' },
+        update: { waWebhookSecretHash: 'hash-1', waWebhookSecretEnc: 'cipher-1' },
+      },
+    });
   });
 });

@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from 'vitest';
 
-import { handleInboundText, setCustomerOptIn } from './consent';
+import { handleInboundText, RecordedOptOut, setCustomerOptIn } from './consent';
 import { createMemoryStore } from './whatsapp/memory-store';
 import type { GrowthCustomer } from './whatsapp/types';
 import type { WhatsAppProvider } from './whatsapp/provider';
@@ -45,18 +45,26 @@ async function inbound(text: string, existing?: GrowthCustomer, waMessageId = 'i
 }
 
 describe('STOP and START', () => {
-  it.each(['STOP', 'stop', 'unsubscribe', 'band karo', 'بند'])(
-    'opts out and replies once for %s',
-    async (text) => {
-      const { store, sendText, result } = await inbound(text, customer());
-      expect(result).toBe('opt_out');
-      const saved = await store.customer('org_1', 'c1');
-      expect(saved?.whatsappOptIn).toBe(false);
-      expect(saved?.whatsappOptOutAt).toEqual(now);
-      expect(sendText).toHaveBeenCalledOnce();
-      expect(sendText).toHaveBeenCalledWith(from, expect.stringContaining('STOP'));
-    }
-  );
+  it.each([
+    'STOP',
+    'stop',
+    'unsubscribe',
+    'band karo',
+    'بند',
+    'STOP.',
+    'stop please',
+    'STOP ALL',
+    'Unsubscribe',
+    'Band Karo!',
+  ])('opts out and replies once for %s', async (text) => {
+    const { store, sendText, result } = await inbound(text, customer());
+    expect(result).toBe('opt_out');
+    const saved = await store.customer('org_1', 'c1');
+    expect(saved?.whatsappOptIn).toBe(false);
+    expect(saved?.whatsappOptOutAt).toEqual(now);
+    expect(sendText).toHaveBeenCalledOnce();
+    expect(sendText).toHaveBeenCalledWith(from, expect.stringContaining('STOP'));
+  });
 
   it('cancels queued rows when the customer replies STOP', async () => {
     const { store, provider } = harness(customer());
@@ -128,6 +136,33 @@ describe('STOP and START', () => {
     expect(result).toBe('opt_in');
     expect((await store.customer('org_1', 'c1'))?.whatsappOptIn).toBe(true);
     expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('does not treat stopwatch as an opt-out', async () => {
+    const { store, result } = await inbound('stopwatch', customer());
+    expect(result).toBe('logged');
+    expect((await store.customer('org_1', 'c1'))?.whatsappOptIn).toBe(true);
+  });
+
+  it('records STOP from an unknown number so a later till opt-in cannot reverse it', async () => {
+    const { store, sendText, result } = await inbound('STOP.');
+    expect(result).toBe('opt_out');
+    const saved = await store.customerByPhone('org_1', from);
+    expect(saved).toMatchObject({
+      whatsappOptIn: false,
+      whatsappOptOutAt: now,
+      whatsappE164: from,
+    });
+    expect(sendText).toHaveBeenCalledOnce();
+    await expect(
+      setCustomerOptIn(store, {
+        organizationId: 'org_1',
+        customerId: saved!.id,
+        whatsappOptIn: true,
+        now,
+      })
+    ).rejects.toBeInstanceOf(RecordedOptOut);
+    expect((await store.customer('org_1', saved!.id))?.whatsappOptIn).toBe(false);
   });
 
   it('records an unknown number without creating an opted-in customer', async () => {

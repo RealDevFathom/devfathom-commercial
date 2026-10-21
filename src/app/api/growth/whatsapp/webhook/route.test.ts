@@ -35,7 +35,7 @@ describe('growth WhatsApp webhook', () => {
     vi.stubEnv('GROWTH_WEBHOOK_SECRET', secret);
     mocks.withPlatformDb.mockImplementation(async (run) =>
       run({
-        growthSettings: {
+        growthWaSettings: {
           findMany: async (args?: { where?: { waWebhookSecretHash?: string } }) =>
             args?.where?.waWebhookSecretHash === secretHash
               ? [{ organizationId: 'org_1', waWebhookSecretHash: secretHash }]

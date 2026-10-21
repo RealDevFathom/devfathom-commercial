@@ -160,6 +160,150 @@ export async function productFamiliesFromMedicines(
   return rows.map((row) => row.productFamily);
 }
 
+/** Marketing `{{product}}` may name only these stored families. */
+const ALLOWLISTED_PRODUCT_FAMILIES = new Set(['FRONT_SHOP', 'DEVICE']);
+
+const PRODUCT_TOKEN = /\{\{\s*product\s*\}\}/;
+
+export class ProductNotAllowlisted extends Error {
+  constructor() {
+    super('The product variable must come from a front-shop or device medicine.');
+    this.name = 'ProductNotAllowlisted';
+  }
+}
+
+export class ProhibitedDrugInCopy extends Error {
+  constructor() {
+    super('Marketing copy names a prescription, controlled, or restricted medicine.');
+    this.name = 'ProhibitedDrugInCopy';
+  }
+}
+
+function escapeRegExp(value: string): string {
+  return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
+/** Case-insensitive whole-word match. Names shorter than 3 characters are ignored. */
+export function bodyNamesProhibitedDrug(body: string, names: readonly string[]): boolean {
+  const text = body.normalize('NFKC');
+  for (const raw of names) {
+    const name = raw.normalize('NFKC').trim();
+    if (name.length < 3) continue;
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(name)}(?![\\p{L}\\p{N}])`, 'iu');
+    if (pattern.test(text)) return true;
+  }
+  return false;
+}
+
+type MedicineReader = MedicineFamilyDb;
+
+function readMedicines(db: MedicineReader, args: object): Promise<unknown> {
+  return (db.medicine.findMany as (query: object) => Promise<unknown>)(args);
+}
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value)
+    ? (value as Record<string, unknown>)
+    : null;
+}
+
+/**
+ * Replaces `{{product}}` from this organization's front-shop and device rows.
+ * A caller-supplied product string is not accepted. Lookup failure fails closed.
+ */
+export async function fillAllowlistedProduct(
+  db: MedicineReader,
+  organizationId: string,
+  body: string,
+  medicineIds: readonly string[]
+): Promise<string> {
+  if (!PRODUCT_TOKEN.test(body)) return body;
+  const ids = [...new Set(medicineIds)];
+  let rows: unknown;
+  try {
+    rows = await readMedicines(db, {
+      where: {
+        organizationId,
+        id: { in: ids },
+        productFamily: { in: ['FRONT_SHOP', 'DEVICE'] },
+      },
+      select: { productName: true, productFamily: true },
+    });
+  } catch {
+    throw new ProductNotAllowlisted();
+  }
+  if (!Array.isArray(rows)) throw new ProductNotAllowlisted();
+  const names = [
+    ...new Set(
+      rows
+        .map((row) => {
+          const value = asRecord(row);
+          const family = typeof value?.productFamily === 'string' ? value.productFamily : '';
+          const productName =
+            typeof value?.productName === 'string' ? value.productName.trim() : '';
+          return ALLOWLISTED_PRODUCT_FAMILIES.has(family) ? productName : '';
+        })
+        .filter((name) => name.length > 0)
+    ),
+  ];
+  if (names.length === 0) throw new ProductNotAllowlisted();
+  return body.replace(/\{\{\s*product\s*\}\}/g, names.join(', '));
+}
+
+function prohibitedNames(rows: unknown): string[] {
+  if (!Array.isArray(rows)) throw new ProhibitedDrugInCopy();
+  const names: string[] = [];
+  for (const row of rows) {
+    const value = asRecord(row);
+    if (!value) continue;
+    if (typeof value.productName === 'string') names.push(value.productName);
+    if (typeof value.brandName === 'string') names.push(value.brandName);
+    if (Array.isArray(value.aliases)) {
+      for (const alias of value.aliases) {
+        const record = asRecord(alias);
+        if (typeof record?.value === 'string') names.push(record.value);
+      }
+    }
+    if (Array.isArray(value.strengths)) {
+      for (const strength of value.strengths) {
+        const ingredient = asRecord(asRecord(strength)?.ingredient);
+        if (typeof ingredient?.name === 'string') names.push(ingredient.name);
+      }
+    }
+  }
+  return names;
+}
+
+/**
+ * Refuses marketing text that names one of this organization's prescription,
+ * controlled, or restricted medicines. A lookup error fails closed.
+ */
+export async function assertMarketingCopyAllowed(
+  db: MedicineReader,
+  organizationId: string,
+  body: string
+): Promise<void> {
+  let rows: unknown;
+  try {
+    rows = await readMedicines(db, {
+      where: {
+        organizationId,
+        OR: [{ rx: true }, { controlled: true }, { restricted: true }],
+      },
+      select: {
+        productName: true,
+        brandName: true,
+        aliases: { select: { value: true } },
+        strengths: { select: { ingredient: { select: { name: true } } } },
+      },
+    });
+  } catch (error) {
+    if (error instanceof ProhibitedDrugInCopy) throw error;
+    throw new ProhibitedDrugInCopy();
+  }
+  if (bodyNamesProhibitedDrug(body, prohibitedNames(rows))) throw new ProhibitedDrugInCopy();
+}
+
 export class UnknownTemplateVariable extends Error {
   readonly variable: string;
   constructor(variable: string) {

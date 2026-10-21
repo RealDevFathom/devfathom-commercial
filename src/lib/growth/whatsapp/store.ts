@@ -17,6 +17,7 @@ type Delegate = {
   create?: (args: unknown) => Promise<unknown>;
   update?: (args: unknown) => Promise<unknown>;
   updateMany?: (args: unknown) => Promise<{ count: number }>;
+  upsert?: (args: unknown) => Promise<unknown>;
   count?: (args: unknown) => Promise<number>;
 };
 
@@ -107,6 +108,7 @@ function asSettings(row: unknown): GrowthSettings | null {
     waApiUrl: asString(value.waApiUrl),
     waApiKeyEnc: asString(value.waApiKeyEnc),
     waWebhookSecretHash: asString(value.waWebhookSecretHash),
+    waWebhookSecretEnc: asString(value.waWebhookSecretEnc),
     churnThreshold: asInt(value.churnThreshold, 60),
     createdAt: asDate(value.createdAt),
   };
@@ -164,15 +166,16 @@ function rows(value: unknown): unknown[] {
 }
 
 /**
- * Maps the growth store onto Prisma delegates named for the WP-G1 models:
- * `growthSettings`, `customer`, `messageLog`, `messageTemplate`.
+ * Maps the growth store onto the WhatsApp Prisma delegates:
+ * `growthWaSettings`, `growthWaCustomer`, `growthWaMessage`, `growthWaTemplate`.
+ * Those names stay off a future G1 `growthSettings` / `customer` / `messageLog` schema.
  */
 export function growthStore(db: object): GrowthWhatsAppStore {
   const organizations = db as OrganizationReader;
-  const settingsModel = () => model(db, 'growthSettings');
-  const customers = () => model(db, 'customer');
-  const messages = () => model(db, 'messageLog');
-  const templates = () => model(db, 'messageTemplate');
+  const settingsModel = () => model(db, 'growthWaSettings');
+  const customers = () => model(db, 'growthWaCustomer');
+  const messages = () => model(db, 'growthWaMessage');
+  const templates = () => model(db, 'growthWaTemplate');
 
   return {
     async settings(organizationId) {
@@ -289,6 +292,25 @@ export function growthStore(db: object): GrowthWhatsAppStore {
           status: { in: ['sent', 'delivered', 'read'] },
           updatedAt: { gte: since },
         },
+      });
+    },
+    async countMarketingSince(organizationId, customerId, since) {
+      return call(messages().count, {
+        where: {
+          organizationId,
+          customerId,
+          direction: 'out',
+          campaignId: { not: null },
+          status: { in: ['queued', 'sending', 'sent', 'delivered', 'read'] },
+          createdAt: { gte: since },
+        },
+      });
+    },
+    async saveWebhookSecret(organizationId, secret) {
+      await call(settingsModel().upsert, {
+        where: { organizationId },
+        create: { organizationId, ...secret },
+        update: secret,
       });
     },
     async markMessage(id, patch) {

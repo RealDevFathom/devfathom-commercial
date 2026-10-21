@@ -26,16 +26,20 @@ vi.mock('./store', () => ({
   },
 }));
 
-import { DrugCategoryInPromo } from '@/lib/growth/templates';
+import {
+  DrugCategoryInPromo,
+  ProductNotAllowlisted,
+  ProhibitedDrugInCopy,
+} from '@/lib/growth/templates';
 
 import { EvolutionWhatsAppProvider } from './evolution';
 import { createMemoryStore } from './memory-store';
 import {
+  CustomerDailyCap,
   drainQueue,
   drainOrganizationQueue,
   enqueueMarketing,
   enqueueOrderReady,
-  enqueueOutbound,
   type StoreUnit,
 } from './queue';
 import { effectiveDailyCap, isQuietHours, zonedDayStart } from './time';
@@ -70,6 +74,32 @@ function customer(id: string, phone: string, whatsappOptIn = true): GrowthCustom
     whatsappOptIn,
     whatsappOptInAt: whatsappOptIn ? day : null,
     whatsappOptOutAt: null,
+  };
+}
+
+function medicineDb(options?: { prohibited?: unknown; failLookup?: boolean }) {
+  return {
+    medicine: {
+      findMany: async (args: {
+        where: { id?: { in: string[] }; OR?: unknown };
+      }): Promise<Array<{ productFamily: string; productName?: string }>> => {
+        if (args.where.OR) {
+          if (options?.failLookup) throw new Error('medicine lookup failed');
+          return (options?.prohibited ?? []) as Array<{
+            productFamily: string;
+            productName?: string;
+          }>;
+        }
+        const ids = args.where.id?.in ?? [];
+        if (ids.includes('drug')) {
+          return [{ productFamily: 'PHARMACEUTICAL', productName: 'Alprazolam' }];
+        }
+        if (ids.includes('alt'))
+          return [{ productFamily: 'ALTERNATIVE', productName: 'Herbal Mix' }];
+        if (ids.length === 0) return [];
+        return [{ productFamily: 'FRONT_SHOP', productName: 'Vitamin C' }];
+      },
+    },
   };
 }
 
@@ -490,25 +520,14 @@ describe('outbound queue', () => {
     const store = createMemoryStore();
     store.putCustomer(customer('c1', '+923001111111', false));
     await expect(
-      enqueueOutbound(store, {
+      enqueueMarketing(medicineDb(), store, {
         organizationId: 'org_1',
         customerId: 'c1',
         body: 'Hello. Reply STOP to opt out.',
+        templateKey: 'slow_day',
+        medicineIds: ['shop'],
       })
     ).rejects.toBeInstanceOf(NotOptedIn);
-    expect(store.messages).toHaveLength(0);
-  });
-
-  it('refuses an opted-in send that names no template', async () => {
-    const store = createMemoryStore();
-    store.putCustomer(customer('c1', '+923001111111'));
-    await expect(
-      enqueueOutbound(store, {
-        organizationId: 'org_1',
-        customerId: 'c1',
-        body: 'Hello. Reply STOP to opt out.',
-      })
-    ).rejects.toBeInstanceOf(DrugCategoryInPromo);
     expect(store.messages).toHaveLength(0);
   });
 
@@ -516,14 +535,7 @@ describe('outbound queue', () => {
     const store = createMemoryStore();
     store.putCustomer(customer('c1', '+923001111111'));
     const body = 'Salaam. Reply STOP to opt out.';
-    const db = {
-      medicine: {
-        findMany: async (args: { where: { id: { in: string[] } } }) =>
-          args.where.id.in.includes('drug')
-            ? [{ productFamily: 'PHARMACEUTICAL' }]
-            : [{ productFamily: 'FRONT_SHOP' }],
-      },
-    };
+    const db = medicineDb();
     const queued = await enqueueMarketing(db, store, {
       organizationId: 'org_1',
       customerId: 'c1',
@@ -551,6 +563,86 @@ describe('outbound queue', () => {
       })
     ).rejects.toBeInstanceOf(DrugCategoryInPromo);
     expect(store.messages).toHaveLength(1);
+  });
+
+  it('fills {{product}} only from front-shop or device rows', async () => {
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    const queued = await enqueueMarketing(medicineDb(), store, {
+      organizationId: 'org_1',
+      customerId: 'c1',
+      body: 'Today: {{product}}. Reply STOP to opt out.',
+      templateKey: 'slow_day',
+      medicineIds: ['shop'],
+    });
+    expect(queued.body).toBe('Today: Vitamin C. Reply STOP to opt out.');
+    await expect(
+      enqueueMarketing(medicineDb(), store, {
+        organizationId: 'org_1',
+        customerId: 'c1',
+        body: 'Today: {{product}}. Reply STOP to opt out.',
+        templateKey: 'slow_day',
+        medicineIds: ['alt'],
+      })
+    ).rejects.toBeInstanceOf(ProductNotAllowlisted);
+  });
+
+  it('refuses marketing copy that names a restricted medicine and fails closed', async () => {
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    const prohibited = [
+      {
+        productName: 'Alprazolam',
+        brandName: 'Xanax',
+        aliases: [{ value: 'Alprax' }],
+        strengths: [{ ingredient: { name: 'alprazolam' } }],
+      },
+    ];
+    await expect(
+      enqueueMarketing(medicineDb({ prohibited }), store, {
+        organizationId: 'org_1',
+        customerId: 'c1',
+        body: 'Ask for xanax today. Reply STOP to opt out.',
+        templateKey: 'generic',
+        medicineIds: ['shop'],
+      })
+    ).rejects.toBeInstanceOf(ProhibitedDrugInCopy);
+    await expect(
+      enqueueMarketing(medicineDb({ failLookup: true }), store, {
+        organizationId: 'org_1',
+        customerId: 'c1',
+        body: 'A note from the shop. Reply STOP to opt out.',
+        templateKey: 'generic',
+        medicineIds: ['shop'],
+      })
+    ).rejects.toBeInstanceOf(ProhibitedDrugInCopy);
+    expect(store.messages).toHaveLength(0);
+  });
+
+  it('allows one marketing message per customer per day and still queues order ready', async () => {
+    const store = createMemoryStore({ now: () => day });
+    store.putCustomer(customer('c1', '+923001111111'));
+    const input = {
+      organizationId: 'org_1',
+      customerId: 'c1',
+      body: 'One offer. Reply STOP to opt out.',
+      templateKey: 'slow_day',
+      medicineIds: ['shop'],
+      now: day,
+    };
+    await enqueueMarketing(medicineDb(), store, input);
+    await expect(enqueueMarketing(medicineDb(), store, input)).rejects.toBeInstanceOf(
+      CustomerDailyCap
+    );
+    const ready = await enqueueOrderReady(store, {
+      organizationId: 'org_1',
+      customerId: 'c1',
+      language: 'en',
+      name: 'Ayesha',
+      business: 'Sehat Pharmacy',
+    });
+    expect(ready.campaignId).toBeNull();
+    expect(store.messages.filter((row) => row.campaignId != null)).toHaveLength(1);
   });
 
   it('caps the first 14 days at 30 messages', () => {

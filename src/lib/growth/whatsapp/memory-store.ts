@@ -122,6 +122,36 @@ export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
           row.updatedAt >= since
       ).length;
     },
+    async countMarketingSince(organizationId, customerId, since) {
+      return messages.filter(
+        (row) =>
+          row.organizationId === organizationId &&
+          row.customerId === customerId &&
+          row.direction === 'out' &&
+          row.campaignId != null &&
+          row.status !== 'failed' &&
+          row.createdAt >= since
+      ).length;
+    },
+    async saveWebhookSecret(organizationId, secret) {
+      const current = settings.get(organizationId);
+      settings.set(organizationId, {
+        organizationId,
+        monthlyBudgetMinor: current?.monthlyBudgetMinor ?? 0,
+        autoApproveUnderMinor: current?.autoApproveUnderMinor ?? 0,
+        quietHoursStart: current?.quietHoursStart ?? 21,
+        quietHoursEnd: current?.quietHoursEnd ?? 9,
+        maxMsgsPerDay: current?.maxMsgsPerDay ?? 200,
+        minSecondsBetweenMsgs: current?.minSecondsBetweenMsgs ?? 4,
+        waInstanceName: current?.waInstanceName ?? null,
+        waApiUrl: current?.waApiUrl ?? null,
+        waApiKeyEnc: current?.waApiKeyEnc ?? null,
+        waWebhookSecretHash: secret.waWebhookSecretHash,
+        waWebhookSecretEnc: secret.waWebhookSecretEnc,
+        churnThreshold: current?.churnThreshold ?? 60,
+        createdAt: current?.createdAt ?? now(),
+      });
+    },
     async markMessage(id, patch) {
       const row = messages.find((item) => item.id === id);
       if (!row) return;

@@ -6,6 +6,7 @@ import {
   DEFAULT_TEMPLATES,
   DrugCategoryInPromo,
   ensureDefaultTemplates,
+  bodyNamesProhibitedDrug,
   productFamiliesFromMedicines,
   MissingStop,
   MissingTemplateVariable,
@@ -68,6 +69,15 @@ describe('message templates', () => {
     expect(() =>
       assertCampaignProducts({ templateKey: 'not_a_template', productCategories: [] })
     ).toThrow(UnknownTemplateVariable);
+  });
+
+  it('matches prescription names on word boundaries without case', () => {
+    expect(
+      bodyNamesProhibitedDrug('Ask for Xanax today. Reply STOP', ['Alprazolam', 'Xanax'])
+    ).toBe(true);
+    expect(bodyNamesProhibitedDrug('panadolol tablets', ['Panadol'])).toBe(false);
+    expect(bodyNamesProhibitedDrug('Try PANADOL tonight', ['Panadol'])).toBe(true);
+    expect(bodyNamesProhibitedDrug('Rx only', ['Rx'])).toBe(false);
   });
 
   it('loads product families from this organization and fails closed on a missing medicine', async () => {
