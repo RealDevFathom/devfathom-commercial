@@ -667,7 +667,8 @@ const organizationInput = z
     timezone: z.string().trim().min(1).max(100).default('UTC'),
     locale: z.string().trim().min(2).max(20).default('en'),
     currency: currency.default('USD'),
-    // Seat limits are derived from the package; submitted seat fields are stripped.
+    // Only a platform super admin may use this untrusted override.
+    seatLimit: z.unknown().optional(),
     gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
     dataResidency: optionalText.optional(),
     primaryContactName: requiredText,
@@ -879,6 +880,10 @@ async function bootstrapOrganization(
       400
     );
   }
+  const seatLimit =
+    actor?.role === 'SUPER_ADMIN' && input.seatLimit !== undefined
+      ? z.coerce.number().int().min(1).max(packageRecord.defaultSeats).parse(input.seatLimit)
+      : packageRecord.defaultSeats;
   const password = demo ? null : await hash(input.adminPassword, 12);
   const organization = await createOrganizationRecord(db, {
     ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
@@ -892,7 +897,7 @@ async function bootstrapOrganization(
     timezone: input.timezone,
     locale: input.locale,
     currency: input.currency,
-    seatLimit: packageRecord.defaultSeats,
+    seatLimit,
     gracePeriodDays: input.gracePeriodDays,
     dataResidency: input.dataResidency,
     primaryContactName: input.primaryContactName,
