@@ -17,6 +17,9 @@ vi.mock('@/server/audit', () => ({
 import { pharmacyMedicineRouter } from '@/server/routers/pharmacy-medicine';
 import { router, type TRPCContext } from '@/server/trpc';
 import { purchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
+import { searchCounterCatalog } from '@/lib/pharmacy/counter';
+import { receiveLot } from '@/lib/pharmacy/stock-ledger';
+import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 function caller(db: object) {
   return router({ pharmacyMedicine: pharmacyMedicineRouter }).createCaller({
@@ -30,7 +33,7 @@ function caller(db: object) {
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import type { PrismaClient } from '@/generated/prisma/client';
 
-it('creates, reviews, publishes and packs a manual medicine for receiving and onboarding step 8 (in-memory delegates)', async () => {
+it('creates, reviews, publishes and packs a manual medicine through stock-in and counter sellable stock, including onboarding step 8 (in-memory delegates)', async () => {
   type Assertion = {
     id: string;
     medicineId: string;
@@ -51,6 +54,26 @@ it('creates, reviews, publishes and packs a manual medicine for receiving and on
   const packs: object[] = [];
   const entries: object[] = [];
   let published = false;
+  const at = new Date('2026-10-21T12:00:00Z');
+  const expiresAt = new Date('2027-12-31T23:59:59Z');
+  const batch = {
+    id: 'manual-manufacturing-batch',
+    medicineId: medicine.id,
+    batchNumber: 'MANUAL-001',
+    state: 'ACTIVE',
+    expiresAt,
+    medicine: { coldChain: false },
+  };
+  const location = {
+    id: 'shelf-a',
+    branchId: 'branch-a',
+    coldChain: false,
+    kind: 'SHELF',
+    code: 'A',
+    name: 'Shelf A',
+  };
+  const lots: object[] = [];
+  const balances: object[] = [];
   const db = {
     medicine: {
       create: vi.fn(async ({ data }: { data: { provenance: { create: Assertion[] } } }) => {
@@ -73,6 +96,7 @@ it('creates, reviews, publishes and packs a manual medicine for receiving and on
               {
                 ...medicine,
                 coldChain: false,
+                strengths: [],
                 controlled: false,
                 presentations: [
                   { id: 'manual-presentation', presentation: '10 tablets', packLevels: packs },
@@ -115,10 +139,14 @@ it('creates, reviews, publishes and packs a manual medicine for receiving and on
     presentation: {
       create: vi.fn(async () => ({ id: 'manual-presentation' })),
       findFirst: vi.fn(async () => ({ id: 'manual-presentation' })),
+      findMany: vi.fn(async () => []),
     },
-    medicineStrengthComponent: { create: vi.fn(async () => ({})) },
-    medicineAlias: { create: vi.fn(async () => ({})) },
+    medicineStrengthComponent: { create: vi.fn(async () => ({})), findMany: vi.fn(async () => []) },
+    medicineAlias: { create: vi.fn(async () => ({})), findMany: vi.fn(async () => []) },
+    medicineBarcode: { findFirst: vi.fn(async () => null) },
+    medicinePackMrp: { findMany: vi.fn(async () => []) },
     packLevel: {
+      findMany: vi.fn(async () => packs),
       create: vi.fn(async ({ data }: { data: object }) => {
         const pack = { id: 'manual-pack', parentPackLevelId: null, effectiveTo: null, ...data };
         packs.push(pack);
@@ -126,7 +154,10 @@ it('creates, reviews, publishes and packs a manual medicine for receiving and on
       }),
     },
     pharmacyBranch: { findMany: vi.fn(async () => []) },
-    pharmacyStockLocation: { findMany: vi.fn(async () => []) },
+    pharmacyStockLocation: {
+      findMany: vi.fn(async () => [location]),
+      findFirst: vi.fn(async () => location),
+    },
     pharmacySupplier: { findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
     user: {
       findMany: vi.fn(async () => []),
@@ -136,7 +167,40 @@ it('creates, reviews, publishes and packs a manual medicine for receiving and on
     pharmacyOnboardingGateState: { findMany: vi.fn(async () => []) },
     branchRegulatoryProfile: { findFirst: vi.fn(async () => null) },
     organizationRole: { count: vi.fn(async () => 0) },
-    pharmacyInventoryLot: { count: vi.fn(async () => 0) },
+    pharmacyManufacturingBatch: { findFirst: vi.fn(async () => batch) },
+    pharmacyInventoryLot: {
+      count: vi.fn(async () => lots.length),
+      create: vi.fn(async ({ data }: { data: object }) => {
+        const lot = { id: 'manual-lot', ...data, batch };
+        lots.push(lot);
+        return lot;
+      }),
+      findMany: vi.fn(async () => lots),
+    },
+    pharmacyStockMovement: {
+      create: vi.fn(
+        async ({
+          data,
+        }: {
+          data: {
+            inventoryLotId: string;
+            stockLocationId: string;
+            disposition: string;
+            quantityUnits: number;
+          };
+        }) => {
+          // Emulate only the receipt balance projection; real trigger behavior belongs to DB tests.
+          balances.push({
+            inventoryLotId: data.inventoryLotId,
+            stockLocationId: data.stockLocationId,
+            disposition: data.disposition,
+            onHandUnits: data.quantityUnits,
+          });
+          return { id: 'manual-receipt', ...data };
+        }
+      ),
+    },
+    pharmacyStockBalance: { findMany: vi.fn(async () => balances) },
   };
   const scoped = Object.assign(db, {
     $transaction: async (fn: (tx: typeof db) => unknown) => fn(db),
@@ -207,6 +271,47 @@ it('creates, reviews, publishes and packs a manual medicine for receiving and on
   expect(workspace.medicines[0].packs).toEqual([
     expect.objectContaining({ canonicalUnitsPerPack: 10, packLevelId: 'manual-pack' }),
   ]);
+  const stockDb = scoped as unknown as ScopedDb;
+  const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'admin-a' };
+  const search = () => searchCounterCatalog(stockDb, scope, { query: 'Paracetamol', at });
+  expect((await search()).rows[0]).toMatchObject({ onHandUnits: 0, saleableUnits: [] });
+  const pack = workspace.medicines[0].packs[0];
+  const receipt = await receiveLot(stockDb, scope, {
+    manufacturingBatchId: batch.id,
+    packLevelId: pack.packLevelId,
+    stockLocationId: location.id,
+    unitsPerPack: pack.canonicalUnitsPerPack,
+    supplierName: 'Manual supplier',
+    supplierInvoiceRef: 'INV-001',
+    unitCostMinor: 500,
+    printedMrpMinor: 1000,
+    receivedExpiresAt: expiresAt,
+    receivedExpiryPrecision: 'DAY',
+    quantityUnits: 20,
+    idempotencyKey: 'manual-stock-in',
+    receivedAt: at,
+  });
+  expect(receipt.movement).toMatchObject({
+    kind: 'RECEIPT',
+    disposition: 'AVAILABLE',
+    quantityUnits: 20,
+  });
+  const counter = await search();
+  expect(counter.rows).toHaveLength(1);
+  expect(counter.rows[0]).toMatchObject({
+    medicineId: medicine.id,
+    recommendedLotId: receipt.lot.id,
+    packLevelId: pack.packLevelId,
+    onHandUnits: 20,
+    blocked: [],
+    saleableUnits: expect.arrayContaining([
+      expect.objectContaining({
+        canonicalUnitsPerSaleUnit: 10,
+        wholeUnits: 2,
+        unitPriceMinor: 1000,
+      }),
+    ]),
+  });
   expect(db.ingredient.upsert).toHaveBeenCalledWith(
     expect.objectContaining({
       where: { organizationId_name: { organizationId: 'org-a', name: 'Paracetamol' } },
