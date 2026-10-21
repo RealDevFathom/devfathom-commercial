@@ -35,8 +35,24 @@ export const PAKISTAN_PROVINCES: Record<string, string> = {
   'PK-AJK': 'Azad Jammu and Kashmir',
 };
 
+const LEGACY_PROVINCE_CODES: Record<string, string> = {
+  PB: 'PK-PB',
+  SD: 'PK-SD',
+  KP: 'PK-KP',
+  BA: 'PK-BA',
+  ICT: 'PK-ICT',
+  GB: 'PK-GB',
+  AJK: 'PK-AJK',
+};
+
+/** Convert province codes written before the ISO-style `PK-` prefix was adopted. */
+export function canonicalProvinceCode(code: string): string {
+  return LEGACY_PROVINCE_CODES[code] ?? code;
+}
+
 export function provinceName(code: string): string {
-  return PAKISTAN_PROVINCES[code] ?? code;
+  const canonicalCode = canonicalProvinceCode(code);
+  return PAKISTAN_PROVINCES[canonicalCode] ?? code;
 }
 
 /**
@@ -52,11 +68,14 @@ export function defaultProvinceCode(
   jurisdictions: readonly { provinceCode: string }[],
   branchProvinceCode: string | null | undefined
 ): string {
+  const canonicalBranchProvinceCode = branchProvinceCode
+    ? canonicalProvinceCode(branchProvinceCode)
+    : null;
   if (
-    branchProvinceCode &&
-    jurisdictions.some((jurisdiction) => jurisdiction.provinceCode === branchProvinceCode)
+    canonicalBranchProvinceCode &&
+    jurisdictions.some((jurisdiction) => jurisdiction.provinceCode === canonicalBranchProvinceCode)
   ) {
-    return branchProvinceCode;
+    return canonicalBranchProvinceCode;
   }
   return jurisdictions[0]?.provinceCode ?? '';
 }

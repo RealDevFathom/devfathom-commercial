@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { formatValidationError } from '@/lib/validation-error';
 import {
+  canonicalProvinceCode,
   defaultProvinceCode,
   FISCAL_STATUSES,
   fieldError,
@@ -125,6 +126,7 @@ describe('branch regulatory profile input', () => {
 
   it('prints a province name rather than its code, and falls back to the code it does not know', () => {
     expect(provinceName('PK-PB')).toBe('Punjab');
+    expect(provinceName('SD')).toBe('Sindh');
     expect(provinceName('PK-ICT')).toBe('Islamabad Capital Territory');
     expect(provinceName('PK-ZZ')).toBe('PK-ZZ');
   });
@@ -140,12 +142,25 @@ describe('branch regulatory profile input', () => {
     const jurisdictions = [{ provinceCode: 'PK-PB' }, { provinceCode: 'PK-SD' }];
     // A Karachi branch opens on Sindh even though Punjab sorts first.
     expect(defaultProvinceCode(jurisdictions, 'PK-SD')).toBe('PK-SD');
+    expect(defaultProvinceCode(jurisdictions, 'SD')).toBe('PK-SD');
     expect(defaultProvinceCode(jurisdictions, 'PK-PB')).toBe('PK-PB');
     // A branch whose province has no published rules falls back to the first
     // published jurisdiction rather than leaving the select empty.
     expect(defaultProvinceCode(jurisdictions, 'PK-KP')).toBe('PK-PB');
     expect(defaultProvinceCode(jurisdictions, null)).toBe('PK-PB');
     expect(defaultProvinceCode([], 'PK-SD')).toBe('');
+  });
+
+  it('maps every legacy short province code to its canonical stored value', () => {
+    expect(canonicalProvinceCode('PB')).toBe('PK-PB');
+    expect(canonicalProvinceCode('SD')).toBe('PK-SD');
+    expect(canonicalProvinceCode('KP')).toBe('PK-KP');
+    expect(canonicalProvinceCode('BA')).toBe('PK-BA');
+    expect(canonicalProvinceCode('ICT')).toBe('PK-ICT');
+    expect(canonicalProvinceCode('GB')).toBe('PK-GB');
+    expect(canonicalProvinceCode('AJK')).toBe('PK-AJK');
+    expect(canonicalProvinceCode('PK-SD')).toBe('PK-SD');
+    expect(canonicalProvinceCode('UNKNOWN')).toBe('UNKNOWN');
   });
 });
 

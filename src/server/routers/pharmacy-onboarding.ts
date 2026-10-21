@@ -38,6 +38,7 @@ import {
   pharmacyOnboardingChecklist,
 } from '@/lib/pharmacy/onboarding-checklist';
 import {
+  canonicalProvinceCode,
   fieldError,
   provinceName,
   regulatoryProfileShape,
@@ -419,7 +420,10 @@ export const pharmacyOnboardingRouter = router({
       }
       // QA-129: a branch operates under its own province's rules. Never accept a
       // client-chosen province that differs from the one the branch records.
-      if (branch.provinceCode && branch.provinceCode !== input.provinceCode) {
+      if (
+        branch.provinceCode &&
+        canonicalProvinceCode(branch.provinceCode) !== input.provinceCode
+      ) {
         throw badRequest(
           'provinceCode',
           `This branch is registered in ${provinceName(branch.provinceCode)}. Use that province's rules.`
