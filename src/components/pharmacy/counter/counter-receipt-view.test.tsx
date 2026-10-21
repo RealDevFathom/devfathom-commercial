@@ -75,6 +75,18 @@ it('labels reprints and disables unissued receipts', () => {
   expect(screen.getByRole('button', { name: 'Reprint receipt' })).toBeDisabled();
 });
 
+it('renders receipt amounts with Urdu digits when Urdu is selected', () => {
+  const input = props({ locale: 'ur' });
+  input.receipt!.lines[0] = {
+    ...input.receipt!.lines[0]!,
+    unitPriceMinor: 123_456,
+    lineTotalMinor: 123_456,
+  };
+  render(<CounterReceiptView {...input} />);
+  expect(screen.getAllByText('۱۲۳۴٫۵۶')).toHaveLength(2);
+  expect(screen.queryByText('1234.56')).toBeNull();
+});
+
 it('shows retry on failed or permission-denied receipt reads', () => {
   const input = props({ state: 'error', error: 'You do not have permission for this action.' });
   render(<CounterReceiptView {...input} />);
