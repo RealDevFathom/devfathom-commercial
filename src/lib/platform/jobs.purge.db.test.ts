@@ -86,6 +86,7 @@ const JOB_ID = `wha1209_job_${suffix}`;
 const PURGED_PROFILE_ID = `wha1220_profile_${suffix}`;
 const LIVE_PROFILE_ID = `wha1220_live_profile_${suffix}`;
 const REGISTER_ENTRY_ID = `wha281_register_${suffix}`;
+const LIVE_REGISTER_ENTRY_ID = `wha281_live_register_${suffix}`;
 const HOTEL_PURGED_ORG = `hotel_purge_${suffix}`;
 const HOTEL_LIVE_ORG = `hotel_live_${suffix}`;
 const HOTEL_JOB_ID = `hotel_purge_job_${suffix}`;
@@ -185,6 +186,17 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
           REGISTER_ENTRY_ID,
           PURGED_ORG,
           BRANCH_ID
+        );
+        await db.$executeRawUnsafe(
+          `INSERT INTO pharmacy_controlled_register_entries
+             (id, "organizationId", "branchId", serial, "entryKind", "inventoryLotId",
+              "stockMovementId", "batchNumber", "quantityCanonicalUnits", "runningBalance",
+              "balanceDelta", "recordedByUserId", "witnessedByUserId", "counterpartyName")
+           VALUES ($1, $2, $3, 1, 'PURCHASE', 'live-fixture-lot', 'live-fixture-movement',
+                   'LIVE-BATCH', 1, 1, 1, 'operator-a', 'operator-b', 'Live fixture supplier')`,
+          LIVE_REGISTER_ENTRY_ID,
+          LIVE_ORG,
+          LIVE_BRANCH_ID
         );
       } finally {
         await db.$executeRawUnsafe(
@@ -319,6 +331,16 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
         );
       })
     ).rejects.toThrow(/append-only/);
+
+    await expect(
+      withTenantDb(LIVE_ORG, async (db) => {
+        await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${LIVE_ORG}, true)`;
+        return db.$executeRawUnsafe(
+          `DELETE FROM pharmacy_controlled_register_entries WHERE id = $1`,
+          LIVE_REGISTER_ENTRY_ID
+        );
+      })
+    ).rejects.toThrow(/controlled register entry is within its 3-year retention window/);
 
     await expect(
       withPlatformDb((db) =>

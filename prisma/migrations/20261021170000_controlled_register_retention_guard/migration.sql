@@ -5,15 +5,29 @@
 -- 1214(I)/96). The register is already append-only in the application; this makes the
 -- "no edits/no deletes" guarantee enforceable at the row, where an inspector relies on it.
 --
--- The one authorized exception is a whole-tenant purge, recognised exactly as the
--- regulatory-profile and onboarding-event guards do: "app.purging_organization_id"
--- names this row's tenant, or the organization no longer exists.
+-- The one authorized exception is a verified whole-tenant purge: the configured
+-- tenant must match and the caller must have trusted platform or purge-role authority.
+
+BEGIN;
+
+CREATE OR REPLACE FUNCTION app_is_verified_tenant_purge(organization_id text) RETURNS boolean
+LANGUAGE sql STABLE AS $$
+  SELECT NULLIF(current_setting('app.purging_organization_id', true), '') = organization_id
+    AND (
+      current_setting('app.is_platform_admin', true) = 'true'
+      OR EXISTS (
+        SELECT 1 FROM pg_roles
+        WHERE rolname = 'app_tenant_purge'
+          AND pg_has_role(current_user, oid, 'MEMBER')
+      )
+    )
+$$;
 
 CREATE OR REPLACE FUNCTION pharmacy_controlled_register_retention_guard() RETURNS trigger
 LANGUAGE plpgsql AS $$
 DECLARE last_ts timestamp(3); retained_until timestamp(3);
 BEGIN
-  IF NULLIF(current_setting('app.purging_organization_id', true), '') = OLD."organizationId" THEN
+  IF app_is_verified_tenant_purge(OLD."organizationId") THEN
     RETURN OLD;
   END IF;
   IF NOT EXISTS (SELECT 1 FROM "organizations" WHERE "id" = OLD."organizationId") THEN
@@ -32,6 +46,10 @@ BEGIN
   RETURN OLD;
 END $$;
 
+DROP TRIGGER IF EXISTS pharmacy_controlled_register_retention
+  ON "pharmacy_controlled_register_entries";
 CREATE TRIGGER pharmacy_controlled_register_retention
   BEFORE DELETE ON "pharmacy_controlled_register_entries"
   FOR EACH ROW EXECUTE FUNCTION pharmacy_controlled_register_retention_guard();
+
+COMMIT;

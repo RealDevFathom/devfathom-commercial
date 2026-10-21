@@ -1,6 +1,8 @@
 -- A tenant identifier alone is not authority to bypass immutable-history guards.
 -- Require the exact tenant plus either the trusted platform transaction context or
 -- membership in the optional, deployment-managed purge role.
+BEGIN;
+
 CREATE OR REPLACE FUNCTION app_is_verified_tenant_purge(organization_id text) RETURNS boolean
 LANGUAGE sql STABLE AS $$
   SELECT NULLIF(current_setting('app.purging_organization_id', true), '') = organization_id
@@ -123,3 +125,5 @@ BEGIN
   END IF;
   RETURN OLD;
 END $$;
+
+COMMIT;
