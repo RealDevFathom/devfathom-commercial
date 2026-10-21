@@ -10,6 +10,34 @@ const sql = readFileSync(
   'utf8'
 );
 
+// Preserve quoted values/identifiers while discarding comments before splitting.
+function splitSql(source: string): string[] {
+  const statements: string[] = [];
+  let statement = '';
+  const tokens =
+    source.match(/'(?:''|[^'])*'|"(?:""|[^"])*"|--[^\r\n]*|\/\*[\s\S]*?\*\/|;|[^'";/-]+|./g) ?? [];
+  for (const token of tokens) {
+    if (token.startsWith('--') || token.startsWith('/*')) {
+      statement += ' ';
+    } else if (token === ';') {
+      if (statement.trim()) statements.push(statement.trim());
+      statement = '';
+    } else {
+      statement += token;
+    }
+  }
+  if (statement.trim()) statements.push(statement.trim());
+  return statements;
+}
+
+describe('backfill SQL splitter', () => {
+  it('ignores semicolons in line and block comments and preserves quoted text', () => {
+    expect(
+      splitSql(`-- ignored;\nBEGIN; /* ignored; */ SELECT 'a;--b', "a;/*b*/"; COMMIT; -- trailing;`)
+    ).toEqual(['BEGIN', `SELECT 'a;--b', "a;/*b*/"`, 'COMMIT']);
+  });
+});
+
 (databaseUrl ? describe : describe.skip)('seat backfill on PostgreSQL with forced RLS', () => {
   it('repairs legacy seats, preserves custom and single-seat limits, and audits once', async () => {
     const client = new Client({ connectionString: databaseUrl });
@@ -51,19 +79,27 @@ const sql = readFileSync(
         INSERT INTO organizations (id, "packageId", "seatLimit") VALUES
           ('raise', 'team', 1), ('custom', 'team', 7), ('solo', 'solo', 1), ('hotel', 'hotel', 1);
       `);
+      const originalSeats = new Map(
+        (await client.query('SELECT id, "seatLimit" FROM organizations')).rows.map((o) => [
+          o.id,
+          o.seatLimit,
+        ])
+      );
       await client.query("SELECT set_config('app.is_platform_admin', 'false', true)");
       expect((await client.query('SELECT * FROM organizations')).rows).toHaveLength(0);
       await client.query('COMMIT');
       // No outer transaction: each statement has migrate deploy semantics.
       const deploy = async () => {
         const results = [];
-        for (const statement of sql.split(';').filter((part) => part.trim())) {
+        for (const statement of splitSql(sql)) {
           results.push(await client.query(statement));
         }
         return results;
       };
       const results = await deploy();
-      expect(results.filter((result) => result.command === 'UPDATE').map((result) => result.rowCount)).toEqual([1]);
+      expect(
+        results.filter((result) => result.command === 'UPDATE').map((result) => result.rowCount)
+      ).toEqual([1]);
       expect(results.find((result) => result.command === 'INSERT')?.rowCount).toBe(2);
       expect((await client.query('SELECT * FROM organizations')).rowCount).toBe(0);
       await client.query("SELECT set_config('app.is_platform_admin', 'true', false)");
@@ -80,6 +116,8 @@ const sql = readFileSync(
         ['solo', 1],
       ]);
       expect(first.audits).toHaveLength(2);
+      const updatedOrgCount = first.orgs.filter((o) => o.seatLimit !== originalSeats.get(o.id)).length;
+      expect(updatedOrgCount).toBe(2);
       expect(first.audits.map((a) => [a.organizationId, a.before, a.after])).toEqual([
         ['hotel', { seatLimit: 1 }, { seatLimit: 15, packageId: 'hotel' }],
         ['raise', { seatLimit: 1 }, { seatLimit: 42, packageId: 'team' }],
