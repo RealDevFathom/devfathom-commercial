@@ -29,7 +29,14 @@ export type DraftCheckTotalInput = {
  * `deliveryFeeTotal` onto the taxable grand total. Money stays on the decimal
  * helper, so a third decimal rounds half-up instead of being sliced off.
  */
-export function quoteDraftCheckTotal(input: DraftCheckTotalInput): string {
+export type DraftCheckBreakdown = {
+  tax: string;
+  serviceCharge: string;
+  total: string;
+};
+
+/** Tax, service, and the amount due. A stored or client total is not an input. */
+export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
   const lines = input.lines.map((line) => ({
@@ -53,7 +60,15 @@ export function quoteDraftCheckTotal(input: DraftCheckTotalInput): string {
     proposedTenderType: 'CASH',
     serviceCharge: { amount: serviceAmount, taxable: false },
   });
-  return formatMoney(add(quote.grandTotal.toString(), input.deliveryFee ?? '0.00'));
+  return {
+    tax: formatMoney(quote.tax.toString()),
+    serviceCharge: formatMoney(quote.serviceChargePayable.toString()),
+    total: formatMoney(add(quote.grandTotal.toString(), input.deliveryFee ?? '0.00')),
+  };
+}
+
+export function quoteDraftCheckTotal(input: DraftCheckTotalInput): string {
+  return quoteDraftCheckBreakdown(input).total;
 }
 
 function zeroTax(at: Date): { profiles: TaxProfile[]; rules: TaxRule[] } {

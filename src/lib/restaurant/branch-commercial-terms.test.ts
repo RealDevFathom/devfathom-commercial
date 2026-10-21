@@ -41,7 +41,23 @@ describe('loadBranchCommercialTerms', () => {
     };
     const terms = await loadBranchCommercialTerms(db as unknown as ScopedDb, 'branch-1', at);
     expect(db.restaurantTaxProfileVersion.findMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: { branchId: 'branch-1' } })
+      expect.objectContaining({
+        where: {
+          branchId: 'branch-1',
+          status: 'PUBLISHED',
+          effectiveFrom: { lte: at },
+          OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+        },
+        select: expect.objectContaining({
+          rules: expect.objectContaining({
+            where: {
+              status: 'PUBLISHED',
+              effectiveFrom: { lte: at },
+              OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+            },
+          }),
+        }),
+      })
     );
     expect(db.restaurantServiceChargePolicyVersion.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({

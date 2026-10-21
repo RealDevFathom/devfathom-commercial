@@ -17,9 +17,13 @@ export async function loadBranchCommercialTerms(
   branchId: string,
   at: Date
 ): Promise<BranchCommercialTerms> {
+  const effectiveWindow = {
+    effectiveFrom: { lte: at },
+    OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+  };
   const [profiles, policy] = await Promise.all([
     db.restaurantTaxProfileVersion.findMany({
-      where: { branchId },
+      where: { branchId, status: 'PUBLISHED', ...effectiveWindow },
       orderBy: [{ effectiveFrom: 'asc' }, { id: 'asc' }],
       select: {
         id: true,
@@ -29,6 +33,7 @@ export async function loadBranchCommercialTerms(
         approvalReference: true,
         approvedAt: true,
         rules: {
+          where: { status: 'PUBLISHED', ...effectiveWindow },
           select: {
             id: true,
             profileVersionId: true,
@@ -46,11 +51,7 @@ export async function loadBranchCommercialTerms(
       },
     }),
     db.restaurantServiceChargePolicyVersion.findFirst({
-      where: {
-        branchId,
-        effectiveFrom: { lte: at },
-        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
-      },
+      where: { branchId, ...effectiveWindow },
       orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
       select: { rate: true },
     }),

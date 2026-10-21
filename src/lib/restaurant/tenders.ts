@@ -16,7 +16,20 @@ import {
   runMoneyTransaction,
   type MoneyActor,
 } from './drawer-sessions';
-import { add, compare, equals, isNegative, isZero, money, sub, sum, ZERO } from './money';
+import {
+  add,
+  compare,
+  equals,
+  formatMoney,
+  isNegative,
+  isZero,
+  money,
+  multiply,
+  roundMoney,
+  sub,
+  sum,
+  ZERO,
+} from './money';
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
 import {
   quoteTaxSettlement,
@@ -464,8 +477,12 @@ async function loadSettlementContext(
   proposedTenderType: TenderType,
   at: Date
 ): Promise<SettlementContext> {
+  const effectiveWindow = {
+    effectiveFrom: { lte: at },
+    OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+  };
   const profiles = await tx.restaurantTaxProfileVersion.findMany({
-    where: { branchId: bill.branchId },
+    where: { branchId: bill.branchId, status: 'PUBLISHED', ...effectiveWindow },
     select: {
       id: true,
       effectiveFrom: true,
@@ -474,6 +491,7 @@ async function loadSettlementContext(
       approvalReference: true,
       approvedAt: true,
       rules: {
+        where: { status: 'PUBLISHED', ...effectiveWindow },
         select: {
           id: true,
           profileVersionId: true,
@@ -617,14 +635,27 @@ async function loadSettlementContext(
       };
     });
   });
-  const taxablePriorTenders = allocateTaxableTenderPrincipals(
-    priorTenders,
-    sum(
-      quoteLines.map((line) =>
-        line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
-      )
+  const merchandiseBasis = sum(
+    quoteLines.map((line) =>
+      line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
     )
   );
+  const order = await tx.restaurantOrder.findFirst({
+    where: { id: bill.orderId },
+    select: { channel: true },
+  });
+  const servicePolicy =
+    order?.channel === 'DINE_IN'
+      ? await tx.restaurantServiceChargePolicyVersion.findFirst({
+          where: { branchId: bill.branchId, ...effectiveWindow },
+          orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
+          select: { rate: true },
+        })
+      : null;
+  const serviceAmount = servicePolicy
+    ? formatMoney(roundMoney(multiply(merchandiseBasis, servicePolicy.rate.toString())))
+    : '0.00';
+  const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
     profiles: profiles.map((profile) => ({
@@ -643,7 +674,7 @@ async function loadSettlementContext(
     priorTenderWeights: taxablePriorTenders,
     acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
     afterTaxDiscount,
-    serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
+    serviceCharge: { amount: serviceAmount, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
   });
   const acceptedPrincipal = taxableQuote.acceptedPrincipal;
