@@ -1,53 +1,65 @@
-# Growth G1 blocked — 2026-10-21
+# Growth G6 blocked — 2026-10-21
 
-Stopped under the explicit instruction to stop when the same problem fails twice.
-`prisma format` and `prisma migrate diff` both reported P1012: CustomerMetrics has
-an organization-scoped one-to-one customer relation but lacks the explicit
-`@@unique([organizationId, customerId])` required by Prisma. No fix attempts or
-further validation were run after recognizing the repeated failure.
+G6 cannot be implemented on the requested base without implementing earlier work
+packages, which the user explicitly excludes. No G6 runtime code was added.
 
-## Partial work
+## Verified base and missing prerequisites
 
-- Added draft growth schema models and PharmacyCustomer consent fields,
-  PharmacySale.discountCode, and extensions to the existing PharmacyMessageLog.
-- Schema is NOT valid. No migration was produced, no database was changed,
-  and seed implementation is pending. Do not merge this branch.
-- Prisma format also reformatted existing schema alignment; review/minimize that
-  incidental diff when resuming.
+- Worktree: /workspace/wt/improve/ai-growth-g6; branch: improve/ai-growth-g6.
+- HEAD and remote improve/ai-growth-g1 both resolve to
+  97e9d2c426918b799df8f5a45ca4a56859f61db3 at verification time.
+- G6 explicitly depends on G5. src/server/routers/growth.ts is an empty router;
+  growth contains only flag.ts, index.ts and the flag test. There is no G5
+  segments.ts, campaigns.ts or codes.ts, nor the G2 metrics job.
+- The base already records an invalid G1 draft. No G1 growth migration exists.
+  CustomerMetrics.customer at prisma/schema.prisma:15257 lacks the composite
+  uniqueness required for its one-to-one relation. This is an earlier package's
+  repair, not G6 work. No migration or RLS policy was changed.
+- G6 settings additions (customDates, lastPlanRunAt) are absent as expected for
+  unimplemented G6; adding them alone cannot supply the missing prerequisites.
 
-## Repository findings
+The plan's stop condition applies: a required reusable foundation does not exist.
+Do not merge this documentation PR as a completed AI planner. Resume G6 only on
+an explicitly authorized base containing validated G1 and completed G2–G5.
 
-- Tenant: Organization / organizationId.
-- Retail customer: PharmacyCustomer; full phone and dateOfBirth are on its
-  organization-scoped PharmacyPatient relation. Reuse dateOfBirth, not a duplicate
-  birthday. Existing nullable whatsappOptIn and whatsappOptInChangedAt must retain
-  their audit semantics. Backfill only valid full Pakistani mobile numbers from
-  the linked patient; never derive from phoneLast4 or grant consent.
-- Sale: PharmacySale, pharmacy_sales; discountCode was absent.
-- Settings/flag: OrganizationModule entitlements; growth_ai already uses
-  resolveOrganizationEntitlements / hasModule. No new flag system needed.
-- AI: src/lib/ai/provider.ts, createGroq / existing provider abstraction.
-- WhatsApp: existing PharmacyMessageLog and Meta/mock providers in
-  src/lib/pharmacy/whatsapp. No production Prisma cast stub was found in growth
-  or WhatsApp files inspected. Preserve existing providerMessageId/dedupeKey
-  behavior when adding the required organizationId,direction,waMessageId key.
-- No nested AGENTS.md found under prisma or src. Read root AGENTS.md, both
-  /workspace plans, and installed Next installation documentation. No UI work.
+## Discovered repository names
 
-## Remaining G1 work
+- Tenant: Organization / organizationId; scoped database access is in
+  src/lib/tenancy/scoped-db.ts. Preserve tenant isolation and FORCE RLS.
+- Customer: PharmacyCustomer; linked PharmacyPatient holds dateOfBirth/phone.
+- Sale: PharmacySale / pharmacy_sales; draft discountCode exists; sale lines use
+  PharmacySaleLine and the existing sale discount mechanism must be reused.
+- Settings: GrowthSettings / growth_settings (draft); feature entitlement:
+  OrganizationModule with resolveOrganizationEntitlements / hasModule.
+- Campaign / campaigns, CampaignRecipient / campaign_recipients,
+  CustomerMetrics / customer_metrics, MessageTemplate / message_templates are
+  draft schema names, not validated deployed tables.
+- Audit/channel: existing PharmacyMessageLog. AI client:
+  src/lib/ai/provider.ts, createAIModel with the existing Groq provider.
 
-Repair the relation; generate one migration with ENABLE and FORCE RLS and
-organization isolation policies for every new table; ensure composite tenant
-foreign keys; safe phone backfill and false defaults without data loss; seed
-GrowthSettings and eight safe templates for existing demo pharmacies only.
-No medicine/drug/Rx promotions; refill messages must remain utility only.
-Generate Prisma and validate migration on fresh and demo databases and seed.
-Run relevant/full tests, typecheck, lint and build. No install was repeated.
+## Validation
 
-## Validation limitations
+- Read AGENTS.md and the exact WP-G6 section; user waived the four named tools
+  and prohibited recursive Codex. No UI or UI planning was performed.
+- Read installed Next.js route-handler reference before any runtime changes;
+  no runtime changes were ultimately made.
+- node_modules was initially absent. Ran bun install first: failed in postinstall
+  prisma generate with P1012 for the inherited CustomerMetrics relation above.
+  Did not retry the known schema failure or repair earlier packages.
+- bun run test -- src/lib/growth/flag.test.ts
+  src/app/api/growth/tick/route.test.ts: exit 1; 15 tests passed, but one worker
+  failed before collecting its tests with undici/jsdom error
+  `webidl.util.markAsUncloneable is not a function`.
+- Typecheck result recorded below after completion.
+- Lint, build and full suite skipped after confirming the prerequisite blocker;
+  build also invokes the known failing prisma generate.
+- G6 canned-output, slow-day and weekly-idempotency tests: not available because
+  G6 was not implemented. No test is represented as passing for G6.
+- Manual real planner/demo DB run: skipped; no runnable planner or migrated
+  growth foundation exists. No live model call, message, or database mutation.
+- No drug/Rx/medicine promotion code or content was introduced; future refill
+  behavior must remain utility only. No session-facing surface was added.
 
-Prisma format and schema diff failed with the same P1012 relation error.
-Generation, migration application, seed, typecheck, tests, lint and build were
-not run after the mandatory stop. No DATABASE_URL or SHADOW_DATABASE_URL was
-present in the shell environment; no local postgres/psql/docker executable was
-found. Database validation would require an available isolated database.
+Typecheck: `bun run typecheck` exited 2. Missing generated Prisma client
+(src/generated/prisma/client.js) produces repository-wide TS2307 and cascading
+implicit-any/unknown errors. Generation was blocked by the inherited P1012.
