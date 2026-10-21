@@ -140,15 +140,9 @@ export const teamRouter = router({
         where: { email },
         select: { id: true, status: true },
       });
-      // Only a still-pending invite may be re-sent; an active/real account blocks.
-      if (existing && existing.status !== 'INVITED') {
+      // Pending invitations and deactivated accounts may be invited again.
+      if (existing && existing.status !== 'INVITED' && existing.status !== 'INACTIVE') {
         throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
-      }
-      if (!existing && ctx.entitlements.activeSeats >= ctx.entitlements.seatLimit) {
-        throw new TRPCError({
-          code: 'FORBIDDEN',
-          message: `Seat limit reached (${ctx.entitlements.activeSeats}/${ctx.entitlements.seatLimit}). Increase the organization license before inviting another member.`,
-        });
       }
 
       const { token, tokenHash } = generateInviteToken();
@@ -164,7 +158,12 @@ export const teamRouter = router({
       };
 
       const user = await ctx.db.$transaction(async (tx) => {
-        if (!existing) await lockOrganizationSeat(tx, ctx.session.user.organizationId!, ctx.entitlements.seatLimit);
+        await lockOrganizationSeat(
+          tx,
+          ctx.session.user.organizationId!,
+          ctx.entitlements.seatLimit,
+          existing?.id
+        );
         // Upsert the user (re-invite refreshes the seeded details), then replace
         // any prior invitation with a fresh single-use token.
         const u = existing

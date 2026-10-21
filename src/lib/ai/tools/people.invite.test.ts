@@ -25,6 +25,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: vi.fn(async () => ({ activeSeats: 1, seatLimit: 50 })),
 }));
 
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { buildPeopleTools } from './people';
 import type { AssistantHelpers } from '@/lib/ai/context';
 
@@ -100,6 +101,9 @@ describe('assistant inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+    const entitlementDb = vi.mocked(resolveOrganizationEntitlements).mock.calls.at(-1)?.[1];
+    expect(entitlementDb).not.toBe(db);
+    expect(entitlementDb).toEqual(expect.objectContaining({ $queryRaw: expect.any(Function) }));
   });
 
   // WHA-278 — departments are tenant-configured rows behind a composite foreign

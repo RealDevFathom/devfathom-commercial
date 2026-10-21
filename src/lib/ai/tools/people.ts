@@ -710,7 +710,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
 
         const updated = await h.db.$transaction(async (tx) => {
           if (!occupiesSeat(before.status)) {
-            const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, h.db);
+            const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, tx);
             await lockOrganizationSeat(tx, ctx.organizationId, entitlements.seatLimit);
           }
           return tx.user.update({
@@ -787,7 +787,7 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           where: { email: lowerEmail },
           select: { id: true, status: true },
         });
-        if (existing && existing.status !== 'INVITED') {
+        if (existing && existing.status !== 'INVITED' && existing.status !== 'INACTIVE') {
           return { error: 'A user with this email already exists.' };
         }
 
@@ -804,10 +804,8 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         };
 
         const user = await h.db.$transaction(async (tx) => {
-          if (!existing) {
-            const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, h.db);
-            await lockOrganizationSeat(tx, ctx.organizationId, entitlements.seatLimit);
-          }
+          const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, tx);
+          await lockOrganizationSeat(tx, ctx.organizationId, entitlements.seatLimit, existing?.id);
           const u = existing
             ? await tx.user.update({
                 where: { id: existing.id },
