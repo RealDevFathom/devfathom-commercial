@@ -14,14 +14,27 @@ vi.mock('@/lib/webhooks/safe-url', () => ({
 import {
   CLAIM_SQL,
   DELIVERED_RETENTION_MS,
+  DUE_ORGANIZATIONS_SQL,
   MAX_ATTEMPTS,
+  SCRUB_DEAD_EMAIL_SQL,
+  STALE_CLAIM_MS,
   claimEffects,
+  drainDueOrganizations,
   failureDisposition,
+  listDueOrganizationIds,
   recordOutcome,
   retainDelivered,
   requeueStale,
   runEffect,
+  scrubDeadEmailPayload,
 } from './drain';
+
+const tenancy = vi.hoisted(() => ({
+  withPlatformDb: vi.fn(),
+  withTenantDb: vi.fn(),
+}));
+
+vi.mock('@/lib/tenancy/scoped-db', () => tenancy);
 
 describe('outbound effect delivery', () => {
   beforeEach(() => {
@@ -165,19 +178,59 @@ describe('outbound effect worker', () => {
     });
 
     await retainDelivered(db as never, now);
-    expect(deleteMany).toHaveBeenCalledWith({
-      where: { status: 'DONE', updatedAt: { lt: new Date(now - DELIVERED_RETENTION_MS) } },
+    const cutoff = new Date(now - DELIVERED_RETENTION_MS);
+    expect(deleteMany).toHaveBeenNthCalledWith(1, {
+      where: { status: 'DONE', updatedAt: { lt: cutoff } },
     });
+    expect(deleteMany).toHaveBeenNthCalledWith(2, {
+      where: { status: 'DEAD', updatedAt: { lt: cutoff } },
+    });
+    expect(deleteMany).toHaveBeenNthCalledWith(3, {
+      where: { status: 'FAILED', updatedAt: { lt: cutoff } },
+    });
+  });
+
+  it('scrubs the recipient email, name, and HTML when an email is dead-lettered', async () => {
+    const now = Date.parse('2026-10-21T00:00:00Z');
+    const update = vi.fn(async () => ({}));
+    const payload = {
+      to: { email: 'person@example.com', name: 'Person' },
+      subject: 'Assigned',
+      html: '<p>secret</p>',
+      text: 'hi',
+    };
+    await recordOutcome(
+      { outboundEffect: { update } } as never,
+      { id: 'effect_email_dead', attempts: MAX_ATTEMPTS, kind: 'email', payload },
+      { ok: false, error: 'Delivery failed' },
+      now
+    );
+    expect(update).toHaveBeenCalledWith({
+      where: { id: 'effect_email_dead' },
+      data: {
+        status: 'DEAD',
+        lastError: 'Delivery failed',
+        availableAt: new Date(now),
+        payload: scrubDeadEmailPayload(payload),
+      },
+    });
+    expect(JSON.stringify(scrubDeadEmailPayload(payload))).not.toMatch(
+      /person@example.com|Person|<p>secret<\/p>/
+    );
   });
 
   it('returns a stale claim to the queue until the attempt cap', async () => {
     const now = Date.parse('2026-10-21T00:00:00Z');
     const updateMany = vi.fn(async () => ({ count: 1 }));
-    await requeueStale({ outboundEffect: { updateMany } } as never, now);
+    const execute = vi.fn(async () => 0);
+    await requeueStale(
+      { outboundEffect: { updateMany }, $executeRawUnsafe: execute } as never,
+      now
+    );
     expect(updateMany).toHaveBeenNthCalledWith(1, {
       where: {
         status: 'PROCESSING',
-        updatedAt: { lt: new Date(now - 2 * 60 * 1000) },
+        updatedAt: { lt: new Date(now - STALE_CLAIM_MS) },
         attempts: { gte: MAX_ATTEMPTS },
       },
       data: { status: 'DEAD' },
@@ -185,10 +238,46 @@ describe('outbound effect worker', () => {
     expect(updateMany).toHaveBeenNthCalledWith(2, {
       where: {
         status: 'PROCESSING',
-        updatedAt: { lt: new Date(now - 2 * 60 * 1000) },
+        updatedAt: { lt: new Date(now - STALE_CLAIM_MS) },
         attempts: { lt: MAX_ATTEMPTS },
       },
       data: { status: 'PENDING', availableAt: new Date(now) },
     });
+    expect(STALE_CLAIM_MS).toBe(5 * 60 * 1000);
+    expect(execute).toHaveBeenCalledWith(SCRUB_DEAD_EMAIL_SQL);
+  });
+
+  it('lists due organizations and drains each one under tenant scope', async () => {
+    const query = vi.fn(async () => [{ organizationId: 'org_a' }, { organizationId: 'org_b' }]);
+    await expect(listDueOrganizationIds(query)).resolves.toEqual(['org_a', 'org_b']);
+    expect(query).toHaveBeenCalledWith(DUE_ORGANIZATIONS_SQL, STALE_CLAIM_MS);
+    expect(DUE_ORGANIZATIONS_SQL).toContain(`status = 'PENDING'`);
+    expect(DUE_ORGANIZATIONS_SQL).toContain(`status = 'PROCESSING'`);
+
+    tenancy.withPlatformDb.mockImplementation(async (run: (db: unknown) => Promise<unknown>) =>
+      run({ $queryRawUnsafe: query })
+    );
+    tenancy.withTenantDb.mockImplementation(
+      async (_org: string, run: (db: unknown) => Promise<unknown>) =>
+        run({
+          outboundEffect: {
+            updateMany: async () => ({ count: 0 }),
+            deleteMany: async () => ({ count: 0 }),
+          },
+          $executeRawUnsafe: async () => 0,
+          $queryRawUnsafe: async () => [],
+        })
+    );
+    await expect(drainDueOrganizations()).resolves.toEqual({ organizations: 2 });
+    expect(tenancy.withTenantDb).toHaveBeenCalledWith(
+      'org_a',
+      expect.any(Function),
+      expect.objectContaining({ skipDrain: true })
+    );
+    expect(tenancy.withTenantDb).toHaveBeenCalledWith(
+      'org_b',
+      expect.any(Function),
+      expect.objectContaining({ skipDrain: true })
+    );
   });
 });

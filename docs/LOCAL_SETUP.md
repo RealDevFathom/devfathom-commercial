@@ -31,6 +31,7 @@ PLATFORM_BASE_DOMAIN=localhost
 PLATFORM_ENCRYPTION_KEY=<32-byte-base64-or-64-character-hex-key>
 PLATFORM_ADMIN_EMAIL=<local-platform-email>
 PLATFORM_ADMIN_PASSWORD=<strong-local-password>
+# Bearer for platform jobs and POST /api/cron/outbound-effects (intended schedule: every minute).
 CRON_SECRET=<random-secret>
 
 DEFAULT_ORGANIZATION_ID=org_devfathom

@@ -1,4 +1,4 @@
-import { createHmac } from 'node:crypto';
+import { createHmac, randomBytes } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
 import { env as runtimeEnv } from 'node:process';
 
@@ -49,7 +49,12 @@ type RateLimitEnv = {
   CLIENT_IP_HEADER?: string;
   TRUSTED_PROXY_CIDRS?: string;
   TRUSTED_PROXY_HOPS?: string;
+  RATE_LIMIT_HMAC_SECRET?: string;
+  AUTH_SECRET?: string;
 };
+
+/** Non-production processes may rate-limit without a configured secret. The value is not a credential. */
+const devRateLimitHmacFallback = randomBytes(32).toString('hex');
 
 export function rateLimitBackend(env: RateLimitEnv = runtimeEnv): 'memory' | 'postgres' {
   if (env.NODE_ENV === 'production' && env.VITEST !== 'true') return 'postgres';
@@ -137,12 +142,27 @@ async function postgresRateLimit(
   }
 }
 
-function rateLimitHmacSecret(): string {
-  const env = runtimeEnv as NodeJS.ProcessEnv & {
-    RATE_LIMIT_HMAC_SECRET?: string;
-    AUTH_SECRET?: string;
-  };
-  return env.RATE_LIMIT_HMAC_SECRET?.trim() || env.AUTH_SECRET?.trim() || 'devfathom-rate-limit';
+function rateLimitHmacSecret(env: RateLimitEnv = runtimeEnv): string {
+  const secret = env.RATE_LIMIT_HMAC_SECRET?.trim() || env.AUTH_SECRET?.trim();
+  if (secret) return secret;
+  if (env.NODE_ENV === 'production') {
+    throw new Error('Refusing to rate-limit: set RATE_LIMIT_HMAC_SECRET or AUTH_SECRET.');
+  }
+  return devRateLimitHmacFallback;
+}
+
+/**
+ * Production must HMAC rate-limit keys. A missing secret would either store raw
+ * addresses and emails or sign every bucket with a value an attacker can read.
+ * Development and test keep an ephemeral process fallback.
+ */
+export function assertProductionRateLimitHmacSecret(env: RateLimitEnv = runtimeEnv): void {
+  if (env.NODE_ENV !== 'production') return;
+  if (env.NEXT_PHASE === 'phase-production-build') return;
+  if (env.RATE_LIMIT_HMAC_SECRET?.trim() || env.AUTH_SECRET?.trim()) return;
+  throw new Error(
+    'Refusing to start: set RATE_LIMIT_HMAC_SECRET or AUTH_SECRET. Production rate-limit keys must be HMAC-signed so raw addresses and emails are not stored.'
+  );
 }
 
 /** Bucket identity stored in memory and Postgres. The raw address or email is not kept. */

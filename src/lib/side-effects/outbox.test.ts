@@ -93,7 +93,10 @@ describe('tenant transaction side effects', () => {
           expect.objectContaining({
             kind: 'webhook',
             status: 'PENDING',
-            payload: expect.not.objectContaining({ secret: expect.anything() }),
+            payload: expect.not.objectContaining({
+              secret: expect.anything(),
+              url: expect.anything(),
+            }),
           }),
         ],
       })
@@ -103,6 +106,7 @@ describe('tenant transaction side effects', () => {
     );
     expect(webhookWrite?.[0].data[0].payload).toMatchObject({ webhookId: 'webhook_1' });
     expect(webhookWrite?.[0].data[0].payload).not.toHaveProperty('secret');
+    expect(webhookWrite?.[0].data[0].payload).not.toHaveProperty('url');
     expect(mocks.sendEmail).not.toHaveBeenCalled();
     expect(mocks.deliver).not.toHaveBeenCalled();
     expect(mocks.drain).toHaveBeenCalledWith('org_1');

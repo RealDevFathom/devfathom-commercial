@@ -5,7 +5,8 @@ import { sendEmail } from '@/lib/email';
 import { deliverWebhookRequest } from '@/lib/webhooks/safe-url';
 
 const BATCH = 25;
-const STALE_MS = 2 * 60 * 1000;
+/** A claimed row stays locked to this worker until delivery finishes. Five minutes covers a full batch. */
+export const STALE_CLAIM_MS = 5 * 60 * 1000;
 const WEBHOOK_TIMEOUT_MS = 5_000;
 export const MAX_ATTEMPTS = 5;
 const BACKOFF_BASE_MS = 30_000;
@@ -31,6 +32,29 @@ FROM picked
 WHERE effect.id = picked.id
 RETURNING effect.id, effect.kind, effect.payload, effect.attempts`;
 
+/** Organizations with work the per-tenant drain should pick up, including claims older than the stale window. */
+export const DUE_ORGANIZATIONS_SQL = `SELECT DISTINCT "organizationId"
+FROM "outbound_effects"
+WHERE (status = 'PENDING' AND "availableAt" <= NOW())
+   OR (status = 'PROCESSING' AND "updatedAt" <= NOW() - ($1::int * INTERVAL '1 millisecond'))`;
+
+/** Drop recipient email, name, and HTML from dead-lettered email rows. Other fields stay for diagnosis. */
+export const SCRUB_DEAD_EMAIL_SQL = `UPDATE "outbound_effects"
+SET payload = CASE
+  WHEN jsonb_typeof(payload->'to') = 'object'
+    THEN jsonb_set(payload - 'html', '{to}', (payload->'to') - 'email' - 'name', true)
+  ELSE payload - 'html'
+END
+WHERE kind = 'email'
+  AND status = 'DEAD'
+  AND (
+    payload ? 'html'
+    OR (
+      jsonb_typeof(payload->'to') = 'object'
+      AND ((payload->'to') ? 'email' OR (payload->'to') ? 'name')
+    )
+  )`;
+
 type EffectRow = {
   id: string;
   kind: string;
@@ -55,6 +79,7 @@ export type EffectOutcome = {
 
 type EffectDb = {
   $queryRawUnsafe: <T>(sql: string, ...params: unknown[]) => Promise<T>;
+  $executeRawUnsafe: (sql: string, ...params: unknown[]) => Promise<unknown>;
   outboundEffect: {
     update: (args: {
       where: { id: string };
@@ -62,6 +87,7 @@ type EffectDb = {
         status: string;
         lastError?: string | null;
         availableAt?: Date;
+        payload?: Prisma.InputJsonValue;
       };
     }) => Promise<unknown>;
     updateMany: (args: {
@@ -96,6 +122,21 @@ export function failureDisposition(
 
 export function deliveredRetentionCutoff(now = Date.now()): Date {
   return new Date(now - DELIVERED_RETENTION_MS);
+}
+
+/** Remove the recipient email, name, and HTML from a dead-lettered email payload. */
+export function scrubDeadEmailPayload(payload: Prisma.JsonValue): Prisma.InputJsonValue {
+  const record = asRecord(payload) ?? {};
+  const next: Record<string, unknown> = { ...record };
+  delete next.html;
+  const to = asRecord(next.to);
+  if (to) {
+    const rest = { ...to };
+    delete rest.email;
+    delete rest.name;
+    next.to = rest;
+  }
+  return next as Prisma.InputJsonValue;
 }
 
 /**
@@ -183,7 +224,7 @@ async function runWebhook(
 }
 
 export async function requeueStale(db: EffectDb, now = Date.now()): Promise<void> {
-  const staleBefore = new Date(now - STALE_MS);
+  const staleBefore = new Date(now - STALE_CLAIM_MS);
   await db.outboundEffect.updateMany({
     where: {
       status: 'PROCESSING',
@@ -200,11 +241,19 @@ export async function requeueStale(db: EffectDb, now = Date.now()): Promise<void
     },
     data: { status: 'PENDING', availableAt: new Date(now) },
   });
+  await db.$executeRawUnsafe(SCRUB_DEAD_EMAIL_SQL);
 }
 
 export async function retainDelivered(db: EffectDb, now = Date.now()): Promise<void> {
+  const cutoff = deliveredRetentionCutoff(now);
   await db.outboundEffect.deleteMany({
-    where: { status: 'DONE', updatedAt: { lt: deliveredRetentionCutoff(now) } },
+    where: { status: 'DONE', updatedAt: { lt: cutoff } },
+  });
+  await db.outboundEffect.deleteMany({
+    where: { status: 'DEAD', updatedAt: { lt: cutoff } },
+  });
+  await db.outboundEffect.deleteMany({
+    where: { status: 'FAILED', updatedAt: { lt: cutoff } },
   });
 }
 
@@ -215,7 +264,7 @@ export async function claimEffects(db: EffectDb): Promise<EffectRow[]> {
 
 export async function recordOutcome(
   db: EffectDb,
-  row: Pick<EffectRow, 'id' | 'attempts'>,
+  row: Pick<EffectRow, 'id' | 'attempts'> & Partial<Pick<EffectRow, 'kind' | 'payload'>>,
   outcome: EffectOutcome,
   now = Date.now()
 ): Promise<void> {
@@ -228,10 +277,44 @@ export async function recordOutcome(
     const next = failureDisposition(row.attempts, now);
     await db.outboundEffect.update({
       where: { id: row.id },
-      data: { status: next.status, lastError: outcome.error, availableAt: next.availableAt },
+      data: {
+        status: next.status,
+        lastError: outcome.error,
+        availableAt: next.availableAt,
+        ...(next.status === 'DEAD' && row.kind === 'email'
+          ? { payload: scrubDeadEmailPayload(row.payload ?? null) }
+          : {}),
+      },
     });
   }
   if (outcome.delivery) await db.webhookDelivery.create({ data: outcome.delivery });
+}
+
+export async function listDueOrganizationIds(
+  query: (sql: string, staleMs: number) => Promise<Array<{ organizationId: string }>>
+): Promise<string[]> {
+  const rows = await query(DUE_ORGANIZATIONS_SQL, STALE_CLAIM_MS);
+  return rows.map((row) => row.organizationId).filter((id) => id.length > 0);
+}
+
+/**
+ * Drain every organization with due or stale outbox work. Retries must not wait
+ * for that organization's next enqueue. Platform admin lists the ids; each drain
+ * runs under that tenant's row level security.
+ */
+export async function drainDueOrganizations(): Promise<{ organizations: number }> {
+  const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+  const organizationIds = await withPlatformDb((db) =>
+    listDueOrganizationIds((sql, staleMs) =>
+      db.$queryRawUnsafe<Array<{ organizationId: string }>>(sql, staleMs)
+    )
+  );
+  for (const organizationId of organizationIds) {
+    await drainOrganization(organizationId).catch((error) => {
+      console.error('[side-effects] drain failed', error instanceof Error ? error.name : 'error');
+    });
+  }
+  return { organizations: organizationIds.length };
 }
 
 /**
