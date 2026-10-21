@@ -1659,32 +1659,89 @@ export function exclusiveTaxOutsideOrderTotal(evidence: SettlementTaxEvidence): 
   return ZERO;
 }
 
-/** Frozen exclusive tax per bill. Reversals are ignored: they do not rewrite grandTotal. */
+/** One frozen tax snapshot, including whether a later row reversed it. */
+export type SettlementTaxSnapshot = {
+  id: string;
+  billId: string | null;
+  settledAt: Date;
+  createdAt: Date;
+  reversesSnapshotId: string | null;
+  /** Rows whose reversesSnapshotId points at this snapshot. */
+  reversals: readonly { id: string }[];
+  taxTotal: Prisma.Decimal;
+  buckets: readonly { priceMode: string; taxAmount: Prisma.Decimal }[];
+  profile: { rules: readonly { priceMode: string }[] };
+};
+
+function settlementSnapshotIsNewer(
+  candidate: SettlementTaxSnapshot,
+  current: SettlementTaxSnapshot
+): boolean {
+  const settled = candidate.settledAt.getTime() - current.settledAt.getTime();
+  if (settled !== 0) return settled > 0;
+  const created = candidate.createdAt.getTime() - current.createdAt.getTime();
+  if (created !== 0) return created > 0;
+  return candidate.id > current.id;
+}
+
+/**
+ * Exclusive tax to subtract per bill. A reversal row is not a freeze, and a
+ * snapshot that another row reverses is stale. A reversed freeze plus a later
+ * re-freeze would otherwise subtract the same exclusive tax twice and fail the
+ * order identity. Only the latest snapshot that is still in force counts.
+ */
+export function exclusiveTaxFromSettlementSnapshots(
+  snapshots: readonly SettlementTaxSnapshot[]
+): Map<string, Prisma.Decimal> {
+  const reversedIds = new Set<string>();
+  for (const snapshot of snapshots) {
+    if (snapshot.reversesSnapshotId) reversedIds.add(snapshot.reversesSnapshotId);
+    if (snapshot.reversals.length > 0) reversedIds.add(snapshot.id);
+  }
+  const latest = new Map<string, SettlementTaxSnapshot>();
+  for (const snapshot of snapshots) {
+    if (!snapshot.billId || snapshot.reversesSnapshotId !== null) continue;
+    if (reversedIds.has(snapshot.id)) continue;
+    const current = latest.get(snapshot.billId);
+    if (!current || settlementSnapshotIsNewer(snapshot, current)) {
+      latest.set(snapshot.billId, snapshot);
+    }
+  }
+  const totals = new Map<string, Prisma.Decimal>();
+  for (const [billId, snapshot] of latest) {
+    totals.set(
+      billId,
+      exclusiveTaxOutsideOrderTotal({
+        taxTotal: snapshot.taxTotal,
+        buckets: snapshot.buckets,
+        rulePriceModes: snapshot.profile.rules.map((rule) => rule.priceMode),
+      })
+    );
+  }
+  return totals;
+}
+
+/** Frozen exclusive tax per bill, from the latest snapshot that has not been reversed. */
 async function exclusiveTaxByLiveBill(
   tx: ScopedDb,
   billIds: readonly string[]
 ): Promise<Map<string, Prisma.Decimal>> {
-  const totals = new Map<string, Prisma.Decimal>();
-  if (billIds.length === 0) return totals;
+  if (billIds.length === 0) return new Map();
   const snapshots = await tx.restaurantTaxTransactionSnapshot.findMany({
-    where: { billId: { in: [...billIds] }, reversesSnapshotId: null },
+    where: { billId: { in: [...billIds] } },
     select: {
+      id: true,
       billId: true,
+      settledAt: true,
+      createdAt: true,
+      reversesSnapshotId: true,
+      reversals: { select: { id: true }, take: 1 },
       taxTotal: true,
       buckets: { select: { priceMode: true, taxAmount: true } },
       profile: { select: { rules: { select: { priceMode: true } } } },
     },
   });
-  for (const snapshot of snapshots) {
-    if (!snapshot.billId) continue;
-    const exclusive = exclusiveTaxOutsideOrderTotal({
-      taxTotal: snapshot.taxTotal,
-      buckets: snapshot.buckets,
-      rulePriceModes: snapshot.profile.rules.map((rule) => rule.priceMode),
-    });
-    totals.set(snapshot.billId, add(totals.get(snapshot.billId) ?? ZERO, exclusive));
-  }
-  return totals;
+  return exclusiveTaxFromSettlementSnapshots(snapshots);
 }
 
 export async function evaluateOrderSettlement(

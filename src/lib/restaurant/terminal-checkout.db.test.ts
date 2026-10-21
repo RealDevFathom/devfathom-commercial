@@ -255,6 +255,7 @@ beforeAll(async () => {
     import('@/app/api/restaurant/cash/day/correct/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/orders/close/route'),
   ]);
 
   const [
@@ -274,6 +275,7 @@ beforeAll(async () => {
     dayCorrect,
     establish,
     unlock,
+    orderClose,
   ] = routeMods as RouteModule[];
 
   deps = {
@@ -297,6 +299,7 @@ beforeAll(async () => {
       dayCurrent,
       dayClose,
       dayCorrect,
+      orderClose,
     },
     terminal: { establish, unlock },
   };
@@ -889,6 +892,92 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         grandTotal: '138.00',
         remainingDue: '0.00',
       });
+    });
+
+    it('leaves the bill open and refuses order close when only the pre-tax amount is paid', async () => {
+      const token = await establishUnlock(ctx.posTax.secret, ctx.staffA, ctx.branchTax);
+      const drawer = await call(deps.routes.drawerOpen, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-open'),
+        body: { openingFloat: '0.00' },
+      });
+      if (drawer.status !== 200) {
+        expect(JSON.stringify(drawer.json)).toMatch(/already has an open drawer/);
+      }
+
+      const { orderId } = await seedOrder(ctx.branchTax, ctx.posTax.deviceId, TODAY, ['970.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      expect(cut.status, JSON.stringify(cut.json)).toBe(200);
+      const billId = (cut.json.billIds as string[])[0]!;
+
+      const partial = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay'),
+        body: {
+          billId,
+          tender: { type: 'CASH', amount: '970.00', cashReceived: '1000.00' },
+        },
+      });
+      expect(partial.status, JSON.stringify(partial.json)).toBe(200);
+      expect(partial.json.settled).toBe(false);
+      eqMoney(partial.json.remainingDue, '145.50');
+
+      const summary = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId },
+      });
+      expect(summary.status, JSON.stringify(summary.json)).toBe(200);
+      expect(summary.json.settled).toBe(false);
+      expect(summary.json.blocker).toBe('BILLS_OPEN');
+      const bill = (summary.json.bills as Record<string, unknown>[])[0]!;
+      expect(bill.status).toBe('OPEN');
+      eqMoney(bill.remainingDue, '145.50');
+
+      // SERVED → PAYMENT_PENDING parks an unsettled order. Closing that pending
+      // order is the refusal: the bill is still short the exclusive tax.
+      const parked = await call(deps.routes.orderClose, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-park'),
+        body: { orderId },
+      });
+      expect(parked.status, JSON.stringify(parked.json)).toBe(200);
+      const pending = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+      );
+      expect(pending?.status).toBe('PAYMENT_PENDING');
+
+      const refused = await call(deps.routes.orderClose, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-close'),
+        body: { orderId },
+      });
+      expect(refused.status, JSON.stringify(refused.json)).toBe(400);
+      expect(refused.json.error).toBe(
+        'The order cannot close until it is fully settled (BILLS_OPEN).'
+      );
+      const stillOpen = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+      );
+      expect(stillOpen?.status).toBe('PAYMENT_PENDING');
+      const afterRefusal = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId },
+      });
+      expect(afterRefusal.status).toBe(200);
+      expect((afterRefusal.json.bills as Record<string, unknown>[])[0]?.status).toBe('OPEN');
     });
   });
 
