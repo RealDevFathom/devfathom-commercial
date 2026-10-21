@@ -24,6 +24,8 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
   beforeAll(async () => {
     owner = new pg.Client({ connectionString: ownerUrl });
     await owner.connect();
+    // Keep platform scope on this dedicated fixture connection across autocommitted seed queries.
+    await owner.query("SELECT set_config('app.is_platform_admin', 'true', false)");
     tenancy = await import('@/lib/tenancy/scoped-db');
     audit = await import('@/server/audit');
     reports = await import('@/lib/restaurant/reports');
