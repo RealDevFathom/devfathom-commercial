@@ -266,10 +266,9 @@ export default async function NewOrganizationPage({
               },
               {
                 name: 'seatLimit',
-                label: 'Seat limit',
+                label: 'Seat limit override',
                 type: 'number',
-                required: true,
-                defaultValue: packages[0]?.defaultSeats ?? 5,
+                help: 'Leave blank to use the selected commercial package’s default seats.',
                 min: 1,
                 max: 100000,
               },
