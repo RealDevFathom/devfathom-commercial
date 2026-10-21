@@ -155,12 +155,10 @@ export async function handleInboundText(input: {
         now: input.now,
       });
     } else {
-      const created = await input.store.createCustomer({
+      const created = await input.store.upsertOptOutByPhone({
         organizationId: input.organizationId,
         displayName: input.fromE164,
         whatsappE164: input.fromE164,
-        whatsappOptIn: false,
-        whatsappOptInAt: null,
         whatsappOptOutAt: input.now,
       });
       customerId = created.id;

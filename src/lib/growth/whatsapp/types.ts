@@ -95,6 +95,13 @@ export type GrowthWhatsAppStore = {
   createCustomer(
     input: Omit<CustomerWrite, 'id'> & { displayName: string | null }
   ): Promise<GrowthCustomer>;
+  /** Insert or update the opt-out for this phone. A concurrent STOP must not surface P2002. */
+  upsertOptOutByPhone(input: {
+    organizationId: string;
+    displayName: string | null;
+    whatsappE164: string;
+    whatsappOptOutAt: Date;
+  }): Promise<GrowthCustomer>;
   queuedMessages(organizationId: string, limit: number): Promise<MessageLogRow[]>;
   /** Commits a queued row to `sending` so a later rollback cannot return it to the queue. */
   claimQueued(organizationId: string, id: string): Promise<MessageLogRow | null>;

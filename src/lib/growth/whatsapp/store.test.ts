@@ -176,4 +176,46 @@ describe('growth WhatsApp Prisma adapter', () => {
       },
     });
   });
+
+  it('upserts a STOP by phone when a concurrent insert already took the number', async () => {
+    const phone = '+923001234567';
+    const optedOutAt = new Date('2026-10-21T05:00:00.000Z');
+    const winner = {
+      id: 'c-won',
+      organizationId: 'org_1',
+      displayName: phone,
+      whatsappE164: phone,
+      whatsappOptIn: false,
+      whatsappOptInAt: null,
+      whatsappOptOutAt: optedOutAt,
+    };
+    const calls: string[] = [];
+    const db = {
+      organization: {
+        findUnique: async () => ({ timezone: 'Asia/Karachi', displayName: 'Sehat Pharmacy' }),
+      },
+      growthWaCustomer: {
+        upsert: async () => {
+          calls.push('upsert');
+          throw Object.assign(new Error('unique'), { code: 'P2002' });
+        },
+        findFirst: async () => {
+          calls.push('findFirst');
+          return winner;
+        },
+        updateMany: async () => {
+          calls.push('updateMany');
+          return { count: 1 };
+        },
+      },
+    };
+    const saved = await growthStore(db).upsertOptOutByPhone({
+      organizationId: 'org_1',
+      displayName: phone,
+      whatsappE164: phone,
+      whatsappOptOutAt: optedOutAt,
+    });
+    expect(saved).toMatchObject({ id: 'c-won', whatsappOptIn: false, whatsappE164: phone });
+    expect(calls).toEqual(['upsert', 'findFirst', 'updateMany', 'findFirst']);
+  });
 });

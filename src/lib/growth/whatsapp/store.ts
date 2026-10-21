@@ -165,6 +165,15 @@ function rows(value: unknown): unknown[] {
   return Array.isArray(value) ? value : [];
 }
 
+function isUniqueConflict(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
+}
+
 /**
  * Maps the growth store onto the WhatsApp Prisma delegates:
  * `growthWaSettings`, `growthWaCustomer`, `growthWaMessage`, `growthWaTemplate`.
@@ -263,6 +272,53 @@ export function growthStore(db: object): GrowthWhatsAppStore {
       const customer = asCustomer(created);
       if (!customer) throw new Error('Customer not found.');
       return customer;
+    },
+    async upsertOptOutByPhone(input) {
+      const where = {
+        organizationId_whatsappE164: {
+          organizationId: input.organizationId,
+          whatsappE164: input.whatsappE164,
+        },
+      };
+      try {
+        const saved = await call(customers().upsert, {
+          where,
+          create: {
+            organizationId: input.organizationId,
+            displayName: input.displayName,
+            whatsappE164: input.whatsappE164,
+            whatsappOptIn: false,
+            whatsappOptInAt: null,
+            whatsappOptOutAt: input.whatsappOptOutAt,
+          },
+          update: {
+            whatsappOptIn: false,
+            whatsappOptOutAt: input.whatsappOptOutAt,
+          },
+        });
+        const customer = asCustomer(saved);
+        if (!customer) throw new Error('Customer not found.');
+        return customer;
+      } catch (error) {
+        if (!isUniqueConflict(error)) throw error;
+        const existing = await call(customers().findFirst, {
+          where: { organizationId: input.organizationId, whatsappE164: input.whatsappE164 },
+        });
+        const found = asCustomer(existing);
+        if (!found) throw error;
+        const updated = await call(customers().updateMany, {
+          where: { id: found.id, organizationId: found.organizationId },
+          data: { whatsappOptIn: false, whatsappOptOutAt: input.whatsappOptOutAt },
+        });
+        if (!updated || updated.count !== 1) throw error;
+        const saved = asCustomer(
+          await call(customers().findFirst, {
+            where: { id: found.id, organizationId: found.organizationId },
+          })
+        );
+        if (!saved) throw error;
+        return saved;
+      }
     },
     async queuedMessages(organizationId, limit) {
       const found = await call(messages().findMany, {

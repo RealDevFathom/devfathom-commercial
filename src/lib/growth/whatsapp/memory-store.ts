@@ -86,6 +86,28 @@ export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
       customers.push(created);
       return created;
     },
+    async upsertOptOutByPhone(input) {
+      const existing = customers.find(
+        (row) =>
+          row.organizationId === input.organizationId && row.whatsappE164 === input.whatsappE164
+      );
+      if (existing) {
+        existing.whatsappOptIn = false;
+        existing.whatsappOptOutAt = input.whatsappOptOutAt;
+        return { ...existing };
+      }
+      const created: GrowthCustomer = {
+        id: nextId('cus'),
+        organizationId: input.organizationId,
+        displayName: input.displayName,
+        whatsappE164: input.whatsappE164,
+        whatsappOptIn: false,
+        whatsappOptInAt: null,
+        whatsappOptOutAt: input.whatsappOptOutAt,
+      };
+      customers.push(created);
+      return created;
+    },
     async claimQueued(organizationId, id) {
       const row = messages.find(
         (item) =>

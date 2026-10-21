@@ -1,5 +1,7 @@
 import type { GrowthWhatsAppStore, MessageTemplateRow } from '@/lib/growth/whatsapp/types';
 
+import { PROHIBITED_DRUG_NAMES } from './prohibited-drugs';
+
 export const TEMPLATE_KEYS = [
   'birthday_offer',
   'refill_reminder',
@@ -184,13 +186,49 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Case-insensitive whole-word match. Names shorter than 3 characters are ignored. */
+const DRUG_LEET: Record<string, string> = {
+  '0': 'o',
+  '1': 'i',
+  '3': 'e',
+  '4': 'a',
+  '5': 's',
+  '7': 't',
+  '@': 'a',
+  $: 's',
+  '!': 'i',
+};
+
+/** Lowercase, common leetspeak, then letters and digits only. */
+export function normalizeDrugName(value: string): string {
+  const folded = value.normalize('NFKC').toLowerCase();
+  let out = '';
+  for (const character of folded) out += DRUG_LEET[character] ?? character;
+  return out.replace(/[^\p{L}\p{N}]+/gu, '');
+}
+
+function foldDrugText(value: string): string {
+  const folded = value.normalize('NFKC').toLowerCase();
+  let out = '';
+  for (const character of folded) out += DRUG_LEET[character] ?? character;
+  return out;
+}
+
+/**
+ * Match after lowercase, stripped spacing and punctuation, common leetspeak,
+ * and a trailing plural. Names shorter than 3 characters are ignored. A longer
+ * word that merely starts with the name does not match.
+ */
 export function bodyNamesProhibitedDrug(body: string, names: readonly string[]): boolean {
-  const text = body.normalize('NFKC');
+  const text = foldDrugText(body);
   for (const raw of names) {
-    const name = raw.normalize('NFKC').trim();
+    const name = normalizeDrugName(raw);
     if (name.length < 3) continue;
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(name)}(?![\\p{L}\\p{N}])`, 'iu');
+    const letters = [...name].map((character) => escapeRegExp(character)).join('[^\\p{L}\\p{N}]*');
+    const plural =
+      /^[\p{Script=Latin}\p{N}]+$/u.test(name) && name.length >= 4 && !name.endsWith('s')
+        ? 's?'
+        : '';
+    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${letters}${plural}(?![\\p{L}\\p{N}])`, 'iu');
     if (pattern.test(text)) return true;
   }
   return false;
@@ -302,7 +340,9 @@ export async function assertMarketingCopyAllowed(
     if (error instanceof ProhibitedDrugInCopy) throw error;
     throw new ProhibitedDrugInCopy();
   }
-  if (bodyNamesProhibitedDrug(body, prohibitedNames(rows))) throw new ProhibitedDrugInCopy();
+  if (bodyNamesProhibitedDrug(body, [...prohibitedNames(rows), ...PROHIBITED_DRUG_NAMES])) {
+    throw new ProhibitedDrugInCopy();
+  }
 }
 
 export class UnknownTemplateVariable extends Error {
