@@ -505,6 +505,8 @@ export type CounterCartLine = {
   highAlert: boolean;
   lasa: boolean;
   coldChain: boolean;
+  /** An emergency controlled supply was recorded for this line (open follow-up). */
+  emergencySupply: boolean;
   /** What FEFO actually took, batch by batch (POS-03: cart shows allocation). */
   allocations: Array<{
     inventoryLotId: string;
@@ -568,6 +570,16 @@ export async function readCounterCart(
       })
     : [];
   const locationById = new Map(locations.map((location) => [location.id, location.code]));
+  const controlledLineIds = sale.lines
+    .filter((line) => line.medicine.controlled)
+    .map((line) => line.id);
+  const emergencyFollowUps = controlledLineIds.length
+    ? await db.pharmacyEmergencyRxFollowUp.findMany({
+        where: { organizationId: scope.organizationId, saleLineId: { in: controlledLineIds } },
+        select: { saleLineId: true },
+      })
+    : [];
+  const emergencyLineIds = new Set(emergencyFollowUps.map((row) => row.saleLineId));
 
   const lines: CounterCartLine[] = sale.lines.map((line) => {
     // The earliest expiry among this line's own allocations is what FEFO would
@@ -598,6 +610,7 @@ export async function readCounterCart(
       highAlert: line.medicine.highAlert,
       lasa: line.medicine.lasa,
       coldChain: line.medicine.coldChain,
+      emergencySupply: emergencyLineIds.has(line.id),
       allocations: line.allocations.map((allocation) => ({
         inventoryLotId: allocation.inventoryLotId,
         batchNumber: allocation.lot.batch.batchNumber,

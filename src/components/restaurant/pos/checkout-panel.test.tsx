@@ -26,6 +26,7 @@ const billed = {
       status: 'OPEN',
       splitKind: 'NONE',
       grandTotal: '24.00',
+      taxTotal: '0.00',
       remainingDue: '24.00',
       deliveryFeeTotal: '4.00',
       compTotal: '0.00',
@@ -52,6 +53,23 @@ describe('CheckoutPanel', () => {
       expect(screen.queryByText(/Outstanding balance unavailable/)).not.toBeInTheDocument();
     }
   );
+
+  it('discloses tax and prefills the tax remainder on an open partially paid bill', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({
+        ...billed,
+        bills: [
+          { ...billed.bills[0], grandTotal: '1115.50', taxTotal: '145.50', remainingDue: '145.50' },
+        ],
+      }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Tax')).toBeVisible();
+    expect(screen.getByText('Tax').nextElementSibling).toHaveTextContent('145.50');
+    expect(screen.getByText('Bill total').nextElementSibling).toHaveTextContent('1115.50');
+    expect(screen.getByLabelText('Amount')).toHaveValue('145.50');
+    expect(screen.getByLabelText('Cash received')).toHaveValue('145.50');
+  });
 
   it('keeps an absent balance unknown instead of falling back to the bill total', async () => {
     const request: TerminalRequest = async <T,>() =>

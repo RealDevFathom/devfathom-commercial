@@ -3,11 +3,13 @@ import { describe, expect, it } from 'vitest';
 import {
   ACCOUNT_INACTIVE_MESSAGE,
   SESSION_ENDED_MESSAGE,
+  TEMPORARY_PASSWORD_MESSAGE,
   WORKSPACE_UNAVAILABLE_MESSAGE,
   evaluateSessionUser,
   isSessionUsable,
   liveDemoAccessExpiry,
   signInRedirectPath,
+  temporaryPasswordBlocks,
   type SessionUserState,
 } from './session-state';
 
@@ -120,6 +122,23 @@ describe('evaluateSessionUser', () => {
   it('prefers the revocation claim over an otherwise-active status', () => {
     expect(isSessionUsable({ status: 'ACTIVE' })).toBe(true);
     expect(isSessionUsable({ status: 'ACTIVE', sessionRevoked: true })).toBe(false);
+  });
+});
+
+describe('temporaryPasswordBlocks', () => {
+  it('blocks every call except the password change while the flag is set', () => {
+    expect(TEMPORARY_PASSWORD_MESSAGE).toBe('Change your temporary password before continuing.');
+    expect(temporaryPasswordBlocks({ mustChangePassword: true }, 'team.updateProfile')).toBe(true);
+    expect(
+      temporaryPasswordBlocks({ mustChangePassword: true }, 'organizationAdmin.createMember')
+    ).toBe(true);
+    expect(temporaryPasswordBlocks({ mustChangePassword: true }, 'team.changePassword')).toBe(
+      false
+    );
+    expect(temporaryPasswordBlocks({ mustChangePassword: false }, 'team.updateProfile')).toBe(
+      false
+    );
+    expect(temporaryPasswordBlocks(undefined, 'team.updateProfile')).toBe(false);
   });
 });
 

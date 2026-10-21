@@ -26,6 +26,8 @@ export type CanOptions = {
 };
 
 function capabilityMatches(rule: string, action: string): boolean {
+  // Legacy pharmacy grants use a dot; normalize them at the decision point.
+  if (action.startsWith('pharmacy:')) rule = rule.replace(/^pharmacy\./, 'pharmacy:');
   if (rule === '*' || rule === action) return true;
   if (!rule.endsWith(':*')) return false;
   return action.startsWith(rule.slice(0, -1));
