@@ -25,6 +25,19 @@ const publicPaths = [
   '/wallet',
 ];
 
+/**
+ * A public path covers itself and what lies under it, never a longer sibling:
+ * `/pos` and `/pos/x` are public, `/positions` is not. An entry that already
+ * ends in `/` (`/meet/`) covers only what lies under it, as before.
+ */
+function isPublicPath(pathname: string): boolean {
+  return publicPaths.some((path) =>
+    path.endsWith('/')
+      ? pathname.startsWith(path)
+      : pathname === path || pathname.startsWith(`${path}/`)
+  );
+}
+
 export async function proxy(request: Request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
@@ -124,11 +137,7 @@ export async function proxy(request: Request) {
   }
 
   // Allow public paths
-  if (
-    pathname === '/demo' ||
-    pathname.startsWith('/demo/') ||
-    publicPaths.some((path) => pathname.startsWith(path))
-  ) {
+  if (pathname === '/demo' || pathname.startsWith('/demo/') || isPublicPath(pathname)) {
     return next();
   }
 
