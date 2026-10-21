@@ -461,7 +461,7 @@ export function CounterReceiptView({
         aria-label={receiptTitle(receipt, locale)}
         lang={language}
         dir={direction}
-        className={`space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
+        className={`w-full min-w-0 break-words space-y-4 rounded-lg border border-border-subtle bg-surface-card p-5 outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
           format === 'THERMAL_58'
             ? 'max-w-[16rem] font-mono text-xs'
             : format === 'THERMAL'
@@ -499,7 +499,7 @@ export function CounterReceiptView({
             }
             return (
               <li key={line.saleLineId} className="space-y-0.5 py-2">
-                <div className="flex justify-between gap-3">
+                <div className="flex min-w-0 flex-wrap justify-between gap-3">
                   <span className="min-w-0 break-words text-text-strong">
                     {counterLinePresentation(line, locale).identity}
                   </span>
@@ -566,7 +566,7 @@ export function CounterReceiptView({
               [strings.change, receipt.totals.changeMinor],
             ] as const
           ).map(([label, value]) => (
-            <div key={label} className="flex justify-between gap-3">
+            <div key={label} className="flex min-w-0 flex-wrap justify-between gap-3">
               <dt className="text-text-muted">{label}</dt>
               <dd className="tabular-nums text-text-strong">{formatMinor(value)}</dd>
             </div>
@@ -577,7 +577,7 @@ export function CounterReceiptView({
           <div className="space-y-1 border-t border-border-subtle pt-3">
             <p className="text-text-muted">{strings.tenders}</p>
             {receipt.tenders.map((tender) => (
-              <div key={tender.tenderId} className="flex justify-between gap-3">
+              <div key={tender.tenderId} className="flex min-w-0 flex-wrap justify-between gap-3">
                 <span className="text-text-strong">{tender.type}</span>
                 <span className="tabular-nums text-text-strong">
                   {formatMinor(tender.amountMinor)}

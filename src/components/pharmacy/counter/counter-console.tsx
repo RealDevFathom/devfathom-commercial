@@ -1,5 +1,6 @@
 'use client';
 
+import { KhataCollectionForm } from './khata-collection-form';
 import { browserUuid } from '@/lib/browser-uuid';
 
 import { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
@@ -1118,6 +1119,7 @@ function ScopedPharmacyCounterConsole({
         cashReceivedMinor?: number;
         familyAccountId?: string;
         ownerOverride?: boolean;
+      overrideReason?: string;
       },
       draft: TenderDraft
     ): Promise<CounterTenderResult> => {
@@ -1162,7 +1164,7 @@ function ScopedPharmacyCounterConsole({
             ? `counter-tender:${saleId}:${input.type}:${browserUuid()}`
             : `counter-tender:${saleId}:${input.type}:${input.amountMinor}`,
           ...(input.familyAccountId
-            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride }
+            ? { familyAccountId: input.familyAccountId, ownerOverride: input.ownerOverride, overrideReason: input.overrideReason }
             : {}),
         };
         const original: TenderAttempt = { version: 1, scope: recoveryScope, input: payload, draft };
@@ -2211,6 +2213,11 @@ function ScopedPharmacyCounterConsole({
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
                 </div>
+                <KhataCollectionForm accounts={customerQuery.data.khataAccounts ?? []} disabled={busy}
+                  onCollect={async input => {
+                    await utils.client.pharmacySales.settleFamilyKhata.mutate({ branchId, ...input });
+                    await customerQuery.refetch();
+                  }} />
                 <div className="flex gap-2">
                   <Label htmlFor="counter-redeem-points" className="sr-only">
                     Points to redeem

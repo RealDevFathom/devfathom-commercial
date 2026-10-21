@@ -35,6 +35,7 @@ const storedSchema = z
         idempotencyKey: z.string().trim().min(1).max(160),
         familyAccountId: id.optional(),
         ownerOverride: z.boolean().optional(),
+        overrideReason: z.string().trim().min(3).max(500).optional(),
       })
       .strict(),
     draft: z.object({ amount: amountText, cashReceived: amountText }).strict(),
