@@ -150,11 +150,31 @@ describe('organization member updates', () => {
   it('allows an admin demotion when another active admin remains', async () => {
     mocks.userCount.mockResolvedValue(1);
 
-    await expect(caller().updateMember(updateInput)).resolves.toMatchObject({
+    mocks.userUpdate.mockImplementation(async ({ select }) => {
+      const stored = {
+        id: 'admin_a',
+        email: 'admin@example.com',
+        role: 'EMPLOYEE',
+        status: 'ACTIVE',
+        password: 'bcrypt-secret',
+      };
+      return Object.fromEntries(
+        Object.keys(select).map((key) => [key, stored[key as keyof typeof stored]])
+      );
+    });
+
+    const response = await caller().updateMember(updateInput);
+    expect(response).toMatchObject({
       id: 'admin_a',
       role: 'EMPLOYEE',
     });
+    expect(response).not.toHaveProperty('password');
     expect(mocks.userUpdate).toHaveBeenCalledOnce();
+    expect(mocks.userUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: expect.not.objectContaining({ password: expect.anything() }),
+      })
+    );
   });
 
   it('preserves one active admin when two demotions race', async () => {

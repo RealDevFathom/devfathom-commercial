@@ -9,6 +9,7 @@ import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
+import { safeUserSelect } from '@/server/safe-user-select';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -552,6 +553,7 @@ export const organizationAdminRouter = router({
                 ? { increment: 1 }
                 : undefined,
           },
+          select: safeUserSelect,
         });
       });
       annotateAudit(ctx, {

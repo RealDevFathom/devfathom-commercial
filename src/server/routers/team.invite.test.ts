@@ -101,14 +101,23 @@ describe('team.inviteMember duplicate guard', () => {
 
   it('stores the canonical form for a genuinely new member', async () => {
     mocks.findFirst.mockResolvedValue(null);
-    mocks.create.mockResolvedValue({ id: 'user_2', name: 'Alex Carter' });
+    mocks.create.mockResolvedValue({
+      id: 'user_2',
+      name: 'Alex Carter',
+      password: 'bcrypt-secret',
+    });
     mocks.invitationUpsert.mockResolvedValue({});
 
-    await caller().inviteMember({ ...invite, email: 'New.Person@Company.COM' });
+    const response = await caller().inviteMember({
+      ...invite,
+      email: 'New.Person@Company.COM',
+    });
 
+    expect(response).not.toHaveProperty('password');
     expect(mocks.create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({ email: 'new.person@company.com' }),
+        select: expect.not.objectContaining({ password: expect.anything() }),
       })
     );
   });
