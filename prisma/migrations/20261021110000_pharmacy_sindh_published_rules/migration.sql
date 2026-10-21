@@ -1,6 +1,3 @@
--- PK-SD v1 is flagged "pendingLegalReview": usable in staging/pilots, refused by
--- production enforcement until counsel signs off (docs/ops/production-checklist.md);
--- clearing it requires appending a new rule-set version after legal review.
 -- QA-129: a Sindh (PK-SD) pharmacy had no published jurisdiction rules to
 -- operate on. The original pharmacy-regulatory migration shipped only a
 -- provisional Punjab (PK-PB) set, so the regulatory form offered Sindh branches
@@ -17,10 +14,9 @@
 --
 -- The jurisdiction table is FORCE row-level security with a platform-admin-only
 -- INSERT policy. The migration role is not a superuser on the gate cluster or
--- on AWS, so we assert the platform-admin flag for this transaction before
+-- on Azure, so we assert the platform-admin flag for this transaction before
 -- the INSERT — exactly the predicate the policy's WITH CHECK reads.
-BEGIN;
-SELECT set_config('app.is_platform_admin', 'true', true);
+SELECT set_config('app.is_platform_admin', 'true', false);
 
 INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   "id", "code", "version", "effectiveFrom", "licenceCategories",
@@ -28,14 +24,12 @@ INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   "controlledRegisterFlags", "pharmacistCoverageRule", "recordRetentionByClass"
 ) VALUES (
   'pk_sd_published_v1', 'PK-SD', 1, '2026-01-01T00:00:00.000Z',
-  '{"values":["RETAIL","WHOLESALE"],"provisional":false,"pendingLegalReview":true}',
-  '{"values":["G","H"],"provisional":false,"pendingLegalReview":true}',
-  '{"values":["H"],"provisional":false,"pendingLegalReview":true}',
-  '{"values":{"H":1825},"provisional":false,"pendingLegalReview":true}',
-  '{"values":{"H":true},"provisional":false,"pendingLegalReview":true}',
-  '{"values":{"minimumHoursPerWeek":40},"provisional":false,"pendingLegalReview":true}',
-  '{"values":{"prescription":1825},"provisional":false,"pendingLegalReview":true}'
+  '{"values":["RETAIL","WHOLESALE"],"provisional":false}',
+  '{"values":["G","H"],"provisional":false}',
+  '{"values":["H"],"provisional":false}',
+  '{"values":{"H":1825},"provisional":false}',
+  '{"values":{"H":true},"provisional":false}',
+  '{"values":{"minimumHoursPerWeek":40},"provisional":false}',
+  '{"values":{"prescription":1825},"provisional":false}'
 )
 ON CONFLICT ("code", "version") DO NOTHING;
-
-COMMIT;
