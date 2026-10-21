@@ -3,7 +3,11 @@
 import { useRef, useState } from 'react';
 import { Button } from '@/components/ui/button';
 import { formatKarachiDateTime } from '@/lib/pharmacy/karachi-time';
-import { registerPrintTotals } from '@/lib/pharmacy/register-print';
+import {
+  registerPeriodBounds,
+  registerPrintTotals,
+  withinRegisterPeriod,
+} from '@/lib/pharmacy/register-print';
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
@@ -17,6 +21,8 @@ export function ControlledRegisterConsole() {
   const page = useRef<HTMLDivElement>(null);
   const [printError, setPrintError] = useState(false);
   const [branchId, setBranchId] = useState('');
+  const [periodFrom, setPeriodFrom] = useState('');
+  const [periodTo, setPeriodTo] = useState('');
   const [correctsEntryId, setCorrectsEntryId] = useState('');
   const [reason, setReason] = useState('');
   const [quantity, setQuantity] = useState('1');
@@ -45,6 +51,14 @@ export function ControlledRegisterConsole() {
     onError: (error) => setFormError(error.message),
   });
 
+  const periodBounds = registerPeriodBounds(periodFrom, periodTo);
+  const allEntries = register.data?.entries ?? [];
+  const periodEntries = allEntries.filter((entry) =>
+    withinRegisterPeriod(entry.createdAt, periodBounds)
+  );
+  const periodLabel =
+    periodFrom || periodTo ? `${periodFrom || 'start'} to ${periodTo || 'latest'}` : 'all entries';
+
   function printRegister() {
     const popup = window.open('', '_blank', 'width=1100,height=800');
     if (!popup || !page.current) {
@@ -58,7 +72,7 @@ export function ControlledRegisterConsole() {
     const branchName =
       branches.data?.find((branch) => branch.id === selected)?.name ?? 'This branch';
     const stamp = popup.document.createElement('p');
-    stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · ${branchName}`;
+    stamp.textContent = `Printed ${formatKarachiDateTime(new Date())} · ${branchName} · period ${periodLabel}`;
     const style = popup.document.createElement('style');
     style.textContent =
       '@page { size: landscape; margin: 12mm; } body { font: 11px sans-serif; color: #222; } table { border-collapse: collapse; width: 100%; } th, td { border: 1px solid #222; padding: 4px; text-align: left; vertical-align: top; } thead { display: table-header-group; } tr { break-inside: avoid; }';
@@ -77,7 +91,7 @@ export function ControlledRegisterConsole() {
             type="button"
             variant="outline"
             className="h-9"
-            disabled={!register.data?.entries.length}
+            disabled={!periodEntries.length}
             onClick={printRegister}
           >
             Print register
@@ -92,22 +106,59 @@ export function ControlledRegisterConsole() {
           Allow the print window, then try Print register again.
         </p>
       ) : null}
-      <label className="block text-xs text-text-muted" htmlFor="register-branch">
-        Branch
-        <select
-          id="register-branch"
-          className="mt-1 h-9 w-full max-w-sm rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
-          value={selected}
-          onChange={(event) => setBranchId(event.target.value)}
-        >
-          {branches.data?.length ? null : <option value="">No branch</option>}
-          {branches.data?.map((branch) => (
-            <option key={branch.id} value={branch.id}>
-              {branch.name}
-            </option>
-          ))}
-        </select>
-      </label>
+      <div className="flex flex-wrap items-end gap-3">
+        <label className="block text-xs text-text-muted" htmlFor="register-branch">
+          Branch
+          <select
+            id="register-branch"
+            className="mt-1 h-9 w-full max-w-sm rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
+            value={selected}
+            onChange={(event) => setBranchId(event.target.value)}
+          >
+            {branches.data?.length ? null : <option value="">No branch</option>}
+            {branches.data?.map((branch) => (
+              <option key={branch.id} value={branch.id}>
+                {branch.name}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label className="block text-xs text-text-muted" htmlFor="register-from">
+          From
+          <input
+            id="register-from"
+            type="date"
+            className="mt-1 h-9 rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
+            value={periodFrom}
+            max={periodTo || undefined}
+            onChange={(event) => setPeriodFrom(event.target.value)}
+          />
+        </label>
+        <label className="block text-xs text-text-muted" htmlFor="register-to">
+          To
+          <input
+            id="register-to"
+            type="date"
+            className="mt-1 h-9 rounded-md border border-border-subtle bg-surface-raised px-2 text-sm text-text-strong"
+            value={periodTo}
+            min={periodFrom || undefined}
+            onChange={(event) => setPeriodTo(event.target.value)}
+          />
+        </label>
+        {periodFrom || periodTo ? (
+          <Button
+            type="button"
+            variant="ghost"
+            className="h-9"
+            onClick={() => {
+              setPeriodFrom('');
+              setPeriodTo('');
+            }}
+          >
+            Clear period
+          </Button>
+        ) : null}
+      </div>
       {branches.error ? (
         <p className="text-xs text-destructive" role="alert">
           {branches.error.message}
@@ -127,9 +178,13 @@ export function ControlledRegisterConsole() {
             <p className="text-xs text-text-muted">
               No rows yet. A sale or purchase of a controlled medicine adds the first one.
             </p>
+          ) : periodEntries.length === 0 ? (
+            <p className="text-xs text-text-muted">
+              No entries in this period. Adjust the dates or clear the period.
+            </p>
           ) : (
             <>
-              <RegisterCards entries={register.data.entries} />
+              <RegisterCards entries={periodEntries} />
               <div ref={page} className="hidden max-w-full overflow-x-auto md:block">
                 <table className="w-full border-collapse text-left">
                   <thead>
@@ -153,7 +208,7 @@ export function ControlledRegisterConsole() {
                     </tr>
                   </thead>
                   <tbody>
-                    {register.data.entries.map((entry) => {
+                    {periodEntries.map((entry) => {
                       const drug =
                         entry.medicine?.productName ?? entry.line?.medicine.productName ?? '—';
                       const prescriber = entry.prescriber?.name ?? entry.prescriberName ?? '—';
@@ -240,7 +295,7 @@ export function ControlledRegisterConsole() {
                       );
                     })}
                   </tbody>
-                  <RegisterTotals entries={register.data.entries} />
+                  <RegisterTotals entries={periodEntries} />
                 </table>
               </div>
             </>
