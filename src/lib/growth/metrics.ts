@@ -9,7 +9,7 @@ export type CustomerAggregate = {
   lastPurchaseAt: Date | null;
   orders90d: number;
   totalOrders: number;
-  spend90dMinor: number;
+  spend90dMinor: bigint;
   medianGapDays: number | null;
   refillSoldAt: Date | null;
   refillQuantity: number | null;
@@ -47,7 +47,7 @@ export function customerMetricsQuery(organizationId: string, now: Date) {
     SELECT c.id AS "customerId", max(s."completedAt") AS "lastPurchaseAt",
       count(s.id)::int AS "totalOrders",
       (count(s.id) FILTER (WHERE s."completedAt" >= ${now}::timestamp - interval '90 days'))::int AS "orders90d",
-      coalesce(sum(b.spend) FILTER (WHERE s."completedAt" >= ${now}::timestamp - interval '90 days'), 0)::int AS "spend90dMinor",
+      coalesce(sum(b.spend) FILTER (WHERE s."completedAt" >= ${now}::timestamp - interval '90 days'), 0)::bigint AS "spend90dMinor",
       m.median AS "medianGapDays", r."completedAt" AS "refillSoldAt", r."canonicalUnits" AS "refillQuantity", r.directions
     FROM pharmacy_customers c
     LEFT JOIN sales s ON s."customerId" = c.id
