@@ -191,6 +191,22 @@ async function seedWorkspace(email: string, passwordHash: string) {
         updatedAt: FIXED_AT,
       },
     });
+    // The administrator role holds every capability, granted exactly as prisma/seed.ts grants
+    // its own administrator role. The counter's receipt guard asks the organization role for a
+    // capability before it honours a session ADMIN, so without this grant the admin the spec
+    // signs in as cannot read the bill it is selling.
+    await tx.organizationRolePermission.upsert({
+      where: {
+        organizationRoleId_capability: { organizationRoleId: PHARMACY_E2E.roleId, capability: '*' },
+      },
+      update: { effect: 'ALLOW' },
+      create: {
+        organizationId: PHARMACY_E2E.organizationId,
+        organizationRoleId: PHARMACY_E2E.roleId,
+        capability: '*',
+        effect: 'ALLOW',
+      },
+    });
     const user = {
       organizationId: PHARMACY_E2E.organizationId,
       organizationRoleId: PHARMACY_E2E.roleId,
@@ -283,8 +299,10 @@ async function seedCashier(passwordHash: string) {
         updatedAt: FIXED_AT,
       },
     });
+    // Canonical grants, as #163's migration leaves real cashiers and the Cashier template gives
+    // new ones. A legacy pharmacy.counter grant is inert to can().
     for (const [id, capability] of [
-      [PHARMACY_E2E.cashierCounterPermissionId, 'pharmacy.counter'],
+      [PHARMACY_E2E.cashierCounterPermissionId, 'pharmacy:counter'],
       [PHARMACY_E2E.cashierOrdersPermissionId, 'pharmacy:orders'],
     ] as const) {
       const existing = await tx.organizationRolePermission.findFirst({
