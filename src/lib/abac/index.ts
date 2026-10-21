@@ -10,6 +10,7 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
+import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -24,27 +25,6 @@ export type CanOptions = {
   ip?: string | null;
   db?: AuthzDb;
 };
-
-const LEGACY_CAPABILITIES: Record<string, string> = {
-  'pharmacy.procurement': 'pharmacy:procurement',
-  'pharmacy.dispense': 'pharmacy:dispense',
-};
-const CLINICAL_ACTIONS = new Set([
-  'pharmacy:dispense',
-  'pharmacy:safety',
-  'pharmacy:catalogue-review',
-]);
-
-function capabilityMatches(rule: string, action: string, effect: 'ALLOW' | 'DENY'): boolean {
-  rule = LEGACY_CAPABILITIES[rule] ?? rule;
-  if (rule === action) return true;
-  // Clinical access is opt-in; broad denials still restrict explicit grants.
-  if (effect === 'ALLOW' && CLINICAL_ACTIONS.has(action)) return false;
-  if (rule === '*') return true;
-  if (rule === 'pharmacy.*') return action.startsWith('pharmacy:');
-  if (!rule.endsWith(':*')) return false;
-  return action.startsWith(rule.slice(0, -1));
-}
 
 async function customDecision(
   db: AuthzDb,

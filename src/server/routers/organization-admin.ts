@@ -4,6 +4,7 @@ import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
+import { passwordSchema } from '@/lib/password-policy';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
@@ -187,7 +188,7 @@ export const organizationAdminRouter = router({
         primaryContactName: true,
         primaryContactEmail: true,
         activatedAt: true,
-        package: { select: { name: true } },
+        packageId: true,
         brand: true,
         emailSettings: {
           select: {
@@ -258,6 +259,16 @@ export const organizationAdminRouter = router({
       },
     });
     if (!organization) throw new TRPCError({ code: 'NOT_FOUND' });
+    // Package catalog rows are control-plane-only under RLS. Use only the
+    // package assigned to this session's organization, and expose its name.
+    const assignedPackage = organization.packageId
+      ? await withPlatformDb((db) =>
+          db.platformPackage.findUnique({
+            where: { id: organization.packageId! },
+            select: { name: true },
+          })
+        )
+      : null;
     const pharmacyBranches = await ctx.db.pharmacyBranch.findMany({
       where: { organizationId: id, active: true },
       select: { id: true, name: true, code: true },
@@ -267,6 +278,7 @@ export const organizationAdminRouter = router({
       pharmacyBranches,
       organization: {
         ...organization,
+        package: assignedPackage,
         emailSettings: organization.emailSettings
           ? {
               ...organization.emailSettings,
@@ -522,7 +534,7 @@ export const organizationAdminRouter = router({
           .email()
           .max(254)
           .transform((value) => value.trim().toLowerCase()),
-        password: z.string().min(12).max(256),
+        password: passwordSchema.min(12).max(256),
         title: z.string().trim().min(1).max(150),
         role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']),
         department: departmentKey,
@@ -619,7 +631,7 @@ export const organizationAdminRouter = router({
     }),
 
   resetMemberPassword: adminProcedure
-    .input(z.object({ id: z.string(), password: z.string().min(12).max(256) }))
+    .input(z.object({ id: z.string(), password: passwordSchema.min(12).max(256) }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
       const user = await ctx.db.user.findFirst({

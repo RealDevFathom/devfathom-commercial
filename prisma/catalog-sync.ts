@@ -50,11 +50,13 @@ export type PlatformCatalogSync = {
  * still listed only the 18 agency modules and the Agency Suite package after
  * every restaurant migration had been applied.
  *
- * The reconciliation is deliberately create-only:
+ * The reconciliation preserves operator customizations:
  *
  * - modules upsert with `update: {}`, so `active`, `sortOrder` and any
  *   name/category edit an operator made in SuperAdmin survive a deployment;
- * - a package that already exists is skipped entirely — its module links are
+ * - existing vertical packages still at the legacy default of one
+ *   seat receive the catalog seat default; customized seat values survive;
+ * - an existing package otherwise stays unchanged — its module links are
  *   the live entitlements of every organization on it, so adding one here
  *   would grant a module nobody bought, and bumping its version would
  *   misreport an unchanged package as edited.
@@ -164,7 +166,16 @@ export async function syncPlatformCatalog(
   let packagesCreated = 0;
   let linksCreated = 0;
   for (const definition of packages) {
-    if (existingPackageKeys.has(definition.key)) continue;
+    if (existingPackageKeys.has(definition.key)) {
+      if (packageDefaultSeats(definition) !== undefined) {
+        // Guard the write itself so a concurrent admin seat edit also survives.
+        await tx.platformPackage.updateMany({
+          where: { key: definition.key, defaultSeats: 1 },
+          data: { defaultSeats: packageDefaultSeats(definition) },
+        });
+      }
+      continue;
+    }
 
     const platformPackage = await tx.platformPackage.upsert({
       where: { key: definition.key },

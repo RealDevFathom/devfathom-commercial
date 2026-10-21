@@ -85,7 +85,7 @@ function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatL
 const input = {
   name: 'Ayesha Cashier',
   email: 'Ayesha@Clifton.test',
-  password: 'temporary-123456',
+  password: 'Temporary-123456',
   title: 'Cashier',
   role: 'EMPLOYEE' as const,
   department: 'COUNTER',
@@ -108,6 +108,13 @@ describe('organization member creation', () => {
       email: 'ayesha@clifton.test',
       name: 'Ayesha Cashier',
     });
+  });
+
+  it.each(['aaaaaaaaaaaa', 'AAAAAAAAAAAA', 'PasswordOnly'])('rejects weak staff passwords: %s', async (password) => {
+    await expect(caller().createMember({ ...input, password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    await expect(caller().resetMemberPassword({ id: 'member', password })).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.userFindFirst).not.toHaveBeenCalled();
   });
 
   it('creates an ACTIVE member scoped to the caller tenant with a hashed password', async () => {

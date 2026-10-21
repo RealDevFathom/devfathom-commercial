@@ -1,4 +1,4 @@
-import { render, screen } from '@testing-library/react';
+import { fireEvent, render, screen, waitFor } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import NewOrganizationPage from './page';
@@ -86,6 +86,26 @@ describe('NewOrganizationPage type-first choice', () => {
 });
 
 describe('NewOrganizationPage package step', () => {
+  it('resets an overridden seat limit to the selected package default', async () => {
+    render(await renderPage({ vertical: 'RESTAURANT' }));
+    const seats = screen.getByLabelText('Seat limit');
+    expect(seats).toHaveValue(25);
+    fireEvent.change(seats, { target: { value: '7' } });
+    fireEvent.change(screen.getByLabelText('Commercial package'), { target: { value: 'pkg_r2' } });
+    expect(screen.getByLabelText('Seat limit')).toHaveValue(120);
+    expect(screen.getByLabelText('Seat limit')).toHaveAttribute('max', '120');
+    fireEvent.change(screen.getByLabelText('Commercial package'), { target: { value: 'pkg_r1' } });
+    expect(screen.getByLabelText('Seat limit')).toHaveValue(25);
+  });
+
+  it('disables seat overrides for other platform operators', async () => {
+    mocks.requirePlatformRead.mockResolvedValue({ role: 'SALES' });
+    render(await renderPage({ vertical: 'RESTAURANT' }));
+    expect(screen.getByLabelText('Seat limit')).toBeDisabled();
+    fireEvent.change(screen.getByLabelText('Commercial package'), { target: { value: 'pkg_r2' } });
+    expect(screen.getByLabelText('Seat limit')).toHaveValue(120);
+  });
+
   it('offers only shared deployment when Vercel provisioning is not configured', async () => {
     vi.stubEnv('VERCEL_ACCESS_TOKEN', undefined);
     vi.stubEnv('VERCEL_TEAM_ID', undefined);
@@ -278,4 +298,36 @@ describe('NewOrganizationPage package step', () => {
       '/platform/catalog'
     );
   });
+});
+
+it('submits the selected package default and a super admin override within its ceiling', async () => {
+  mocks.packageFindMany.mockResolvedValue([
+    { id: 'chain', name: 'Pharmacy Chain', defaultSeats: 2500 },
+    { id: 'professional', name: 'Pharmacy Professional', defaultSeats: 50 },
+  ]);
+  const fetchMock = vi
+    .fn()
+    .mockResolvedValue({ ok: true, json: async () => ({ data: { id: 'org' } }) });
+  vi.stubGlobal('fetch', fetchMock);
+  try {
+    const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
+    fireEvent.change(screen.getByLabelText('Commercial package'), {
+      target: { value: 'professional' },
+    });
+    const seats = screen.getByLabelText('Seat limit');
+    expect(seats).toHaveValue(50);
+    expect(seats).toHaveAttribute('max', '50');
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(1));
+    const first = JSON.parse(fetchMock.mock.calls[0]![1].body).payload;
+    expect(first.packageId).toBe('professional');
+    expect(first.seatLimit).toBe(50);
+    await waitFor(() => expect(screen.queryByText('Working…')).not.toBeInTheDocument());
+    fireEvent.change(seats, { target: { value: '25' } });
+    fireEvent.submit(container.querySelector('form')!);
+    await waitFor(() => expect(fetchMock).toHaveBeenCalledTimes(2));
+    expect(JSON.parse(fetchMock.mock.calls[1]![1].body).payload.seatLimit).toBe(25);
+  } finally {
+    vi.unstubAllGlobals();
+  }
 });

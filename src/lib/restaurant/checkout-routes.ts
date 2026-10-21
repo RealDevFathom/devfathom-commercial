@@ -1,3 +1,4 @@
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import 'server-only';
 
 import { NextResponse } from 'next/server';
@@ -13,6 +14,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { BillCommandError, evaluateOrderSettlement, type MoneyCommandActor } from './bills';
 import { CoAuthorizationError } from './co-authorization';
+import { resolveStaffCapabilityDecision } from './job-roles';
 import {
   DailyCloseError,
   type ClosePreview,
@@ -30,6 +32,7 @@ import {
 import { PaymentAdapterError } from './payment-adapter';
 import { RefundError, type RefundTenderResult } from './refunds';
 import { quoteOpenBillSettlement, TenderError, type ApplyTenderResult } from './tenders';
+import { TaxConfigurationError, TaxProfileResolutionError } from './tax-calculator';
 import { OrderCommandError } from './orders';
 import {
   authenticateApprover,
@@ -59,17 +62,19 @@ import { withTerminalAuth, type TerminalContext } from './terminal-auth';
  * replay record (C11); this file only wires transport.
  *
  * Capability gate (C11). Terminal money routes gate on the EXISTING pos/payments/cash
- * capabilities, resolved from the acting operator's staff profile via its linked
- * `User`'s effective capabilities — the org-role permissions + non-expired per-user
- * overrides, evaluated exactly like the ABAC `customDecision` path that the back-office
- * `money:read` reads use (org-role-driven; policies.ts: "Terminal money mutations gate
- * on the existing pos/payments/cash capabilities"). Resolution is default-DENY: an
- * operator whose staff profile has no linked user, or whose user lacks the capability,
- * is refused (403). A co-authorized action additionally verifies the approving
- * manager's own credential AND that the approver carries `coauth:approve`. The
- * operator↔capability store is the platform's org-role model (no restaurant operator
- * capability column exists to date, and none is added — no schema change, C12); this
- * coupling is recorded in BUILD-ASSUMPTIONS for the console + reconciliation lanes.
+ * capabilities, resolved from the acting operator's staff profile by UNIONING two
+ * sources (QA-145): the linked `User`'s effective capabilities — the org-role permissions
+ * + non-expired per-user overrides, evaluated exactly like the ABAC `customDecision` path
+ * that the back-office `money:read` reads use — AND the restaurant SOP-1 job-role
+ * capabilities the profile holds at the terminal's bound branch (see
+ * `resolveStaffCapabilities` in `job-roles.ts`). Resolution is default-DENY: a profile
+ * that NEITHER source grants — including a PIN-only operator with no linked user whose job
+ * roles do not carry the capability — is refused (403). A co-authorized action
+ * additionally verifies the approving manager's own credential AND that the approver
+ * carries `coauth:approve` through either source; a PIN-only floor manager holding the
+ * Owner job role can therefore approve. The platform org-role model is retained alongside
+ * the job-role path (no restaurant operator capability column is added — no schema change,
+ * C12); this coupling is recorded in BUILD-ASSUMPTIONS for the console + reconciliation lanes.
  *
  * Read contract (C12, consumed by L7a): the register's settled-bill receipt payload
  * (`buildReceiptForBranch`, display data only) and per-order settlement state
@@ -201,31 +206,26 @@ export const dayCorrectBody = z
 export type MoneyCapability =
   'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
 
-/** Wildcard-aware capability match, identical to the ABAC engine's rule (`*`, an exact
- * match, or a `namespace:*` prefix). Kept local because the ABAC helper is private and
- * its `can()` only accepts registered ABAC actions, which these vertical capabilities
- * are not. */
-function capabilityMatches(rule: string, capability: string): boolean {
-  if (rule === '*' || rule === capability) return true;
-  if (!rule.endsWith(':*')) return false;
-  return capability.startsWith(rule.slice(0, -1));
-}
-
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
-/** Resolve whether the acting operator holds `capability`, via its staff profile's
- * linked `User` effective capabilities (per-user overrides win over org-role rules; a
- * DENY beats an ALLOW at each layer; default-DENY). No linked user ⇒ denied. Mirrors
- * `customDecision` in `src/lib/abac/index.ts` but for the vertical capability strings. */
+/** Resolve branch-bound active staff access. Any matching DENY across linked-user
+ * rules and staff overrides wins over all grants, including wildcard grants.
+ * A branch binding is a primary branch, held job role, or direct staff override. */
 export async function operatorHasCapability(
   db: ScopedDb,
   staffProfileId: string,
   capability: string,
-  now: Date
+  now: Date,
+  branchId: string
 ): Promise<boolean> {
+  if (!branchId?.trim()) return false;
   const profile = await db.restaurantStaffProfile.findUnique({
     where: { id: staffProfileId },
     select: {
+      status: true,
+      primaryBranchId: true,
+      jobRoles: { where: { branchId }, select: { branchId: true } },
+      directCapabilityGrants: { where: { branchId }, select: { branchId: true } },
       user: {
         select: {
           organizationRole: {
@@ -239,8 +239,15 @@ export async function operatorHasCapability(
       },
     },
   });
-  const user = profile?.user;
-  if (!user) return false;
+  if (
+    !profile ||
+    profile.status !== 'ACTIVE' ||
+    (profile.primaryBranchId !== branchId &&
+      !profile.jobRoles.some((row) => row.branchId === branchId) &&
+      !profile.directCapabilityGrants.some((row) => row.branchId === branchId))
+  )
+    return false;
+  const user = profile.user;
 
   const decide = (rules: readonly CapabilityRule[]): boolean | null => {
     const matching = rules.filter((rule) => capabilityMatches(rule.capability, capability));
@@ -249,11 +256,21 @@ export async function operatorHasCapability(
     return null;
   };
 
-  const overrideDecision = decide(user.permissionOverrides);
-  if (overrideDecision !== null) return overrideDecision;
-  const roleDecision = decide(user.organizationRole?.permissions ?? []);
-  if (roleDecision !== null) return roleDecision;
-  return false;
+  const staff = await resolveStaffCapabilityDecision(db, staffProfileId, branchId);
+  const overrides = decide(user?.permissionOverrides ?? []);
+  const role = decide(user?.organizationRole?.permissions ?? []);
+  if (
+    overrides === false ||
+    role === false ||
+    [...staff.denied].some((rule) => capabilityMatches(rule, capability))
+  )
+    return false;
+
+  return (
+    overrides === true ||
+    role === true ||
+    [...staff.effective].some((rule) => capabilityMatches(rule, capability))
+  );
 }
 
 function forbidden(message: string): NextResponse {
@@ -313,9 +330,10 @@ async function requireCapability(
   db: ScopedDb,
   staffProfileId: string,
   capability: MoneyCapability,
-  now: Date
+  now: Date,
+  branchId: string
 ): Promise<NextResponse | null> {
-  const allowed = await operatorHasCapability(db, staffProfileId, capability, now);
+  const allowed = await operatorHasCapability(db, staffProfileId, capability, now, branchId);
   return allowed ? null : forbidden(`This operator lacks the "${capability}" capability.`);
 }
 
@@ -360,7 +378,8 @@ async function resolveApprover(
     ctx.db,
     auth.staffProfileId,
     'coauth:approve',
-    now
+    now,
+    ctx.device.branchId
   );
   if (!canApprove) {
     return {
@@ -383,6 +402,24 @@ const json = (body: unknown, status: number): NextResponse => NextResponse.json(
  * generic 500.
  */
 export function moneyErrorResponse(err: unknown): NextResponse | null {
+  // Map only after the terminal transaction rolls back. Configuration errors
+  // may contain internal profile/rule IDs, so return fixed operator guidance.
+  if (err instanceof TaxProfileResolutionError) {
+    const error =
+      err.reason === 'AMBIGUOUS'
+        ? 'Conflicting effective tax profiles. Ask an administrator to correct the branch tax configuration before tendering.'
+        : 'The branch has no current effective tax profile. Ask an administrator to publish a tax profile before tendering.';
+    return json({ error, code: err.code }, 409);
+  }
+  if (err instanceof TaxConfigurationError) {
+    return json(
+      {
+        error:
+          'The branch tax configuration is invalid. Ask an administrator to correct it before tendering.',
+      },
+      409
+    );
+  }
   if (err instanceof MoneyIdempotencyError) {
     return json({ error: err.message }, 409);
   }
@@ -512,7 +549,13 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
       if (!operator.ok) return operator.response;
 
       const now = new Date();
-      const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+      const denied = await requireCapability(
+        ctx.db,
+        operator.staffProfileId,
+        opts.capability,
+        now,
+        ctx.device.branchId
+      );
       if (denied) return denied;
 
       const key = idempotencyKeyFromRequest(request);
@@ -553,7 +596,13 @@ export function moneyReadRoute(opts: {
       if (!operator.ok) return operator.response;
 
       const now = new Date();
-      const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+      const denied = await requireCapability(
+        ctx.db,
+        operator.staffProfileId,
+        opts.capability,
+        now,
+        ctx.device.branchId
+      );
       if (denied) return denied;
 
       return await opts.run(ctx, request);

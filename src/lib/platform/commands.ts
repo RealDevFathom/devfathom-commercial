@@ -667,8 +667,8 @@ const organizationInput = z
     timezone: z.string().trim().min(1).max(100).default('UTC'),
     locale: z.string().trim().min(2).max(20).default('en'),
     currency: currency.default('USD'),
-    // Legacy callers may omit seats; the selected package supplies the baseline.
-    seatLimit: z.coerce.number().int().min(1).max(100_000).optional(),
+    // Only a platform super admin may use this untrusted override.
+    seatLimit: z.unknown().optional(),
     gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
     dataResidency: optionalText.optional(),
     primaryContactName: requiredText,
@@ -880,6 +880,10 @@ async function bootstrapOrganization(
       400
     );
   }
+  const seatLimit =
+    actor?.role === 'SUPER_ADMIN' && input.seatLimit !== undefined
+      ? z.coerce.number().int().min(1).max(packageRecord.defaultSeats).parse(input.seatLimit)
+      : packageRecord.defaultSeats;
   const password = demo ? null : await hash(input.adminPassword, 12);
   const organization = await createOrganizationRecord(db, {
     ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
@@ -893,7 +897,7 @@ async function bootstrapOrganization(
     timezone: input.timezone,
     locale: input.locale,
     currency: input.currency,
-    seatLimit: input.seatLimit ?? packageRecord.defaultSeats,
+    seatLimit,
     gracePeriodDays: input.gracePeriodDays,
     dataResidency: input.dataResidency,
     primaryContactName: input.primaryContactName,
@@ -965,6 +969,7 @@ async function bootstrapOrganization(
       name: input.adminName,
       email: input.adminEmail,
       password,
+      mustChangePassword: !demo,
       role: 'ADMIN',
       department: adminDepartmentKeyForVertical(input.vertical),
       title: 'Organization administrator',
@@ -1344,7 +1349,6 @@ export async function bootstrapDemoRestaurantOrganizationInTransaction(
         timezone: 'Asia/Karachi',
         locale: 'en-PK',
         currency: 'PKR',
-        seatLimit: 1,
         gracePeriodDays: 0,
         dataResidency: null,
         primaryContactName: identity.displayName,

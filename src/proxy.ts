@@ -29,11 +29,12 @@ export async function proxy(request: Request) {
   const url = new URL(request.url);
   const pathname = url.pathname;
   const forwardedHost = request.headers.get('x-forwarded-host') ?? request.headers.get('host');
-  const host = (forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '')
-    .replace(/:\d+$/, '')
-    .replace(/\.$/, '');
+  const hostWithPort = forwardedHost?.split(',')[0]?.trim().toLowerCase() ?? '';
+  const host = hostWithPort.replace(/:\d+$/, '').replace(/\.$/, '');
   const requestHeaders = new Headers(request.headers);
-  requestHeaders.set(TENANT_HOST_HEADER, host);
+  // Host classification ignores ports, but downstream login redirects need the
+  // original authority to keep local tenant navigation on the same dev server.
+  requestHeaders.set(TENANT_HOST_HEADER, hostWithPort);
   requestHeaders.set(
     REQUEST_ID_HEADER,
     request.headers.get(REQUEST_ID_HEADER) ?? crypto.randomUUID()
@@ -139,7 +140,7 @@ export async function proxy(request: Request) {
 
   if (!hasSession) {
     const loginUrl = new URL('/login', request.url);
-    loginUrl.searchParams.set('callbackUrl', pathname);
+    loginUrl.searchParams.set('callbackUrl', `${pathname}${url.search}`);
     return NextResponse.redirect(loginUrl);
   }
 

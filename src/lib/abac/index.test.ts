@@ -82,11 +82,19 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
-  it('honors existing owner pharmacy wildcard without granting reports', async () => {
+  it('grants owners reports and non-clinical pharmacy actions, but never clinical actions via the pharmacy wildcard', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
+    // Owner holds `pharmacy:*` plus both report grants. The namespace wildcard
+    // covers non-clinical pharmacy actions and the explicit grants cover reports,
+    // but clinical actions stay opt-in: they are reachable only by an exact grant.
+    const clinicalByWildcard: readonly string[] = [
+      'pharmacy:dispense',
+      'pharmacy:catalogue-review',
+      'pharmacy:safety',
+    ];
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        action === 'pharmacy:orders'
+        !clinicalByWildcard.includes(action)
       );
     }
   });
@@ -178,7 +186,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:procurement',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(42);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);
@@ -262,7 +270,10 @@ describe('hospitality capability namespace', () => {
   });
 });
 
-it.each(['pharmacy:procurement', 'pharmacy.procurement', 'pharmacy.*'])(
+// `pharmacy.*` is no longer a live wildcard under canonical names: the migration
+// expands stored `pharmacy.*` grants into explicit colon capabilities, and only the
+// exact dotted aliases (`pharmacy.procurement`, `pharmacy.dispense`) map at runtime.
+it.each(['pharmacy:procurement', 'pharmacy.procurement'])(
   'accepts procurement grant %s and honors a legacy denial',
   async (capability) => {
     await expect(
@@ -289,7 +300,9 @@ const clinicalActions = [
   'pharmacy:catalogue-review',
 ] as const;
 it.each(clinicalActions)('requires explicit clinical grant for %s', async (action) => {
-  for (const capability of ['pharmacy.*', 'pharmacy:*', '*']) {
+  // Canonical wildcards only: `pharmacy.*` is inert now (see migration + exact alias
+  // table), so the broad grants/denials that matter are `pharmacy:*` and `*`.
+  for (const capability of ['pharmacy:*', '*']) {
     await expect(
       can(employee, action, undefined, {
         db: authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] }),
