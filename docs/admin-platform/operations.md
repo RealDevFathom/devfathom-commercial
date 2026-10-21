@@ -11,7 +11,7 @@ Web/API runs on Next.js Node.js in an Azure Container App. PostgreSQL is the dur
 
 The route requires `CRON_SECRET`. An Azure scheduler/recurring trigger is a production gate; do not claim five-minute processing until that trigger exists and is verified. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, recovers 15-minute stale leases, increments attempts, and uses exponential backoff capped at 30 minutes.
 
-`POST /api/cron/outbound-effects` drains every organization's pending outbox so a retry does not wait for that organization's next enqueue. Send `Authorization: Bearer <CRON_SECRET>`. The comparison is constant-time, and a missing or mismatched secret returns 401. Retries start at 30 seconds, so the intended schedule is every minute. A claim left in `PROCESSING` returns to the queue after 5 minutes. The same Azure-scheduler gate applies: do not claim one-minute draining until that trigger exists and is verified. Dead-lettered email rows drop the recipient email, name, and HTML. Delivered and dead-lettered rows are deleted after 7 days.
+`POST /api/cron/outbound-effects` drains every organization's pending outbox so a retry does not wait for that organization's next enqueue. Send `Authorization: Bearer <CRON_SECRET>`. The comparison is constant-time, and a missing or mismatched secret returns 401. Retries start at 30 seconds. Staging calls this route every minute from an EventBridge Scheduler, and `CRON_SECRET` is kept in Secrets Manager. That wiring will be added in the infra/aws pull request #110. A claim left in `PROCESSING` returns to the queue after 5 minutes. Dead-lettered email rows drop the recipient email, name, and HTML. Delivered and dead-lettered rows are deleted after 7 days.
 
 ## Job types
 
