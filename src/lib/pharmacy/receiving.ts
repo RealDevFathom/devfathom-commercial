@@ -45,6 +45,7 @@ export class PharmacyReceivingError extends Error {
       | 'INVALID_MONEY'
       | 'INVALID_TRANSITION'
       | 'BYPASS_EVIDENCE_MISSING'
+      | 'APPROVER_NOT_AUTHORIZED'
       | 'SELF_APPROVAL'
       | 'BATCH_EXPIRY_CONFLICT'
       | 'OCR_CONFIRMATION_REQUIRED'

@@ -613,6 +613,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
       },
       permissionOverrides: [],
     });
+    db.user.findFirst.mockResolvedValue({ id: 'user_manager' });
     db.medicineBarcode.findFirst.mockResolvedValue({
       presentation: { medicineId: 'medicine_a' },
     });
@@ -692,6 +693,35 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
         directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_counter' },
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bypass approver who is not an active user in the tenant', async () => {
+    db.user.findFirst.mockResolvedValue(null);
+    await expect(
+      caller('user_counter').createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_unknown' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'APPROVER_NOT_AUTHORIZED' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a bypass approver without procurement approval capability', async () => {
+    db.user.findUnique
+      .mockResolvedValueOnce({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      })
+      .mockResolvedValueOnce({ organizationRole: null, permissionOverrides: [] });
+    await expect(
+      caller('user_counter').createGoodsReceipt({
+        ...withoutOrder(),
+        directPurchase: { reason: 'Emergency insulin.', approvedByUserId: 'user_manager' },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'APPROVER_NOT_AUTHORIZED' });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
