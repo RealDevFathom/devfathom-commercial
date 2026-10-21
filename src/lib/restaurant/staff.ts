@@ -82,7 +82,11 @@ async function assertBranchInScope(db: ScopedDb, branchId: string): Promise<void
   }
 }
 
-/** A linked `User` must exist in the caller's organization (RLS scopes the lookup). */
+/**
+ * A linked `User` must exist in the caller's organization (RLS scopes the lookup).
+ * Pending invitees are valid links: their staff profile needs to exist before
+ * they accept the invitation so managers can finish branch setup in one flow.
+ */
 async function assertUserInScope(
   db: ScopedDb,
   userId: string,
@@ -91,7 +95,7 @@ async function assertUserInScope(
   const user = await db.user.findFirst({
     where: {
       id: userId,
-      status: 'ACTIVE',
+      status: { in: ['ACTIVE', 'INVITED'] },
       restaurantStaffProfiles: currentProfileId
         ? { every: { id: currentProfileId } }
         : { none: {} },

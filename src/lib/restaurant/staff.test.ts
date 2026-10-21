@@ -124,7 +124,7 @@ describe('createStaffProfile', () => {
     expect(mocks.userFindFirst).toHaveBeenCalledWith({
       where: {
         id: 'user_1',
-        status: 'ACTIVE',
+        status: { in: ['ACTIVE', 'INVITED'] },
         restaurantStaffProfiles: { none: {} },
       },
       select: { id: true },
@@ -133,6 +133,22 @@ describe('createStaffProfile', () => {
       expect.objectContaining({
         data: expect.objectContaining({ userId: 'user_1', primaryBranchId: 'branch_1' }),
       })
+    );
+  });
+
+  it('allows a pending invitee to be linked before they accept their invitation', async () => {
+    await createStaffProfile(db, { displayName: 'Invited Cook', userId: 'user_invited' });
+
+    expect(mocks.userFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'user_invited',
+        status: { in: ['ACTIVE', 'INVITED'] },
+        restaurantStaffProfiles: { none: {} },
+      },
+      select: { id: true },
+    });
+    expect(mocks.staffCreate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ userId: 'user_invited' }) })
     );
   });
 });
