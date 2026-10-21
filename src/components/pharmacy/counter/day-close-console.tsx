@@ -201,7 +201,10 @@ function DayCloseForm({ branchId, date }: { branchId: string; date: string }) {
             <p role="status">
               Day closed. New tenders and drawer changes for this business date are blocked.
             </p>
-            <p>Variance note: {report.reason || 'No variance recorded.'}</p>
+            <p>
+              {report.supersedesCloseId || report.sequence > 1 ? 'Reopen reason' : 'Variance note'}:{' '}
+              {report.reason || 'No variance recorded.'}
+            </p>
             {!report.isFinal && <p>Provisional report: migration reconciliation is pending.</p>}
             <label className="grid gap-2">
               Report language

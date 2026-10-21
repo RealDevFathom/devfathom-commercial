@@ -4,6 +4,7 @@ const mocks = vi.hoisted(() => ({
   role: 'ADMIN',
   loading: false,
   error: null as Error | null,
+  close: null as Record<string, unknown> | null,
   mutate: vi.fn(),
   previewInput: vi.fn(),
   /** The zone the workspace has stored. */
@@ -51,7 +52,7 @@ vi.mock('@/lib/trpc', () => ({
             data: {
               branchName: 'Main',
               timezone: mocks.zone,
-              close: null,
+              close: mocks.close,
               totals: { cashExpectedMinor: 12500, sourceHash: 'hash' },
               drawers: [
                 {
@@ -83,6 +84,7 @@ beforeEach(() => {
   mocks.role = 'ADMIN';
   mocks.loading = false;
   mocks.error = null;
+  mocks.close = null;
   mocks.mutate.mockReset();
   mocks.previewInput.mockReset();
 });
@@ -159,6 +161,34 @@ describe('day-close console', () => {
     view.rerender(<PharmacyDayCloseConsole />);
     expect(screen.getByRole('alert')).toHaveTextContent('Network unavailable');
     expect(screen.getByRole('button', { name: 'Retry preview' })).toBeInTheDocument();
+  });
+  it('labels a re-close reason as the reopen reason, and a first close reason as the variance note', () => {
+    const recorded = { cashExpectedMinor: 12500, cashCountedMinor: 12400, isFinal: true };
+    mocks.close = { ...recorded, id: 'c1', sequence: 1, supersedesCloseId: null, reason: 'Short' };
+    const view = render(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Variance note: Short')).toBeInTheDocument();
+    mocks.close = { ...recorded, id: 'c1', sequence: 1, supersedesCloseId: null, reason: null };
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Variance note: No variance recorded.')).toBeInTheDocument();
+    mocks.close = {
+      ...recorded,
+      id: 'c2',
+      sequence: 2,
+      supersedesCloseId: 'c1',
+      reason: 'Late refund',
+    };
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Reopen reason: Late refund')).toBeInTheDocument();
+    expect(screen.queryByText(/^Variance note:/)).not.toBeInTheDocument();
+    mocks.close = {
+      ...recorded,
+      id: 'c3',
+      sequence: 3,
+      supersedesCloseId: null,
+      reason: 'Recount',
+    };
+    view.rerender(<PharmacyDayCloseConsole />);
+    expect(screen.getByText('Reopen reason: Recount')).toBeInTheDocument();
   });
   it('requires a count, variance note and explicit confirmation before submitting', () => {
     render(<PharmacyDayCloseConsole />);
