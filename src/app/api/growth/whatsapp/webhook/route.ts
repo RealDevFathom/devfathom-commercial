@@ -1,4 +1,3 @@
-import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { isGrowthEnabled } from '@/lib/growth';
@@ -10,6 +9,7 @@ import {
 import { handleGrowthWebhook } from '@/lib/growth/whatsapp/inbound';
 import type { WhatsAppProvider } from '@/lib/growth/whatsapp/provider';
 import { growthStore } from '@/lib/growth/whatsapp/store';
+import { webhookSecretHash, webhookSecretMatches } from '@/lib/growth/whatsapp/webhook-secret';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
@@ -17,18 +17,9 @@ const WEBHOOK_HEADER = 'x-growth-webhook-secret';
 const IP_LIMIT = 120;
 const IP_WINDOW_MS = 60_000;
 
-function safeEqual(left: string, right: string): boolean {
-  const leftBuffer = Buffer.from(left);
-  const rightBuffer = Buffer.from(right);
-  return leftBuffer.length === rightBuffer.length && timingSafeEqual(leftBuffer, rightBuffer);
-}
-
-function webhookAuthorized(request: Request): boolean {
-  const expected = process.env.GROWTH_WEBHOOK_SECRET?.trim();
-  if (!expected) return false;
-  const provided = request.headers.get(WEBHOOK_HEADER);
-  if (!provided) return false;
-  return safeEqual(provided, expected);
+function presentedSecret(request: Request): string | null {
+  const header = request.headers.get(WEBHOOK_HEADER)?.trim();
+  return header ? header : null;
 }
 
 export async function POST(request: Request) {
@@ -39,18 +30,22 @@ export async function POST(request: Request) {
       { status: 429, headers: { 'Retry-After': String(gate.retryAfter) } }
     );
   }
-  if (!webhookAuthorized(request)) {
+  const secret = presentedSecret(request);
+  if (!secret) {
     return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
   }
+  const authenticated = await withPlatformDb((db) =>
+    growthStore(db).organizationForWebhookSecret(webhookSecretHash(secret))
+  );
+  if (!authenticated || !webhookSecretMatches(secret, authenticated.waWebhookSecretHash)) {
+    return NextResponse.json({ error: 'Unauthorized.' }, { status: 401 });
+  }
+  const organizationId = authenticated.organizationId;
   const payload = (await request.json().catch(() => null)) as unknown;
   const parsed = parseEvolutionWebhook(payload);
-  if (!parsed || parsed.kind === 'ignore' || !parsed.instance) {
+  if (!parsed || parsed.kind === 'ignore') {
     return NextResponse.json({ ok: true, ignored: true });
   }
-  const organizationId = await withPlatformDb((db) =>
-    growthStore(db).organizationIdForInstance(parsed.instance)
-  );
-  if (!organizationId) return NextResponse.json({ ok: true, ignored: true });
   if (!(await isGrowthEnabled(organizationId))) return new NextResponse(null, { status: 204 });
 
   await withTenantDb(organizationId, async (db) => {

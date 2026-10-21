@@ -1,4 +1,6 @@
 import { lookup } from 'node:dns/promises';
+import { request as httpRequest } from 'node:http';
+import { request as httpsRequest } from 'node:https';
 import { BlockList, isIP } from 'node:net';
 
 import { decryptSecret } from '@/lib/secret-crypto';
@@ -86,6 +88,78 @@ function isBlockedAddress(address: string): boolean {
 function blockedHost(hostname: string): boolean {
   const host = hostname.toLowerCase().replace(/\.$/, '');
   return !host || BLOCKED_HOSTS.has(host) || host.endsWith('.localhost') || /^\d+$/.test(host);
+}
+
+type NodeRequest = typeof httpsRequest;
+
+/**
+ * Fetch that connects to the address resolved for this call. A later DNS answer
+ * cannot move the socket. A private address is refused unless this origin is the
+ * configured Evolution allowlist.
+ */
+export function createPinnedFetch(
+  resolve: HostLookup,
+  allowPrivate: boolean,
+  requestImpl: { http: NodeRequest; https: NodeRequest } = {
+    http: httpRequest,
+    https: httpsRequest,
+  }
+): typeof fetch {
+  return async (input, init) => {
+    const raw = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const url = new URL(raw);
+    const addresses =
+      isIP(url.hostname) !== 0 ? [url.hostname] : await resolve(url.hostname.replace(/\.$/, ''));
+    if (
+      addresses.length === 0 ||
+      (!allowPrivate && addresses.some((address) => isBlockedAddress(address)))
+    ) {
+      throw new Error('Evolution URL is not allowed.');
+    }
+    const pinned = addresses[0];
+    if (!pinned) throw new Error('Evolution URL is not allowed.');
+    const library = url.protocol === 'https:' ? requestImpl.https : requestImpl.http;
+    const method = init?.method ?? 'GET';
+    const headers = new Headers(init?.headers);
+    const body = typeof init?.body === 'string' ? init.body : null;
+    const status = await new Promise<{ status: number; text: string }>(
+      (resolveResponse, reject) => {
+        const request = library(
+          url,
+          {
+            method,
+            headers: Object.fromEntries(headers.entries()),
+            servername: url.hostname,
+            lookup: (_hostname, options, callback) => {
+              const family = isIP(pinned) === 6 ? 6 : 4;
+              if (options.all) {
+                callback(null, [{ address: pinned, family }]);
+                return;
+              }
+              callback(null, pinned, family);
+            },
+          },
+          (response) => {
+            const chunks: Buffer[] = [];
+            response.on('data', (chunk: Buffer) => chunks.push(chunk));
+            response.on('end', () =>
+              resolveResponse({
+                status: response.statusCode ?? 0,
+                text: Buffer.concat(chunks).toString('utf8'),
+              })
+            );
+          }
+        );
+        request.setTimeout(10_000, () =>
+          request.destroy(new Error('Evolution request timed out.'))
+        );
+        request.on('error', reject);
+        if (body) request.write(body);
+        request.end();
+      }
+    );
+    return new Response(status.text, { status: status.status });
+  };
 }
 
 /** True for an https origin whose host does not resolve to a private or metadata address. */
@@ -215,12 +289,17 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
 export async function createEvolutionProvider(
   settings: GrowthSettings | null,
   env: NodeJS.ProcessEnv = process.env,
-  fetchImpl: FetchImpl = fetch,
+  fetchImpl?: FetchImpl,
   resolve: HostLookup = publicLookup
 ): Promise<WhatsAppProvider | null> {
   const config = await resolveEvolutionConfig(settings, env, resolve);
   if (!config) return null;
-  return new EvolutionWhatsAppProvider(config, fetchImpl);
+  const envUrl = (env.EVOLUTION_API_URL || '').trim();
+  const allowPrivate = Boolean(envUrl && sameOrigin(config.baseUrl, envUrl));
+  return new EvolutionWhatsAppProvider(
+    config,
+    fetchImpl ?? createPinnedFetch(resolve, allowPrivate)
+  );
 }
 
 export type ParsedWebhook =

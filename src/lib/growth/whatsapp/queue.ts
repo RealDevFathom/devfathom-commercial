@@ -1,7 +1,10 @@
 import {
   assertBodyHasStop,
+  assertCampaignProducts,
+  DrugCategoryInPromo,
   MissingStop,
   ORDER_READY_BODIES,
+  productFamiliesFromMedicines,
   renderTemplate,
   type OrderReadyLanguage,
 } from '@/lib/growth/templates';
@@ -171,7 +174,36 @@ export async function enqueueOrderReady(
     organizationId: input.organizationId,
     customerId: input.customerId,
     body,
+    templateKey: 'order_ready',
   });
+}
+
+type FamilyDb = Parameters<typeof productFamiliesFromMedicines>[0];
+
+/**
+ * Marketing queue gate. Product families come from this organization's medicines,
+ * then the allowlist runs before the row is inserted.
+ */
+export async function enqueueMarketing(
+  db: FamilyDb,
+  store: GrowthWhatsAppStore,
+  input: {
+    organizationId: string;
+    customerId: string;
+    body: string;
+    templateKey: string;
+    medicineIds: readonly string[];
+    campaignId?: string | null;
+    recipientId?: string | null;
+  }
+): Promise<MessageLogRow> {
+  const productCategories = await productFamiliesFromMedicines(
+    db,
+    input.organizationId,
+    input.medicineIds
+  );
+  assertCampaignProducts({ templateKey: input.templateKey, productCategories });
+  return enqueueOutbound(store, { ...input, productCategories });
 }
 
 /** Never enqueues a customer who is not opted in, or a body without STOP. */
@@ -181,12 +213,19 @@ export async function enqueueOutbound(
     organizationId: string;
     customerId: string;
     body: string;
+    templateKey?: string;
+    productCategories?: readonly string[];
     campaignId?: string | null;
     recipientId?: string | null;
   }
 ): Promise<MessageLogRow> {
   const customer = await store.customer(input.organizationId, input.customerId);
   if (!customer?.whatsappOptIn || !customer.whatsappE164) throw new NotOptedIn();
+  if (!input.templateKey) throw new DrugCategoryInPromo([]);
+  assertCampaignProducts({
+    templateKey: input.templateKey,
+    productCategories: input.productCategories ?? [],
+  });
   assertBodyHasStop(input.body);
   return store.insertMessage({
     organizationId: input.organizationId,
@@ -203,7 +242,9 @@ export async function enqueueOutbound(
 
 export async function drainOrganizationQueue(
   organizationId: string,
-  now = new Date()
+  now = new Date(),
+  openProvider: (settings: GrowthSettings) => Promise<WhatsAppProvider | null> = (settings) =>
+    createEvolutionProvider(settings)
 ): Promise<DrainResult> {
   const unit: StoreUnit = (run) => withTenantDb(organizationId, (db) => run(growthStore(db)));
   const ready = await unit(async (store) => {
@@ -217,7 +258,7 @@ export async function drainOrganizationQueue(
 
   let provider: WhatsAppProvider | null = null;
   try {
-    provider = await createEvolutionProvider(ready.settings);
+    provider = await openProvider(ready.settings);
   } catch {
     provider = null;
   }

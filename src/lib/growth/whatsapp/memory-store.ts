@@ -1,3 +1,4 @@
+import { DuplicateInboundMessage } from './duplicate';
 import type {
   GrowthCustomer,
   GrowthSettings,
@@ -35,6 +36,16 @@ export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
         (row) => row.waInstanceName === instance || row.organizationId === instance
       );
       return matches.length === 1 ? matches[0]!.organizationId : null;
+    },
+    async organizationForWebhookSecret(secretHash) {
+      const matches = [...settings.values()].filter(
+        (row) => row.waWebhookSecretHash === secretHash
+      );
+      if (matches.length !== 1 || !matches[0]?.waWebhookSecretHash) return null;
+      return {
+        organizationId: matches[0].organizationId,
+        waWebhookSecretHash: matches[0].waWebhookSecretHash,
+      };
     },
     async organization() {
       return { timezone: 'Asia/Karachi', displayName: 'Demo Pharmacy' };
@@ -120,6 +131,18 @@ export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
       row.updatedAt = now();
     },
     async insertMessage(input) {
+      if (
+        input.direction === 'in' &&
+        input.waMessageId &&
+        messages.some(
+          (row) =>
+            row.organizationId === input.organizationId &&
+            row.direction === 'in' &&
+            row.waMessageId === input.waMessageId
+        )
+      ) {
+        throw new DuplicateInboundMessage();
+      }
       const stamp = now();
       const row: MessageLogRow = {
         id: nextId('msg'),

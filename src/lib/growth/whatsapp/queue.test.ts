@@ -26,11 +26,14 @@ vi.mock('./store', () => ({
   },
 }));
 
+import { DrugCategoryInPromo } from '@/lib/growth/templates';
+
 import { EvolutionWhatsAppProvider } from './evolution';
 import { createMemoryStore } from './memory-store';
 import {
   drainQueue,
   drainOrganizationQueue,
+  enqueueMarketing,
   enqueueOrderReady,
   enqueueOutbound,
   type StoreUnit,
@@ -427,16 +430,17 @@ describe('outbound queue', () => {
     });
     vi.stubEnv('EVOLUTION_API_URL', 'http://localhost:8080');
     vi.stubEnv('EVOLUTION_API_KEY', 'env-key');
-    vi.useFakeTimers({ now: day });
-    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+    vi.useFakeTimers({ now: day, toFake: ['Date'] });
+    const fetchImpl = vi.fn(async () => {
       tx.httpInside = tx.depth > 0;
       return new Response(JSON.stringify({ key: { id: 'wamid-live' } }), { status: 200 });
     });
     try {
-      const result = await drainOrganizationQueue('org_1', day);
+      const result = await drainOrganizationQueue('org_1', day, async () =>
+        providerFor(fetchImpl as typeof fetch)
+      );
       expect(result).toEqual({ sent: 1, reason: 'ok' });
     } finally {
-      fetchMock.mockRestore();
       vi.useRealTimers();
       vi.unstubAllEnvs();
       tx.store = null;
@@ -493,6 +497,60 @@ describe('outbound queue', () => {
       })
     ).rejects.toBeInstanceOf(NotOptedIn);
     expect(store.messages).toHaveLength(0);
+  });
+
+  it('refuses an opted-in send that names no template', async () => {
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    await expect(
+      enqueueOutbound(store, {
+        organizationId: 'org_1',
+        customerId: 'c1',
+        body: 'Hello. Reply STOP to opt out.',
+      })
+    ).rejects.toBeInstanceOf(DrugCategoryInPromo);
+    expect(store.messages).toHaveLength(0);
+  });
+
+  it('queues front-shop marketing and refuses a drug family before insert', async () => {
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    const body = 'Salaam. Reply STOP to opt out.';
+    const db = {
+      medicine: {
+        findMany: async (args: { where: { id: { in: string[] } } }) =>
+          args.where.id.in.includes('drug')
+            ? [{ productFamily: 'PHARMACEUTICAL' }]
+            : [{ productFamily: 'FRONT_SHOP' }],
+      },
+    };
+    const queued = await enqueueMarketing(db, store, {
+      organizationId: 'org_1',
+      customerId: 'c1',
+      body,
+      templateKey: 'slow_day',
+      medicineIds: ['shop'],
+    });
+    expect(queued.status).toBe('queued');
+    await expect(
+      enqueueMarketing(db, store, {
+        organizationId: 'org_1',
+        customerId: 'c1',
+        body,
+        templateKey: 'slow_day',
+        medicineIds: ['drug'],
+      })
+    ).rejects.toBeInstanceOf(DrugCategoryInPromo);
+    await expect(
+      enqueueMarketing(db, store, {
+        organizationId: 'org_1',
+        customerId: 'c1',
+        body,
+        templateKey: 'slow_day',
+        medicineIds: [],
+      })
+    ).rejects.toBeInstanceOf(DrugCategoryInPromo);
+    expect(store.messages).toHaveLength(1);
   });
 
   it('caps the first 14 days at 30 messages', () => {

@@ -89,18 +89,10 @@ export const TEMPLATE_PURPOSE: Record<TemplateKey, TemplatePurpose> = {
 };
 
 /**
- * Drug categories a promotional campaign must not include. Pharmaceutical and
- * biological families are medicines; front-shop, device, and alternative are not.
+ * Promotional campaigns may name only these product families. Anything else,
+ * including an empty list, is refused. Utility templates do not use this list.
  */
-const DRUG_PRODUCT_CATEGORIES = new Set([
-  'pharmaceutical',
-  'biological',
-  'drug',
-  'medicine',
-  'prescription',
-  'rx',
-  'controlled',
-]);
+const PROMO_PRODUCT_CATEGORIES = new Set(['front_shop', 'device', 'alternative']);
 
 export class DrugCategoryInPromo extends Error {
   readonly categories: readonly string[];
@@ -112,22 +104,27 @@ export class DrugCategoryInPromo extends Error {
   }
 }
 
-export function isDrugProductCategory(category: string): boolean {
-  const normalized = category
+export function normalizeProductCategory(category: string): string {
+  return category
     .trim()
     .toLowerCase()
     .replace(/[\s-]+/g, '_');
-  return DRUG_PRODUCT_CATEGORIES.has(normalized);
+}
+
+export function isDrugProductCategory(category: string): boolean {
+  return !PROMO_PRODUCT_CATEGORIES.has(normalizeProductCategory(category));
 }
 
 export function assertPromoProductCategories(categories: readonly string[]): void {
+  if (categories.length === 0) throw new DrugCategoryInPromo([]);
   const blocked = categories.filter(isDrugProductCategory);
   if (blocked.length > 0) throw new DrugCategoryInPromo(blocked);
 }
 
 /**
- * Marketing sends refuse a drug product category. A utility template such as
- * `refill_reminder` may name the medicine being refilled.
+ * Marketing sends allow only front-shop, device, and alternative families.
+ * A utility template such as `refill_reminder` or `order_ready` may name a medicine.
+ * An unknown template key and an empty marketing list both fail closed.
  */
 export function assertCampaignProducts(input: {
   templateKey: string;
@@ -136,6 +133,31 @@ export function assertCampaignProducts(input: {
   if (!isTemplateKey(input.templateKey)) throw new UnknownTemplateVariable(input.templateKey);
   if (TEMPLATE_PURPOSE[input.templateKey] === 'utility') return;
   assertPromoProductCategories(input.productCategories);
+}
+
+type MedicineFamilyDb = {
+  medicine: {
+    findMany(args: {
+      where: { organizationId: string; id: { in: string[] } };
+      select: { productFamily: true };
+    }): Promise<Array<{ productFamily: string }>>;
+  };
+};
+
+/** Families stored on this organization's medicines. A missing id fails closed. */
+export async function productFamiliesFromMedicines(
+  db: MedicineFamilyDb,
+  organizationId: string,
+  medicineIds: readonly string[]
+): Promise<string[]> {
+  const ids = [...new Set(medicineIds)];
+  if (ids.length === 0) return [];
+  const rows = await db.medicine.findMany({
+    where: { organizationId, id: { in: ids } },
+    select: { productFamily: true },
+  });
+  if (rows.length !== ids.length) throw new DrugCategoryInPromo(['UNKNOWN']);
+  return rows.map((row) => row.productFamily);
 }
 
 export class UnknownTemplateVariable extends Error {

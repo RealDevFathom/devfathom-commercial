@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
+import { DuplicateInboundMessage } from './duplicate';
 import { growthStore } from './store';
 
 type Call = { model: string; op: string; args: unknown };
@@ -92,5 +93,57 @@ describe('growth WhatsApp Prisma adapter', () => {
         data: expect.objectContaining({ whatsappOptIn: true, whatsappE164: '+923001234567' }),
       },
     });
+  });
+
+  it('looks up exactly one organization by webhook secret hash', async () => {
+    const { db, calls } = recordingDb();
+    await expect(growthStore(db).organizationForWebhookSecret('hash-1')).resolves.toBeNull();
+    expect(calls.at(-1)).toMatchObject({
+      model: 'growthSettings',
+      op: 'findMany',
+      args: { where: { waWebhookSecretHash: 'hash-1' }, take: 2 },
+    });
+
+    const matched = {
+      organization: { findUnique: async () => null },
+      growthSettings: {
+        findMany: async () => [
+          { organizationId: 'org_1', waWebhookSecretHash: 'hash-1' },
+          { organizationId: 'org_2', waWebhookSecretHash: 'hash-1' },
+        ],
+      },
+    };
+    await expect(growthStore(matched).organizationForWebhookSecret('hash-1')).resolves.toBeNull();
+    matched.growthSettings.findMany = async () => [
+      { organizationId: 'org_1', waWebhookSecretHash: 'hash-1' },
+    ];
+    await expect(growthStore(matched).organizationForWebhookSecret('hash-1')).resolves.toEqual({
+      organizationId: 'org_1',
+      waWebhookSecretHash: 'hash-1',
+    });
+  });
+
+  it('maps an inbound unique conflict to a duplicate and leaves other conflicts alone', async () => {
+    const conflict = Object.assign(new Error('unique'), { code: 'P2002' });
+    const db = {
+      organization: { findUnique: async () => null },
+      messageLog: { create: async () => Promise.reject(conflict) },
+    };
+    const message = {
+      organizationId: 'org_1',
+      customerId: null,
+      waMessageId: 'in-1',
+      body: 'hi',
+      status: 'received' as const,
+      campaignId: null,
+      recipientId: null,
+      error: null,
+    };
+    await expect(
+      growthStore(db).insertMessage({ ...message, direction: 'in' })
+    ).rejects.toBeInstanceOf(DuplicateInboundMessage);
+    await expect(
+      growthStore(db).insertMessage({ ...message, direction: 'out', status: 'queued' })
+    ).rejects.toBe(conflict);
   });
 });

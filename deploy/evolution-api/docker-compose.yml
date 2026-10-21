@@ -3,26 +3,25 @@
 #   EVOLUTION_API_KEY=replace-with-evolution-api-key \
 #     docker compose -f deploy/evolution-api/docker-compose.yml up
 #
-# Pair a dedicated shop number at http://localhost:8080/manager
+# The API is not published on the host. Reach the manager only from the compose network.
 # Set the instance webhook URL to:
 #   $NEXT_PUBLIC_APP_URL/api/growth/whatsapp/webhook
-# and the webhook header x-growth-webhook-secret: $GROWTH_WEBHOOK_SECRET
+# and the webhook header x-growth-webhook-secret to that organization's secret.
 # Do not put the secret in the URL. This stack is dev-only.
 # Postgres is not published on the host, so it does not take DevFathom's 5432.
+# Set EVOLUTION_POSTGRES_PASSWORD in the environment. It is not stored in this file.
 
 name: devfathom-evolution-dev
 
 services:
   evolution-api:
     image: atendai/evolution-api:v2.1.1
-    ports:
-      - '8080:8080'
     environment:
-      SERVER_URL: http://localhost:8080
+      SERVER_URL: http://evolution-api:8080
       AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY}
       DATABASE_ENABLED: 'true'
       DATABASE_PROVIDER: postgresql
-      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution
+      DATABASE_CONNECTION_URI: postgresql://evolution:${EVOLUTION_POSTGRES_PASSWORD:?set EVOLUTION_POSTGRES_PASSWORD}@evolution-postgres:5432/evolution
       DATABASE_CONNECTION_CLIENT_NAME: devfathom_growth
       CACHE_REDIS_ENABLED: 'true'
       CACHE_REDIS_URI: redis://evolution-redis:6379/1
@@ -38,7 +37,7 @@ services:
     environment:
       POSTGRES_DB: evolution
       POSTGRES_USER: evolution
-      POSTGRES_PASSWORD: evolution
+      POSTGRES_PASSWORD: ${EVOLUTION_POSTGRES_PASSWORD:?set EVOLUTION_POSTGRES_PASSWORD}
     volumes:
       - evolution_postgres:/var/lib/postgresql/data
 

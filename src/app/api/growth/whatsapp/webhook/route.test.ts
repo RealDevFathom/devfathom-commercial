@@ -14,10 +14,12 @@ vi.mock('@/lib/growth', () => ({ isGrowthEnabled: mocks.isGrowthEnabled }));
 
 import { handleGrowthWebhook } from '@/lib/growth/whatsapp/inbound';
 import { createMemoryStore } from '@/lib/growth/whatsapp/memory-store';
+import { webhookSecretHash } from '@/lib/growth/whatsapp/webhook-secret';
 
 import { POST } from './route';
 
 const secret = 'growth-webhook-secret';
+const secretHash = webhookSecretHash(secret);
 
 function request(url: string, body: unknown, headers?: Record<string, string>) {
   return new Request(url, {
@@ -34,7 +36,10 @@ describe('growth WhatsApp webhook', () => {
     mocks.withPlatformDb.mockImplementation(async (run) =>
       run({
         growthSettings: {
-          findMany: async () => [{ organizationId: 'org_1', waInstanceName: 'shop' }],
+          findMany: async (args?: { where?: { waWebhookSecretHash?: string } }) =>
+            args?.where?.waWebhookSecretHash === secretHash
+              ? [{ organizationId: 'org_1', waWebhookSecretHash: secretHash }]
+              : [],
         },
       })
     );
@@ -51,17 +56,28 @@ describe('growth WhatsApp webhook', () => {
     request(
       'http://localhost/api/growth/whatsapp/webhook',
       { event: 'messages.update' },
-      {
-        'x-growth-webhook-secret': 'wrong',
-      }
+      { apikey: secret }
     ),
     request('http://localhost/api/growth/whatsapp/webhook', { event: 'messages.update' }),
-  ])('rejects a wrong secret with 401 before any database read', async (incoming) => {
+  ])('rejects a secret outside the header before any database read', async (incoming) => {
     const response = await POST(incoming);
     expect(response.status).toBe(401);
     expect(mocks.withPlatformDb).not.toHaveBeenCalled();
     expect(mocks.withTenantDb).not.toHaveBeenCalled();
     expect(mocks.isGrowthEnabled).not.toHaveBeenCalled();
+  });
+
+  it('rejects a header secret that matches no organization before opening a tenant', async () => {
+    const response = await POST(
+      request(
+        'http://localhost/api/growth/whatsapp/webhook',
+        { event: 'messages.update', instance: 'other-shop' },
+        { 'x-growth-webhook-secret': 'wrong' }
+      )
+    );
+    expect(response.status).toBe(401);
+    expect(mocks.withPlatformDb).toHaveBeenCalledOnce();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 
   it('rejects the secret from the query string and from the apikey header', async () => {
@@ -82,17 +98,25 @@ describe('growth WhatsApp webhook', () => {
     expect(mocks.withPlatformDb).not.toHaveBeenCalled();
   });
 
-  it('rejects every request when the webhook secret is unset', async () => {
-    vi.stubEnv('GROWTH_WEBHOOK_SECRET', '');
+  it('does not authenticate a tenant from the shared env secret or the payload instance', async () => {
+    vi.stubEnv('GROWTH_WEBHOOK_SECRET', secret);
+    const opened: string[] = [];
+    mocks.withTenantDb.mockImplementation(async (organizationId: string) => {
+      opened.push(organizationId);
+    });
     const response = await POST(
       request(
         'http://localhost/api/growth/whatsapp/webhook',
-        { event: 'messages.update' },
+        {
+          event: 'messages.update',
+          instance: 'other-shop',
+          data: { keyId: 'wamid.1', status: 'DELIVERY_ACK' },
+        },
         { 'x-growth-webhook-secret': secret }
       )
     );
-    expect(response.status).toBe(401);
-    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
+    expect(response.status).toBe(200);
+    expect(opened).toEqual(['org_1']);
   });
 
   it('rate-limits by IP before parsing the body', async () => {
@@ -115,7 +139,6 @@ describe('growth WhatsApp webhook', () => {
     );
     expect(blocked.status).toBe(429);
     expect(blocked.headers.get('Retry-After')).toBeTruthy();
-    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
   });
 
   it('returns 204 when growth is off and does not open a tenant transaction', async () => {
@@ -149,7 +172,7 @@ describe('growth WhatsApp webhook', () => {
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, ignored: true });
-    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
+    expect(mocks.withTenantDb).not.toHaveBeenCalled();
   });
 
   it('flips a sent row to delivered', async () => {

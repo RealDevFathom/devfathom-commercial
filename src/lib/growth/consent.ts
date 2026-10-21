@@ -1,4 +1,5 @@
 import { assertBodyHasStop, renderTemplate } from '@/lib/growth/templates';
+import { isDuplicateInbound } from '@/lib/growth/whatsapp/duplicate';
 
 import { InvalidWhatsAppPhone, normalizeWhatsAppE164 } from './whatsapp/phone';
 import type { WhatsAppProvider } from './whatsapp/provider';
@@ -105,17 +106,22 @@ export async function handleInboundText(input: {
   if (await input.store.findInbound(input.organizationId, input.waMessageId)) return 'duplicate';
   const keyword = consentKeyword(text);
   const known = await input.store.customerByPhone(input.organizationId, input.fromE164);
-  await input.store.insertMessage({
-    organizationId: input.organizationId,
-    customerId: known?.id ?? null,
-    direction: 'in',
-    waMessageId: input.waMessageId,
-    body: text,
-    status: 'received',
-    campaignId: null,
-    recipientId: null,
-    error: null,
-  });
+  try {
+    await input.store.insertMessage({
+      organizationId: input.organizationId,
+      customerId: known?.id ?? null,
+      direction: 'in',
+      waMessageId: input.waMessageId,
+      body: text,
+      status: 'received',
+      campaignId: null,
+      recipientId: null,
+      error: null,
+    });
+  } catch (error) {
+    if (isDuplicateInbound(error)) return 'duplicate';
+    throw error;
+  }
 
   if (keyword === 'stop') {
     if (known) {

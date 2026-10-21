@@ -30,6 +30,8 @@ export type GrowthSettings = {
   waInstanceName: string | null;
   waApiUrl: string | null;
   waApiKeyEnc: string | null;
+  /** SHA-256 hex of the per-instance webhook secret. The ciphertext is not required to authenticate. */
+  waWebhookSecretHash?: string | null;
   churnThreshold: number;
   /** Pairing proxy: the model has no pairedAt, so warm-up starts here. */
   createdAt: Date | null;
@@ -82,6 +84,9 @@ export type CustomerWrite = {
 export type GrowthWhatsAppStore = {
   settings(organizationId: string): Promise<GrowthSettings | null>;
   organizationIdForInstance(instance: string): Promise<string | null>;
+  organizationForWebhookSecret(
+    secretHash: string
+  ): Promise<{ organizationId: string; waWebhookSecretHash: string } | null>;
   organization(organizationId: string): Promise<{ timezone: string; displayName: string } | null>;
   customer(organizationId: string, customerId: string): Promise<GrowthCustomer | null>;
   customerByPhone(organizationId: string, whatsappE164: string): Promise<GrowthCustomer | null>;

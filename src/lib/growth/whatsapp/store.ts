@@ -1,3 +1,4 @@
+import { DuplicateInboundMessage, isDuplicateInbound } from './duplicate';
 import type {
   CustomerWrite,
   GrowthCustomer,
@@ -105,6 +106,7 @@ function asSettings(row: unknown): GrowthSettings | null {
     waInstanceName: asString(value.waInstanceName),
     waApiUrl: asString(value.waApiUrl),
     waApiKeyEnc: asString(value.waApiKeyEnc),
+    waWebhookSecretHash: asString(value.waWebhookSecretHash),
     churnThreshold: asInt(value.churnThreshold, 60),
     createdAt: asDate(value.createdAt),
   };
@@ -186,6 +188,29 @@ export function growthStore(db: object): GrowthWhatsAppStore {
         .map(asSettings)
         .filter((row): row is GrowthSettings => row !== null);
       return parsed.length === 1 ? parsed[0].organizationId : null;
+    },
+    async organizationForWebhookSecret(secretHash) {
+      const found = await call(settingsModel().findMany, {
+        where: { waWebhookSecretHash: secretHash },
+        take: 2,
+      });
+      const parsed = rows(found)
+        .map((row) => {
+          const value = record(row);
+          const organizationId =
+            value && typeof value.organizationId === 'string' ? value.organizationId : null;
+          const waWebhookSecretHash =
+            value && typeof value.waWebhookSecretHash === 'string'
+              ? value.waWebhookSecretHash
+              : null;
+          return organizationId && waWebhookSecretHash
+            ? { organizationId, waWebhookSecretHash }
+            : null;
+        })
+        .filter(
+          (row): row is { organizationId: string; waWebhookSecretHash: string } => row !== null
+        );
+      return parsed.length === 1 ? parsed[0] : null;
     },
     async organization(organizationId) {
       return organizations.organization.findUnique({
@@ -270,10 +295,16 @@ export function growthStore(db: object): GrowthWhatsAppStore {
       await call(messages().update, { where: { id }, data: patch });
     },
     async insertMessage(input: NewMessage) {
-      const created = await call(messages().create, { data: input });
-      const message = asMessage(created);
-      if (!message) throw new Error('Message log row was not created.');
-      return message;
+      try {
+        const created = await call(messages().create, { data: input });
+        const message = asMessage(created);
+        if (!message) throw new Error('Message log row was not created.');
+        return message;
+      } catch (error) {
+        if (input.direction === 'in' && isDuplicateInbound(error))
+          throw new DuplicateInboundMessage();
+        throw error;
+      }
     },
     async findInbound(organizationId, waMessageId) {
       const row = await call(messages().findFirst, {

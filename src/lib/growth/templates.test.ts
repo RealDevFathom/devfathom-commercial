@@ -6,6 +6,7 @@ import {
   DEFAULT_TEMPLATES,
   DrugCategoryInPromo,
   ensureDefaultTemplates,
+  productFamiliesFromMedicines,
   MissingStop,
   MissingTemplateVariable,
   renderTemplate,
@@ -46,9 +47,18 @@ describe('message templates', () => {
     expect(() =>
       assertCampaignProducts({
         templateKey: 'slow_day',
-        productCategories: ['Front Shop'],
+        productCategories: ['Front Shop', 'DEVICE', 'ALTERNATIVE'],
       })
     ).not.toThrow();
+    expect(() =>
+      assertCampaignProducts({ templateKey: 'birthday_offer', productCategories: [] })
+    ).toThrow(DrugCategoryInPromo);
+    expect(() =>
+      assertCampaignProducts({ templateKey: 'winback', productCategories: ['PHARMACEUTICALS'] })
+    ).toThrow(DrugCategoryInPromo);
+    expect(() =>
+      assertCampaignProducts({ templateKey: 'generic', productCategories: ['gadget'] })
+    ).toThrow(DrugCategoryInPromo);
     expect(() =>
       assertCampaignProducts({
         templateKey: 'refill_reminder',
@@ -58,6 +68,27 @@ describe('message templates', () => {
     expect(() =>
       assertCampaignProducts({ templateKey: 'not_a_template', productCategories: [] })
     ).toThrow(UnknownTemplateVariable);
+  });
+
+  it('loads product families from this organization and fails closed on a missing medicine', async () => {
+    const db = {
+      medicine: {
+        findMany: async () => [{ productFamily: 'FRONT_SHOP' }, { productFamily: 'DEVICE' }],
+      },
+    };
+    await expect(productFamiliesFromMedicines(db, 'org_1', ['m1', 'm2', 'm1'])).resolves.toEqual([
+      'FRONT_SHOP',
+      'DEVICE',
+    ]);
+    await expect(productFamiliesFromMedicines(db, 'org_1', [])).resolves.toEqual([]);
+    const missing = {
+      medicine: {
+        findMany: async () => [{ productFamily: 'FRONT_SHOP' }],
+      },
+    };
+    await expect(
+      productFamiliesFromMedicines(missing, 'org_1', ['m1', 'm2'])
+    ).rejects.toMatchObject({ categories: ['UNKNOWN'] });
   });
 
   it('refuses a body without STOP', () => {

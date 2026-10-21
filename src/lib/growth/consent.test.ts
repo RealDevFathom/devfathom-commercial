@@ -87,6 +87,25 @@ describe('STOP and START', () => {
     });
   });
 
+  it('drops a duplicate inbound when the first lookup misses the row', async () => {
+    const { store, provider, sendText } = harness(customer());
+    store.findInbound = async () => null;
+    const input = {
+      store,
+      provider,
+      organizationId: 'org_1',
+      fromE164: from,
+      text: 'hello',
+      waMessageId: 'in-race',
+      businessName: 'Sehat Pharmacy',
+      now,
+    };
+    expect(await handleInboundText(input)).toBe('logged');
+    expect(await handleInboundText(input)).toBe('duplicate');
+    expect(store.messages.filter((row) => row.direction === 'in')).toHaveLength(1);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
   it('replies to STOP only once when the webhook is delivered twice', async () => {
     const { store, provider, sendText } = harness(customer());
     const input = {

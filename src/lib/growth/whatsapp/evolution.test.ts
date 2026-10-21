@@ -2,7 +2,12 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { encryptSecret } from '@/lib/secret-crypto';
 
-import { isPublicHttpsUrl, resolveEvolutionConfig, type HostLookup } from './evolution';
+import {
+  createPinnedFetch,
+  isPublicHttpsUrl,
+  resolveEvolutionConfig,
+  type HostLookup,
+} from './evolution';
 import type { GrowthSettings } from './types';
 
 const lookup: HostLookup = async (hostname) => {
@@ -113,5 +118,66 @@ describe('Evolution base URL', () => {
   it('accepts a public https origin', async () => {
     await expect(isPublicHttpsUrl('https://evolution.example/path', lookup)).resolves.toBe(true);
     await expect(isPublicHttpsUrl('https://10.0.0.8', lookup)).resolves.toBe(false);
+  });
+});
+
+describe('pinned Evolution fetch', () => {
+  it('connects with the resolved address and refuses a private address in the set', async () => {
+    const calls: string[] = [];
+    const requestImpl = {
+      http: (
+        url: URL,
+        options: {
+          lookup?: (
+            hostname: string,
+            lookupOptions: { all?: boolean },
+            callback: (
+              err: null,
+              address: string | { address: string; family: number }[],
+              family?: number
+            ) => void
+          ) => void;
+        },
+        onResponse: (response: {
+          statusCode: number;
+          on: (event: string, handler: () => void) => void;
+        }) => void
+      ) => {
+        calls.push(url.hostname);
+        options.lookup?.('evolution.example', { all: true }, (_err, address) => {
+          calls.push(
+            Array.isArray(address) ? address.map((item) => item.address).join(',') : address
+          );
+        });
+        const response = {
+          statusCode: 200,
+          on(event: string, handler: () => void) {
+            if (event === 'end') handler();
+          },
+        };
+        onResponse(response);
+        return { setTimeout() {}, on() {}, write() {}, end() {} };
+      },
+      https: () => {
+        throw new Error('https should not run');
+      },
+    };
+    const allowed = createPinnedFetch(async () => ['8.8.8.8'], false, requestImpl as never);
+    const response = await allowed('http://evolution.example/message/sendText/shop', {
+      method: 'POST',
+      body: '{}',
+    });
+    expect(response.status).toBe(200);
+    expect(calls).toEqual(['evolution.example', '8.8.8.8']);
+
+    const blocked = createPinnedFetch(
+      async () => ['8.8.8.8', '10.1.0.5'],
+      false,
+      requestImpl as never
+    );
+    await expect(blocked('http://rebinding.example/message')).rejects.toThrow(
+      'Evolution URL is not allowed.'
+    );
+    expect(calls).toEqual(['evolution.example', '8.8.8.8']);
   });
 });
