@@ -92,6 +92,32 @@ suite('catalog tenant isolation on real PostgreSQL (#142)', () => {
   });
 
   for (const restricted of [false, true]) {
+    it(`restores row_security from off before catalog reads (${restricted ? 'restricted role' : 'superuser'})`, async () => {
+      await tenant(
+        'essentials',
+        async (tx) => {
+          const rowSecurity = async () => {
+            const [setting] = await tx.$queryRaw<{ value: string }[]>`
+              SELECT current_setting('row_security') AS value
+            `;
+            return setting.value;
+          };
+          await tx.$queryRaw`SELECT set_config('row_security', 'off', true)`;
+          expect(await rowSecurity()).toBe('off');
+          expect((await getProduct(tx, productB)).id).toBe(productB);
+          expect(await rowSecurity()).toBe('on');
+
+          await tx.$queryRaw`SELECT set_config('row_security', 'off', true)`;
+          expect(await rowSecurity()).toBe('off');
+          expect((await listProducts(tx)).map((product) => product.id)).toEqual([productB]);
+          expect(await rowSecurity()).toBe('on');
+          // The restricted role now applies the policy even to unfiltered reads.
+          if (restricted) expect(await tx.restaurantProduct.count()).toBe(1);
+        },
+        restricted
+      );
+    });
+
     it(`blocks the reported getProduct/listProducts leak (${restricted ? 'restricted role' : 'superuser'})`, async () => {
       await tenant(
         'essentials',
