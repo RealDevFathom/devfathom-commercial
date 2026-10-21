@@ -400,6 +400,7 @@ jobs:
           DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
           TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
           PLAYWRIGHT_DATABASE_ADMIN_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/platform_e2e_gate?options=-c%20app.is_platform_admin%3Dtrue
+          TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/gate/browser/platform-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/platform
         run: bunx playwright test --config=tests/e2e/platform-control-plane.config.ts --workers=1 --reporter=html,json
@@ -414,6 +415,7 @@ jobs:
           TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
           AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
           AGENCY_E2E: '1'
+          TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/agency-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/agency
         run: bunx tsx scripts/run-agency-e2e.ts --workers=1 --reporter=html,json
@@ -428,6 +430,7 @@ jobs:
           TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
           PHARMACY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
           PHARMACY_E2E: '1'
+          TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/pharmacy-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/pharmacy
         run: >-

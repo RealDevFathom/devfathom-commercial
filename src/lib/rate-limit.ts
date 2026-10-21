@@ -42,6 +42,7 @@ const SWEEP_SQL = `DELETE FROM rate_limit_buckets WHERE "resetAt" <= NOW()`;
 
 type RateLimitEnv = {
   NODE_ENV?: string;
+  NEXT_PHASE?: string;
   VITEST?: string;
   RATE_LIMIT_STORE?: string;
   CLIENT_IP_HEADER?: string;
@@ -217,10 +218,29 @@ function isTrusted(ip: string, list: BlockList): boolean {
  * skips trusted proxies. The rightmost hop must itself be trusted, or the
  * header is ignored. `TRUSTED_PROXY_HOPS` selects the address that many hops
  * from the right (the one the outermost proxy appended). With neither setting,
- * production ignores forwarded headers. Development and test accept one address,
- * which is the socket address Next copies into `X-Forwarded-For` when the client
- * did not send the header. A multi-hop list stays ignored.
+ * production ignores forwarded headers. Production startup refuses to run until
+ * one of those settings is present, so requests cannot share an `unknown`
+ * bucket. Development and test accept one address, which is the socket address
+ * Next copies into `X-Forwarded-For` when the client did not send the header.
+ * A multi-hop list stays ignored.
  */
+/**
+ * Production must name a proxy. With none of the three settings, every request
+ * shares the address `unknown` and a burst can lock out login.
+ */
+export function assertProductionClientIpConfig(env: RateLimitEnv = runtimeEnv): void {
+  if (env.NODE_ENV !== 'production') return;
+  if (env.NEXT_PHASE === 'phase-production-build') return;
+  const configured = [env.CLIENT_IP_HEADER, env.TRUSTED_PROXY_CIDRS, env.TRUSTED_PROXY_HOPS].some(
+    (value) => Boolean(value?.trim())
+  );
+  if (configured) return;
+  throw new Error(
+    'Refusing to start: set CLIENT_IP_HEADER, TRUSTED_PROXY_CIDRS, or TRUSTED_PROXY_HOPS. ' +
+      'Without one of them, production rate limits share a single "unknown" address and can lock out login.'
+  );
+}
+
 export function clientIp(request: Request, env: RateLimitEnv = runtimeEnv): string {
   const configured = env.CLIENT_IP_HEADER?.trim();
   if (configured) {

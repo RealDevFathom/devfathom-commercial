@@ -70,8 +70,9 @@ migrations and seed (a local superuser is enough). Prisma CLI and the seed read
 back to `DATABASE_URL`. The running server reads `DATABASE_URL` only.
 
 `next start` and any production process refuse to boot when that application role is
-`SUPERUSER` or `BYPASSRLS`. `bun run dev` does not run the check. Confirm the application
-role with:
+`SUPERUSER` or `BYPASSRLS`, and when `CLIENT_IP_HEADER`, `TRUSTED_PROXY_CIDRS`, and
+`TRUSTED_PROXY_HOPS` are all unset. `bun run dev` does not run either check. Confirm the
+application role with:
 
 ```sql
 SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;

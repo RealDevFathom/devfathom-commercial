@@ -1,6 +1,7 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
   clearRateLimit,
+  assertProductionClientIpConfig,
   clientIp,
   interpretRateLimitRow,
   RATE_LIMIT_UPSERT_SQL,
@@ -142,6 +143,38 @@ describe('shared rate-limit store', () => {
     const resetAt = new Date(Date.now() + 5_000);
     expect(interpretRateLimitRow(1, resetAt, 2).ok).toBe(true);
     expect(interpretRateLimitRow(3, resetAt, 2)).toMatchObject({ ok: false, remaining: 0 });
+  });
+});
+
+describe('assertProductionClientIpConfig', () => {
+  it('requires a proxy setting only for a production server', () => {
+    expect(() => assertProductionClientIpConfig({ NODE_ENV: 'development' })).not.toThrow();
+    expect(() => assertProductionClientIpConfig({ NODE_ENV: 'test' })).not.toThrow();
+    expect(() =>
+      assertProductionClientIpConfig({
+        NODE_ENV: 'production',
+        NEXT_PHASE: 'phase-production-build',
+      })
+    ).not.toThrow();
+    expect(() => assertProductionClientIpConfig({ NODE_ENV: 'production' })).toThrow(/unknown/);
+    expect(() =>
+      assertProductionClientIpConfig({ NODE_ENV: 'production', CLIENT_IP_HEADER: '   ' })
+    ).toThrow(/CLIENT_IP_HEADER/);
+  });
+
+  it('accepts any one of the three proxy settings', () => {
+    expect(() =>
+      assertProductionClientIpConfig({
+        NODE_ENV: 'production',
+        CLIENT_IP_HEADER: 'cf-connecting-ip',
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertProductionClientIpConfig({ NODE_ENV: 'production', TRUSTED_PROXY_CIDRS: '10.0.0.0/8' })
+    ).not.toThrow();
+    expect(() =>
+      assertProductionClientIpConfig({ NODE_ENV: 'production', TRUSTED_PROXY_HOPS: '1' })
+    ).not.toThrow();
   });
 });
 
