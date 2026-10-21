@@ -61,6 +61,7 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
+    pharmacyBranchAssignment: model(),
     user: model(),
     medicineBarcode: model(),
   };
@@ -116,6 +117,7 @@ beforeEach(() => {
   db = makeDb();
   mocks.can.mockReset().mockResolvedValue(true);
   db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch_a' });
+  db.pharmacyBranchAssignment.findFirst.mockResolvedValue({ id: 'assignment_a' });
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
@@ -802,6 +804,64 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });
+
+  it.each(['reverseGoodsReceipt', 'resolveReceivingException'] as const)(
+    'requires an effective procurement grant before %s',
+    async (procedure) => {
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
+      });
+      const input =
+        procedure === 'reverseGoodsReceipt'
+          ? { branchId: 'branch_a', goodsReceiptId: 'gr_a', reason: 'Incorrect receipt' }
+          : {
+              branchId: 'branch_a',
+              receivingExceptionId: 'rex_a',
+              resolutionNote: 'Checked against invoice',
+            };
+
+      await expect(caller()[procedure](input as never)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+      });
+      expect(db.pharmacyBranchAssignment.findFirst).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.pharmacyReceivingException.update).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['reverseGoodsReceipt', 'resolveReceivingException'] as const)(
+    'requires assignment to the receipt branch before %s',
+    async (procedure) => {
+      db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null);
+      const input =
+        procedure === 'reverseGoodsReceipt'
+          ? { branchId: 'branch_a', goodsReceiptId: 'gr_a', reason: 'Incorrect receipt' }
+          : {
+              branchId: 'branch_a',
+              receivingExceptionId: 'rex_a',
+              resolutionNote: 'Checked against invoice',
+            };
+
+      await expect(caller()[procedure](input as never)).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'Branch is outside your pharmacy scope.',
+      });
+      expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
+        where: {
+          organizationId: 'org_a',
+          branchId: 'branch_a',
+          userId: 'user_a',
+          active: true,
+        },
+        select: { id: true },
+      });
+      expect(db.$transaction).not.toHaveBeenCalled();
+      expect(db.pharmacyReceivingException.update).not.toHaveBeenCalled();
+    }
+  );
 
   it('stores the server parse of a scan and ignores a conflicting client serial', async () => {
     await caller().createGoodsReceipt({

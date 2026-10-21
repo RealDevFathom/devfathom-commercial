@@ -193,6 +193,20 @@ async function assertProcurement(ctx: TRPCContext) {
   }
 }
 
+async function assertProcurementBranch(ctx: TRPCContext, branchId: string) {
+  await assertProcurement(ctx);
+  const organizationId = ctx.entitlements?.organizationId;
+  const actorId = ctx.session?.user?.id;
+  if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+    where: { organizationId, branchId, userId: actorId, active: true },
+    select: { id: true },
+  });
+  if (!assignment) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your pharmacy scope.' });
+  }
+}
+
 type ReceiptIdentityInput = {
   medicineId: string;
   batchNumber: string;
@@ -321,7 +335,12 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
 function assertOrderableSupplier(
   supplier: {
     authorized: boolean;
-    licences: { id: string; expiresAt: Date; verifiedAt: Date | null; supersedesId: string | null }[];
+    licences: {
+      id: string;
+      expiresAt: Date;
+      verifiedAt: Date | null;
+      supersedesId: string | null;
+    }[];
   } | null,
   at: Date
 ) {
@@ -1200,6 +1219,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurementBranch(ctx, input.branchId);
       const scope = receivingScope(ctx, input.branchId);
       try {
         return await ctx.db.$transaction((tx) =>
@@ -1246,6 +1266,7 @@ const purchasingRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      await assertProcurementBranch(ctx, input.branchId);
       try {
         return await resolveReceivingException(ctx.db, receivingScope(ctx, input.branchId), {
           receivingExceptionId: input.receivingExceptionId,
