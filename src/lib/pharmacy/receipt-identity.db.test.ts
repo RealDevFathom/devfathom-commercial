@@ -3,7 +3,7 @@ import { randomUUID } from 'node:crypto';
 import { beforeAll, describe, expect, it } from 'vitest';
 import { db } from '@/lib/db';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { addSaleLine, createSale, changeSaleStatus, returnSaleLine } from './sales';
+import { addSaleLine, createSale, returnSaleLine } from './sales';
 import { receiveLot } from './stock-ledger';
 import { applyPharmacyTender, refundPharmacyTender } from './settlement';
 import { readCounterReceipt } from './counter';
@@ -363,7 +363,18 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
   });
   it('legacy/status-only completion reports unavailable history without live catalog backfill', async () => {
     const f = await fixture();
-    await transaction((db) => changeSaleStatus(db, scope, f.sale.id, 'complete'));
+    await transaction((db) =>
+      db.pharmacySale.update({
+        where: { id: f.sale.id },
+        data: {
+          status: 'COMPLETED',
+          completedAt: new Date(),
+          receiptNumber: 1,
+          receiptDeviceId: f.input.deviceId,
+          businessDate,
+        },
+      })
+    );
     const receipt = await read(f.sale.id);
     expect(receipt.receiptNumber).toBeGreaterThan(0);
     expect(receipt.lines[0]).toMatchObject({
