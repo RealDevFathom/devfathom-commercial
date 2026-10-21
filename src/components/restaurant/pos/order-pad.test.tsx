@@ -4,6 +4,35 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 
 import { OrderPad } from './order-pad';
 import { PosOfflineRuntime } from '@/lib/restaurant/pos-offline-runtime';
+import { reviveCommercialTerms } from '@/lib/restaurant/commercial-terms';
+import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
+
+const commercialTerms = {
+  profiles: [
+    {
+      id: 'profile-1',
+      effectiveFrom: '2020-01-01T00:00:00.000Z',
+      effectiveTo: '2099-01-01T00:00:00.000Z',
+      status: 'PUBLISHED' as const,
+      approvalReference: 'TAX-1',
+      approvedAt: '2019-12-01T00:00:00.000Z',
+    },
+  ],
+  rules: (['CASH', 'CARD', 'OTHER'] as const).map((category) => ({
+    id: `rule-${category}`,
+    profileVersionId: 'profile-1',
+    paymentCategory: category,
+    priceMode: 'EXCLUSIVE' as const,
+    rate: '0.05',
+    effectiveFrom: '2020-01-01T00:00:00.000Z',
+    effectiveTo: '2099-01-01T00:00:00.000Z',
+    status: 'PUBLISHED' as const,
+    approvalReference: 'TAX-1',
+    approvedAt: '2019-12-01T00:00:00.000Z',
+    sourceExpiresAt: '2099-01-01T00:00:00.000Z',
+  })),
+  serviceChargeRate: '0.10',
+};
 
 function json(body: unknown, status = 200) {
   return new Response(JSON.stringify(body), {
@@ -202,6 +231,9 @@ function transport({
     }
     if (path.endsWith('/orders/delivery/attach')) {
       return json({ fulfillmentId: 'fulfillment-1' }, 201);
+    }
+    if (path.endsWith('/orders/commercial-terms')) {
+      return json(commercialTerms);
     }
     if (path.includes('/orders/effective-menu')) {
       const publicationId = new URL(path, 'http://localhost').searchParams.get('publicationId');
@@ -1142,7 +1174,15 @@ describe('OrderPad transport', () => {
     fireEvent.click(screen.getByRole('button', { name: /Coffee4\.00/ }));
     fireEvent.click(screen.getByRole('checkbox', { name: /Oat milk/ }));
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
-    expect(screen.getByText('4.50')).toBeVisible();
+    const terms = reviveCommercialTerms(commercialTerms);
+    const priced = quoteDraftCheckTotal({
+      profiles: terms.profiles,
+      rules: terms.rules,
+      serviceChargeRate: terms.serviceChargeRate,
+      lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
+    });
+    expect(priced).toBe('5.18');
+    expect(await screen.findByText(priced)).toBeVisible();
   });
 
   it('does not let F9 close the check while a void dialog is open or a field is focused', async () => {

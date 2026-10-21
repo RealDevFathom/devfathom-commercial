@@ -16,6 +16,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { ORDER_CHANNELS } from '@/lib/restaurant/order-channels';
+import type { CommercialTermsQuote } from '@/lib/restaurant/commercial-terms';
 import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
 import { shouldHandleCounterKey } from '@/lib/pharmacy/counter-keymap';
 
@@ -464,19 +465,7 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               className="shrink-0"
               actions={
                 <span className="inline-block min-w-24 text-right font-mono text-sm tabular-nums text-text-strong">
-                  {quoteDraftCheckTotal({
-                    lines: pos.draftLines.map((line) => ({
-                      id: line.lineId,
-                      unitPrice: line.quotedUnitPrice,
-                      quantity: line.quantity,
-                      modifierDeltas: modifierDeltas(line, pos.draftMenu),
-                    })),
-                    serviceCharge: '0.00',
-                    deliveryFee:
-                      pos.channel === 'DELIVERY'
-                        ? (pos.selectedDeliveryZone?.fee ?? '0.00')
-                        : '0.00',
-                  })}
+                  {draftCheckTotal(pos)}
                 </span>
               }
             >
@@ -620,6 +609,38 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
       <CheckoutPanel {...workspace.checkoutPanelProps} />
     </PosShell>
   );
+}
+
+function draftCheckTotal(pos: {
+  channel: string;
+  commercialTerms: CommercialTermsQuote | null;
+  draftLines: Array<{
+    lineId: string;
+    quotedUnitPrice: string;
+    quantity: number;
+    menuItemId: string;
+    modifierOptionIds: string[];
+  }>;
+  draftMenu: Parameters<typeof modifierDeltas>[1];
+  selectedDeliveryZone?: { fee: string } | null;
+}) {
+  if (!pos.commercialTerms) return '…';
+  const terms = pos.commercialTerms;
+  try {
+    return quoteDraftCheckTotal({
+      lines: pos.draftLines.map((line) => ({
+        id: line.lineId,
+        unitPrice: line.quotedUnitPrice,
+        quantity: line.quantity,
+        modifierDeltas: modifierDeltas(line, pos.draftMenu),
+      })),
+      ...(terms.profiles.length ? { profiles: terms.profiles, rules: terms.rules } : {}),
+      serviceChargeRate: pos.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0',
+      deliveryFee: pos.channel === 'DELIVERY' ? (pos.selectedDeliveryZone?.fee ?? '0.00') : '0.00',
+    });
+  } catch {
+    return '—';
+  }
 }
 
 function modifierDeltas(

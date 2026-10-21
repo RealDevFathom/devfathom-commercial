@@ -1,4 +1,4 @@
-import { add, formatMoney, sum } from '@/lib/restaurant/money-arithmetic';
+import { add, formatMoney, multiply, roundMoney, sum } from '@/lib/restaurant/money-arithmetic';
 import { quoteTaxSettlement, type TaxProfile, type TaxRule } from '@/lib/restaurant/tax-calculator';
 
 export type DraftCheckLine = {
@@ -11,7 +11,10 @@ export type DraftCheckLine = {
 
 export type DraftCheckTotalInput = {
   lines: readonly DraftCheckLine[];
+  /** Flat service amount. Ignored when `serviceChargeRate` is set. */
   serviceCharge?: string;
+  /** Branch policy rate, such as `0.10`. `0` is an explicit zero, not a missing policy. */
+  serviceChargeRate?: string | null;
   deliveryFee?: string;
   profiles?: TaxProfile[];
   rules?: TaxRule[];
@@ -29,18 +32,26 @@ export type DraftCheckTotalInput = {
 export function quoteDraftCheckTotal(input: DraftCheckTotalInput): string {
   const at = input.at ?? new Date();
   const fallback = input.profiles ? null : zeroTax(at);
+  const lines = input.lines.map((line) => ({
+    id: line.id,
+    unitPrice: line.unitPrice,
+    quantity: line.quantity,
+    modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
+  }));
+  const basis = sum(
+    lines.map((line) => multiply(add(line.unitPrice, line.modifierTotal), line.quantity))
+  );
+  const serviceAmount =
+    input.serviceChargeRate != null
+      ? formatMoney(roundMoney(multiply(basis, input.serviceChargeRate)))
+      : (input.serviceCharge ?? '0.00');
   const quote = quoteTaxSettlement({
-    lines: input.lines.map((line) => ({
-      id: line.id,
-      unitPrice: line.unitPrice,
-      quantity: line.quantity,
-      modifierTotal: formatMoney(sum(line.modifierDeltas ?? [])),
-    })),
+    lines,
     profiles: input.profiles ?? fallback!.profiles,
     rules: input.rules ?? fallback!.rules,
     at,
     proposedTenderType: 'CASH',
-    serviceCharge: { amount: input.serviceCharge ?? '0.00', taxable: false },
+    serviceCharge: { amount: serviceAmount, taxable: false },
   });
   return formatMoney(add(quote.grandTotal.toString(), input.deliveryFee ?? '0.00'));
 }

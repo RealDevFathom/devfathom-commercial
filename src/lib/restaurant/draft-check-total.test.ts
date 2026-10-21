@@ -50,6 +50,30 @@ describe('quoteDraftCheckTotal', () => {
     ).toBe('10.01');
   });
 
+  it('applies a branch service-charge rate to the pre-tax basis', () => {
+    expect(
+      quoteDraftCheckTotal({
+        at,
+        profiles: [profile],
+        rules: [rule('CASH', '0.05'), rule('CARD', '0.10'), rule('OTHER', '0.00')],
+        serviceChargeRate: '0.10',
+        lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
+      })
+    ).toBe('5.18');
+  });
+
+  it('treats a zero service-charge rate as no charge', () => {
+    expect(
+      quoteDraftCheckTotal({
+        at,
+        profiles: [profile],
+        rules: [rule('CASH', '0'), rule('CARD', '0'), rule('OTHER', '0')],
+        serviceChargeRate: '0',
+        lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
+      })
+    ).toBe('4.50');
+  });
+
   it('keeps two decimal places when tax, service, and delivery are zero', () => {
     expect(
       quoteDraftCheckTotal({
