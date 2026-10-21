@@ -122,6 +122,8 @@ describe('CRM-L01 pharmacy loyalty', () => {
 
   it('returns counter history, points and khata visibility without patient fields', async () => {
     const db = {
+      pharmacyFamilyAccount: { findMany: vi.fn().mockResolvedValue([{id:'family-a', displayName:'Family', creditLimitMinor:20_000}]) },
+      pharmacyKhataEvent: { groupBy: vi.fn().mockResolvedValue([{kind:'CHARGE', _sum:{amountMinor:1000}}, {kind:'PAYMENT', _sum:{amountMinor:200}}]) },
       pharmacyCustomer: {
         findFirst: vi.fn().mockResolvedValue({
           id: 'customer-a',

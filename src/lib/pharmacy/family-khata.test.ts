@@ -48,6 +48,8 @@ describe('CRM-L02 family privacy and khata settlement', () => {
     }));
     const db = {
       $queryRaw: vi.fn(),
+      financeJournalEntry: { findFirst: vi.fn().mockResolvedValue(null), create: vi.fn().mockResolvedValue({id: 'journal'}) },
+      financeJournalLine: { create: vi.fn() },
       pharmacyKhataEvent: {
         findMany: vi.fn().mockResolvedValue([
           {
@@ -283,7 +285,7 @@ describe('counter Khata ledger gate', () => {
       authorizeKhataCharge(
         db as never,
         scope,
-        { ...input, amountMinor: 600, ownerOverride: true },
+        { ...input, amountMinor: 600, ownerOverride: true, overrideReason: 'Trusted customer emergency' },
         owner
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
@@ -294,7 +296,7 @@ describe('counter Khata ledger gate', () => {
     await authorizeKhataCharge(
       db as never,
       scope,
-      { ...input, amountMinor: 600, ownerOverride: true },
+      { ...input, amountMinor: 600, ownerOverride: true, overrideReason: 'Trusted customer emergency' },
       { authorized: true, passwordAuthenticatedAt: Date.now() }
     );
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({

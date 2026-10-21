@@ -1,3 +1,4 @@
+import { readKhataBalance } from './family-khata';
 import 'server-only';
 
 import { completePaidPharmacySale, completionSaleInclude } from './sale-completion';
@@ -346,24 +347,26 @@ export async function readCustomerSnapshot(
       where: { organizationId: scope.organizationId, branchId: scope.branchId, customerId },
     }),
   ]);
-  const creditBalanceMinor = sales
-    .flatMap((sale) => sale.tenders)
-    .filter((tender) => tender.type === 'CREDIT')
-    .reduce(
-      (sum, tender) =>
-        sum +
-        tender.amountMinor -
-        tender.refunds.reduce((value, row) => value + row.amountMinor, 0),
-      0
-    );
+  const accounts = await db.pharmacyFamilyAccount.findMany({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId,
+      active: true, members: { some: { customerId } } },
+    select: { id: true, displayName: true, creditLimitMinor: true },
+    orderBy: { id: 'asc' },
+  });
+  const khataAccounts = await Promise.all(accounts.map(async (account) => ({
+    ...account, balanceMinor: await readKhataBalance(db, scope, account.id),
+  })));
+  const creditBalanceMinor = khataAccounts.reduce((sum, a) => sum + a.balanceMinor, 0);
+  const creditLimitMinor = khataAccounts.reduce((sum, a) => sum + a.creditLimitMinor, 0);
   return {
-    customer,
+    customer: { ...customer, creditLimitMinor },
+    khataAccounts,
     pointsBalance: points._sum.points ?? 0,
     pointsHistory,
     pointsCount,
     pointsPage: page,
     creditBalanceMinor,
-    availableCreditMinor: Math.max(0, customer.creditLimitMinor - creditBalanceMinor),
+    availableCreditMinor: Math.max(0, creditLimitMinor - creditBalanceMinor),
     history: sales.map((sale) => ({
       saleId: sale.id,
       receiptNumber: sale.receiptNumber,

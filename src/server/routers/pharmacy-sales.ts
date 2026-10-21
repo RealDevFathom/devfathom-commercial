@@ -28,6 +28,8 @@ import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import {
+  dishonourKhataPayment,
+  settleFamilyKhata,
   authorizeKhataCharge,
   FamilyKhataError,
   readSaleKhataAccounts,
@@ -116,6 +118,7 @@ const tenderInput = z
     idempotencyKey: z.string().trim().min(1).max(160),
     familyAccountId: z.string().trim().min(1).max(128).optional(),
     ownerOverride: z.boolean().optional(),
+    overrideReason: z.string().trim().min(3).max(500).optional(),
   })
   .strict();
 const saleUnit = z.enum(['PACK', 'STRIP', 'UNIT']);
@@ -149,7 +152,7 @@ async function khataScope(ctx: TRPCContext, branch: string) {
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
       db: ctx.db,
       source: 'TRPC',
     }))
@@ -525,6 +528,44 @@ export const pharmacySalesRouter = router({
         closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
       );
     }),
+  dishonourKhataPayment: protectedProcedure.input(z.object({
+    branchId, paymentId: z.string().min(1), reason: z.string().trim().min(3).max(500),
+  }).strict()).mutation(async ({ ctx, input }) => {
+    const scope = await khataScope(ctx, input.branchId);
+    if (!await can(subjectFromSession(ctx.session!.user), 'pharmacy:manage', undefined, { db: ctx.db }))
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    return ctx.db.$transaction(async tx => {
+      const db = txDb(tx);
+      await bindKhataBranch(db, scope);
+      return dishonourKhataPayment(db, scope, { ...input, occurredAt: new Date() });
+    });
+  }),
+  settleFamilyKhata: protectedProcedure.input(z.object({
+    branchId, familyAccountId: z.string().min(1), amountMinor: z.number().int().positive().max(2147483647),
+    idempotencyKey: z.string().trim().min(1).max(128),
+  }).strict()).mutation(async ({ ctx, input }) => {
+    const scope = await khataScope(ctx, input.branchId);
+    return ctx.db.$transaction(async (tx) => {
+      const db = txDb(tx);
+      await bindKhataBranch(db, scope);
+      await db.$queryRaw(Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${scope.organizationId}), hashtext(${input.idempotencyKey}))`);
+      await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${input.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+      const account = await db.pharmacyFamilyAccount.findFirst({ where: {
+        id: input.familyAccountId, organizationId: scope.organizationId, branchId: scope.branchId, active: true,
+      }});
+      if (!account) throw new TRPCError({ code: 'NOT_FOUND' });
+      const key = `collection:${scope.branchId}:${input.idempotencyKey}`;
+      const prior = await db.pharmacyKhataEvent.findMany({ where: {
+        organizationId: scope.organizationId, branchId: scope.branchId, note: key,
+      }});
+      if (prior.length) {
+        if (prior.some(p => p.familyAccountId !== input.familyAccountId) || prior.reduce((n,p) => n+p.amountMinor,0) !== input.amountMinor)
+          throw new TRPCError({ code: 'CONFLICT' });
+        return { paidMinor: input.amountMinor, replayed: true };
+      }
+      return settleFamilyKhata(db, scope, { ...input, occurredAt: new Date(), collectionKey: key });
+    });
+  }),
   customerSnapshot: protectedProcedure
     .input(
       z
@@ -709,8 +750,7 @@ export const pharmacySalesRouter = router({
       const normalized = ledgerTender(input);
       const ownerAuthorized =
         input.ownerOverride === true &&
-        ctx.session!.user.role === 'ADMIN' &&
-        (await can(subjectFromSession(ctx.session!.user), 'admin:access', undefined, {
+        (await can(subjectFromSession(ctx.session!.user), 'pharmacy:manage', undefined, {
           db: ctx.db,
           source: 'TRPC',
         }));

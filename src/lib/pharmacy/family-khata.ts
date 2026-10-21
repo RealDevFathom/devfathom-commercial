@@ -3,6 +3,8 @@ import 'server-only';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { postJournalEntry } from '@/lib/finance/journal';
+
 import { auditPatientRead } from './patient-prescriptions';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
@@ -152,7 +154,7 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date }
+  input: { familyAccountId: string; amountMinor: number; occurredAt: Date; collectionKey?: string }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -175,7 +177,7 @@ export async function settleFamilyKhata(
         (paidByCharge.get(event.settlesChargeId) ?? 0) + event.amountMinor
       );
   const openCharges = events
-    .filter((event) => event.kind === 'CHARGE')
+    .filter((event) => event.kind === 'CHARGE' || event.kind === 'DISHONOURED_CHEQUE')
     .map((charge) => ({
       charge,
       remaining: charge.amountMinor - (paidByCharge.get(charge.id) ?? 0),
@@ -196,6 +198,7 @@ export async function settleFamilyKhata(
           branchId: scope.branchId,
           familyAccountId: input.familyAccountId,
           kind: 'PAYMENT',
+          note: input.collectionKey,
           amountMinor,
           occurredAt: input.occurredAt,
           settlesChargeId: item.charge.id,
@@ -204,6 +207,17 @@ export async function settleFamilyKhata(
       })
     );
     remaining -= amountMinor;
+  }
+  for (const allocation of allocations) {
+    await postJournalEntry(db, scope, {
+      sourceKind: 'PHARMACY_KHATA_EVENT', sourceId: allocation.id,
+      idempotencyKey: `khata-collection:${allocation.id}`, branchId: scope.branchId,
+      description: 'Khata collection', occurredAt: input.occurredAt,
+      lines: [
+        { accountCode: 'CASH', side: 'DEBIT', amountMinor: allocation.amountMinor, branchId: scope.branchId },
+        { accountCode: 'ACCOUNTS_RECEIVABLE', side: 'CREDIT', amountMinor: allocation.amountMinor, branchId: scope.branchId },
+      ],
+    });
   }
   return {
     paidMinor: input.amountMinor,
@@ -354,7 +368,7 @@ export async function readSaleKhataStatement(
 export async function authorizeKhataCharge(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean },
+  input: { saleId: string; familyAccountId: string; amountMinor: number; ownerOverride?: boolean; overrideReason?: string },
   owner: { authorized: boolean; passwordAuthenticatedAt?: number }
 ) {
   await db.$queryRaw(
@@ -374,21 +388,13 @@ export async function authorizeKhataCharge(
     throw new FamilyKhataError('INVALID_AMOUNT');
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
+    if (!input.overrideReason?.trim()) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
     const now = new Date();
+    const suggestion = calculateKhataHealthSuggestion([], account.creditLimitMinor, now, now);
+    suggestion.reasons.push(`Override reason: ${input.overrideReason.trim()}`);
     await applyKhataLimitDecision(db, scope, {
       familyAccountId: account.id,
-      suggestion: calculateKhataHealthSuggestion(
-        await db.pharmacyKhataEvent.findMany({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            familyAccountId: account.id,
-          },
-        }),
-        account.creditLimitMinor,
-        new Date(now.getTime() - 180 * DAY_MS),
-        now
-      ),
+      suggestion,
       ownerAuthorized: owner.authorized,
       ownerAuthorizedByUserId: scope.actorId,
       ownerReauthenticatedAt:
@@ -399,4 +405,33 @@ export async function authorizeKhataCharge(
     });
   }
   return account;
+}
+
+/** Append a debit and restore AR; never edit the collected payment. Caller owns the transaction. */
+export async function dishonourKhataPayment(db: ScopedDb, scope: FamilyKhataScope,
+  input: { paymentId: string; reason: string; occurredAt: Date }) {
+  if (!input.reason.trim()) throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  const payment = await db.pharmacyKhataEvent.findFirst({ where: {
+    id: input.paymentId, organizationId: scope.organizationId, branchId: scope.branchId, kind: 'PAYMENT',
+  }});
+  if (!payment) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
+  await db.$queryRaw(Prisma.sql`SELECT id FROM pharmacy_family_accounts WHERE id=${payment.familyAccountId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`);
+  const id = `dishonour:${payment.id}`;
+  const prior = await db.pharmacyKhataEvent.findFirst({ where: { id, organizationId: scope.organizationId, branchId: scope.branchId } });
+  if (prior) return prior;
+  const event = await db.pharmacyKhataEvent.create({ data: {
+    id, organizationId: scope.organizationId, branchId: scope.branchId,
+    familyAccountId: payment.familyAccountId, kind: 'DISHONOURED_CHEQUE',
+    amountMinor: payment.amountMinor, actorId: scope.actorId, occurredAt: input.occurredAt,
+    note: input.reason.trim(),
+  }});
+  await postJournalEntry(db, scope, {
+    sourceKind: 'PHARMACY_KHATA_EVENT', sourceId: id, idempotencyKey: id,
+    branchId: scope.branchId, description: 'Dishonoured Khata collection', occurredAt: input.occurredAt,
+    lines: [
+      { accountCode: 'ACCOUNTS_RECEIVABLE', side: 'DEBIT', amountMinor: payment.amountMinor, branchId: scope.branchId },
+      { accountCode: 'CASH', side: 'CREDIT', amountMinor: payment.amountMinor, branchId: scope.branchId },
+    ],
+  });
+  return event;
 }

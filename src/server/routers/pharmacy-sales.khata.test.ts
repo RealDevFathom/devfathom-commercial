@@ -132,7 +132,7 @@ describe('Khata router trust and recovery boundary', () => {
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
-    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true });
+    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Trusted customer emergency' });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reasons: expect.objectContaining({
@@ -156,12 +156,13 @@ describe('Khata router trust and recovery boundary', () => {
     const f = fixture();
     f.user.passwordAuthenticatedAt -= 301000;
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
+      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Trusted customer emergency' })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     f.user.passwordAuthenticatedAt = Date.now();
     f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(async (_s, action) => action !== 'pharmacy:manage');
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true })
+      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Trusted customer emergency' })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
@@ -174,7 +175,7 @@ describe('Khata router trust and recovery boundary', () => {
       replayUnsafe: true,
       result,
     });
-    expect(await f.caller().tender({ ...input, ownerOverride: true })).toEqual({
+    expect(await f.caller().tender({ ...input, ownerOverride: true, overrideReason: 'Trusted customer emergency' })).toEqual({
       ...result,
       replayed: true,
     });
