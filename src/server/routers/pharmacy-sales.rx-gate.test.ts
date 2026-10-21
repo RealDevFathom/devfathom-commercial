@@ -70,7 +70,7 @@ function fixture(flags: { rx?: boolean; restricted?: boolean } = { rx: true }) {
     pharmacySale: {
       findFirst: vi.fn(
         async () =>
-          ({ customerId: null, customer: null }) as {
+          ({ customerId: 'customer-1', customer: { patientId: 'patient-1' } }) as {
             customerId: string | null;
             customer: { patientId: string } | null;
           }
@@ -81,8 +81,14 @@ function fixture(flags: { rx?: boolean; restricted?: boolean } = { rx: true }) {
     prescriptionLine: { findFirst: vi.fn(async () => null as unknown) },
     restaurantOperatorCredential: { findFirst: vi.fn(async () => null), update: vi.fn() },
     pharmacyRxLineAuthorization: {
-      findFirst: vi.fn(async () => null),
+      findFirst: vi.fn(async () => null as unknown),
       create: authorizationCreate,
+    },
+    pharmacyPharmacistReviewItem: {
+      upsert: vi.fn(async () => ({ id: 'review-1' })),
+    },
+    pharmacyPharmacistReviewDecision: {
+      create: vi.fn(async ({ data }: { data: unknown }) => data),
     },
   };
   const context = {
@@ -245,6 +251,28 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
     });
     await expect(
       f.caller.addLine({ ...line, rxAuthorization: { prescriptionLineId: 'rx-line-1' } })
+      // #237: a patient mismatch reads differently from a missing prescription.
+    ).resolves.toMatchObject({ blocked: expect.stringContaining('not for the patient') });
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(f.db.prescriptionFill.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an arbitrary patient prescription on a sale with no linked customer (SEC #236)', async () => {
+    const f = fixture();
+    f.db.pharmacySale.findFirst.mockResolvedValue({ customerId: null, customer: null });
+    f.db.prescriptionLine.findFirst.mockResolvedValue({
+      id: 'rx-line-1',
+      authorizedCanonicalUnits: 30,
+      fills: [],
+      prescription: {
+        patientId: 'patient-1',
+        authorizedRepeats: 0,
+        validFrom: new Date('2020-01-01'),
+        validUntil: new Date('2099-01-01'),
+      },
+    });
+    await expect(
+      f.caller.addLine({ ...line, rxAuthorization: { prescriptionLineId: 'rx-line-1' } })
     ).resolves.toHaveProperty('blocked');
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(f.db.prescriptionFill.create).not.toHaveBeenCalled();
@@ -289,6 +317,48 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
       action: 'rx_override',
       metadata: { reason: 'Repeat chronic therapy, script at home' },
     });
+  });
+
+  it('signs a prescription-linked Rx line when the actor is a pharmacist (#235)', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const f = fixture();
+    f.db.pharmacyRxLineAuthorization.findFirst.mockResolvedValue({
+      prescriptionLineId: 'rx-line-1',
+    });
+    await expect(
+      f.caller.signRxLine({ branchId: 'branch-1', saleLineId: 'line-1' })
+    ).resolves.toMatchObject({ signed: true });
+    expect(f.db.pharmacyPharmacistReviewItem.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({
+          prescriptionLineId: 'rx-line-1',
+          saleLineId: 'line-1',
+        }),
+      })
+    );
+    expect(f.db.pharmacyPharmacistReviewDecision.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ kind: 'SIGN', actorUserId: 'cashier-1' }),
+    });
+  });
+
+  it('refuses a counter sign-off from a cashier with no pharmacist PIN (#235)', async () => {
+    const f = fixture();
+    f.db.pharmacyRxLineAuthorization.findFirst.mockResolvedValue({
+      prescriptionLineId: 'rx-line-1',
+    });
+    await expect(
+      f.caller.signRxLine({ branchId: 'branch-1', saleLineId: 'line-1' })
+    ).resolves.toHaveProperty('blocked');
+    expect(f.db.pharmacyPharmacistReviewDecision.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses to sign a line with no linked prescription (#235)', async () => {
+    vi.mocked(can).mockResolvedValue(true);
+    const f = fixture();
+    await expect(
+      f.caller.signRxLine({ branchId: 'branch-1', saleLineId: 'line-1' })
+    ).resolves.toHaveProperty('blocked');
+    expect(f.db.pharmacyPharmacistReviewItem.upsert).not.toHaveBeenCalled();
   });
 
   it('rejects giving both a prescription line and an override', async () => {

@@ -42,6 +42,57 @@ describe('CRM-L01 pharmacy loyalty', () => {
     expect(update).not.toHaveBeenCalled();
   });
 
+  it('refuses to link a customer whose patient differs from an already-gated Rx line (SEC #236)', async () => {
+    const update = vi.fn();
+    const db = {
+      patientConsent: { findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }) },
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ id: 'sale-a' }), update },
+      pharmacySaleLine: { findMany: vi.fn().mockResolvedValue([{ id: 'line-a' }]) },
+      pharmacyRxLineAuthorization: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ prescriptionLine: { prescription: { patientId: 'patient-b' } } }]),
+      },
+      pharmacyCustomer: { upsert: vi.fn() },
+    };
+    await expect(
+      linkCustomerToSale(db as never, scope, {
+        saleId: 'sale-a',
+        patientId: 'patient-a',
+        displayName: 'Retail name',
+      })
+    ).rejects.toEqual(new PharmacyLoyaltyError('PATIENT_MISMATCH'));
+    expect(db.pharmacyCustomer.upsert).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+  });
+
+  it('links when the already-gated Rx line belongs to the same patient (SEC #236)', async () => {
+    const update = vi.fn();
+    const db = {
+      patientConsent: { findFirst: vi.fn().mockResolvedValue({ granted: true, revokedAt: null }) },
+      pharmacySale: { findFirst: vi.fn().mockResolvedValue({ id: 'sale-a' }), update },
+      pharmacySaleLine: { findMany: vi.fn().mockResolvedValue([{ id: 'line-a' }]) },
+      pharmacyRxLineAuthorization: {
+        findMany: vi
+          .fn()
+          .mockResolvedValue([{ prescriptionLine: { prescription: { patientId: 'patient-a' } } }]),
+      },
+      pharmacyCustomer: {
+        upsert: vi
+          .fn()
+          .mockResolvedValue({ id: 'customer-a', displayName: 'Retail name', phoneLast4: null }),
+      },
+    };
+    await expect(
+      linkCustomerToSale(db as never, scope, {
+        saleId: 'sale-a',
+        patientId: 'patient-a',
+        displayName: 'Retail name',
+      })
+    ).resolves.toMatchObject({ id: 'customer-a' });
+    expect(update).toHaveBeenCalled();
+  });
+
   it('accrues whole points from net paid excluding loyalty tender', async () => {
     expect(pointsForNetPaid(10_099)).toBe(100);
     const create = vi.fn().mockImplementation(async ({ data }) => ({ id: 'earn-a', ...data }));

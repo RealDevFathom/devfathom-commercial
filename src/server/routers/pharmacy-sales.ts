@@ -220,7 +220,25 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
   return { ...input, type: input.type === 'KHATA' ? ('CREDIT' as const) : input.type };
 }
 
+// The DB fill trigger (pharmacy_rx_assert_fill_remaining) fails closed with a
+// 23514 when a race slips a fill past the app pre-check. Surface it as a clear,
+// user-correctable counter message rather than a raw Prisma 500.
+function isRxFillTriggerViolation(error: unknown): boolean {
+  if (!error || typeof error !== 'object') return false;
+  const probe = error as { code?: unknown; meta?: unknown; message?: unknown };
+  const text = `${String(probe.message ?? '')} ${JSON.stringify(probe.meta ?? {})}`;
+  return (
+    text.includes('fill exceeds remaining authorized quantity') ||
+    text.includes('prescription line is unavailable')
+  );
+}
+
 function fail(error: unknown): never {
+  if (isRxFillTriggerViolation(error))
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Prescription quantity or repeat allowance is exhausted.',
+    });
   if (error instanceof PharmacySafetyBlockError)
     throw new TRPCError({
       code: 'PRECONDITION_FAILED',
@@ -250,7 +268,9 @@ function fail(error: unknown): never {
       code:
         error.reason === 'CUSTOMER_NOT_FOUND'
           ? 'NOT_FOUND'
-          : error.reason === 'CONSENT_REQUIRED' || error.reason === 'SALE_NOT_LINKED'
+          : error.reason === 'CONSENT_REQUIRED' ||
+              error.reason === 'SALE_NOT_LINKED' ||
+              error.reason === 'PATIENT_MISMATCH'
             ? 'FORBIDDEN'
             : 'BAD_REQUEST',
       message: error.reason,
@@ -841,6 +861,12 @@ export const pharmacySalesRouter = router({
               blocked:
                 'Prescription-only or restricted medicine needs a valid prescription or a pharmacist override with a reason.',
             } as const;
+            // #237: a patient mismatch must read differently from a missing Rx so
+            // the counter knows to link the patient, not to hunt for a script.
+            const rxPatientMismatch = {
+              blocked:
+                'This prescription is not for the patient linked to this sale. Link the correct patient to the sale before dispensing.',
+            } as const;
             const rxAuth = input.rxAuthorization;
             if (!rxAuth) return rxBlocked;
             const now = new Date();
@@ -863,7 +889,10 @@ export const pharmacySalesRouter = router({
                 !rx ||
                 rx.prescription.validFrom > now ||
                 rx.prescription.validUntil <= now ||
-                !Number.isSafeInteger(units) ||
+                !Number.isSafeInteger(units)
+              )
+                return rxBlocked;
+              if (
                 !(await prescriptionMatchesSalePatient(
                   db,
                   scope,
@@ -871,7 +900,7 @@ export const pharmacySalesRouter = router({
                   rx.prescription.patientId
                 ))
               )
-                return rxBlocked;
+                return rxPatientMismatch;
               const previous = await db.pharmacySaleLine.findFirst({
                 where: {
                   organizationId: scope.organizationId,
@@ -1126,6 +1155,103 @@ export const pharmacySalesRouter = router({
           });
         }
         return outcome;
+      } catch (error) {
+        fail(error);
+      }
+    }),
+  // #235: let a pharmacist sign (verify) a prescription-linked Rx line from the
+  // counter. A cashier who holds no dispense capability must present an
+  // independent pharmacist PIN; a pharmacist actor signs with their session.
+  // Signing records the RX-03 SIGN decision the panel reads as "verified".
+  signRxLine: protectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          saleLineId: z.string().min(1),
+          staffProfileId: z.string().min(1).optional(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      try {
+        return await ctx.db.$transaction(async (tx) => {
+          const db = txDb(tx);
+          const scope = await scopeFor(ctx, input.branchId);
+          await db.$queryRaw`SELECT id FROM pharmacy_sale_lines WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${input.saleLineId} FOR UPDATE`;
+          const authorization = await db.pharmacyRxLineAuthorization.findFirst({
+            where: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              saleLineId: input.saleLineId,
+              kind: 'PRESCRIPTION',
+              prescriptionLineId: { not: null },
+            },
+            select: { prescriptionLineId: true },
+          });
+          if (!authorization?.prescriptionLineId)
+            return { blocked: 'This line has no linked prescription to sign.' };
+          const now = new Date();
+          let signerId = scope.actorId;
+          if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+            db,
+            now,
+          }))) {
+            if (!input.staffProfileId || !input.pin)
+              return { blocked: 'A pharmacist PIN is required to sign this prescription.' };
+            const pharmacist = await verifyPharmacistPin(
+              db,
+              scope,
+              input.staffProfileId,
+              input.pin
+            );
+            if (!pharmacist)
+              return { blocked: 'A pharmacist PIN is required to sign this prescription.' };
+            signerId = pharmacist.id;
+          }
+          const review = await db.pharmacyPharmacistReviewItem.upsert({
+            where: {
+              organizationId_saleLineId: {
+                organizationId: scope.organizationId,
+                saleLineId: input.saleLineId,
+              },
+            },
+            update: {},
+            create: {
+              organizationId: scope.organizationId,
+              prescriptionLineId: authorization.prescriptionLineId,
+              saleLineId: input.saleLineId,
+              requestedByUserId: scope.actorId,
+            },
+          });
+          await db.pharmacyPharmacistReviewDecision.create({
+            data: {
+              organizationId: scope.organizationId,
+              reviewItemId: review.id,
+              kind: 'SIGN',
+              actorUserId: signerId,
+              signedAt: now,
+            },
+          });
+          annotateAudit(ctx, {
+            category: 'PHARMACY_SAFETY',
+            action: 'rx_sign',
+            targetType: 'PharmacySale',
+            targetId: input.saleLineId,
+            description: 'Pharmacist signed a prescription line at the counter.',
+            metadata: {
+              branchId: input.branchId,
+              saleLineId: input.saleLineId,
+              pharmacistUserId: signerId,
+            },
+          });
+          return { signed: true };
+        });
       } catch (error) {
         fail(error);
       }

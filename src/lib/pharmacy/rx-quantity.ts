@@ -35,5 +35,9 @@ export async function prescriptionMatchesSalePatient(
     where: { organizationId: scope.organizationId, branchId: scope.branchId, id: saleId },
     select: { customerId: true, customer: { select: { patientId: true } } },
   });
-  return Boolean(sale && (!sale.customerId || sale.customer?.patientId === patientId));
+  // SEC (#236): an Rx-gated line may only be dispensed on a sale that is tied to
+  // the prescription's patient. A sale with no linked customer, or one linked to
+  // a different patient, is refused — an anonymous bill can no longer launder an
+  // arbitrary patient's prescription.
+  return Boolean(sale && sale.customer?.patientId === patientId);
 }
