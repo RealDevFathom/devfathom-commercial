@@ -1051,6 +1051,7 @@ export const pharmacySalesRouter = router({
           medicineId: z.string().min(1),
           presentationId: z.string().min(1),
           quantityCanonicalUnits: z.number().int().positive(),
+          // Accepted and discarded. The reference price is the latest received lot.
           referencePriceMinor: z.number().int().positive().optional(),
         })
         .strict()
@@ -1068,9 +1069,6 @@ export const pharmacySalesRouter = router({
           medicineId: input.medicineId,
           presentationId: input.presentationId,
           quantityCanonicalUnits: input.quantityCanonicalUnits,
-          ...(input.referencePriceMinor !== undefined
-            ? { referencePriceMinor: input.referencePriceMinor }
-            : {}),
         });
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {

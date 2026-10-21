@@ -78,6 +78,18 @@ describe('substitute proposals', () => {
     );
   });
 
+  it('does not forward a client reference price', async () => {
+    await caller({ id: 'branch-1' }).substituteProposals({
+      ...input,
+      referencePriceMinor: 10_000,
+    });
+    expect(findSubstituteProposals).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.not.objectContaining({ referencePriceMinor: expect.anything() })
+    );
+  });
+
   it('rejects a client requireLowerPrice flag', async () => {
     await expect(
       caller({ id: 'branch-1' }).substituteProposals({

@@ -34,13 +34,20 @@ function lot(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function dbWith(lots: unknown[], onHandUnits = 10) {
+function dbWith(
+  lots: unknown[],
+  onHandUnits = 10,
+  historical: { printedMrpMinor: number; unitsPerPack: number } | null = {
+    printedMrpMinor: 1_000,
+    unitsPerPack: 10,
+  }
+) {
   return {
     medicine: { findFirst: async () => requested },
     pharmacyStockBalance: {
       aggregate: async () => ({ _sum: { onHandUnits } }),
     },
-    pharmacyInventoryLot: { findMany: async () => lots, findFirst: async () => null },
+    pharmacyInventoryLot: { findMany: async () => lots, findFirst: async () => historical },
   };
 }
 
@@ -64,7 +71,6 @@ describe('AI-05 deterministic substitute finder', () => {
         medicineId: 'requested',
         presentationId: 'presentation-requested',
         quantityCanonicalUnits: 10,
-        referencePriceMinor: 1_000,
       }
     );
     expect(rows).toEqual([]);
@@ -78,6 +84,7 @@ describe('AI-05 deterministic substitute finder', () => {
         aggregate: async () => ({ _sum: { onHandUnits: 10 } }),
       },
       pharmacyInventoryLot: {
+        findFirst: async () => ({ printedMrpMinor: 1_000, unitsPerPack: 10 }),
         findMany: async (args: { where: unknown }) => {
           where = args.where;
           return [];
@@ -89,7 +96,6 @@ describe('AI-05 deterministic substitute finder', () => {
         medicineId: 'requested',
         presentationId: 'presentation-requested',
         quantityCanonicalUnits: 10,
-        referencePriceMinor: 1_000,
         at: new Date('2026-09-05T00:00:00Z'),
       })
     ).toEqual([]);
@@ -123,7 +129,6 @@ describe('AI-05 deterministic substitute finder', () => {
         medicineId: 'requested',
         presentationId: 'presentation-requested',
         quantityCanonicalUnits: 10,
-        referencePriceMinor: 1_000,
       }
     );
     expect(
@@ -139,7 +144,6 @@ describe('AI-05 deterministic substitute finder', () => {
       medicineId: 'requested',
       presentationId: 'presentation-requested',
       quantityCanonicalUnits: 10,
-      referencePriceMinor: 1_000,
     };
     expect(
       await findSubstituteProposals(
@@ -156,6 +160,26 @@ describe('AI-05 deterministic substitute finder', () => {
     expect(
       rows.map((row) => [row.inventoryLotId, row.priceMinor, row.priceDifferenceMinor])
     ).toEqual([['dearer', 2_000, -1_000]]);
+  });
+
+  it('ignores an inflated client price when applying cheaper-only and the savings label', async () => {
+    const rows = await findSubstituteProposals(
+      dbWith(
+        [lot({ id: 'dearer', printedMrpMinor: 900 }), lot({ id: 'cheaper', printedMrpMinor: 700 })],
+        10,
+        { printedMrpMinor: 800, unitsPerPack: 10 }
+      ) as never,
+      scope,
+      {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+        referencePriceMinor: 10_000,
+      } as never
+    );
+    expect(
+      rows.map((row) => [row.inventoryLotId, row.priceMinor, row.priceDifferenceMinor])
+    ).toEqual([['cheaper', 700, 100]]);
   });
 
   it('refuses a candidate whose controlled, prescription, or restricted flag differs', async () => {
@@ -200,7 +224,6 @@ describe('AI-05 deterministic substitute finder', () => {
         medicineId: 'requested',
         presentationId: 'presentation-requested',
         quantityCanonicalUnits: 10,
-        referencePriceMinor: 1_000,
       }
     );
     expect(rows).toEqual([]);
@@ -212,6 +235,7 @@ describe('AI-05 deterministic substitute finder', () => {
       medicine: { findFirst: async () => regulated },
       pharmacyStockBalance: { aggregate: async () => ({ _sum: { onHandUnits: 0 } }) },
       pharmacyInventoryLot: {
+        findFirst: async () => null,
         findMany: async () => [
           lot({
             id: 'regulated-lot',
@@ -233,7 +257,6 @@ describe('AI-05 deterministic substitute finder', () => {
       medicineId: 'requested',
       presentationId: 'presentation-requested',
       quantityCanonicalUnits: 10,
-      referencePriceMinor: 1_000,
     });
     expect(rows[0]).toMatchObject({
       inventoryLotId: 'regulated-lot',
