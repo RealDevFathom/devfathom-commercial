@@ -238,6 +238,10 @@ export function OrganizationAdminContent() {
     onSuccess: () => success('Member access updated.'),
     onError: failure,
   });
+  const addMember = trpc.organizationAdmin.createMember.useMutation({
+    onSuccess: () => success('Staff member added.'),
+    onError: failure,
+  });
   const password = trpc.organizationAdmin.resetMemberPassword.useMutation({
     onSuccess: () => toast.success('Password reset and existing sessions revoked.'),
     onError: failure,
@@ -469,8 +473,83 @@ export function OrganizationAdminContent() {
 
       <Card
         title="People and access"
-        description={`${entitlements.activeSeats} licensed seats are currently occupied.`}
+        description={`${entitlements.activeSeats} of ${entitlements.seatLimit} licensed seats are currently occupied.`}
       >
+        <form
+          className="mb-5 grid gap-3 rounded-xl bg-muted/35 p-4 sm:grid-cols-2 lg:grid-cols-3"
+          aria-label="Add staff member"
+          onSubmit={(event) => {
+            event.preventDefault();
+            const values = new FormData(event.currentTarget);
+            const form = event.currentTarget;
+            addMember.mutate(
+              {
+                name: formValue(values, 'name'),
+                email: formValue(values, 'email'),
+                password: formValue(values, 'password'),
+                title: formValue(values, 'title'),
+                role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
+                department: formValue(values, 'department'),
+                organizationRoleId: formValue(values, 'organizationRoleId') || null,
+              },
+              { onSuccess: () => form.reset() }
+            );
+          }}
+        >
+          <p className="text-sm font-semibold sm:col-span-2 lg:col-span-3">Add staff member</p>
+          <label>
+            <span className={labelClass}>Full name</span>
+            <Input name="name" required />
+          </label>
+          <label>
+            <span className={labelClass}>Email</span>
+            <Input name="email" type="email" required />
+          </label>
+          <label>
+            <span className={labelClass}>Title</span>
+            <Input name="title" placeholder="Cashier" required />
+          </label>
+          <label>
+            <span className={labelClass}>System role</span>
+            <select className={inputClass} name="role" defaultValue="EMPLOYEE">
+              {['ADMIN', 'HR', 'EMPLOYEE'].map((option) => (
+                <option key={option}>{option}</option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className={labelClass}>Department</span>
+            <select className={inputClass} name="department" required>
+              {organization.departments.map((department) => (
+                <option key={department.key} value={department.key}>
+                  {department.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label>
+            <span className={labelClass}>Role template</span>
+            <select className={inputClass} name="organizationRoleId" defaultValue="">
+              <option value="">No custom role</option>
+              {organization.roles.map((item) => (
+                <option key={item.id} value={item.id}>
+                  {item.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="sm:col-span-2 lg:col-span-2">
+            <span className={labelClass}>Temporary password</span>
+            <Input name="password" type="password" minLength={12} required />
+          </label>
+          <div className="flex items-end">
+            <SubmitButton pending={addMember.isPending}>Add staff</SubmitButton>
+          </div>
+          <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
+            Minimum 12-character password. The new member occupies one licensed seat
+            ({entitlements.activeSeats}/{entitlements.seatLimit} used).
+          </p>
+        </form>
         <div className="divide-y divide-border/60">
           {organization.users.map((user) => (
             <details key={user.id} className="group">
@@ -514,12 +593,6 @@ export function OrganizationAdminContent() {
                       ['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED'],
                       user.status,
                     ],
-                    [
-                      'department',
-                      'Department',
-                      ['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN'],
-                      user.department,
-                    ],
                   ].map(([name, label, options, value]) => (
                     <label key={String(name)}>
                       <span className={labelClass}>{String(label)}</span>
@@ -534,6 +607,23 @@ export function OrganizationAdminContent() {
                       </select>
                     </label>
                   ))}
+                  <label>
+                    <span className={labelClass}>Department</span>
+                    {/* The organization's own departments, not a hardcoded agency
+                        list: a pharmacy files staff under Counter, Dispensary, and
+                        the rest its vertical defines. */}
+                    <select
+                      className={inputClass}
+                      name="department"
+                      defaultValue={user.department}
+                    >
+                      {organization.departments.map((department) => (
+                        <option key={department.key} value={department.key}>
+                          {department.name}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
                   <label>
                     <span className={labelClass}>Custom role</span>
                     <select

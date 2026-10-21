@@ -149,6 +149,7 @@ export const organizationAdminRouter = router({
         legalName: true,
         displayName: true,
         status: true,
+        vertical: true,
         deploymentMode: true,
         timezone: true,
         locale: true,
@@ -196,6 +197,11 @@ export const organizationAdminRouter = router({
             revokedAt: true,
             createdAt: true,
           },
+        },
+        departments: {
+          where: { active: true },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+          select: { id: true, key: true, name: true },
         },
         roles: {
           orderBy: { name: 'asc' },
@@ -479,6 +485,77 @@ export const organizationAdminRouter = router({
         metadata: { before, after: input },
       });
       return saved;
+    }),
+
+  createMember: adminProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(150),
+        email: z.email().max(254).transform((value) => value.trim().toLowerCase()),
+        password: z.string().min(12).max(256),
+        title: z.string().trim().min(1).max(150),
+        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']),
+        department: departmentKey,
+        organizationRoleId: z.string().nullable().default(null),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      // A new member occupies a licensed seat the moment they are created
+      // ACTIVE, so refuse before writing anything when the package is full.
+      try {
+        assertSeatAvailable(ctx.entitlements);
+      } catch (error) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: error instanceof Error ? error.message : 'No license seat is available.',
+        });
+      }
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { organizationId: id, key: input.department, active: true },
+        select: { id: true },
+      });
+      if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+      if (input.organizationRoleId) {
+        const role = await ctx.db.organizationRole.findFirst({
+          where: { id: input.organizationRoleId, organizationId: id },
+          select: { id: true },
+        });
+        if (!role) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid custom role.' });
+      }
+      const existing = await ctx.db.user.findFirst({
+        where: { organizationId: id, email: input.email },
+        select: { id: true },
+      });
+      if (existing)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'A member with this email already exists in this workspace.',
+        });
+      const created = await ctx.db.user.create({
+        data: {
+          organizationId: id,
+          name: input.name,
+          email: input.email,
+          password: await hash(input.password, 12),
+          passwordChangedAt: new Date(),
+          role: input.role,
+          department: input.department,
+          title: input.title,
+          organizationRoleId: input.organizationRoleId,
+          status: 'ACTIVE',
+        },
+        select: { id: true, email: true, name: true },
+      });
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: created.id,
+        targetLabel: created.email,
+        operation: 'CREATE',
+        description: 'Added a workspace member',
+        metadata: { role: input.role, department: input.department },
+      });
+      return created;
     }),
 
   resetMemberPassword: adminProcedure
