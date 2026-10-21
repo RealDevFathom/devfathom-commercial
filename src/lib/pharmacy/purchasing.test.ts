@@ -15,6 +15,7 @@ import {
 
 const NOW = new Date('2026-09-02T00:00:00.000Z');
 const VALID_LICENCE: SupplierLicenceEvidence = {
+  issuedAt: new Date('2026-01-01T00:00:00.000Z'),
   expiresAt: new Date('2027-01-01T00:00:00.000Z'),
   verified: true,
   superseded: false,
@@ -39,9 +40,25 @@ describe('PUR-01 supplier eligibility', () => {
         authorized: true,
         licences: [
           {
+            issuedAt: new Date('2025-01-01T00:00:00.000Z'),
             expiresAt: new Date('2026-09-01T23:59:59.999Z'),
             verified: true,
             superseded: false,
+          },
+        ],
+        at: NOW,
+      })
+    ).toThrow('SUPPLIER_LICENCE_EXPIRED');
+  });
+
+  it('refuses a verified licence before its issue date', () => {
+    expect(() =>
+      assertSupplierEligible({
+        authorized: true,
+        licences: [
+          {
+            ...VALID_LICENCE,
+            issuedAt: new Date('2026-09-03T00:00:00.000Z'),
           },
         ],
         at: NOW,
@@ -73,7 +90,7 @@ describe('PUR-01 supplier eligibility', () => {
     expect(() =>
       assertSupplierEligible({
         authorized: true,
-        licences: [{ expiresAt: NOW, verified: true, superseded: false }],
+        licences: [{ issuedAt: NOW, expiresAt: NOW, verified: true, superseded: false }],
         at: NOW,
       })
     ).not.toThrow();
@@ -398,6 +415,7 @@ describe('PUR-02 quote comparison', () => {
           ...supplier('s_2', 'Lapsed'),
           supplierLicences: [
             {
+              issuedAt: new Date('2025-01-01T00:00:00.000Z'),
               expiresAt: new Date('2026-01-01T00:00:00.000Z'),
               verified: true,
               superseded: false,

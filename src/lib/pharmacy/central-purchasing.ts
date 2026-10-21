@@ -76,13 +76,20 @@ export async function createCentralPurchaseOrder(
   }
 ) {
   await requireOrganizationPurchaser(db, scope);
+  const now = new Date();
   const [supplier, branch] = await Promise.all([
     db.pharmacySupplier.findFirst({
       where: {
         id: input.supplierId,
         organizationId: scope.organizationId,
         authorized: true,
-        licences: { some: { verifiedAt: { not: null }, expiresAt: { gt: new Date() } } },
+        licences: {
+          some: {
+            verifiedAt: { not: null },
+            issuedAt: { lte: now },
+            expiresAt: { gt: now },
+          },
+        },
       },
     }),
     db.pharmacyBranch.findFirst({

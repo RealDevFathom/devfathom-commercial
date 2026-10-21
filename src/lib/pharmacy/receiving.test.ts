@@ -21,6 +21,7 @@ import {
 
 const AT = new Date('2026-09-02T09:00:00.000Z');
 const LICENCE = {
+  issuedAt: new Date('2026-01-01T00:00:00.000Z'),
   expiresAt: new Date('2027-01-01T00:00:00.000Z'),
   verified: true,
   superseded: false,
@@ -83,6 +84,7 @@ describe('PUR-02 — stock is not saleable until every named field is present', 
               authorized: true,
               licences: [
                 {
+                  issuedAt: new Date('2025-01-01T00:00:00.000Z'),
                   expiresAt: new Date('2026-09-01T00:00:00.000Z'),
                   verified: true,
                   superseded: false,

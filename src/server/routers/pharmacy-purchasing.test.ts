@@ -95,7 +95,7 @@ function orderableSupplier() {
   db.pharmacySupplier.findFirst.mockResolvedValue({
     id: 'supplier_a',
     authorized: true,
-    licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+    licences: [{ issuedAt: PAST, expiresAt: FUTURE, verifiedAt: PAST }],
   });
 }
 
@@ -238,7 +238,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: false,
-      licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+      licences: [{ issuedAt: PAST, expiresAt: FUTURE, verifiedAt: PAST }],
     });
     await expect(
       caller().createPurchaseOrder({
@@ -255,7 +255,24 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: true,
-      licences: [{ expiresAt: PAST, verifiedAt: PAST }],
+      licences: [{ issuedAt: PAST, expiresAt: PAST, verifiedAt: PAST }],
+    });
+    await expect(
+      caller().createPurchaseOrder({
+        reference: 'PO-1',
+        supplierId: 'supplier_a',
+        lines: [ORDER_LINE],
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'SUPPLIER_LICENCE_EXPIRED' });
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses an order before the supplier licence issue date', async () => {
+    resolvableCatalog();
+    db.pharmacySupplier.findFirst.mockResolvedValue({
+      id: 'supplier_a',
+      authorized: true,
+      licences: [{ issuedAt: FUTURE, expiresAt: FUTURE, verifiedAt: PAST }],
     });
     await expect(
       caller().createPurchaseOrder({
@@ -276,7 +293,7 @@ describe('PUR-01 a purchase order needs a licensed, authorized supplier', () => 
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: false,
-      licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+      licences: [{ issuedAt: PAST, expiresAt: FUTURE, verifiedAt: PAST }],
     });
     await expect(caller().sendPurchaseOrder({ purchaseOrderId: 'po_a' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -488,7 +505,7 @@ describe('PUR-02/PUR-03 comparison and landed cost over stored rows', () => {
         id,
         name,
         authorized,
-        licences: [{ expiresAt: FUTURE, verifiedAt: PAST }],
+        licences: [{ issuedAt: PAST, expiresAt: FUTURE, verifiedAt: PAST }],
       },
       validUntil: FUTURE,
     });
@@ -699,7 +716,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     db.pharmacySupplier.findFirst.mockResolvedValue({
       id: 'supplier_a',
       authorized: true,
-      licences: [{ expiresAt: PAST, verifiedAt: PAST }],
+      licences: [{ issuedAt: PAST, expiresAt: PAST, verifiedAt: PAST }],
     });
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',

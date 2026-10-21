@@ -211,6 +211,7 @@ export async function postGoodsReceipt(
       supplier: {
         authorized: receipt.supplier.authorized,
         licences: receipt.supplier.licences.map((licence) => ({
+          issuedAt: licence.issuedAt,
           expiresAt: licence.expiresAt,
           verified: licence.verifiedAt !== null,
           superseded: receipt.supplier.licences.some(

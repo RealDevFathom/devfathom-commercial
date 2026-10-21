@@ -150,13 +150,18 @@ function summarizeSupplier(
 ): SupplierSummary {
   const licences = licenceViews(supplier.licences, at);
   const evidence = licences.map((licence) => ({
+    issuedAt: licence.issuedAt,
     expiresAt: licence.expiresAt,
     verified: licence.verified,
     superseded: licence.superseded,
   }));
   const governing =
     licences.find(
-      (licence) => licence.verified && !licence.superseded && licence.daysToExpiry >= 0
+      (licence) =>
+        licence.verified &&
+        !licence.superseded &&
+        licence.issuedAt.getTime() <= at.getTime() &&
+        licence.daysToExpiry >= 0
     ) ??
     licences[0] ??
     null;

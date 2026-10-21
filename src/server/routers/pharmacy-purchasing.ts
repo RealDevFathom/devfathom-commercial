@@ -321,7 +321,13 @@ function tenantScope(ctx: TRPCContext): { organizationId: string } {
 function assertOrderableSupplier(
   supplier: {
     authorized: boolean;
-    licences: { id: string; expiresAt: Date; verifiedAt: Date | null; supersedesId: string | null }[];
+    licences: {
+      id: string;
+      issuedAt: Date;
+      expiresAt: Date;
+      verifiedAt: Date | null;
+      supersedesId: string | null;
+    }[];
   } | null,
   at: Date
 ) {
@@ -329,6 +335,7 @@ function assertOrderableSupplier(
   assertSupplierEligible({
     authorized: supplier.authorized,
     licences: supplier.licences.map((licence) => ({
+      issuedAt: licence.issuedAt,
       expiresAt: licence.expiresAt,
       verified: licence.verifiedAt !== null,
       superseded: supplier.licences.some((candidate) => candidate.supersedesId === licence.id),
@@ -590,6 +597,7 @@ const purchasingRouter = router({
           supplierName: line.quote.supplier.name,
           supplierAuthorized: line.quote.supplier.authorized,
           supplierLicences: line.quote.supplier.licences.map((licence) => ({
+            issuedAt: licence.issuedAt,
             expiresAt: licence.expiresAt,
             verified: licence.verifiedAt !== null,
             superseded: line.quote.supplier.licences.some(
