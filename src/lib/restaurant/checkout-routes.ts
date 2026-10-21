@@ -1,3 +1,4 @@
+import { capabilityMatches } from '@/lib/abac/capabilities';
 import 'server-only';
 
 import { NextResponse } from 'next/server';
@@ -200,16 +201,6 @@ export const dayCorrectBody = z
  * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
 export type MoneyCapability =
   'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
-
-/** Wildcard-aware capability match, identical to the ABAC engine's rule (`*`, an exact
- * match, or a `namespace:*` prefix). Kept local because the ABAC helper is private and
- * its `can()` only accepts registered ABAC actions, which these vertical capabilities
- * are not. */
-function capabilityMatches(rule: string, capability: string): boolean {
-  if (rule === '*' || rule === capability) return true;
-  if (!rule.endsWith(':*')) return false;
-  return capability.startsWith(rule.slice(0, -1));
-}
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 

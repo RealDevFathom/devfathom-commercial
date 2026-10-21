@@ -301,7 +301,7 @@ beforeAll(async () => {
   deps = { withTenantDb: scopedDb.withTenantDb, ledger, signals };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
   // C1 (createDraftAction) authorizes a real, active PHARMACY actor holding the
-  // native pharmacy.procurement / pharmacy.inventory grants.
+  // native pharmacy:procurement / pharmacy:inventory grants.
   await scopedDb.withPlatformDb(async (db) => {
     await db.$executeRawUnsafe(
       `INSERT INTO organizations (id, slug, "legalName", "displayName", vertical, status, "deploymentMode", "createdAt", "updatedAt")
@@ -323,7 +323,7 @@ beforeAll(async () => {
     await db.$executeRawUnsafe(
       `INSERT INTO organization_role_permissions (id, "organizationId", "organizationRoleId", capability, effect, "createdAt")
        SELECT 'perm_' || c || '_' || $1, $2, $3, c, 'ALLOW', now()
-       FROM unnest(ARRAY['pharmacy.procurement', 'pharmacy.inventory']) AS c`,
+       FROM unnest(ARRAY['pharmacy:procurement', 'pharmacy:inventory']) AS c`,
       suffix,
       ORG_A,
       `role_${suffix}`

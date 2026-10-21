@@ -502,14 +502,17 @@ describe('optional pharmacy Owner / Operator', () => {
         capabilities: role.capabilities,
       }))
     ).toEqual([
-      { key: 'owner', capabilities: ['pharmacy.*', 'pharmacy:orders'] },
-      { key: 'pharmacist', capabilities: ['pharmacy.dispense', 'pharmacy:catalogue-review'] },
-      { key: 'manager', capabilities: ['pharmacy.manage', 'pharmacy:orders'] },
-      { key: 'cashier', capabilities: ['pharmacy.counter', 'pharmacy:orders'] },
-      { key: 'procurement', capabilities: ['pharmacy.procurement'] },
-      { key: 'inventory', capabilities: ['pharmacy.inventory'] },
-      { key: 'finance', capabilities: ['pharmacy.finance'] },
-      { key: 'auditor', capabilities: ['pharmacy.audit'] },
+      { key: 'owner', capabilities: ['pharmacy:*', 'reports:operational', 'reports:financial'] },
+      {
+        key: 'pharmacist',
+        capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
+      },
+      { key: 'manager', capabilities: ['pharmacy:manage', 'pharmacy:orders'] },
+      { key: 'cashier', capabilities: ['pharmacy:counter', 'pharmacy:orders'] },
+      { key: 'procurement', capabilities: ['pharmacy:procurement'] },
+      { key: 'inventory', capabilities: ['pharmacy:inventory'] },
+      { key: 'finance', capabilities: ['reports:financial'] },
+      { key: 'auditor', capabilities: ['reports:operational'] },
     ]);
   });
 });
