@@ -9,9 +9,8 @@
  * what the batch is, so a mistyped multiplier is a costing error that survives
  * into the ledger.
  *
- * `unitsPerParent` counts how many of the next level down fit inside one pack at
- * this level, so a leaf level's value is already canonical base units per pack
- * and every level above it multiplies down the chain.
+ * `unitsPerParent` counts this level inside its parent. A pack's canonical
+ * conversion multiplies only descendants, ending at an explicit UNIT leaf.
  */
 
 export type PackLevelNode = {
@@ -49,10 +48,8 @@ export function isEffective(level: PackLevelNode, at: Date): boolean {
  * A level can be superseded by a revision that has not started yet, so both
  * versions exist in the table at once; only the effective ones form the chain.
  *
- * A malformed hierarchy — a cycle, or a level whose parent is not effective —
- * must not hang the console or silently invent a multiplier, so descent stops
- * at the first level it has already visited and a branch point is resolved
- * deterministically by (level, id) rather than by insertion order.
+ * Missing UNIT leaves, ambiguous branches, cycles and invalid descendant
+ * multipliers yield no conversion rather than inventing receivable stock.
  */
 export function packConversions(
   levels: readonly PackLevelNode[],
@@ -66,31 +63,32 @@ export function packConversions(
     siblings.push(level);
     children.set(level.parentPackLevelId, siblings);
   }
-  for (const siblings of children.values()) {
-    siblings.sort((a, b) => a.level.localeCompare(b.level) || a.id.localeCompare(b.id));
-  }
-
-  return effective.map((level) => {
+  return effective.flatMap((level): PackConversion[] => {
     const chain: PackConversionStep[] = [];
     const seen = new Set<string>();
     let canonicalUnitsPerPack = 1;
-    let cursor: PackLevelNode | undefined = level;
-    while (cursor && !seen.has(cursor.id)) {
+    let cursor = level;
+    for (;;) {
+      if (seen.has(cursor.id)) return [];
       seen.add(cursor.id);
       chain.push({
         packLevelId: cursor.id,
         level: cursor.level,
         unitsPerParent: cursor.unitsPerParent,
       });
-      canonicalUnitsPerPack *= cursor.unitsPerParent;
-      cursor = children.get(cursor.id)?.[0];
+      const descendants = children.get(cursor.id) ?? [];
+      if (descendants.length === 0) {
+        if (cursor.level !== 'UNIT') return [];
+        break;
+      }
+      if (cursor.level === 'UNIT' || descendants.length !== 1) return [];
+      const child = descendants[0]!;
+      if (!Number.isSafeInteger(child.unitsPerParent) || child.unitsPerParent <= 0) return [];
+      canonicalUnitsPerPack *= child.unitsPerParent;
+      if (!Number.isSafeInteger(canonicalUnitsPerPack)) return [];
+      cursor = child;
     }
-    return {
-      packLevelId: level.id,
-      level: level.level,
-      canonicalUnitsPerPack,
-      chain,
-    };
+    return [{ packLevelId: level.id, level: level.level, canonicalUnitsPerPack, chain }];
   });
 }
 
@@ -104,12 +102,13 @@ export function describePackConversion(conversion: PackConversion, packs = 1): s
   if (conversion.chain.length <= 1) return `${label} = ${units} units`;
   const inner = conversion.chain
     .slice(1)
+    .filter((step) => step.level !== 'UNIT')
     .map((step, index) => {
       const multiplier = conversion.chain
-        .slice(0, index + 1)
+        .slice(1, index + 2)
         .reduce((total, previous) => total * previous.unitsPerParent, packs);
       return `${multiplier} ${step.level}${multiplier === 1 ? '' : 's'}`;
     })
     .join(' = ');
-  return `${label} = ${inner} = ${units} units`;
+  return `${label}${inner ? ` = ${inner}` : ''} = ${units} units`;
 }
