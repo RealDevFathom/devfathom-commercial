@@ -8,6 +8,10 @@ import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
 import { annotateAudit } from '@/server/audit';
+import {
+  prescriptionConsumedUnits,
+  prescriptionMatchesSalePatient,
+} from '@/lib/pharmacy/rx-quantity';
 import { needsPrescription, PharmacySafetyBlockError } from '@/lib/pharmacy/rx-gate';
 import {
   isLockedOut,
@@ -324,6 +328,9 @@ function requireCloseAccess(ctx: TRPCContext) {
 }
 
 export const pharmacySalesRouter = router({
+  rxOverridePermission: protectedProcedure.query(({ ctx }) =>
+    can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, { db: ctx.db })
+  ),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
     try {
@@ -838,7 +845,10 @@ export const pharmacySalesRouter = router({
             if (!rxAuth) return rxBlocked;
             const now = new Date();
             let pharmacistUserId = scope.actorId;
+            let prescriptionFill:
+              { prescriptionLineId: string; fillSequence: number; units: number } | undefined;
             if (rxAuth.prescriptionLineId) {
+              await db.$queryRaw`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${rxAuth.prescriptionLineId} FOR UPDATE`;
               const rx = await db.prescriptionLine.findFirst({
                 where: {
                   id: rxAuth.prescriptionLineId,
@@ -846,7 +856,7 @@ export const pharmacySalesRouter = router({
                   medicineId: input.medicineId,
                   presentationId: input.presentationId,
                 },
-                include: { prescription: true },
+                include: { prescription: true, fills: true },
               });
               const units = input.quantity * input.canonicalUnitsPerSaleUnit;
               if (
@@ -854,9 +864,44 @@ export const pharmacySalesRouter = router({
                 rx.prescription.validFrom > now ||
                 rx.prescription.validUntil <= now ||
                 !Number.isSafeInteger(units) ||
-                units > rx.authorizedCanonicalUnits
+                !(await prescriptionMatchesSalePatient(
+                  db,
+                  scope,
+                  input.saleId,
+                  rx.prescription.patientId
+                ))
               )
                 return rxBlocked;
+              const previous = await db.pharmacySaleLine.findFirst({
+                where: {
+                  organizationId: scope.organizationId,
+                  branchId: scope.branchId,
+                  saleId: input.saleId,
+                  idempotencyKey: input.idempotencyKey,
+                },
+              });
+              if (previous) {
+                const authorization = await db.pharmacyRxLineAuthorization.findFirst({
+                  where: {
+                    organizationId: scope.organizationId,
+                    saleLineId: previous.id,
+                    prescriptionLineId: rx.id,
+                    kind: 'PRESCRIPTION',
+                  },
+                });
+                if (authorization) return addSaleLine(db, scope, input);
+                return rxBlocked;
+              }
+              if (
+                (await prescriptionConsumedUnits(db, scope.organizationId, rx.id)) + units >
+                rx.authorizedCanonicalUnits * (1 + rx.prescription.authorizedRepeats)
+              )
+                return rxBlocked;
+              prescriptionFill = {
+                prescriptionLineId: rx.id,
+                fillSequence: rx.fills.length + 1,
+                units,
+              };
             } else {
               const override = rxAuth.override!;
               const actorIsPharmacist = await can(
@@ -895,7 +940,18 @@ export const pharmacySalesRouter = router({
               where: { organizationId: scope.organizationId, saleLineId: result.line.id },
               select: { id: true },
             });
-            if (!existing)
+            if (!existing) {
+              if (prescriptionFill)
+                await db.prescriptionFill.create({
+                  data: {
+                    organizationId: scope.organizationId,
+                    prescriptionLineId: prescriptionFill.prescriptionLineId,
+                    fillSequence: prescriptionFill.fillSequence,
+                    quantityCanonicalUnits: prescriptionFill.units,
+                    dispensedByUserId: pharmacistUserId,
+                    idempotencyKey: `rx:${result.line.id}`,
+                  },
+                });
               await db.pharmacyRxLineAuthorization.create({
                 data: {
                   organizationId: scope.organizationId,
@@ -909,6 +965,7 @@ export const pharmacySalesRouter = router({
                   reason: rxAuth.override?.reason ?? null,
                 },
               });
+            }
             return result;
           }
           const authorization = input.controlledAuthorization;
@@ -943,6 +1000,12 @@ export const pharmacySalesRouter = router({
           if (
             !rx ||
             rx.prescription.patientId !== authorization.patientId ||
+            !(await prescriptionMatchesSalePatient(
+              db,
+              scope,
+              input.saleId,
+              rx.prescription.patientId
+            )) ||
             !rx.prescription.patient.cnic?.trim() ||
             !rx.prescription.prescriber.registrationNumber.trim() ||
             rx.prescription.validFrom > now ||
@@ -965,9 +1028,8 @@ export const pharmacySalesRouter = router({
             };
           if (
             !Number.isSafeInteger(units) ||
-            rx.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0) + units >
-              rx.authorizedCanonicalUnits ||
-            rx.fills.length > rx.prescription.authorizedRepeats
+            (await prescriptionConsumedUnits(db, scope.organizationId, rx.id)) + units >
+              rx.authorizedCanonicalUnits * (1 + rx.prescription.authorizedRepeats)
           )
             return { blocked: 'Prescription quantity or repeat allowance is exhausted.' };
           const consent = await db.patientConsent.findFirst({

@@ -52,7 +52,7 @@ function fixture(flags: { rx?: boolean; restricted?: boolean } = { rx: true }) {
   const authorizationCreate = vi.fn(async ({ data }: { data: unknown }) => data);
   const db = {
     $transaction: vi.fn(async (callback: (tx: unknown) => unknown) => callback(db)),
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn<(...args: unknown[]) => Promise<unknown[]>>(async () => []),
     pharmacyBranch: {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
@@ -67,6 +67,17 @@ function fixture(flags: { rx?: boolean; restricted?: boolean } = { rx: true }) {
         ...flags,
       })),
     },
+    pharmacySale: {
+      findFirst: vi.fn(
+        async () =>
+          ({ customerId: null, customer: null }) as {
+            customerId: string | null;
+            customer: { patientId: string } | null;
+          }
+      ),
+    },
+    pharmacySaleLine: { findFirst: vi.fn(async () => null as unknown) },
+    prescriptionFill: { create: vi.fn(async ({ data }: { data: unknown }) => data) },
     prescriptionLine: { findFirst: vi.fn(async () => null as unknown) },
     restaurantOperatorCredential: { findFirst: vi.fn(async () => null), update: vi.fn() },
     pharmacyRxLineAuthorization: {
@@ -122,8 +133,14 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
     ).resolves.toHaveProperty('blocked');
     f.db.prescriptionLine.findFirst.mockResolvedValueOnce({
       id: 'rx-line-1',
+      fills: [],
       authorizedCanonicalUnits: 30,
-      prescription: { validFrom: new Date('2020-01-01'), validUntil: new Date('2020-02-01') },
+      prescription: {
+        patientId: 'patient-1',
+        authorizedRepeats: 0,
+        validFrom: new Date('2020-01-01'),
+        validUntil: new Date('2020-02-01'),
+      },
     });
     await expect(
       f.caller.addLine({ ...line, rxAuthorization: { prescriptionLineId: 'rx-line-1' } })
@@ -135,8 +152,11 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
     const f = fixture();
     f.db.prescriptionLine.findFirst.mockResolvedValueOnce({
       id: 'rx-line-1',
+      fills: [],
       authorizedCanonicalUnits: 30,
       prescription: {
+        patientId: 'patient-1',
+        authorizedRepeats: 0,
         validFrom: new Date(Date.now() - 86_400_000),
         validUntil: new Date(Date.now() + 86_400_000),
       },
@@ -160,6 +180,74 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
         recordedByUserId: 'cashier-1',
       }),
     });
+  });
+
+  it('enforces cumulative units including repeats, and records exactly one fill', async () => {
+    const f = fixture();
+    f.db.prescriptionLine.findFirst.mockResolvedValue({
+      id: 'rx-line-1',
+      authorizedCanonicalUnits: 10,
+      fills: [{ id: 'fill-1' }],
+      prescription: {
+        patientId: 'patient-1',
+        authorizedRepeats: 1,
+        validFrom: new Date('2020-01-01'),
+        validUntil: new Date('2099-01-01'),
+      },
+    });
+    f.db.$queryRaw.mockImplementation(async (sql: unknown) =>
+      sql && typeof sql === 'object' && 'sql' in sql && String(sql.sql).includes('SUM(CASE')
+        ? [{ units: BigInt(10) }]
+        : ([] as never)
+    );
+    await expect(
+      f.caller.addLine({ ...line, rxAuthorization: { prescriptionLineId: 'rx-line-1' } })
+    ).resolves.not.toHaveProperty('blocked');
+    expect(f.db.prescriptionFill.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({
+        quantityCanonicalUnits: 10,
+        fillSequence: 2,
+        idempotencyKey: 'rx:line-1',
+        organizationId: 'org-1',
+      }),
+    });
+    f.db.$queryRaw.mockImplementation(async (sql: unknown) =>
+      sql && typeof sql === 'object' && 'sql' in sql && String(sql.sql).includes('SUM(CASE')
+        ? [{ units: BigInt(20) }]
+        : ([] as never)
+    );
+    await expect(
+      f.caller.addLine({
+        ...line,
+        idempotencyKey: 'second',
+        rxAuthorization: { prescriptionLineId: 'rx-line-1' },
+      })
+    ).resolves.toHaveProperty('blocked');
+    expect(addSaleLine).toHaveBeenCalledOnce();
+  });
+
+  it('refuses a prescription for a different sale customer patient', async () => {
+    const f = fixture();
+    f.db.pharmacySale.findFirst.mockResolvedValue({
+      customerId: 'customer-1',
+      customer: { patientId: 'other-patient' },
+    });
+    f.db.prescriptionLine.findFirst.mockResolvedValue({
+      id: 'rx-line-1',
+      authorizedCanonicalUnits: 30,
+      fills: [],
+      prescription: {
+        patientId: 'patient-1',
+        authorizedRepeats: 0,
+        validFrom: new Date('2020-01-01'),
+        validUntil: new Date('2099-01-01'),
+      },
+    });
+    await expect(
+      f.caller.addLine({ ...line, rxAuthorization: { prescriptionLineId: 'rx-line-1' } })
+    ).resolves.toHaveProperty('blocked');
+    expect(addSaleLine).not.toHaveBeenCalled();
+    expect(f.db.prescriptionFill.create).not.toHaveBeenCalled();
   });
 
   it('refuses a cashier override without an independent pharmacist PIN', async () => {
@@ -212,4 +300,143 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
       })
     ).rejects.toThrow();
   });
+});
+
+// Real PostgreSQL row-lock coverage without a migrated application database.
+// The isolated tables retain FORCE RLS and run under a non-bypass tenant role.
+describe.skipIf(!process.env.RX_GATE_DATABASE_URL)('Rx quantity concurrency (PostgreSQL)', () => {
+  it('serializes sequential and concurrent fills and releases voids and returns', async () => {
+    const { Client } = await import('pg');
+    const { Prisma } = await import('@/generated/prisma/client');
+    const { randomUUID } = await import('node:crypto');
+    const schema = `rx_${randomUUID().replaceAll('-', '')}`;
+    const admin = new Client({ connectionString: process.env.RX_GATE_DATABASE_URL });
+    await admin.connect();
+    const clients: InstanceType<typeof Client>[] = [];
+    try {
+      await admin.query(`CREATE SCHEMA ${schema}; SET search_path TO ${schema};
+        CREATE ROLE ${schema} NOSUPERUSER NOBYPASSRLS;
+        CREATE TABLE pharmacy_prescription_lines (id text, "organizationId" text);
+        CREATE TABLE pharmacy_sales (id text, "organizationId" text, "branchId" text, status text);
+        CREATE TABLE pharmacy_sale_lines (id text, "organizationId" text, "saleId" text);
+        CREATE TABLE pharmacy_sale_return_lines ("organizationId" text, "saleLineId" text, "canonicalUnits" int);
+        CREATE TABLE pharmacy_prescription_fills ("organizationId" text, "prescriptionLineId" text, "fillSequence" int, "quantityCanonicalUnits" int, "idempotencyKey" text, UNIQUE ("organizationId", "prescriptionLineId", "fillSequence"));
+        INSERT INTO pharmacy_prescription_lines VALUES ('rx-line-1', 'org-1');
+        INSERT INTO pharmacy_sales VALUES ('sale-1','org-1','branch-1','OPEN');
+        GRANT USAGE ON SCHEMA ${schema} TO ${schema};
+        GRANT ALL ON ALL TABLES IN SCHEMA ${schema} TO ${schema};`);
+      for (const table of [
+        'pharmacy_prescription_lines',
+        'pharmacy_sales',
+        'pharmacy_sale_lines',
+        'pharmacy_sale_return_lines',
+        'pharmacy_prescription_fills',
+      ]) {
+        await admin.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY; ALTER TABLE ${table} FORCE ROW LEVEL SECURITY;
+          CREATE POLICY tenant ON ${table} USING ("organizationId" = current_setting('app.current_organization_id')) WITH CHECK ("organizationId" = current_setting('app.current_organization_id'));`);
+      }
+      async function caller() {
+        const client = new Client({ connectionString: process.env.RX_GATE_DATABASE_URL });
+        await client.connect();
+        clients.push(client);
+        await client.query(
+          `SET search_path TO ${schema}; SET ROLE ${schema}; SELECT set_config('app.current_organization_id','org-1',false)`
+        );
+        const f = fixture();
+        f.db.$transaction.mockImplementation(async (callback) => {
+          await client.query('BEGIN');
+          try {
+            const result = await callback(f.db);
+            await client.query('COMMIT');
+            return result;
+          } catch (error) {
+            await client.query('ROLLBACK');
+            throw error;
+          }
+        });
+        f.db.$queryRaw.mockImplementation(async (...args: unknown[]) => {
+          const sql = Array.isArray(args[0])
+            ? Prisma.sql(args[0] as unknown as TemplateStringsArray, ...args.slice(1))
+            : (args[0] as InstanceType<typeof Prisma.Sql>);
+          return (await client.query(sql.text, sql.values)).rows;
+        });
+        f.db.prescriptionLine.findFirst.mockImplementation(async () => ({
+          id: 'rx-line-1',
+          authorizedCanonicalUnits: 10,
+          prescription: {
+            patientId: 'patient-1',
+            authorizedRepeats: 1,
+            validFrom: new Date('2020-01-01T00:00:00Z'),
+            validUntil: new Date('2099-01-01T00:00:00Z'),
+          },
+          fills: (await client.query('SELECT * FROM pharmacy_prescription_fills')).rows,
+        }));
+        f.db.prescriptionFill.create.mockImplementation(async ({ data }) => {
+          const d = data as Record<string, unknown>;
+          await client.query('INSERT INTO pharmacy_prescription_fills VALUES ($1,$2,$3,$4,$5)', [
+            d.organizationId,
+            d.prescriptionLineId,
+            d.fillSequence,
+            d.quantityCanonicalUnits,
+            d.idempotencyKey,
+          ]);
+          return data;
+        });
+        return f.caller;
+      }
+      vi.mocked(addSaleLine).mockImplementation(async (db) => {
+        const id = randomUUID();
+        await db.$queryRaw(
+          Prisma.sql`INSERT INTO pharmacy_sale_lines VALUES (${id}, 'org-1', 'sale-1')`
+        );
+        return { line: { id }, allocation: {} } as never;
+      });
+      const a = await caller();
+      const b = await caller();
+      let key = 0;
+      const add = (c: typeof a) =>
+        c.addLine({
+          ...line,
+          idempotencyKey: `db:${key++}`,
+          rxAuthorization: { prescriptionLineId: 'rx-line-1' },
+        });
+      await expect(add(a)).resolves.not.toHaveProperty('blocked');
+      await expect(add(b)).resolves.not.toHaveProperty('blocked');
+      await expect(add(a)).resolves.toHaveProperty('blocked');
+      await admin.query('TRUNCATE pharmacy_prescription_fills, pharmacy_sale_lines');
+      const outcomes = await Promise.all([add(a), add(b), add(await caller())]);
+      expect(outcomes.filter((row) => 'blocked' in row)).toHaveLength(1);
+      expect(
+        (
+          await admin.query(
+            'SELECT SUM("quantityCanonicalUnits")::int AS units FROM pharmacy_prescription_fills'
+          )
+        ).rows[0].units
+      ).toBe(20);
+      await admin.query("UPDATE pharmacy_sales SET status = 'VOID'");
+      await expect(add(a)).resolves.not.toHaveProperty('blocked');
+      await admin.query("UPDATE pharmacy_sales SET status = 'OPEN'");
+      await admin.query(
+        'INSERT INTO pharmacy_sale_return_lines SELECT "organizationId", id, 10 FROM pharmacy_sale_lines'
+      );
+      await expect(add(a)).resolves.not.toHaveProperty('blocked');
+      // Other tenants cannot read or inject fills under the runtime role.
+      expect(
+        (
+          await clients[0]!.query(
+            'SELECT * FROM pharmacy_prescription_fills WHERE "organizationId"=\'other\''
+          )
+        ).rows
+      ).toEqual([]);
+      await expect(
+        clients[0]!.query(
+          "INSERT INTO pharmacy_prescription_fills VALUES ('other','rx-line-1',99,100,'bad')"
+        )
+      ).rejects.toThrow('row-level security');
+    } finally {
+      await Promise.all(clients.map((client) => client.end()));
+      await admin.query(`DROP SCHEMA ${schema} CASCADE; DROP ROLE IF EXISTS ${schema}`);
+      await admin.end();
+    }
+  }, 20_000);
 });
