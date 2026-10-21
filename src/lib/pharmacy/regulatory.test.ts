@@ -1,10 +1,13 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   assertBranchMayOperate,
+  assertStoredBranchMayOperate,
   BranchOperationDeniedError,
   pendingLegalReviewAllowed,
   type BranchRegulatoryState,
 } from './regulatory';
+
+vi.mock('@/server/audit', () => ({ recordAudit: vi.fn() }));
 
 const at = new Date('2026-09-02T12:00:00.000Z');
 
@@ -61,6 +64,12 @@ describe('assertBranchMayOperate', () => {
   it('fails closed and audits an expired licence', () => {
     const state = validState();
     state.licenceValidTo = at;
+    expectDenied(state, 'LICENCE_INVALID');
+  });
+
+  it('rejects a licence expiring today from midnight UTC', () => {
+    const state = validState();
+    state.licenceValidTo = new Date('2026-09-02T00:00:00.000Z');
     expectDenied(state, 'LICENCE_INVALID');
   });
 
@@ -121,4 +130,51 @@ describe('pending legal review rule sets (#162)', () => {
       vi.unstubAllEnvs();
     }
   });
+});
+
+describe('legacy Sindh rules', () => {
+  it('treats an unflagged v1 as pending legal review in production', () => {
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_ENV', 'production');
+    try {
+      const state = validState();
+      state.ruleSet.code = 'PK-SD';
+      expectDenied(state, 'RULE_SET_PENDING_LEGAL_REVIEW');
+    } finally {
+      vi.unstubAllEnvs();
+    }
+  });
+});
+
+it('enforces the latest Sindh version for a stored profile referencing legacy v1', async () => {
+  const state = validState();
+  const legacy = { ...state.ruleSet, code: 'PK-SD', version: 1 };
+  const latest = {
+    ...legacy,
+    version: 2,
+    licenceCategories: { provisional: false, pendingLegalReview: true, values: ['PHARMACY'] },
+  };
+  const db = {
+    branchRegulatoryProfile: {
+      findFirst: vi.fn().mockResolvedValue({ ...state, jurisdictionRuleSet: legacy }),
+    },
+    jurisdictionRuleSet: { findFirst: vi.fn().mockResolvedValue(latest) },
+  };
+  vi.stubEnv('NODE_ENV', 'production');
+  vi.stubEnv('APP_ENV', 'production');
+  try {
+    await expect(
+      assertStoredBranchMayOperate(db as never, 'org-a', 'branch-a', { name: 'DISPENSE', at })
+    ).rejects.toMatchObject({ reason: 'RULE_SET_PENDING_LEGAL_REVIEW' });
+    expect(db.jurisdictionRuleSet.findFirst).toHaveBeenCalledWith({
+      where: {
+        code: 'PK-SD',
+        effectiveFrom: { lte: at },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      },
+      orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+    });
+  } finally {
+    vi.unstubAllEnvs();
+  }
 });

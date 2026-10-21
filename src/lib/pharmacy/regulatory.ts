@@ -34,6 +34,7 @@ export type BranchRegulatoryState = {
   qualifiedPersonValidTo: Date;
   qualifiedPersonCoverageRosterRef: string;
   ruleSet: {
+    code?: string;
     licenceCategories: unknown;
     permittedSchedules: unknown;
     pharmacistCoverageRule: unknown;
@@ -44,7 +45,7 @@ export type BranchRegulatoryState = {
 type RuleField = { provisional?: boolean; pendingLegalReview?: boolean; values?: unknown };
 
 /**
- * Rule sets flagged `pendingLegalReview` (e.g. PK-SD v1 until counsel signs off) may be
+ * Rule sets flagged `pendingLegalReview` (e.g. PK-SD until counsel signs off) may be
  * exercised in development, tests, staging and pilots, but production enforcement
  * refuses them. Fail closed: under NODE_ENV=production only an explicit
  * APP_ENV of `staging` or `pilot` allows them.
@@ -86,7 +87,9 @@ export function assertBranchMayOperate(
     deny('RULE_SET_UNCONFIRMED');
   }
   if (
-    relevantRules.some((field) => ruleField(field).pendingLegalReview === true) &&
+    (relevantRules.some((field) => ruleField(field).pendingLegalReview === true) ||
+      (branch.ruleSet.code === 'PK-SD' &&
+        relevantRules.some((field) => ruleField(field).pendingLegalReview === undefined))) &&
     !pendingLegalReviewAllowed()
   ) {
     deny('RULE_SET_PENDING_LEGAL_REVIEW');
@@ -158,10 +161,20 @@ export async function assertStoredBranchMayOperate(
     throw new BranchOperationDeniedError('PROFILE_MISSING');
   }
 
+  // Existing profiles can still reference v1; enforce the latest rules in force.
+  const latestRules = await db.jurisdictionRuleSet.findFirst({
+    where: {
+      code: profile.jurisdictionRuleSet.code,
+      effectiveFrom: { lte: at },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+    },
+    orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
+  });
+
   assertBranchMayOperate(
     {
       ...profile,
-      ruleSet: profile.jurisdictionRuleSet,
+      ruleSet: latestRules ?? profile.jurisdictionRuleSet,
       auditDenied,
     },
     { ...action, at }

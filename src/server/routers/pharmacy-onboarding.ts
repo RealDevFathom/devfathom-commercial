@@ -135,7 +135,7 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       effectiveFrom: { lte: at },
       OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
     },
-    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }],
+    orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }, { version: 'desc' }],
   });
   // One rule set per province — the first, because the ordering puts the most
   // recently effective version of each code first.
@@ -347,8 +347,11 @@ export const pharmacyOnboardingRouter = router({
         throw badRequest('effectiveFrom', 'The effective date cannot be in the past.');
       }
 
-      if (midnightUtc(input.licenceValidTo) < today) {
-        throw badRequest('licenceValidTo', 'The licence expiry date cannot be in the past.');
+      if (midnightUtc(input.licenceValidTo) <= today) {
+        throw badRequest(
+          'licenceValidTo',
+          'The licence expiry date must be after today (exclusive expiry).'
+        );
       }
 
       const branch = await ctx.db.pharmacyBranch.findFirst({

@@ -265,6 +265,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
 
   it.each([
     ['expired', '2026-01-01', '2026-06-01'],
+    ['expiring today', '2026-01-01', day(0)],
     ['reversed', day(30), day(20)],
   ])('refuses a %s licence window without storing a profile', async (_, validFrom, validTo) => {
     await withTenantDb(organizationId, async (db) => {
@@ -474,6 +475,14 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         fiscalStatus: 'REGISTERED',
       });
       expect(saved.version).toBe(1);
+      const stored = await db.branchRegulatoryProfile.findFirst({
+        where: { organizationId: otherOrganizationId, branchId: otherBranchId },
+        include: { jurisdictionRuleSet: true },
+      });
+      expect(stored?.jurisdictionRuleSet.version).toBe(2);
+      expect(stored?.jurisdictionRuleSet.licenceCategories).toMatchObject({
+        pendingLegalReview: true,
+      });
 
       // The gate the operator came for: with published rules and a complete
       // profile, premises-and-licences is done and activation is no longer
