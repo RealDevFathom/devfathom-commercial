@@ -804,7 +804,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // Shorter lifetime bounds how long a stolen token is useful; combined with
     // the per-request revalidation above, effective revocation is ~1 minute.
     maxAge: 60 * 60 * 8, // 8 hours
-    updateAge: 60 * 60, // rotate the session cookie at most hourly
+    updateAge: 60 * 60, // Database sessions only; Auth.js refreshes JWT cookies on every read.
   },
   secret: process.env.AUTH_SECRET,
 });

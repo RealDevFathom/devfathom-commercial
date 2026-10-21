@@ -19,3 +19,12 @@ changing the policy alone would break hydration. A safe rollout needs request
 nonce propagation, dynamic rendering across all routes, and production browser
 coverage. Production builds are excluded from this shared-box batch. Keep the
 existing script policy for now; address the Zod eval violation separately (#166).
+
+## PLATFORM daily QA — #169 (2026-10-21)
+
+Deferred: installed Auth.js implements `session.updateAge` only for database
+sessions. Its JWT session handler deliberately re-encodes and reissues the cookie
+on every read (node_modules/@auth/core/src/lib/actions/session.ts). Throttling it
+requires a custom refresh policy; simply dropping Set-Cookie can lose updated
+revocation/role claims or cookie cleanup. Keep upstream JWT behavior in this
+minimal batch. The misleading updateAge comment is corrected alongside this note.
