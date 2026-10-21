@@ -1,3 +1,4 @@
+import { TRPCError } from '@trpc/server';
 import { describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
@@ -238,5 +239,17 @@ describe('tax configuration checkout refusal (#148)', () => {
     expect(response.status).toBe(409);
     expect((await response.json()).error).not.toContain('private-rule-id');
     expect(moneyErrorResponse(new Error('database failure'))).toBeNull();
+  });
+});
+
+describe('comp constraint response', () => {
+  it('returns the authored conflict message to the terminal', async () => {
+    const response = moneyErrorResponse(
+      new TRPCError({ code: 'CONFLICT', message: 'Bill service-charge evidence is inconsistent.' })
+    );
+    expect(response?.status).toBe(409);
+    expect(await response?.json()).toEqual({
+      error: 'Bill service-charge evidence is inconsistent.',
+    });
   });
 });

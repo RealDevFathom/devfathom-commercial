@@ -1,6 +1,7 @@
 import 'server-only';
 
 import { randomUUID } from 'node:crypto';
+import { TRPCError } from '@trpc/server';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -923,7 +924,16 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
     const bill = await tx.restaurantBill.findFirst({
       where: { id: input.billId, branchId: input.branchId },
-      select: { id: true, status: true, compTotal: true, discountTotal: true, grandTotal: true },
+      select: {
+        id: true,
+        status: true,
+        compTotal: true,
+        discountTotal: true,
+        grandTotal: true,
+        serviceChargeTotal: true,
+        serviceChargeBasis: true,
+        serviceChargePolicyVersionId: true,
+      },
     });
     if (!bill) {
       throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -953,7 +963,13 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     const line = await tx.restaurantBillLine.findUnique({
       where: { id: input.billLineId },
-      select: { id: true, billId: true, lineSubtotal: true, compAmount: true },
+      select: {
+        id: true,
+        billId: true,
+        lineSubtotal: true,
+        compAmount: true,
+        serviceChargeAmount: true,
+      },
     });
     if (!line || line.billId !== bill.id) {
       throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
@@ -963,7 +979,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     }
 
     // What the comp cannot absorb out of the bill's own balance (B3).
-    const shortfall = sub(line.lineSubtotal, bill.grandTotal);
+    const shortfall = sub(add(line.lineSubtotal, line.serviceChargeAmount), bill.grandTotal);
     let releasedDiscount = ZERO;
     if (compare(shortfall, ZERO) > 0 && compare(bill.discountTotal, ZERO) > 0) {
       const release = await releaseLoyaltyRedemption(tx, {
@@ -979,7 +995,14 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       // it — so this call applies no further delta.
       releasedDiscount = release.replayed ? ZERO : release.value;
     }
-    const grandTotal = sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal);
+    const serviceChargeTotal = sub(bill.serviceChargeTotal, line.serviceChargeAmount);
+    const serviceChargeBasis = bill.serviceChargePolicyVersionId
+      ? sub(bill.serviceChargeBasis, line.lineSubtotal)
+      : ZERO;
+    const grandTotal = sub(
+      sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal),
+      line.serviceChargeAmount
+    );
     if (compare(grandTotal, ZERO) < 0) {
       // The bill carries a deduction this lane cannot release, so the comp would
       // leave a negative grand total. Refuse rather than record an untrue total.
@@ -1003,6 +1026,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       where: { id: line.id },
       data: {
         compAmount: line.lineSubtotal,
+        serviceChargeAmount: ZERO,
         lineTotal: ZERO,
         compReason: reason,
         compCoAuthorizationId: coAuthorizationId,
@@ -1011,6 +1035,15 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
+        serviceChargeTotal,
+        serviceChargeBasis,
+        ...(serviceChargeBasis.isZero() && serviceChargeTotal.isZero()
+          ? {
+              serviceChargePolicyVersionId: null,
+              serviceChargeRate: null,
+              serviceChargeTaxTreatment: null,
+            }
+          : {}),
         compTotal: add(bill.compTotal, line.lineSubtotal),
         discountTotal: sub(bill.discountTotal, releasedDiscount),
         grandTotal,
@@ -1019,6 +1052,30 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
+  }).catch((error: unknown) => {
+    const isCheckViolation = (value: unknown, seen = new Set<unknown>()): boolean => {
+      if (!value || typeof value !== 'object' || seen.has(value)) return false;
+      seen.add(value);
+      const record = value as Record<string, unknown>;
+      return (
+        record.code === '23514' ||
+        record.originalCode === '23514' ||
+        record.sqlState === '23514' ||
+        record.code === 'P2004' ||
+        [record.cause, record.originalError, ...Object.values(record)].some((child) =>
+          isCheckViolation(child, seen)
+        )
+      );
+    };
+    if (isCheckViolation(error)) {
+      throw new TRPCError({
+        code: 'CONFLICT',
+        message:
+          'The comp could not be applied because the bill totals or service-charge evidence are inconsistent. Refresh the bill and try again.',
+        cause: error,
+      });
+    }
+    throw error;
   });
 }
 
