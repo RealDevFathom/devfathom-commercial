@@ -8,6 +8,7 @@ const mocks = vi.hoisted(() => ({
   reportUpdate: vi.fn(),
   settingUpsert: vi.fn(),
   transaction: vi.fn(),
+  bankLineCreate: vi.fn(),
   comparison: vi.fn(),
   valuation: vi.fn(),
   margin: vi.fn(),
@@ -53,6 +54,7 @@ function caller(role = 'ADMIN', context: Partial<TRPCContext> = {}) {
         update: mocks.reportUpdate,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+      pharmacyBankStatementLine: { create: mocks.bankLineCreate },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -386,6 +388,27 @@ describe('finance comparison boundary', () => {
       select: { id: true },
     });
     expect(mocks.transaction).not.toHaveBeenCalled();
+  });
+  it('refuses a bank-line import when the branch is missing, inactive, or outside the workspace', async () => {
+    mocks.branchFindMany.mockResolvedValue([]);
+    await expect(
+      caller().importBankLine({
+        branchId: 'branch_1',
+        statementRef: 'stmt_1',
+        lineReference: 'line_1',
+        bookedAt: new Date('2026-09-01T00:00:00Z'),
+        amountMinor: 100,
+        description: 'Deposit',
+      })
+    ).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(mocks.branchFindMany).toHaveBeenCalledWith({
+      where: { id: { in: ['branch_1'] }, organizationId: 'org_1', active: true },
+      select: { id: true },
+    });
+    expect(mocks.bankLineCreate).not.toHaveBeenCalled();
   });
 
   it.each([

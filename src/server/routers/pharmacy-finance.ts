@@ -421,11 +421,12 @@ export const pharmacyFinanceRouter = router({
         description: z.string().trim().min(1).max(300),
       })
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyBankStatementLine.create({
+    .mutation(async ({ ctx, input }) => {
+      await scope(ctx, input.branchId);
+      return ctx.db.pharmacyBankStatementLine.create({
         data: { organizationId: ctx.entitlements.organizationId, ...input },
-      })
-    ),
+      });
+    }),
 
   reconcile: bookkeepingProcedure
     .input(

@@ -71,8 +71,10 @@ back to `DATABASE_URL`. The running server reads `DATABASE_URL` only.
 
 `next start` and any production process refuse to boot when that application role is
 `SUPERUSER` or `BYPASSRLS`, and when `CLIENT_IP_HEADER`, `TRUSTED_PROXY_CIDRS`, and
-`TRUSTED_PROXY_HOPS` are all unset. `bun run dev` does not run either check. Confirm the
-application role with:
+`TRUSTED_PROXY_HOPS` are all unset. `bun run dev` does not run either check. IPv4 entries
+in `TRUSTED_PROXY_CIDRS` must be plain IPv4, such as `10.0.0.0/8`. `::ffff:` addresses are
+unwrapped to IPv4 before the trust check, so a mapped form in that list does not match.
+Confirm the application role with:
 
 ```sql
 SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user;
