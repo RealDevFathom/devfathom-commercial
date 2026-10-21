@@ -48,7 +48,9 @@ const db = {
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
-      user: { create: mocks.create, update: mocks.update },
+      // Seat lock: `FOR UPDATE` row read + occupied-seat count.
+      $queryRaw: vi.fn(async () => []),
+      user: { create: mocks.create, update: mocks.update, count: vi.fn(async () => 0) },
       invitation: { upsert: mocks.invitationUpsert },
     }),
 };

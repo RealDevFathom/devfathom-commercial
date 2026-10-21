@@ -1,3 +1,5 @@
+import { lockOrganizationSeat, occupiesSeat } from '@/lib/organization-seat';
+import { rateLimit, clearRateLimit } from '@/lib/rate-limit';
 import { z } from 'zod';
 import { hash, compare } from 'bcryptjs';
 import { TRPCError } from '@trpc/server';
@@ -162,6 +164,7 @@ export const teamRouter = router({
       };
 
       const user = await ctx.db.$transaction(async (tx) => {
+        if (!existing) await lockOrganizationSeat(tx, ctx.session.user.organizationId!, ctx.entitlements.seatLimit);
         // Upsert the user (re-invite refreshes the seeded details), then replace
         // any prior invitation with a fresh single-use token.
         const u = existing
@@ -642,6 +645,18 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { category: 'AUTH', action: 'team.changePassword',
+        targetType: 'User', targetId: ctx.session.user.id, skipInput: true,
+        description: 'Password change attempted' });
+      // Share the login failure budget so switching endpoints cannot bypass lockout.
+      const accountKey = `login:acct:${ctx.session.user.email!.trim().toLowerCase()}`;
+      const ipKey = `login:ip:${ctx.requestMeta.ip ?? 'unknown'}`;
+      const userGate = await rateLimit(`password-change:user:${ctx.session.user.id}`, 10, 5 * 60_000);
+      const ipGate = await rateLimit(ipKey, 30, 5 * 60_000);
+      const accountGate = await rateLimit(accountKey, 10, 5 * 60_000);
+      if (!userGate.ok || !ipGate.ok || !accountGate.ok) {
+        throw new TRPCError({ code: 'TOO_MANY_REQUESTS', message: 'Too many password attempts. Try again later.' });
+      }
       const user = await ctx.db.user.findUnique({
         where: { id: ctx.session.user.id },
         select: { password: true },
@@ -666,6 +681,9 @@ export const teamRouter = router({
           tokenVersion: { increment: 1 },
         },
       });
+      await clearRateLimit(accountKey);
+      await clearRateLimit(ipKey);
+      annotateAudit(ctx, { description: 'Password changed successfully' });
       return { success: true };
     }),
 
@@ -789,7 +807,12 @@ export const teamRouter = router({
         }
       }
 
-      const updated = await ctx.db.user.update({ where: { id }, data });
+      const updated = await ctx.db.$transaction(async (tx) => {
+        if (data.status && occupiesSeat(data.status) && !occupiesSeat(before?.status ?? '')) {
+          await lockOrganizationSeat(tx, ctx.session.user.organizationId!, ctx.entitlements.seatLimit);
+        }
+        return tx.user.update({ where: { id }, data });
+      });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
