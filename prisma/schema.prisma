@@ -15246,9 +15246,11 @@ model OutboundEffect {
   status         String   @default("PENDING")
   attempts       Int      @default(0)
   lastError      String?
+  availableAt    DateTime @default(now())
   createdAt      DateTime @default(now())
   updatedAt      DateTime @updatedAt
 
   @@index([organizationId, status, createdAt])
+  @@index([status, availableAt])
   @@map("outbound_effects")
 }

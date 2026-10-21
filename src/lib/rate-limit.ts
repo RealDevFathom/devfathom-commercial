@@ -1,3 +1,4 @@
+import { createHmac } from 'node:crypto';
 import { BlockList, isIP } from 'node:net';
 import { env as runtimeEnv } from 'node:process';
 
@@ -136,24 +137,39 @@ async function postgresRateLimit(
   }
 }
 
+function rateLimitHmacSecret(): string {
+  const env = runtimeEnv as NodeJS.ProcessEnv & {
+    RATE_LIMIT_HMAC_SECRET?: string;
+    AUTH_SECRET?: string;
+  };
+  return env.RATE_LIMIT_HMAC_SECRET?.trim() || env.AUTH_SECRET?.trim() || 'devfathom-rate-limit';
+}
+
+/** Bucket identity stored in memory and Postgres. The raw address or email is not kept. */
+export function rateLimitStorageKey(key: string): string {
+  return createHmac('sha256', rateLimitHmacSecret()).update(key).digest('hex');
+}
+
 export async function rateLimit(
   key: string,
   limit: number,
   windowMs: number
 ): Promise<RateLimitResult> {
   if (terminalFloodBypass(key)) return { ok: true, retryAfter: 0, remaining: limit - 1 };
-  if (rateLimitBackend() === 'memory') return memoryRateLimit(key, limit, windowMs);
-  return postgresRateLimit(key, limit, windowMs);
+  const stored = rateLimitStorageKey(key);
+  if (rateLimitBackend() === 'memory') return memoryRateLimit(stored, limit, windowMs);
+  return postgresRateLimit(stored, limit, windowMs);
 }
 
 export async function clearRateLimit(key: string): Promise<void> {
+  const stored = rateLimitStorageKey(key);
   if (rateLimitBackend() === 'memory') {
-    buckets.delete(key);
+    buckets.delete(stored);
     return;
   }
   const query = rateLimitQuery.current ?? defaultQuery;
   try {
-    await query(CLEAR_SQL, [key]);
+    await query(CLEAR_SQL, [stored]);
   } catch (error) {
     console.error('[rate-limit] clear failed', error instanceof Error ? error.name : 'error');
   }

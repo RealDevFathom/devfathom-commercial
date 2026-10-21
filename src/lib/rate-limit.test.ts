@@ -131,6 +131,21 @@ describe('shared rate-limit store', () => {
     expect(RATE_LIMIT_UPSERT_SQL).not.toContain('${');
   });
 
+  it('stores an HMAC instead of a raw address or email', async () => {
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    const seen: string[] = [];
+    rateLimitQuery.current = async (_sql, params) => {
+      seen.push(String(params[0]));
+      return [{ count: 1, resetAt: new Date(Date.now() + 60_000) }];
+    };
+    const raw = 'login:acct:person@example.com';
+    await rateLimit(raw, 5, 60_000);
+    await clearRateLimit(raw);
+    expect(seen[0]).toMatch(/^[0-9a-f]{64}$/);
+    expect(seen[0]).not.toContain('person@example.com');
+    expect(seen[1]).toBe(seen[0]);
+  });
+
   it('fails closed when the shared store errors', async () => {
     vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
     rateLimitQuery.current = async () => {

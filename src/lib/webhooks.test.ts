@@ -71,7 +71,15 @@ describe('emitEvent entitlement enforcement', () => {
     await vi.waitFor(() => expect(createDelivery).toHaveBeenCalledOnce());
     expect(mocks.deliver).toHaveBeenCalledWith(
       'https://example.com/hook',
-      expect.objectContaining({ body: expect.any(String), timeoutMs: 5_000 })
+      expect.objectContaining({
+        body: expect.any(String),
+        timeoutMs: 5_000,
+        headers: expect.objectContaining({
+          'X-DevFathom-Delivery-Id': expect.stringMatching(
+            /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+          ),
+        }),
+      })
     );
   });
 
