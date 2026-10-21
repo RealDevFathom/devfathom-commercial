@@ -5,7 +5,6 @@ const mocks = vi.hoisted(() => ({
   moduleUpsert: vi.fn(),
   organizationUpdate: vi.fn(),
   auditCreate: vi.fn(),
-  moduleFindMany: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -16,7 +15,6 @@ vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
 const platformDb = {
   platformContract: { create: mocks.contractCreate },
   organizationModule: { upsert: mocks.moduleUpsert },
-  platformModule: { findMany: mocks.moduleFindMany },
   organization: { update: mocks.organizationUpdate },
   platformAuditLog: { create: mocks.auditCreate },
 };
@@ -37,10 +35,6 @@ describe('commercial contract entitlement synchronization', () => {
     mocks.moduleUpsert.mockResolvedValue({ id: 'override_1' });
     mocks.organizationUpdate.mockResolvedValue({ id: 'org_1' });
     mocks.auditCreate.mockResolvedValue({ id: 'audit_1' });
-    mocks.moduleFindMany.mockResolvedValue([
-      { id: 'mod_contract' },
-      { id: 'mod_package_baseline' },
-    ]);
   });
 
   it('creates overrides only for modules included in the contract', async () => {
