@@ -291,7 +291,7 @@ export function OrganizationAdminContent() {
     );
   }
 
-  const { organization, entitlements } = overview.data;
+  const { organization, entitlements, pharmacyBranches } = overview.data;
   const createRoleErrors = !role.variables?.id ? role.error?.data?.validation : null;
   const createRoleKeyError = createRoleErrors?.key?.[0];
   const createRolePermissionsError = createRoleErrors?.permissions?.[0];
@@ -491,6 +491,7 @@ export function OrganizationAdminContent() {
                 role: formValue(values, 'role') as 'ADMIN' | 'HR' | 'EMPLOYEE',
                 department: formValue(values, 'department'),
                 organizationRoleId: formValue(values, 'organizationRoleId') || null,
+                branchIds: values.getAll('branchId').map(String),
               },
               { onSuccess: () => form.reset() }
             );
@@ -538,6 +539,24 @@ export function OrganizationAdminContent() {
               ))}
             </select>
           </label>
+          {pharmacyBranches.length > 0 && (
+            <fieldset className="sm:col-span-2 lg:col-span-3">
+              <legend className={labelClass}>Pharmacy branches</legend>
+              <div className="flex flex-wrap gap-3">
+                {pharmacyBranches.map((branch) => (
+                  <label key={branch.id} className="flex min-h-11 items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      name="branchId"
+                      value={branch.id}
+                      className="size-4 rounded border-border text-primary focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                    />
+                    {branch.name}
+                  </label>
+                ))}
+              </div>
+            </fieldset>
+          )}
           <label className="sm:col-span-2 lg:col-span-2">
             <span className={labelClass}>Temporary password</span>
             <Input name="password" type="password" minLength={12} required />
@@ -546,8 +565,8 @@ export function OrganizationAdminContent() {
             <SubmitButton pending={addMember.isPending}>Add staff</SubmitButton>
           </div>
           <p className="text-[11px] text-muted-foreground sm:col-span-2 lg:col-span-3">
-            Minimum 12-character password. The new member occupies one licensed seat
-            ({entitlements.activeSeats}/{entitlements.seatLimit} used).
+            Minimum 12-character password. The new member occupies one licensed seat (
+            {entitlements.activeSeats}/{entitlements.seatLimit} used).
           </p>
         </form>
         <div className="divide-y divide-border/60">
@@ -612,11 +631,7 @@ export function OrganizationAdminContent() {
                     {/* The organization's own departments, not a hardcoded agency
                         list: a pharmacy files staff under Counter, Dispensary, and
                         the rest its vertical defines. */}
-                    <select
-                      className={inputClass}
-                      name="department"
-                      defaultValue={user.department}
-                    >
+                    <select className={inputClass} name="department" defaultValue={user.department}>
                       {organization.departments.map((department) => (
                         <option key={department.key} value={department.key}>
                           {department.name}

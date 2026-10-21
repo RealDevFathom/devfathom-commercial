@@ -2,7 +2,12 @@ import { cleanup, fireEvent, render, screen, within } from '@testing-library/rea
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const overviewData = vi.hoisted(() => ({ current: null as unknown }));
-const mutations = vi.hoisted(() => ({ map: new Map<string, { mutate: ReturnType<typeof vi.fn>; isPending: boolean; reset: () => void }>() }));
+const mutations = vi.hoisted(() => ({
+  map: new Map<
+    string,
+    { mutate: ReturnType<typeof vi.fn>; isPending: boolean; reset: () => void }
+  >(),
+}));
 
 function mutationFor(key: string) {
   let entry = mutations.map.get(key);
@@ -13,7 +18,9 @@ function mutationFor(key: string) {
   return entry;
 }
 
-vi.mock('next-auth/react', () => ({ useSession: () => ({ status: 'unauthenticated', data: null }) }));
+vi.mock('next-auth/react', () => ({
+  useSession: () => ({ status: 'unauthenticated', data: null }),
+}));
 vi.mock('sonner', () => ({ toast: { success: vi.fn(), error: vi.fn() } }));
 vi.mock('@/lib/trpc', () => ({
   trpc: {
@@ -66,7 +73,17 @@ beforeEach(() => {
       identityConnections: [],
       scimTokens: [],
       departments: PHARMACY_DEPARTMENTS,
-      roles: [{ id: 'role_cashier', key: 'cashier', name: 'Cashier', description: null, isSystem: false, permissions: [], _count: { users: 0 } }],
+      roles: [
+        {
+          id: 'role_cashier',
+          key: 'cashier',
+          name: 'Cashier',
+          description: null,
+          isSystem: false,
+          permissions: [],
+          _count: { users: 0 },
+        },
+      ],
       users: [
         {
           id: 'owner_1',
@@ -83,6 +100,10 @@ beforeEach(() => {
       usageCounters: [],
     },
     entitlements: { activeSeats: 1, seatLimit: 10, modules: [] },
+    pharmacyBranches: [
+      { id: 'branch_clifton', name: 'Clifton', code: 'CLF' },
+      { id: 'branch_dha', name: 'DHA', code: 'DHA' },
+    ],
   };
 });
 
@@ -112,13 +133,16 @@ describe('organization people and access — staff onboarding', () => {
       target: { value: 'ayesha@qa-clifton.test' },
     });
     fireEvent.change(within(form).getByLabelText('Title'), { target: { value: 'Cashier' } });
-    fireEvent.change(within(form).getByLabelText('Department'), { target: { value: 'DISPENSARY' } });
+    fireEvent.change(within(form).getByLabelText('Department'), {
+      target: { value: 'DISPENSARY' },
+    });
     fireEvent.change(within(form).getByLabelText('Role template'), {
       target: { value: 'role_cashier' },
     });
     fireEvent.change(within(form).getByLabelText('Temporary password'), {
       target: { value: 'temporary-123456' },
     });
+    fireEvent.click(within(form).getByLabelText('Clifton'));
     fireEvent.submit(form);
 
     expect(mutationFor('createMember').mutate).toHaveBeenCalledWith(
@@ -130,6 +154,7 @@ describe('organization people and access — staff onboarding', () => {
         role: 'EMPLOYEE',
         department: 'DISPENSARY',
         organizationRoleId: 'role_cashier',
+        branchIds: ['branch_clifton'],
       },
       expect.objectContaining({ onSuccess: expect.any(Function) })
     );

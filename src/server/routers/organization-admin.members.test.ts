@@ -3,6 +3,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
   userFindFirst: vi.fn(),
   userCreate: vi.fn(),
+  userCount: vi.fn(),
+  queryRaw: vi.fn(),
+  branchFindMany: vi.fn(),
+  assignmentCreateMany: vi.fn(),
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
   assertSeatAvailable: vi.fn(),
@@ -33,10 +37,28 @@ vi.mock('@/lib/abac', async () => {
 import type { TRPCContext } from '../trpc';
 import { organizationAdminRouter } from './organization-admin';
 
-const db = {
-  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
+type MemberDb = {
+  user: {
+    findFirst: typeof mocks.userFindFirst;
+    create: typeof mocks.userCreate;
+    count: typeof mocks.userCount;
+  };
+  organizationDepartment: { findFirst: typeof mocks.departmentFindFirst };
+  organizationRole: { findFirst: typeof mocks.roleFindFirst };
+  pharmacyBranch: { findMany: typeof mocks.branchFindMany };
+  pharmacyBranchAssignment: { createMany: typeof mocks.assignmentCreateMany };
+  $queryRaw: typeof mocks.queryRaw;
+  $transaction: (fn: (tx: MemberDb) => Promise<unknown>) => Promise<unknown>;
+};
+
+const db: MemberDb = {
+  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate, count: mocks.userCount },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   organizationRole: { findFirst: mocks.roleFindFirst },
+  pharmacyBranch: { findMany: mocks.branchFindMany },
+  pharmacyBranchAssignment: { createMany: mocks.assignmentCreateMany },
+  $queryRaw: mocks.queryRaw,
+  $transaction: (fn) => fn(db),
 };
 
 function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatLimit: 10 }) {
@@ -77,7 +99,15 @@ describe('organization member creation', () => {
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
     mocks.roleFindFirst.mockResolvedValue({ id: 'role_cashier' });
     mocks.userFindFirst.mockResolvedValue(null);
-    mocks.userCreate.mockResolvedValue({ id: 'user_new', email: 'ayesha@clifton.test', name: 'Ayesha Cashier' });
+    mocks.userCount.mockResolvedValue(0);
+    mocks.queryRaw.mockResolvedValue([{ id: 'org_a' }]);
+    mocks.branchFindMany.mockResolvedValue([]);
+    mocks.assignmentCreateMany.mockResolvedValue({ count: 0 });
+    mocks.userCreate.mockResolvedValue({
+      id: 'user_new',
+      email: 'ayesha@clifton.test',
+      name: 'Ayesha Cashier',
+    });
   });
 
   it('creates an ACTIVE member scoped to the caller tenant with a hashed password', async () => {
@@ -89,9 +119,17 @@ describe('organization member creation', () => {
       organizationId: 'org_a',
       email: 'ayesha@clifton.test',
       password: 'hashed',
+      passwordChangedAt: null,
+      mustChangePassword: true,
       role: 'EMPLOYEE',
       department: 'COUNTER',
       status: 'ACTIVE',
+    });
+    expect(mocks.queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      mocks.userCreate.mock.invocationCallOrder[0]!
+    );
+    expect(mocks.userCount).toHaveBeenCalledWith({
+      where: { organizationId: 'org_a', status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] } },
     });
     // The duplicate check is scoped to the caller tenant, never global.
     expect(mocks.userFindFirst).toHaveBeenCalledWith({
@@ -101,13 +139,15 @@ describe('organization member creation', () => {
   });
 
   it('refuses before writing anything when the seat limit is reached', async () => {
-    mocks.assertSeatAvailable.mockImplementation(() => {
-      throw new Error('Seat limit reached (10/10).');
-    });
+    mocks.userCount.mockResolvedValue(10);
 
     await expect(
       caller('org_a', { activeSeats: 10, seatLimit: 10 }).createMember(input)
-    ).rejects.toMatchObject({ code: 'PRECONDITION_FAILED' });
+    ).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Seat limit reached (10/10).',
+    });
+    expect(mocks.queryRaw).toHaveBeenCalled();
     expect(mocks.userCreate).not.toHaveBeenCalled();
   });
 
@@ -138,5 +178,48 @@ describe('organization member creation', () => {
 
     await expect(caller('org_a').createMember(input)).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it('maps a concurrent duplicate email to CONFLICT', async () => {
+    mocks.userCreate.mockRejectedValue({ code: 'P2002' });
+
+    await expect(caller('org_a').createMember(input)).rejects.toMatchObject({
+      code: 'CONFLICT',
+      message: 'A member with this email already exists in this workspace.',
+    });
+  });
+
+  it('assigns the new member to the chosen active pharmacy branches', async () => {
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_clifton' }, { id: 'branch_dha' }]);
+
+    await caller('org_a').createMember({
+      ...input,
+      branchIds: ['branch_clifton', 'branch_dha', 'branch_clifton'],
+    });
+
+    expect(mocks.branchFindMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        id: { in: ['branch_clifton', 'branch_dha'] },
+        active: true,
+      },
+      select: { id: true },
+    });
+    expect(mocks.assignmentCreateMany).toHaveBeenCalledWith({
+      data: [
+        { organizationId: 'org_a', branchId: 'branch_clifton', userId: 'user_new', active: true },
+        { organizationId: 'org_a', branchId: 'branch_dha', userId: 'user_new', active: true },
+      ],
+    });
+  });
+
+  it('refuses an inactive or unknown branch before creating the member', async () => {
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_clifton' }]);
+
+    await expect(
+      caller('org_a').createMember({ ...input, branchIds: ['branch_clifton', 'branch_missing'] })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Choose an active pharmacy branch.' });
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+    expect(mocks.assignmentCreateMany).not.toHaveBeenCalled();
   });
 });
