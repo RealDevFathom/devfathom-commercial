@@ -39,7 +39,7 @@ describe('backfill SQL splitter', () => {
 });
 
 (databaseUrl ? describe : describe.skip)('seat backfill on PostgreSQL with forced RLS', () => {
-  it('repairs legacy seats, preserves manual, custom and single-seat limits, and audits once', async () => {
+  it('repairs legacy seats, preserves contract, creation, demo, unknown, manual, custom and single-seat limits, and audits once', async () => {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
     const schema = `seat_${randomUUID().replaceAll('-', '')}`;
@@ -59,12 +59,19 @@ describe('backfill SQL splitter', () => {
         CREATE TABLE platform_packages (id text PRIMARY KEY, key text, vertical text,
           "defaultSeats" integer NOT NULL DEFAULT 1, "updatedAt" timestamp NOT NULL DEFAULT now());
         CREATE TABLE organizations (id text PRIMARY KEY, "packageId" text REFERENCES platform_packages,
-          "seatLimit" integer NOT NULL DEFAULT 1, "updatedAt" timestamp NOT NULL DEFAULT now());
+          "seatLimit" integer NOT NULL DEFAULT 1, "isDemo" boolean NOT NULL DEFAULT false, "updatedAt" timestamp NOT NULL DEFAULT now());
+        CREATE TABLE platform_contracts (id text PRIMARY KEY,
+          "organizationId" text NOT NULL REFERENCES organizations);
         CREATE TABLE platform_audit_logs (id text PRIMARY KEY, "organizationId" text REFERENCES organizations,
           action text NOT NULL, "targetType" text, "targetId" text, before jsonb, after jsonb, reason text,
           "createdAt" timestamp NOT NULL DEFAULT now());
       `);
-      for (const table of ['platform_packages', 'organizations', 'platform_audit_logs']) {
+      for (const table of [
+        'platform_packages',
+        'organizations',
+        'platform_contracts',
+        'platform_audit_logs',
+      ]) {
         await client.query(`ALTER TABLE ${table} ENABLE ROW LEVEL SECURITY`);
         await client.query(`ALTER TABLE ${table} FORCE ROW LEVEL SECURITY`);
         await client.query(`CREATE POLICY platform_access ON ${table}
@@ -77,12 +84,32 @@ describe('backfill SQL splitter', () => {
           ('team', 'team', 'AGENCY', 42), ('solo', 'solo', 'AGENCY', 1),
           ('hotel', 'hotel-essentials', 'HOSPITALITY', 1);
         INSERT INTO organizations (id, "packageId", "seatLimit") VALUES
+          ('contract-row', 'team', 1), ('contract-create-audit', 'team', 1),
+          ('contract-status-audit', 'team', 1), ('created-one', 'team', 1),
+          ('demo', 'team', 1), ('unknown', 'team', 1),
           ('manual', 'team', 1), ('raise', 'team', 1), ('custom', 'team', 7), ('solo', 'solo', 1), ('hotel', 'hotel', 1);
+        UPDATE organizations SET "isDemo" = true WHERE id = 'demo';
+        INSERT INTO platform_contracts (id, "organizationId") VALUES ('contract', 'contract-row');
+        INSERT INTO platform_audit_logs
+          (id, "organizationId", action, "targetType", "targetId", after)
+        SELECT 'create-' || id, id, 'organization.create', 'Organization', id,
+          CASE WHEN id = 'created-one' THEN '{"seatLimit": 1}'::jsonb ELSE '{}'::jsonb END
+        FROM organizations WHERE id <> 'unknown';
+        INSERT INTO platform_audit_logs
+          (id, "organizationId", action, "targetType", "targetId", after)
+        VALUES
+          ('contract-create', 'contract-create-audit', 'commercial.contract.create',
+            'PlatformContract', 'deleted-contract-create', '{"seatLimit": 1}'),
+          ('contract-status', 'contract-status-audit', 'commercial.contract.status',
+            'PlatformContract', 'deleted-contract-status', '{"seatLimit": 1}');
         INSERT INTO platform_audit_logs
           (id, "organizationId", action, "targetType", "targetId", before, after)
         VALUES ('manual-seat-limit', 'manual', 'organization.update', 'Organization', 'manual',
           '{"seatLimit": 42}', '{"seatLimit": 1}');
       `);
+      const originalOrgs = (await client.query('SELECT * FROM organizations ORDER BY id')).rows;
+      const originalAuditCount = (await client.query('SELECT * FROM platform_audit_logs'))
+        .rowCount!;
       const originalSeats = new Map(
         (await client.query('SELECT id, "seatLimit" FROM organizations')).rows.map((o) => [
           o.id,
@@ -114,13 +141,35 @@ describe('backfill SQL splitter', () => {
       });
       const first = await snapshot();
       expect(first.orgs.map((o) => [o.id, o.seatLimit])).toEqual([
+        ['contract-create-audit', 1],
+        ['contract-row', 1],
+        ['contract-status-audit', 1],
+        ['created-one', 1],
         ['custom', 7],
+        ['demo', 1],
         ['hotel', 15],
         ['manual', 1],
         ['raise', 42],
         ['solo', 1],
+        ['unknown', 1],
       ]);
-      expect(first.audits).toHaveLength(3);
+      expect(first.orgs).toHaveLength(11);
+      expect(first.audits).toHaveLength(originalAuditCount + 2);
+      for (const id of [
+        'contract-row',
+        'contract-create-audit',
+        'contract-status-audit',
+        'created-one',
+        'demo',
+        'unknown',
+      ]) {
+        expect(first.orgs.find((o) => o.id === id)).toEqual(originalOrgs.find((o) => o.id === id));
+        expect(
+          first.audits.filter(
+            (a) => a.organizationId === id && a.action === 'organization.seat_limit.backfill'
+          )
+        ).toHaveLength(0);
+      }
       const updatedOrgCount = first.orgs.filter(
         (o) => o.seatLimit !== originalSeats.get(o.id)
       ).length;
