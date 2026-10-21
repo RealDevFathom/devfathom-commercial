@@ -1,5 +1,9 @@
 import type { GrowthWhatsAppStore, MessageTemplateRow } from '@/lib/growth/whatsapp/types';
 
+import confusables from './unicode-confusables';
+
+import { PROHIBITED_DRUG_NAMES } from './prohibited-drugs';
+
 export const TEMPLATE_KEYS = [
   'birthday_offer',
   'refill_reminder',
@@ -184,14 +188,55 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-/** Case-insensitive whole-word match. Names shorter than 3 characters are ignored. */
+// Policy folds supplement the full vendored UTS #39 skeleton.
+const DRUG_FOLD: Record<string, string> = {
+  '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't',
+  '@': 'a', '$': 's', '!': 'i', '|': 'i', '€': 'e', l: 'i',
+  'ᴀ': 'a',
+  ي: 'ی', ى: 'ی', ك: 'ک', ه: 'ہ', ة: 'ہ',
+};
+
+function foldDrugText(value: string): string {
+  const digits = value.toLowerCase().replace(/[\u0660-\u0669\u06f0-\u06f9]/g, (c) =>
+    String(c.charCodeAt(0) % 16)
+  );
+  const policy = [...digits].map((c) => DRUG_FOLD[c] ?? c).join('');
+  const skeleton = [...policy.normalize('NFKD')]
+    .map((c) => (confusables as Record<string, string>)[c] ?? c)
+    .join('')
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[\p{M}\u0640]/gu, '');
+  return [...skeleton].map((c) => DRUG_FOLD[c] ?? c).join('');
+}
+
+export function normalizeDrugName(value: string): string {
+  return foldDrugText(value)
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .replace(/(.)\1+/gu, '$1');
+}
+
+/** Long names allow affixes. Short names retain boundaries; repeated letters
+ * and separators are accepted on both the body and catalog/list side. */
 export function bodyNamesProhibitedDrug(body: string, names: readonly string[]): boolean {
-  const text = body.normalize('NFKC');
+  const text = foldDrugText(body);
+  // A common adjective, explicitly reviewed in PR #175. Apply only to the
+  // Lyrica alias so tenant catalog names remain enforceable.
+
   for (const raw of names) {
-    const name = raw.normalize('NFKC').trim();
+    const name = normalizeDrugName(raw);
     if (name.length < 3) continue;
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(name)}(?![\\p{L}\\p{N}])`, 'iu');
-    if (pattern.test(text)) return true;
+    const letters = [...name].map((c) => `(?:${escapeRegExp(c)}[^\\p{L}\\p{N}]*)+`).join('');
+    const long = normalizeDrugName(raw).length >= 5;
+    const pattern = new RegExp(
+      `${long ? '' : '(?<![\\p{L}\\p{N}])'}${letters}${long ? '' : '(?![\\p{L}\\p{N}])'}`,
+      'iu'
+    );
+    const candidate =
+      normalizeDrugName(raw) === normalizeDrugName('lyrica')
+        ? text.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(foldDrugText('lyrical'))}(?![\\p{L}\\p{N}])`, 'gu'), '')
+        : text;
+    if (pattern.test(candidate)) return true;
   }
   return false;
 }
@@ -284,6 +329,14 @@ export async function assertMarketingCopyAllowed(
   organizationId: string,
   body: string
 ): Promise<void> {
+  // Generic medicine language is prohibited even when no catalog drug is named.
+  if (
+    /(?<![\p{L}\p{N}])r\s*x(?![\p{L}\p{N}])/u.test(foldDrugText(body)) ||
+    bodyNamesProhibitedDrug(body, [
+      'prescription', 'nuskha', 'dawai', 'dawa', 'medicine',
+      'دوائی', 'دوا', 'نسخہ', 'ask your doctor', 'ڈاکٹر سے پوچھیں',
+    ])
+  ) throw new ProhibitedDrugInCopy();
   let rows: unknown;
   try {
     rows = await readMedicines(db, {
@@ -302,7 +355,14 @@ export async function assertMarketingCopyAllowed(
     if (error instanceof ProhibitedDrugInCopy) throw error;
     throw new ProhibitedDrugInCopy();
   }
-  if (bodyNamesProhibitedDrug(body, prohibitedNames(rows))) throw new ProhibitedDrugInCopy();
+  // The accessory noun must immediately follow insulin; insulin elsewhere still blocks.
+  const checkedBody = body.replace(
+    /\binsulin\s+(?:pen\s+needles|cooler\s+bags?|syringes|ka\s+(?:pen|cooler))\b/giu,
+    'device accessory'
+  ).replace(/\blithium\s+(?:batter(?:y|ies)|cells?)\b/giu, 'device battery');
+  if (bodyNamesProhibitedDrug(checkedBody, [...prohibitedNames(rows), ...PROHIBITED_DRUG_NAMES])) {
+    throw new ProhibitedDrugInCopy();
+  }
 }
 
 export class UnknownTemplateVariable extends Error {

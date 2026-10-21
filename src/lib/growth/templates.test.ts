@@ -3,10 +3,12 @@ import { describe, expect, it } from 'vitest';
 import { createMemoryStore } from './whatsapp/memory-store';
 import {
   assertCampaignProducts,
+  assertMarketingCopyAllowed,
   DEFAULT_TEMPLATES,
   DrugCategoryInPromo,
   ensureDefaultTemplates,
   bodyNamesProhibitedDrug,
+  ProhibitedDrugInCopy,
   productFamiliesFromMedicines,
   MissingStop,
   MissingTemplateVariable,
@@ -83,11 +85,42 @@ describe('message templates', () => {
     ).toThrow(UnknownTemplateVariable);
   });
 
+  it('matches a controlled name after spacing, punctuation, leetspeak, and a plural', () => {
+    const names = ['Alprazolam', 'Xanax', 'زاناکس', 'tramadul'];
+    expect(bodyNamesProhibitedDrug('x a n a x tonight', names)).toBe(true);
+    expect(bodyNamesProhibitedDrug('x.a.n.a.x tonight', names)).toBe(true);
+    expect(bodyNamesProhibitedDrug('x4n4x tonight', names)).toBe(true);
+    expect(bodyNamesProhibitedDrug('xanaxs tonight', names)).toBe(true);
+    expect(bodyNamesProhibitedDrug('زاناکس موجود ہے', names)).toBe(true);
+    expect(bodyNamesProhibitedDrug('tramadul available', names)).toBe(true);
+    expect(bodyNamesProhibitedDrug('panadolol tablets', names)).toBe(false);
+    expect(bodyNamesProhibitedDrug('a vitamin offer', names)).toBe(false);
+  });
+
+  it('matches the global controlled and Schedule-G list even when the catalog is empty', async () => {
+    const db = { medicine: { findMany: async () => [] } };
+    await expect(
+      assertMarketingCopyAllowed(db, 'org_1', 'Ask for zanaks. Reply STOP')
+    ).rejects.toBeInstanceOf(ProhibitedDrugInCopy);
+    await expect(
+      assertMarketingCopyAllowed(db, 'org_1', 'x.a.n.a.x in stock. Reply STOP')
+    ).rejects.toBeInstanceOf(ProhibitedDrugInCopy);
+    await expect(
+      assertMarketingCopyAllowed(db, 'org_1', 'مورفین available. Reply STOP')
+    ).rejects.toBeInstanceOf(ProhibitedDrugInCopy);
+    const down = {
+      medicine: { findMany: async () => Promise.reject(new Error('catalog down')) },
+    };
+    await expect(
+      assertMarketingCopyAllowed(down, 'org_1', 'A shop note. Reply STOP')
+    ).rejects.toBeInstanceOf(ProhibitedDrugInCopy);
+  });
+
   it('matches prescription names on word boundaries without case', () => {
     expect(
       bodyNamesProhibitedDrug('Ask for Xanax today. Reply STOP', ['Alprazolam', 'Xanax'])
     ).toBe(true);
-    expect(bodyNamesProhibitedDrug('panadolol tablets', ['Panadol'])).toBe(false);
+    expect(bodyNamesProhibitedDrug('panadolol tablets', ['Panadol'])).toBe(true);
     expect(bodyNamesProhibitedDrug('Try PANADOL tonight', ['Panadol'])).toBe(true);
     expect(bodyNamesProhibitedDrug('Rx only', ['Rx'])).toBe(false);
   });

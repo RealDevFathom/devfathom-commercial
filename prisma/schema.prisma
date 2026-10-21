@@ -15226,6 +15226,8 @@ model PharmacyPackPrice {
 
 /// WhatsApp channel for one organization. Tables are `growth_wa_*` so a later
 /// G1 growth schema can add its own settings and customer models without a clash.
+/// `organizationId` is on all four tables so tenant purge deletes them. The
+/// settings foreign key also cascades when the organization row itself is deleted.
 model GrowthWaSettings {
   organizationId        String   @id
   monthlyBudgetMinor    Int      @default(0)

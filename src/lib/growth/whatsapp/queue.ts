@@ -5,6 +5,7 @@ import {
   DrugCategoryInPromo,
   fillAllowlistedProduct,
   MissingStop,
+  ProhibitedDrugInCopy,
   ORDER_READY_BODIES,
   productFamiliesFromMedicines,
   renderTemplate,
@@ -15,7 +16,7 @@ import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import { createEvolutionProvider, evolutionConfigured } from './evolution';
 import type { WhatsAppProvider } from './provider';
 import { sendText } from './send';
-import { growthStore } from './store';
+import { outboundGrowthStore as growthStore } from './store';
 import { businessTimeZone, effectiveDailyCap, isQuietHours, zonedDayStart } from './time';
 import {
   NotOptedIn,
@@ -71,27 +72,43 @@ async function attemptRow(
   unit: StoreUnit,
   provider: WhatsAppProvider,
   organizationId: string,
-  row: MessageLogRow
+  row: MessageLogRow,
+  checkCopy?: (body: string) => Promise<void>
 ): Promise<'sent' | 'failed' | 'skipped'> {
   const priorAttempts = readAttempts(row.error);
   const claimed = await unit(async (store) => {
     const next = await store.claimQueued(organizationId, row.id);
     if (!next) return null;
     const customer = next.customerId ? await store.customer(organizationId, next.customerId) : null;
-    return { row: next, customer };
+    return { row: next, customer, organization: await store.organization(organizationId) };
   });
   if (!claimed) return 'skipped';
   let result;
+  const utility = claimed.row.direction === 'out' && Object.values(ORDER_READY_BODIES).some(
+    (template) => claimed.row.body === renderTemplate(template, {
+      name: claimed.customer?.displayName ?? '',
+      business: claimed.organization?.displayName ?? '',
+    })
+  );
+  let copyChecked = utility;
   try {
+    if (!utility) {
+      if (!checkCopy) throw new ProhibitedDrugInCopy();
+      await checkCopy(claimed.row.body);
+      copyChecked = true;
+    }
     result = await sendText({
       provider,
       customer: claimed.customer,
       body: claimed.row.body,
     });
   } catch (error) {
-    if (error instanceof NotOptedIn || error instanceof MissingStop) {
+    if (error instanceof NotOptedIn || error instanceof MissingStop || !copyChecked) {
       await unit((store) =>
-        store.markMessage(claimed.row.id, { status: 'failed', error: error.name })
+        store.markMessage(claimed.row.id, {
+          status: 'failed',
+          error: error instanceof Error ? error.name : 'CopyCheckFailed',
+        })
       );
       return 'failed';
     }
@@ -127,6 +144,7 @@ export async function drainQueue(input: {
   timeZone?: string | null;
   now: Date;
   clock?: QueueClock;
+  checkCopy?: (body: string) => Promise<void>;
 }): Promise<DrainResult> {
   const zone = businessTimeZone(input.timeZone);
   const clock = input.clock ?? realClock;
@@ -158,7 +176,8 @@ export async function drainQueue(input: {
       input.unit,
       input.provider,
       input.organizationId,
-      rows[index]!
+      rows[index]!,
+      input.checkCopy
     );
     if (outcome === 'sent') sent += 1;
   }
@@ -297,6 +316,8 @@ export async function drainOrganizationQueue(
     unit,
     provider,
     organizationId,
+    checkCopy: (body) =>
+      withTenantDb(organizationId, (db) => assertMarketingCopyAllowed(db, organizationId, body)),
     settings: ready.settings,
     timeZone: ready.timeZone,
     now,

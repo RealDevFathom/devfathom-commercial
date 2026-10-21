@@ -20,7 +20,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 
 vi.mock('./store', () => ({
-  growthStore: () => {
+  outboundGrowthStore: () => {
     if (!tx.store) throw new Error('store missing');
     return tx.store;
   },
@@ -151,6 +151,7 @@ describe('outbound queue', () => {
     });
     const sleeps: number[] = [];
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -193,6 +194,7 @@ describe('outbound queue', () => {
     });
     const fetchImpl = vi.fn();
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -231,6 +233,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
     });
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -266,6 +269,7 @@ describe('outbound queue', () => {
     });
     const fetchImpl = vi.fn(async () => new Response('no', { status: 500 }));
     const input = {
+      checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -308,6 +312,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: `wamid-${open}` } }), { status: 200 });
     });
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: async (run) => {
         open += 1;
         try {
@@ -367,6 +372,7 @@ describe('outbound queue', () => {
     };
     await expect(
       drainQueue({
+        checkCopy: async () => {},
         unit,
         provider: providerFor(fetchImpl as typeof fetch),
         organizationId: 'org_1',
@@ -379,6 +385,7 @@ describe('outbound queue', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(store.messages[0]?.status).toBe('sending');
     await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -414,6 +421,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
     });
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -448,7 +456,7 @@ describe('outbound queue', () => {
       customerId: 'c1',
       direction: 'out',
       waMessageId: null,
-      body: 'Hello. Reply STOP to opt out.',
+      body: 'c1, your order from Demo Pharmacy is ready for pickup. Reply STOP to opt out.',
       status: 'queued',
       campaignId: null,
       recipientId: null,
@@ -657,4 +665,46 @@ describe('business local time', () => {
       '2026-10-20T19:00:00.000Z'
     );
   });
+});
+
+describe('campaign drain copy gate', () => {
+  it.each(['prohibited copy', 'catalog unavailable', 'missing gate', 'no campaign'])(
+    'fails closed before provider send: %s',
+    async (reason) => {
+      const store = createMemoryStore();
+      store.putCustomer(customer('drain', '+923001234567'));
+      const row = await store.insertMessage({
+        organizationId: 'org_1',
+        customerId: 'drain',
+        direction: 'out',
+        body: 'Xаnax offer. Reply STOP',
+        status: 'queued',
+        campaignId: reason === 'no campaign' ? null : 'campaign',
+        recipientId: null,
+        waMessageId: null,
+        error: null,
+      });
+      const sendText = vi.fn();
+      const checkCopy =
+        reason === 'missing gate'
+          ? undefined
+          : async (body: string) => {
+              if (reason === 'catalog unavailable') throw new Error('catalog unavailable');
+              const { assertMarketingCopyAllowed } = await import('@/lib/growth/templates');
+              await assertMarketingCopyAllowed(medicineDb(), 'org_1', body);
+            };
+      const result = await drainQueue({
+        unit: (run) => run(store),
+        provider: { sendText, getStatus: async () => 'connected' },
+        organizationId: 'org_1',
+        settings: settings(),
+        now: day,
+        clock: { now: () => day, sleep: async () => {}, random: () => 0 },
+        checkCopy,
+      });
+      expect(result.sent).toBe(0);
+      expect(sendText).not.toHaveBeenCalled();
+      expect(store.messages.find((message) => message.id === row.id)?.status).toBe('failed');
+    }
+  );
 });
