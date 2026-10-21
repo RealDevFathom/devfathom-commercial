@@ -1,3 +1,4 @@
+import type { StoreUnit } from './queue';
 import { handleInboundText } from '@/lib/growth/consent';
 
 import { parseEvolutionWebhook } from './evolution';
@@ -28,6 +29,8 @@ export async function handleGrowthWebhook(input: {
   payload: unknown;
   businessName: string;
   now?: Date;
+  afterCommit?: (send: () => Promise<void>) => void;
+  confirmationUnit?: StoreUnit;
 }): Promise<{ ignored: boolean }> {
   const parsed = parseEvolutionWebhook(input.payload);
   if (!parsed || parsed.kind === 'ignore') return { ignored: true };
@@ -44,6 +47,8 @@ export async function handleGrowthWebhook(input: {
   }
   await handleInboundText({
     store: input.store,
+    afterCommit: input.afterCommit,
+    confirmationUnit: input.confirmationUnit,
     provider: input.provider,
     organizationId: input.organizationId,
     fromE164: parsed.fromE164,

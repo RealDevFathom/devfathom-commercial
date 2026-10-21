@@ -184,13 +184,10 @@ export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
     },
     async insertMessage(input) {
       if (
-        input.direction === 'in' &&
         input.waMessageId &&
         messages.some(
           (row) =>
-            row.organizationId === input.organizationId &&
-            row.direction === 'in' &&
-            row.waMessageId === input.waMessageId
+            row.organizationId === input.organizationId && row.waMessageId === input.waMessageId
         )
       ) {
         throw new DuplicateInboundMessage();
@@ -232,7 +229,7 @@ export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
           row.organizationId === organizationId &&
           row.customerId === customerId &&
           row.direction === 'out' &&
-          row.status === 'queued'
+          ['queued', 'sending'].includes(row.status)
         ) {
           row.status = 'failed';
           row.error = 'cancelled:opt_out';

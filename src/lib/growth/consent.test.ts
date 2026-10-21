@@ -62,7 +62,7 @@ describe('STOP and START', () => {
       phrase.replace(/ /g, '  \t'),
       [...phrase].join(' '),
       phrase.replace(/ /g, '\u200c'),
-      [...phrase].map((letter) => letter === ' ' ? letter : `${letter}\u064e`).join(''),
+      [...phrase].map((letter) => (letter === ' ' ? letter : `${letter}\u064e`)).join(''),
     ]),
   ])('opts out and replies once for %s', async (text) => {
     const { store, sendText, result } = await inbound(text, customer());
@@ -73,6 +73,7 @@ describe('STOP and START', () => {
     expect(sendText).toHaveBeenCalledOnce();
     expect(sendText).toHaveBeenCalledWith(from, expect.stringContaining('START / شروع'));
     expect(sendText).toHaveBeenCalledWith(from, expect.stringContaining('STOP'));
+    expect(sendText).toHaveBeenCalledWith(from, expect.stringContaining('آپ کو'));
   });
 
   it('cancels queued rows when the customer replies STOP', async () => {
@@ -142,16 +143,38 @@ describe('STOP and START', () => {
   });
 
   it.each(['START', 'start ', 'شروع', '  START \t', ' شروع '])('opts in for %s', async (text) => {
-    const { store, sendText, result } = await inbound(text, customer({ whatsappOptIn: false, whatsappOptOutAt: now }));
+    const { store, sendText, result } = await inbound(
+      text,
+      customer({ whatsappOptIn: false, whatsappOptOutAt: now })
+    );
     expect(result).toBe('opt_in');
     expect((await store.customer('org_1', 'c1'))?.whatsappOptIn).toBe(true);
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it.each(['yes', 'haan', 'ہاں', ' ہاں ', "Yes, I'll pick it up tomorrow", 'yes please', 'START offers', 'haan kal', 'ہاں کل', 'START.', 'yes!', `START${' '.repeat(1000)}tomorrow`])('does not re-subscribe for %s', async (text) => {
-    const { store, result } = await inbound(text, customer({ whatsappOptIn: false, whatsappOptOutAt: now }));
+  it.each([
+    'yes',
+    'haan',
+    'ہاں',
+    ' ہاں ',
+    "Yes, I'll pick it up tomorrow",
+    'yes please',
+    'START offers',
+    'haan kal',
+    'ہاں کل',
+    'START.',
+    'yes!',
+    `START${' '.repeat(1000)}tomorrow`,
+  ])('does not re-subscribe for %s', async (text) => {
+    const { store, result } = await inbound(
+      text,
+      customer({ whatsappOptIn: false, whatsappOptOutAt: now })
+    );
     expect(result).toBe('logged');
-    expect(await store.customer('org_1', 'c1')).toMatchObject({ whatsappOptIn: false, whatsappOptOutAt: now });
+    expect(await store.customer('org_1', 'c1')).toMatchObject({
+      whatsappOptIn: false,
+      whatsappOptOutAt: now,
+    });
     expect(await (await inbound(text)).store.customerByPhone('org_1', from)).toBeNull();
   });
 
@@ -209,7 +232,10 @@ describe('STOP and START', () => {
   });
 
   it('does not opt in a known customer who sends an ordinary message', async () => {
-    const { store, result } = await inbound('Salaam', customer({ whatsappOptIn: false, whatsappOptOutAt: now }));
+    const { store, result } = await inbound(
+      'Salaam',
+      customer({ whatsappOptIn: false, whatsappOptOutAt: now })
+    );
     expect(result).toBe('logged');
     expect((await store.customer('org_1', 'c1'))?.whatsappOptIn).toBe(false);
   });

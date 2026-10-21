@@ -1,3 +1,6 @@
+import { createHash } from 'node:crypto';
+
+import type { StoreUnit } from './whatsapp/queue';
 import { assertBodyHasStop, renderTemplate } from '@/lib/growth/templates';
 import { isDuplicateInbound } from '@/lib/growth/whatsapp/duplicate';
 
@@ -5,7 +8,16 @@ import { InvalidWhatsAppPhone, normalizeWhatsAppE164 } from './whatsapp/phone';
 import type { WhatsAppProvider } from './whatsapp/provider';
 import type { GrowthCustomer, GrowthWhatsAppStore } from './whatsapp/types';
 
-const STOP_PHRASES = ['stop', 'unsubscribe', 'band karo', 'بند', 'رک جاؤ', 'ruk jao', 'ruk jaao', 'band kar do'];
+const STOP_PHRASES = [
+  'stop',
+  'unsubscribe',
+  'band karo',
+  'بند',
+  'رک جاؤ',
+  'ruk jao',
+  'ruk jaao',
+  'band kar do',
+];
 const START_KEYWORDS = new Set(['start', 'شروع']);
 
 export class CustomerNotFound extends Error {
@@ -47,7 +59,7 @@ export function consentKeyword(text: string): 'stop' | 'start' | null {
 
 export function optOutConfirmation(business: string): string {
   return renderTemplate(
-    'You will no longer receive WhatsApp offers from {{business}}. Reply START / شروع to opt back in. Reply STOP to opt out.',
+    'You will no longer receive WhatsApp offers from {{business}}. Reply START / شروع to opt back in. Reply STOP to opt out.\nآپ کو اب {{business}} کی واٹس ایپ آفرز نہیں ملیں گی۔ دوبارہ شامل ہونے کے لیے START / شروع لکھیں۔',
     { business }
   );
 }
@@ -127,6 +139,9 @@ export async function handleInboundText(input: {
   waMessageId: string;
   businessName: string;
   now: Date;
+  /** Production defers this work until the consent transaction commits. */
+  afterCommit?: (send: () => Promise<void>) => void;
+  confirmationUnit?: StoreUnit;
 }): Promise<'duplicate' | 'opt_out' | 'opt_in' | 'logged'> {
   const text = input.text.normalize('NFKC').slice(0, 1000);
   if (await input.store.findInbound(input.organizationId, input.waMessageId)) return 'duplicate';
@@ -170,33 +185,18 @@ export async function handleInboundText(input: {
     const business = input.businessName.trim() || 'this shop';
     const body = optOutConfirmation(business);
     assertBodyHasStop(body);
-    try {
-      const sent = await input.provider.sendText(input.fromE164, body);
-      await input.store.insertMessage({
+    const send = () =>
+      sendOptOutConfirmation({
+        unit: input.confirmationUnit ?? (async (run) => run(input.store)),
+        provider: input.provider,
         organizationId: input.organizationId,
         customerId,
-        direction: 'out',
-        waMessageId: sent.providerMessageId,
+        fromE164: input.fromE164,
+        waMessageId: input.waMessageId,
         body,
-        status: 'sent',
-        campaignId: null,
-        recipientId: null,
-        error: null,
       });
-    } catch (error) {
-      const message = error instanceof Error ? error.message : 'send failed';
-      await input.store.insertMessage({
-        organizationId: input.organizationId,
-        customerId,
-        direction: 'out',
-        waMessageId: null,
-        body,
-        status: 'failed',
-        campaignId: null,
-        recipientId: null,
-        error: message.slice(0, 300),
-      });
-    }
+    if (input.afterCommit) input.afterCommit(send);
+    else await send();
     return 'opt_out';
   }
 
@@ -205,4 +205,47 @@ export async function handleInboundText(input: {
     return 'opt_in';
   }
   return 'logged';
+}
+
+/** A durable claim keyed by the inbound event prevents duplicate confirmations.
+ * Provider HTTP runs after the claim commits; ambiguous sends are never retried. */
+export async function sendOptOutConfirmation(input: {
+  unit: StoreUnit;
+  provider: WhatsAppProvider;
+  organizationId: string;
+  customerId: string | null;
+  fromE164: string;
+  waMessageId: string;
+  body: string;
+}) {
+  const key = 'opt-out:' + createHash('sha256').update(input.waMessageId).digest('hex');
+  const row = await input.unit(async (store) => {
+    if (await store.findOutboundByProviderId(input.organizationId, key)) return null;
+    try {
+      return await store.insertMessage({
+        organizationId: input.organizationId,
+        customerId: input.customerId,
+        direction: 'out',
+        waMessageId: key,
+        body: input.body,
+        status: 'sending',
+        campaignId: null,
+        recipientId: null,
+        error: null,
+      });
+    } catch (error) {
+      if (isDuplicateInbound(error)) return null;
+      throw error;
+    }
+  });
+  if (!row) return;
+  let patch: { status: 'sent' | 'failed'; error: string | null };
+  try {
+    await input.provider.sendText(input.fromE164, input.body);
+    patch = { status: 'sent', error: null };
+  } catch {
+    patch = { status: 'failed', error: 'confirmation send failed' };
+  }
+  // Keep the event key even after sending so a replay cannot claim it again.
+  await input.unit((store) => store.markMessage(row.id, patch));
 }

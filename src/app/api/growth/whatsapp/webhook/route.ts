@@ -8,7 +8,7 @@ import {
 } from '@/lib/growth/whatsapp/evolution';
 import { handleGrowthWebhook } from '@/lib/growth/whatsapp/inbound';
 import type { WhatsAppProvider } from '@/lib/growth/whatsapp/provider';
-import { growthStore } from '@/lib/growth/whatsapp/store';
+import { growthStore, outboundGrowthStore } from '@/lib/growth/whatsapp/store';
 import { webhookSecretHash, webhookSecretMatches } from '@/lib/growth/whatsapp/webhook-secret';
 import { clientIp, rateLimit } from '@/lib/rate-limit';
 import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
@@ -48,6 +48,7 @@ export async function POST(request: Request) {
   }
   if (!(await isGrowthEnabled(organizationId))) return new NextResponse(null, { status: 204 });
 
+  const confirmations: Array<() => Promise<void>> = [];
   await withTenantDb(organizationId, async (db) => {
     const store = growthStore(db);
     const settings = await store.settings(organizationId);
@@ -61,6 +62,9 @@ export async function POST(request: Request) {
     }
     await handleGrowthWebhook({
       store,
+      afterCommit: (send) => confirmations.push(send),
+      confirmationUnit: (run) =>
+        withTenantDb(organizationId, (confirmationDb) => run(outboundGrowthStore(confirmationDb))),
       provider: provider ?? {
         async sendText() {
           throw new Error('Evolution API is not configured.');
@@ -74,5 +78,6 @@ export async function POST(request: Request) {
       businessName: organization?.displayName ?? 'this shop',
     });
   });
+  for (const send of confirmations) await send();
   return NextResponse.json({ ok: true });
 }

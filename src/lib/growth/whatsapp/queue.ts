@@ -85,14 +85,18 @@ async function attemptRow(
   });
   if (!claimed) return 'skipped';
   let result;
-  const utility = claimed.row.direction === 'out' &&
+  const utility =
+    claimed.row.direction === 'out' &&
     isOrderReadyName(claimed.customer?.displayName ?? '') &&
-    isOrderReadyName(claimed.organization?.displayName ?? '') && Object.values(ORDER_READY_BODIES).some(
-    (template) => claimed.row.body === renderTemplate(template, {
-      name: claimed.customer?.displayName ?? '',
-      business: claimed.organization?.displayName ?? '',
-    })
-  );
+    isOrderReadyName(claimed.organization?.displayName ?? '') &&
+    Object.values(ORDER_READY_BODIES).some(
+      (template) =>
+        claimed.row.body ===
+        renderTemplate(template, {
+          name: claimed.customer?.displayName ?? '',
+          business: claimed.organization?.displayName ?? '',
+        })
+    );
   let copyChecked = utility;
   try {
     if (!utility) {
@@ -102,7 +106,11 @@ async function attemptRow(
     }
     result = await sendText({
       provider,
-      customer: claimed.customer,
+      customer: await unit((store) =>
+        claimed.row.customerId
+          ? store.customer(organizationId, claimed.row.customerId)
+          : Promise.resolve(null)
+      ),
       body: claimed.row.body,
     });
   } catch (error) {

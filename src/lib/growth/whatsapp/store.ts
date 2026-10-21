@@ -398,7 +398,12 @@ export function outboundGrowthStore(db: object): GrowthWhatsAppStore {
     },
     async cancelQueued(organizationId, customerId) {
       const result = await call(messages().updateMany, {
-        where: { organizationId, customerId, direction: 'out', status: 'queued' },
+        where: {
+          organizationId,
+          customerId,
+          direction: 'out',
+          status: { in: ['queued', 'sending'] },
+        },
         data: { status: 'failed', error: 'cancelled:opt_out' },
       });
       return result?.count ?? 0;

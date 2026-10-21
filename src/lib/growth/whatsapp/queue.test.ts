@@ -151,7 +151,7 @@ describe('outbound queue', () => {
     });
     const sleeps: number[] = [];
     const result = await drainQueue({
-        checkCopy: async () => {},
+      checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -194,7 +194,7 @@ describe('outbound queue', () => {
     });
     const fetchImpl = vi.fn();
     const result = await drainQueue({
-        checkCopy: async () => {},
+      checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -233,7 +233,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
     });
     const result = await drainQueue({
-        checkCopy: async () => {},
+      checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -312,7 +312,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: `wamid-${open}` } }), { status: 200 });
     });
     const result = await drainQueue({
-        checkCopy: async () => {},
+      checkCopy: async () => {},
       unit: async (run) => {
         open += 1;
         try {
@@ -385,7 +385,7 @@ describe('outbound queue', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(store.messages[0]?.status).toBe('sending');
     await drainQueue({
-        checkCopy: async () => {},
+      checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -421,7 +421,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
     });
     const result = await drainQueue({
-        checkCopy: async () => {},
+      checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -669,18 +669,24 @@ describe('business local time', () => {
 
 describe('campaign drain copy gate', () => {
   it.each(['A'.repeat(81), 'Shop\nXanax offer', 'Shop 💊'])(
-    'does not exempt an order-ready body with an unsafe name: %s', async (name) => {
+    'does not exempt an order-ready body with an unsafe name: %s',
+    async (name) => {
       const store = createMemoryStore();
       store.putCustomer({ ...customer('drain', '+923001234567'), displayName: name });
       await enqueueOrderReady(store, {
-        organizationId: 'org_1', customerId: 'drain', language: 'en',
-        name, business: 'Demo Pharmacy',
+        organizationId: 'org_1',
+        customerId: 'drain',
+        language: 'en',
+        name,
+        business: 'Demo Pharmacy',
       });
       const sendText = vi.fn();
       const result = await drainQueue({
         unit: (run) => run(store),
         provider: { sendText, getStatus: async () => 'connected' },
-        organizationId: 'org_1', settings: settings(), now: day,
+        organizationId: 'org_1',
+        settings: settings(),
+        now: day,
         clock: { now: () => day, sleep: async () => {}, random: () => 0 },
       });
       expect(result.sent).toBe(0);
@@ -726,4 +732,38 @@ describe('campaign drain copy gate', () => {
       expect(store.messages.find((message) => message.id === row.id)?.status).toBe('failed');
     }
   );
+});
+
+it('rechecks consent after claiming and copy checks, and cancels sending rows', async () => {
+  const store = createMemoryStore({ now: () => day });
+  store.putCustomer(customer('c1', '+923001234567'));
+  await store.insertMessage({
+    organizationId: 'org_1',
+    customerId: 'c1',
+    direction: 'out',
+    waMessageId: null,
+    body: 'Offers. Reply STOP to opt out.',
+    status: 'queued',
+    campaignId: 'campaign',
+    recipientId: null,
+    error: null,
+  });
+  const sendText = vi.fn(async () => ({ providerMessageId: 'should-not-send' }));
+  const outcome = await drainQueue({
+    unit: unitFor(store),
+    organizationId: 'org_1',
+    provider: { sendText, getStatus: async () => 'connected' },
+    settings: settings(),
+    now: day,
+    clock: { now: () => day, sleep: async () => {}, random: () => 0 },
+    checkCopy: async () => {
+      expect(store.messages[0]?.status).toBe('sending');
+      const existing = await store.customer('org_1', 'c1');
+      await store.saveCustomer({ ...existing!, whatsappOptIn: false, whatsappOptOutAt: day });
+      expect(await store.cancelQueued('org_1', 'c1')).toBe(1);
+      expect(store.messages[0]).toMatchObject({ status: 'failed', error: 'cancelled:opt_out' });
+    },
+  });
+  expect(outcome.sent).toBe(0);
+  expect(sendText).not.toHaveBeenCalled();
 });
