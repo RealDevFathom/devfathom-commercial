@@ -1344,7 +1344,6 @@ export async function bootstrapDemoRestaurantOrganizationInTransaction(
         timezone: 'Asia/Karachi',
         locale: 'en-PK',
         currency: 'PKR',
-        seatLimit: 1,
         gracePeriodDays: 0,
         dataResidency: null,
         primaryContactName: identity.displayName,
