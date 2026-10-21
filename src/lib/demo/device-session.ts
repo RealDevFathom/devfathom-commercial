@@ -138,8 +138,14 @@ export async function prepareDemoDeviceSession(
   if (profiles.length !== 1 || !staff?.primaryBranchId) return null;
 
   const [canOperateTerminal, canOperateKind] = await Promise.all([
-    operatorHasCapability(db, staff.id, 'terminal:operate', now),
-    operatorHasCapability(db, staff.id, kind === 'POS' ? 'pos:operate' : 'kitchen:operate', now),
+    operatorHasCapability(db, staff.id, 'terminal:operate', now, staff.primaryBranchId),
+    operatorHasCapability(
+      db,
+      staff.id,
+      kind === 'POS' ? 'pos:operate' : 'kitchen:operate',
+      now,
+      staff.primaryBranchId
+    ),
   ]);
   if (!canOperateTerminal || !canOperateKind) return null;
 

@@ -13,7 +13,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { BillCommandError, evaluateOrderSettlement, type MoneyCommandActor } from './bills';
 import { CoAuthorizationError } from './co-authorization';
-import { resolveStaffCapabilities } from './job-roles';
+import { resolveStaffCapabilityDecision } from './job-roles';
 import {
   DailyCloseError,
   type ClosePreview,
@@ -216,31 +216,24 @@ function capabilityMatches(rule: string, capability: string): boolean {
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
-/** Resolve whether the acting operator (or co-authorizing approver) holds `capability`.
- *
- * TWO independent grant sources are unioned (QA-145). The first is the staff profile's
- * linked `User` effective capabilities (per-user overrides win over org-role rules; a
- * DENY beats an ALLOW at each layer; default-DENY) — this mirrors `customDecision` in
- * `src/lib/abac/index.ts` for the vertical capability strings. The second is the
- * restaurant SOP-1 job-role path: the capabilities inherited from the job roles the
- * profile holds AT `branchId`, plus/minus its per-staff capability overrides at that
- * branch (see {@link resolveStaffCapabilities}). A PIN-only floor manager with NO linked
- * user can therefore still hold `coauth:approve` through the Owner job role.
- *
- * Fail-closed: a profile that neither source grants (no linked user AND no job-role
- * capability — including a profile in another organization, which RLS hides so both
- * queries come back empty) is denied. `branchId` is required to consult the job-role
- * path; omitting it (legacy call sites) evaluates the linked-user path only. */
+/** Resolve branch-bound active staff access. Any matching DENY across linked-user
+ * rules and staff overrides wins over all grants, including wildcard grants.
+ * A branch binding is a primary branch, held job role, or direct staff override. */
 export async function operatorHasCapability(
   db: ScopedDb,
   staffProfileId: string,
   capability: string,
   now: Date,
-  branchId?: string
+  branchId: string
 ): Promise<boolean> {
+  if (!branchId?.trim()) return false;
   const profile = await db.restaurantStaffProfile.findUnique({
     where: { id: staffProfileId },
     select: {
+      status: true,
+      primaryBranchId: true,
+      jobRoles: { where: { branchId }, select: { branchId: true } },
+      directCapabilityGrants: { where: { branchId }, select: { branchId: true } },
       user: {
         select: {
           organizationRole: {
@@ -254,7 +247,15 @@ export async function operatorHasCapability(
       },
     },
   });
-  const user = profile?.user;
+  if (
+    !profile ||
+    profile.status !== 'ACTIVE' ||
+    (profile.primaryBranchId !== branchId &&
+      !profile.jobRoles.some((row) => row.branchId === branchId) &&
+      !profile.directCapabilityGrants.some((row) => row.branchId === branchId))
+  )
+    return false;
+  const user = profile.user;
 
   const decide = (rules: readonly CapabilityRule[]): boolean | null => {
     const matching = rules.filter((rule) => capabilityMatches(rule.capability, capability));
@@ -263,22 +264,21 @@ export async function operatorHasCapability(
     return null;
   };
 
-  if (user) {
-    const overrideDecision = decide(user.permissionOverrides);
-    if (overrideDecision === true) return true;
-    if (overrideDecision === null && decide(user.organizationRole?.permissions ?? []) === true) {
-      return true;
-    }
-  }
+  const staff = await resolveStaffCapabilityDecision(db, staffProfileId, branchId);
+  const overrides = decide(user?.permissionOverrides ?? []);
+  const role = decide(user?.organizationRole?.permissions ?? []);
+  if (
+    overrides === false ||
+    role === false ||
+    [...staff.denied].some((rule) => capabilityMatches(rule, capability))
+  )
+    return false;
 
-  if (branchId !== undefined) {
-    const effective = await resolveStaffCapabilities(db, staffProfileId, branchId);
-    for (const granted of effective) {
-      if (capabilityMatches(granted, capability)) return true;
-    }
-  }
-
-  return false;
+  return (
+    overrides === true ||
+    role === true ||
+    [...staff.effective].some((rule) => capabilityMatches(rule, capability))
+  );
 }
 
 function forbidden(message: string): NextResponse {

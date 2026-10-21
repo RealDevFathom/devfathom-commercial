@@ -43,6 +43,10 @@ function fakeDb(options: {
   overrides?: { capability: string; effect: 'ALLOW' | 'DENY' }[];
   /** When true, the profile is not visible (e.g. another org under RLS). */
   hidden?: boolean;
+  status?: string;
+  primaryBranchId?: string | null;
+  jobRoleBranchIds?: string[];
+  overrideBranchIds?: string[];
 }): ScopedDb {
   const { user = null, jobRoleCapabilities = [], overrides = [], hidden = false } = options;
   return {
@@ -51,6 +55,13 @@ function fakeDb(options: {
         hidden
           ? null
           : {
+              status: options.status ?? 'ACTIVE',
+              primaryBranchId:
+                options.primaryBranchId === undefined ? BRANCH : options.primaryBranchId,
+              jobRoles: (options.jobRoleBranchIds ?? []).map((branchId) => ({ branchId })),
+              directCapabilityGrants: (options.overrideBranchIds ?? []).map((branchId) => ({
+                branchId,
+              })),
               user: user
                 ? {
                     organizationRole: user.organizationRole ?? null,
@@ -124,13 +135,87 @@ describe('operatorHasCapability — SOP-1 job-role path (QA-145)', () => {
     ).resolves.toBe(false);
   });
 
-  it('skips the job-role path when no branch is supplied (linked-user only)', async () => {
-    const db = fakeDb({ user: null, jobRoleCapabilities: ['coauth:approve'] });
-    await expect(
-      operatorHasCapability(db, 'staff_floor_owner', 'coauth:approve', NOW)
-    ).resolves.toBe(false);
+  it.each([undefined, '', '   '])(
+    'denies missing or blank branch %s before querying',
+    async (branch) => {
+      const db = fakeDb({ user: { permissionOverrides: [{ capability: '*', effect: 'ALLOW' }] } });
+      // Runtime callers must fail closed even if they bypass the required string type.
+      await expect(
+        operatorHasCapability(db, 'staff', 'coauth:approve', NOW, branch as string)
+      ).resolves.toBe(false);
+      expect(db.restaurantStaffProfile.findUnique).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(['INACTIVE', 'ARCHIVED'])('denies %s staff despite grants', async (status) => {
+    const db = fakeDb({ status, jobRoleCapabilities: ['coauth:approve'] });
+    await expect(operatorHasCapability(db, 'staff', 'coauth:approve', NOW, BRANCH)).resolves.toBe(
+      false
+    );
     expect(db.restaurantStaffJobRole.findMany).not.toHaveBeenCalled();
   });
+
+  it.each([null, 'other_branch'])(
+    'denies unbound staff with primary branch %s despite grants',
+    async (primaryBranchId) => {
+      const db = fakeDb({ primaryBranchId, jobRoleCapabilities: ['coauth:approve'] });
+      await expect(operatorHasCapability(db, 'staff', 'coauth:approve', NOW, BRANCH)).resolves.toBe(
+        false
+      );
+    }
+  );
+
+  it.each(['jobRoleBranchIds', 'overrideBranchIds'] as const)(
+    'accepts an explicit %s branch binding',
+    async (binding) => {
+      const db = fakeDb({
+        primaryBranchId: null,
+        [binding]: [BRANCH],
+        jobRoleCapabilities: ['coauth:approve'],
+      });
+      await expect(operatorHasCapability(db, 'staff', 'coauth:approve', NOW, BRANCH)).resolves.toBe(
+        true
+      );
+    }
+  );
+
+  it.each(['permissionOverrides', 'organizationRole'] as const)(
+    'linked-user %s DENY beats job-role ALLOW',
+    async (layer) => {
+      const rules = [{ capability: 'coauth:*', effect: 'DENY' as const }];
+      const db = fakeDb({
+        user:
+          layer === 'organizationRole'
+            ? {
+                organizationRole: { permissions: rules },
+                permissionOverrides: [{ capability: '*', effect: 'ALLOW' }],
+              }
+            : { permissionOverrides: rules },
+        jobRoleCapabilities: ['coauth:approve'],
+      });
+      await expect(operatorHasCapability(db, 'staff', 'coauth:approve', NOW, BRANCH)).resolves.toBe(
+        false
+      );
+    }
+  );
+
+  it.each(['permissionOverrides', 'organizationRole'] as const)(
+    'staff wildcard DENY beats linked-user %s ALLOW',
+    async (layer) => {
+      const rules = [{ capability: 'coauth:approve', effect: 'ALLOW' as const }];
+      const db = fakeDb({
+        user:
+          layer === 'organizationRole'
+            ? { organizationRole: { permissions: rules } }
+            : { permissionOverrides: rules },
+        jobRoleCapabilities: ['*'],
+        overrides: [{ capability: 'coauth:*', effect: 'DENY' }],
+      });
+      await expect(operatorHasCapability(db, 'staff', 'coauth:approve', NOW, BRANCH)).resolves.toBe(
+        false
+      );
+    }
+  );
 });
 
 describe('resolveApprover — job-role approver (QA-145 repro)', () => {
