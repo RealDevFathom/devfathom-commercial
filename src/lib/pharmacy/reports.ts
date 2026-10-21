@@ -308,6 +308,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
           branchId: { in: filters.branchIds },
           effectiveFrom: { lte: new Date() },
           OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
+          qualifiedPersonValidTo: { gt: new Date() },
         },
       }),
       db.$queryRaw<Array<{ value: number }>>(

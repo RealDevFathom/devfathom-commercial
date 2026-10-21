@@ -44,6 +44,34 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain('SUM(t."amountMinor")');
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
+
+  it('excludes expired qualified-person coverage from the command centre count', async () => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date('2026-03-10T12:00:00.000Z'));
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+
+    try {
+      await readPharmacyOwnerCommandCentre(
+        {
+          $queryRaw: queryRaw,
+          pharmacyRecallNotice: { count },
+          pharmacySupplierClaim: { count },
+          pharmacyReceivingException: { count },
+          branchRegulatoryProfile: { count },
+        } as never,
+        { branchIds: ['branch_1'], from: '2026-03-10', to: '2026-03-10' }
+      );
+
+      expect(count).toHaveBeenCalledWith({
+        where: expect.objectContaining({
+          qualifiedPersonValidTo: { gt: new Date('2026-03-10T12:00:00.000Z') },
+        }),
+      });
+    } finally {
+      vi.useRealTimers();
+    }
+  });
 });
 
 // Query-shape regressions follow the existing cash-tender test seam.
