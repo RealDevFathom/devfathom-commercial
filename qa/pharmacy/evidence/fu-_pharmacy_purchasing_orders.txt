@@ -1,0 +1,111 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Purchasing
+Orders
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY PROCUREMENT
+Requisitions & orders
+
+Demand becomes a requisition, quotes are compared and explained, and an approved order is sent to a supplier that is still licensed at the moment it leaves.
+
+Overview
+PUR-01..06
+Suppliers
+PUR-01
+Requisitions & orders
+PUR-02/03
+Goods in
+PUR-02/04/05
+Returns & claims
+PUR-06
+OPEN REQUISITIONS
+0
+Drafted or submitted
+AWAITING APPROVAL
+0
+Needs a second person
+ORDERABLE SUPPLIERS
+0 of 0
+Authorized and licensed
+PUR-02
+Requisitions (0)
+No requisitions yet
+
+A requisition states what the pharmacy needs, in packs. Draft one below, submit it, then record the quotes you were given.
+
+No requisition selected
+Pick a requisition to compare its quotes
+
+Its lines, the quotes recorded against them and the ranked comparison open here, beside the list.
+
+PUR-02
+Draft a requisition
+No medicine has a pack conversion yet
+
+A requisition is stated in packs, so every line needs a medicine with an effective pack level. Add one before drafting demand.
+
+→
+Open the medicine register
+PUR-02
+Purchase orders (0)
+No purchase orders yet
+
+Raise one from a quote above so the order carries the terms that were compared, or draft an ad-hoc order below.
+
+No order selected
+Pick an order to cost and approve it
+
+Its lines, landed cost with freight allocated, approval history and the next available action open here.
+
+PUR-02/03
+Draft an ad-hoc order
+No supplier can be ordered from
+
+There are no suppliers yet. Add one and file a verified licence before raising an order.
+
+→
+Open the supplier register

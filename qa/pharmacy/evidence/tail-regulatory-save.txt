@@ -1,0 +1,135 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Regulatory
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY
+Branch regulatory profile
+
+Province, premises, licence, permitted schedules, qualified person, tax and retention. Every version is kept, so what was true on any past day survives.
+
+PLAT-02
+Branch
+NO PROFILE
+WHICH BRANCH IS THIS PROFILE FOR?
+Clifton Chemist — Karachi
+
+Only branches in this workspace appear here.
+
+This branch has no regulatory profile in force. Until it does, dispensing and activation are refused — not warned about.
+
+EFFECTIVE-DATED
+Record the first version
+
+A regulatory profile is never edited. Saving records a new version from the date you choose and closes the one before it, so the record of what was true on any past day survives.
+
+Jurisdiction and premises
+EFFECTIVE FROM
+
+The day this version starts applying.
+
+PROVINCE
+Punjab (rules provisional)
+
+These rules are still provisional, so this branch cannot operate on them yet.
+
+PREMISES ADDRESS
+PREMISES CITY
+MEDICINE STORAGE AT THESE PREMISES
+
+Cold chain, controlled-drug cabinet, general shelving — what an inspector would want described.
+
+Licence
+LICENCE CATEGORY
+Provisional — awaiting published categories
+
+This province has not published its licence categories yet, so the profile records a provisional one.
+
+LICENCE NUMBER
+LICENCE VALID FROM
+LICENCE VALID TO
+LICENCE EVIDENCE
+
+No evidence attached yet.
+
+Upload a scan or photograph of the licence as evidence.
+
+PERMITTED SCHEDULES
+
+Nothing to choose yet — this version records no permitted schedules.
+
+This province has not published its medicine schedules yet, so none can be permitted on this version.
+
+Qualified person
+REGISTRATION NUMBER
+COVERAGE ROSTER
+
+Upload or reference the roster showing when the qualified person covers this branch.
+
+REGISTERED FROM
+REGISTERED TO
+Tax and retention
+NTN
+
+Optional.
+
+STRN
+
+Optional.
+
+FISCAL STATUS
+Registered for sales tax
+Not registered for sales tax
+Exempt from sales tax
+Not confirmed yet
+KEEP PRESCRIPTIONS (YEARS)
+KEEP INVOICES (YEARS)
+KEEP CONTROLLED-DRUG REGISTER (YEARS)
+Save this version
+Back to your setup steps
+Effective-dated versions
+
+No versions yet. The first one you save appears here, and every later one is added beside it rather than replacing it.
