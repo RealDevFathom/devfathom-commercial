@@ -12,6 +12,7 @@ export type EffectiveMenuItem = {
   product: { name: string };
   price: string | null;
   available: boolean;
+  barcode?: string | null;
   modifierGroups?: Array<{
     id: string;
     name: string;
@@ -65,7 +66,10 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
       ...section,
       items: section.items.filter((item) => {
         if (!needle) return true;
-        return (item.displayName ?? item.product.name).toLowerCase().includes(needle);
+        const name = (item.displayName ?? item.product.name).toLowerCase();
+        return (
+          name.includes(needle) || item.barcode?.trim().toLowerCase().includes(needle) === true
+        );
       }),
     }))
     .filter((section) => !needle || section.items.length > 0);
@@ -108,21 +112,37 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
     commit(selected, modifierIds);
   }
 
+  function itemName(item: EffectiveMenuItem) {
+    return (item.displayName ?? item.product.name).trim().toLowerCase();
+  }
+
   function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
     if (event.key !== 'Enter') return;
     event.preventDefault();
     const visible = sections.flatMap((section) => section.items);
-    const item = visible.find((candidate) => candidate.id === selectedId) ?? visible[0];
-    if (!item) return;
-    if (item.id !== selectedId) {
+    const selectedVisible = visible.find((candidate) => candidate.id === selectedId);
+    if (selectedVisible) {
+      commit(selectedVisible, modifierIds);
+      return;
+    }
+    const exact = needle
+      ? visible.filter(
+          (item) => itemName(item) === needle || item.barcode?.trim().toLowerCase() === needle
+        )
+      : [];
+    if (exact.length === 1) {
+      const item = exact[0]!;
       setSelectedId(item.id);
       setModifierIds([]);
       setModifierError(null);
-      if ((item.modifierGroups ?? []).some((group) => group.minSelect > 0)) return;
       commit(item, []);
       return;
     }
-    commit(item, modifierIds);
+    const next = visible[0];
+    if (!next) return;
+    setSelectedId(next.id);
+    setModifierIds([]);
+    setModifierError(null);
   }
 
   return (
@@ -242,7 +262,9 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                     aria-label="Decrease quantity"
                     className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle text-sm"
                     onClick={() =>
-                      setQuantity((current) => String(Math.max(1, (Number.parseInt(current, 10) || 1) - 1)))
+                      setQuantity((current) =>
+                        String(Math.max(1, (Number.parseInt(current, 10) || 1) - 1))
+                      )
                     }
                   >
                     −

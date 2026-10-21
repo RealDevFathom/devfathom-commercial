@@ -108,12 +108,64 @@ export function CounterCartPanel({
               {line.presentation} · {line.saleUnit.toLowerCase()} · {line.canonicalUnits} units @{' '}
               {formatMinor(line.unitPriceMinor)}
               {line.discountMinor > 0 ? ` · less ${formatMinor(line.discountMinor)}` : ''}
-              {line.controlled ? ' · Controlled' : ''}
-              {line.rx ? ' · Prescription only' : ''}
-              {line.restricted ? ' · Restricted' : ''}
-              {line.highAlert ? ' · High alert' : ''}
-              {line.coldChain ? ' · Cold chain' : ''}
             </p>
+            {line.controlled ||
+            line.rx ||
+            line.restricted ||
+            line.highAlert ||
+            line.lasa ||
+            line.coldChain ? (
+              <div className="mt-1 flex flex-wrap gap-1">
+                {line.controlled ? (
+                  <StatusPill
+                    status="controlled"
+                    tone="danger"
+                    label="Controlled"
+                    className="shrink-0"
+                  />
+                ) : null}
+                {line.rx ? (
+                  <StatusPill
+                    status="prescription"
+                    tone="warning"
+                    label="Prescription only"
+                    className="shrink-0"
+                  />
+                ) : null}
+                {line.restricted ? (
+                  <StatusPill
+                    status="restricted"
+                    tone="warning"
+                    label="Restricted"
+                    className="shrink-0"
+                  />
+                ) : null}
+                {line.highAlert ? (
+                  <StatusPill
+                    status="high-alert"
+                    tone="danger"
+                    label="High alert"
+                    className="shrink-0"
+                  />
+                ) : null}
+                {line.lasa ? (
+                  <StatusPill
+                    status="look-alike"
+                    tone="warning"
+                    label="Look-alike"
+                    className="shrink-0"
+                  />
+                ) : null}
+                {line.coldChain ? (
+                  <StatusPill
+                    status="cold-chain"
+                    tone="info"
+                    label="Cold chain"
+                    className="shrink-0"
+                  />
+                ) : null}
+              </div>
+            ) : null}
 
             <ul className="mt-1" aria-label={`FEFO allocation for ${line.medicineName}`}>
               {line.allocations.map((allocation) => (

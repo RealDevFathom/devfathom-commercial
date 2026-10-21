@@ -1,5 +1,6 @@
 'use client';
 
+import { StatusPill } from '@/components/ui/status-pill';
 import type { CounterSearchRow } from '@/lib/pharmacy/counter';
 import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
 
@@ -125,19 +126,33 @@ export function CounterSearchResults({
               row.storage.locationCode ? ` ${row.storage.locationCode}` : ''
             }`
           : null;
-        const flags = [
-          row.restriction.controlled ? 'Controlled' : null,
-          row.restriction.rx ? 'Prescription only' : null,
-          row.restriction.restricted ? 'Restricted' : null,
-          row.restriction.highAlert ? 'High alert' : null,
-          row.restriction.lasa ? 'Look-alike' : null,
+        const safety = [
+          row.restriction.controlled
+            ? { status: 'controlled', tone: 'danger' as const, label: 'Controlled' }
+            : null,
+          row.restriction.rx
+            ? { status: 'prescription', tone: 'warning' as const, label: 'Prescription only' }
+            : null,
+          row.restriction.restricted
+            ? { status: 'restricted', tone: 'warning' as const, label: 'Restricted' }
+            : null,
+          row.restriction.highAlert
+            ? { status: 'high-alert', tone: 'danger' as const, label: 'High alert' }
+            : null,
+          row.restriction.lasa
+            ? { status: 'look-alike', tone: 'warning' as const, label: 'Look-alike' }
+            : null,
+          row.storage.coldChain
+            ? { status: 'cold-chain', tone: 'info' as const, label: 'Cold chain' }
+            : null,
+        ].filter((flag) => flag !== null);
+        const notes = [
           row.restriction.otc &&
           !row.restriction.rx &&
           !row.restriction.restricted &&
           !row.restriction.controlled
             ? 'Over the counter'
             : null,
-          row.storage.coldChain ? 'Cold chain' : null,
           location,
           !sellable ? 'Not sellable' : null,
         ].filter(Boolean);
@@ -167,9 +182,22 @@ export function CounterSearchResults({
                 {` · Batch ${row.batchNumber ?? '—'}`}
                 {` · Exp ${row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—'}`}
                 {` · ${row.onHandUnits} units`}
-                {flags.length ? ` · ${flags.join(' · ')}` : ''}
+                {notes.length ? ` · ${notes.join(' · ')}` : ''}
                 {` · ${MATCH_LABEL[row.matchedOn]}`}
               </span>
+              {safety.length > 0 ? (
+                <span className="col-span-2 flex flex-wrap gap-1">
+                  {safety.map((flag) => (
+                    <StatusPill
+                      key={flag.status}
+                      status={flag.status}
+                      tone={flag.tone}
+                      label={flag.label}
+                      className="shrink-0"
+                    />
+                  ))}
+                </span>
+              ) : null}
               {row.blocked.length > 0 ? (
                 <span className="col-span-2 text-xs text-warning">
                   Blocked stock present: {row.blocked.join(', ').toLowerCase()}.

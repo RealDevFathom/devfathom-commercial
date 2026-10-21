@@ -1489,7 +1489,8 @@ function ScopedPharmacyCounterConsole({
         (tenderRef.current?.contains(event.target) || event.target === autoPrintRef.current)
       )
         return;
-      if (!shouldHandleCounterKey(event)) return;
+      if (!shouldHandleCounterKey(event, document.querySelector('[role="dialog"]') !== null))
+        return;
       const action = matchCounterAction(keymap.bindings, event);
       if (!action) return;
       // Claim the chord before the browser or a focused control can act on it,
@@ -1647,116 +1648,116 @@ function ScopedPharmacyCounterConsole({
           </p>
         </div>
         <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
-            <CounterReturnPanel
-              branchId={branchId}
-              organizationId={organizationId}
-              accountId={accountId}
-              deviceId={counterDeviceId}
-              businessDate={businessDate}
-            />
-            <Link
-              className={buttonVariants({
-                variant: 'outline',
-                className: 'h-8 shadow-none hover:translate-y-0 active:translate-y-0',
-              })}
-              href="/pharmacy/orders"
-            >
-              Customer orders
-            </Link>
-            {/*
+          <CounterReturnPanel
+            branchId={branchId}
+            organizationId={organizationId}
+            accountId={accountId}
+            deviceId={counterDeviceId}
+            businessDate={businessDate}
+          />
+          <Link
+            className={buttonVariants({
+              variant: 'outline',
+              className: 'h-8 shadow-none hover:translate-y-0 active:translate-y-0',
+            })}
+            href="/pharmacy/orders"
+          >
+            Customer orders
+          </Link>
+          {/*
               UX rule 1: never show the operator an identifier the application
               already knows. A sale id fragment names nothing a pharmacist can
               act on; the receipt number is the only bill identity that exists
               in the real world, and it exists only once the bill is settled.
               Before that, describe the bill by what it holds.
             */}
-            <StatusPill
-              status={saleId ? 'open' : 'idle'}
-              tone={saleId ? 'info' : 'neutral'}
-              label={
-                cart?.receiptNumber
-                  ? `Receipt ${cart.receiptNumber}`
-                  : saleId
-                    ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
-                    : 'No open bill'
-              }
-            />
-            {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
-            {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
-            {openDrawerSession ? (
-              <StatusPill status="drawer-open" tone="success" label="Drawer open" />
-            ) : (
-              <Button
-                type="button"
-                variant="outline"
-                className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
-                disabled={busy || !drawerStatusKnown}
-                onClick={() => {
-                  setPending('drawer');
-                  openDrawer
-                    .mutateAsync({
-                      branchId,
-                      deviceId: counterDeviceId(),
-                      businessDate: businessDate(),
-                      openingFloatMinor: 0,
+          <StatusPill
+            status={saleId ? 'open' : 'idle'}
+            tone={saleId ? 'info' : 'neutral'}
+            label={
+              cart?.receiptNumber
+                ? `Receipt ${cart.receiptNumber}`
+                : saleId
+                  ? `Bill open · ${lineCount} ${lineCount === 1 ? 'line' : 'lines'}`
+                  : 'No open bill'
+            }
+          />
+          {heldSaleId ? <StatusPill status="held" tone="warning" label="1 held" /> : null}
+          {blocked ? <StatusPill status="blocked" tone="danger" label="Safety block" /> : null}
+          {openDrawerSession ? (
+            <StatusPill status="drawer-open" tone="success" label="Drawer open" />
+          ) : (
+            <Button
+              type="button"
+              variant="outline"
+              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+              disabled={busy || !drawerStatusKnown}
+              onClick={() => {
+                setPending('drawer');
+                openDrawer
+                  .mutateAsync({
+                    branchId,
+                    deviceId: counterDeviceId(),
+                    businessDate: businessDate(),
+                    openingFloatMinor: 0,
+                  })
+                  .then(() =>
+                    setNotice({
+                      tone: 'success',
+                      message: 'Cash drawer opened for this counter.',
                     })
-                    .then(() =>
-                      setNotice({
-                        tone: 'success',
-                        message: 'Cash drawer opened for this counter.',
-                      })
-                    )
-                    .catch((error: unknown) =>
-                      setNotice({ tone: 'warning', message: messageFrom(error) })
-                    )
-                    // Either way the server now holds the truth about this device's drawer.
-                    .finally(() => {
-                      setPending(null);
-                      void utils.pharmacySales.drawerStatus.invalidate();
-                    });
-                }}
-              >
-                Open drawer
-              </Button>
-            )}
-          </div>
+                  )
+                  .catch((error: unknown) =>
+                    setNotice({ tone: 'warning', message: messageFrom(error) })
+                  )
+                  // Either way the server now holds the truth about this device's drawer.
+                  .finally(() => {
+                    setPending(null);
+                    void utils.pharmacySales.drawerStatus.invalidate();
+                  });
+              }}
+            >
+              Open drawer
+            </Button>
+          )}
+        </div>
       </header>
 
       <div className="flex min-h-8 shrink-0 items-center px-2">
-      {notice ? (
-        <div
-          role={notice.tone === 'success' ? 'status' : 'alert'}
-          aria-live="polite"
-          className={`flex items-center gap-3 rounded-lg border p-3 ${
-            notice.tone === 'danger'
-              ? 'border-destructive/30 bg-destructive/10'
-              : notice.tone === 'warning'
-                ? 'border-warning/30 bg-warning/10'
-                : notice.tone === 'success'
-                  ? 'border-success/30 bg-success/10'
-                  : 'border-border-subtle bg-surface-sunken'
-          }`}
-        >
-          <StatusPill status={notice.tone} tone={notice.tone} />
-          <div className="min-w-0 space-y-2 text-sm text-text-body">
-            <p>{notice.message}</p>
-            {notice.inventoryBranchId ? (
-              <Link
-                href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
-                target="_blank"
-                rel="noopener noreferrer"
-                prefetch={false}
-                className={buttonVariants({
-                  variant: 'outline',
-                  className: 'h-auto min-h-11 whitespace-normal',
-                })}
-              >
-                Open Inventory to review pack breaking (new tab)
-              </Link>
-            ) : null}
+        {notice ? (
+          <div
+            role={notice.tone === 'success' ? 'status' : 'alert'}
+            aria-live="polite"
+            className={`flex items-center gap-3 rounded-lg border p-3 ${
+              notice.tone === 'danger'
+                ? 'border-destructive/30 bg-destructive/10'
+                : notice.tone === 'warning'
+                  ? 'border-warning/30 bg-warning/10'
+                  : notice.tone === 'success'
+                    ? 'border-success/30 bg-success/10'
+                    : 'border-border-subtle bg-surface-sunken'
+            }`}
+          >
+            <StatusPill status={notice.tone} tone={notice.tone} />
+            <div className="min-w-0 space-y-2 text-sm text-text-body">
+              <p>{notice.message}</p>
+              {notice.inventoryBranchId ? (
+                <Link
+                  href={`/pharmacy/inventory?branch=${encodeURIComponent(notice.inventoryBranchId)}`}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  prefetch={false}
+                  className={buttonVariants({
+                    variant: 'outline',
+                    className: 'h-auto min-h-11 whitespace-normal',
+                  })}
+                >
+                  Open Inventory to review pack breaking (new tab)
+                </Link>
+              ) : null}
+            </div>
           </div>
-        </div>
-      ) : null}
+        ) : null}
       </div>
 
       <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 overflow-hidden p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
@@ -2098,7 +2099,12 @@ function ScopedPharmacyCounterConsole({
             />
           </SectionCard>
 
-          <SectionCard compact className="min-h-0 max-h-24 shrink overflow-y-auto" eyebrow="POS-08" title="Receipt">
+          <SectionCard
+            compact
+            className="min-h-0 max-h-24 shrink overflow-y-auto"
+            eyebrow="POS-08"
+            title="Receipt"
+          >
             <CounterReceiptView
               branchId={branchId}
               receipt={
