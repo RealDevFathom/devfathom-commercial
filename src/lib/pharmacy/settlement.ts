@@ -798,7 +798,12 @@ export async function closePharmacyDrawer(
 export async function cutPharmacyDailyClose(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { businessDate: Date; reopenReason?: string; controlledCountHook?: unknown }
+  input: {
+    businessDate: Date;
+    reason?: string;
+    reopenReason?: string;
+    controlledCountHook?: unknown;
+  }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
@@ -870,7 +875,7 @@ export async function cutPharmacyDailyClose(
       businessDate: input.businessDate,
       sequence: (prior?.sequence ?? 0) + 1,
       supersedesCloseId: prior?.id,
-      reason: input.reopenReason?.trim(),
+      reason: input.reason?.trim() || input.reopenReason?.trim(),
       ...aggregate,
       isFinal,
       controlledCountHook: input.controlledCountHook as Prisma.InputJsonValue | undefined,

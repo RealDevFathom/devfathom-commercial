@@ -61,6 +61,20 @@ async function lockOrganizationSeat(
   }
 }
 
+async function lockActiveOrganizationAdmins(
+  tx: Prisma.TransactionClient,
+  organizationId: string
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT "id"
+    FROM "users"
+    WHERE "organizationId" = ${organizationId}
+      AND "role" = 'ADMIN'
+      AND "status" = 'ACTIVE'
+    FOR UPDATE
+  `;
+}
+
 function inputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
 }
@@ -499,8 +513,32 @@ export const organizationAdminRouter = router({
       if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
+      const removingActiveAdmin =
+        before.role === 'ADMIN' &&
+        before.status === 'ACTIVE' &&
+        (input.role !== 'ADMIN' || input.status !== 'ACTIVE');
       const saved = await ctx.db.$transaction(async (tx) => {
         if (activating) await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
+        if (removingActiveAdmin) {
+          // Lock every active admin membership before checking the invariant. This
+          // serializes concurrent demotions, so the second transaction observes
+          // the first transaction's committed role change before it can proceed.
+          await lockActiveOrganizationAdmins(tx, id);
+          const otherActiveAdmins = await tx.user.count({
+            where: {
+              organizationId: id,
+              id: { not: before.id },
+              role: 'ADMIN',
+              status: 'ACTIVE',
+            },
+          });
+          if (otherActiveAdmins === 0) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote or deactivate the last active admin.',
+            });
+          }
+        }
         return tx.user.update({
           where: { id: input.id },
           data: {
