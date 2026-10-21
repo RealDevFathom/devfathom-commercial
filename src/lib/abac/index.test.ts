@@ -135,6 +135,15 @@ describe('custom ABAC decisions', () => {
     ).resolves.toBe(false);
   });
 
+  it('keeps user ALLOW precedence over a role DENY outside pharmacy', async () => {
+    const db = authorizationDb({
+      overrides: [{ capability: 'finance:read', effect: 'ALLOW' }],
+      rolePermissions: [{ capability: 'finance:*', effect: 'DENY' }],
+    });
+
+    await expect(can(employee, 'finance:read', undefined, { db })).resolves.toBe(true);
+  });
+
   it('falls back to built-in policy only when no custom rule matches', async () => {
     const db = authorizationDb({});
 
@@ -343,6 +352,16 @@ it.each(['pharmacy.dispense', 'pharmacy:dispense'])(
     }
   }
 );
+it('keeps a pharmacy role DENY above a user ALLOW', async () => {
+  await expect(
+    can(employee, 'pharmacy:dispense', undefined, {
+      db: authorizationDb({
+        overrides: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        rolePermissions: [{ capability: 'pharmacy:dispense', effect: 'DENY' }],
+      }),
+    })
+  ).resolves.toBe(false);
+});
 it('gives the Pharmacist an explicit canonical dispense grant', async () => {
   const capabilities = roleTemplatesForVertical('PHARMACY').find(
     (role) => role.key === 'pharmacist'

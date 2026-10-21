@@ -1,16 +1,12 @@
+import { capabilityMatches } from '@/lib/abac/capabilities';
+
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
-const PROCUREMENT_ACTIONS = ['pharmacy.procurement', 'pharmacy:procurement'] as const;
-
-function covers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith('.*') || rule.endsWith(':*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
+const PROCUREMENT_ACTION = 'pharmacy:procurement';
 
 function matching(rules: readonly CapabilityRule[]) {
   return rules.filter((rule) =>
-    PROCUREMENT_ACTIONS.some((action) => covers(rule.capability, action))
+    capabilityMatches(rule.capability, PROCUREMENT_ACTION, rule.effect)
   );
 }
 
@@ -25,9 +21,9 @@ export function procurementCapabilityGranted(input: {
 }): boolean {
   const overrides = matching(input.overrides);
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const role = matching(input.role);
   if (role.some((rule) => rule.effect === 'DENY')) return false;
+  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   return role.some((rule) => rule.effect === 'ALLOW') || input.rolelessAdmin === true;
 }
 
