@@ -1,3 +1,7 @@
+import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
 /**
  * PLAT-02 / PLAT-03 tenant surfaces — the twelve-step onboarding checklist, the
  * branch regulatory profile, and the activation status the operator reads when
@@ -36,7 +40,8 @@ import {
 import {
   fieldError,
   provinceName,
-  regulatoryProfileInput,
+  regulatoryProfileShape,
+  regulatoryProfileSchema,
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
@@ -155,6 +160,18 @@ async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
       // Provisional anywhere is provisional everywhere: the regulatory guard
       // refuses the branch if *any* of the three fields it reads is unconfirmed,
       // so the surface must report the same thing rather than a rosier subset.
+      pendingLegalReview: [
+        ruleSet.licenceCategories,
+        ruleSet.permittedSchedules,
+        ruleSet.pharmacistCoverageRule,
+      ].some((field) =>
+        Boolean(
+          field &&
+          typeof field === 'object' &&
+          'pendingLegalReview' in field &&
+          field.pendingLegalReview
+        )
+      ),
       provisional:
         categories.provisional ||
         schedules.provisional ||
@@ -310,7 +327,20 @@ export const pharmacyOnboardingRouter = router({
           })
         : [];
 
+      let operationBlocked: string | null = null;
+      if (selected) {
+        try {
+          await assertStoredBranchMayOperate(ctx.db, organizationId, selected.id, {
+            name: 'REGULATORY_STATUS',
+            at: now,
+          });
+        } catch (error) {
+          if (!(error instanceof BranchOperationDeniedError)) throw error;
+          operationBlocked = error.reason;
+        }
+      }
       return {
+        operationBlocked,
         branches,
         jurisdictions,
         selectedBranchId: selected?.id ?? null,
@@ -336,7 +366,7 @@ export const pharmacyOnboardingRouter = router({
    * force.
    */
   saveRegulatoryProfile: adminProcedure
-    .input(regulatoryProfileInput)
+    .input(regulatoryProfileShape)
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const effectiveFrom = midnightUtc(input.effectiveFrom);
@@ -347,11 +377,15 @@ export const pharmacyOnboardingRouter = router({
         throw badRequest('effectiveFrom', 'The effective date cannot be in the past.');
       }
 
-      if (midnightUtc(input.licenceValidTo) <= today) {
-        throw badRequest(
-          'licenceValidTo',
-          'The licence expiry date must be after today (exclusive expiry).'
-        );
+      const organization = await ctx.db.organization.findUnique({
+        where: { id: organizationId },
+        select: { timezone: true },
+      });
+      const validated = regulatoryProfileSchema(organization?.timezone ?? undefined).safeParse(
+        input
+      );
+      if (!validated.success) {
+        throw new TRPCError({ code: 'BAD_REQUEST', cause: validated.error });
       }
 
       const branch = await ctx.db.pharmacyBranch.findFirst({

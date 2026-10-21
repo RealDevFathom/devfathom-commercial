@@ -154,6 +154,7 @@ export type PharmacyGateResult = PharmacyOnboardingStep & {
   actorId: string | null;
   recordedAt: Date | null;
   /** Why the evaluated status differs from the claim, when it does. */
+  regulatoryReason?: string;
   downgradeReason: 'EVIDENCE_ABSENT' | 'ATTESTATION_INCOMPLETE' | null;
 };
 
@@ -297,10 +298,11 @@ export async function evaluatePharmacyReadiness(
     db.pharmacySupplier.count({ where: { organizationId, authorized: true, active: true } }),
   ]);
 
+  const regulatoryReason = branch
+    ? await branchMayOperate(db, organizationId, branch.branchId, at)
+    : 'PROFILE_MISSING';
   const evidence: PharmacyReadinessEvidence = {
-    PREMISES_AND_LICENCES: branch
-      ? await branchMayOperate(db, organizationId, branch.branchId, at)
-      : false,
+    PREMISES_AND_LICENCES: regulatoryReason === null,
     COMMERCIAL_PACKAGE: Boolean(
       organization?.packageId &&
       isPackageCompatibleWithVertical(organization.package?.vertical ?? 'AGENCY', 'PHARMACY')
@@ -312,7 +314,15 @@ export async function evaluatePharmacyReadiness(
     PARTIES_AND_BALANCES: supplierCount > 0,
   };
 
-  return evaluateReadiness(organizationId, claims as PharmacyGateClaim[], evidence);
+  const readiness = evaluateReadiness(organizationId, claims as PharmacyGateClaim[], evidence);
+  return {
+    ...readiness,
+    gates: readiness.gates.map((gate) =>
+      gate.gate === 'PREMISES_AND_LICENCES' && regulatoryReason
+        ? { ...gate, regulatoryReason }
+        : gate
+    ),
+  };
 }
 
 /**
@@ -332,16 +342,16 @@ async function branchMayOperate(
   organizationId: string,
   branchId: string,
   at: Date
-): Promise<boolean> {
+): Promise<string | null> {
   try {
     await assertStoredBranchMayOperate(db, organizationId, branchId, {
       name: 'ONBOARDING_READINESS',
       at,
       requiresQualifiedPerson: true,
     });
-    return true;
+    return null;
   } catch (error) {
-    if (error instanceof BranchOperationDeniedError) return false;
+    if (error instanceof BranchOperationDeniedError) return error.reason;
     throw error;
   }
 }

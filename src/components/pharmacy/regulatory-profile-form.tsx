@@ -165,6 +165,19 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const categories = jurisdiction?.licenceCategories ?? [];
   const schedules = jurisdiction?.permittedSchedules ?? [];
   const inForce = data.versions.find((version) => version.inForce);
+  const pendingReview = data.jurisdictions.find(
+    (item) => item.provinceCode === inForce?.provinceCode
+  )?.pendingLegalReview;
+  const status = !inForce
+    ? 'No profile'
+    : data.operationBlocked === 'LICENCE_INVALID'
+      ? 'Licence expired or invalid'
+      : pendingReview
+        ? 'Pending legal review'
+        : data.operationBlocked
+          ? `Blocked: ${data.operationBlocked.replaceAll('_', ' ').toLowerCase()}`
+          : 'In force';
+  const operational = status === 'In force';
 
   async function uploadEvidence(file: File) {
     setUploadError(null);
@@ -247,13 +260,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         eyebrow="PLAT-02"
         title="Branch"
         titleLevel={2}
-        actions={
-          inForce ? (
-            <StatusPill status="In force" tone="success" />
-          ) : (
-            <StatusPill status="No profile" tone="warning" />
-          )
-        }
+        actions={<StatusPill status={status} tone={operational ? 'success' : 'warning'} />}
       >
         <Field
           htmlFor="branch-select"
@@ -275,7 +282,7 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         </Field>
         {inForce ? (
           <p className="mt-4 text-sm text-text-muted">
-            Version {inForce.version} is in force from {day(inForce.effectiveFrom)}: licence{' '}
+            Version {inForce.version} takes effect from {day(inForce.effectiveFrom)}: licence{' '}
             {inForce.licenceNumber} ({inForce.licenceCategory}) valid to{' '}
             {day(inForce.licenceValidTo)}, qualified person {inForce.qualifiedPersonRegistration}{' '}
             covered to {day(inForce.qualifiedPersonValidTo)}.
@@ -730,12 +737,20 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
         </form>
       </SectionCard>
 
-      <VersionHistory versions={data.versions} />
+      <VersionHistory versions={data.versions} status={status} operational={operational} />
     </div>
   );
 }
 
-function VersionHistory({ versions }: { versions: readonly Version[] }) {
+function VersionHistory({
+  versions,
+  status,
+  operational,
+}: {
+  versions: readonly Version[];
+  status: string;
+  operational: boolean;
+}) {
   return (
     <SectionCard title="Effective-dated versions" titleLevel={2}>
       {versions.length === 0 ? (
@@ -784,8 +799,14 @@ function VersionHistory({ versions }: { versions: readonly Version[] }) {
                   </td>
                   <td className="py-2">
                     <StatusPill
-                      status={version.inForce ? 'In force' : 'Superseded'}
-                      tone={version.inForce ? 'success' : 'neutral'}
+                      status={
+                        version.inForce
+                          ? status
+                          : version.effectiveFrom > new Date()
+                            ? 'Scheduled'
+                            : 'Superseded'
+                      }
+                      tone={version.inForce ? (operational ? 'success' : 'warning') : 'neutral'}
                     />
                   </td>
                 </tr>

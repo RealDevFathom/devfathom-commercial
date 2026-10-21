@@ -1,3 +1,4 @@
+import { licenceDateValid, LICENCE_EXPIRY_ERROR } from './licence-validity';
 /**
  * PLAT-02 form contract — the branch regulatory profile, as the operator fills
  * it in and as the server validates it.
@@ -88,7 +89,7 @@ const retentionYears = (subject: string) =>
     .min(1, `${subject} must be kept for at least 1 year.`)
     .max(30, 'Enter 30 years or fewer.');
 
-export const regulatoryProfileInput = z
+export const regulatoryProfileShape = z
   .object({
     branchId: required('Choose the branch this profile belongs to.', 128),
     effectiveFrom: isoDate('Choose the date this profile takes effect, as YYYY-MM-DD.'),
@@ -149,6 +150,18 @@ export const regulatoryProfileInput = z
       });
     }
   });
+
+export function regulatoryProfileSchema(timezone = 'Asia/Karachi', at?: Date) {
+  return regulatoryProfileShape.superRefine((value, ctx) => {
+    if (
+      value.licenceValidTo > value.licenceValidFrom &&
+      !licenceDateValid(value.licenceValidTo, at, timezone)
+    ) {
+      ctx.addIssue({ code: 'custom', path: ['licenceValidTo'], message: LICENCE_EXPIRY_ERROR });
+    }
+  });
+}
+export const regulatoryProfileInput = regulatoryProfileSchema();
 
 export type RegulatoryProfileInput = z.infer<typeof regulatoryProfileInput>;
 

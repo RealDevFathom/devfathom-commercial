@@ -63,14 +63,14 @@ describe('assertBranchMayOperate', () => {
 
   it('fails closed and audits an expired licence', () => {
     const state = validState();
-    state.licenceValidTo = at;
+    state.licenceValidTo = new Date('2026-09-01T00:00:00Z');
     expectDenied(state, 'LICENCE_INVALID');
   });
 
-  it('rejects a licence expiring today from midnight UTC', () => {
+  it('allows a licence throughout its expiry date', () => {
     const state = validState();
     state.licenceValidTo = new Date('2026-09-02T00:00:00.000Z');
-    expectDenied(state, 'LICENCE_INVALID');
+    expect(() => assertBranchMayOperate(state, { name: 'DISPENSE', at })).not.toThrow();
   });
 
   it('fails closed and audits missing qualified-person coverage', () => {
@@ -155,6 +155,7 @@ it('enforces the latest Sindh version for a stored profile referencing legacy v1
     licenceCategories: { provisional: false, pendingLegalReview: true, values: ['PHARMACY'] },
   };
   const db = {
+    organization: { findUnique: vi.fn().mockResolvedValue({ timezone: 'Asia/Karachi' }) },
     branchRegulatoryProfile: {
       findFirst: vi.fn().mockResolvedValue({ ...state, jurisdictionRuleSet: legacy }),
     },
@@ -177,4 +178,17 @@ it('enforces the latest Sindh version for a stored profile referencing legacy v1
   } finally {
     vi.unstubAllEnvs();
   }
+});
+
+it.each([
+  ['2026-10-20T23:59:59Z', true],
+  ['2026-10-21T00:00:00Z', true],
+  ['2026-10-21T18:59:59.999Z', true],
+  ['2026-10-21T19:00:00Z', false],
+])('runtime gate honours inclusive PKT expiry at %s', (instant, allowed) => {
+  const state = validState();
+  state.licenceValidTo = new Date('2026-10-21T00:00:00Z');
+  const run = () => assertBranchMayOperate(state, { name: 'DISPENSE', at: new Date(instant) });
+  if (allowed) expect(run).not.toThrow();
+  else expect(run).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
 });

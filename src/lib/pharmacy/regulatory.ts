@@ -1,3 +1,4 @@
+import { licenceDateValid } from './licence-validity';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 
@@ -24,6 +25,7 @@ export type BranchOperationAction = {
 };
 
 export type BranchRegulatoryState = {
+  timezone?: string;
   branchId: string;
   licenceCategory: string;
   licenceValidFrom: Date;
@@ -99,7 +101,7 @@ export function assertBranchMayOperate(
     !branch.licenceCategory.trim() ||
     !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
     at < branch.licenceValidFrom ||
-    at >= branch.licenceValidTo
+    !licenceDateValid(branch.licenceValidTo, at, branch.timezone)
   ) {
     deny('LICENCE_INVALID');
   }
@@ -171,9 +173,14 @@ export async function assertStoredBranchMayOperate(
     orderBy: [{ effectiveFrom: 'desc' }, { version: 'desc' }],
   });
 
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { timezone: true },
+  });
   assertBranchMayOperate(
     {
       ...profile,
+      timezone: organization?.timezone ?? undefined,
       ruleSet: latestRules ?? profile.jurisdictionRuleSet,
       auditDenied,
     },

@@ -7,6 +7,7 @@ import {
   fieldError,
   provinceName,
   regulatoryProfileInput,
+  regulatoryProfileSchema,
   ruleSetOptions,
 } from './regulatory-profile-form';
 
@@ -145,5 +146,27 @@ describe('branch regulatory profile input', () => {
     expect(defaultProvinceCode(jurisdictions, 'PK-KP')).toBe('PK-PB');
     expect(defaultProvinceCode(jurisdictions, null)).toBe('PK-PB');
     expect(defaultProvinceCode([], 'PK-SD')).toBe('');
+  });
+});
+
+describe('expiry save validation at PKT day boundaries', () => {
+  it.each([
+    ['2026-10-20T23:59:59Z', true],
+    ['2026-10-21T00:00:00Z', true],
+    ['2026-10-21T18:59:59.999Z', true],
+    ['2026-10-21T19:00:00Z', false],
+  ])('validates an expires-today save at %s', (instant, accepted) => {
+    const result = regulatoryProfileSchema('Asia/Karachi', new Date(instant)).safeParse({
+      ...valid,
+      licenceValidTo: '2026-10-21',
+    });
+    expect(result.success).toBe(accepted);
+    if (!result.success) {
+      const error = formatValidationError(result.error)!;
+      expect(error.fields.licenceValidTo).toEqual([
+        'The licence expiry date must be today or later.',
+      ]);
+      expect(error.message).toMatch(/^Licence valid to:/);
+    }
   });
 });
