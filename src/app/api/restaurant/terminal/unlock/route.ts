@@ -3,6 +3,7 @@ import { z } from 'zod';
 
 import { readJson } from '@/lib/api-json';
 import { rateLimit } from '@/lib/rate-limit';
+import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
 import { recordTerminalOperatorAudit } from '@/lib/restaurant/terminal-audit';
 import { describeShiftDenial } from '@/lib/restaurant/shifts';
 import { authenticateOperator, withTerminalAuth } from '@/lib/restaurant/terminal-auth';
@@ -79,6 +80,24 @@ export const POST = withTerminalAuth(async (ctx, request) => {
         { status: 403 }
       );
     }
+    return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
+  }
+
+  // QA-287: never make KDS authorization an oracle for kitchen membership. The
+  // credential check above performs the real (or dummy) constant-cost bcrypt
+  // comparison and advances the same lockout/rate-limit path before we consult
+  // capabilities. A valid credential without kitchen access is deliberately
+  // indistinguishable from a wrong credential to the caller.
+  if (
+    ctx.device.kind === 'KDS' &&
+    !(await operatorHasCapability(
+      ctx.db,
+      staffProfileId,
+      'kitchen:operate',
+      now,
+      ctx.device.branchId
+    ))
+  ) {
     return NextResponse.json({ error: 'Invalid operator credential.' }, { status: 401 });
   }
 
