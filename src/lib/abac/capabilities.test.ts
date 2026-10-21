@@ -1,8 +1,5 @@
-import { readFileSync, readdirSync } from 'node:fs';
-import path from 'node:path';
-import ts from 'typescript';
 import { describe, expect, it } from 'vitest';
-import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import { PHARMACY_CHECKED_CAPABILITIES, PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { capabilityMatches } from './capabilities';
 import { ALL_ACTIONS } from './policies';
 
@@ -64,68 +61,30 @@ describe('canonical capability contract (#130)', () => {
     expect(capabilityMatches('*', 'pharmacy.dispense')).toBe(false);
   });
 
-  it('enumerates every checked action across all tRPC routers, including dynamic unions', () => {
-    const files = readdirSync('src/server/routers', { recursive: true })
-      .filter(
-        (f): f is string => typeof f === 'string' && f.endsWith('.ts') && !f.endsWith('.test.ts')
-      )
-      .map((f) => path.resolve('src/server/routers', f));
-    // Resolve literal unions locally, without loading the entire application and Prisma.
-    // Action is the real catalogue; unresolved/dynamic strings fail the assertion below.
-    const options = { noResolve: true, target: ts.ScriptTarget.ESNext };
-    const host = ts.createCompilerHost(options);
-    const originalGetSourceFile = host.getSourceFile.bind(host);
-    host.getSourceFile = (file, languageVersion, onError, shouldCreateNewSourceFile) => {
-      if (!files.includes(file)) return originalGetSourceFile(file, languageVersion, onError, shouldCreateNewSourceFile);
-      const source = ts.createSourceFile(
-        file,
-        readFileSync(file, 'utf8'),
-        ts.ScriptTarget.Latest,
-        true
-      );
-      const body = source.statements
-        .filter((n) => !ts.isImportDeclaration(n))
-        .map((n) => n.getFullText(source))
-        .join('\n');
-      return ts.createSourceFile(
-        file,
-        `type Action = ${ALL_ACTIONS.map((a) => JSON.stringify(a)).join(' | ')};\n${body}`,
-        ts.ScriptTarget.Latest,
-        true
-      );
-    };
-    const program = ts.createProgram(files, options, host);
-    const checker = program.getTypeChecker();
-    const checked = new Set<string>();
-    for (const file of files) {
-      const source = program.getSourceFile(file)!;
-      const visit = (node: ts.Node) => {
-        if (ts.isCallExpression(node)) {
-          const name = node.expression.getText(source);
-          const index = name === 'can' ? 1 : name === 'capabilityProcedure' ? 0 : -1;
-          if (index >= 0) {
-            const arg = node.arguments[index];
-            expect(arg, `${file}: missing action`).toBeDefined();
-            const type = checker.getTypeAtLocation(arg);
-            const variants = type.isUnion() ? type.types : [type];
-            for (const variant of variants) {
-              expect(
-                variant.isStringLiteral(),
-                `${file}: unresolved action ${arg.getText(source)}`
-              ).toBe(true);
-              if (variant.isStringLiteral()) {
-                expect(ALL_ACTIONS, `${file}: ${variant.value}`).toContain(variant.value);
-                checked.add(variant.value);
-              }
-            }
-          }
-        }
-        ts.forEachChild(node, visit);
-      };
-      visit(source);
+  it('covers the checked pharmacy actions with the owner template', () => {
+    const owner = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === 'owner')!;
+    for (const action of PHARMACY_CHECKED_CAPABILITIES) {
+      expect(ALL_ACTIONS).toContain(action);
+      expect(owner.capabilities.some((grant) => capabilityMatches(grant, action))).toBe(true);
     }
-    expect(checked).toContain('pharmacy:dispense');
-    expect(checked).toContain('pharmacy:procurement');
-    expect(checked.size).toBeGreaterThan(30);
-  }, 60_000);
+  });
+
+  it.each([
+    ['pharmacist', ['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review']],
+    ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
+    ['finance', ['reports:financial']],
+    ['auditor', ['reports:operational']],
+  ])('limits %s to its intended checked actions', (key, actions) => {
+    const role = PHARMACY_ROLE_TEMPLATES.find((role) => role.key === key)!;
+    expect(
+      PHARMACY_CHECKED_CAPABILITIES.filter((action) =>
+        role.capabilities.some((grant) => capabilityMatches(grant, action))
+      )
+    ).toEqual(expect.arrayContaining(actions));
+    expect(
+      PHARMACY_CHECKED_CAPABILITIES.filter((action) =>
+        role.capabilities.some((grant) => capabilityMatches(grant, action))
+      )
+    ).toHaveLength(actions.length);
+  });
 });

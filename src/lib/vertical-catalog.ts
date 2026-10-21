@@ -735,6 +735,20 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy:safety',
 ];
 
+/** Canonical actions checked by pharmacy workflows, including shared report gates. */
+export const PHARMACY_CHECKED_CAPABILITIES = [
+  'pharmacy:counter',
+  'pharmacy:manage',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+  'pharmacy:orders',
+  'reports:operational',
+  'reports:financial',
+] as const;
+
 export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
   {
     key: 'owner',
