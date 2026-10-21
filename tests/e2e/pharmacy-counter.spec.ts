@@ -38,7 +38,7 @@ async function pressControl(target: Locator) {
   await target.press('Enter');
 }
 
-async function signIn(page: Page) {
+async function signIn(page: Page, email = process.env.PHARMACY_E2E_ADMIN_EMAIL!) {
   await page.goto('/login');
   // Prove the client form is hydrated before entering credentials: a native
   // pre-hydration submit otherwise posts back to /login and loses the draft.
@@ -48,9 +48,9 @@ async function signIn(page: Page) {
       await pressControl(page.getByRole('button', { name: 'Show password' }));
     await expect(passwordControl).toHaveAttribute('type', 'text');
   }).toPass({ timeout: 15_000 });
-  const email = page.getByLabel('Email');
-  await email.focus();
-  await email.fill(process.env.PHARMACY_E2E_ADMIN_EMAIL!);
+  const emailField = page.getByLabel('Email');
+  await emailField.focus();
+  await emailField.fill(email);
   const password = page.getByRole('textbox', { name: 'Password' });
   await password.focus();
   await password.fill(process.env.PHARMACY_E2E_ADMIN_PASSWORD!);
@@ -66,8 +66,8 @@ async function signIn(page: Page) {
   await expect(page).toHaveURL(/\/(dashboard|pharmacy)/, { timeout: 30_000 });
 }
 
-async function openCounter(page: Page) {
-  await signIn(page);
+async function openCounter(page: Page, email?: string) {
+  await signIn(page, email);
   await page.goto('/pharmacy/counter');
   await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
   // The module is licensed by the seed, so the shell must render the counter
@@ -802,6 +802,30 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await page.keyboard.press('Escape');
   await expect(dialog).not.toBeVisible();
   await expect(page.getByRole('button', { name: 'Returns & refunds' })).toBeFocused();
+});
+
+test('cashier — the seeded cashier sells from the counter and gets the receipt', async ({
+  page,
+}) => {
+  // The seeded cashier holds the canonical pharmacy:counter that #163 leaves real cashiers with,
+  // so this bill fails if the counter's receipt guard stops recognising it. It runs before the
+  // day close, which refuses tenders for the rest of the business date.
+  const otc = PHARMACY_E2E.medicines.otc;
+  await openCounter(page, PHARMACY_E2E.cashierEmail);
+  await openDrawer(page);
+  await search(page, otc.brandName);
+  await stageFirstResult(page, otc.name);
+  await page.keyboard.press('F4');
+  await setQuantity(page, 1);
+  await page.keyboard.press('F6');
+  await expect(page.getByRole('list', { name: 'Cart lines' })).toContainText(otc.name, {
+    timeout: 15_000,
+  });
+  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcStripPrice);
+  const receipt = page.getByRole('region', { name: /^Receipt \d+$/ });
+  await expect(receipt).toBeVisible({ timeout: 15_000 });
+  await expect(receipt).toContainText(otc.name);
+  await expect(receipt).toContainText(otc.batchNumber);
 });
 
 test('day close — open sell count lock and print Z-report', async ({ page, context }) => {

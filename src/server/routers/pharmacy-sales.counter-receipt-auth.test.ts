@@ -91,13 +91,12 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
       })),
     },
     pharmacyBranch: {
-      findMany: vi.fn(
-        async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
-          args.where.organizationId && args.where.organizationId !== 'org-a'
-            ? []
-            : args.where.id.in
-                .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
-                .map((id) => ({ id }))
+      findMany: vi.fn(async (args: { where: { id: { in: string[] }; organizationId?: string } }) =>
+        args.where.organizationId && args.where.organizationId !== 'org-a'
+          ? []
+          : args.where.id.in
+              .filter((id) => id !== 'foreign-branch' && id !== 'closed-branch')
+              .map((id) => ({ id }))
       ),
       findFirst: vi.fn(async (args?: { where?: { id?: string; organizationId?: string } }) => {
         const id = args?.where?.id;
@@ -301,6 +300,40 @@ describe('counter receipt authorization', () => {
     expect(readCounterCart).toHaveBeenCalled();
     expect(readReturnHistory).toHaveBeenCalled();
     expect(applyPharmacyTender).toHaveBeenCalled();
+  });
+
+  it('lets an assigned cashier holding the canonical pharmacy:counter do the same (#163)', async () => {
+    // #163 migrates pharmacy.counter grants to pharmacy:counter, and the Cashier template grants it.
+    const f = fixture([
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:orders', effect: 'ALLOW' },
+    ]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ receiptNumber: 7 });
+    await expect(
+      f.caller().counterCart({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ saleId: 'sale-a' });
+    await expect(
+      f.caller().returnHistory({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toEqual([{ id: 'return-1' }]);
+    for (const type of ['CASH', 'CARD'] as const) {
+      await expect(
+        f.caller().tender({
+          branchId: 'branch-a',
+          saleId: 'sale-a',
+          deviceId: 'device-a',
+          businessDate: new Date('2026-10-01T00:00:00.000Z'),
+          type,
+          amountMinor: 100,
+          idempotencyKey: `canonical-${type}`,
+        })
+      ).resolves.toEqual({ tenderId: 'tender-1' });
+    }
+    expect(readCounterCart).toHaveBeenCalled();
+    expect(readReturnHistory).toHaveBeenCalled();
+    expect(applyPharmacyTender).toHaveBeenCalledTimes(2);
   });
 
   it('denies counter reads and cash tender when the cashier is not assigned', async () => {

@@ -272,11 +272,13 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
+// Canonical names (#163) beside the legacy dotted ones, which still cover un-migrated grants.
 const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:dispense',
   'pharmacy.dispense',
   'pharmacy:receipt',
   'pharmacy.receipt',
+  'pharmacy:counter',
   'pharmacy.counter',
 ] as const;
 
