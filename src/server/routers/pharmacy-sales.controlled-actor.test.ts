@@ -50,6 +50,7 @@ function callerFor(permissions: Array<{ capability: string; effect: 'ALLOW' | 'D
   const register = vi.fn();
   const db = {
     $transaction: async (callback: (tx: unknown) => unknown) => callback(db),
+    pharmacyBranch: { findMany: async () => [{ id: 'branch-1' }] },
     medicine: {
       findFirst: async () => ({ id: 'medicine-1', controlled: true, manufacturer: 'Maker' }),
     },

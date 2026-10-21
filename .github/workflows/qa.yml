@@ -3,6 +3,9 @@ name: QA gate
 on:
   push:
     branches: [restaurantv2]
+  pull_request:
+    branches:
+      - 'integration/**'
   workflow_dispatch:
     inputs:
       sha:
@@ -33,15 +36,42 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 20
+      # Reserved catering slot. Those suites require port 55675 and a database
+      # name containing "disposable", on its own cluster from the gate database.
+      catering-postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: gate-postgres-ci-only
+        ports: ['55675:5432']
+        options: >-
+          --health-cmd "pg_isready -U postgres"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 20
     env:
       OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      # Prisma migrate prefers this URL. The app DATABASE_URL below stays on gate_runtime.
+      MIGRATION_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
       RUNTIME_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       COHORT_OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/pharmacy_cohort_test
       COHORT_SETUP_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/pharmacy_cohort_test
       COHORT_RUNTIME_URL: postgresql://cohort_runtime:cohort-runtime-ci-only@127.0.0.1:55432/pharmacy_cohort_test
+      PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL: postgresql://cohort_runtime:cohort-runtime-ci-only@127.0.0.1:55432/pharmacy_cohort_test
+      CATERING_OWNER_URL: postgresql://catering_owner:catering-owner-ci-only@127.0.0.1:55675/devfathom_catering_disposable
+      CATERING_SETUP_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55675/devfathom_catering_disposable
+      CATERING_RUNTIME_URL: postgresql://catering_runtime:catering-runtime-ci-only@127.0.0.1:55675/devfathom_catering_disposable
+      CATERING_TEST_DATABASE_URL: postgresql://catering_runtime:catering-runtime-ci-only@127.0.0.1:55675/devfathom_catering_disposable
+      CATERING_TEST_ORG_ID: org_catering_ci
+      CATERING_TEST_BRANCH_ID: branch_catering_ci
+      CATERING_TEST_STAFF_ID: staff_catering_ci
+      WALLET_TEST_OWNER_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_test
+      WALLET_TEST_RUNTIME_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       RECEIPT_OWNER_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/wha1364_receipt_test
       RECEIPT_RUNTIME_URL: postgresql://receipt_runtime:receipt-runtime-ci-only@127.0.0.1:55432/wha1364_receipt_test
       SUPERUSER_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
+      # #142 regression: owner must be superuser to reproduce the RLS bypass; the suite
+      # creates its own NOSUPERUSER NOBYPASSRLS role for the restricted-role assertions.
+      CATALOG_TEST_DATABASE_URL: postgresql://postgres:gate-postgres-ci-only@127.0.0.1:55432/devfathom_gate_test
       DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/devfathom_gate_test
       SHADOW_DATABASE_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/devfathom_gate_shadow_test
@@ -141,6 +171,8 @@ jobs:
           }
 
           PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55432 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL' >gate/database-bootstrap.stdout.log 2>gate/database-bootstrap.stderr.log
+          -- CREATEROLE stays on this ephemeral test owner so RLS suites can CREATE ROLE.
+          -- gate_runtime, cohort_runtime, and receipt_runtime stay NOCREATEROLE.
           CREATE ROLE gate_owner LOGIN PASSWORD 'gate-owner-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB CREATEROLE NOINHERIT;
           CREATE ROLE gate_runtime LOGIN PASSWORD 'gate-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
           CREATE DATABASE devfathom_gate_test OWNER gate_owner;
@@ -159,8 +191,18 @@ jobs:
           SQL
           record database-bootstrap "$?"
 
-          DATABASE_URL="$OWNER_URL" EXTENSION_ADMIN_DATABASE_URL="$OWNER_URL" run prepare-extensions bun prisma/prepare-extensions.ts
-          DATABASE_URL="$OWNER_URL" run migrate-deploy bunx prisma migrate deploy
+          # Reserved catering database and role. The runtime role is not CREATEROLE.
+          PGPASSWORD=gate-postgres-ci-only psql -h 127.0.0.1 -p 55675 -U postgres -d postgres -v ON_ERROR_STOP=1 <<'SQL' >gate/catering-bootstrap.stdout.log 2>gate/catering-bootstrap.stderr.log
+          CREATE ROLE catering_owner LOGIN PASSWORD 'catering-owner-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE ROLE catering_runtime LOGIN PASSWORD 'catering-runtime-ci-only' NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          CREATE DATABASE devfathom_catering_disposable OWNER catering_owner;
+          REVOKE ALL ON DATABASE devfathom_catering_disposable FROM PUBLIC;
+          GRANT CONNECT, TEMPORARY ON DATABASE devfathom_catering_disposable TO catering_runtime;
+          SQL
+          record catering-bootstrap "$?"
+
+          DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" EXTENSION_ADMIN_DATABASE_URL="$OWNER_URL" run prepare-extensions bun prisma/prepare-extensions.ts
+          DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" run migrate-deploy bunx prisma migrate deploy
           run prisma-generate bunx prisma generate
           run runtime-grants psql "$OWNER_URL" -v ON_ERROR_STOP=1 \
             -c 'GRANT USAGE ON SCHEMA public TO gate_runtime;' \
@@ -168,26 +210,66 @@ jobs:
             -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gate_runtime;' \
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
-          DATABASE_URL="$OWNER_URL" run seed bunx prisma db seed
+          : > gate/runtime-role-check.stdout.log
+          : > gate/runtime-role-check.stderr.log
+          role_ok=0
+          for role_url in "gate_runtime|$RUNTIME_URL" "receipt_runtime|$RECEIPT_RUNTIME_URL"; do
+            role_name="${role_url%%|*}"
+            role_dsn="${role_url#*|}"
+            role_attributes=$(psql "$role_dsn" -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> current_user AND (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member'))::text FROM pg_roles WHERE rolname = current_user")
+            if [ "$role_attributes" = 'false:false:false' ]; then
+              printf '%s %s\n' "$role_name" "$role_attributes" >>gate/runtime-role-check.stdout.log
+            else
+              echo "Runtime database role ${role_name} is not restricted: ${role_attributes:-<empty>}" >>gate/runtime-role-check.stderr.log
+              role_ok=1
+            fi
+          done
+          record runtime-role-check "$role_ok"
+          DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" run seed bunx prisma db seed
           # These suites require isolated fixtures and different runtime privileges.
           for lane in cohort receipt; do
             if [ "$lane" = cohort ]; then owner_url="$COHORT_OWNER_URL"; else owner_url="$RECEIPT_OWNER_URL"; fi
-            DATABASE_URL="$owner_url" EXTENSION_ADMIN_DATABASE_URL="$owner_url" run "$lane-prepare-extensions" bun prisma/prepare-extensions.ts
-            DATABASE_URL="$owner_url" run "$lane-migrate-deploy" bunx prisma migrate deploy
+            DATABASE_URL="$owner_url" MIGRATION_DATABASE_URL="$owner_url" EXTENSION_ADMIN_DATABASE_URL="$owner_url" run "$lane-prepare-extensions" bun prisma/prepare-extensions.ts
+            DATABASE_URL="$owner_url" MIGRATION_DATABASE_URL="$owner_url" run "$lane-migrate-deploy" bunx prisma migrate deploy
           done
           # The mixed-tenant fixture needs setup authority; sales RLS has no platform-admin exception.
           run cohort-fixture psql "$COHORT_SETUP_URL" -v ON_ERROR_STOP=1 \
             -f src/lib/pharmacy/repeat-purchasing.fixture.sql
           run cohort-runtime-grants psql "$COHORT_OWNER_URL" -v ON_ERROR_STOP=1 \
             -c 'GRANT USAGE ON SCHEMA public TO cohort_runtime;' \
+            -c 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM PUBLIC;' \
+            -c 'REVOKE ALL ON ALL TABLES IN SCHEMA public FROM cohort_runtime;' \
             -c 'GRANT SELECT ON pharmacy_sales, pharmacy_sale_lines, pharmacy_sale_returns, pharmacy_sale_return_lines, pharmacy_refunds TO cohort_runtime;'
           run receipt-runtime-grants psql "$RECEIPT_OWNER_URL" -v ON_ERROR_STOP=1 \
             -c 'GRANT USAGE ON SCHEMA public TO receipt_runtime;' \
             -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO receipt_runtime;' \
             -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO receipt_runtime;'
-          DATABASE_URL="$COHORT_RUNTIME_URL" TEST_DATABASE_URL="$COHORT_RUNTIME_URL" run vitest-cohort bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-cohort.json
+          DATABASE_URL="$CATERING_OWNER_URL" MIGRATION_DATABASE_URL="$CATERING_OWNER_URL" EXTENSION_ADMIN_DATABASE_URL="$CATERING_OWNER_URL" run catering-prepare-extensions bun prisma/prepare-extensions.ts
+          DATABASE_URL="$CATERING_OWNER_URL" MIGRATION_DATABASE_URL="$CATERING_OWNER_URL" run catering-migrate-deploy bunx prisma migrate deploy
+          run catering-runtime-grants psql "$CATERING_OWNER_URL" -v ON_ERROR_STOP=1 \
+            -c 'GRANT USAGE ON SCHEMA public TO catering_runtime;' \
+            -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO catering_runtime;' \
+            -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO catering_runtime;'
+          run catering-fixture psql "$CATERING_SETUP_URL" -v ON_ERROR_STOP=1 \
+            -c "INSERT INTO organizations (id, slug, \"legalName\", \"displayName\", status, \"deploymentMode\", \"createdAt\", \"updatedAt\") VALUES ('org_catering_ci', 'org_catering_ci', 'Catering CI', 'Catering CI', 'ACTIVE', 'SHARED', now(), now());" \
+            -c "INSERT INTO restaurant_branches (id, \"organizationId\", name, timezone, \"businessDayCutoff\", \"updatedAt\") VALUES ('branch_catering_ci', 'org_catering_ci', 'Kitchen', 'UTC', '00:00', now());" \
+            -c "INSERT INTO restaurant_staff_profiles (id, \"organizationId\", \"displayName\", \"primaryBranchId\", \"updatedAt\") VALUES ('staff_catering_ci', 'org_catering_ci', 'Cook', 'branch_catering_ci', now());"
+          catering_attributes=$(psql "$CATERING_RUNTIME_URL" -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || rolcreaterole::text FROM pg_roles WHERE rolname = current_user")
+          cohort_attributes=$(psql "$COHORT_RUNTIME_URL" -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || rolcreaterole::text FROM pg_roles WHERE rolname = current_user")
+          if [ "$catering_attributes" = 'false:false:false' ] && [ "$cohort_attributes" = 'false:false:false' ]; then
+            printf '%s\n%s\n' "$catering_attributes" "$cohort_attributes" >gate/reserved-role-check.stdout.log
+            : > gate/reserved-role-check.stderr.log
+            record reserved-role-check 0
+          else
+            echo "Reserved runtime role is not restricted: catering=${catering_attributes:-<empty>} cohort=${cohort_attributes:-<empty>}" >gate/reserved-role-check.stderr.log
+            : > gate/reserved-role-check.stdout.log
+            record reserved-role-check 1
+          fi
+          DATABASE_URL="$COHORT_RUNTIME_URL" TEST_DATABASE_URL="$COHORT_RUNTIME_URL" PHARMACY_REPEAT_PURCHASING_TEST_DATABASE_URL="$COHORT_RUNTIME_URL" run vitest-cohort bunx vitest run src/lib/pharmacy/repeat-purchasing.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-cohort.json
           DATABASE_URL="$RECEIPT_RUNTIME_URL" TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" WHA1364_RECEIPT_TEST_DATABASE_URL="$RECEIPT_RUNTIME_URL" run vitest-receipt bunx vitest run src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-receipt.json
-          RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          CATERING_MONEY_DB_SLOT=reserved DATABASE_URL="$CATERING_RUNTIME_URL" TEST_DATABASE_URL="$CATERING_RUNTIME_URL" run vitest-catering bunx vitest run src/lib/restaurant/catering-money.db.test.ts src/lib/restaurant/catering-runtime.db.test.ts src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest-catering.json
+          RESTAURANT_DEMO_RESET_DB=1 run vitest bunx vitest run --exclude=src/lib/pharmacy/repeat-purchasing.db.test.ts --exclude=src/lib/pharmacy/receipt-identity.db.test.ts --exclude=src/lib/restaurant/catering-money.db.test.ts --exclude=src/lib/restaurant/catering-runtime.db.test.ts --exclude=src/lib/restaurant/catering-endpoints.db.test.ts --maxWorkers=1 --no-file-parallelism --reporter=json --outputFile=gate/vitest.json
+          # test:rls creates its own NOLOGIN role and does not start the app.
           DATABASE_URL="$SUPERUSER_URL" TEST_DATABASE_URL="$SUPERUSER_URL" run test-rls bun run test:rls
           run lint bun run lint
 
@@ -234,7 +316,7 @@ jobs:
           const requiredZero = ['numFailedTests', 'numFailedTestSuites', 'numPendingTests', 'numPendingTestSuites', 'numTodoTests'];
           const requiredPositive = ['numTotalTests', 'numTotalTestSuites', 'numPassedTests', 'numPassedTestSuites'];
           const totals = Object.fromEntries([...requiredZero, ...requiredPositive].map((field) => [field, 0]));
-          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt']) {
+          for (const lane of ['vitest', 'vitest-cohort', 'vitest-receipt', 'vitest-catering']) {
             try {
               const report = JSON.parse(fs.readFileSync(`gate/${lane}.json`, 'utf8'));
               for (const field of [...requiredZero, ...requiredPositive]) {
@@ -330,16 +412,21 @@ jobs:
               -c "CREATE DATABASE $db OWNER gate_owner;" \
               -c "REVOKE ALL ON DATABASE $db FROM PUBLIC;" \
               -c "GRANT CONNECT, TEMPORARY ON DATABASE $db TO gate_runtime;"
-            EXTENSION_ADMIN_DATABASE_URL="$owner_base/$db" DATABASE_URL="$owner_base/$db" bun prisma/prepare-extensions.ts
-            DATABASE_URL="$owner_base/$db" bunx prisma migrate deploy
+            EXTENSION_ADMIN_DATABASE_URL="$owner_base/$db" DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bun prisma/prepare-extensions.ts
+            DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bunx prisma migrate deploy
             psql "$owner_base/$db" -v ON_ERROR_STOP=1 \
               -c 'GRANT USAGE ON SCHEMA public TO gate_runtime;' \
               -c 'GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO gate_runtime;' \
               -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gate_runtime;' \
               -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
               -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
-            DATABASE_URL="$owner_base/$db" bunx prisma db seed
+            DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bunx prisma db seed
           done
+          role_attributes=$(PGPASSWORD=gate-runtime-ci-only psql -h 127.0.0.1 -p 55432 -U gate_runtime -d restaurant_e2e_gate -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> current_user AND (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member'))::text FROM pg_roles WHERE rolname = current_user")
+          if [ "$role_attributes" != 'false:false:false' ]; then
+            echo "Runtime database role is not restricted: ${role_attributes:-<empty>}" >&2
+            exit 1
+          fi
       - name: Record 01-provision
         if: always()
         run: printf '01-provision=%s\n' '${{ steps.provision.outcome == 'success' && '0' || '1' }}' >> gate/browser/exit-codes.txt
@@ -382,6 +469,7 @@ jobs:
           DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
           TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/platform_e2e_gate
           PLAYWRIGHT_DATABASE_ADMIN_URL: postgresql://gate_owner:gate-owner-ci-only@127.0.0.1:55432/platform_e2e_gate?options=-c%20app.is_platform_admin%3Dtrue
+          TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_FILE: ${{ github.workspace }}/gate/browser/platform-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/platform
         run: bunx playwright test --config=tests/e2e/platform-control-plane.config.ts --workers=1 --reporter=html,json
@@ -396,6 +484,7 @@ jobs:
           TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
           AGENCY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/agency_e2e_gate
           AGENCY_E2E: '1'
+          TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/agency-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/agency
         run: bunx tsx scripts/run-agency-e2e.ts --workers=1 --reporter=html,json
@@ -410,6 +499,7 @@ jobs:
           TEST_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
           PHARMACY_E2E_DATABASE_URL: postgresql://gate_runtime:gate-runtime-ci-only@127.0.0.1:55432/pharmacy_e2e_gate
           PHARMACY_E2E: '1'
+          TRUSTED_PROXY_HOPS: '1'
           PLAYWRIGHT_JSON_OUTPUT_NAME: gate/browser/pharmacy-results.json
           PLAYWRIGHT_HTML_OUTPUT_DIR: playwright-report/pharmacy
         run: >-

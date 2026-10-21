@@ -1,3 +1,4 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import { GrowthPanel } from './growth-panel';
 import Link from 'next/link';
 import { TRPCError } from '@trpc/server';
@@ -214,7 +215,7 @@ export default async function PharmacyMarketingPage({
                 operation="sandbox"
                 label="Run sandbox dispatch"
               >
-                <input type="hidden" name="requestKey" value={crypto.randomUUID()} />
+                <input type="hidden" name="requestKey" value={browserUuid()} />
                 <label className="block text-sm">
                   Sandbox outcome
                   <select name="outcome" className={control} defaultValue="DELIVERED">

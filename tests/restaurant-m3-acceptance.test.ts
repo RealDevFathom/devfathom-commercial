@@ -159,6 +159,7 @@ function makeFixture() {
   );
 
   const db: Record<string, unknown> = {
+    $queryRaw: vi.fn(async () => [{ organizationId: 'org_m3' }]),
     restaurantBrand: {
       findFirst: vi.fn(
         async () => [...brands.values()].find((brand) => brand.isDefault === true) ?? null
@@ -177,26 +178,52 @@ function makeFixture() {
       }),
     },
     restaurantProduct: {
+      findMany: vi.fn(
+        async ({ where }: { where: { id: { in: string[] }; organizationId: string } }) =>
+          where.id.in.flatMap((id) => {
+            const row = products.get(id);
+            return row?.organizationId === where.organizationId ? [{ id }] : [];
+          })
+      ),
       findUnique: vi.fn(async ({ where }: IdArgs) => find(products, where.id)),
       create: productCreate,
       update: vi.fn(async (args: UpdateArgs) => update(products, args)),
     },
     restaurantRecipe: {
+      findMany: vi.fn(
+        async ({ where }: { where: { id: { in: string[] }; organizationId: string } }) =>
+          where.id.in.flatMap((id) => {
+            const row = recipes.get(id);
+            return row?.organizationId === where.organizationId ? [{ id }] : [];
+          })
+      ),
       findUnique: vi.fn(async ({ where }: IdArgs) => find(recipes, where.id)),
       create: recipeCreate,
     },
     restaurantRecipeVersion: {
       findUnique: vi.fn(async ({ where }: IdArgs) => find(recipeVersions, where.id)),
-      findMany: vi.fn(async ({ where }: { where: { recipeId: string } }) =>
-        [...recipeVersions.values()]
-          .filter((version) => version.recipeId === where.recipeId)
-          .map((version) => ({ ...version }))
+      findMany: vi.fn(
+        async ({
+          where,
+        }: {
+          where: { recipeId?: string; organizationId: string; id?: { in: string[] } };
+        }) =>
+          [...recipeVersions.values()]
+            .filter(
+              (version) =>
+                version.organizationId === where.organizationId &&
+                (where.id ? where.id.in.includes(version.id) : version.recipeId === where.recipeId)
+            )
+            .map((version) => ({ ...version }))
       ),
       create: recipeVersionCreate,
       update: vi.fn(async (args: UpdateArgs) => update(recipeVersions, args)),
     },
     restaurantMenu: {
       findUnique: vi.fn(async ({ where }: IdArgs) => find(menus, where.id)),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.flatMap((id) => (menus.has(id) ? [{ id }] : []))
+      ),
       create: menuCreate,
       update: vi.fn(async (args: UpdateArgs) => update(menus, args)),
     },
@@ -220,10 +247,16 @@ function makeFixture() {
     },
     restaurantBranch: {
       findUnique: vi.fn(async ({ where }: IdArgs) => find(branches, where.id)),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.flatMap((id) => (branches.has(id) ? [{ id }] : []))
+      ),
     },
     restaurantPriceList: {
       findUnique: vi.fn(async ({ where }: IdArgs) => find(priceLists, where.id)),
       findFirst: vi.fn(async () => null),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.flatMap((id) => (priceLists.has(id) ? [{ id }] : []))
+      ),
     },
     restaurantPriceListVersion: {
       findMany: vi.fn(async () => []),
@@ -298,6 +331,7 @@ function api(fixture: Fixture, enabledModules: string[] = ['restaurant-menu'], b
   return acceptanceRouter.createCaller({
     db: fixture.db,
     entitlements: {
+      organizationId: 'org_m3',
       enabledModules,
       activeSeats: 1,
       seatLimit: 50,
@@ -306,7 +340,13 @@ function api(fixture: Fixture, enabledModules: string[] = ['restaurant-menu'], b
     },
     session: {
       expires: 'later',
-      user: { id: 'user_gm', role: 'EMPLOYEE', department: 'OPERATIONS', status: 'ACTIVE' },
+      user: {
+        organizationId: 'org_m3',
+        id: 'user_gm',
+        role: 'EMPLOYEE',
+        department: 'OPERATIONS',
+        status: 'ACTIVE',
+      },
     },
     organization: null,
     support: null,
@@ -389,17 +429,17 @@ describe('GOV-1 canonical ownership', () => {
 
     await expect(
       caller.restaurantMenus.createPublication({ branchId: 'foreign_branch', menuId: menu.id })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(
       caller.restaurantMenus.createPublication({ branchId: 'branch_1', menuId: 'foreign_menu' })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(
       caller.restaurantMenus.createPublication({
         branchId: 'branch_1',
         menuId: menu.id,
         priceListId: 'foreign_price_list',
       })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   it('rejects other-organization override references', async () => {

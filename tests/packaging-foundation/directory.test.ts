@@ -16,6 +16,7 @@ const policy: DemoDirectoryPolicy = {
 function context() {
   return {
     organization: { id: 'organization', isDemo: true },
+    entitlements: { organizationId: 'organization' },
     session: {
       user: {
         id: 'actor',
@@ -25,16 +26,14 @@ function context() {
     },
     db: {
       restaurantStaffProfile: {
-        findMany: vi
-          .fn()
-          .mockResolvedValue([
-            {
-              id: 'profile',
-              primaryBranchId: 'branch-a',
-              jobRoles: [{ branchId: 'branch-a' }, { branchId: 'branch-b' }],
-              directCapabilityGrants: [],
-            },
-          ]),
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'profile',
+            primaryBranchId: 'branch-a',
+            jobRoles: [{ branchId: 'branch-a' }, { branchId: 'branch-b' }],
+            directCapabilityGrants: [],
+          },
+        ]),
       },
       restaurantBranch: { findMany: vi.fn().mockResolvedValue([{ id: 'branch-a' }]) },
     },

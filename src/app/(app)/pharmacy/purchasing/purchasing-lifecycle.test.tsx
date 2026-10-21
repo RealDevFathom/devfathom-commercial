@@ -36,6 +36,16 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
     session: actor.session,
     organization: actor.organization,
     entitlements: { organizationId: 'org-1', enabledModules },
+    db: {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        }),
+      },
+    },
   };
 }
 

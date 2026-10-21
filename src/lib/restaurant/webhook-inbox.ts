@@ -29,10 +29,9 @@ import { processTerminalEvent, terminalEventSchema } from '@/lib/restaurant/term
  *     `(organization, source, externalEventId)` unique index as the authoritative
  *     guard (a concurrent duplicate loses the race and is returned as
  *     `deduplicated`). The enqueued job is itself deduplicated on the inbox id.
- *   - Processing is durable acknowledgement only. The `webhook.process` handler
- *     marks a received envelope `PROCESSED` (or `DISCARDED` when verification
- *     FAILED — "a failed verification is never processed"); no tenant mutation and
- *     no external call happen in M7. A later integration fills the seam.
+ *   - Only VERIFIED envelopes may be processed. Terminal events apply the
+ *     payment integration below; other events receive durable acknowledgement.
+ *     Every other verification state is discarded without processing.
  */
 
 /** The scheduler job type L2 owns and registers in `job-handlers.ts`. */
@@ -197,9 +196,9 @@ export async function recordInboundWebhook(
  * The `webhook.process` handler (registered in `job-handlers.ts`). Idempotent: it
  * re-reads the inbox row, no-ops if the row is gone or already left `PENDING`
  * (a retry after a crash), and otherwise moves it to a terminal state — `DISCARDED`
- * when signature verification FAILED (never processed), else `PROCESSED`. M7 does
- * NO tenant mutation and NO external call here; this is the durable-acknowledgement
- * seam a provider integration later fills.
+ * unless signature verification is VERIFIED (never processed), else `PROCESSED`.
+ * Terminal events use the payment integration; other verified events receive
+ * durable acknowledgement.
  */
 export const processInboundWebhookHandler: RestaurantJobHandler = async ({ db, job }) => {
   const { inboxId } = webhookProcessPayloadSchema.parse(job.payload);
@@ -219,7 +218,7 @@ export const processInboundWebhookHandler: RestaurantJobHandler = async ({ db, j
   });
   if (!row || row.status !== 'PENDING') return;
 
-  if (row.verificationStatus !== 'FAILED' && row.eventType?.startsWith('terminal.')) {
+  if (row.verificationStatus === 'VERIFIED' && row.eventType?.startsWith('terminal.')) {
     const event = terminalEventSchema.parse(row.payload);
     await processTerminalEvent(db, {
       source: row.source,
@@ -229,7 +228,7 @@ export const processInboundWebhookHandler: RestaurantJobHandler = async ({ db, j
     });
   }
   await runInboxTransaction(db, async (tx) => {
-    const terminalStatus = row.verificationStatus === 'FAILED' ? 'DISCARDED' : 'PROCESSED';
+    const terminalStatus = row.verificationStatus === 'VERIFIED' ? 'PROCESSED' : 'DISCARDED';
     await tx.restaurantWebhookInbox.update({
       where: { id: inboxId },
       data: {

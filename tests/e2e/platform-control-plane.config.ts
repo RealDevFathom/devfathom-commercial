@@ -69,6 +69,7 @@ export default defineConfig({
         timeout: 120_000,
         env: {
           AUTH_TRUST_HOST: 'true',
+          DATABASE_URL: process.env.DATABASE_URL ?? '',
           SHARED_APP_HOSTS: new URL(sharedBaseURL).hostname,
           // WHA-1180 — the shared-host deployment default derives a tenant URL
           // from this base domain, and offers nothing when it is unset. Stated

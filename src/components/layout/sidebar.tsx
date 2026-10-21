@@ -398,6 +398,14 @@ export const navigation: NavItem[] = [
     group: 'Pharmacy',
     module: 'pharmacy-core',
   },
+  {
+    label: 'Branch assignments',
+    href: '/pharmacy/settings/branches',
+    icon: MapPin,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
   // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
   // every operating surface arrives with its own lane, and a nav entry pointing
   // at a route that does not exist is a dead end (UX rule 12). Gated through

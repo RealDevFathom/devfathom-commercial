@@ -15,6 +15,7 @@ import {
   notificationWebhookJobPayloadSchema,
 } from '@/lib/restaurant/notification-webhook';
 import { enqueue, type RestaurantJobStatus } from '@/lib/restaurant/scheduler';
+import { assertInOrganization } from '../org-refs';
 import { capabilityProcedure, protectedProcedure, router } from '../trpc';
 import { annotateAudit } from '../audit';
 
@@ -149,6 +150,13 @@ export const restaurantNotificationsRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.branchId) {
+        const organizationId = ctx.entitlements.organizationId ?? ctx.session?.user.organizationId;
+        if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+        await assertInOrganization(ctx.db.restaurantBranch, organizationId, [input.branchId], {
+          active: true,
+        });
+      }
       const existing = await ctx.db.restaurantNotificationChannelSetting.findFirst({
         where: {
           branchId: input.branchId,

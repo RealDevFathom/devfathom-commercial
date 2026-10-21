@@ -127,6 +127,7 @@ describe('pharmacy navigation', () => {
         '/pharmacy',
         '/pharmacy/medicines',
         '/pharmacy/regulatory',
+        '/pharmacy/settings/branches',
         '/pharmacy/finance',
       ]) {
         expect(visible).not.toContain(adminRoute);

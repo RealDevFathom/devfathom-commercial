@@ -49,7 +49,7 @@ export async function recordAuthenticatedCateringEvidence(ctx: TerminalContext, 
     ctx.db,
     profile.user,
     'catering:manage',
-    { requireExactlyOneActiveActor: true }
+    { organizationId: ctx.organizationId, requireExactlyOneActiveActor: true }
   );
   return Response.json(
     await recordCateringMoneyEvidence(

@@ -262,6 +262,86 @@ async function seedBranch() {
   });
 }
 
+/** Demo cashier for the counter. Assigned to the seeded branch so receipt reads are not empty-set denies. */
+async function seedCashier(passwordHash: string) {
+  await asTenant(async (tx) => {
+    const role = await tx.organizationRole.upsert({
+      where: {
+        organizationId_key: {
+          organizationId: PHARMACY_E2E.organizationId,
+          key: 'cashier',
+        },
+      },
+      update: { name: 'Cashier', isSystem: true },
+      create: {
+        id: PHARMACY_E2E.cashierRoleId,
+        organizationId: PHARMACY_E2E.organizationId,
+        key: 'cashier',
+        name: 'Cashier',
+        isSystem: true,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+    for (const [id, capability] of [
+      [PHARMACY_E2E.cashierCounterPermissionId, 'pharmacy.counter'],
+      [PHARMACY_E2E.cashierOrdersPermissionId, 'pharmacy:orders'],
+    ] as const) {
+      const existing = await tx.organizationRolePermission.findFirst({
+        where: { organizationRoleId: role.id, capability },
+        select: { id: true },
+      });
+      if (!existing) {
+        await tx.organizationRolePermission.create({
+          data: {
+            id,
+            organizationId: PHARMACY_E2E.organizationId,
+            organizationRoleId: role.id,
+            capability,
+            effect: 'ALLOW',
+            createdAt: FIXED_AT,
+          },
+        });
+      }
+    }
+    const user = {
+      organizationId: PHARMACY_E2E.organizationId,
+      organizationRoleId: role.id,
+      name: 'Counter Gate Cashier',
+      email: PHARMACY_E2E.cashierEmail,
+      password: passwordHash,
+      role: 'EMPLOYEE' as const,
+      department: 'LEADERSHIP',
+      title: 'Cashier',
+      status: 'ACTIVE' as const,
+    };
+    await tx.user.upsert({
+      where: { id: PHARMACY_E2E.cashierId },
+      update: user,
+      create: { id: PHARMACY_E2E.cashierId, ...user, createdAt: FIXED_AT, updatedAt: FIXED_AT },
+    });
+    await tx.pharmacyBranchAssignment.upsert({
+      where: {
+        organizationId_branchId_userId: {
+          organizationId: PHARMACY_E2E.organizationId,
+          branchId: PHARMACY_E2E.branchId,
+          userId: PHARMACY_E2E.cashierId,
+        },
+      },
+      update: { active: true },
+      create: {
+        id: PHARMACY_E2E.cashierAssignmentId,
+        organizationId: PHARMACY_E2E.organizationId,
+        branchId: PHARMACY_E2E.branchId,
+        userId: PHARMACY_E2E.cashierId,
+        active: true,
+        createdAt: FIXED_AT,
+        updatedAt: FIXED_AT,
+      },
+    });
+  });
+}
+
 type MedicineSeed = {
   id: string;
   name: string;
@@ -722,6 +802,7 @@ async function main() {
     await seedCatalog();
     await seedWorkspace(email, passwordHash);
     await seedBranch();
+    await seedCashier(passwordHash);
     await seedMedicines();
     await seedStock();
     await seedPrescription();

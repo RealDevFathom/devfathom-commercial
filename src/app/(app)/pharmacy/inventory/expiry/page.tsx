@@ -1,3 +1,4 @@
+import { browserUuid } from '@/lib/browser-uuid';
 import type { Metadata } from 'next';
 import Link from 'next/link';
 import { redirect } from 'next/navigation';
@@ -127,7 +128,7 @@ export default async function PharmacyExpiryBoardPage({
           recordedAt: row.markdown.recordedAt.toISOString(),
         }
       : null,
-    requestKey: crypto.randomUUID(),
+    requestKey: browserUuid(),
   }));
 
   async function perform(data: FormData) {

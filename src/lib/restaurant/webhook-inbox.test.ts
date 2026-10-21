@@ -6,10 +6,16 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 const mocks = vi.hoisted(() => ({
   enqueue: vi.fn(),
+  processTerminalEvent: vi.fn(),
 }));
 
 vi.mock('@/lib/restaurant/scheduler', () => ({
   enqueue: mocks.enqueue,
+}));
+
+vi.mock('@/lib/restaurant/terminal-payments', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/restaurant/terminal-payments')>()),
+  processTerminalEvent: mocks.processTerminalEvent,
 }));
 
 import {
@@ -211,6 +217,62 @@ describe('recordInboundWebhook', () => {
 });
 
 describe('processInboundWebhookHandler', () => {
+  it.each(['PENDING', 'FAILED', 'UNKNOWN', null, undefined])(
+    'discards non-VERIFIED terminal events (%s) without processing payments',
+    async (verificationStatus) => {
+      const { db, inbox } = createFakeDb();
+      inbox.set('inbox_1', {
+        id: 'inbox_1',
+        source: 'provider-neutral',
+        externalEventId: 'event-1',
+        eventType: 'terminal.approved',
+        payload: {}, // Must not even parse an unverified terminal payload.
+        status: 'PENDING',
+        verificationStatus,
+        attempts: 0,
+      });
+
+      await processInboundWebhookHandler({ db, job: claimedJob({ inboxId: 'inbox_1' }) });
+
+      expect(mocks.processTerminalEvent).not.toHaveBeenCalled();
+      expect(inbox.get('inbox_1')).toMatchObject({ status: 'DISCARDED', attempts: 1 });
+    }
+  );
+
+  it('processes a VERIFIED terminal event exactly once across a job retry', async () => {
+    const { db, inbox } = createFakeDb();
+    const payload = {
+      status: 'approved',
+      terminalId: 'counter-1',
+      reference: 'bill-1',
+      amount: '12.50',
+      staffProfileId: 'staff-1',
+      providerReference: 'provider-ref-1',
+    };
+    inbox.set('inbox_1', {
+      id: 'inbox_1',
+      source: 'provider-neutral',
+      externalEventId: 'event-1',
+      eventType: 'terminal.approved',
+      payload,
+      status: 'PENDING',
+      verificationStatus: 'VERIFIED',
+      attempts: 0,
+    });
+
+    const context = { db, job: claimedJob({ inboxId: 'inbox_1' }) };
+    await processInboundWebhookHandler(context);
+    await processInboundWebhookHandler(context);
+
+    expect(mocks.processTerminalEvent).toHaveBeenCalledExactlyOnceWith(db, {
+      source: 'provider-neutral',
+      externalEventId: 'event-1',
+      event: payload,
+      requiredMode: 'WEBHOOK',
+    });
+    expect(inbox.get('inbox_1')).toMatchObject({ status: 'PROCESSED', attempts: 1 });
+  });
+
   it('marks a verified PENDING envelope PROCESSED', async () => {
     const { db, inbox } = createFakeDb();
     inbox.set('inbox_1', {

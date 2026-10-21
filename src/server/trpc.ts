@@ -3,7 +3,12 @@ import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
-import { evaluateSessionUser, type SessionUserState } from '@/lib/auth/session-state';
+import {
+  evaluateSessionUser,
+  TEMPORARY_PASSWORD_MESSAGE,
+  temporaryPasswordBlocks,
+  type SessionUserState,
+} from '@/lib/auth/session-state';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TenantOrganization } from '@/lib/tenancy/host';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
@@ -131,6 +136,14 @@ function assertSessionUsable(user: SessionUserState) {
   });
 }
 
+function assertTemporaryPasswordChanged(
+  user: { mustChangePassword?: boolean | null },
+  path: string
+) {
+  if (!temporaryPasswordBlocks(user, path)) return;
+  throw new TRPCError({ code: 'FORBIDDEN', message: TEMPORARY_PASSWORD_MESSAGE });
+}
+
 /**
  * Audit middleware. Installed as the OUTERMOST middleware on protected/admin
  * procedures so it wraps the auth checks — meaning even FORBIDDEN/UNAUTHORIZED
@@ -196,6 +209,7 @@ const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
     });
   }
   assertSessionUsable(ctx.session.user);
+  assertTemporaryPasswordChanged(ctx.session.user, path);
   assertDemoProcedureAllowed(ctx, path, type);
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
@@ -238,6 +252,7 @@ function requireCapability(action: Action) {
       });
     }
     assertSessionUsable(ctx.session.user);
+    assertTemporaryPasswordChanged(ctx.session.user, path);
     assertDemoProcedureAllowed(ctx, path, type);
     const subject = subjectFromSession(ctx.session.user);
     const allowed = await can(subject, action, undefined, {
