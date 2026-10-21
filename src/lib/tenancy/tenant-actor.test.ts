@@ -43,6 +43,7 @@ import { headers } from 'next/headers';
 import { resolveOrganizationByHost } from '@/lib/tenancy/host';
 import { TenantHostError } from '@/lib/tenancy/host';
 import { resolveTenantActor, resolveTenantMismatchLoginPath } from './tenant-actor';
+import { proxy } from '@/proxy';
 
 function sessionFor(user: Record<string, unknown>): Session {
   return {
@@ -209,6 +210,30 @@ describe('wrong-host session login destination', () => {
     vi.mocked(resolveOrganizationByHost).mockResolvedValue({ id: 'org_other' } as never);
     await expect(resolveTenantMismatchLoginPath()).resolves.toBeNull();
   });
+  it.each(['host', 'x-forwarded-host'])(
+    'preserves the %s port through the proxy into the wrong-host login redirect',
+    async (hostHeader) => {
+      const response = await proxy(
+        new Request('http://devfathom.localhost:3000/dashboard', {
+          headers: {
+            host: 'internal.localhost:8080',
+            [hostHeader]: 'devfathom.localhost:3000',
+            cookie: 'authjs.session-token=test-session',
+          },
+        })
+      );
+      const forwardedHost = response.headers.get('x-middleware-request-x-devfathom-host');
+      expect(forwardedHost).toBe('devfathom.localhost:3000');
+      vi.mocked(headers).mockResolvedValue(
+        new Headers({ 'x-devfathom-host': forwardedHost! }) as never
+      );
+
+      await expect(resolveTenantMismatchLoginPath()).resolves.toBe(
+        'http://karahi-house.localhost:3000/login'
+      );
+      expect(resolveOrganizationByHost).toHaveBeenCalledWith('devfathom.localhost:3000');
+    }
+  );
   it('does not use revoked sessions to select a tenant host', async () => {
     mocks.auth.mockResolvedValue(sessionFor({ status: 'ACTIVE', sessionRevoked: true }));
     await expect(resolveTenantMismatchLoginPath()).resolves.toBeNull();
