@@ -31,6 +31,27 @@ const MONEY_MAX_MESSAGE = 'Amount must be 9,999,999,999.99 or less';
 const positiveMoney = () => z.number().positive().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 const nonNegativeMoney = () => z.number().nonnegative().max(MAX_MONEY, MONEY_MAX_MESSAGE);
 
+export const createInvoiceInputSchema = z.object({
+  clientId: z.string(),
+  projectId: z.string().optional(),
+  items: z
+    .array(
+      z.object({
+        description: z.string(),
+        quantity: z.number().positive(),
+        rate: positiveMoney(),
+        amount: nonNegativeMoney(),
+      })
+    )
+    .min(1, 'Invoice must have at least one line item'),
+  subtotal: nonNegativeMoney(),
+  tax: nonNegativeMoney().default(0),
+  total: nonNegativeMoney(),
+  currency: z.enum(['USD', 'PKR']).default('USD'),
+  dueDate: z.date(),
+  notes: z.string().optional(),
+});
+
 // Round to 2 decimal places (cents). Used to derive invoice money server-side so
 // caller-supplied subtotal/total are never trusted (FIN-01).
 const round2 = (n: number) => Math.round(n * 100) / 100;
@@ -223,26 +244,7 @@ export const financeRouter = router({
     }),
 
   createInvoice: adminProcedure
-    .input(
-      z.object({
-        clientId: z.string(),
-        projectId: z.string().optional(),
-        items: z.array(
-          z.object({
-            description: z.string(),
-            quantity: z.number().positive(),
-            rate: positiveMoney(),
-            amount: nonNegativeMoney(),
-          })
-        ),
-        subtotal: nonNegativeMoney(),
-        tax: nonNegativeMoney().default(0),
-        total: nonNegativeMoney(),
-        currency: z.enum(['USD', 'PKR']).default('USD'),
-        dueDate: z.date(),
-        notes: z.string().optional(),
-      })
-    )
+    .input(createInvoiceInputSchema)
     .mutation(async ({ ctx, input }) => {
       const orgId = workspaceId(ctx);
       await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
