@@ -8,6 +8,8 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
+import { runMigrationSql } from '../../../tests/split-sql-statements';
+
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
 const describeIfDatabase = databaseUrl ? describe : describe.skip;
@@ -406,8 +408,8 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       ),
       'utf8'
     );
-    await withPlatformDb((tx) => tx.$executeRawUnsafe(backfill));
-    await withPlatformDb((tx) => tx.$executeRawUnsafe(backfill));
+    await withPlatformDb((tx) => runMigrationSql(tx, backfill));
+    await withPlatformDb((tx) => runMigrationSql(tx, backfill));
 
     const assigned = await withTenantDb(ids.orgA, (tx) =>
       tx.pharmacyBranchAssignment.findMany({

@@ -26,6 +26,16 @@ describe('pharmacy branch assignment backfill', () => {
     expect(sql).toContain(`p."capability" LIKE 'pharmacy:%'`);
     expect(sql).toContain('ON CONFLICT ("organizationId", "branchId", "userId") DO NOTHING');
     for (const role of PHARMACY_ROLE_TEMPLATES) expect(sql).toContain(`'${role.key}'`);
+    const elevate = sql.indexOf("SELECT set_config('app.is_platform_admin', 'true', true);");
+    const insert = sql.indexOf('INSERT INTO "pharmacy_branch_assignments"');
+    const guard = sql.indexOf(
+      "RAISE EXCEPTION 'pharmacy branch assignment backfill left an active pharmacy organization with eligible members and no assignments'"
+    );
+    expect(elevate).toBeGreaterThan(-1);
+    expect(elevate).toBeLessThan(insert);
+    expect(guard).toBeGreaterThan(insert);
+    expect(sql).not.toContain('WITH elevated');
+    expect(sql).toContain(`o."status" = 'ACTIVE'::"OrganizationStatus"`);
   });
 
   it('leaves the already-shipped table migration without a backfill', () => {
