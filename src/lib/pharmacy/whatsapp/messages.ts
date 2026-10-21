@@ -61,20 +61,12 @@ const STOP_KEYWORDS = new Set([
   'بند کریں',
   'بند کرو',
 ]);
-const START_KEYWORDS = new Set([
-  'start',
-  'subscribe',
-  'opt in',
-  'optin',
-  'shuru karo',
-  'شروع',
-  'شروع کریں',
-]);
+const START_KEYWORDS = new Set(['start', 'شروع']);
 
 export function consentKeyword(text: string): 'STOP' | 'START' | null {
   const normalized = normalizeText(text);
   if (STOP_KEYWORDS.has(normalized)) return 'STOP';
-  if (START_KEYWORDS.has(normalized)) return 'START';
+  if (START_KEYWORDS.has(text.trim().toLowerCase())) return 'START';
   return null;
 }
 
@@ -247,8 +239,8 @@ export const WHATSAPP_REPLIES = {
     'Thank you for your message. A pharmacist will call you shortly to help with your order.\n' +
     'آپ کے پیغام کا شکریہ۔ فارماسسٹ جلد آپ کو کال کریں گے۔',
   optedOut:
-    'You will no longer receive WhatsApp messages from this pharmacy. Reply START to opt back in.\n' +
-    'آپ کو اب اس فارمیسی سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START لکھیں۔',
+    'You will no longer receive WhatsApp messages from this pharmacy. Reply START / شروع to opt back in.\n' +
+    'آپ کو اب اس فارمیسی سے واٹس ایپ پیغامات نہیں ملیں گے۔ دوبارہ شروع کرنے کے لیے START / شروع لکھیں۔',
   optedIn:
     'You are now subscribed to WhatsApp messages from this pharmacy. Reply STOP at any time to opt out.\n' +
     'آپ نے واٹس ایپ پیغامات کی اجازت دے دی ہے۔ بند کرنے کے لیے STOP لکھیں۔',

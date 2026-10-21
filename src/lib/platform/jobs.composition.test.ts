@@ -294,7 +294,7 @@ it.each(['STOP.', 'رک جاؤ', 'بند', 'band kar do', 'رُک جاؤ'])(
   }
 );
 
-it.each(["Yes, I'll pick it up tomorrow", 'haan kal', 'START offers'])(
+it.each(['yes', 'haan', 'ہاں', "Yes, I'll pick it up tomorrow", 'haan kal', 'START offers'])(
   'does not archive ordinary conversation as opt-in: %s', async (body) => {
     queue(job('PURGE_DATA'));
     const baseQuery = m.query.getMockImplementation()!;

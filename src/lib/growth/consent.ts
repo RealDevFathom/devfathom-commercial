@@ -6,7 +6,7 @@ import type { WhatsAppProvider } from './whatsapp/provider';
 import type { GrowthCustomer, GrowthWhatsAppStore } from './whatsapp/types';
 
 const STOP_PHRASES = ['stop', 'unsubscribe', 'band karo', 'بند', 'رک جاؤ', 'ruk jao', 'ruk jaao', 'band kar do'];
-const START_KEYWORDS = new Set(['start', 'yes', 'haan', 'ہاں']);
+const START_KEYWORDS = new Set(['start', 'شروع']);
 
 export class CustomerNotFound extends Error {
   constructor() {
@@ -47,7 +47,7 @@ export function consentKeyword(text: string): 'stop' | 'start' | null {
 
 export function optOutConfirmation(business: string): string {
   return renderTemplate(
-    'You will no longer receive WhatsApp offers from {{business}}. Reply START to opt back in. Reply STOP to opt out.',
+    'You will no longer receive WhatsApp offers from {{business}}. Reply START / شروع to opt back in. Reply STOP to opt out.',
     { business }
   );
 }
