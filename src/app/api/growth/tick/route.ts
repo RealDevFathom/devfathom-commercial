@@ -1,6 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
+import { runCustomerMetrics } from '@/lib/growth/metrics';
 import { isGrowthEnabled } from '@/lib/growth';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
@@ -22,6 +23,7 @@ export async function POST(request: Request) {
   );
   for (const organization of organizations) {
     if (await isGrowthEnabled(organization.id)) {
+      await runCustomerMetrics(organization.id);
       console.info(`[growth] tick organizationId=${organization.id}`);
     }
   }

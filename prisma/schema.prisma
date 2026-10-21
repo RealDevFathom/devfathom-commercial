@@ -14407,6 +14407,7 @@ model GrowthSettings {
   waInstanceName        String?
   waApiUrl              String?
   waApiKeyEnc           String?
+  lastMetricsRunAt      DateTime?
   churnThreshold        Int      @default(60)
   createdAt             DateTime @default(now())
   updatedAt             DateTime @updatedAt
