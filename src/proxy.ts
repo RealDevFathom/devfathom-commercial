@@ -1,3 +1,4 @@
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { NextResponse } from 'next/server';
 import { getPlatformSession } from '@/lib/platform/auth';
 import {
@@ -91,6 +92,19 @@ export async function proxy(request: Request) {
   // deployment's canonical URL and authenticates with its own bearer secret.
   if (isPlatformApi && !isCronWorker && !isPlatformHost) {
     return NextResponse.json({ error: 'Not found.' }, { status: 404 });
+  }
+
+  // Central gate runs for every API route, including future handlers that do
+  // not translate PasswordChangeRequiredError themselves.
+  if (pathname.startsWith('/api/') && !isPlatformApi) {
+    try {
+      const { resolveTenantActor } = await import('@/lib/tenancy/tenant-actor');
+      await resolveTenantActor({ request });
+    } catch (error) {
+      const response = responseForPasswordChange(error);
+      if (response) return response;
+      throw error;
+    }
   }
 
   // Framework assets and API routes must bypass host-level page redirects.
