@@ -5,18 +5,25 @@ import { Client } from 'pg';
 import { describe, expect, it } from 'vitest';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
+const ownerDatabaseUrl = process.env.OWNER_DATABASE_URL ?? process.env.MIGRATION_DATABASE_URL;
+const describeIfDatabase = databaseUrl && ownerDatabaseUrl ? describe : describe.skip;
 const sql = readFileSync(
   'prisma/migrations/20261021190000_qa304_contract_disabled_override_cleanup/migration.sql',
   'utf8'
 );
 
-(databaseUrl ? describe : describe.skip)('QA-304 contract entitlement override cleanup', () => {
+describeIfDatabase('QA-304 contract entitlement override cleanup', () => {
   it('removes only contract-sync package denials and is safe to rerun', async () => {
-    const client = new Client({ connectionString: databaseUrl });
+    expect(ownerDatabaseUrl).not.toBe(databaseUrl);
+    const client = new Client({ connectionString: ownerDatabaseUrl });
+    const app = new Client({ connectionString: databaseUrl });
     await client.connect();
+    await app.connect();
     const schema = `qa304_${randomUUID().replaceAll('-', '')}`;
 
     try {
+      const appRole = (await app.query<{ current_user: string }>('SELECT current_user')).rows[0]
+        .current_user.replaceAll('"', '""');
       await client.query(`CREATE SCHEMA "${schema}"`);
       await client.query(`SET search_path TO "${schema}"`);
       await client.query(`
@@ -42,10 +49,13 @@ const sql = readFileSync(
           ('not-baseline', 'org', 'package-disabled', 'DISABLED', NULL, NULL, NULL, 'Contract CON-304'),
           ('enabled', 'org', 'included', 'ENABLED', NULL, NULL, NULL, 'Contract CON-304');
       `);
+      await client.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${appRole}"`);
+      await client.query(`GRANT SELECT ON ALL TABLES IN SCHEMA "${schema}" TO "${appRole}"`);
+      await app.query(`SET search_path TO "${schema}"`);
 
       await client.query(sql);
       const afterFirstRun = (
-        await client.query('SELECT id FROM organization_modules ORDER BY id')
+        await app.query('SELECT id FROM organization_modules ORDER BY id')
       ).rows.map(({ id }) => id);
       expect(afterFirstRun).toEqual([
         'admin-fields',
@@ -57,26 +67,37 @@ const sql = readFileSync(
 
       await client.query(sql);
       expect(
-        (await client.query('SELECT id FROM organization_modules ORDER BY id')).rows.map(
+        (await app.query('SELECT id FROM organization_modules ORDER BY id')).rows.map(
           ({ id }) => id
         )
       ).toEqual(afterFirstRun);
     } finally {
       await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await app.end();
       await client.end();
     }
   });
 
   it('does nothing when the catalog tables do not exist', async () => {
-    const client = new Client({ connectionString: databaseUrl });
+    const client = new Client({ connectionString: ownerDatabaseUrl });
+    const app = new Client({ connectionString: databaseUrl });
     await client.connect();
+    await app.connect();
     const schema = `qa304_guard_${randomUUID().replaceAll('-', '')}`;
     try {
+      const appRole = (await app.query<{ current_user: string }>('SELECT current_user')).rows[0]
+        .current_user.replaceAll('"', '""');
       await client.query(`CREATE SCHEMA "${schema}"`);
+      await client.query(`GRANT USAGE ON SCHEMA "${schema}" TO "${appRole}"`);
       await client.query(`SET search_path TO "${schema}"`);
       await expect(client.query(sql)).resolves.toBeDefined();
+      await app.query(`SET search_path TO "${schema}"`);
+      expect(
+        (await app.query("SELECT to_regclass('organization_modules') AS table_name")).rows[0]
+      ).toEqual({ table_name: null });
     } finally {
       await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
+      await app.end();
       await client.end();
     }
   });
