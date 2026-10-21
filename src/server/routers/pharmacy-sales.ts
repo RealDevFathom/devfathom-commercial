@@ -247,6 +247,60 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
+/**
+ * Dispense capability plus the caller's assigned branch, before the receipt is read.
+ * An organization administrator with no staff assignment stays organization-wide.
+ */
+async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = scopeFor(ctx, branch);
+  const user = ctx.session!.user;
+  if (
+    !(await can(subjectFromSession(user), 'pharmacy:dispense', undefined, {
+      db: ctx.db,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    }))
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+
+  const available = await ctx.db.pharmacyBranch.findFirst({
+    where: { id: branch, organizationId: scope.organizationId, active: true },
+    select: { id: true },
+  });
+  if (!available) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  const profiles = await ctx.db.restaurantStaffProfile.findMany({
+    where: { userId: user.id, status: 'ACTIVE' },
+    select: {
+      primaryBranchId: true,
+      jobRoles: { select: { branchId: true } },
+      directCapabilityGrants: { select: { branchId: true } },
+    },
+  });
+  const assigned = new Set<string>();
+  for (const profile of profiles) {
+    if (profile.primaryBranchId) assigned.add(profile.primaryBranchId);
+    for (const row of profile.jobRoles) assigned.add(row.branchId);
+    for (const row of profile.directCapabilityGrants) assigned.add(row.branchId);
+  }
+  if (assigned.size > 0) {
+    if (!assigned.has(branch)) {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    }
+    return scope;
+  }
+  if (user.role !== 'ADMIN') {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
+}
+
 const closeDate = z
   .date()
   .refine(
@@ -1312,7 +1366,7 @@ export const pharmacySalesRouter = router({
   counterReceipt: protectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = scopeFor(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
