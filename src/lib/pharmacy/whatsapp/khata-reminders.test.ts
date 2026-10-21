@@ -29,18 +29,6 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         timezone: 'Asia/Karachi',
       }),
     },
-    pharmacyKhataEvent: {
-      groupBy: async ({ where }: { where: { familyAccountId: string } }) => [
-        {
-          kind: 'CHARGE',
-          _sum: {
-            amountMinor:
-              store.accounts.find((a) => a.familyAccountId === where.familyAccountId)
-                ?.balanceMinor ?? 0,
-          },
-        },
-      ],
-    },
     pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
     pharmacyCustomer: {
       findFirst: async ({ where }: { where: { id: string } }) =>

@@ -7,7 +7,6 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
-import { readKhataBalance } from '../family-khata';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
@@ -116,7 +115,7 @@ export async function processDueWhatsAppKhataReminders(
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
   const accounts = await withPlatformDb((db) =>
-    readDueKhataAccounts(db, organizationId, now, limit)
+    readDueKhataAccounts(db, organizationId, now, limit, minBalanceMinor)
   );
 
   for (const account of accounts) {
@@ -277,40 +276,49 @@ export function sanitizeReminderDisplayName(name: string): string {
   );
 }
 
-/** Platform scan only; balance uses exactly the statement's ledger function.
- * Payments made from another counter are ledger credits on the account's branch.
- */
+/** One platform scan; ledger credits stay on the account's branch. */
 export async function readDueKhataAccounts(
   db: import('@/lib/tenancy/scoped-db').ScopedDb,
   organizationId: string,
   now: Date,
-  limit: number
+  limit: number,
+  minBalanceMinor: number = DEFAULT_MIN_BALANCE_MINOR
 ): Promise<DueAccount[]> {
-  const accounts = await db.$queryRaw<Omit<DueAccount, 'balanceMinor'>[]>(Prisma.sql`
+  const floor = Math.max(1, Number.isSafeInteger(minBalanceMinor) ? minBalanceMinor : 1);
+  return db.$queryRaw<DueAccount[]>(Prisma.sql`
+    WITH payments AS (
+      SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId",
+             SUM("amountMinor") AS paid
+      FROM "pharmacy_khata_events"
+      WHERE "organizationId" = ${organizationId} AND "kind" = 'PAYMENT'
+      GROUP BY "organizationId", "branchId", "familyAccountId", "settlesChargeId"
+    )
     SELECT acct."id" AS "familyAccountId", acct."organizationId", acct."branchId",
-           acct."displayName", acct."payerCustomerId", MIN(ev."dueAt") AS "oldestOverdueAt"
+           acct."displayName", acct."payerCustomerId",
+           SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
+                    ELSE ev."amountMinor"::bigint END)::bigint AS "balanceMinor",
+           MIN(ev."dueAt") FILTER (
+             WHERE ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
+               AND ev."amountMinor" > COALESCE(payments.paid, 0)
+           ) AS "oldestOverdueAt"
     FROM "pharmacy_family_accounts" acct
     JOIN "pharmacy_khata_events" ev
       ON ev."organizationId" = acct."organizationId"
      AND ev."branchId" = acct."branchId" AND ev."familyAccountId" = acct."id"
+    LEFT JOIN payments
+      ON payments."organizationId" = ev."organizationId"
+     AND payments."branchId" = ev."branchId"
+     AND payments."familyAccountId" = ev."familyAccountId"
+     AND payments."settlesChargeId" = ev."id"
     WHERE acct."organizationId" = ${organizationId} AND acct."active" = true
-      AND ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
     GROUP BY acct."id", acct."organizationId", acct."branchId", acct."displayName", acct."payerCustomerId"
+    HAVING SUM(CASE WHEN ev."kind" = 'PAYMENT' THEN -ev."amountMinor"::bigint
+                    ELSE ev."amountMinor"::bigint END) >= ${floor}
+       AND MIN(ev."dueAt") FILTER (
+         WHERE ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
+           AND ev."amountMinor" > COALESCE(payments.paid, 0)
+       ) IS NOT NULL
     ORDER BY "oldestOverdueAt", acct."id"
-    LIMIT ${limit}
+    LIMIT ${Math.max(1, Math.min(500, Math.floor(limit)))}
   `);
-  const result: DueAccount[] = [];
-  for (const account of accounts) {
-    const balanceMinor = await readKhataBalance(
-      db,
-      {
-        organizationId,
-        branchId: account.branchId,
-        actorId: 'khata-reminder-job',
-      },
-      account.familyAccountId
-    );
-    result.push({ ...account, balanceMinor });
-  }
-  return result;
 }

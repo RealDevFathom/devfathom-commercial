@@ -19,7 +19,11 @@ type Fixture = {
   memberId: string;
 };
 let a: Fixture, sibling: Fixture, foreign: Fixture;
-async function fixture(organizationId: string, label: string): Promise<Fixture> {
+async function fixture(
+  organizationId: string,
+  label: string,
+  dueAt = new Date()
+): Promise<Fixture> {
   return tenant(organizationId, async (db: ScopedDb) => {
     await db.organization.upsert({
       where: { id: organizationId },
@@ -85,7 +89,7 @@ async function fixture(organizationId: string, label: string): Promise<Fixture> 
           familyAccountId: family.id,
           kind: 'CHARGE',
           memberId: member.id,
-          dueAt: new Date(),
+          dueAt,
           amountMinor: 50,
           actorId: 'owner',
         },
@@ -226,80 +230,165 @@ suite('family Khata restricted PostgreSQL', () => {
 });
 
 suite('khata reminder PostgreSQL balance and idempotency', () => {
-  it('uses the statement balance for unallocated credits, refunds and reversals across scanned branches', async () => {
+  it('keeps cross-branch payments scoped and derives overdue dates from outstanding charges', async () => {
     expect(process.env.TZ).toBe('UTC');
     const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
     const { readDueKhataAccounts } = await import('./whatsapp/khata-reminders');
-    const now = new Date('2026-10-21T08:00:00Z');
-    const scopes = [await fixture(orgA, 'ReminderA'), await fixture(orgA, 'ReminderB')];
-    for (const scope of scopes) {
-      await inScope(scope, async (db) => {
-        const charge = await db.pharmacyKhataEvent.findFirstOrThrow({
-          where: { familyAccountId: scope.familyAccountId, kind: 'CHARGE' },
-        });
-        await db.pharmacyKhataEvent.createMany({
-          data: [
-            // Account-level payment, intentionally not allocated to a charge.
-            {
-              organizationId: orgA,
-              branchId: scope.branchId,
-              familyAccountId: scope.familyAccountId,
-              kind: 'PAYMENT',
-              amountMinor: 200,
-              actorId: 'owner',
-            },
-            // Refund credit follows the same PAYMENT representation as refundTender.
-            {
-              organizationId: orgA,
-              branchId: scope.branchId,
-              familyAccountId: scope.familyAccountId,
-              kind: 'PAYMENT',
-              amountMinor: 100,
-              settlesChargeId: charge.id,
-              actorId: 'owner',
-              note: 'Refund',
-            },
-            {
-              organizationId: orgA,
-              branchId: scope.branchId,
-              familyAccountId: scope.familyAccountId,
-              kind: 'DISHONOURED_CHEQUE',
-              amountMinor: 50,
-              actorId: 'owner',
-            },
-          ],
-        });
+    const scope = await fixture(orgA, 'Reminder', new Date('2026-11-01T00:00:00.000Z'));
+    const now = new Date('2026-10-21T08:00:00.000Z');
+    const oldest = new Date('2026-10-01T00:00:00.000Z');
+    const next = new Date('2026-10-10T00:00:00.000Z');
+    const charges = await inScope(scope, async (db) => {
+      return db.pharmacyKhataEvent.createManyAndReturn({
+        data: [oldest, next, new Date('2026-11-01T00:00:00.000Z')].map((dueAt) => ({
+          organizationId: orgA,
+          branchId: scope.branchId,
+          familyAccountId: scope.familyAccountId,
+          kind: 'CHARGE' as const,
+          memberId: scope.memberId,
+          dueAt,
+          amountMinor: 20_000,
+          actorId: scope.actorId,
+        })),
       });
-    }
-    // Fixtures use current due dates; scan after them using an explicit UTC instant.
-    const scanAt = new Date(Math.max(now.getTime(), Date.now() + 1000));
-    const rows = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, scanAt, 100));
-    for (const scope of scopes) {
-      const statement = await inScope(scope, (db) =>
-        khata.readSaleKhataStatement(db, scope, scope.saleId, scope.familyAccountId)
-      );
-      expect(statement.account.balanceMinor).toBe(350);
-      expect(rows.find((row) => row.familyAccountId === scope.familyAccountId)?.balanceMinor).toBe(
-        statement.account.balanceMinor
-      );
-      await inScope(scope, (db) =>
+    });
+    const charge = charges.find((row) => row.dueAt?.getTime() === oldest.getTime())!;
+    // A payment physically written at a different branch cannot bypass the
+    // account/charge composite FKs, even under a platform scan context.
+    await expect(
+      withPlatformDb((db) =>
+        db.pharmacyKhataEvent.create({
+          data: {
+            organizationId: orgA,
+            branchId: sibling.branchId,
+            familyAccountId: scope.familyAccountId,
+            kind: 'PAYMENT',
+            amountMinor: 20_000,
+            settlesChargeId: charge.id,
+            actorId: scope.actorId,
+          },
+        })
+      )
+    ).rejects.toThrow();
+    expect(
+      await inScope(scope, (db) => khata.readKhataBalance(db, scope, scope.familyAccountId))
+    ).toBe(60_600);
+    const beforePayment = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, now, 1));
+    expect(beforePayment[0].oldestOverdueAt.toISOString()).toBe(oldest.toISOString());
+    await expect(
+      inScope(scope, (db) =>
         db.pharmacyKhataEvent.create({
           data: {
             organizationId: orgA,
             branchId: scope.branchId,
             familyAccountId: scope.familyAccountId,
             kind: 'PAYMENT',
-            amountMinor: 350,
-            actorId: 'owner',
+            amountMinor: 20_000,
+            actorId: scope.actorId,
           },
         })
-      );
-    }
-    const cleared = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, scanAt, 100));
-    for (const scope of scopes)
-      expect(
-        cleared.find((row) => row.familyAccountId === scope.familyAccountId)?.balanceMinor
-      ).toBe(0);
+      )
+    ).rejects.toThrow();
+    await inScope(scope, (db) =>
+      db.pharmacyKhataEvent.create({
+        data: {
+          organizationId: orgA,
+          branchId: scope.branchId,
+          familyAccountId: scope.familyAccountId,
+          kind: 'PAYMENT',
+          amountMinor: 20_000,
+          settlesChargeId: charge.id,
+          actorId: scope.actorId,
+        },
+      })
+    );
+    const statement = await inScope(scope, (db) =>
+      khata.readSaleKhataStatement(db, scope, scope.saleId, scope.familyAccountId)
+    );
+    expect(statement.account.balanceMinor).toBe(40_600);
+    // Existing accounts have earlier overdue charges but balances below the
+    // floor. They must not consume the single available result slot.
+    const rows = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, now, 1));
+    expect(rows).toHaveLength(1);
+    expect(rows[0].familyAccountId).toBe(scope.familyAccountId);
+    expect(Number(rows[0].balanceMinor)).toBe(statement.account.balanceMinor);
+    expect(rows[0].oldestOverdueAt.toISOString()).toBe(next.toISOString());
+    const second = charges.find((row) => row.dueAt?.getTime() === next.getTime())!;
+    await inScope(scope, (db) =>
+      db.pharmacyKhataEvent.create({
+        data: {
+          organizationId: orgA,
+          branchId: scope.branchId,
+          familyAccountId: scope.familyAccountId,
+          kind: 'PAYMENT',
+          amountMinor: 19_999,
+          settlesChargeId: second.id,
+          actorId: scope.actorId,
+        },
+      })
+    );
+    const partial = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, now, 1));
+    expect(partial[0].oldestOverdueAt.toISOString()).toBe(next.toISOString());
+    expect(Number(partial[0].balanceMinor)).toBe(20_601);
+    await inScope(scope, (db) =>
+      db.pharmacyKhataEvent.create({
+        data: {
+          organizationId: orgA,
+          branchId: scope.branchId,
+          familyAccountId: scope.familyAccountId,
+          kind: 'PAYMENT',
+          amountMinor: 1,
+          settlesChargeId: second.id,
+          actorId: scope.actorId,
+        },
+      })
+    );
+    const settled = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, now, 100));
+    expect(settled.find((row) => row.familyAccountId === scope.familyAccountId)).toBeUndefined();
+  });
+
+  it('filters balances before the 500-account cap', async () => {
+    const scope = await fixture(orgB, 'Cap');
+    await inScope(scope, async (db) => {
+      const account = await db.pharmacyFamilyAccount.findFirstOrThrow({
+        where: { id: scope.familyAccountId },
+      });
+      const accounts = Array.from({ length: 501 }, (_, index) => ({
+        id: `cap_${suffix}_${index}`,
+        organizationId: orgB,
+        branchId: scope.branchId,
+        payerCustomerId: account.payerCustomerId,
+        displayName: 'Cap family',
+      }));
+      await db.pharmacyFamilyAccount.createMany({ data: accounts });
+      await db.pharmacyFamilyMember.createMany({
+        data: accounts.map((account) => ({
+          id: `member_${account.id}`,
+          organizationId: orgB,
+          branchId: scope.branchId,
+          familyAccountId: account.id,
+          customerId: account.payerCustomerId,
+        })),
+      });
+      await db.pharmacyKhataEvent.createMany({
+        data: accounts.map((account, index) => ({
+          organizationId: orgB,
+          branchId: scope.branchId,
+          familyAccountId: account.id,
+          memberId: `member_${account.id}`,
+          kind: 'CHARGE' as const,
+          amountMinor: index === 500 ? 20_000 : 1,
+          dueAt: new Date(index === 500 ? '2026-10-10T00:00:00Z' : '2026-10-01T00:00:00Z'),
+          actorId: scope.actorId,
+        })),
+      });
+    });
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    const { readDueKhataAccounts } = await import('./whatsapp/khata-reminders');
+    const rows = await withPlatformDb((db) =>
+      readDueKhataAccounts(db, orgB, new Date('2026-10-21T08:00:00Z'), 500)
+    );
+    expect(rows.map((row) => row.familyAccountId)).toEqual([`cap_${suffix}_500`]);
   });
 
   it('allows only one concurrent customer/day claim, even with different account keys', async () => {
