@@ -57,6 +57,7 @@ import {
   getUpload,
   deleteUpload,
   StorageUnavailableError,
+  StoredObjectMissingError,
 } from './storage';
 
 beforeEach(() => {
@@ -238,6 +239,37 @@ test('an S3 object without a body is an error, not an empty file', async () => {
   vi.stubEnv('AWS_REGION', 'me-central-1');
   io.s3send.mockResolvedValue({});
   await expect(getUpload('org-a', 'file.png')).rejects.toThrow('Stored object has no body.');
+});
+test('a missing S3 object reads as missing, in the shape the readers test for', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  // The SDK's errors carry only a name and $metadata.httpStatusCode: no code, no statusCode.
+  const noSuchKey = Object.assign(new Error('The specified key does not exist.'), {
+    name: 'NoSuchKey',
+    $metadata: { httpStatusCode: 404 },
+  });
+  const bare404 = Object.assign(new Error('UnknownError'), {
+    name: 'Unknown',
+    $metadata: { httpStatusCode: 404 },
+  });
+  for (const failure of [noSuchKey, bare404]) {
+    io.s3send.mockRejectedValueOnce(failure);
+    const error = await getUpload('org-a', 'gone.json').catch((caught: unknown) => caught);
+    expect(error).toBeInstanceOf(StoredObjectMissingError);
+    expect(error).toMatchObject({ statusCode: 404, code: 'NoSuchKey', cause: failure });
+  }
+});
+test('an S3 refusal stays a failure rather than reading as a missing object', async () => {
+  vi.stubEnv('STORAGE_ADAPTER', 's3');
+  vi.stubEnv('S3_UPLOADS_BUCKET', 'uploads-bucket');
+  vi.stubEnv('AWS_REGION', 'me-central-1');
+  const denied = Object.assign(new Error('Access Denied'), {
+    name: 'AccessDenied',
+    $metadata: { httpStatusCode: 403 },
+  });
+  io.s3send.mockRejectedValue(denied);
+  await expect(getUpload('org-a', 'file.png')).rejects.toBe(denied);
 });
 test('an S3 delete failure rejects rather than claiming retention cleanup', async () => {
   vi.stubEnv('STORAGE_ADAPTER', 's3');

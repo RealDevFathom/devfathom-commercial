@@ -65,10 +65,41 @@ export function assertStorageAvailable(
 /** One object store behind every adapter except the local filesystem. */
 type ObjectStore = {
   put(key: string, data: Buffer, contentType: string): Promise<void>;
+  /** A missing object rejects with an error whose `statusCode` is 404, as readers expect. */
   get(key: string): Promise<Buffer>;
   /** Idempotent: removing an object that is already gone succeeds. */
   remove(key: string): Promise<void>;
 };
+
+/**
+ * A missing S3 object, in the shape the readers of getUpload already test for:
+ * the local adapter's `ENOENT`, Azure's `BlobNotFound`, or any `statusCode` of 404.
+ * The S3 SDK's own error carries neither a `code` nor a `statusCode`, only its
+ * `name` and `$metadata.httpStatusCode`, so without this a missing prescription
+ * image would read as a server failure instead of "unavailable".
+ */
+export class StoredObjectMissingError extends Error {
+  readonly code = 'NoSuchKey';
+  readonly statusCode = 404;
+
+  constructor(options?: { cause?: unknown }) {
+    super('Stored object does not exist.', options);
+    this.name = 'StoredObjectMissingError';
+  }
+}
+
+/**
+ * S3 reports a missing key as `NoSuchKey` (404) only to a caller allowed to list
+ * the bucket; without s3:ListBucket it answers 403, which stays a failure here.
+ */
+function isMissingS3Object(error: unknown): boolean {
+  if (typeof error !== 'object' || error === null) return false;
+  const { name, $metadata } = error as {
+    name?: unknown;
+    $metadata?: { httpStatusCode?: unknown };
+  };
+  return name === 'NoSuchKey' || name === 'NotFound' || $metadata?.httpStatusCode === 404;
+}
 
 let blobAccount: string | undefined;
 let s3Region: string | undefined;
@@ -108,7 +139,13 @@ function s3Store(bucket: string, region: string): ObjectStore {
       );
     },
     async get(key) {
-      const response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      let response;
+      try {
+        response = await client.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+      } catch (error) {
+        if (isMissingS3Object(error)) throw new StoredObjectMissingError({ cause: error });
+        throw error;
+      }
       if (!response.Body) throw new Error('Stored object has no body.');
       return Buffer.from(await response.Body.transformToByteArray());
     },
