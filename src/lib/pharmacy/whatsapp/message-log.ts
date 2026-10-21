@@ -18,6 +18,7 @@ export type MessageLogEntry = {
   organizationId: string;
   kind: MessageLogKind;
   dedupeKey: string;
+  customerDayKey?: string;
   branchId?: string | null;
   customerId?: string | null;
   patientId?: string | null;
