@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import { assertStagingDemoTarget, resolvePharmacyE2eDatabaseUrl } from '../scripts/pharmacy-e2e-environment';
+import {
+  assertStagingDemoTarget,
+  resolvePharmacyE2eDatabaseUrl,
+} from '../scripts/pharmacy-e2e-environment';
 
 const ENDPOINT = 'devfathom-staging.abc123.ap-southeast-1.rds.amazonaws.com';
 const URL_OK = `postgresql://app:pw@${ENDPOINT}:5432/devfathom`;
@@ -61,6 +64,22 @@ describe('assertStagingDemoTarget', () => {
     expect(() =>
       assertStagingDemoTarget(`postgresql://a:b@${ENDPOINT}:5432/production`, base)
     ).toThrow(/production or preview/);
+  });
+});
+
+describe('fixed staging RDS endpoint form', () => {
+  it.each([
+    'db.internal.example.com',
+    'devfathom-staging.abc123.us-east-1.rds.amazonaws.com',
+    'devfathom-other.abc123.ap-southeast-1.rds.amazonaws.com',
+    'devfathom-staging.abc123.ap-southeast-1.rds.amazonaws.com.evil.example',
+  ])('refuses %s even when STAGING_DB_ENDPOINT names it', (host) => {
+    expect(() =>
+      assertStagingDemoTarget(`postgresql://a:b@${host}:5432/devfathom`, {
+        DEPLOY_ENV: 'staging',
+        STAGING_DB_ENDPOINT: host,
+      })
+    ).toThrow(/devfathom-staging RDS endpoint/);
   });
 });
 

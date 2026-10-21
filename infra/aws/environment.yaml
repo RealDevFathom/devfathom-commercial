@@ -751,7 +751,8 @@ Resources:
               - 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts${After}'
               - After: !If
                   - MigrationSeeds
-                  - ' && bun prisma/seed.ts && bun scripts/seed-staging-demo.ts --skip-base'
+                  # The guarded staging seed runs prisma/seed.ts itself, after its target checks.
+                  - ' && bun scripts/seed-staging-demo.ts'
                   - !If [MigrationBootstraps, ' && bun prisma/bootstrap.ts', '']
           Environment:
             - Name: NODE_ENV
@@ -771,6 +772,8 @@ Resources:
             - Name: PLATFORM_ADMIN_EMAIL
               Value: !Ref PlatformAdminEmail
             # The staging demo seed refuses to run unless both match the database URL's target.
+            # STAGING_DB_ENDPOINT comes from the RDS resource itself; the script also requires
+            # the fixed devfathom-staging.<id>.ap-southeast-1.rds.amazonaws.com form.
             - Name: DEPLOY_ENV
               Value: !Ref EnvironmentName
             - Name: STAGING_DB_ENDPOINT

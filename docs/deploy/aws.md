@@ -181,8 +181,9 @@ Builds cost cents.
 
 ## Staging demo tenants
 
-In `seed` mode the migration task also runs `bun scripts/seed-staging-demo.ts --skip-base`
-after `prisma/seed.ts`. It seeds the pharmacy tenant (`pharmacy-counter-e2e`) and restaurant
+In `seed` mode the migration task runs `bun scripts/seed-staging-demo.ts`, which first refuses
+unless `DEPLOY_ENV` is `staging` and both database URLs point at the stack's
+`devfathom-staging` RDS endpoint in ap-southeast-1, then runs `prisma/seed.ts` and seeds the pharmacy tenant (`pharmacy-counter-e2e`) and restaurant
 demo seat 1 (tax-inclusive, passwordless personas behind `DEMO_ACCESS_CODE`, secret
 `demo-access-code`). The agency workspace and SuperAdmin come from `prisma/seed.ts`. The
 pharmacy password is HMAC-derived from `seed-password`, so an operator writes the login sheet
