@@ -19,7 +19,7 @@ const suffix = randomUUID().replaceAll('-', '').slice(0, 12);
 const sql = readFileSync(
   join(
     process.cwd(),
-    'prisma/migrations/20261021133000_pharmacy_branch_assignment_backfill/migration.sql'
+    'prisma/migrations/20261021133001_pharmacy_branch_assignment_backfill/migration.sql'
   ),
   'utf8'
 );
@@ -112,7 +112,10 @@ describeIfDatabase('pharmacy branch assignment backfill as the migrator', () => 
       'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
     );
     expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
-    expect(splitSqlStatements(sql)).toHaveLength(3);
+    const statements = splitSqlStatements(sql);
+    expect(statements).toHaveLength(5);
+    expect(statements[0]).toBe('BEGIN');
+    expect(statements.at(-1)).toBe('COMMIT');
 
     await seedOrg({ id: orgA, status: 'ACTIVE', userStatus: 'ACTIVE', withBranch: true });
     await seedOrg({ id: orgB, status: 'ACTIVE', userStatus: 'ACTIVE', withBranch: true });
@@ -125,7 +128,10 @@ describeIfDatabase('pharmacy branch assignment backfill as the migrator', () => 
             `SELECT set_config('app.is_platform_admin', 'false', true),
                     set_config('app.current_organization_id', '', true)`
           );
-          await runMigrationSql(tx, sql);
+          // The test already owns a transaction so that its fixtures can share
+          // the migration-local scope. Execute the migration body here; the
+          // focused unit contract pins the deploy-time BEGIN/COMMIT boundary.
+          await runMigrationSql(tx, statements.slice(1, -1).join(';'));
         },
         { timeout: 60_000 }
       );
@@ -140,7 +146,7 @@ describeIfDatabase('pharmacy branch assignment backfill as the migrator', () => 
 
   it('raises when an active pharmacy organization with eligible members has no assignments', async () => {
     await seedOrg({ id: orgGap, status: 'ACTIVE', userStatus: 'ACTIVE', withBranch: true });
-    const guard = splitSqlStatements(sql).at(-1);
+    const guard = splitSqlStatements(sql).at(-2);
     expect(guard).toContain('RAISE EXCEPTION');
     await expect(
       db.$transaction(async (tx) => {
