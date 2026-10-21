@@ -769,12 +769,14 @@ export const pharmacyInventoryRouter = router({
    * quarantine are organization-wide by §8A invariant 18, so this is not
    * branch-scoped.
    */
-  setBatchState: protectedProcedure
+  setBatchState: regulatory
     .input(
       z
         .object({
           manufacturingBatchId: z.string().min(1),
-          state: z.enum(['ACTIVE', 'RECALLED', 'QUARANTINED']),
+          // Reactivation belongs to the recall close/reversal workflows, which
+          // verify the recall evidence before restoring affected stock.
+          state: z.enum(['RECALLED', 'QUARANTINED']),
           reason: z.string().trim().max(500).optional(),
         })
         .strict()
@@ -784,7 +786,7 @@ export const pharmacyInventoryRouter = router({
         where: { id: input.manufacturingBatchId },
       });
       if (!batch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Batch not found.' });
-      if (input.state !== 'ACTIVE' && !input.reason) {
+      if (!input.reason) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: 'Blocking a batch requires a reason.',
@@ -794,8 +796,8 @@ export const pharmacyInventoryRouter = router({
         where: { id: batch.id },
         data: {
           state: input.state,
-          stateReason: input.state === 'ACTIVE' ? null : (input.reason ?? null),
-          stateChangedAt: input.state === 'ACTIVE' ? null : new Date(),
+          stateReason: input.reason,
+          stateChangedAt: new Date(),
         },
       });
     }),

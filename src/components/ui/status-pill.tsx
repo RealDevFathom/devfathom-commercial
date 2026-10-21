@@ -12,7 +12,7 @@ const statusPillVariants = cva(
         info: 'bg-primary/10 text-primary',
         warning: 'bg-warning/10 text-warning',
         danger: 'bg-destructive/10 text-destructive',
-        neutral: 'bg-muted text-text-muted',
+        neutral: 'bg-muted text-text-strong',
       },
     },
     defaultVariants: {
