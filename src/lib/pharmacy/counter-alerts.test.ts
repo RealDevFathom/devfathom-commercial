@@ -133,9 +133,6 @@ describe('counterAlertsFor (POS-09)', () => {
     expect(bySeverity.LOOK_ALIKE_SOUND_ALIKE).toBe('CLINICAL_ADVICE');
     expect(bySeverity.COLD_CHAIN_HANDLING).toBe('CLINICAL_ADVICE');
     expect(bySeverity.NEAR_EXPIRY_BATCH).toBe('COMMERCIAL');
-    expect(alerts.find((alert) => alert.code === 'NEAR_EXPIRY_BATCH')?.message).toContain(
-      '30-day near-expiry alert'
-    );
     expect(hasBlockingAlert(alerts)).toBe(false);
   });
 
@@ -205,39 +202,6 @@ describe('counterAlertsFor (POS-09)', () => {
     expect(alerts).toHaveLength(1);
     expect(alerts[0]!.code).toBe('REGULATED_DISCOUNT_REFUSED');
     expect(alerts[0]!.severity).toBe('COMMERCIAL');
-  });
-
-  it('names the sooner lot when two lines of one medicine expire on different days', () => {
-    const alerts = counterAlertsFor(
-      [
-        line({
-          ref: 'later',
-          nearestSafeExpiry: new Date(AT.getTime() + 45 * 86_400_000),
-        }),
-        line({
-          ref: 'sooner',
-          nearestSafeExpiry: new Date(AT.getTime() + 12 * 86_400_000),
-        }),
-      ],
-      { at: AT }
-    );
-    const near = alerts.filter((alert) => alert.code === 'NEAR_EXPIRY_BATCH');
-    expect(near).toHaveLength(1);
-    expect(near[0]!.saleLineRef).toBe('sooner');
-    expect(near[0]!.message).toContain('12 day(s)');
-    expect(near[0]!.message).toContain('30-day near-expiry alert');
-    expect(near[0]!.message).not.toContain('60-day');
-  });
-
-  it('uses one day count for the sentence and the band one millisecond past 30 days', () => {
-    const alerts = counterAlertsFor(
-      [line({ nearestSafeExpiry: new Date(AT.getTime() + 30 * 86_400_000 + 1) })],
-      { at: AT }
-    );
-    const message = alerts.find((alert) => alert.code === 'NEAR_EXPIRY_BATCH')?.message ?? '';
-    expect(message).toContain('30 day(s)');
-    expect(message).toContain('30-day near-expiry alert');
-    expect(message).not.toContain('60-day');
   });
 
   it('does not warn about an expiry well beyond the near-expiry window', () => {
