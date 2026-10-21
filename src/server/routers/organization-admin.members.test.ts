@@ -71,6 +71,8 @@ const db: MemberDb = {
   $transaction: (fn) => fn(db),
 };
 
+const immediateTransaction = (fn: (tx: MemberDb) => Promise<unknown>) => fn(db);
+
 function caller(organizationId = 'org_a', entitlements = { activeSeats: 1, seatLimit: 10 }) {
   return organizationAdminRouter.createCaller({
     db,
@@ -114,6 +116,7 @@ const updateInput = {
 describe('organization member updates', () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    db.$transaction = immediateTransaction;
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_counter' });
     mocks.userFindFirst.mockResolvedValue({
       id: 'admin_a',
@@ -155,6 +158,53 @@ describe('organization member updates', () => {
       role: 'EMPLOYEE',
     });
     expect(mocks.userUpdate).toHaveBeenCalledOnce();
+  });
+
+  it('preserves one active admin when two demotions race', async () => {
+    const activeAdmins = new Set(['admin_a', 'admin_b']);
+    let transactionTail = Promise.resolve();
+
+    db.$transaction = async (fn) => {
+      const previousTransaction = transactionTail;
+      let releaseTransaction!: () => void;
+      transactionTail = new Promise<void>((resolve) => {
+        releaseTransaction = resolve;
+      });
+      await previousTransaction;
+      try {
+        return await fn(db);
+      } finally {
+        releaseTransaction();
+      }
+    };
+    mocks.userFindFirst.mockImplementation(async ({ where }: { where: { id: string } }) => ({
+      id: where.id,
+      email: `${where.id}@example.com`,
+      role: 'ADMIN',
+      status: 'ACTIVE',
+    }));
+    mocks.userCount.mockImplementation(
+      async ({ where }: { where: { id: { not: string } } }) =>
+        [...activeAdmins].filter((adminId) => adminId !== where.id.not).length
+    );
+    mocks.userUpdate.mockImplementation(async ({ where }: { where: { id: string } }) => {
+      activeAdmins.delete(where.id);
+      return { id: where.id, email: `${where.id}@example.com`, role: 'EMPLOYEE', status: 'ACTIVE' };
+    });
+
+    const results = await Promise.allSettled([
+      caller().updateMember(updateInput),
+      caller().updateMember({ ...updateInput, id: 'admin_b' }),
+    ]);
+
+    expect(results.filter((result) => result.status === 'fulfilled')).toHaveLength(1);
+    expect(results.filter((result) => result.status === 'rejected')).toHaveLength(1);
+    expect(activeAdmins.size).toBe(1);
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
+    for (const [query] of mocks.queryRaw.mock.calls) {
+      expect(query.sql).toContain('FROM "users"');
+      expect(query.sql).toContain('FOR UPDATE');
+    }
   });
 });
 
