@@ -52,12 +52,18 @@ consistent surface:
 This project uses **Bun** as its package manager and runtime.
 
 ```bash
-bun install          # install dependencies
-bun run db:generate  # generate the Prisma client
+bun install                      # install dependencies
+bun run db:generate              # generate the Prisma client
+bun prisma/prepare-extensions.ts # harden trusted extensions (required before migrate)
 bunx prisma migrate deploy
-bun run db:seed      # (optional) seed demo data
-bun run dev          # start Next.js
+bun run db:seed                  # (optional) seed demo data
+bun run dev                      # start Next.js
 ```
+
+`bun prisma/prepare-extensions.ts` must run before `prisma migrate deploy`: it revokes
+`PUBLIC EXECUTE` on the trusted `btree_gist` / `pg_trgm` functions as the extension administrator,
+and the migration gate fails closed on a fresh database if it was skipped. It reads
+`EXTENSION_ADMIN_DATABASE_URL` — see **[the local setup guide](./docs/LOCAL_SETUP.md)**.
 
 For local multi-host development, open
 `http://devfathom.localhost:3000` for the tenant workspace and
