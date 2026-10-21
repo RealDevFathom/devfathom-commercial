@@ -116,6 +116,9 @@ export async function approveCount(
   countId: string,
   idempotencyKeyPrefix: string
 ) {
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_inventory_counts WHERE id=${countId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
   const count = await db.pharmacyInventoryCount.findFirst({
     where: { id: countId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: { lines: true },
