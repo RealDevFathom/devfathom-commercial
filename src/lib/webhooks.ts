@@ -2,6 +2,7 @@ import { createHmac } from 'node:crypto';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { hasModule } from '@/lib/entitlements';
 import type { EntitlementView } from '@/lib/module-catalog';
+import { deliverWebhookRequest } from '@/lib/webhooks/safe-url';
 
 /**
  * ============================================================================
@@ -76,38 +77,18 @@ async function deliver(
   body: string
 ): Promise<void> {
   const signature = createHmac('sha256', hook.secret).update(body).digest('hex');
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
-
-  let statusCode: number | null = null;
-  let success = false;
-  let error: string | null = null;
-
-  try {
-    const res = await fetch(hook.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-DevFathom-Event': event,
-        'X-DevFathom-Signature': `sha256=${signature}`,
-      },
-      body,
-      signal: controller.signal,
-    });
-    statusCode = res.status;
-    success = res.ok;
-    if (!res.ok) error = `HTTP ${res.status}`;
-  } catch (err) {
-    error =
-      err instanceof Error
-        ? err.name === 'AbortError'
-          ? `Timed out after ${DELIVERY_TIMEOUT_MS}ms`
-          : err.message
-        : String(err);
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await deliverWebhookRequest(hook.url, {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-DevFathom-Event': event,
+      'X-DevFathom-Signature': `sha256=${signature}`,
+    },
+    body,
+    timeoutMs: DELIVERY_TIMEOUT_MS,
+  });
+  const statusCode = result.statusCode;
+  const success = result.success;
+  const error = result.error;
 
   await db.webhookDelivery
     .create({
