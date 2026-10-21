@@ -202,8 +202,10 @@ describe('organization member updates', () => {
     expect(activeAdmins.size).toBe(1);
     expect(mocks.queryRaw).toHaveBeenCalledTimes(2);
     for (const [query] of mocks.queryRaw.mock.calls) {
-      expect(query.sql).toContain('FROM "users"');
-      expect(query.sql).toContain('FOR UPDATE');
+      // $queryRaw is a tagged template: the first argument is the strings array.
+      const sql = Array.isArray(query) ? query.join('?') : String(query?.sql ?? query);
+      expect(sql).toContain('FROM "users"');
+      expect(sql).toContain('FOR UPDATE');
     }
   });
 });
