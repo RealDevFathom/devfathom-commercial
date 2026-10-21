@@ -15,15 +15,18 @@ import { createTenantDb } from '@/lib/tenancy/scoped-db';
  * POSTs a strict envelope; the receiver resolves the tenant STRICTLY from the
  * request host (an explicit tenant host, never the default organization), records
  * the envelope in that org's `restaurant_webhook_inbox` (deduplicated by
- * `(org, source, externalEventId)`), records a STUB signature verification status,
+ * `(org, source, externalEventId)`), records the signature verification status,
  * and enqueues a `webhook.process` job for the scheduler to drain inside the
  * tenant's RLS context. No provider event is processed on the request path.
  *
  * This is an UNAUTHENTICATED public endpoint (a webhook source carries no session),
  * so it is IP rate-limited and never trusts a client-supplied organization — the
  * host is the only tenant signal, and an unknown host is a flat 404 (no tenant
- * enumeration). Real signature verification is a documented stub in M7 (no provider
- * secret configured); the seam a provider adapter fills is `verifyWebhookSignatureStub`.
+ * enumeration). Terminal events require `x-webhook-timestamp` (Unix seconds,
+ * within five minutes in either direction) and `x-webhook-signature` containing
+ * the hex HMAC-SHA256 of `${timestamp}.${source}.${rawBody}` using
+ * RESTAURANT_TERMINAL_WEBHOOK_SECRET (an optional `sha256=` prefix is accepted).
+ * Other events use `verifyWebhookSignatureStub`.
  */
 
 /** A provider slug: lowercase-ish, no path traversal. */
@@ -87,7 +90,12 @@ export async function POST(
     return NextResponse.json({ error: 'Invalid terminal event.' }, { status: 400 });
   }
   const verificationStatus = terminalEvent
-    ? verifyTerminalSignature(source.data, rawBody, signature)
+    ? verifyTerminalSignature(
+        source.data,
+        rawBody,
+        signature,
+        request.headers.get('x-webhook-timestamp')
+      )
     : undefined;
   const result = await recordInboundWebhook(createTenantDb(organization.id), {
     source: source.data,

@@ -29,15 +29,26 @@ export type TerminalEvent = z.infer<typeof terminalEventSchema>;
 export function verifyTerminalSignature(
   source: string,
   rawBody: string,
-  signature: string | null
+  signature: string | null,
+  timestamp: string | null
 ): 'VERIFIED' | 'FAILED' {
   const secret = process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
-  if (!secret || !signature) return 'FAILED';
+  if (!secret || !signature || !timestamp || !/^\d+$/.test(timestamp)) return 'FAILED';
+  const timestampSeconds = Number(timestamp);
+  if (
+    !Number.isSafeInteger(timestampSeconds) ||
+    Math.abs(Date.now() / 1000 - timestampSeconds) > 300
+  )
+    return 'FAILED';
   const encoded = signature.startsWith('sha256=') ? signature.slice(7) : signature;
   if (!/^[a-f\d]{64}$/i.test(encoded)) return 'FAILED';
-  const expected = createHmac('sha256', secret).update(`${source}.${rawBody}`).digest();
+  const expected = createHmac('sha256', secret)
+    .update(`${timestamp}.${source}.${rawBody}`)
+    .digest();
   const actual = Buffer.from(encoded, 'hex');
-  return timingSafeEqual(expected, actual) ? 'VERIFIED' : 'FAILED';
+  return actual.length === expected.length && timingSafeEqual(expected, actual)
+    ? 'VERIFIED'
+    : 'FAILED';
 }
 
 export class TerminalPaymentError extends Error {
