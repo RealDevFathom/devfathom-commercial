@@ -1225,11 +1225,12 @@ const purchasingRouter = router({
     const actor = subjectFromSession(ctx.session!.user);
     if (
       !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db })) &&
+      !(await can(actor, 'pharmacy:procurement', undefined, { db: ctx.db }))
     ) {
       throw new TRPCError({ code: 'FORBIDDEN' });
     }
-    const organizationId = ctx.entitlements?.organizationId;
+    const organizationId = ctx.session?.user?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     return listControlledPinWitnesses(ctx.db, organizationId, actorId);
   }),

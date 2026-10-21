@@ -766,3 +766,55 @@ it.each(['pending', 'uncertain'] as const)(
       });
   }
 );
+
+it.each([false, true])(
+  'opens controlled drafts safely when witness lookup fails=%s',
+  async (fails) => {
+    const receipt = {
+      id: 'gr-controlled',
+      reference: 'GR-C',
+      status: 'DRAFT',
+      supplier: licensedSupplier,
+      supplierInvoiceRef: 'INV-C',
+      supplierInvoiceDate: new Date('2026-09-01T00:00:00Z'),
+      receivedAt: new Date('2026-09-01T00:00:00Z'),
+      qualifiedPersonUserId: 'qualified-user',
+      lines: [],
+      exceptions: [],
+    };
+    const post = vi.fn().mockResolvedValue({});
+    const witnesses = fails
+      ? vi.fn().mockRejectedValue(new Error('FORBIDDEN'))
+      : vi.fn().mockResolvedValue([{ id: 'staff-witness', name: 'Qualified witness' }]);
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        goodsReceipts: vi.fn().mockResolvedValue([receipt]),
+        controlledWitnesses: witnesses,
+        postGoodsReceipt: post,
+      })
+    );
+    render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+    const button = screen.getByRole('button', { name: 'Post into stock' });
+    if (fails) {
+      expect(button).toBeDisabled();
+      expect(screen.getByText(/Qualified witnesses could not be loaded/)).toBeVisible();
+      expect(post).not.toHaveBeenCalled();
+    } else {
+      expect(button).toBeEnabled();
+      fireEvent.change(screen.getByLabelText('Qualified person PIN'), {
+        target: { value: 'staff-witness' },
+      });
+      fireEvent.change(screen.getByLabelText('PIN'), { target: { value: '1234' } });
+      await act(async () => {
+        fireEvent.click(button);
+      });
+      expect(post).toHaveBeenCalledExactlyOnceWith({
+        branchId: 'branch-1',
+        goodsReceiptId: receipt.id,
+        staffProfileId: 'staff-witness',
+        pin: '1234',
+      });
+      expect(screen.getByRole('status')).toHaveTextContent('posted');
+    }
+  }
+);

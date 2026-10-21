@@ -28,7 +28,7 @@ function fixture(capability: string) {
   const ctx = {
     db,
     entitlements: { organizationId: 'org', modules: [] },
-    session: { user: { id: 'actor', role: 'EMPLOYEE', status: 'ACTIVE' } },
+    session: { user: { id: 'actor', organizationId: 'org', role: 'EMPLOYEE', status: 'ACTIVE' } },
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
@@ -61,3 +61,21 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
     );
   });
 });
+
+it.each(['pharmacy:procurement', 'pharmacy.procurement'])(
+  'allows purchasing witness lookup with %s without opening safety enumeration',
+  async (capability) => {
+    const f = fixture(capability);
+    await expect(
+      (
+        f.caller.purchasing as unknown as { controlledWitnesses: () => Promise<unknown> }
+      ).controlledWitnesses()
+    ).resolves.toEqual([]);
+    await expect(f.caller.safety.controlledPharmacists()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org' }) })
+    );
+  }
+);
