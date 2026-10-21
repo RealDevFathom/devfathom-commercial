@@ -1,4 +1,9 @@
-import { Decimal } from '@prisma/client/runtime/index-browser.js';
+// Reuse the money core's Decimal so every monetary value shares one class
+// identity (instanceof, static Decimal.sum/min). Importing from the money
+// helper keeps the Prisma-internal runtime path in a single place instead of
+// hard-coding '@prisma/client/runtime/index-browser.js' here, where a Prisma
+// upgrade would silently break it.
+import { Decimal } from '@/lib/restaurant/money-arithmetic';
 
 const ZERO = new Decimal(0);
 const HUNDRED = new Decimal(100);
