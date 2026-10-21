@@ -31,6 +31,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { Textarea } from '@/components/ui/textarea';
 import {
+  defaultProvinceCode,
   FISCAL_STATUSES,
   PROVISIONAL_LICENCE_CATEGORY,
 } from '@/lib/pharmacy/regulatory-profile-form';
@@ -91,7 +92,10 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [evidenceRef, setEvidenceRef] = useState('');
   const [provinceCode, setProvinceCode] = useState<string>(
-    initial.jurisdictions[0]?.provinceCode ?? ''
+    defaultProvinceCode(
+      initial.jurisdictions,
+      initial.branches.find((branch) => branch.id === initial.selectedBranchId)?.provinceCode
+    )
   );
   const formRef = useRef<HTMLFormElement>(null);
 
@@ -99,7 +103,18 @@ export function PharmacyRegulatoryProfileForm({ initial }: { initial: Regulatory
   const refresh = (nextBranchId = branchId) => {
     void utils.pharmacyOnboarding.regulatory
       .fetch({ branchId: nextBranchId || undefined })
-      .then(setData)
+      .then((next) => {
+        setData(next);
+        // Follow the newly selected branch to its own province, so a Sindh
+        // branch is not left showing the province the previous branch used.
+        setProvinceCode(
+          defaultProvinceCode(
+            next.jurisdictions,
+            next.branches.find((branch) => branch.id === (nextBranchId || next.selectedBranchId))
+              ?.provinceCode
+          )
+        );
+      })
       .catch(() => setErrors({ form: 'That branch could not be loaded. Try again.' }));
   };
 

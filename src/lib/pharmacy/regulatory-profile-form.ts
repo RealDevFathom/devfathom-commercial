@@ -38,6 +38,28 @@ export function provinceName(code: string): string {
   return PAKISTAN_PROVINCES[code] ?? code;
 }
 
+/**
+ * The province the form should start on for a given branch.
+ *
+ * A branch records which province it operates in, so the form defaults to that
+ * province when its rules are published — a Karachi branch opens on Sindh, not
+ * on whichever province happens to sort first (QA-129). Only when the branch's
+ * own province has no published rule set does it fall back to the first
+ * published jurisdiction, so the select is never empty while any exist.
+ */
+export function defaultProvinceCode(
+  jurisdictions: readonly { provinceCode: string }[],
+  branchProvinceCode: string | null | undefined
+): string {
+  if (
+    branchProvinceCode &&
+    jurisdictions.some((jurisdiction) => jurisdiction.provinceCode === branchProvinceCode)
+  ) {
+    return branchProvinceCode;
+  }
+  return jurisdictions[0]?.provinceCode ?? '';
+}
+
 /** Fiscal registration states, with the sentence the operator picks by. */
 export const FISCAL_STATUSES = [
   { value: 'REGISTERED', label: 'Registered for sales tax' },
