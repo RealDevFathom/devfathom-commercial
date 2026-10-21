@@ -1,53 +1,21 @@
-# Growth G1 blocked — 2026-10-21
+# Growth G5 blocked: dependency installation
 
-Stopped under the explicit instruction to stop when the same problem fails twice.
-`prisma format` and `prisma migrate diff` both reported P1012: CustomerMetrics has
-an organization-scoped one-to-one customer relation but lacks the explicit
-`@@unique([organizationId, customerId])` required by Prisma. No fix attempts or
-further validation were run after recognizing the repeated failure.
+Work was attempted only on `improve/ai-growth-g5` in `/workspace/wt/improve/ai-growth-g5`.
 
-## Partial work
+Dependency installation failed twice because required filesystem locations are read-only:
 
-- Added draft growth schema models and PharmacyCustomer consent fields,
-  PharmacySale.discountCode, and extensions to the existing PharmacyMessageLog.
-- Schema is NOT valid. No migration was produced, no database was changed,
-  and seed implementation is pending. Do not merge this branch.
-- Prisma format also reformatted existing schema alignment; review/minimize that
-  incidental diff when resuming.
+1. `bun install`: `bun is unable to write files to tempdir: EROFS`.
+2. `TMPDIR=/tmp BUN_INSTALL_CACHE_DIR=/tmp/bun-growth-cache bun install`: the Prisma postinstall failed with `EROFS: read-only file system, utime '/home/box/.cache/prisma/master/e922089b7d7502aff4249d5da3420f6fa55fc6ad/debian-openssl-3.0.x/schema-engine'`.
 
-## Repository findings
+The user requires stopping after two failures at the same problem. No further installation attempts, implementation, or checks were performed. Resume with writable Bun temporary and Prisma cache directories.
 
-- Tenant: Organization / organizationId.
-- Retail customer: PharmacyCustomer; full phone and dateOfBirth are on its
-  organization-scoped PharmacyPatient relation. Reuse dateOfBirth, not a duplicate
-  birthday. Existing nullable whatsappOptIn and whatsappOptInChangedAt must retain
-  their audit semantics. Backfill only valid full Pakistani mobile numbers from
-  the linked patient; never derive from phoneLast4 or grant consent.
-- Sale: PharmacySale, pharmacy_sales; discountCode was absent.
-- Settings/flag: OrganizationModule entitlements; growth_ai already uses
-  resolveOrganizationEntitlements / hasModule. No new flag system needed.
-- AI: src/lib/ai/provider.ts, createGroq / existing provider abstraction.
-- WhatsApp: existing PharmacyMessageLog and Meta/mock providers in
-  src/lib/pharmacy/whatsapp. No production Prisma cast stub was found in growth
-  or WhatsApp files inspected. Preserve existing providerMessageId/dedupeKey
-  behavior when adding the required organizationId,direction,waMessageId key.
-- No nested AGENTS.md found under prisma or src. Read root AGENTS.md, both
-  /workspace plans, and installed Next installation documentation. No UI work.
+## Inspection findings
 
-## Remaining G1 work
+The existing tenant key is `organizationId`. G1 provides `Campaign`, `CampaignRecipient`, `CustomerMetrics`, `GrowthSettings`, and `MessageTemplate`, linked to `PharmacyCustomer`, `PharmacySale`, and `PharmacyMessageLog`. The growth router is empty; the tick currently only logs enabled organizations. G2/G4 metrics, consent, template renderer, and WhatsApp queue/provider modules are absent under `src/lib/growth`; implementation must provide minimal integration rather than import absent modules. Tenant scoping uses `withTenantDb`; FORCE RLS must remain intact.
 
-Repair the relation; generate one migration with ENABLE and FORCE RLS and
-organization isolation policies for every new table; ensure composite tenant
-foreign keys; safe phone backfill and false defaults without data loss; seed
-GrowthSettings and eight safe templates for existing demo pharmacies only.
-No medicine/drug/Rx promotions; refill messages must remain utility only.
-Generate Prisma and validate migration on fresh and demo databases and seed.
-Run relevant/full tests, typecheck, lint and build. No install was repeated.
+## Checks and manual verification
 
-## Validation limitations
-
-Prisma format and schema diff failed with the same P1012 relation error.
-Generation, migration application, seed, typecheck, tests, lint and build were
-not run after the mandatory stop. No DATABASE_URL or SHADOW_DATABASE_URL was
-present in the shell environment; no local postgres/psql/docker executable was
-found. Database validation would require an available isolated database.
+- Dependency installation: failed twice as above.
+- Typecheck, relevant tests, lint, full tests, build: not run because installation failed and the stop rule applied.
+- Live WhatsApp send and demo POS redemption: skipped; no campaign implementation or configured live service was verified.
+- No UI, schema, production, integration, or main-branch changes were made.
