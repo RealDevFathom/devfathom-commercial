@@ -53,13 +53,9 @@ import { consumeReservations } from './promotion-caps';
  * compTotal − discountTotal + roundingAdjustment`. The reconciliation invariant the
  * settlement guard and the reconciliation battery both rely on is:
  *
- *   Σ non-void bills of (grandTotal + compTotal + discountTotal − exclusiveTax)
- *     ≡ derived order total.
- *
- * A comp or discount adds back its own amount. Inclusive tax is already inside the
- * merchandise price, so it stays in both sides. Exclusive tax is added on top only
- * when a tender freezes it and is not part of the pre-tax derived order total —
- * leaving it in the sum makes a fully tendered bill look like TOTAL_MISMATCH.
+ *   Σ non-void bill grand totals ≡ merchandise − comps − discounts + remaining
+ *   bill service + delivery + frozen exclusive tax, compared in integer cents.
+ * Inclusive tax is already inside merchandise and is never added a second time.
  *
  * Re-splitting is allowed only while ALL of the order's live bills are OPEN and
  * untendered; afterwards a re-cut is a void-and-recut — the old bills become VOID
@@ -1653,8 +1649,7 @@ export type OrderSettlement = {
   blocker: OrderSettlementBlocker | null;
   derivedOrderTotal: Prisma.Decimal;
   /**
-   * Σ over live bills of (grandTotal + compTotal + discountTotal − exclusiveTax).
-   * Exclusive tax is removed so this stays comparable to the pre-tax derived total.
+   * Sum of live bill grand totals, compared to the derived payable order total.
    */
   accountedTotal: Prisma.Decimal;
   bills: {
@@ -1682,10 +1677,9 @@ export type OrderSettlement = {
  *      line (FRACTIONAL bills own fractions, not items, so item coverage is proven
  *      by the money identity instead);
  *   3. every live bill is SETTLED (VOID bills are excluded);
- *   4. Σ (grandTotal + compTotal + discountTotal − exclusiveTax) over live bills ≡
- *      the derived order total by exact Decimal equality. Comps and discounts add
- *      back their amount. Exclusive tax is the portion a final tender adds on top
- *      of merchandise; inclusive tax is already inside the derived merchandise price.
+ *   4. Live bill grand totals equal merchandise less comps and discounts, plus
+ *      remaining allocated service, delivery, and frozen exclusive tax. All sums
+ *      and the comparison use integer cents; inclusive tax stays in merchandise.
  */
 
 type SettlementTaxEvidence = {
@@ -1701,7 +1695,7 @@ type SettlementTaxEvidence = {
  * the additive portion. Fractional bills persist no buckets, so a profile whose
  * rules are uniformly EXCLUSIVE contributes the snapshot tax total, and a
  * uniformly INCLUSIVE (or mixed, bucket-less) profile contributes nothing —
- * inclusive tax is already inside merchandise and must not be subtracted.
+ * inclusive tax is already inside merchandise and must not be added again.
  */
 export function exclusiveTaxOutsideOrderTotal(evidence: SettlementTaxEvidence): Prisma.Decimal {
   if (evidence.buckets.length > 0) {
@@ -1742,9 +1736,9 @@ function settlementSnapshotIsNewer(
 }
 
 /**
- * Exclusive tax to subtract per bill. A reversal row is not a freeze, and a
+ * Exclusive tax per bill. A reversal row is not a freeze, and a
  * snapshot that another row reverses is stale. A reversed freeze plus a later
- * re-freeze would otherwise subtract the same exclusive tax twice and fail the
+ * re-freeze would otherwise count the same exclusive tax twice and fail the
  * order identity. Only the latest snapshot that is still in force counts.
  */
 export function exclusiveTaxFromSettlementSnapshots(
@@ -1807,15 +1801,6 @@ export async function evaluateOrderSettlement(
 ): Promise<OrderSettlement> {
   const order = await loadBillOrder(tx, orderId);
   const items = nonVoidedItems(order);
-  const derivedOrderTotal = add(
-    add(
-      deriveOrderTotal(items),
-      order.serviceChargePolicyVersion
-        ? roundMoney(multiply(deriveOrderTotal(items), order.serviceChargePolicyVersion.rate))
-        : ZERO
-    ),
-    order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO
-  );
 
   const allBills = await tx.restaurantBill.findMany({
     where: { orderId },
@@ -1826,6 +1811,7 @@ export async function evaluateOrderSettlement(
       splitKind: true,
       grandTotal: true,
       deliveryFeeTotal: true,
+      serviceChargeTotal: true,
       compTotal: true,
       discountTotal: true,
       taxTotal: true,
@@ -1839,14 +1825,23 @@ export async function evaluateOrderSettlement(
     tx,
     liveBills.map((bill) => bill.id)
   );
-  const accountedTotal = sum(
-    liveBills.map((bill) =>
-      sub(
-        add(add(bill.grandTotal, bill.compTotal), bill.discountTotal),
-        exclusiveTaxByBill.get(bill.id) ?? ZERO
-      )
-    )
-  );
+  // Compare payable amounts in integer minor units. Service is already allocated
+  // to bills at cut time and reduced by comps; recomputing it on original gross
+  // merchandise would restore service the guest no longer owes (and lose split cents).
+  const cents = (amount: Prisma.Decimal) => BigInt(exactCents(amount));
+  let expectedCents =
+    cents(deriveOrderTotal(items)) + cents(order.deliveryFulfillment?.deliveryFeeSnapshot ?? ZERO);
+  let accountedCents = BigInt(0);
+  for (const bill of liveBills) {
+    expectedCents +=
+      cents(bill.serviceChargeTotal) +
+      cents(exclusiveTaxByBill.get(bill.id) ?? ZERO) -
+      cents(bill.compTotal) -
+      cents(bill.discountTotal);
+    accountedCents += cents(bill.grandTotal);
+  }
+  const derivedOrderTotal = money(expectedCents.toString()).div(100);
+  const accountedTotal = money(accountedCents.toString()).div(100);
 
   const coveredItemIds = new Set<string>();
   for (const bill of liveBills) {
@@ -1878,7 +1873,7 @@ export async function evaluateOrderSettlement(
     blocker = 'ITEMS_UNBILLED';
   } else if (liveBills.some((b) => b.status !== 'SETTLED')) {
     blocker = 'BILLS_OPEN';
-  } else if (!equals(accountedTotal, derivedOrderTotal)) {
+  } else if (accountedCents !== expectedCents) {
     blocker = 'TOTAL_MISMATCH';
   }
 
