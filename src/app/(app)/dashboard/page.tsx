@@ -1,4 +1,5 @@
 import type { Metadata } from 'next';
+import { redirect } from 'next/navigation';
 import { HydrationBoundary } from '@tanstack/react-query';
 import { createSSRHelpers } from '@/lib/trpc-server';
 import { DashboardContent } from './dashboard-content';
@@ -22,6 +23,14 @@ export default async function DashboardPage() {
   const restaurant = ssr?.entitlements.vertical === 'RESTAURANT';
   const pharmacy = ssr?.entitlements.vertical === 'PHARMACY';
   const hospitality = ssr?.entitlements.vertical === 'HOSPITALITY';
+
+  // `/dashboard` is the safe, role-agnostic login callback. Once the tenant is
+  // known, send restaurant administrators to the management console and floor
+  // staff to the order pad instead of rendering a dashboard neither role uses.
+  if (restaurant && ssr?.session?.user) {
+    redirect(ssr.session.user.role === 'ADMIN' ? '/restaurant' : '/pos');
+  }
+
   const firstRunVertical =
     ssr?.entitlements.vertical === 'RESTAURANT' || ssr?.entitlements.vertical === 'PHARMACY'
       ? ssr.entitlements.vertical
