@@ -147,6 +147,9 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 
 async function khataScope(ctx: TRPCContext, branch: string) {
   const scope = await scopeFor(ctx, branch);
+  // Khata is a counter tender, not a clinical dispensing decision. Cashiers may
+  // charge within the account limit; pharmacy:manage is checked separately only
+  // when an over-limit override is requested.
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||

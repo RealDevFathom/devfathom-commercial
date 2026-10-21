@@ -180,14 +180,33 @@ describe('Khata router trust and recovery boundary', () => {
     expect(f.db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
   });
 
-  it('allows a cashier with counter permission to charge exactly the limit without override', async () => {
-    const f = fixture();
-    f.user.role = 'EMPLOYEE';
-    vi.mocked(can).mockImplementation(async (_s, action) => action === 'pharmacy:counter');
-    await f.caller().tender(input);
-    expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
-    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
-  });
+  it.each([1, 99, 100])(
+    'allows a cashier with only pharmacy:counter to charge %i minor units within the limit',
+    async (amountMinor) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      vi.mocked(can).mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+
+      await expect(f.caller().tender({ ...input, amountMinor })).resolves.toMatchObject({
+        tenderId: 'tender-a',
+      });
+
+      expect(can).toHaveBeenCalledWith(
+        f.user,
+        'pharmacy:counter',
+        undefined,
+        expect.objectContaining({ db: f.db, source: 'TRPC' })
+      );
+      expect(can).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:dispense',
+        expect.anything(),
+        expect.anything()
+      );
+      expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
 
   it.each(['ADMIN', 'EMPLOYEE'])(
     'audits a reason and real history for owner/manager %s',
