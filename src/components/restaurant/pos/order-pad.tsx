@@ -1,5 +1,5 @@
 'use client';
-import type { ReactNode } from 'react';
+import { useEffect, type ReactNode } from 'react';
 import { usePosRuntime, type PosNotice } from './use-pos-runtime';
 import { CheckoutPanel } from './checkout-panel';
 import { DrawerPanel } from './drawer-panel';
@@ -19,6 +19,24 @@ import { ORDER_CHANNELS } from '@/lib/restaurant/order-channels';
 
 export function OrderPad({ demo = false }: { demo?: boolean }) {
   const pos = usePosRuntime({ demo });
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      if (event.key === 'F2') {
+        const search = document.getElementById('pos-menu-search');
+        if (!(search instanceof HTMLElement)) return;
+        event.preventDefault();
+        search.focus();
+      }
+      if (event.key === 'F9') {
+        const pay = document.querySelector<HTMLButtonElement>('[data-pos-pay]');
+        if (!pay || pay.disabled) return;
+        event.preventDefault();
+        pay.click();
+      }
+    };
+    window.addEventListener('keydown', onKeyDown);
+    return () => window.removeEventListener('keydown', onKeyDown);
+  }, []);
   const { runtime, workspace, controls } = pos;
   if (!runtime || !workspace || !controls) {
     return (
@@ -125,47 +143,47 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
 
   return (
     <PosShell
+      flush
       status={pos.online ? 'Online' : 'Offline'}
       tone={pos.online ? 'success' : 'warning'}
       busy={pos.busy}
     >
-      <div className="mx-auto max-w-[1600px] space-y-4">
-        <PageHeader
-          eyebrow="Restaurant POS"
-          heading="Order pad"
-          description="Live menu, open checks, kitchen pacing, and table service."
-          actions={
-            <div className="flex flex-wrap items-center justify-end gap-2">
-              <StatusPill {...pos.operatorStatus} />
-              <StatusPill {...pos.connectionStatus} />
-              <StatusPill {...pos.queueStatus} />
-              <OperatorSwitch {...workspace.operatorSwitchProps} />
-              <DrawerPanel {...workspace.drawerPanelProps} />
-              <DayClosePanel {...workspace.dayClosePanelProps} />
-              <RefundPanel {...workspace.refundPanelProps} />
-              <Button
-                type="button"
-                variant="outline"
-                onClick={workspace.lockTerminal}
-                disabled={pos.busy}
-                className="h-11"
-              >
-                {pos.pending === 'lock' ? 'Locking…' : 'Lock terminal'}
-              </Button>
-            </div>
-          }
-        />
-        {pos.pending ? (
-          <Notice notice={{ tone: 'warning', message: 'Request pending. Controls are paused.' }} />
-        ) : pos.notice ? (
-          <Notice notice={pos.notice} />
-        ) : null}
+      <div className="flex h-full min-h-0 flex-col">
+        <header className="flex h-10 shrink-0 items-center gap-2 border-b border-border-subtle px-2">
+          <h1 className="text-sm font-semibold leading-5 text-text-strong">Order pad</h1>
+          <p className="hidden text-xs text-text-muted md:block">F2 search · Enter add · F9 pay</p>
+          <div className="ml-auto flex min-w-0 flex-wrap items-center justify-end gap-1">
+            <StatusPill {...pos.operatorStatus} />
+            <StatusPill {...pos.connectionStatus} />
+            <StatusPill {...pos.queueStatus} />
+            <OperatorSwitch {...workspace.operatorSwitchProps} />
+            <DrawerPanel {...workspace.drawerPanelProps} />
+            <DayClosePanel {...workspace.dayClosePanelProps} />
+            <RefundPanel {...workspace.refundPanelProps} />
+            <Button
+              type="button"
+              variant="outline"
+              onClick={workspace.lockTerminal}
+              disabled={pos.busy}
+              className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+            >
+              {pos.pending === 'lock' ? 'Locking…' : 'Lock terminal'}
+            </Button>
+          </div>
+        </header>
+        <div className="flex min-h-8 shrink-0 items-center px-2">
+          {pos.pending ? (
+            <Notice notice={{ tone: 'warning', message: 'Request pending. Controls are paused.' }} />
+          ) : pos.notice ? (
+            <Notice notice={pos.notice} />
+          ) : null}
+        </div>
 
         {!pos.online ||
         pos.queuedCount > 0 ||
         pos.reviewDrafts.length > 0 ||
         pos.discardedCount > 0 ? (
-          <SectionCard eyebrow="Offline queue" title="Saved new orders">
+          <SectionCard compact eyebrow="Offline queue" title="Saved new orders">
             <div className="space-y-3 text-sm text-text-body">
               <p>
                 {pos.online
@@ -213,10 +231,15 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
           </SectionCard>
         ) : null}
 
-        <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(18rem,0.8fr)_minmax(0,2.2fr)]">
-          <div className="min-w-0 space-y-4">
-            <SectionCard eyebrow="New check" title="Open order">
-              <form onSubmit={workspace.openOrder} className="space-y-3">
+        <div className="grid min-h-0 flex-1 grid-cols-1 gap-2 p-2 md:grid-cols-[minmax(0,1fr)_minmax(18rem,22rem)]">
+          <div className="flex min-h-0 min-w-0 flex-col gap-2 md:col-start-2 md:row-start-1">
+            <SectionCard
+              compact
+              eyebrow="New check"
+              title="Open order"
+              className="max-h-40 shrink-0 overflow-y-auto"
+            >
+              <form onSubmit={workspace.openOrder} className="space-y-2">
                 <div className="space-y-1.5">
                   <Label htmlFor="order-channel">Channel</Label>
                   <select
@@ -426,36 +449,93 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
               </form>
             </SectionCard>
 
-            <SectionCard eyebrow="Local draft" title="Composed order">
+            <SectionCard
+              compact
+              title="Composed order"
+              className="shrink-0"
+              actions={
+                <span className="inline-block w-20 text-right font-mono text-sm tabular-nums text-text-strong">
+                  {draftTotal(pos.draftLines)}
+                </span>
+              }
+            >
+              <p className="mb-1 text-xs text-text-muted">
+                {pos.channel === 'DINE_IN'
+                  ? 'Dine in'
+                  : pos.channel === 'TAKEAWAY'
+                    ? 'Takeaway'
+                    : 'Delivery'}
+                {' · '}
+                {pos.tableIds.length
+                  ? pos.tableIds
+                      .map(
+                        (id) =>
+                          pos.layout?.floors
+                            .flatMap((floor) => floor.tables)
+                            .find((table) => table.id === id)?.code ?? 'Table'
+                      )
+                      .join(', ')
+                  : 'No table'}
+              </p>
               {pos.draftLines.length === 0 ? (
                 <p className="text-sm text-text-muted">
                   Tap menu items to compose. Nothing is sent until Send order.
                 </p>
               ) : (
-                <div className="space-y-2">
+                <div className="space-y-1">
                   {pos.draftLines.map((line) => (
                     <div
                       key={line.lineId}
-                      className="flex min-h-11 items-center justify-between gap-3 rounded-lg border border-border-subtle px-3 py-2"
+                      className="flex min-h-8 items-center justify-between gap-2"
                     >
-                      <span className="min-w-0 truncate text-sm">
-                        {line.quantity} × {line.name}
+                      <span className="min-w-0">
+                        <span className="block truncate text-sm">
+                          {line.quantity} × {line.name}
+                        </span>
+                        <span className="block truncate text-xs text-text-muted">
+                          {draftModifiers(line, pos.draftMenu)}
+                        </span>
                       </span>
-                      <Button
-                        type="button"
-                        variant="outline"
-                        className="h-9"
-                        disabled={pos.busy}
-                        onClick={workspace.removeDraftLine(line)}
-                      >
-                        Remove
-                      </Button>
+                      <span className="flex shrink-0 items-center gap-1">
+                        <Button
+                          type="button"
+                          variant="outline"
+                          aria-label={`Decrease ${line.name}`}
+                          className="size-8 px-0 shadow-none hover:translate-y-0 active:translate-y-0"
+                          disabled={pos.busy || line.quantity <= 1}
+                          onClick={workspace.adjustDraftQuantity(line.lineId, -1)}
+                        >
+                          −
+                        </Button>
+                        <span className="w-6 text-center font-mono text-sm tabular-nums">
+                          {line.quantity}
+                        </span>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          aria-label={`Increase ${line.name}`}
+                          className="size-8 px-0 shadow-none hover:translate-y-0 active:translate-y-0"
+                          disabled={pos.busy}
+                          onClick={workspace.adjustDraftQuantity(line.lineId, 1)}
+                        >
+                          +
+                        </Button>
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="h-8 shadow-none hover:translate-y-0 active:translate-y-0"
+                          disabled={pos.busy}
+                          onClick={workspace.removeDraftLine(line)}
+                        >
+                          Remove
+                        </Button>
+                      </span>
                     </div>
                   ))}
                   <Button
                     type="button"
                     variant="destructive"
-                    className="h-11 w-full"
+                    className="h-8 w-full shadow-none hover:translate-y-0 active:translate-y-0"
                     disabled={pos.busy}
                     onClick={workspace.discardDraft}
                   >
@@ -466,6 +546,8 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
             </SectionCard>
 
             <SectionCard
+              compact
+              className="min-h-0 shrink"
               eyebrow="Resume"
               title="Open orders"
               actions={
@@ -504,11 +586,13 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
                 </div>
               )}
             </SectionCard>
+            <div className="min-h-0 flex-1">
+              <OrderTicketPanel {...workspace.orderTicketPanelProps} />
+            </div>
           </div>
 
-          <div className="grid min-w-0 gap-4 lg:grid-cols-2 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]">
+          <div className="min-h-0 min-w-0 md:col-start-1 md:row-start-1">
             <MenuGrid {...workspace.menuGridProps} />
-            <OrderTicketPanel {...workspace.orderTicketPanelProps} />
           </div>
         </div>
       </div>
@@ -517,19 +601,46 @@ export function OrderPad({ demo = false }: { demo?: boolean }) {
   );
 }
 
+function draftTotal(lines: Array<{ quantity: number; quotedUnitPrice: string }>) {
+  const minor = lines.reduce((sum, line) => {
+    const [major = '0', fraction = '0'] = line.quotedUnitPrice.split('.');
+    const unit = Number(major) * 100 + Number(fraction.padEnd(2, '0').slice(0, 2));
+    return Number.isFinite(unit) ? sum + unit * line.quantity : sum;
+  }, 0);
+  const absolute = Math.abs(minor);
+  return `${minor < 0 ? '-' : ''}${Math.floor(absolute / 100)}.${String(absolute % 100).padStart(2, '0')}`;
+}
+
+function draftModifiers(
+  line: { menuItemId: string; modifierOptionIds: string[] },
+  menu: { sections: Array<{ items: Array<{ id: string; modifierGroups?: Array<{ options: Array<{ id: string; name: string }> }> }> }> } | null
+) {
+  if (!menu) return '';
+  const names = menu.sections
+    .flatMap((section) => section.items)
+    .filter((item) => item.id === line.menuItemId)
+    .flatMap((item) => item.modifierGroups ?? [])
+    .flatMap((group) => group.options)
+    .filter((option) => line.modifierOptionIds.includes(option.id))
+    .map((option) => option.name);
+  return names.join(', ');
+}
+
 function PosShell({
   status,
   tone,
   busy,
+  flush = false,
   children,
 }: {
   status: string;
   tone: 'success' | 'warning' | 'neutral';
   busy: boolean;
+  flush?: boolean;
   children: ReactNode;
 }) {
   return (
-    <div className="studio-viewport h-dvh overflow-hidden text-text-strong">
+    <div className="pos-calm studio-viewport h-dvh overflow-hidden text-text-strong">
       <a
         href="#pos-main"
         className="sr-only fixed top-3 left-3 z-50 rounded-[3px] bg-primary px-4 py-2 text-sm font-semibold text-primary-foreground focus:not-sr-only"
@@ -537,12 +648,10 @@ function PosShell({
         Skip to order pad
       </a>
       <div className="studio-shell flex h-full min-w-0 flex-col overflow-hidden">
-        <header className="studio-topbar flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card px-4 sm:px-6 xl:px-8">
-          <FathomMark className="size-10" variant="brand" />
+        <header className="studio-topbar flex h-12 shrink-0 items-center gap-2 border-b border-border-subtle bg-card px-3">
+          <FathomMark className="size-7" variant="brand" />
           <div className="min-w-0 leading-tight">
-            <p className="truncate text-sm font-semibold tracking-[-0.03em] text-text-strong">
-              DevFathom
-            </p>
+            <p className="truncate text-sm font-semibold text-text-strong">DevFathom</p>
             <p className="truncate text-xs text-text-muted">Restaurant POS</p>
           </div>
           <div className="ml-auto shrink-0" aria-live="polite">
@@ -556,9 +665,15 @@ function PosShell({
         <main
           id="pos-main"
           aria-busy={busy}
-          className="studio-canvas relative min-h-0 flex-1 overflow-y-auto"
+          className={`studio-canvas relative min-h-0 flex-1 ${flush ? 'overflow-hidden' : 'overflow-y-auto'}`}
         >
-          <div className="studio-stage mx-auto min-h-full w-full max-w-[1600px] px-4 py-5 sm:px-6 sm:py-7 xl:px-8 xl:pb-8">
+          <div
+            className={
+              flush
+                ? 'flex h-full min-h-0 w-full flex-col'
+                : 'studio-stage mx-auto min-h-full w-full max-w-[1600px] px-4 py-4 sm:px-6'
+            }
+          >
             {children}
           </div>
         </main>

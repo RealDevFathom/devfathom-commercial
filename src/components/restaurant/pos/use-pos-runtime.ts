@@ -942,6 +942,15 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         setDraftLines((current) =>
           current.filter((item) => item.lineId !== line.lineId)
         )) satisfies MouseEventHandler<HTMLButtonElement>,
+    adjustDraftQuantity: (lineId: string, delta: number) =>
+      (() =>
+        setDraftLines((current) =>
+          current.map((item) =>
+            item.lineId === lineId
+              ? { ...item, quantity: Math.max(1, item.quantity + delta) }
+              : item
+          )
+        )) satisfies MouseEventHandler<HTMLButtonElement>,
     discardDraft: (() => setDraftLines([])) satisfies MouseEventHandler<HTMLButtonElement>,
     refreshOrders: (() => void loadOpenOrders()) satisfies MouseEventHandler<HTMLButtonElement>,
     selectOrder: (openOrder: (typeof openOrders)[number]) =>
