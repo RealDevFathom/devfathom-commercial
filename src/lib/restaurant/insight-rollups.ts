@@ -12,7 +12,7 @@ import type { RestaurantJobHandler } from './job-handlers-core';
 
 export const INSIGHTS_ROLLUP_DAY_JOB = 'insights.rollupDay';
 export const MAX_BACKFILL_CHUNK_DAYS = 90;
-export const INSIGHT_PROJECTION_VERSION = 4;
+export const INSIGHT_PROJECTION_VERSION = 5;
 
 export type RollupErrorReason = 'CLOSE_NOT_FOUND' | 'RECONCILIATION_FAILED' | 'INVALID';
 
@@ -62,7 +62,11 @@ export type ReconciledFinancials = {
 export function computeReconciledFinancials(input: {
   bills: readonly RawBill[];
   tenders: readonly { tipAmount: Prisma.Decimal }[];
-  refunds: readonly { amount: Prisma.Decimal; deliveryFeeRefundAmount: Prisma.Decimal }[];
+  refunds: readonly {
+    amount: Prisma.Decimal;
+    taxRefundAmount: Prisma.Decimal;
+    deliveryFeeRefundAmount: Prisma.Decimal;
+  }[];
   drawers: readonly RawDrawer[];
 }): ReconciledFinancials {
   const settled = input.bills.filter((bill) => bill.status === 'SETTLED');
@@ -71,7 +75,11 @@ export function computeReconciledFinancials(input: {
   const discountTotal = sum(settled.map((bill) => bill.discountTotal));
   const cashExpected = sum(input.drawers.map((drawer) => foldExpectedCash(drawer.movements)));
   const cashCounted = sum(input.drawers.map((drawer) => drawer.countedCash ?? ZERO));
-  const refundTotal = sum(input.refunds.map((refund) => refund.amount));
+  // grossSales is pre-tax, so refunds must use the same basis. Refund.amount is
+  // the tax-inclusive payment reversal recorded by the payment workflow.
+  const refundTotal = sum(
+    input.refunds.map((refund) => sub(refund.amount, refund.taxRefundAmount))
+  );
   return {
     grossSales,
     netSales: sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal),
@@ -227,13 +235,27 @@ function resolveCloseTip(closes: readonly CloseTip[]): CloseTip | null {
   return closes.filter((close) => !superseded.has(close.id)).at(-1) ?? null;
 }
 
-function assertReconciles(close: CloseTip, raw: ReconciledFinancials): void {
+function assertReconciles(
+  close: CloseTip,
+  raw: ReconciledFinancials,
+  taxRefundTotal: Prisma.Decimal
+): void {
+  // Daily closes are append-only. Before issue #405, refundTotal stored the
+  // tax-inclusive reversal and netSales deducted that value. Older WHA-1621
+  // closes did not deduct refunds from netSales at all. Accept both coherent
+  // historical shapes, while every projection is normalized from current raw
+  // facts onto the pre-tax basis below.
+  const usesLegacyTaxInclusiveRefund = close.refundTotal.equals(
+    add(raw.refundTotal, taxRefundTotal)
+  );
+  const acceptedNetSales = usesLegacyTaxInclusiveRefund
+    ? [sub(raw.netSales, taxRefundTotal), add(raw.netSales, raw.refundTotal)]
+    : [raw.netSales, add(raw.netSales, raw.refundTotal)];
   const mismatch = (Object.keys(raw) as Array<keyof ReconciledFinancials>).find(
     (key) =>
       !close[key].equals(raw[key]) &&
-      // Closes cut before WHA-1621 Q1 persisted netSales without the refund deduction;
-      // they are append-only, so accept that legacy formula rather than refuse to project.
-      !(key === 'netSales' && close.netSales.equals(add(raw.netSales, raw.refundTotal)))
+      !(key === 'refundTotal' && usesLegacyTaxInclusiveRefund) &&
+      !(key === 'netSales' && acceptedNetSales.some((value) => close.netSales.equals(value)))
   );
   if (mismatch) {
     throw new RollupError(
@@ -310,7 +332,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
     });
     const refunds = await tx.restaurantRefund.findMany({
       where: { businessDate, bill: { branchId: input.branchId } },
-      select: { amount: true, deliveryFeeRefundAmount: true },
+      select: { amount: true, taxRefundAmount: true, deliveryFeeRefundAmount: true },
     });
     const drawers = await tx.restaurantDrawerSession.findMany({
       where: { branchId: input.branchId, businessDate },
@@ -322,7 +344,11 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
       refunds,
       drawers: drawers as RawDrawer[],
     });
-    assertReconciles(close, raw);
+    assertReconciles(
+      close,
+      raw,
+      sum(refunds.map((refund) => refund.taxRefundAmount))
+    );
 
     const existing = await tx.insightDailyRollup.findFirst({
       where: { branchId: input.branchId, businessDate },
@@ -459,7 +485,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         deliveryFeeSales: close.deliveryFeeSales,
         deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,
-        refundTotal: close.refundTotal,
+        refundTotal: raw.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
         loyaltyLiability: ZERO,
@@ -475,7 +501,7 @@ export async function rollupDay(db: ScopedDb, input: RollupDayInput) {
         deliveryFeeSales: close.deliveryFeeSales,
         deliveryFeeRefunds: close.deliveryFeeRefunds,
         compTotal: close.compTotal,
-        refundTotal: close.refundTotal,
+        refundTotal: raw.refundTotal,
         voidTotal: close.voidTotal,
         drawerVariance: close.cashVariance,
         loyaltyLiability: ZERO,

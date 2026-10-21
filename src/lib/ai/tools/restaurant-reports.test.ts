@@ -577,7 +577,7 @@ it.each(['settled_sales', 'financial_breakdown'])(
     const totals = computeCloseAggregate({
       bills: [bill('SETTLED', 100), bill('OPEN', 10000)],
       refunds: [
-        { amount: decimal(20), taxRefundAmount: decimal(0), deliveryFeeRefundAmount: decimal(0) },
+        { amount: decimal(20), taxRefundAmount: decimal(2), deliveryFeeRefundAmount: decimal(0) },
       ],
       drawers: [{ status: 'CLOSED', expectedCash: decimal(40), countedCash: decimal(39.5) }],
       tenders: [
@@ -640,8 +640,8 @@ it.each(['settled_sales', 'financial_breakdown'])(
         ? {
             metrics: {
               grossSales: { value: '100' },
-              netSales: { value: '65' },
-              refunds: { value: '20' },
+              netSales: { value: '67' },
+              refunds: { value: '18' },
             },
             openUnpaid: { value: null },
             averageCheck: { value: null, denominator: null },
@@ -649,7 +649,7 @@ it.each(['settled_sales', 'financial_breakdown'])(
         : {
             observedFacts: {
               discounts: { value: '10' },
-              refunds: { value: '20' },
+              refunds: { value: '18' },
               tax: { value: '8.5' },
               serviceCharges: { value: '4.25' },
               tips: { value: '3.75' },

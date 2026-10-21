@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { computeCloseAggregate } from './daily-close';
 
 const mocks = vi.hoisted(() => ({ enqueue: vi.fn() }));
 vi.mock('server-only', () => ({}));
@@ -21,6 +22,40 @@ import {
 const D = (value: string) => new Prisma.Decimal(value);
 
 describe('pure rollup calculations', () => {
+  it('matches the day-close pre-tax refund and net-sales calculation', () => {
+    const bills = [
+      {
+        status: 'SETTLED' as const,
+        subtotal: D('100.00'),
+        deliveryFeeTotal: D('0'),
+        taxTotal: D('10.00'),
+        serviceChargeTotal: D('0'),
+        compTotal: D('5.00'),
+        discountTotal: D('2.00'),
+        grandTotal: D('103.00'),
+      },
+    ];
+    const refunds = [
+      {
+        amount: D('22.00'),
+        taxRefundAmount: D('2.00'),
+        deliveryFeeRefundAmount: D('0'),
+      },
+    ];
+    const reconciled = computeReconciledFinancials({
+      bills,
+      refunds,
+      tenders: [],
+      drawers: [],
+    });
+    const close = computeCloseAggregate({ bills, refunds, tenders: [], drawers: [] });
+
+    expect(reconciled.refundTotal.equals(close.refundTotal)).toBe(true);
+    expect(reconciled.netSales.equals(close.netSales)).toBe(true);
+    expect(reconciled.refundTotal.toString()).toBe('20');
+    expect(reconciled.netSales.toString()).toBe('73');
+  });
+
   it('reconciles close-facing totals exactly with Decimal, including discounts', () => {
     const total = computeReconciledFinancials({
       bills: [
@@ -46,18 +81,24 @@ describe('pure rollup calculations', () => {
         },
       ],
       tenders: [{ tipAmount: D('6.00') }],
-      refunds: [{ amount: D('2.50'), deliveryFeeRefundAmount: D('1.25') }],
+      refunds: [
+        {
+          amount: D('2.50'),
+          taxRefundAmount: D('0.25'),
+          deliveryFeeRefundAmount: D('1.25'),
+        },
+      ],
       drawers: [],
     });
     expect(total.grossSales.toString()).toBe('100');
     expect(total.deliveryFeeSales.toString()).toBe('12');
     expect(total.deliveryFeeRefunds.toString()).toBe('1.25');
     expect(total.discountTotal.toString()).toBe('5');
-    expect(total.netSales.toString()).toBe('82.5');
+    expect(total.netSales.toString()).toBe('82.75');
     expect(total.taxTotal.toString()).toBe('7');
     expect(total.serviceChargeTotal.toString()).toBe('3');
     expect(total.tipTotal.toString()).toBe('6');
-    expect(total.refundTotal.toString()).toBe('2.5');
+    expect(total.refundTotal.toString()).toBe('2.25');
     expect(total.voidTotal.toString()).toBe('9.99');
   });
 
@@ -97,7 +138,16 @@ describe('pure rollup calculations', () => {
   });
 });
 
-function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?: boolean }) {
+function rollupDb(input?: {
+  correction?: boolean;
+  mismatch?: boolean;
+  legacyNet?: boolean;
+  taxRefund?: boolean;
+  legacyTaxInclusiveClose?: boolean;
+}) {
+  const taxRefund = input?.taxRefund ? D('0.50') : D('0');
+  const refundTotal = input?.legacyTaxInclusiveClose ? D('3') : D('3').minus(taxRefund);
+  const currentNetSales = D('7').minus(refundTotal);
   const close = {
     id: 'close_1',
     createdAt: new Date('2026-08-21T02:00:00.000Z'),
@@ -105,13 +155,13 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     grossSales: D(input?.mismatch ? '11' : '10'),
     deliveryFeeSales: D('2'),
     deliveryFeeRefunds: D('1'),
-    netSales: D(input?.legacyNet ? '7' : '4'),
+    netSales: input?.legacyNet ? D('7') : currentNetSales,
     taxTotal: D('0'),
     serviceChargeTotal: D('0'),
     tipTotal: D('0'),
     compTotal: D('2'),
     discountTotal: D('1'),
-    refundTotal: D('3'),
+    refundTotal,
     voidTotal: D('4'),
     cashExpected: D('0'),
     cashCounted: D('0'),
@@ -153,7 +203,9 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
     },
     restaurantTender: { findMany: vi.fn(async () => []) },
     restaurantRefund: {
-      findMany: vi.fn(async () => [{ amount: D('3'), deliveryFeeRefundAmount: D('1') }]),
+      findMany: vi.fn(async () => [
+        { amount: D('3'), taxRefundAmount: taxRefund, deliveryFeeRefundAmount: D('1') },
+      ]),
     },
     restaurantDrawerSession: { findMany: vi.fn(async () => []) },
     insightDailyRollup: {
@@ -163,7 +215,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
           sourceDailyCloseId: string;
           projectionVersion: number;
         } | null>
-      >(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 4 })),
+      >(async () => ({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 5 })),
       upsert: vi.fn(async () => ({ id: 'rollup_1' })),
     },
     insightLoyaltyLiability: {
@@ -184,7 +236,7 @@ function rollupDb(input?: { correction?: boolean; mismatch?: boolean; legacyNet?
         positivePoints: BigInt(0),
         signedPoints: BigInt(0),
         liability: D('0'),
-        projectionVersion: 4,
+        projectionVersion: 5,
       })),
       upsert: vi.fn<(args?: { update: { liability: Prisma.Decimal } }) => Promise<{ id: string }>>(
         async () => ({ id: 'liability_1' })
@@ -274,7 +326,7 @@ describe('rollupDay handler idempotency and correction', () => {
 
       db.insightDailyRollup.findFirst
         .mockResolvedValueOnce(null)
-        .mockResolvedValue({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 4 });
+        .mockResolvedValue({ id: 'rollup_1', sourceDailyCloseId: 'close_1', projectionVersion: 5 });
       db.insightLoyaltyLiability.findFirst.mockResolvedValueOnce(null).mockResolvedValue({
         cutoffAt: new Date('2026-08-20T19:00:00.000Z'),
         programVersionId: 'program_1',
@@ -282,7 +334,7 @@ describe('rollupDay handler idempotency and correction', () => {
         positivePoints: BigInt(100),
         signedPoints: BigInt(100),
         liability: D('1.5'),
-        projectionVersion: 4,
+        projectionVersion: 5,
       });
       db.loyaltyProgramVersion.findFirst.mockResolvedValue({
         id: 'program_1',
@@ -406,14 +458,64 @@ describe('rollupDay handler idempotency and correction', () => {
     expect(db.insightDailyRollup.upsert).not.toHaveBeenCalled();
   });
 
+  it('reconciles and persists tax-inclusive refunds on the pre-tax sales basis', async () => {
+    const db = rollupDb({ taxRefund: true });
+    db.insightDailyRollup.findFirst.mockResolvedValue(null);
+
+    await rollupDay(db as unknown as ScopedDb, {
+      branchId: 'branch_1',
+      businessDate: '2026-08-20',
+    });
+
+    expect(db.restaurantRefund.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        select: {
+          amount: true,
+          taxRefundAmount: true,
+          deliveryFeeRefundAmount: true,
+        },
+      })
+    );
+    expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
+      expect.objectContaining({
+        create: expect.objectContaining({ refundTotal: D('2.5'), netSales: D('4.5') }),
+        update: expect.objectContaining({ refundTotal: D('2.5'), netSales: D('4.5') }),
+      })
+    );
+  });
+
+  it.each([false, true])(
+    'normalizes an immutable tax-inclusive close with legacyNet=%s',
+    async (legacyNet) => {
+      const db = rollupDb({
+        taxRefund: true,
+        legacyTaxInclusiveClose: true,
+        legacyNet,
+      });
+      db.insightDailyRollup.findFirst.mockResolvedValue(null);
+
+      await rollupDay(db as unknown as ScopedDb, {
+        branchId: 'branch_1',
+        businessDate: '2026-08-20',
+      });
+
+      expect(db.insightDailyRollup.upsert).toHaveBeenCalledWith(
+        expect.objectContaining({
+          create: expect.objectContaining({ refundTotal: D('2.5'), netSales: D('4.5') }),
+          update: expect.objectContaining({ refundTotal: D('2.5'), netSales: D('4.5') }),
+        })
+      );
+    }
+  );
+
   it.each([true, false])(
-    'normalizes legacy=%s and refreshes an existing v3 projection',
+    'normalizes legacy=%s and refreshes an existing v4 projection',
     async (legacyNet) => {
       const db = rollupDb({ legacyNet });
       db.insightDailyRollup.findFirst.mockResolvedValue({
         id: 'rollup_1',
         sourceDailyCloseId: 'close_1',
-        projectionVersion: 3,
+        projectionVersion: 4,
       });
       await rollupDay(db as unknown as ScopedDb, {
         branchId: 'branch_1',
