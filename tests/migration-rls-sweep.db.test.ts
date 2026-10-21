@@ -5,6 +5,7 @@ import { describe, expect, it } from 'vitest';
 
 const url = process.env.MIGSWEEP_DATABASE_URL;
 const repairs = [
+  '20261021180900_repair_canonical_pharmacy_capabilities',
   '20261021180800_repair_package_module_cleanup',
   '20261021180100_repair_pharmacy_reference_permissions',
   '20261021180200_repair_pharmacy_branch_assignments',
@@ -27,6 +28,10 @@ describe('migration #218 repair contracts', () => {
         /^--[^\n]*\n(?:--[^\n]*\n)*BEGIN;\nSELECT set_config\('app\.is_platform_admin', 'true', true\);[\s\S]*\nCOMMIT;\s*$/,
       );
     }
+
+    expect(sql('20261021110000_canonical_pharmacy_capabilities')).toMatch(
+      /^--[^\n]*\nBEGIN;\nSELECT set_config\('app\.is_platform_admin', 'true', true\);[\s\S]*\nCOMMIT;\s*$/,
+    );
   });
 });
 
@@ -74,6 +79,20 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
           ('sweep218_leave','sweep218_a','sweep218_role_a','Leave','sweep218-leave@example.invalid','test','test','ON_LEAVE',now()),
           ('sweep218_inactive','sweep218_a','sweep218_role_a','Inactive','sweep218-inactive@example.invalid','test','test','INACTIVE',now()),
           ('sweep218_other','sweep218_b','sweep218_role_b','Other','sweep218-other@example.invalid','test','test','ACTIVE',now());
+        INSERT INTO organization_role_permissions
+          (id,"organizationId","organizationRoleId",capability,effect) VALUES
+          ('sweep218_rp_counter','sweep218_a','sweep218_role_a','pharmacy.counter','ALLOW'),
+          ('sweep218_rp_dispense_old','sweep218_a','sweep218_role_a','pharmacy.dispense','DENY'),
+          ('sweep218_rp_dispense_new','sweep218_a','sweep218_role_a','pharmacy:dispense','ALLOW'),
+          ('sweep218_rp_inventory_old','sweep218_a','sweep218_role_a','pharmacy.inventory','ALLOW'),
+          ('sweep218_rp_inventory_new','sweep218_a','sweep218_role_a','pharmacy:inventory','DENY');
+        INSERT INTO user_permission_overrides
+          (id,"organizationId","userId",capability,effect,reason,"updatedAt") VALUES
+          ('sweep218_up_manage','sweep218_a','sweep218_active','pharmacy.manage','DENY','legacy deny',now()),
+          ('sweep218_up_audit_old','sweep218_a','sweep218_active','pharmacy.audit','ALLOW','legacy allow',now()),
+          ('sweep218_up_audit_new','sweep218_a','sweep218_active','pharmacy:audit','DENY','canonical deny',now()),
+          ('sweep218_up_finance_old','sweep218_a','sweep218_active','pharmacy.finance','DENY','legacy deny',now()),
+          ('sweep218_up_finance_new','sweep218_a','sweep218_active','pharmacy:finance','ALLOW','canonical allow',now());
         INSERT INTO pharmacy_branches (id,"organizationId",code,name,"addressLine",city,"provinceCode",active,"updatedAt") VALUES
           ('sweep218_branch','sweep218_a','SWEEP218','Sweep','Test','Karachi','SD',true,now()),
           ('sweep218_closed','sweep218_a','SWEEP218C','Closed','Test','Karachi','SD',false,now());
@@ -123,6 +142,12 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
             (SELECT count(*)::int FROM organization_modules WHERE id='sweep218_copy') AS copies,
             (SELECT count(*)::int FROM organization_modules WHERE id='sweep218_override') AS overrides,
             (SELECT count(*)::int FROM organization_role_permissions WHERE "organizationRoleId"='sweep218_role_a' AND capability='pharmacy:catalogue-review') AS permissions,
+            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy.%') AS legacy_role_grants,
+            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy:%' AND effect='ALLOW') AS canonical_role_allows,
+            (SELECT count(*)::int FROM organization_role_permissions WHERE id LIKE 'sweep218_rp_%' AND capability LIKE 'pharmacy:%' AND effect='DENY') AS canonical_role_denies,
+            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy.%') AS legacy_user_overrides,
+            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy:%' AND effect='ALLOW') AS canonical_user_allows,
+            (SELECT count(*)::int FROM user_permission_overrides WHERE id LIKE 'sweep218_up_%' AND capability LIKE 'pharmacy:%' AND effect='DENY') AS canonical_user_denies,
             (SELECT count(*)::int FROM organization_role_permissions WHERE "organizationRoleId"='sweep218_role_b') AS other_permissions,
             (SELECT count(*)::int FROM pharmacy_branch_assignments WHERE "organizationId"='sweep218_a') AS assignments,
             (SELECT count(*)::int FROM outbound_effects WHERE id='sweep218_failed') AS failed,
@@ -130,10 +155,10 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
           return result.rows[0];
         } finally { await db.query('COMMIT'); }
       }
-      expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 0, copies: 1, overrides: 1, invitations: 0, pending_modes: 1, pins: 1, permissions: 0, other_permissions: 0, assignments: 0, failed: 1, sanitized: 0 });
+      expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 0, copies: 1, overrides: 1, invitations: 0, pending_modes: 1, pins: 1, permissions: 0, legacy_role_grants: 3, canonical_role_allows: 1, canonical_role_denies: 1, legacy_user_overrides: 3, canonical_user_allows: 1, canonical_user_denies: 1, other_permissions: 0, assignments: 0, failed: 1, sanitized: 0 });
       for (let pass = 0; pass < 2; pass++) {
         for (const name of repairs) await db.query(sql(name));
-        expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 2, copies: 0, overrides: 1, invitations: 1, pending_modes: 0, pins: 1, permissions: 0, other_permissions: 0, assignments: 2, failed: 0, sanitized: 1 });
+        expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 2, copies: 0, overrides: 1, invitations: 1, pending_modes: 0, pins: 1, permissions: 0, legacy_role_grants: 0, canonical_role_allows: 1, canonical_role_denies: 2, legacy_user_overrides: 0, canonical_user_allows: 0, canonical_user_denies: 3, other_permissions: 0, assignments: 2, failed: 0, sanitized: 1 });
         if (pass === 0) await db.query(`BEGIN;
           SELECT set_config('app.is_platform_admin', 'true', true);
           INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,status,"updatedAt")
