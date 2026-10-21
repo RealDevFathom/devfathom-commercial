@@ -409,6 +409,15 @@ describe('pharmacySales.addLine self-override cap (SEC PR #195)', () => {
     await expect(f.caller.addLine(selfOverride)).resolves.not.toHaveProperty('blocked');
     // The rolling-window query is scoped to the acting pharmacist's self-overrides:
     // a co-signed row (pharmacistUserId !== recordedByUserId) is excluded by it.
+    expect(f.db.$queryRaw).toHaveBeenCalledWith(
+      expect.arrayContaining([
+        expect.stringContaining('pg_advisory_xact_lock(hashtextextended('),
+      ]),
+      'org-1:cashier-1'
+    );
+    expect(f.db.$queryRaw.mock.invocationCallOrder[0]).toBeLessThan(
+      f.db.pharmacyRxLineAuthorization.findMany.mock.invocationCallOrder[0]
+    );
     expect(f.db.pharmacyRxLineAuthorization.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({

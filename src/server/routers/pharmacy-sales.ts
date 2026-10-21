@@ -1167,6 +1167,7 @@ export const pharmacySalesRouter = router({
               // hatch and are excluded. The current line's authorization has not
               // been written yet, so it is never counted against itself.
               if (selfOverride) {
+                await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.actorId},0))`;
                 const windowStart = new Date(now.getTime() - RX_SELF_OVERRIDE_WINDOW_MS);
                 const priorAuths = await db.pharmacyRxLineAuthorization.findMany({
                   where: {
