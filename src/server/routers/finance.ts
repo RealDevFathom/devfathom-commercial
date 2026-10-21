@@ -845,11 +845,13 @@ export const financeRouter = router({
         _count: true,
         where: { status: 'PAID' },
       }),
-      ctx.db.invoice.groupBy({
-        by: ['currency'],
-        _sum: { total: true },
-        _count: true,
+      ctx.db.invoice.findMany({
         where: { status: { in: ['SENT', 'OVERDUE'] } },
+        select: {
+          total: true,
+          currency: true,
+          payments: { select: { amount: true } },
+        },
       }),
       ctx.db.recurringExpense.findMany({
         where: { active: true },
@@ -891,6 +893,18 @@ export const financeRouter = router({
       fromCurrencyGroups(yearlyExpenseG, 'amount'),
       recurringYearly
     );
+    const outstandingByCurrency = new Map<string, number>();
+    for (const invoice of outstandingInvoicesG) {
+      const paid = invoice.payments.reduce((sum, payment) => sum + Number(payment.amount), 0);
+      const balance = Math.max(0, round2(Number(invoice.total) - paid));
+      outstandingByCurrency.set(
+        invoice.currency,
+        (outstandingByCurrency.get(invoice.currency) ?? 0) + balance
+      );
+    }
+    const totalOutstanding = sumByCurrency(
+      Array.from(outstandingByCurrency, ([currency, amount]) => ({ currency, amount }))
+    );
 
     return {
       monthlyIncome,
@@ -901,8 +915,8 @@ export const financeRouter = router({
       yearlyProfit: diffByCurrency(yearlyIncome, yearlyExpense),
       totalPaid: fromCurrencyGroups(paidInvoicesG, 'total'),
       paidCount: paidInvoicesG.reduce((s, g) => s + g._count, 0),
-      totalOutstanding: fromCurrencyGroups(outstandingInvoicesG, 'total'),
-      outstandingCount: outstandingInvoicesG.reduce((s, g) => s + g._count, 0),
+      totalOutstanding,
+      outstandingCount: outstandingInvoicesG.length,
     };
   }),
 
