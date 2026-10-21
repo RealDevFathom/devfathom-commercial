@@ -108,6 +108,24 @@ const legacy: Record<string, string[]> = {
         );
       }
     }
+    // Owner backfill: an existing report DENY survives; a custom pharmacy.* role is not widened.
+    for (const [key, roleKey] of [
+      ['other_owner', 'owner'],
+      ['other_custom', 'custom-all'],
+    ]) {
+      await client.query(
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,false,now())`,
+        [id(key), other, roleKey]
+      );
+      await client.query(
+        `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy.*','ALLOW')`,
+        [id(`${key}_star`), other, id(key)]
+      );
+    }
+    await client.query(
+      `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'reports:financial','DENY')`,
+      [id('other_owner_deny'), other, id('other_owner')]
+    );
     await client.query(migration);
   }, 60_000);
   afterAll(async () => {
@@ -138,7 +156,6 @@ const legacy: Record<string, string[]> = {
       { capability: 'pharmacy:dispense', effect: 'DENY', expiresAt: expiry, reason: 'canonical' },
     ]);
     for (const [key, capability, effect, expiresAt] of [
-      ['owner', 'pharmacy:*', 'ALLOW', expiry],
       ['pharmacist', 'pharmacy:dispense', 'ALLOW', expiry],
       ['manager', 'pharmacy:manage', 'DENY', expiry],
       ['inventory', 'pharmacy:inventory', 'ALLOW', expired],
@@ -154,6 +171,42 @@ const legacy: Record<string, string[]> = {
       `SELECT * FROM user_permission_overrides WHERE "organizationId"=$1 ORDER BY id`,
       [org]
     );
+    const rolesBefore = await client.query(
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2) ORDER BY id`,
+      [org, other]
+    );
+    const ownerOther = await client.query(
+      `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
+      [id('other_owner')]
+    );
+    expect(ownerOther.rows).toEqual([
+      { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'reports:financial', effect: 'DENY' },
+      { capability: 'reports:operational', effect: 'ALLOW' },
+    ]);
+    const custom = await client.query(
+      `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      [id('other_custom')]
+    );
+    // Legacy pharmacy.* on a non-owner role expands to an explicit list without safety.
+    expect(custom.rows.map((r) => r.capability).sort()).toEqual(
+      [
+        'pharmacy:catalogue-review',
+        'pharmacy:counter',
+        'pharmacy:dispense',
+        'pharmacy:inventory',
+        'pharmacy:manage',
+        'pharmacy:orders',
+        'pharmacy:procurement',
+      ].sort()
+    );
+    const ownerOverride = await client.query(
+      `SELECT capability FROM user_permission_overrides WHERE "userId"=$1 ORDER BY capability`,
+      [id('user_owner')]
+    );
+    expect(ownerOverride.rows.map((r) => r.capability)).not.toContain('pharmacy:safety');
+    expect(ownerOverride.rows.map((r) => r.capability)).not.toContain('pharmacy:*');
+    expect(ownerOverride.rows).toHaveLength(7);
     await client.query('DROP TABLE pharmacy_capability_aliases');
     await client.query(migration);
     expect(
@@ -164,6 +217,14 @@ const legacy: Record<string, string[]> = {
         )
       ).rows
     ).toEqual(before.rows);
+    expect(
+      (
+        await client.query(
+          `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2) ORDER BY id`,
+          [org, other]
+        )
+      ).rows
+    ).toEqual(rolesBefore.rows);
   });
 
   it('enforces tenant RLS and authorizes migrated grants without coarse ADMIN authority', async () => {
