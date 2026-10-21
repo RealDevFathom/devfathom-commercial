@@ -176,6 +176,23 @@ describe('pharmacy navigation', () => {
     }
   });
 
+  it('hides the controlled register until the user holds pharmacy safety access', () => {
+    const entitled = {
+      vertical: 'PHARMACY' as const,
+      enabledModules: ['pharmacy-core', 'pharmacy-safety'],
+    };
+    expect(
+      visibleNavigation(entitled, 'EMPLOYEE').some(
+        (item) => item.href === '/pharmacy/controlled-register'
+      )
+    ).toBe(false);
+    expect(
+      visibleNavigation(entitled, 'EMPLOYEE', [], ['pharmacy:safety']).some(
+        (item) => item.href === '/pharmacy/controlled-register'
+      )
+    ).toBe(true);
+  });
+
   it('shows pharmacy routes to a Pharmacy admin with core and counter modules', () => {
     const visible = visibleNavigation(
       {

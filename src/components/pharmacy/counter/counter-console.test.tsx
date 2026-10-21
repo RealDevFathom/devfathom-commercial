@@ -116,7 +116,11 @@ vi.mock('./counter-receipt-view', () => ({
     return null;
   },
 }));
-vi.mock('./counter-rx-panel', () => ({ CounterRxPanel: () => null }));
+vi.mock('./counter-rx-panel', () => ({
+  // Render a marker only when the console offers controlled authorization (QA-138).
+  CounterRxPanel: (props: { controlled?: unknown }) =>
+    props.controlled ? <div data-testid="controlled-authorization" /> : null,
+}));
 vi.mock('./counter-keymap-legend', () => ({ CounterKeymapLegend: () => null }));
 vi.mock('./counter-search-results', () => ({ CounterSearchResults: () => null }));
 vi.mock('./counter-substitute-proposals', () => ({ CounterSubstituteProposals: () => null }));
@@ -155,6 +159,7 @@ function cart(overrides: Partial<CounterCart> = {}): CounterCart {
         highAlert: false,
         lasa: false,
         coldChain: false,
+        emergencySupply: false,
         allocations: [],
       },
     ],
@@ -1153,5 +1158,22 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     fireEvent.keyDown(window, { key: 'F9' });
     expect(document.activeElement).not.toBe(tender);
     dialog.remove();
+  });
+});
+
+describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {
+  it('hides the controlled authorization panel from an actor who cannot dispense', () => {
+    Object.assign(mocks.queries.controlledPharmacists!, {
+      isSuccess: false,
+      isError: true,
+      error: Object.assign(new Error('Forbidden'), { data: { code: 'FORBIDDEN' } }),
+    });
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.queryByTestId('controlled-authorization')).toBeNull();
+  });
+
+  it('shows the controlled authorization panel to a dispenser', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
 });

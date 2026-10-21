@@ -191,6 +191,13 @@ export default async function PharmacyReceivingPage({
   if (selectedReceipt && selectedReceipt.status === 'POSTED') {
     lots = await caller.lotsFromReceipt({ branchId, goodsReceiptId: selectedReceipt.id });
   }
+  const needsWitness = Boolean(
+    selectedReceipt &&
+    selectedReceipt.status === 'DRAFT' &&
+    (selectedReceipt.qualifiedPersonUserId ||
+      selectedReceipt.lines.some((line) => line.medicine.controlled))
+  );
+  const witnesses = needsWitness ? await caller.controlledWitnesses() : [];
 
   // ── actions ───────────────────────────────────────────────────────────────
 
@@ -239,6 +246,7 @@ export default async function PharmacyReceivingPage({
         warrantyEvidenceRef: field(form, 'warrantyEvidenceRef'),
         receivedAt: dateField(form, 'receivedAt', 'Received on'),
         note: optionalField(form, 'note'),
+        qualifiedPersonUserId: optionalField(form, 'qualifiedPersonUserId'),
         lines,
       });
       revalidatePath(ROUTE);
@@ -301,6 +309,7 @@ export default async function PharmacyReceivingPage({
           approvedByUserId: field(form, 'bypassApprovedByUserId'),
         },
         note: optionalField(form, 'directNote'),
+        qualifiedPersonUserId: optionalField(form, 'directQualifiedPersonUserId'),
         lines,
       });
       revalidatePath(ROUTE);
@@ -334,7 +343,22 @@ export default async function PharmacyReceivingPage({
       const result = await outcome.write(actionCaller.postGoodsReceipt)({
         branchId: branch,
         goodsReceiptId,
+        staffProfileId: optionalField(form, 'witnessStaffProfileId'),
+        pin: optionalField(form, 'witnessPin'),
       });
+      if (result && 'blocked' in result) {
+        next = destination(
+          ROUTE,
+          {
+            message: result.blocked,
+            kind: 'error',
+            outcome: 'rejected',
+            field: 'witnessPin',
+          },
+          { branch, receipt: goodsReceiptId }
+        );
+        return next;
+      }
       revalidatePath(ROUTE);
       const raised = result.exceptions?.length ?? 0;
       next = destination(
@@ -667,6 +691,18 @@ export default async function PharmacyReceivingPage({
                   })}
                 </div>
 
+                <SelectField
+                  emptyHint="No other active user can sign a controlled-medicine purchase."
+                  hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you. Their PIN is entered when the receipt is posted."
+                  label="Qualified person"
+                  name="qualifiedPersonUserId"
+                  notice={notice}
+                  options={workspace.approvers.map((approver) => ({
+                    value: approver.id,
+                    label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
+                  }))}
+                  placeholder="Not a controlled medicine"
+                />
                 <TextAreaField label="Receipt note" name="note" notice={notice} />
                 <SubmitButton>File receipt (draft)</SubmitButton>
                 <p className="text-sm text-text-muted">
@@ -803,6 +839,18 @@ export default async function PharmacyReceivingPage({
                 </div>
               ))}
             </div>
+            <SelectField
+              emptyHint="No other active user can sign a controlled-medicine purchase."
+              hint="Required only when a line is a controlled medicine. They must be allowed to dispense, and they cannot be you. Their PIN is entered when the receipt is posted."
+              label="Qualified person"
+              name="directQualifiedPersonUserId"
+              notice={notice}
+              options={workspace.approvers.map((approver) => ({
+                value: approver.id,
+                label: approver.name ? `${approver.name} (${approver.email})` : approver.email,
+              }))}
+              placeholder="Not a controlled medicine"
+            />
             <TextAreaField label="Direct purchase note" name="directNote" notice={notice} />
             <SubmitButton>File direct purchase (draft)</SubmitButton>
           </PurchasingActionForm>
@@ -860,6 +908,7 @@ export default async function PharmacyReceivingPage({
             onPost={postReceipt}
             onReverse={reverseReceipt}
             receipt={selectedReceipt}
+            witnesses={witnesses}
           />
         ) : (
           <SectionCard title="No receipt selected" titleLevel={2}>
@@ -1120,6 +1169,7 @@ function ReceiptDetail({
   notice,
   onPost,
   onReverse,
+  witnesses,
 }: {
   receipt: GoodsReceiptDetail;
   lots: {
@@ -1132,6 +1182,7 @@ function ReceiptDetail({
   notice: Notice | null;
   onPost: (form: FormData) => Promise<string>;
   onReverse: (form: FormData) => Promise<string>;
+  witnesses: ReadonlyArray<{ id: string; name: string }>;
 }) {
   return (
     <SectionCard
@@ -1230,6 +1281,34 @@ function ReceiptDetail({
           >
             <input name="branchId" type="hidden" value={branchId} />
             <input name="goodsReceiptId" type="hidden" value={receipt.id} />
+            {receipt.qualifiedPersonUserId ||
+            receipt.lines.some((line) => line.medicine.controlled) ? (
+              <div className="mb-3 grid gap-3 sm:grid-cols-2">
+                <SelectField
+                  emptyHint="No other active user with a dispensing PIN can witness this receipt."
+                  hint="Must be the qualified person named when the receipt was drafted, and cannot be you."
+                  label="Qualified person PIN"
+                  name="witnessStaffProfileId"
+                  notice={notice}
+                  options={witnesses.map((witness) => ({
+                    value: witness.id,
+                    label: witness.name,
+                  }))}
+                  placeholder="Select the qualified person"
+                  required
+                />
+                <TextField
+                  autoComplete="off"
+                  hint="Four to eight digits. A wrong PIN is refused and stock stays unposted."
+                  inputMode="numeric"
+                  label="PIN"
+                  name="witnessPin"
+                  notice={notice}
+                  required
+                  type="password"
+                />
+              </div>
+            ) : null}
             <SubmitButton>Post into stock</SubmitButton>
             <p className="mt-2 text-sm text-text-muted">
               Posting creates the batch lot, both dispositions and any match exception in one

@@ -64,6 +64,9 @@ vi.mock('@/lib/trpc', () => ({
         },
       },
     },
+    pharmacySafety: {
+      access: { useQuery: () => ({ data: { allowed: false } }) },
+    },
   },
 }));
 vi.mock('@/components/preferences-provider', () => ({

@@ -39,6 +39,7 @@ function cart(expiries: string[]): CounterCart {
         highAlert: false,
         lasa: false,
         coldChain: false,
+        emergencySupply: false,
         allocations: expiries.map((expiresAt, index) => ({
           inventoryLotId: `lot-${index}`,
           batchNumber: `B-${index}`,
