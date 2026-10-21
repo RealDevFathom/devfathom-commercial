@@ -838,6 +838,63 @@ async function liveBillIds(tx: ScopedDb, orderId: string, branchId: string): Pro
   return rows.map((r) => r.id);
 }
 
+/** Called inside the order mutation transaction, after the parent order lock.
+ * Preserve pinned service allocations on the remaining lines. Paid/fractional bills
+ * need the existing reversal/re-cut flow before an item can be voided. */
+export async function removeVoidedItemFromBills(tx: ScopedDb, orderId: string, itemId: string) {
+  await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE "orderId" = ${orderId} AND status <> 'VOID' ORDER BY id FOR UPDATE`;
+  const bills = await tx.restaurantBill.findMany({
+    where: { orderId, status: { not: 'VOID' } },
+    include: { lines: true, tenders: { select: { id: true }, take: 1 } },
+  });
+  for (const bill of bills) {
+    const line = bill.lines.find((line) => line.orderItemId === itemId);
+    if (!line && bill.splitKind !== 'FRACTIONAL') continue;
+    if (
+      bill.status !== 'OPEN' ||
+      bill.tenders.length ||
+      bill.splitKind === 'FRACTIONAL' ||
+      !bill.taxTotal.isZero()
+    ) {
+      throw new BillCommandError(
+        'Reverse payments and re-cut this bill before voiding an item.',
+        'BILL_NOT_OPEN'
+      );
+    }
+    if (!line) continue;
+    const grandTotal = bill.grandTotal.minus(line.lineTotal);
+    if (grandTotal.isNegative()) {
+      throw new BillCommandError(
+        'Reverse bill discounts before voiding this item.',
+        'COMP_EXCEEDS_BILL'
+      );
+    }
+    const serviceChargeTotal = bill.serviceChargeTotal.minus(line.serviceChargeAmount);
+    const serviceChargeBasis =
+      bill.serviceChargePolicyVersionId && line.compAmount.isZero()
+        ? bill.serviceChargeBasis.minus(line.lineSubtotal)
+        : bill.serviceChargeBasis;
+    await tx.restaurantBillLine.delete({ where: { id: line.id } });
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        subtotal: bill.subtotal.minus(line.lineSubtotal),
+        compTotal: bill.compTotal.minus(line.compAmount),
+        serviceChargeTotal,
+        serviceChargeBasis,
+        grandTotal,
+        ...(serviceChargeBasis.isZero() && serviceChargeTotal.isZero()
+          ? {
+              serviceChargePolicyVersionId: null,
+              serviceChargeRate: null,
+              serviceChargeTaxTreatment: null,
+            }
+          : {}),
+      },
+    });
+  }
+}
+
 // ── compLine (comp at zero) ──────────────────────────────────────────────────
 
 export type CompLineInput = {
