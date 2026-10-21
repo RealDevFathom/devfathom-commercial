@@ -1,5 +1,6 @@
 'use client';
 
+import { enumLabel } from '@/lib/enum-label';
 import { useState, memo } from 'react';
 import Link from 'next/link';
 import { useSession } from 'next-auth/react';
@@ -354,7 +355,7 @@ export function MemberDetailContent({ memberId }: { memberId: string }) {
                   Department
                 </p>
                 <p className="text-sm font-medium text-foreground">
-                  {member.department.charAt(0) + member.department.slice(1).toLowerCase()}
+                  {enumLabel(member.department)}
                 </p>
               </div>
               <div>
@@ -723,7 +724,7 @@ function EditMemberForm({
             >
               {departmentOptions.map((d) => (
                 <option key={d} value={d}>
-                  {d.charAt(0) + d.slice(1).toLowerCase()}
+                  {enumLabel(d)}
                 </option>
               ))}
             </select>
