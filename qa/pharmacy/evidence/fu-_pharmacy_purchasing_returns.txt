@@ -1,0 +1,135 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Purchasing
+Returns
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY PROCUREMENT
+Returns & claims
+
+Purchase returns and expiry claims, the supplier return window each one is racing, the debit notes they raise and the credit that has actually arrived against them.
+
+Overview
+PUR-01..06
+Suppliers
+PUR-01
+Requisitions & orders
+PUR-02/03
+Goods in
+PUR-02/04/05
+Returns & claims
+PUR-06
+
+Returning from Clifton Chemist — the only active branch in this workspace.
+
+EXPECTED CREDIT
+PKR 0.00
+Frozen at issue
+RECEIVED CREDIT
+PKR 0.00
+Allocated from suppliers
+VARIANCE
+PKR 0.00
+Positive means still owed
+WINDOWS CLOSING
+0
+Within 7 days or past
+Supplier-credit follow-up
+
+As of 2026-10-21 02:25:57.418Z. Age measures time since issue, not a contractual overdue deadline. Read-only priorities; reload for current records.
+
+Outstanding claims, allocated credit and recorded-but-unallocated credit are separate. Matching credit may appear beside several claims; it is not reserved and must not be added across them. None proves cash recovered or sales revenue.
+
+Open issued debit notes · oldest first
+
+Showing 0 of 0 qualifying loaded notes.
+
+No open issued debit notes in validated loaded records.
+
+Submitted, undispatched returns · open deadlines first
+
+Showing 0 of 0 qualifying loaded returns.
+
+No submitted, undispatched returns in loaded records.
+
+PUR-06
+Return windows
+No return window is closing
+
+Every open return and claim at this branch still has more than a week of its supplier window left. A window that closes before dispatch cannot be credited, so this board leads with the deadline rather than the document.
+
+PUR-06
+Returns & claims (0)
+Nothing is going back to a supplier
+
+Raise a purchase return for goods you are sending back, or an expiry claim for stock the supplier agreed to take on expiry. Both use the same document and the same settlement path.
+
+No return selected
+Pick a return to work it
+
+Its lines, their return windows, the debit notes it raised and the credit received against them open here, beside the list.
+
+PUR-06
+Raise a return or expiry claim
+No available stock to return
+
+A return is raised against a lot that is on hand and available at this branch. Nothing here qualifies — quarantined and already-claimed quantities are deliberately not offered.
+
+→
+Open the goods-in bench
+PUR-06
+Supplier credit
+Supplier
+
+No suppliers yet.
+
+Credit note reference
+Amount (PKR)
+Received on
+Record credit
+No credit received yet
+
+Record a supplier's credit note here as it arrives. What the supplier actually paid is kept separate from what a debit note expected, so the two can be compared rather than one overwriting the other.

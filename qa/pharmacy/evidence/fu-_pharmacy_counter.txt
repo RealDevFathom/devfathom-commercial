@@ -1,0 +1,175 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Counter
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY
+Counter
+
+Keyboard-first dispensing: scan, choose a sale unit, allocate by FEFO, tender and print.
+
+Returns & refunds
+Customer orders
+NO OPEN BILL
+Open drawer
+POS-02
+Scan and search
+Scan or search
+
+Names search as you type. Scan a barcode and press Enter to search immediately.
+
+Branch
+Clifton Chemist · MAIN
+
+Scan a barcode, or type at least two characters of a brand, generic, ingredient, strength, form, alias or legacy code.
+
+POS-03
+Sale unit and quantity
+Add to cart (F6)
+
+Select a search result to choose its sale unit.
+
+POS-01
+Workflow map
+Keymap
+DevFathom counter
+Legacy Speed
+
+F2–F10 follow the bill in workflow order; exceptions sit on Shift+F2–F4.
+
+Focus scan and search
+F2
+Sell by pack
+F3
+Sell by strip
+F4
+Sell by unit
+F5
+Add to cart
+F6
+Hold bill
+F7
+Resume held bill
+F8
+Open tender
+F9
+Print receipt
+F10
+Focus prescription panel
+Shift+F2
+Capture unfulfilled demand
+Shift+F3
+Void bill
+Shift+F4
+POS-03
+Cart and FEFO allocation
+Hold
+Resume
+
+No bill is open. Search for a medicine and add a line to start one.
+
+POS-05
+Tender
+Automatically open print dialog after payment
+
+This counter session only. Requires a newly settled bill and issued receipt. Physical printing is not confirmed.
+
+Balance due Unavailable
+
+Open a bill before taking payment.
+
+Tender
+Cash
+Card
+Bank transfer
+Wallet
+Khata / credit
+Credit (legacy)
+Amount
+Cash received
+
+Take payment
+POS-08
+Receipt
+
+Settle the bill to render its receipt.
+
+CRM-L01
+Customer loyalty and khata
+Link selected patient
+
+Select a patient, open a bill, then link. Current loyalty consent is required.
+
+POS-09
+Prescription and patient
+Shift+F2
+Controlled medicine authorization
+
+Attach a patient with ID on file, select the prescription, and ask an independent pharmacist to enter their PIN. Online only.
+
+Prescription line
+Select prescription
+Approving pharmacist
+Select pharmacist
+
+No independent pharmacist with an active staff PIN is available. Ask your administrator to configure one.
+
+Pharmacist PIN
+
+PIN is cleared after each attempt. Five incorrect attempts lock the credential for 15 minutes.
+
+SAFETY BLOCKS
+
+No safety block on this bill. Lines may still carry advice below.
+
+PATIENT
+
+Select a patient to capture their prescription.
+
+Find patient
+Search
+
+Focus scan and search: F2

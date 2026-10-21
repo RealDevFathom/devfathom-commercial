@@ -1,0 +1,79 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Medicines
+Prices
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY / MEDICINES
+Price intelligence
+
+Review DRAP notices against organization pack prices. All amounts are PKR; batch printed MRP remains historical evidence.
+
+Current organization pack prices
+
+One row per currently priced pack, including manual policies. Future prices remain scheduled. Variance compares selling policy with confirmed MRP for the same pack.
+
+No current organization pack policies.
+
+DRAP price notices
+
+Current prices as of 2026-10-21T02:25:32.938Z. Variance = selling − confirmed MRP for the same pack. Missing selling policies remain unknown. Unit amounts are derived previews.
+
+Review 0 selected
+Export CSV
+Select eligible notices (up to 100)
+
+No DRAP price notices yet. Import regulator notices with a named presentation and BOX, STRIP, or UNIT pack through the price notice ingestion service.
+
+Needs mapping (0)
+
+Missing, unmatched, or ambiguous presentation/pack identities cannot be confirmed. Review catalog mapping with an administrator. Keep the original source reference and payload unchanged; unresolved notices remain blocked pending a supported mapping correction.
+
+No notices need mapping.
+
+Preserved branch overrides
+
+No branch overrides.

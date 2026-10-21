@@ -1,0 +1,117 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Purchasing
+Receiving
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY PROCUREMENT
+Goods in
+
+The receiving bench. Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost against a purchase order or a direct purchase, then post it into the batch ledger.
+
+Overview
+PUR-01..06
+Suppliers
+PUR-01
+Requisitions & orders
+PUR-02/03
+Goods in
+PUR-02/04/05
+Returns & claims
+PUR-06
+
+Receiving into Clifton Chemist — the only active branch in this workspace.
+
+OPEN EXCEPTIONS
+0
+Visible until resolved
+ORDERS TO RECEIVE
+0
+Sent or part-received
+DRAFT RECEIPTS
+0
+Filed, not yet in stock
+RECEIVING LOCATIONS
+0
+Clifton Chemist
+PUR-04
+Match exceptions — open (0)
+Show resolved
+No open exceptions at this branch
+
+A shortage, overage, damage, price conflict or pack conflict is raised when a receipt posts, and stays here until somebody records who closed it and why.
+
+PUR-02
+Receive against a purchase order
+No order is out with a supplier
+
+A receipt is filed against an order that has been sent. Approve and send an order, or use the direct purchase path below for a cash-and-carry invoice.
+
+→
+Open requisitions & orders
+PUR-05
+Direct purchase — no purchase order
+
+A phone, WhatsApp or cash-and-carry invoice. Every validation and every posting is the same as receiving against an order — the only difference is that a bypass reason and a named approver stand in place of the order.
+
+No second person can approve a bypass
+
+A direct purchase needs an approver who is not you, and this workspace has no other active user. Invite a colleague, or raise a purchase order instead.
+
+→
+Invite a colleague
+→
+Raise a purchase order
+PUR-02/04
+Receipts (0)
+Nothing has been received at this branch
+
+File a receipt against a sent order, or record a direct purchase. Both appear here with their posting state.
+
+No receipt selected
+Pick a receipt to post or inspect it
+
+Its captured lines, the exceptions it raised and the batch lots it produced open here, beside the list.

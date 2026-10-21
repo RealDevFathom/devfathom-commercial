@@ -1,0 +1,77 @@
+Skip to platform content
+DevFathom
+Platform control
+Platform nominal
+Organizations
+
+Platform Administrator
+
+qa-platform-admin@devfathom.test
+
+PA
+01
+Control room
+02
+Organizations
+03
+Deployments
+04
+Support sessions
+05
+Jobs
+06
+Health
+07
+Sales CRM
+08
+Commercial
+09
+Modules & plans
+10
+Operators
+11
+Audit ledger
+12
+Platform settings
+ORGANIZATIONS / ONBOARDING
+Onboard an organization
+
+Choose the organization type first. The type determines the commercial packages, modules, and workspace surfaces available, and it cannot be changed once the organization is activated.
+
+STEP 1 OF 2
+
+Organization type
+
+No type is preselected. Nothing is created until the onboarding form is submitted.
+
+AGENCY
+
+Agency
+
+Projects, clients, agency finance, HR, and collaboration.
+
+Continue as Agency →
+
+RESTAURANT
+
+Restaurant
+
+Branches, POS, menu, inventory, SOP, loyalty, and insights.
+
+Continue as Restaurant →
+
+PHARMACY
+
+Pharmacy
+
+Counters, dispensing, inventory, procurement, safety, and reporting.
+
+Continue as Pharmacy →
+
+HOSPITALITY
+
+Hospitality
+
+Properties, reservations, front desk, folio, night audit, and reporting.
+
+Continue as Hospitality →

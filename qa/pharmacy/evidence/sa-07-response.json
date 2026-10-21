@@ -1,0 +1,33 @@
+{
+  "status": 200,
+  "json": {
+    "data": {
+      "id": "cmvhhkj1v000ggtjsplibyd6k",
+      "slug": "qa-clifton",
+      "legalName": "QA Clifton Chemist (Private) Limited",
+      "displayName": "QA Clifton Chemist",
+      "vertical": "PHARMACY",
+      "status": "ONBOARDING",
+      "deploymentMode": "SHARED",
+      "packageId": "cmvhhefto003060jsj43tfupt",
+      "timezone": "Asia/Karachi",
+      "locale": "en",
+      "currency": "PKR",
+      "seatLimit": 10,
+      "isDemo": false,
+      "askFathomEnabled": true,
+      "lastDemoResetAt": null,
+      "gracePeriodDays": 0,
+      "activatedAt": null,
+      "suspendedAt": null,
+      "terminatedAt": null,
+      "purgeScheduledAt": null,
+      "dataResidency": null,
+      "primaryContactName": "Pharmacy Owner",
+      "primaryContactEmail": "owner@qa-clifton.test",
+      "notes": null,
+      "createdAt": "2026-10-21T02:21:38.803Z",
+      "updatedAt": "2026-10-21T02:21:38.803Z"
+    }
+  }
+}

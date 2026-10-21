@@ -1,0 +1,249 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Finance
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY OPERATIONS
+Finance
+
+Post and allocate money, reconcile the bank, control periods, and publish approved tax versions.
+
+Journals and financial statements
+From (UTC)
+To, exclusive (UTC)
+Read statements
+
+Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown. Amounts shown in the recorded currency. Retrieved 2026-10-21T02:26:02.567Z.
+
+Receivables, payables and cash at cutoff
+
+Recorded ledger balances only. Goods received accrual is shown separately from invoiced payables; supplier claims are separate from customer receivables. Customer/supplier due-date aging is not available from these postings.
+
+No recorded balance postings; completeness unknown.
+
+Trial balance
+ACCOUNT / CURRENCY	OPENING (DR−CR)	DEBITS	CREDITS	CLOSING (DR−CR)
+Cash flow · posted cash and bank movements
+
+Net cash and bank movement per journal event; internal cash-to-bank transfers contribute zero. This is not a classified statutory cash-flow statement.
+
+Source / currency	Inflow	Outflow	Net
+
+No matching cash postings; unposted activity remains unknown.
+
+Journal · 0 entries in window
+VALUATION · MARGIN · LEAKAGE
+Ledger reports
+
+Branch: Clifton Chemist. Reporting period uses UTC midnight, start inclusive and end exclusive, up to 92 days. Valuation uses its separate inclusive cutoff at UTC midnight.
+
+Period start (UTC)
+Period end (UTC, exclusive)
+Valuation cutoff (00:00 UTC)
+Margin grouping
+Sale line
+Batch
+Product
+Branch
+Apply ledger filters
+Perpetual valuation
+
+Through 2026-10-21T00:00:00.000Z (inclusive). Timezone: UTC. Branch: cmvhhkj2o000qgtjs39tgn195.
+
+Currency: unknown — not recorded by the ledger reader. Integer minor units displayed with two decimals.
+
+Net posted inventory and inventory-in-transit value by lot/location through the inclusive instant; zero-net lots omitted. Missing unit cost remains unknown.
+
+Source: finance_journal_lines. Coverage: posted entries only; completeness unknown. Refunds included only when posted as reversals.
+
+Retrieved: 2026-10-21T02:26:02.681Z. Latest posting: unknown.
+
+COST COVERAGE: UNKNOWN
+
+Missing costs are unknown, not zero. These values do not establish complete business activity.
+
+Disposition and usable quantity are not supplied by this reader. Valued stock must not be treated as usable or available to dispense; quarantine and transit availability are unverified. Lot unit cost is current metadata, not a historical cost reconstruction.
+
+No matching posted ledger rows. This is not proof of zero activity or complete cost coverage. Try another period or branch.
+
+Ledger gross margin
+
+2026-09-21T00:00:00.000Z to 2026-10-22T00:00:00.000Z (start inclusive, end exclusive). Timezone: UTC. Branch: cmvhhkj2o000qgtjs39tgn195.
+
+Currency: unknown — not recorded by the ledger reader. Integer minor units displayed with two decimals.
+
+Posted gross revenue minus discounts minus posted lot COGS; reversals net against postings. Gross margin is neither net profit nor cash flow; unposted costs are unknown.
+
+Source: finance_journal_lines. Coverage: posted entries only; completeness unknown. Refunds included only when posted as reversals.
+
+Retrieved: 2026-10-21T02:26:02.637Z. Latest posting: unknown.
+
+COST COVERAGE: UNKNOWN
+
+Missing costs are unknown, not zero. These values do not establish complete business activity.
+
+Cost coverage cannot be quantified by this reader. Missing or unposted costs may overstate margin. Current purchase costs are not substituted for historical COGS.
+
+No matching posted ledger rows. This is not proof of zero activity or complete cost coverage. Try another period or branch.
+
+Recorded leakage
+
+2026-09-21T00:00:00.000Z to 2026-10-22T00:00:00.000Z (start inclusive, end exclusive). Timezone: UTC. Branch: cmvhhkj2o000qgtjs39tgn195.
+
+Currency: unknown — not recorded by the ledger reader. Integer minor units displayed with two decimals.
+
+Posted discounts plus write-offs plus signed shrinkage by branch/product; stock found offsets stock lost. This is recorded ledger leakage, not expiry exposure or inferred causation.
+
+Source: finance_journal_lines. Coverage: posted entries only; completeness unknown. Refunds included only when posted as reversals.
+
+Retrieved: 2026-10-21T02:26:13.382Z. Latest posting: unknown.
+
+COST COVERAGE: UNKNOWN
+
+Missing costs are unknown, not zero. These values do not establish complete business activity.
+
+Recorded categories only: discounts, write-offs and signed shrinkage. Stock found offsets stock lost. Discounts are commercial decisions; these totals are not all realized loss. Expiry exposure and reasons for changes are not inferred.
+
+No matching posted ledger rows. This is not proof of zero activity or complete cost coverage. Try another period or branch.
+
+ACCOUNTING DRIVERS
+Gross-margin comparison
+
+Branch: Clifton Chemist. Compare up to 92 days with the immediately preceding equal-length period.
+
+Current start (UTC)
+Current end (UTC, exclusive)
+Compare periods
+
+Previous: 2026-08-22T00:00:00.000Z to 2026-09-21T00:00:00.000Z. Current: 2026-09-21T00:00:00.000Z to 2026-10-21T00:00:00.000Z. UTC; start inclusive, end exclusive. Same branch, equal elapsed duration.
+
+No matching posted journal groups in either period. Ledger totals are zero for that period; this does not prove complete source data.
+
+Accounting decomposition · currency unknown · posted revenue, discounts and COGS, including reversals and returns recorded in the journal.
+LEDGER ACCOUNT	PREVIOUS	CURRENT	EFFECT ON GROSS MARGIN
+Revenue	0.00 (currency unknown)	0.00 (currency unknown)	0.00 (currency unknown)
+Discounts (subtracted)	0.00 (currency unknown)	0.00 (currency unknown)	-0.00 (currency unknown)
+COGS (subtracted)	0.00 (currency unknown)	0.00 (currency unknown)	-0.00 (currency unknown)
+Gross margin	0.00 (currency unknown)	0.00 (currency unknown)	0.00 (currency unknown)
+
+Revenue delta 0.00 (currency unknown) minus discount delta 0.00 (currency unknown) minus COGS delta 0.00 (currency unknown) = 0.00 (currency unknown) gross-margin change.
+
+Accounting decomposition, not a causal price/volume/mix explanation. Quantity, unit-price, unit-cost and expense evidence is not provided here; missing evidence is not zero. Gross margin is not net profit or contribution. Percentage change is omitted, including when the previous margin is zero or negative.
+
+ORGANIZATION SCOPE
+Working branch
+Branch
+Clifton Chemist
+Switch branch
+CARD · WALLET · BANK TRANSFER
+Create POS settlement batch
+
+No unsettled electronic POS tenders. Card, wallet, or bank-transfer sales appear here automatically.
+
+FIN-02
+Record money movement
+Workflow
+Supplier payment
+Customer receipt
+Expense
+Petty cash
+Bank deposit
+Settlement
+Voucher
+Cheque
+Reference
+Amount (PKR)
+Posting date
+Counterparty name
+Pay from / receive into
+Bank
+Cash / petty cash
+Bank reference
+Cheque number (cheque only)
+Cheque due date
+Memo
+Post transaction
+CONTROLLED CLOSE
+Close accounting period
+Period starts
+Period ends (exclusive)
+Close period
+
+No closed periods yet. Close a completed date range to prevent back-posting.
+
+BALANCED SHARED JOURNAL
+Recent transactions
+
+No transactions yet. Use “Record money movement” to post the first balanced entry.
+
+STATEMENT MATCHING
+Bank reconciliation
+Statement reference
+Line reference
+Booked date
+Amount (PKR)
+Bank description
+Add statement line
+
+Add a statement line and post a transaction before matching.
+
+FIN-04 · ACCOUNTANT APPROVAL
+Publish tax profile
+Profile name
+Accountant approval reference
+Effective from
+Effective to (optional)
+Medicine PCT / HS code
+Front-shop PCT / HS code
+Rate (0–1)
+Price mode
+Tax inclusive
+Tax exclusive
+SRO reference (always provisional)
+Verify against the final gazette before operational use.
+Publish approved version
+
+No tax profile is active. Publish an accountant-approved, effective-dated version before taxable sales.

@@ -1,0 +1,68 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Medicines
+Search workspace
+⌘K
+Ask Fathom
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY / SOURCE REVIEW
+Medicine catalogue
+
+Review preserved medicine names, source counts and prices before catalogue or stock approval.
+
+Source references, separate from physical stock
+
+Staged means unverified source evidence. A draft catalogue entry needs validated identity and pack metadata. Verified means an explicit review accepted the facts. Sellable also requires stock and sale checks. This screen establishes no linked draft, verified medicine or sellable balance.
+
+Batch, expiry and verified MRP gaps concern opening stock or price publication. They do not erase supplied names or quantities and do not prevent reading these candidates. Staging is workspace-wide; the chosen branch grants context, not ownership of source counts.
+
+Source and branch
+Branch
+Choose a branch
+Clifton Chemist
+Show batches
+
+No batches on this page. Preserved imports must exist in this workspace to appear here.
+
+Medicine reference connectors

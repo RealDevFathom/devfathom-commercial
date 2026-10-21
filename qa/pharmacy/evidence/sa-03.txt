@@ -1,0 +1,92 @@
+Skip to platform content
+DevFathom
+Platform control
+Platform nominal
+Organizations
+
+Platform Administrator
+
+qa-platform-admin@devfathom.test
+
+PA
+01
+Control room
+02
+Organizations
+03
+Deployments
+04
+Support sessions
+05
+Jobs
+06
+Health
+07
+Sales CRM
+08
+Commercial
+09
+Modules & plans
+10
+Operators
+11
+Audit ledger
+12
+Platform settings
+ORGANIZATIONS / ONBOARDING
+Onboard an organization
+
+Creates the tenant boundary, first administrator, package entitlements, default brand and email records, production deployment, and provisioning job. Activation remains manual.
+
+STEP 2 OF 2 · ORGANIZATION TYPE
+
+Pharmacy
+
+Counters, dispensing, inventory, procurement, safety, and reporting. Pharmacy Core is always enabled.
+
+Change type
+Organization and tenant owner
+
+The workspace stays in onboarding until an operator completes activation preflight.
+
+Display name
+Legal name
+Workspace slug
+Lowercase letters, numbers, and hyphens.
+Deployment mode
+Shared platform
+Dedicated enterprise is unavailable until Vercel provisioning is configured for this environment.
+Commercial package
+Pharmacy Chain · 1 default seats
+Pharmacy Essentials · 1 default seats
+Pharmacy Professional · 1 default seats
+Only active Pharmacy packages are listed.
+Seat limit
+Currency
+Timezone
+UTC
+Search by city or IANA name. Timezones are grouped by region.
+First branch name
+2–120 characters. The stable branch code remains MAIN.
+First branch address
+First branch city
+First branch province
+Punjab
+Sindh
+Khyber Pakhtunkhwa
+Balochistan
+Islamabad Capital Territory
+Gilgit-Baltistan
+Azad Jammu and Kashmir
+Sets the jurisdiction the branch licence is recorded under.
+Locale
+Grace period (days)
+Data residency
+Primary contact
+Primary contact email
+Tenant administrator
+Administrator email
+Temporary administrator password
+At least 12 characters. Share through an approved secure channel.
+Operator notes
+Create onboarding record

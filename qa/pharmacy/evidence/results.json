@@ -1,0 +1,479 @@
+{
+  "results": [
+    {
+      "id": "PH-SET-03",
+      "status": "pass",
+      "detail": "platform 200 tenant 200",
+      "evidence": [
+        "qa/pharmacy/evidence/set-03-platform-login.png",
+        "qa/pharmacy/evidence/set-03-tenant-login.png"
+      ],
+      "at": "2026-10-21T02:21:28.542Z"
+    },
+    {
+      "id": "PH-SA-00",
+      "status": "pass",
+      "detail": "Platform session open. MFA step: enrolled.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-00-platform-home.png"
+      ],
+      "at": "2026-10-21T02:21:30.952Z"
+    },
+    {
+      "id": "PH-SA-01",
+      "status": "pass",
+      "detail": "Chooser shows Pharmacy. Body mentions preselection language: true.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-01-chooser.png"
+      ],
+      "at": "2026-10-21T02:21:33.693Z"
+    },
+    {
+      "id": "PH-SA-02",
+      "status": "pass",
+      "detail": "Packages: Pharmacy Chain · 1 default seats | Pharmacy Essentials · 1 default seats | Pharmacy Professional · 1 default seats. Provinces: Punjab, Sindh, Khyber Pakhtunkhwa, Balochistan, Islamabad Capital Territory, Gilgit-Baltistan, Azad Jammu and Kashmir.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-02-pharmacy-form.png",
+        "qa/pharmacy/evidence/gap-02-defaults.png"
+      ],
+      "at": "2026-10-21T02:21:34.242Z"
+    },
+    {
+      "id": "PH-GAP-02",
+      "status": "fail",
+      "detail": "Untouched timezone value \"UTC\", currency \"USD\". Pakistan premises form.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-02-pharmacy-form.png",
+        "qa/pharmacy/evidence/gap-02-defaults.png"
+      ],
+      "at": "2026-10-21T02:21:34.243Z"
+    },
+    {
+      "id": "PH-SA-03",
+      "status": "pass",
+      "detail": "Stayed on form: true. Snippet: Skip to platform content DevFathom Platform control Platform nominal Organizations Platform Administrator qa-platform-admin@devfathom.test PA 01 Control room 02 Organizations 03 Deployments 04 Support sessions 05 Jobs 06 Health 07 Sales CRM 08 Commercial 09 Modules & plans 10 Operators 11 Audit ledger 12 Platform settings ORGANIZATIONS / ONBOARDING Onboard an organization Creates the tenant bounda",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-03-validation.png"
+      ],
+      "at": "2026-10-21T02:21:36.580Z"
+    },
+    {
+      "id": "PH-SA-04",
+      "status": "pass",
+      "detail": "Created cmvhhkj1v000ggtjsplibyd6k. URL http://admin.localhost:3000/platform/organizations/cmvhhkj1v000ggtjsplibyd6k. Contains ONBOARDING: true.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-04-created.png"
+      ],
+      "at": "2026-10-21T02:21:40.559Z"
+    },
+    {
+      "id": "PH-SA-05",
+      "status": "fail",
+      "detail": "evaluate: ReferenceError: process is not defined\n    at eval (eval at evaluate (:311:30), <anonymous>:7:44)\n    at UtilityScript.evaluate (<anonymous>:313:16)\n    at UtilityScript.<anonymous> (<anonymous>:1:44)",
+      "evidence": [],
+      "at": "2026-10-21T02:21:52.334Z"
+    },
+    {
+      "id": "PH-SA-06",
+      "status": "pass",
+      "detail": "Professional module labels are on the organization page.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-06-modules.png"
+      ],
+      "at": "2026-10-21T02:21:55.182Z"
+    },
+    {
+      "id": "PH-SA-08",
+      "status": "fail",
+      "detail": "Disable appears next to Pharmacy Core.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-06-modules.png"
+      ],
+      "at": "2026-10-21T02:21:55.182Z"
+    },
+    {
+      "id": "PH-SA-07",
+      "status": "fail",
+      "detail": "Activation HTTP 200. Body {\"data\":{\"id\":\"cmvhhkj1v000ggtjsplibyd6k\",\"slug\":\"qa-clifton\",\"legalName\":\"QA Clifton Chemist (Private) Limited\",\"displayName\":\"QA Clifton Chemist\",\"vertical\":\"PHARMACY\",\"status\":\"ONBOARDING\",\"deploymentMode\":\"SHARED\",\"packageId\":\"cmvhhefto003060jsj43tfupt\",\"timezone\":\"Asia/Karachi\",\"locale\":\"en\",\"currency\":\"PKR\",\"seatLimit\":10,\"isDemo\":false,\"askFathomEnabled\":true,\"lastDemoResetAt\":null,\"gracePeriodDays\":0,\"activatedAt\":null,\"suspendedAt\":null,\"terminatedAt\":null,\"purgeScheduledAt\":null,\"dataResidency\":null,\"primaryContactName\":\"Pharmacy Owner\",\"primaryContactEmail\":\"owner@qa-clifton.test\",\". Still ONBOARDING on page: true. Jobs exit 0.",
+      "evidence": [
+        "qa/pharmacy/evidence/sa-07-lifecycle.png"
+      ],
+      "at": "2026-10-21T02:21:55.790Z"
+    },
+    {
+      "id": "PH-ON-02",
+      "status": "pass",
+      "detail": "Messages look the same. Wrong: DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems  | Unknown: DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems ",
+      "evidence": [],
+      "at": "2026-10-21T02:21:59.985Z"
+    },
+    {
+      "id": "PH-ON-01",
+      "status": "fail",
+      "detail": "URL http://qa-clifton.localhost:3000/login. Restaurant nav leaked: false.",
+      "evidence": [
+        "qa/pharmacy/evidence/on-01-home.png"
+      ],
+      "at": "2026-10-21T02:22:02.141Z"
+    },
+    {
+      "id": "PH-ON-06",
+      "status": "pass",
+      "detail": "Final URL http://qa-clifton.localhost:3000/login?callbackUrl=%2Fpharmacy%2Fcounter. HTTP 200.",
+      "evidence": [
+        "qa/pharmacy/evidence/on-06-signed-out.png"
+      ],
+      "at": "2026-10-21T02:22:02.454Z"
+    },
+    {
+      "id": "PH-ON-03",
+      "status": "blocked",
+      "detail": "Tenant login did not leave /login.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:02.464Z"
+    },
+    {
+      "id": "PH-RS-01",
+      "status": "blocked",
+      "detail": "no tenant",
+      "evidence": [],
+      "at": "2026-10-21T02:22:02.472Z"
+    },
+    {
+      "id": "PH-SEC-01",
+      "status": "pass",
+      "detail": "GET 401 trpc/pharmacySales.counterBranches; POST 401 trpc/pharmacySales.counterSearch; GET 400 pharmacy/print; POST 403 counter/replay; POST 401 whatsapp/webhook; GET 403 whatsapp/webhook; POST 401 platform/control",
+      "evidence": [],
+      "at": "2026-10-21T02:22:22.140Z"
+    },
+    {
+      "id": "PH-NT-02",
+      "status": "pass",
+      "detail": "POST 401 {\"error\":\"Invalid signature.\"} | GET 403 {\"error\":\"Forbidden.\"}",
+      "evidence": [],
+      "at": "2026-10-21T02:22:22.141Z"
+    },
+    {
+      "id": "PH-SEC-05",
+      "status": "pass",
+      "detail": "x-frame-options=set, x-content-type-options=set, content-security-policy=set, x-powered-by=missing",
+      "evidence": [],
+      "at": "2026-10-21T02:22:22.231Z"
+    },
+    {
+      "id": "PH-MT-01",
+      "status": "pass",
+      "detail": "Rival URL http://qa-rival.localhost:3000/pharmacy/inventory. Clifton leak: false. id cmvhhlh4w001wgtjst4gvc3av.",
+      "evidence": [
+        "qa/pharmacy/evidence/mt-01-rival.png"
+      ],
+      "at": "2026-10-21T02:22:30.388Z"
+    },
+    {
+      "id": "PH-MT-03",
+      "status": "pass",
+      "detail": "Rival host with Clifton cookies landed on http://qa-rival.localhost:3000/login?callbackUrl=%2Fdashboard. Clifton name visible: false.",
+      "evidence": [
+        "qa/pharmacy/evidence/mt-03-cookie.png"
+      ],
+      "at": "2026-10-21T02:22:32.816Z"
+    },
+    {
+      "id": "PH-RV-03",
+      "status": "fail",
+      "detail": "Suspend HTTP 200 {\"data\":{\"id\":\"cmvhhkj1v000ggtjsplibyd6k\",\"slug\":\"qa-clifton\",\"legalName\":\"QA Clifton Chemist (Private) Limited\",\"displayName\":\"QA Clifton Chemist\",\"vertical\":\"PHARMACY\",\"status\":\"ONBOARDING\",\"deploymentMode\":\"SHARED\",\"packageId\":\"cmvhhefto003060jsj43tfupt\",\"timezone\":\"Asia/Karachi\",\"locale\":\"en\",\"c. Login URL http://qa-clifton.localhost:3000/dashboard.",
+      "evidence": [
+        "qa/pharmacy/evidence/rv-03-suspended.png"
+      ],
+      "at": "2026-10-21T02:22:35.328Z"
+    },
+    {
+      "id": "PH-RV-04",
+      "status": "pass",
+      "detail": "Resume HTTP 200 {\"data\":{\"id\":\"cmvhhkj1v000ggtjsplibyd6k\",\"slug\":\"qa-clifton\",\"legalName\":\"QA Clifton Chemist (Private) Limited\",\"displayName\":\"QA Clifton Chemist\",\"vertical\":\"PHARMACY\",\"status\":\"ONBOARDING\",\"deploymentMode\":\"SHARED\",\"packageId\":\"cmvhhefto003060jsj43tfupt\",\"timezone\":\"Asia/Karachi\",\"locale\":\"en\",\"c",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.427Z"
+    },
+    {
+      "id": "PH-SET-01",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.444Z"
+    },
+    {
+      "id": "PH-SET-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.444Z"
+    },
+    {
+      "id": "PH-ST-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.445Z"
+    },
+    {
+      "id": "PH-ST-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.445Z"
+    },
+    {
+      "id": "PH-UR-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.445Z"
+    },
+    {
+      "id": "PH-UR-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.445Z"
+    },
+    {
+      "id": "PH-UR-04",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.445Z"
+    },
+    {
+      "id": "PH-PR-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.445Z"
+    },
+    {
+      "id": "PH-IN-01",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-IN-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-IN-04",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-PU-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-PU-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-PU-05",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-POS-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-POS-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-POS-04",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-POS-05",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-POS-06",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.446Z"
+    },
+    {
+      "id": "PH-POS-07",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-POS-09",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-NT-01",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-CL-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-RV-01",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-RV-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-MT-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-MT-04",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-PM-01",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-PM-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-PM-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-VL-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-VL-04",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-UX-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.447Z"
+    },
+    {
+      "id": "PH-SEC-02",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.448Z"
+    },
+    {
+      "id": "PH-SEC-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.448Z"
+    },
+    {
+      "id": "PH-SEC-04",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.448Z"
+    },
+    {
+      "id": "PH-GAP-03",
+      "status": "not-run",
+      "detail": "Not reached by this automated pass. See the execution report for whether a follow-up probe covered it.",
+      "evidence": [],
+      "at": "2026-10-21T02:22:35.448Z"
+    }
+  ],
+  "consoleProblems": [
+    {
+      "label": "desktop",
+      "kind": "console",
+      "message": "Failed to load resource: the server responded with a status of 401 (Unauthorized)"
+    },
+    {
+      "label": "desktop",
+      "kind": "console",
+      "message": "A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch `if (typeof window !== 'undefined')`.\n- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML ta"
+    },
+    {
+      "label": "desktop",
+      "kind": "console",
+      "message": "Failed to load resource: the server responded with a status of 400 (Bad Request)"
+    },
+    {
+      "label": "desktop",
+      "kind": "console",
+      "message": "A tree hydrated but some attributes of the server rendered HTML didn't match the client properties. This won't be patched up. This can happen if a SSR-ed Client Component used:\n\n- A server/client branch `if (typeof window !== 'undefined')`.\n- Variable input such as `Date.now()` or `Math.random()` which changes each time it's called.\n- Date formatting in a user's locale which doesn't match the server.\n- External changing data without sending a snapshot of it along with the HTML.\n- Invalid HTML ta"
+    }
+  ]
+}

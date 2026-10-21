@@ -1,0 +1,83 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Reports
+Replenishment
+Search workspace
+⌘K
+Ask Fathom
+Ask Fathom chat availability is being checked. Try again shortly.
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY REPORTS
+Replenishment
+
+Inspect recorded consumption and supply, then compare explicit planning assumptions.
+
+Back to reports
+Report scope
+Branch
+Select an authorized branch
+Clifton Chemist
+Find medicine
+Search medicines
+Medicine
+Search and select a medicine
+Observation window
+History start (UTC)
+History end / forecast origin (exclusive, UTC)
+Planning / forecast horizon (days)
+Forecast method
+Recent mean
+Weekly seasonal naive
+
+Use 1–90 history days and a 1–366 day horizon. Sales use business dates; demand coverage uses UTC days. Current reads cannot reconstruct historical versions.
+
+Manual planning assumptions
+Include a user-supplied scenario
+
+USER_SUPPLIED_ASSUMPTIONS: enter a constant daily demand and hypothetical order terms. Current policy means the order quantity you enter, not on-hand stock. These inputs are not observed demand or a forecast guarantee.
+
+Read replenishment report
+Report status
+
+Select a branch and medicine, review dates, then read the report.

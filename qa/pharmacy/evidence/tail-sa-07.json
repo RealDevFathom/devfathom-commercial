@@ -1,0 +1,6 @@
+{
+  "status": 400,
+  "json": {
+    "error": "Activation preflight failed: pharmacy regulatory profile denied operation (PROFILE_MISSING)."
+  }
+}

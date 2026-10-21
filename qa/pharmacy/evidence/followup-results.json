@@ -1,0 +1,40 @@
+[
+  {
+    "id": "FU-LOGIN-PLATFORM",
+    "status": "pass",
+    "detail": "http://admin.localhost:3000/platform/login",
+    "evidence": []
+  },
+  {
+    "id": "PH-SA-05",
+    "status": "fail",
+    "detail": "HTTP 401 {\"error\":\"Platform authentication is required.\"}",
+    "evidence": []
+  },
+  {
+    "id": "PH-SA-08",
+    "status": "pass",
+    "detail": "Disable core HTTP 401 {\"error\":\"Platform authentication is required.\"}",
+    "evidence": []
+  },
+  {
+    "id": "PH-SA-07",
+    "status": "pass",
+    "detail": "HTTP 401 db=ONBOARDING body {\"error\":\"Platform authentication is required.\"}",
+    "evidence": []
+  },
+  {
+    "id": "PH-ON-01",
+    "status": "pass",
+    "detail": "Landed on http://qa-clifton.localhost:3000/dashboard",
+    "evidence": [
+      "qa/pharmacy/evidence/fu-on-01.png"
+    ]
+  },
+  {
+    "id": "PH-ON-02",
+    "status": "fail",
+    "detail": "wrong=\"DevFathom\nFIELDBOOK / 01\n\nTHE DELIVERY DESK\n\nWork with\nthe whole\npicture.\n\nProjects, finance, clients, and people — each moving part visible before it becomes a decision.\n\nAll systems operational\nDevFathom · Company hub\n\nSECURE WORKSPACE ACCESS\n\nWelcome back\n\nSign in to pick up the work your team is moving forward.\n\nEmail\nPassword\nForgot password?\nSigning in...\n\nNeed access? Contact your workspace admin.\" unknown=\"DevFathom\nFIELDBOOK / 01\n\nTHE DELIVERY DESK\n\nWork with\nthe whole\npicture.\n\nProjects, finance, clients, and people — each moving part visible before it becomes a decision.\n\nAll systems operational\nDevFathom · Company hub\n\nSECURE WORKSPACE ACCESS\n\nWelcome back\n\nSign in to pick up the work your team is moving forward.\n\nEmail\nPassword\nForgot password?\nSigning in...\n\nNeed access? Contact your workspace admin.\"",
+    "evidence": []
+  }
+]

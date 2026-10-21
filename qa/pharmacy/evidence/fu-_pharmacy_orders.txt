@@ -1,0 +1,84 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Orders
+Search workspace
+⌘K
+Ask Fathom
+Ask Fathom chat availability is being checked. Try again shortly.
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY
+Customer orders
+
+One protected storefront for branch collection and staff-runner delivery. Every order remains a proposal until pharmacy staff accepts it.
+
+STOREFRONT
+Orderable pharmacy catalogue
+Search catalogue
+Fulfilling branch
+No non-prescription, saleable item with available stock matches this branch and search.
+ORDERS
+Your orders
+
+Loading orders…
+
+BASKET
+Order proposal
+Add an in-stock OTC pack to begin.
+Fulfilment
+Collect
+Deliver
+Intended payment method
+Cash at fulfilment
+Card at fulfilment
+Bank transfer
+Wallet at counter
+Approved credit
+
+This is an intention only. No online payment is taken; staff settle the linked counter sale.
+
+TOTAL
+
+Rs 0
+
+Place order

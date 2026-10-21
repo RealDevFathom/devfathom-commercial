@@ -1,0 +1,122 @@
+QA Clifton Chemist
+Company workspace
+Pharmacy Owner
+Organization administrator
+Pharmacy
+Purchasing
+Search workspace
+⌘K
+Ask Fathom
+Ask Fathom chat availability is being checked. Try again shortly.
+PO
+01
+Dashboard
+02
+Onboarding
+03
+Medicine catalog
+04
+Day close
+05
+Counter
+06
+Inventory
+07
+Purchasing
+08
+Finance
+09
+Reports & Insights
+10
+Cameras
+11
+Loyalty points
+12
+Marketing & growth
+13
+Prescriptions
+14
+Pharmacist queue
+15
+Substitution
+16
+Controlled register
+17
+Regulatory profile
+18
+Organization
+19
+Settings
+PHARMACY PROCUREMENT
+Purchasing & receiving
+
+Suppliers, requisitions, orders, the goods-in bench and supplier returns. Everything a pharmacy buys passes through here on its way to being saleable stock.
+
+Overview
+PUR-01..06
+Suppliers
+PUR-01
+Requisitions & orders
+PUR-02/03
+Goods in
+PUR-02/04/05
+Returns & claims
+PUR-06
+BEFORE YOU CAN RECEIVE
+3 things still to set up
+
+Each one is a gate the domain enforces, not a suggestion. Everything already in place is listed below it, so you can see how far along this workspace is.
+
+READY
+An active pharmacy branch
+Stock is held by a branch, and a goods receipt posts into one branch’s ledger.
+MISSING
+At least one stock location
+Accepted units are received into a named location, and rejected units into a quarantine one.
+Add a stock location
+MISSING
+A medicine with an effective pack level
+Orders and receipts are stated in packs, so the pack → unit conversion has to exist before either can be entered.
+Open the medicine register
+MISSING
+A supplier that can be ordered from
+PUR-01 refuses an order or a receipt unless the supplier is authorized and holds an unexpired verified licence.
+Open the supplier register
+ORDERABLE SUPPLIERS
+0 of 0
+Authorized and licensed
+AWAITING APPROVAL
+0
+Needs a second person
+OPEN MATCH EXCEPTIONS
+0
+Clifton Chemist · Current open receiving exceptions, read on this page load.
+CREDIT OUTSTANDING
+PKR 0.00
+Clifton Chemist · Expected, not yet received. Current debit-note outstanding positions across all returns for this branch; read on this page load.
+Where to go
+Suppliers (PUR-01)
+
+Licence evidence, terms, credit and the standing decision to trade. A supplier is orderable only while both the authorization and an unexpired verified licence hold.
+
+Requisitions & orders (PUR-02/03)
+
+State the demand, record what each distributor quoted, read the ranked and explained comparison, then approve and send the order. Approval is refused to whoever raised it.
+
+Goods in (PUR-02/04/05)
+
+Capture batch, expiry, printed MRP, pack level, quantity, bonus and cost; post into the batch ledger; work the match-exception queue; or take a direct purchase with a recorded bypass.
+
+Returns & claims (PUR-06)
+
+Purchase returns and expiry claims with the supplier window each is racing, the debit notes they raise, and expected against received credit side by side.
+
+Nothing has been ordered yet
+No purchase orders
+
+Once the gates above are met, draft a requisition, compare the quotes you were given, and raise the order from the one you award.
+
+→
+Draft a requisition
+→
+Add a supplier
