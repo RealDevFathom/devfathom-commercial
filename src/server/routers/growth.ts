@@ -1,3 +1,110 @@
-import { router } from '@/server/trpc';
+import { TRPCError } from '@trpc/server';
+import { z } from 'zod';
 
-export const growthRouter = router({});
+import { hasModule } from '@/lib/entitlements';
+import { CustomerNotFound, setCustomerOptIn } from '@/lib/growth/consent';
+import {
+  DEFAULT_TEMPLATE_LANGUAGE,
+  ensureDefaultTemplates,
+  saveTemplateBody,
+  TEMPLATE_KEYS,
+  MissingStop,
+  UnknownTemplateVariable,
+} from '@/lib/growth/templates';
+import { InvalidWhatsAppPhone } from '@/lib/growth/whatsapp/phone';
+import { growthStore } from '@/lib/growth/whatsapp/store';
+import { capabilityProcedure, protectedProcedure, router, type TRPCContext } from '@/server/trpc';
+
+function assertGrowthEnabled(ctx: TRPCContext) {
+  if (!hasModule(ctx.entitlements, 'growth_ai')) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'The growth_ai module is not enabled for this organization.',
+    });
+  }
+}
+
+function organizationIdFrom(ctx: TRPCContext): string {
+  const organizationId = ctx.organization?.id ?? ctx.session?.user?.organizationId;
+  if (!organizationId) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+  }
+  return organizationId;
+}
+
+function fail(error: unknown): never {
+  if (
+    error instanceof InvalidWhatsAppPhone ||
+    error instanceof MissingStop ||
+    error instanceof UnknownTemplateVariable
+  ) {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
+  }
+  if (error instanceof CustomerNotFound) {
+    throw new TRPCError({ code: 'NOT_FOUND', message: error.message });
+  }
+  throw error;
+}
+
+const manage = capabilityProcedure('growth.manage');
+const member = protectedProcedure;
+
+export const growthRouter = router({
+  templates: router({
+    list: manage.query(async ({ ctx }) => {
+      assertGrowthEnabled(ctx);
+      const organizationId = organizationIdFrom(ctx);
+      return ensureDefaultTemplates(growthStore(ctx.db), organizationId);
+    }),
+    update: manage
+      .input(
+        z
+          .object({
+            key: z.enum(TEMPLATE_KEYS),
+            language: z.string().trim().min(2).max(16).default(DEFAULT_TEMPLATE_LANGUAGE),
+            body: z.string().trim().min(1).max(2000),
+          })
+          .strict()
+      )
+      .mutation(async ({ ctx, input }) => {
+        assertGrowthEnabled(ctx);
+        try {
+          return await saveTemplateBody(growthStore(ctx.db), {
+            organizationId: organizationIdFrom(ctx),
+            key: input.key,
+            language: input.language,
+            body: input.body,
+          });
+        } catch (error) {
+          fail(error);
+        }
+      }),
+  }),
+  customers: router({
+    /** POS consent. Cashiers do not receive growth.manage; the module flag still applies. */
+    setOptIn: member
+      .input(
+        z
+          .object({
+            customerId: z.string().trim().min(1).max(200),
+            whatsappOptIn: z.boolean(),
+            phone: z.string().trim().max(32).optional(),
+          })
+          .strict()
+      )
+      .mutation(async ({ ctx, input }) => {
+        assertGrowthEnabled(ctx);
+        try {
+          return await setCustomerOptIn(growthStore(ctx.db), {
+            organizationId: organizationIdFrom(ctx),
+            customerId: input.customerId,
+            whatsappOptIn: input.whatsappOptIn,
+            phone: input.phone,
+            now: new Date(),
+          });
+        } catch (error) {
+          fail(error);
+        }
+      }),
+  }),
+});

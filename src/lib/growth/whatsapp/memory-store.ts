@@ -1,0 +1,186 @@
+import type {
+  GrowthCustomer,
+  GrowthSettings,
+  GrowthWhatsAppStore,
+  MessageLogRow,
+  MessageTemplateRow,
+} from './types';
+
+export type MemoryStore = GrowthWhatsAppStore & {
+  putSettings(row: GrowthSettings): void;
+  putCustomer(row: GrowthCustomer): void;
+  messages: MessageLogRow[];
+};
+
+/** In-memory store for unit tests. Not used by the webhook or the tick. */
+export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
+  const now = options?.now ?? (() => new Date());
+  const settings = new Map<string, GrowthSettings>();
+  const customers: GrowthCustomer[] = [];
+  const messages: MessageLogRow[] = [];
+  const templates: MessageTemplateRow[] = [];
+  let sequence = 0;
+
+  function nextId(prefix: string) {
+    sequence += 1;
+    return `${prefix}_${sequence}`;
+  }
+
+  const store: GrowthWhatsAppStore = {
+    async settings(organizationId) {
+      return settings.get(organizationId) ?? null;
+    },
+    async organizationIdForInstance(instance) {
+      const matches = [...settings.values()].filter(
+        (row) => row.waInstanceName === instance || row.organizationId === instance
+      );
+      return matches.length === 1 ? matches[0]!.organizationId : null;
+    },
+    async organization() {
+      return { timezone: 'Asia/Karachi', displayName: 'Demo Pharmacy' };
+    },
+    async customer(organizationId, customerId) {
+      return (
+        customers.find((row) => row.organizationId === organizationId && row.id === customerId) ??
+        null
+      );
+    },
+    async customerByPhone(organizationId, whatsappE164) {
+      return (
+        customers.find(
+          (row) => row.organizationId === organizationId && row.whatsappE164 === whatsappE164
+        ) ?? null
+      );
+    },
+    async saveCustomer(input) {
+      const index = customers.findIndex(
+        (row) => row.id === input.id && row.organizationId === input.organizationId
+      );
+      if (index < 0) throw new Error('Customer not found.');
+      const current = customers[index]!;
+      const saved = { ...current, ...input };
+      customers[index] = saved;
+      return saved;
+    },
+    async createCustomer(input) {
+      const created: GrowthCustomer = {
+        id: nextId('cus'),
+        organizationId: input.organizationId,
+        displayName: input.displayName,
+        whatsappE164: input.whatsappE164,
+        whatsappOptIn: input.whatsappOptIn,
+        whatsappOptInAt: input.whatsappOptInAt,
+        whatsappOptOutAt: input.whatsappOptOutAt,
+      };
+      customers.push(created);
+      return created;
+    },
+    async queuedMessages(organizationId, limit) {
+      return messages
+        .filter(
+          (row) =>
+            row.organizationId === organizationId &&
+            row.direction === 'out' &&
+            row.status === 'queued'
+        )
+        .sort(
+          (left, right) =>
+            left.createdAt.getTime() - right.createdAt.getTime() || left.id.localeCompare(right.id)
+        )
+        .slice(0, limit);
+    },
+    async countSentToday(organizationId, since) {
+      return messages.filter(
+        (row) =>
+          row.organizationId === organizationId &&
+          row.direction === 'out' &&
+          (row.status === 'sent' || row.status === 'delivered' || row.status === 'read') &&
+          row.updatedAt >= since
+      ).length;
+    },
+    async markMessage(id, patch) {
+      const row = messages.find((item) => item.id === id);
+      if (!row) return;
+      if (patch.status) row.status = patch.status;
+      if ('waMessageId' in patch) row.waMessageId = patch.waMessageId ?? null;
+      if ('error' in patch) row.error = patch.error ?? null;
+      row.updatedAt = now();
+    },
+    async insertMessage(input) {
+      const stamp = now();
+      const row: MessageLogRow = {
+        id: nextId('msg'),
+        ...input,
+        createdAt: stamp,
+        updatedAt: stamp,
+      };
+      messages.push(row);
+      return row;
+    },
+    async findInbound(organizationId, waMessageId) {
+      return (
+        messages.find(
+          (row) =>
+            row.organizationId === organizationId &&
+            row.direction === 'in' &&
+            row.waMessageId === waMessageId
+        ) ?? null
+      );
+    },
+    async findOutboundByProviderId(organizationId, waMessageId) {
+      return (
+        messages.find(
+          (row) =>
+            row.organizationId === organizationId &&
+            row.direction === 'out' &&
+            row.waMessageId === waMessageId
+        ) ?? null
+      );
+    },
+    async cancelQueued(organizationId, customerId) {
+      let count = 0;
+      for (const row of messages) {
+        if (
+          row.organizationId === organizationId &&
+          row.customerId === customerId &&
+          row.direction === 'out' &&
+          row.status === 'queued'
+        ) {
+          row.status = 'failed';
+          row.error = 'cancelled:opt_out';
+          row.updatedAt = now();
+          count += 1;
+        }
+      }
+      return count;
+    },
+    async templates(organizationId) {
+      return templates.filter((row) => row.organizationId === organizationId);
+    },
+    async saveTemplate(input) {
+      const existing = templates.find(
+        (row) =>
+          row.organizationId === input.organizationId &&
+          row.key === input.key &&
+          row.language === input.language
+      );
+      if (existing) {
+        existing.body = input.body;
+        return existing;
+      }
+      const created: MessageTemplateRow = { id: nextId('tpl'), ...input };
+      templates.push(created);
+      return created;
+    },
+  };
+
+  return Object.assign(store, {
+    putSettings(row: GrowthSettings) {
+      settings.set(row.organizationId, row);
+    },
+    putCustomer(row: GrowthCustomer) {
+      customers.push(row);
+    },
+    messages,
+  });
+}

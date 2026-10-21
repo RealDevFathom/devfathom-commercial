@@ -75,6 +75,7 @@ import {
   type CounterBrowserPrintReservation,
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
+import { CounterWhatsAppOffer } from '@/components/growth/whatsapp-offer-consent';
 import { trpc } from '@/lib/trpc';
 
 type Notice = {
@@ -264,6 +265,7 @@ function ScopedPharmacyCounterConsole({
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
+  const entitlements = useEntitlements();
 
   const [selectedBranchId, setSelectedBranchId] = useState(initialBranchId);
   const [query, setQuery] = useState('');
@@ -2109,6 +2111,12 @@ function ScopedPharmacyCounterConsole({
                     Available credit {formatMinor(customerQuery.data.availableCreditMinor)}
                   </p>
                 </div>
+                {isModuleGranted('growth_ai', entitlements.enabledModules) ? (
+                  <CounterWhatsAppOffer
+                    customerId={customerQuery.data.customer.id}
+                    initialPhone={patient?.phone ?? ''}
+                  />
+                ) : null}
                 <div className="flex gap-2">
                   <Label htmlFor="counter-redeem-points" className="sr-only">
                     Points to redeem

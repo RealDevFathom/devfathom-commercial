@@ -2,6 +2,7 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { isGrowthEnabled } from '@/lib/growth';
+import { drainOrganizationQueue } from '@/lib/growth/whatsapp/queue';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 
 function safeEqual(left: string, right: string): boolean {
@@ -23,6 +24,11 @@ export async function POST(request: Request) {
   for (const organization of organizations) {
     if (await isGrowthEnabled(organization.id)) {
       console.info(`[growth] tick organizationId=${organization.id}`);
+      try {
+        await drainOrganizationQueue(organization.id);
+      } catch {
+        console.error(`[growth] tick failed organizationId=${organization.id}`);
+      }
     }
   }
   return NextResponse.json({ ok: true });

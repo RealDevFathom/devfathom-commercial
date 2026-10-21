@@ -1,0 +1,48 @@
+# Dev-only Evolution API for the growth WhatsApp channel. Not a production deploy.
+#
+#   EVOLUTION_API_KEY=replace-with-evolution-api-key \
+#     docker compose -f deploy/evolution-api/docker-compose.yml up
+#
+# Pair a dedicated shop number at http://localhost:8080/manager
+# Set the instance webhook to:
+#   $NEXT_PUBLIC_APP_URL/api/growth/whatsapp/webhook?secret=$GROWTH_WEBHOOK_SECRET
+# Postgres is not published on the host, so it does not take DevFathom's 5432.
+
+name: devfathom-evolution-dev
+
+services:
+  evolution-api:
+    image: atendai/evolution-api:v2.1.1
+    ports:
+      - '8080:8080'
+    environment:
+      SERVER_URL: http://localhost:8080
+      AUTHENTICATION_API_KEY: ${EVOLUTION_API_KEY:?set EVOLUTION_API_KEY}
+      DATABASE_ENABLED: 'true'
+      DATABASE_PROVIDER: postgresql
+      DATABASE_CONNECTION_URI: postgresql://evolution:evolution@evolution-postgres:5432/evolution
+      DATABASE_CONNECTION_CLIENT_NAME: devfathom_growth
+      CACHE_REDIS_ENABLED: 'true'
+      CACHE_REDIS_URI: redis://evolution-redis:6379/1
+      CACHE_REDIS_PREFIX_KEY: devfathom_growth
+    depends_on:
+      - evolution-postgres
+      - evolution-redis
+    volumes:
+      - evolution_instances:/evolution/instances
+
+  evolution-postgres:
+    image: postgres:16
+    environment:
+      POSTGRES_DB: evolution
+      POSTGRES_USER: evolution
+      POSTGRES_PASSWORD: evolution
+    volumes:
+      - evolution_postgres:/var/lib/postgresql/data
+
+  evolution-redis:
+    image: redis:7
+
+volumes:
+  evolution_instances:
+  evolution_postgres:
