@@ -5,6 +5,7 @@ const mocks = vi.hoisted(() => ({
   can: vi.fn(async () => false),
   branchFindMany: vi.fn(),
   settingUpsert: vi.fn(),
+  userFindUnique: vi.fn(),
   branchFindFirst: vi.fn(),
   reportFindFirst: vi.fn(),
   reportFindMany: vi.fn(),
@@ -65,6 +66,7 @@ vi.mock('@/server/audit', () => ({
 }));
 
 import { hasModule } from '@/lib/entitlements';
+import { pharmacyDashboardDefault } from '@/lib/pharmacy/dashboard';
 import type { TRPCContext } from '../trpc';
 import { pharmacyReportsRouter } from './pharmacy-reports';
 
@@ -78,6 +80,7 @@ function caller(role = 'ADMIN') {
         update: mocks.reportUpdate,
       },
       pharmacyOwnerDigestSetting: { upsert: mocks.settingUpsert },
+      user: { findUnique: mocks.userFindUnique },
     },
     entitlements: {
       organizationId: 'org_1',
@@ -94,6 +97,39 @@ function caller(role = 'ADMIN') {
     audit: { detail: {} },
   } as unknown as TRPCContext);
 }
+
+describe('pharmacy administrator bootstrap reads', () => {
+  beforeEach(() => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:manage');
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.userFindUnique.mockResolvedValue({ preferences: null });
+  });
+
+  it('allows an Owner pharmacy namespace grant to read branches', async () => {
+    await expect(caller().branches()).resolves.toMatchObject({
+      organizationId: 'org_1',
+      branches: [{ id: 'branch_1', name: 'Main' }],
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin', role: 'ADMIN' }),
+      'pharmacy:manage',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('allows an Owner pharmacy namespace grant to read the report catalog', async () => {
+    await expect(caller().catalog()).resolves.toEqual(
+      expect.objectContaining({ reports: expect.any(Array), metrics: expect.anything() })
+    );
+  });
+
+  it('allows an Owner pharmacy namespace grant to read dashboard preferences', async () => {
+    await expect(caller().getPreferences()).resolves.toEqual(
+      pharmacyDashboardDefault('ADMIN')
+    );
+  });
+});
 
 function pvCaller() {
   mocks.branchFindFirst.mockResolvedValue({ id: 'branch_1' });

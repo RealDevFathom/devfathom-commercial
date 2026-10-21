@@ -42,6 +42,17 @@ import {
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const reports = capabilityProcedure('reports:operational');
+const pharmacyAdminRead = auditedProtectedProcedure.use(async ({ ctx, next }) => {
+  const actor = subjectFromSession(ctx.session!.user);
+  const options = { db: ctx.db, source: 'TRPC' as const, ip: ctx.requestMeta.ip };
+  if (
+    !(await can(actor, 'pharmacy:manage', undefined, options)) &&
+    !(await can(actor, 'reports:operational', undefined, options))
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy administration access required.' });
+  }
+  return next();
+});
 const widget = z
   .object({
     key: z.enum(PHARMACY_WIDGET_KEYS),
@@ -319,7 +330,7 @@ export const pharmacyReportsRouter = router({
         })),
       };
     }),
-  branches: reports.query(({ ctx }) => scope(ctx)),
+  branches: pharmacyAdminRead.query(({ ctx }) => scope(ctx)),
   replenishment: reports.input(pharmacyReplenishmentReportInput).query(async ({ ctx, input }) => {
     // Existing capability middleware denies before report reads; scope enforces licensing.
     const available = await scope(ctx);
@@ -399,7 +410,7 @@ export const pharmacyReportsRouter = router({
       }
       return readPharmacyDailyWorkPack(ctx.db, resolved, readAt);
     }),
-  catalog: reports.query(async ({ ctx }) => ({
+  catalog: pharmacyAdminRead.query(async ({ ctx }) => ({
     reports: pharmacyReportCatalog(),
     metrics: PHARMACY_METRIC_CONTRACT,
     permissions: {
@@ -625,7 +636,7 @@ export const pharmacyReportsRouter = router({
       select: { branchId: true, enabled: true, timeMinutes: true, nextDueAt: true },
     });
   }),
-  getPreferences: reports.query(async ({ ctx }) => {
+  getPreferences: pharmacyAdminRead.query(async ({ ctx }) => {
     const user = await ctx.db.user.findUnique({
       where: { id: ctx.session!.user.id },
       select: { preferences: true },
