@@ -14,10 +14,11 @@ vi.mock('@/server/audit', () => ({
 
 import { restaurantTaxRouter } from './restaurant-tax';
 
+const branchLookup = vi.fn();
 const db = {
   $executeRaw: vi.fn(),
   $transaction: vi.fn(),
-  restaurantBranch: { findUnique: vi.fn() },
+  restaurantBranch: { findUnique: branchLookup, findFirst: branchLookup },
   restaurantTaxProfileVersion: {
     findUnique: vi.fn(),
     findFirst: vi.fn(),

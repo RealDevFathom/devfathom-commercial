@@ -84,6 +84,7 @@ function caller(role = 'ADMIN', organizationId = 'org_1') {
   return restaurantStaffRouter.createCaller({
     db,
     entitlements: {
+      organizationId,
       enabledModules: ['restaurant-core'],
       activeSeats: 1,
       seatLimit: 50,

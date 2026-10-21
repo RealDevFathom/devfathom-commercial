@@ -110,8 +110,15 @@ import type { TRPCContext } from '../trpc';
 
 function caller() {
   return restaurantFloorRouter.createCaller({
-    db: {},
+    db: {
+      restaurantBranch: {
+        findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+          (where?.id?.in ?? []).map((id) => ({ id }))
+        ),
+      },
+    },
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-pos'],
       activeSeats: 1,
       seatLimit: 50,

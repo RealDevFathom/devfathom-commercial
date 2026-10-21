@@ -1,16 +1,18 @@
 import { createHmac } from 'node:crypto';
-import type { PrismaClient } from '@/generated/prisma/client';
+import type { Prisma, PrismaClient } from '@/generated/prisma/client';
 import { hasModule } from '@/lib/entitlements';
 import type { EntitlementView } from '@/lib/module-catalog';
+import { deliverWebhookRequest } from '@/lib/webhooks/safe-url';
+import { inSideEffectScope, trackSideEffect } from '@/lib/side-effects/scope';
 
 /**
  * ============================================================================
  * OUTBOUND WEBHOOKS / EVENTS (IMP-REST-03)
  * ============================================================================
- * Fire-and-forget event fan-out to admin-registered HTTP endpoints. The same
- * contract as logActivity / notify: emitting an event must NEVER throw, block,
- * or roll back the caller's mutation — all the real work happens off the hot
- * path and any failure is swallowed (and recorded as a WebhookDelivery row).
+ * Event fan-out to admin-registered HTTP endpoints. Inside a tenant transaction
+ * the outbox row commits with the mutation and HTTP runs after commit; a failed
+ * outbox write rolls the mutation back. Outside a transaction, delivery stays
+ * detached and a failed POST is recorded as a WebhookDelivery row.
  *
  * Each delivery is signed so the receiver can verify authenticity:
  *   X-DevFathom-Signature: sha256=<HMAC-SHA256(rawBody, webhook.secret)>
@@ -28,9 +30,9 @@ export type WebhookEvent = (typeof WEBHOOK_EVENTS)[number];
 const DELIVERY_TIMEOUT_MS = 5_000;
 
 /**
- * Fire an event to every active webhook subscribed to it. Returns immediately;
- * the network work + delivery logging run detached. Safe to call inline right
- * after a successful write.
+ * Fire an event to every active webhook subscribed to it. Inside a tenant
+ * transaction the subscription is recorded in the outbox and HTTP runs after
+ * commit. Outside one, delivery stays detached and never throws to the caller.
  */
 export function emitEvent(
   db: PrismaClient,
@@ -39,8 +41,43 @@ export function emitEvent(
   payload: unknown
 ): void {
   if (!hasModule(entitlements, 'webhooks')) return;
+  if (inSideEffectScope()) {
+    trackSideEffect(persistEvent(db, entitlements.organizationId, event, payload));
+    return;
+  }
   void dispatch(db, entitlements.organizationId, event, payload).catch((err) => {
     console.error('[webhooks] dispatch failed for', event, err);
+  });
+}
+
+async function persistEvent(
+  db: PrismaClient,
+  organizationId: string,
+  event: string,
+  payload: unknown
+): Promise<void> {
+  const organization = await db.organization.findUnique({
+    where: { id: organizationId },
+    select: { isDemo: true },
+  });
+  if (organization?.isDemo) return;
+  const hooks = await db.webhook.findMany({
+    where: { active: true, events: { has: event } },
+    select: { id: true },
+  });
+  if (hooks.length === 0) return;
+  const body = JSON.stringify({ event, data: payload, timestamp: new Date().toISOString() });
+  await db.outboundEffect.createMany({
+    data: hooks.map((hook) => ({
+      kind: 'webhook',
+      status: 'PENDING',
+      payload: {
+        webhookId: hook.id,
+        event,
+        body,
+        payload: payload ?? {},
+      } as Prisma.InputJsonValue,
+    })),
   });
 }
 
@@ -75,49 +112,36 @@ async function deliver(
   payload: unknown,
   body: string
 ): Promise<void> {
+  const recorded = await db.webhookDelivery.create({
+    data: {
+      webhookId: hook.id,
+      event,
+      payload: (payload ?? {}) as never,
+      statusCode: null,
+      success: false,
+      error: null,
+    },
+    select: { id: true },
+  });
   const signature = createHmac('sha256', hook.secret).update(body).digest('hex');
-
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), DELIVERY_TIMEOUT_MS);
-
-  let statusCode: number | null = null;
-  let success = false;
-  let error: string | null = null;
-
-  try {
-    const res = await fetch(hook.url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'X-DevFathom-Event': event,
-        'X-DevFathom-Signature': `sha256=${signature}`,
-      },
-      body,
-      signal: controller.signal,
-    });
-    statusCode = res.status;
-    success = res.ok;
-    if (!res.ok) error = `HTTP ${res.status}`;
-  } catch (err) {
-    error =
-      err instanceof Error
-        ? err.name === 'AbortError'
-          ? `Timed out after ${DELIVERY_TIMEOUT_MS}ms`
-          : err.message
-        : String(err);
-  } finally {
-    clearTimeout(timer);
-  }
+  const result = await deliverWebhookRequest(hook.url, {
+    headers: {
+      'Content-Type': 'application/json',
+      'X-DevFathom-Event': event,
+      'X-DevFathom-Delivery-Id': recorded.id,
+      'X-DevFathom-Signature': `sha256=${signature}`,
+    },
+    body,
+    timeoutMs: DELIVERY_TIMEOUT_MS,
+  });
 
   await db.webhookDelivery
-    .create({
+    .update({
+      where: { id: recorded.id },
       data: {
-        webhookId: hook.id,
-        event,
-        payload: (payload ?? {}) as never,
-        statusCode,
-        success,
-        error,
+        statusCode: result.statusCode,
+        success: result.success,
+        error: result.error,
       },
     })
     .catch((e) => {
