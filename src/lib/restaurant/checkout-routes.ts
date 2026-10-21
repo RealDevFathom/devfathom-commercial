@@ -13,6 +13,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { BillCommandError, evaluateOrderSettlement, type MoneyCommandActor } from './bills';
 import { CoAuthorizationError } from './co-authorization';
+import { resolveStaffCapabilities } from './job-roles';
 import {
   DailyCloseError,
   type ClosePreview,
@@ -59,17 +60,19 @@ import { withTerminalAuth, type TerminalContext } from './terminal-auth';
  * replay record (C11); this file only wires transport.
  *
  * Capability gate (C11). Terminal money routes gate on the EXISTING pos/payments/cash
- * capabilities, resolved from the acting operator's staff profile via its linked
- * `User`'s effective capabilities — the org-role permissions + non-expired per-user
- * overrides, evaluated exactly like the ABAC `customDecision` path that the back-office
- * `money:read` reads use (org-role-driven; policies.ts: "Terminal money mutations gate
- * on the existing pos/payments/cash capabilities"). Resolution is default-DENY: an
- * operator whose staff profile has no linked user, or whose user lacks the capability,
- * is refused (403). A co-authorized action additionally verifies the approving
- * manager's own credential AND that the approver carries `coauth:approve`. The
- * operator↔capability store is the platform's org-role model (no restaurant operator
- * capability column exists to date, and none is added — no schema change, C12); this
- * coupling is recorded in BUILD-ASSUMPTIONS for the console + reconciliation lanes.
+ * capabilities, resolved from the acting operator's staff profile by UNIONING two
+ * sources (QA-145): the linked `User`'s effective capabilities — the org-role permissions
+ * + non-expired per-user overrides, evaluated exactly like the ABAC `customDecision` path
+ * that the back-office `money:read` reads use — AND the restaurant SOP-1 job-role
+ * capabilities the profile holds at the terminal's bound branch (see
+ * `resolveStaffCapabilities` in `job-roles.ts`). Resolution is default-DENY: a profile
+ * that NEITHER source grants — including a PIN-only operator with no linked user whose job
+ * roles do not carry the capability — is refused (403). A co-authorized action
+ * additionally verifies the approving manager's own credential AND that the approver
+ * carries `coauth:approve` through either source; a PIN-only floor manager holding the
+ * Owner job role can therefore approve. The platform org-role model is retained alongside
+ * the job-role path (no restaurant operator capability column is added — no schema change,
+ * C12); this coupling is recorded in BUILD-ASSUMPTIONS for the console + reconciliation lanes.
  *
  * Read contract (C12, consumed by L7a): the register's settled-bill receipt payload
  * (`buildReceiptForBranch`, display data only) and per-order settlement state
@@ -213,15 +216,27 @@ function capabilityMatches(rule: string, capability: string): boolean {
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
-/** Resolve whether the acting operator holds `capability`, via its staff profile's
+/** Resolve whether the acting operator (or co-authorizing approver) holds `capability`.
+ *
+ * TWO independent grant sources are unioned (QA-145). The first is the staff profile's
  * linked `User` effective capabilities (per-user overrides win over org-role rules; a
- * DENY beats an ALLOW at each layer; default-DENY). No linked user ⇒ denied. Mirrors
- * `customDecision` in `src/lib/abac/index.ts` but for the vertical capability strings. */
+ * DENY beats an ALLOW at each layer; default-DENY) — this mirrors `customDecision` in
+ * `src/lib/abac/index.ts` for the vertical capability strings. The second is the
+ * restaurant SOP-1 job-role path: the capabilities inherited from the job roles the
+ * profile holds AT `branchId`, plus/minus its per-staff capability overrides at that
+ * branch (see {@link resolveStaffCapabilities}). A PIN-only floor manager with NO linked
+ * user can therefore still hold `coauth:approve` through the Owner job role.
+ *
+ * Fail-closed: a profile that neither source grants (no linked user AND no job-role
+ * capability — including a profile in another organization, which RLS hides so both
+ * queries come back empty) is denied. `branchId` is required to consult the job-role
+ * path; omitting it (legacy call sites) evaluates the linked-user path only. */
 export async function operatorHasCapability(
   db: ScopedDb,
   staffProfileId: string,
   capability: string,
-  now: Date
+  now: Date,
+  branchId?: string
 ): Promise<boolean> {
   const profile = await db.restaurantStaffProfile.findUnique({
     where: { id: staffProfileId },
@@ -240,7 +255,6 @@ export async function operatorHasCapability(
     },
   });
   const user = profile?.user;
-  if (!user) return false;
 
   const decide = (rules: readonly CapabilityRule[]): boolean | null => {
     const matching = rules.filter((rule) => capabilityMatches(rule.capability, capability));
@@ -249,10 +263,21 @@ export async function operatorHasCapability(
     return null;
   };
 
-  const overrideDecision = decide(user.permissionOverrides);
-  if (overrideDecision !== null) return overrideDecision;
-  const roleDecision = decide(user.organizationRole?.permissions ?? []);
-  if (roleDecision !== null) return roleDecision;
+  if (user) {
+    const overrideDecision = decide(user.permissionOverrides);
+    if (overrideDecision === true) return true;
+    if (overrideDecision === null && decide(user.organizationRole?.permissions ?? []) === true) {
+      return true;
+    }
+  }
+
+  if (branchId !== undefined) {
+    const effective = await resolveStaffCapabilities(db, staffProfileId, branchId);
+    for (const granted of effective) {
+      if (capabilityMatches(granted, capability)) return true;
+    }
+  }
+
   return false;
 }
 
@@ -313,9 +338,10 @@ async function requireCapability(
   db: ScopedDb,
   staffProfileId: string,
   capability: MoneyCapability,
-  now: Date
+  now: Date,
+  branchId: string
 ): Promise<NextResponse | null> {
-  const allowed = await operatorHasCapability(db, staffProfileId, capability, now);
+  const allowed = await operatorHasCapability(db, staffProfileId, capability, now, branchId);
   return allowed ? null : forbidden(`This operator lacks the "${capability}" capability.`);
 }
 
@@ -360,7 +386,8 @@ async function resolveApprover(
     ctx.db,
     auth.staffProfileId,
     'coauth:approve',
-    now
+    now,
+    ctx.device.branchId
   );
   if (!canApprove) {
     return {
@@ -512,7 +539,13 @@ export function moneyMutationRoute<S extends z.ZodTypeAny>(opts: {
       if (!operator.ok) return operator.response;
 
       const now = new Date();
-      const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+      const denied = await requireCapability(
+        ctx.db,
+        operator.staffProfileId,
+        opts.capability,
+        now,
+        ctx.device.branchId
+      );
       if (denied) return denied;
 
       const key = idempotencyKeyFromRequest(request);
@@ -553,7 +586,13 @@ export function moneyReadRoute(opts: {
       if (!operator.ok) return operator.response;
 
       const now = new Date();
-      const denied = await requireCapability(ctx.db, operator.staffProfileId, opts.capability, now);
+      const denied = await requireCapability(
+        ctx.db,
+        operator.staffProfileId,
+        opts.capability,
+        now,
+        ctx.device.branchId
+      );
       if (denied) return denied;
 
       return await opts.run(ctx, request);
