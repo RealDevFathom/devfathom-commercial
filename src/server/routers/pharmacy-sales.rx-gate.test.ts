@@ -409,9 +409,12 @@ describe.skipIf(!process.env.RX_GATE_DATABASE_URL)('Rx quantity concurrency (Pos
         const client = new Client({ connectionString: process.env.RX_GATE_DATABASE_URL });
         await client.connect();
         clients.push(client);
-        await client.query(
-          `SET search_path TO ${schema}; SET ROLE ${schema}; SELECT set_config('app.current_organization_id','org-1',false)`
-        );
+        // Apply each session setting independently. Sending SET ROLE in the
+        // same extended query as search_path made the effective schema depend
+        // on driver/server multi-statement handling in the real-DB job.
+        await client.query(`SET ROLE ${schema}`);
+        await client.query(`SET search_path TO ${schema}`);
+        await client.query("SELECT set_config('app.current_organization_id','org-1',false)");
         const f = fixture();
         f.db.$transaction.mockImplementation(async (callback) => {
           await client.query('BEGIN');
