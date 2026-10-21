@@ -138,6 +138,21 @@ describe('NewOrganizationPage package step', () => {
     ]);
   });
 
+  it('pluralises the default-seat count, keeping "seat" singular for a one-seat package', async () => {
+    mocks.packageFindMany.mockResolvedValue([
+      { id: 'pkg_solo', name: 'Pharmacy Solo', defaultSeats: 1 },
+      { id: 'pkg_team', name: 'Pharmacy Team', defaultSeats: 10 },
+    ]);
+
+    const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
+
+    expect(
+      [...container.querySelectorAll('select[name="packageId"] option')].map(
+        (option) => option.textContent
+      )
+    ).toEqual(['Pharmacy Solo · 1 default seat', 'Pharmacy Team · 10 default seats']);
+  });
+
   // WHA-1206 — the four premises answers a pharmacy's first branch is created
   // from. Asked here because `pharmacy_branches` requires all four, and the
   // province decides which jurisdiction's published rules the branch licence is

@@ -1594,6 +1594,26 @@ export function packageByKey(key: string): PackageDefinition | undefined {
   return [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES].find((pkg) => pkg.key === key);
 }
 
+/** The §7 limit key that caps a vertical's licensed users. The `defaultSeats`
+ * a package offers at onboarding is this ceiling, so a Pharmacy Chain offers
+ * 2500 seats rather than the schema's single-seat default. */
+const SEAT_LIMIT_METRIC_BY_VERTICAL: Partial<Record<OrganizationVertical, string>> = {
+  RESTAURANT: 'restaurant.operators.max',
+  PHARMACY: 'pharmacy.users.max',
+  HOSPITALITY: 'hotel.users.max',
+};
+
+/**
+ * The default licensed-seat ceiling a package is offered with: its vertical's
+ * active-user limit. Returns `undefined` for a vertical whose seats are not
+ * catalog-modeled here (Agency), so a caller can fall back to the column
+ * default rather than pin a wrong number.
+ */
+export function packageDefaultSeats(pkg: PackageDefinition): number | undefined {
+  const metric = SEAT_LIMIT_METRIC_BY_VERTICAL[pkg.vertical];
+  return metric ? pkg.defaultLimits[metric] : undefined;
+}
+
 export function roleTemplatesForVertical(vertical: OrganizationVertical): readonly RoleTemplate[] {
   if (vertical === 'HOSPITALITY') return HOSPITALITY_ROLE_TEMPLATES;
   if (vertical === 'PHARMACY') return PHARMACY_ROLE_TEMPLATES;

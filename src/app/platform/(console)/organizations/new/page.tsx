@@ -258,7 +258,9 @@ export default async function NewOrganizationPage({
                 required: true,
                 help: `Only active ${definition.label} packages are listed.`,
                 options: packages.map((item) => ({
-                  label: `${item.name} · ${item.defaultSeats} default seats`,
+                  label: `${item.name} · ${item.defaultSeats} default seat${
+                    item.defaultSeats === 1 ? '' : 's'
+                  }`,
                   value: item.id,
                 })),
               },
