@@ -1,3 +1,4 @@
+import { lockOrganizationSeat } from '@/lib/organization-seat';
 import { z } from 'zod';
 import {
   recordScimEvent,
@@ -77,7 +78,9 @@ export async function PUT(request: Request, route: { params: Promise<{ id: strin
         select: { id: true },
       });
       if (clash) return scimError(409, 'A user with this userName already exists.', 'uniqueness');
-      const user = await ctx.db.user.update({
+      const user = await ctx.db.$transaction(async (tx) => {
+        if (input.active) await lockOrganizationSeat(tx, ctx.organizationId, undefined, id);
+        return tx.user.update({
         where: { id },
         data: {
           email,
@@ -95,6 +98,7 @@ export async function PUT(request: Request, route: { params: Promise<{ id: strin
           createdAt: true,
           updatedAt: true,
         },
+      });
       });
       await recordScimEvent(ctx, request, {
         operation: 'REPLACE',
@@ -150,7 +154,9 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           return scimError(400, `Unsupported PATCH path: ${operation.path}`, 'invalidPath');
         }
       }
-      const user = await ctx.db.user.update({
+      const user = await ctx.db.$transaction(async (tx) => {
+        if (data.status === 'ACTIVE') await lockOrganizationSeat(tx, ctx.organizationId, undefined, id);
+        return tx.user.update({
         where: { id },
         data,
         select: {
@@ -162,6 +168,7 @@ export async function PATCH(request: Request, route: { params: Promise<{ id: str
           createdAt: true,
           updatedAt: true,
         },
+      });
       });
       await recordScimEvent(ctx, request, {
         operation: 'PATCH',

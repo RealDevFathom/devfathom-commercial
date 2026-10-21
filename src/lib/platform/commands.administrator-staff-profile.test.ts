@@ -103,7 +103,9 @@ const platformDb = {
   organizationRole: { create: passthrough('role') },
   organizationDepartment: { createMany: vi.fn(async () => ({ count: 6 })) },
   organizationModule: { count: vi.fn(async () => 0), findMany: vi.fn(async () => []) },
+  $queryRaw: vi.fn(async () => []),
   user: {
+    count: vi.fn(async () => 0),
     findFirst: vi.fn(async () => null),
     create: vi.fn(async () => ({
       id: 'user_admin',

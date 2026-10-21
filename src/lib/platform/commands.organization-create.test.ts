@@ -26,6 +26,8 @@ function record(model: string) {
 }
 
 const platformDb = {
+  // Seat lock: `FOR UPDATE` row read + occupied-seat count on the shared helper.
+  $queryRaw: vi.fn(async () => []),
   platformPackage: {
     findUnique: vi.fn(async () => ({
       id: 'pkg_1',
@@ -38,7 +40,7 @@ const platformDb = {
   organization: { create: vi.fn(async () => ({ id: 'org_new', slug: 'acme' })) },
   organizationRole: { create: vi.fn(async () => ({ id: 'role_admin' })) },
   organizationDepartment: { createMany: vi.fn(async () => ({ count: 6 })) },
-  user: { findFirst: mocks.userFindFirst, create: mocks.userCreate },
+  user: { count: vi.fn(async () => 0), findFirst: mocks.userFindFirst, create: mocks.userCreate },
   organizationBrand: { create: record('brand') },
   organizationEmailSettings: { create: record('emailSettings') },
   organizationDeployment: { create: record('deployment') },

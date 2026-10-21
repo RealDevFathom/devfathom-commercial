@@ -1,3 +1,5 @@
+import { lockOrganizationSeat, occupiesSeat } from '@/lib/organization-seat';
+import { resolveOrganizationEntitlements } from '@/lib/entitlements';
 /**
  * PEOPLE / HR / team-management tools for the DevFathom assistant.
  *
@@ -706,10 +708,15 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
           return { name: before.name, status, message: `${before.name} is already ${status}.` };
         }
 
-        const updated = await h.db.user.update({
-          where: { id: before.id },
-          data: { status },
-          select: { id: true, name: true, status: true },
+        const updated = await h.db.$transaction(async (tx) => {
+          if (!occupiesSeat(before.status)) {
+            const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, h.db);
+            await lockOrganizationSeat(tx, ctx.organizationId, entitlements.seatLimit);
+          }
+          return tx.user.update({
+            where: { id: before.id }, data: { status },
+            select: { id: true, name: true, status: true },
+          });
         });
 
         h.audit({
@@ -797,6 +804,10 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
         };
 
         const user = await h.db.$transaction(async (tx) => {
+          if (!existing) {
+            const entitlements = await resolveOrganizationEntitlements(ctx.organizationId, h.db);
+            await lockOrganizationSeat(tx, ctx.organizationId, entitlements.seatLimit);
+          }
           const u = existing
             ? await tx.user.update({
                 where: { id: existing.id },

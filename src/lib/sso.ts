@@ -1,3 +1,4 @@
+import { lockOrganizationSeat } from '@/lib/organization-seat';
 import 'server-only';
 
 import { createHash, randomBytes } from 'node:crypto';
@@ -148,7 +149,9 @@ export async function provisionIdentityUser(
     // foreign key for every restaurant tenant. Derive the key from this
     // organization's own active catalog instead.
     const department = await resolveProvisionedDepartmentKey(db, connection.organizationId, role);
-    return db.user.create({
+    return db.$transaction(async (tx) => {
+      await lockOrganizationSeat(tx, connection.organizationId, entitlements.seatLimit);
+      return tx.user.create({
       data: {
         organizationId: connection.organizationId,
         name,
@@ -160,6 +163,7 @@ export async function provisionIdentityUser(
         status: 'ACTIVE',
         lastActiveAt: new Date(),
       },
+    });
     });
   });
 }

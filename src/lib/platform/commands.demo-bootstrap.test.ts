@@ -121,6 +121,8 @@ const platformJobCreate = vi.fn(async ({ data }: { data: unknown }) => ({
 }));
 
 const platformDb = {
+  // Seat lock: `FOR UPDATE` row read + occupied-seat count on the shared helper.
+  $queryRaw: vi.fn(async () => []),
   platformPackage: {
     findUnique: vi.fn(async () => ({
       id: packageVertical === 'RESTAURANT' ? 'pkg_restaurant_enterprise' : 'pkg_agency',
@@ -176,6 +178,7 @@ const platformDb = {
   },
   organizationDepartment: { createMany: vi.fn(async () => ({ count: 1 })) },
   user: {
+    count: vi.fn(async () => 0),
     findUnique: vi.fn(
       async ({ where }: { where: { id: string } }) =>
         users.find((user) => user.id === where.id) ?? null

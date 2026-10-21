@@ -27,15 +27,21 @@ vi.mock('@/lib/scim', async () => {
       _request: Request,
       run: (ctx: { organizationId: string; tokenId: string; db: unknown }) => Promise<Response>
     ) =>
-      run({
-        organizationId: 'org_devfathom',
-        tokenId: 'tok_1',
-        db: {
-          user: { findFirst: mocks.findFirst, create: mocks.create },
+      (() => {
+        const db: Record<string, unknown> = {
+          user: {
+            findFirst: mocks.findFirst,
+            create: mocks.create,
+            // Seat lock reads the occupied-seat count under `FOR UPDATE`.
+            count: vi.fn(async () => 0),
+          },
           organization: { findUnique: mocks.organizationFindUnique },
           organizationDepartment: { findMany: mocks.departmentFindMany },
-        },
-      }),
+          $queryRaw: vi.fn(async () => []),
+          $transaction: async (fn: (tx: unknown) => Promise<unknown>) => fn(db),
+        };
+        return run({ organizationId: 'org_devfathom', tokenId: 'tok_1', db });
+      })(),
   };
 });
 

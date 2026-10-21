@@ -1,3 +1,4 @@
+import { lockOrganizationSeat } from '@/lib/organization-seat';
 import { z } from 'zod';
 import {
   requestBaseUrl,
@@ -96,7 +97,9 @@ export async function POST(request: Request) {
       // agency-era key would raise the composite foreign key in any tenant that
       // does not have it — a restaurant has KITCHEN/FRONT_OF_HOUSE only.
       const department = await resolveProvisionedDepartmentKey(ctx.db, ctx.organizationId, role);
-      const user = await ctx.db.user.create({
+      const user = await ctx.db.$transaction(async (tx) => {
+        if (input.active) await lockOrganizationSeat(tx, ctx.organizationId, undefined);
+        return tx.user.create({
         data: {
           organizationId: ctx.organizationId,
           name: input.displayName ?? input.name?.formatted ?? email.split('@')[0]!,
@@ -116,6 +119,7 @@ export async function POST(request: Request) {
           createdAt: true,
           updatedAt: true,
         },
+      });
       });
       const body = scimUser(user, requestBaseUrl(request));
       await recordScimEvent(ctx, request, {
