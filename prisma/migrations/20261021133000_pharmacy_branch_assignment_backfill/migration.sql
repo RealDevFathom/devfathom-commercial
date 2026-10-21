@@ -6,8 +6,6 @@
 --
 -- The platform-admin flag is its own statement. Putting set_config in a CTE of
 -- the INSERT does not make that flag visible to row level security on the INSERT.
-BEGIN;
-
 SELECT set_config('app.is_platform_admin', 'true', true);
 
 INSERT INTO "pharmacy_branch_assignments" (
@@ -110,5 +108,3 @@ BEGIN
     RAISE EXCEPTION 'pharmacy branch assignment backfill left an active pharmacy organization with eligible members and no assignments';
   END IF;
 END $$;
-
-COMMIT;
