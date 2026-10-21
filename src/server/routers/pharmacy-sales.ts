@@ -253,6 +253,7 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy.dispense',
   'pharmacy:receipt',
   'pharmacy.receipt',
+  'pharmacy.counter',
 ] as const;
 
 function capabilityCovers(rule: string, action: string): boolean {
@@ -272,10 +273,11 @@ function capabilityDecision(
 }
 
 /**
- * Dispense or receipt capability, then an active pharmacy branch assignment in
- * the session organization. Restaurant staff profiles are not consulted. An
- * empty assignment denies. A session `ADMIN` of this organization may read a
- * branch they are not assigned to; that exception is recorded on the audit.
+ * Dispense, receipt, or counter capability, then an active pharmacy branch
+ * assignment in the session organization. Restaurant staff profiles are not
+ * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
+ * organization may use every active branch, including when they also have an
+ * explicit assignment elsewhere. That exception is recorded on the audit.
  */
 async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
   const scope = scopeFor(ctx, branch);
@@ -343,14 +345,18 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
   if (assigned.has(branch)) return scope;
 
   // Session role only. An organization-role key is not an administrator grant.
+  // An assigned admin still reaches every other active branch of this organization.
   const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
-  if (assigned.size === 0 && orgAdmin) {
+  if (orgAdmin) {
     annotateAudit(ctx, {
       targetType: 'PharmacyBranch',
       targetId: branch,
       metadata: {
         branchId: branch,
-        reason: 'org-admin-receipt-access-without-branch-assignment',
+        reason:
+          assigned.size === 0
+            ? 'org-admin-receipt-access-without-branch-assignment'
+            : 'org-admin-receipt-access',
       },
     });
     return scope;
@@ -658,8 +664,9 @@ export const pharmacySalesRouter = router({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
           });
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
-          applyPharmacyTender(txDb(tx), scopeFor(ctx, input.branchId), ledgerTender(input))
+          applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
       }
       const scope = await khataScope(ctx, input.branchId);
@@ -1094,7 +1101,8 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        return await readReturnHistory(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await readReturnHistory(ctx.db, scope, input.saleId);
       } catch (error) {
         fail(error);
       }
@@ -1408,7 +1416,8 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        return await readCounterCart(ctx.db, scopeFor(ctx, input.branchId), input.saleId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await readCounterCart(ctx.db, scope, input.saleId);
       } catch (error) {
         fail(error);
       }
@@ -1501,9 +1510,17 @@ export const pharmacySalesRouter = router({
   /** PH-A7: save the branch receipt format. Optimistic revision; admins only. */
   counterSaveReceiptFormat: adminProcedure
     .input(SaveReceiptLayoutSchema)
-    .mutation(({ ctx, input }) =>
-      savePharmacyReceiptFormat(ctx.db, scopeFor(ctx, input.branchId).organizationId, input)
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const scope = scopeFor(ctx, input.branchId);
+      const branch = await ctx.db.pharmacyBranch.findFirst({
+        where: { id: input.branchId, organizationId: scope.organizationId, active: true },
+        select: { id: true },
+      });
+      if (!branch) {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+      }
+      return savePharmacyReceiptFormat(ctx.db, scope.organizationId, input);
+    }),
 
   // ── POS-01 configurable shortcuts ─────────────────────────────────────────
 

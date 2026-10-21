@@ -3,6 +3,8 @@
  * Skipped unless TEST_DATABASE_URL names that role on a migrated disposable database.
  */
 import { randomUUID } from 'node:crypto';
+import { readFileSync } from 'node:fs';
+import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
@@ -31,6 +33,9 @@ const ids = {
   unassigned: `user_rcpt_u_${suffix}`,
   admin: `user_rcpt_admin_${suffix}`,
   outsider: `user_rcpt_x_${suffix}`,
+  legacy: `user_rcpt_legacy_${suffix}`,
+  inactive: `user_rcpt_off_${suffix}`,
+  closedBranch: `br_rcpt_closed_${suffix}`,
   saleA: `sale_rcpt_a_${suffix}`,
   saleB: `sale_rcpt_b_${suffix}`,
 };
@@ -45,6 +50,8 @@ type SalesCaller = {
   }) => Promise<unknown>;
   lookupReceiptByNumber: (input: { branchId: string; receiptNumber: number }) => Promise<unknown>;
   counterReceiptFormat: (input: { branchId: string }) => Promise<unknown>;
+  counterCart: (input: { branchId: string; saleId: string }) => Promise<unknown>;
+  returnHistory: (input: { branchId: string; saleId: string }) => Promise<unknown>;
 };
 
 let withTenantDb: typeof import('@/lib/tenancy/scoped-db').withTenantDb;
@@ -316,13 +323,28 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
       async (api) => {
         await expect(
           api.lookupReceiptByNumber({ branchId: ids.branchA, receiptNumber: 7 })
-        ).rejects.toMatchObject({
-          code: 'FORBIDDEN',
-          message: 'You do not have permission for this action.',
-        });
+        ).resolves.toEqual([
+          expect.objectContaining({ id: ids.saleA, receiptDeviceId: 'device-a' }),
+        ]);
+        await expect(
+          api.counterCart({ branchId: ids.branchA, saleId: ids.saleA })
+        ).resolves.toMatchObject({ saleId: ids.saleA, lines: [] });
+        await expect(
+          api.returnHistory({ branchId: ids.branchA, saleId: ids.saleA })
+        ).resolves.toMatchObject({ saleId: ids.saleA, lines: [] });
       }
     );
 
+    await act(ids.orgA, { id: ids.admin, role: 'ADMIN', organizationId: ids.orgA }, async (api) => {
+      await expect(
+        api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
+      ).resolves.toEqual([expect.objectContaining({ id: ids.saleB })]);
+    });
+    await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyBranchAssignment.create({
+        data: { userId: ids.admin, branchId: ids.branchA },
+      })
+    );
     await act(ids.orgA, { id: ids.admin, role: 'ADMIN', organizationId: ids.orgA }, async (api) => {
       await expect(
         api.lookupReceiptByNumber({ branchId: ids.branchB, receiptNumber: 7 })
@@ -339,6 +361,82 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
         await expect(
           api.counterReceipt({ branchId: ids.branchA, saleId: ids.saleA })
         ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      }
+    );
+
+    await withTenantDb(ids.orgA, async (tx) => {
+      await tx.pharmacyBranch.create({
+        data: {
+          id: ids.closedBranch,
+          code: 'Z',
+          name: 'Closed',
+          addressLine: '1 Road',
+          city: 'Lahore',
+          provinceCode: 'PB',
+          active: false,
+        },
+      });
+      await tx.user.create({
+        data: {
+          id: ids.legacy,
+          name: 'Legacy cashier',
+          email: `${ids.legacy}@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Cashier',
+          organizationRoleId: ids.roleCashier,
+        },
+      });
+      await tx.user.create({
+        data: {
+          id: ids.inactive,
+          name: 'Inactive cashier',
+          email: `${ids.inactive}@example.test`,
+          department: 'LEADERSHIP',
+          title: 'Cashier',
+          status: 'INACTIVE',
+          organizationRoleId: ids.roleCashier,
+        },
+      });
+    });
+
+    const backfill = readFileSync(
+      join(
+        process.cwd(),
+        'prisma/migrations/20261021133000_pharmacy_branch_assignment_backfill/migration.sql'
+      ),
+      'utf8'
+    );
+    await withPlatformDb((tx) => tx.$executeRawUnsafe(backfill));
+    await withPlatformDb((tx) => tx.$executeRawUnsafe(backfill));
+
+    const assigned = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyBranchAssignment.findMany({
+        where: { userId: ids.legacy, active: true },
+        select: { branchId: true },
+      })
+    );
+    expect(assigned.map((row) => row.branchId).sort()).toEqual([ids.branchA, ids.branchB].sort());
+    const inactiveRows = await withTenantDb(ids.orgA, (tx) =>
+      tx.pharmacyBranchAssignment.findMany({
+        where: { userId: ids.inactive },
+        select: { id: true },
+      })
+    );
+    expect(inactiveRows).toEqual([]);
+
+    await act(
+      ids.orgA,
+      { id: ids.legacy, role: 'EMPLOYEE', organizationId: ids.orgA },
+      async (api) => {
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.branchA, receiptNumber: 7 })
+        ).resolves.toEqual([expect.objectContaining({ id: ids.saleA })]);
+        await expect(
+          api.counterCart({ branchId: ids.branchB, saleId: ids.saleB })
+        ).resolves.toMatchObject({ saleId: ids.saleB, lines: [] });
+        await expect(
+          api.lookupReceiptByNumber({ branchId: ids.closedBranch, receiptNumber: 7 })
+        ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       }
     );
   });

@@ -2,8 +2,8 @@
 export const PHARMACY_DEMO_VERSION = 'pharmacy-demo-v1' as const;
 export const PRODUCT_BASE = '37906386a59700ce4a168e410ca68594baa97c75';
 export const SCHEMA_SHA256 = 'a1b54cecbe2a34b292496d13a669ef96382c7ec9bdb677e06e2b5084e595a4c0';
-export const MIGRATIONS_SHA256 = '7d333db5ab4b585e11bb396d5834394d76c9617bd8e58515ba9490cb021fe011';
-export const MIGRATION_COUNT = 110 as const;
+export const MIGRATIONS_SHA256 = '929d663671b84864a9d0b61a12dafc4c99b75baccf6c71fa5ff33270381b3bae';
+export const MIGRATION_COUNT = 150 as const;
 
 /** Real SQL execution is confined to a newly created, private TEST cluster.
  * These identifiers select existing fixtures; they never grant authority. */
