@@ -125,15 +125,20 @@ describe('team.inviteMember duplicate guard', () => {
 
   it('retains the administrator capability check without HR', async () => {
     mocks.can.mockResolvedValue(false);
-    await expect(caller().inviteMember({ ...invite, email: 'cashier@example.com' }))
-      .rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(
+      caller().inviteMember({ ...invite, email: 'cashier@example.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
   it('retains seat limits without HR', async () => {
     mocks.findFirst.mockResolvedValue(null);
-    await expect(caller(50).inviteMember({ ...invite, email: 'cashier@example.com' }))
-      .rejects.toMatchObject({ code: 'FORBIDDEN', message: expect.stringContaining('Seat limit reached') });
+    await expect(
+      caller(50).inviteMember({ ...invite, email: 'cashier@example.com' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('Seat limit reached'),
+    });
     expect(mocks.create).not.toHaveBeenCalled();
   });
 
@@ -203,6 +208,7 @@ it.each(['cashier', 'kitchen', 'server'] as const)(
     mocks.create.mockImplementation(async ({ data }) => Object.assign(user, data));
     await caller().inviteMember({ ...invite, email: user.email, role });
     const update = vi.fn(async ({ data }) => Object.assign(user, data));
+    const profileCreate = vi.fn(async () => ({ id: 'floor_profile', primaryBranchId: null }));
     const acceptDb = {
       invitation: {
         findUnique: vi.fn(async () => ({
@@ -210,11 +216,21 @@ it.each(['cashier', 'kitchen', 'server'] as const)(
           userId: user.id,
           expiresAt: new Date(Date.now() + 60000),
           acceptedAt: null,
-          user: { ...user, organization: { isDemo: false } },
+          user: {
+            ...user,
+            organizationId: 'org_restaurant',
+            organizationRole: { key: role },
+            organization: { isDemo: false, vertical: 'RESTAURANT' },
+          },
         })),
       },
       $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
-        run({ invitation: { updateMany: vi.fn(async () => ({ count: 1 })) }, user: { update } }),
+        run({
+          invitation: { updateMany: vi.fn(async () => ({ count: 1 })) },
+          user: { update },
+          restaurantStaffProfile: { findFirst: vi.fn(async () => null), create: profileCreate },
+          restaurantBranch: { findFirst: vi.fn(async () => null) },
+        }),
     };
     await invitationsRouter
       .createCaller({
@@ -222,6 +238,16 @@ it.each(['cashier', 'kitchen', 'server'] as const)(
         requestMeta: { ip: null, userAgent: null },
       } as unknown as TRPCContext)
       .accept({ token: 'token', password: 'Str0ng!Passw0rd', phone: '+15550999' });
+    expect(profileCreate).toHaveBeenCalledWith(
+      expect.objectContaining({
+        data: expect.objectContaining({
+          userId: user.id,
+          organizationId: 'org_restaurant',
+          displayName: user.name,
+        }),
+      })
+    );
+    expect(JSON.stringify(profileCreate.mock.calls)).not.toMatch(/pin|credential/i);
     expect(user).toMatchObject({
       status: 'ACTIVE',
       role: 'EMPLOYEE',

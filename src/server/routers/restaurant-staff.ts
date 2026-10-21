@@ -1,4 +1,5 @@
 import { z } from 'zod';
+import { pendingOwnPinProfile } from '@/lib/restaurant/invited-staff';
 import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure, protectedProcedure } from '../trpc';
@@ -131,6 +132,25 @@ function workspaceOrganizationId(ctx: {
 }
 
 export const restaurantStaffRouter = router({
+  setOwnPin: protectedProcedure
+    .input(z.object({ secret: z.string() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      annotateAudit(ctx, { skipInput: true });
+      const profile = await pendingOwnPinProfile(ctx.db, ctx.session.user.id);
+      if (!profile)
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'PIN setup is unavailable.' });
+      try {
+        await issueOperatorCredential(ctx.db, {
+          staffProfileId: profile.id,
+          type: 'PIN',
+          secret: input.secret,
+        });
+        return { success: true };
+      } catch (error) {
+        mapCredentialError(error);
+      }
+    }),
+
   /**
    * WHA-1181 — does the signed-in user own the staff profile every restaurant
    * procedure resolves them to? Organizations activated before the onboarding

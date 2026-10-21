@@ -396,3 +396,42 @@ describe('credential listing', () => {
     expect(where.revokedAt).toBeUndefined();
   });
 });
+
+describe('first-login self PIN setup', () => {
+  it('derives the profile from the session, stores only a hash, and suppresses audit input', async () => {
+    mocks.staffFindFirst.mockResolvedValue({ id: 'staff_1' });
+    const result = await caller().setOwnPin({ secret: '4821' });
+    expect(result).toEqual({ success: true });
+    expect(mocks.staffFindFirst).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          userId: 'user_gm',
+          credentials: { none: { type: 'PIN', revokedAt: null } },
+        }),
+      })
+    );
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
+    const stored = mocks.credCreate.mock.calls[0][0].data;
+    expect(stored.staffProfileId).toBe('staff_1');
+    expect(await verifyOperatorCredential('PIN', '4821', stored.credentialHash)).toBe(true);
+    expect(JSON.stringify(result)).not.toContain('4821');
+    expect(JSON.stringify(stored)).not.toContain('4821');
+  });
+  it('denies completed setup and another profile supplied by the client', async () => {
+    await expect(caller().setOwnPin({ secret: '4821' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    await expect(
+      caller().setOwnPin({ secret: '4821', staffProfileId: 'someone_else' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(mocks.credCreate).not.toHaveBeenCalled();
+  });
+  it('enforces PIN policy without storing the attempted secret', async () => {
+    mocks.staffFindFirst.mockResolvedValue({ id: 'staff_1' });
+    await expect(caller().setOwnPin({ secret: '12' })).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(mocks.credCreate).not.toHaveBeenCalled();
+    expect(mocks.annotateAudit).toHaveBeenCalledWith(expect.anything(), { skipInput: true });
+  });
+});
