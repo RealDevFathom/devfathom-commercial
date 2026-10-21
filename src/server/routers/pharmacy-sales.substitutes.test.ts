@@ -1,5 +1,12 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
+vi.mock('@/lib/pharmacy/counter-branch-access', () => ({
+  readCounterBranchAssignments: vi.fn(
+    async (db: { pharmacyBranchAssignment: { findMany: () => Promise<unknown> } }) =>
+      db.pharmacyBranchAssignment.findMany()
+  ),
+}));
+
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn() }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -36,7 +43,7 @@ const input = {
 
 function caller(
   branch: { id: string } | null,
-  options?: { role?: 'EMPLOYEE' | 'ADMIN'; assignedBranchIds?: string[] }
+  options?: { role?: 'EMPLOYEE' | 'ADMIN'; assignedBranchIds?: string[]; denyDispense?: boolean }
 ) {
   const assignedBranchIds = options?.assignedBranchIds ?? (branch ? [branch.id] : []);
   const db = {
@@ -47,7 +54,9 @@ function caller(
         organizationRole: {
           permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
         },
-        permissionOverrides: [],
+        permissionOverrides: options?.denyDispense
+          ? [{ capability: 'pharmacy:dispense', effect: 'DENY' }]
+          : [],
       })),
     },
     pharmacyBranch: { findFirst: vi.fn(async () => branch) },
@@ -120,6 +129,34 @@ describe('substitute proposals', () => {
       message: 'Branch is outside your scope.',
     });
     expect(findSubstituteProposals).not.toHaveBeenCalled();
+  });
+
+  it('refuses a DENY override even with a branch assignment', async () => {
+    await expect(
+      caller({ id: 'branch-1' }, { denyDispense: true }).substituteProposals(input)
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(findSubstituteProposals).not.toHaveBeenCalled();
+  });
+
+  it('rejects a price override without a reason', async () => {
+    await expect(
+      caller({ id: 'branch-1' }).overrideSubstitutePrice({ ...input, reason: '  ' })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(findSubstituteProposals).not.toHaveBeenCalled();
+  });
+
+  it('forwards an explicit pharmacist reason after authorization', async () => {
+    await caller({ id: 'branch-1' }).overrideSubstitutePrice({
+      ...input,
+      reason: 'Patient requested available brand',
+    });
+    expect(findSubstituteProposals).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ actorId: 'actor-1', organizationId: 'org-1' }),
+      expect.objectContaining({
+        pharmacistOverride: { reason: 'Patient requested available brand' },
+      })
+    );
   });
 
   it('rejects a client requireLowerPrice flag', async () => {

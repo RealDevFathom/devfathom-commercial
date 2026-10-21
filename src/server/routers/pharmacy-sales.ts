@@ -1,3 +1,5 @@
+import { customDecision } from '@/lib/abac/capability-decision';
+import { readCounterBranchAssignments } from '@/lib/pharmacy/counter-branch-access';
 import { hasModule } from '@/lib/entitlements';
 import {
   executeSandboxPayment,
@@ -155,29 +157,6 @@ async function khataScope(ctx: TRPCContext, branch: string) {
   return scope;
 }
 
-const RECEIPT_READ_CAPABILITIES = [
-  'pharmacy:dispense',
-  'pharmacy.dispense',
-  'pharmacy:receipt',
-  'pharmacy.receipt',
-] as const;
-
-function capabilityCovers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
-  return false;
-}
-
-function capabilityDecision(
-  rules: { capability: string; effect: string }[],
-  action: string
-): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
-  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
-  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
-  return null;
-}
-
 /**
  * Dispense or receipt capability, then an active pharmacy branch assignment in
  * the session organization. Restaurant staff profiles are not consulted. An
@@ -196,13 +175,6 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     select: {
       status: true,
       organizationId: true,
-      organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
-      },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
-        select: { capability: true, effect: true },
-      },
     },
   });
   if (
@@ -214,14 +186,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const overrides = member.permissionOverrides;
-  const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
-    const override = capabilityDecision(overrides, action);
-    if (override === 'DENY') return false;
-    if (override === 'ALLOW') return true;
-    return capabilityDecision(roleRules, action) === 'ALLOW';
-  });
+  const capable = await customDecision(ctx.db, user.id, 'pharmacy:dispense', new Date());
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -237,15 +202,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
-    where: {
-      organizationId: scope.organizationId,
-      userId: user.id,
-      active: true,
-      branch: { organizationId: scope.organizationId, active: true },
-    },
-    select: { branchId: true },
-  });
+  const rows = await readCounterBranchAssignments(ctx.db, scope.organizationId, user.id);
   const assigned = new Set(rows.map((row) => row.branchId));
   if (assigned.has(branch)) return scope;
 
@@ -1180,6 +1137,27 @@ export const pharmacySalesRouter = router({
         }
         throw error;
       }
+    }),
+  overrideSubstitutePrice: auditedProtectedProcedure
+    .input(
+      z
+        .object({
+          branchId,
+          medicineId: z.string().min(1),
+          presentationId: z.string().min(1),
+          quantityCanonicalUnits: z.number().int().positive(),
+          reason: z.string().trim().min(1).max(1000),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      return findSubstituteProposals(ctx.db, scope, {
+        medicineId: input.medicineId,
+        presentationId: input.presentationId,
+        quantityCanonicalUnits: input.quantityCanonicalUnits,
+        pharmacistOverride: { reason: input.reason },
+      });
     }),
   declineSubstitute: protectedProcedure
     .input(

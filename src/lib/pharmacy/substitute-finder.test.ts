@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
 import { declineSubstitute, findSubstituteProposals } from './substitute-finder';
 
@@ -139,7 +139,7 @@ describe('AI-05 deterministic substitute finder', () => {
     ]);
   });
 
-  it('keeps cheaper-only suggestions unless this branch has none of the medicine on hand', async () => {
+  it('never suggests pricier alternatives even when out of stock', async () => {
     const input = {
       medicineId: 'requested',
       presentationId: 'presentation-requested',
@@ -159,7 +159,7 @@ describe('AI-05 deterministic substitute finder', () => {
     );
     expect(
       rows.map((row) => [row.inventoryLotId, row.priceMinor, row.priceDifferenceMinor])
-    ).toEqual([['dearer', 2_000, -1_000]]);
+    ).toEqual([]);
   });
 
   it('ignores an inflated client price when applying cheaper-only and the savings label', async () => {
@@ -235,7 +235,7 @@ describe('AI-05 deterministic substitute finder', () => {
       medicine: { findFirst: async () => regulated },
       pharmacyStockBalance: { aggregate: async () => ({ _sum: { onHandUnits: 0 } }) },
       pharmacyInventoryLot: {
-        findFirst: async () => null,
+        findFirst: async () => ({ printedMrpMinor: 1000, unitsPerPack: 10 }),
         findMany: async () => [
           lot({
             id: 'regulated-lot',
@@ -266,7 +266,7 @@ describe('AI-05 deterministic substitute finder', () => {
     });
   });
 
-  it('suggests an in-stock equivalent when no reference price exists', async () => {
+  it('fails closed when no reference price exists', async () => {
     const db = {
       medicine: { findFirst: async () => requested },
       pharmacyStockBalance: { aggregate: async () => ({ _sum: { onHandUnits: 0 } }) },
@@ -280,18 +280,83 @@ describe('AI-05 deterministic substitute finder', () => {
       presentationId: 'presentation-requested',
       quantityCanonicalUnits: 1,
     });
-    expect(rows).toEqual([
+    expect(rows).toEqual([]);
+  });
+
+  it('includes equal-price alternatives', async () => {
+    const rows = await findSubstituteProposals(
+      dbWith([lot({ printedMrpMinor: 1000 })]) as never,
+      scope,
+      {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+      }
+    );
+    expect(rows[0].priceDifferenceMinor).toBe(0);
+  });
+
+  it('rejects an override without a reason', async () => {
+    await expect(
+      findSubstituteProposals(
+        dbWith([]) as never,
+        { ...scope, actorId: 'pharmacist' },
+        {
+          medicineId: 'requested',
+          presentationId: 'presentation-requested',
+          quantityCanonicalUnits: 10,
+          pharmacistOverride: { reason: '  ' },
+        }
+      )
+    ).rejects.toMatchObject({ code: 'OVERRIDE_REASON_REQUIRED' });
+  });
+
+  it('records the pharmacist reason before offering a pricier substitute', async () => {
+    const create = vi.fn(async () => ({}));
+    const db = { ...dbWith([lot({ printedMrpMinor: 2000 })], 0), auditLog: { create } };
+    const rows = await findSubstituteProposals(
+      db as never,
+      { ...scope, actorId: 'pharmacist' },
+      {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+        pharmacistOverride: { reason: 'Patient requested available brand' },
+      }
+    );
+    expect(rows[0].priceMinor).toBe(2000);
+    expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
-        inventoryLotId: 'in-stock',
-        priceMinor: 150,
-        priceDifferenceMinor: 0,
-        controlled: false,
-        rx: false,
-        restricted: false,
-        availableCanonicalUnits: 20,
-        equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
-      }),
-    ]);
+        data: expect.objectContaining({
+          organizationId: 'org-a',
+          actorId: 'pharmacist',
+          metadata: expect.objectContaining({ reason: 'Patient requested available brand' }),
+        }),
+      })
+    );
+  });
+
+  it('does not offer override results if the audit cannot be persisted', async () => {
+    const db = {
+      ...dbWith([lot({ printedMrpMinor: 2000 })]),
+      auditLog: {
+        create: vi.fn(async () => {
+          throw new Error('Audit unavailable');
+        }),
+      },
+    };
+    await expect(
+      findSubstituteProposals(
+        db as never,
+        { ...scope, actorId: 'pharmacist' },
+        {
+          medicineId: 'requested',
+          presentationId: 'presentation-requested',
+          quantityCanonicalUnits: 10,
+          pharmacistOverride: { reason: 'Patient requested available brand' },
+        }
+      )
+    ).rejects.toThrow('Audit unavailable');
   });
 
   it('closes a declined POS-10 event with reason substitute declined', async () => {

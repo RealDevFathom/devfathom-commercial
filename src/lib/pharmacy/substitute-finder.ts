@@ -2,7 +2,9 @@ import type { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export class PharmacySubstituteError extends Error {
-  constructor(readonly code: 'NOT_FOUND' | 'NOT_EQUIVALENT' | 'NOT_SALEABLE') {
+  constructor(
+    readonly code: 'NOT_FOUND' | 'NOT_EQUIVALENT' | 'NOT_SALEABLE' | 'OVERRIDE_REASON_REQUIRED'
+  ) {
     super(code);
     this.name = 'PharmacySubstituteError';
   }
@@ -67,41 +69,30 @@ function regulatoryFlags(medicine: { controlled?: boolean; rx?: boolean; restric
  */
 export async function findSubstituteProposals(
   db: ScopedDb,
-  scope: { organizationId: string; branchId: string },
+  scope: { organizationId: string; branchId: string; actorId?: string },
   input: {
     medicineId: string;
     presentationId: string;
     quantityCanonicalUnits: number;
     at?: Date;
+    pharmacistOverride?: { reason: string };
   }
 ): Promise<SubstituteProposal[]> {
   const at = input.at ?? new Date();
-  const [requested, onHand] = await Promise.all([
-    db.medicine.findFirst({
-      where: { id: input.medicineId, organizationId: scope.organizationId },
-      include: { strengths: true, presentations: true },
-    }),
-    db.pharmacyStockBalance.aggregate({
-      where: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        disposition: 'AVAILABLE',
-        onHandUnits: { gt: 0 },
-        lot: {
-          receivedAt: { not: null },
-          batch: { medicineId: input.medicineId, state: 'ACTIVE', expiresAt: { gt: at } },
-        },
-      },
-      _sum: { onHandUnits: true },
-    }),
-  ]);
+  const overrideReason = input.pharmacistOverride?.reason.trim();
+  if (input.pharmacistOverride && (!overrideReason || !scope.actorId)) {
+    throw new PharmacySubstituteError('OVERRIDE_REASON_REQUIRED');
+  }
+  const requested = await db.medicine.findFirst({
+    where: { id: input.medicineId, organizationId: scope.organizationId },
+    include: { strengths: true, presentations: true },
+  });
   const requestedPresentation = requested?.presentations.find(
     (presentation) => presentation.id === input.presentationId
   );
   if (!requested || !requestedPresentation) throw new PharmacySubstituteError('NOT_FOUND');
   const requestedFlags = regulatoryFlags(requested);
-  const availableUnits = onHand._sum.onHandUnits ?? 0;
-  const requireLowerPrice = availableUnits > 0;
+  const requireLowerPrice = !input.pharmacistOverride;
   const ingredientIds = [...new Set(requested.strengths.map((item) => item.ingredientId))];
 
   const historicalReference = await db.pharmacyInventoryLot.findFirst({
@@ -120,7 +111,7 @@ export async function findSubstituteProposals(
           historicalReference.unitsPerPack
       )
     : null;
-  if (referencePriceMinor === null && requireLowerPrice) return [];
+  if (referencePriceMinor === null) return [];
 
   const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({
     where: {
@@ -168,7 +159,7 @@ export async function findSubstituteProposals(
       normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
       normalized(presentation.route) !== normalized(requestedPresentation.route) ||
       availableCanonicalUnits < input.quantityCanonicalUnits ||
-      (requireLowerPrice && (referencePriceMinor === null || priceMinor >= referencePriceMinor))
+      (requireLowerPrice && (referencePriceMinor === null || priceMinor > referencePriceMinor))
     ) {
       return [];
     }
@@ -190,6 +181,30 @@ export async function findSubstituteProposals(
       },
     ];
   });
+
+  if (input.pharmacistOverride) {
+    await db.auditLog.create({
+      data: {
+        organizationId: scope.organizationId,
+        actorId: scope.actorId,
+        source: 'TRPC',
+        category: 'PHARMACY',
+        operation: 'OTHER',
+        action: 'pharmacySales.overrideSubstitutePrice',
+        targetType: 'Medicine',
+        targetId: input.medicineId,
+        metadata: {
+          reason: overrideReason!,
+          branchId: scope.branchId,
+          referencePriceMinor,
+          proposals: proposals.map(({ inventoryLotId, priceMinor }) => ({
+            inventoryLotId,
+            priceMinor,
+          })),
+        },
+      },
+    });
+  }
 
   return proposals.sort(
     (left, right) =>
