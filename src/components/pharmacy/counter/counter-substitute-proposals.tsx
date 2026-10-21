@@ -11,6 +11,7 @@ export function CounterSubstituteProposals({
   proposals,
   state,
   prescriptionOnly,
+  outOfStock = false,
   error,
   disabled,
   onChoose,
@@ -20,6 +21,8 @@ export function CounterSubstituteProposals({
   proposals: readonly SubstituteProposal[];
   state: 'loading' | 'ready' | 'error';
   prescriptionOnly: boolean;
+  /** The staged product has no safe units, so any equivalent is useful. */
+  outOfStock?: boolean;
   error?: string | null;
   disabled: boolean;
   onChoose: (proposal: SubstituteProposal) => void;
@@ -48,7 +51,9 @@ export function CounterSubstituteProposals({
   if (proposals.length === 0) {
     return (
       <p className="text-sm text-text-muted">
-        No cheaper exact equivalent is safely available in this branch.
+        {outOfStock
+          ? 'Nothing in stock shares this salt, strength, form and route.'
+          : 'No cheaper exact equivalent is safely available in this branch.'}
       </p>
     );
   }
@@ -78,8 +83,10 @@ export function CounterSubstituteProposals({
                 {proposal.dosageForm} · {proposal.route} · {proposal.equivalenceBasis}
               </p>
               <p className="mt-1 font-mono text-xs tabular-nums text-text-body">
-                {formatMinor(proposal.priceMinor)} · save{' '}
-                {formatMinor(proposal.priceDifferenceMinor)}
+                {formatMinor(proposal.priceMinor)}
+                {proposal.priceDifferenceMinor > 0
+                  ? ` · save ${formatMinor(proposal.priceDifferenceMinor)}`
+                  : null}
               </p>
             </div>
             {prescriptionOnly ? (

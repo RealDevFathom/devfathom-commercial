@@ -40,6 +40,24 @@ describe('AI-05 counter suggestions', () => {
     expect(screen.queryByRole('button', { name: 'Review option' })).not.toBeInTheDocument();
   });
 
+  it('says when an out-of-stock product has no in-stock equivalent', () => {
+    render(
+      <CounterSubstituteProposals
+        proposals={[]}
+        state="ready"
+        prescriptionOnly={false}
+        outOfStock
+        disabled={false}
+        onChoose={vi.fn()}
+        onDecline={vi.fn()}
+        onRetry={vi.fn()}
+      />
+    );
+    expect(
+      screen.getByText('Nothing in stock shares this salt, strength, form and route.')
+    ).toBeVisible();
+  });
+
   it('exposes an explicit decline action', () => {
     const onDecline = vi.fn();
     render(

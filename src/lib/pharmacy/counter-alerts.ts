@@ -20,6 +20,7 @@
  */
 
 import type { BlockReason } from './inventory';
+import { nearExpiryAlertBand } from './near-expiry-alerts';
 
 export const COUNTER_ALERT_SEVERITIES = ['SAFETY_BLOCK', 'CLINICAL_ADVICE', 'COMMERCIAL'] as const;
 export type CounterAlertSeverity = (typeof COUNTER_ALERT_SEVERITIES)[number];
@@ -218,11 +219,12 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
       (line.nearestSafeExpiry.getTime() - context.at.getTime()) / DAY_MS
     );
     if (remainingDays >= 0 && remainingDays <= nearExpiryDays) {
+      const band = nearExpiryAlertBand(line.nearestSafeExpiry, context.at);
       push(alerts, {
         key: `near-expiry:${medicine.medicineId}`,
         severity: 'COMMERCIAL',
         code: 'NEAR_EXPIRY_BATCH',
-        message: `${name} dispenses from a batch expiring in ${remainingDays} day(s).`,
+        message: `${name} dispenses from a batch expiring in ${remainingDays} day(s).${band ? ` ${band}-day near-expiry alert.` : ''}`,
         saleLineRef: line.ref,
         remedy: 'Tell the customer the expiry before completing the sale.',
       });

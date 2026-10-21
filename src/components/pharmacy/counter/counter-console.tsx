@@ -559,17 +559,21 @@ function ScopedPharmacyCounterConsole({
     requestedCanonicalUnits > 0
       ? Math.max(0, requestedCanonicalUnits - activeRow.onHandUnits)
       : 0;
+  const outOfStock = Boolean(activeRow && activeRow.onHandUnits === 0);
   const substituteInput =
     activeRow &&
-    selectedOption &&
     requestedCanonicalUnits !== null &&
-    activeRow.onHandUnits < requestedCanonicalUnits
+    requestedCanonicalUnits > 0 &&
+    (outOfStock || (selectedOption !== null && activeRow.onHandUnits < requestedCanonicalUnits))
       ? {
           branchId,
           medicineId: activeRow.medicineId,
           presentationId: activeRow.presentationId,
-          quantityCanonicalUnits: requestedCanonicalUnits,
+          // One unit is enough to surface an in-stock equivalent. The row still
+          // shows how many units that batch can actually sell.
+          quantityCanonicalUnits: outOfStock ? 1 : requestedCanonicalUnits,
           ...(preview ? { referencePriceMinor: preview.unitPriceMinor } : {}),
+          ...(outOfStock ? { requireLowerPrice: false as const } : {}),
         }
       : null;
   const substitutesQuery = trpc.pharmacySales.substituteProposals.useQuery(
@@ -1815,6 +1819,7 @@ function ScopedPharmacyCounterConsole({
                       ? 'error'
                       : 'ready'
                 }
+                outOfStock={outOfStock}
                 prescriptionOnly={activeRow?.restriction.rx ?? false}
                 error={substitutesQuery.error ? messageFrom(substitutesQuery.error) : null}
                 disabled={busy}

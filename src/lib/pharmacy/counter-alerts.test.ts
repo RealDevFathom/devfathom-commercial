@@ -133,6 +133,9 @@ describe('counterAlertsFor (POS-09)', () => {
     expect(bySeverity.LOOK_ALIKE_SOUND_ALIKE).toBe('CLINICAL_ADVICE');
     expect(bySeverity.COLD_CHAIN_HANDLING).toBe('CLINICAL_ADVICE');
     expect(bySeverity.NEAR_EXPIRY_BATCH).toBe('COMMERCIAL');
+    expect(alerts.find((alert) => alert.code === 'NEAR_EXPIRY_BATCH')?.message).toContain(
+      '30-day near-expiry alert'
+    );
     expect(hasBlockingAlert(alerts)).toBe(false);
   });
 

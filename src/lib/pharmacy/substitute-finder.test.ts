@@ -122,6 +122,48 @@ describe('AI-05 deterministic substitute finder', () => {
     ]);
   });
 
+  it('keeps cheaper-only suggestions unless the product is out of stock', async () => {
+    const db = dbWith([lot({ id: 'dearer', printedMrpMinor: 2_000 })]);
+    const input = {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 10,
+      referencePriceMinor: 1_000,
+    };
+    expect(await findSubstituteProposals(db as never, scope, input)).toEqual([]);
+    const rows = await findSubstituteProposals(db as never, scope, {
+      ...input,
+      requireLowerPrice: false,
+    });
+    expect(
+      rows.map((row) => [row.inventoryLotId, row.priceMinor, row.priceDifferenceMinor])
+    ).toEqual([['dearer', 2_000, -1_000]]);
+  });
+
+  it('suggests an in-stock equivalent when no reference price exists', async () => {
+    const db = {
+      medicine: { findFirst: async () => requested },
+      pharmacyInventoryLot: {
+        findFirst: async () => null,
+        findMany: async () => [lot({ id: 'in-stock', printedMrpMinor: 1_500 })],
+      },
+    };
+    const rows = await findSubstituteProposals(db as never, scope, {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 1,
+      requireLowerPrice: false,
+    });
+    expect(rows).toEqual([
+      expect.objectContaining({
+        inventoryLotId: 'in-stock',
+        priceMinor: 150,
+        priceDifferenceMinor: 0,
+        equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
+      }),
+    ]);
+  });
+
   it('closes a declined POS-10 event with reason substitute declined', async () => {
     let update: unknown;
     const db = {

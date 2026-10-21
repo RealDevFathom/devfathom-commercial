@@ -62,10 +62,16 @@ export async function findSubstituteProposals(
     presentationId: string;
     quantityCanonicalUnits: number;
     referencePriceMinor?: number;
+    /**
+     * AI-05 keeps the cheaper-only rule. An out-of-stock product has nothing to
+     * undercut, so the counter asks for every in-stock equivalent.
+     */
+    requireLowerPrice?: boolean;
     at?: Date;
   }
 ): Promise<SubstituteProposal[]> {
   const at = input.at ?? new Date();
+  const requireLowerPrice = input.requireLowerPrice ?? true;
   const requested = await db.medicine.findFirst({
     where: { id: input.medicineId, organizationId: scope.organizationId },
     include: { strengths: true, presentations: true },
@@ -96,7 +102,7 @@ export async function findSubstituteProposals(
             historicalReference.unitsPerPack
         )
       : null);
-  if (referencePriceMinor === null) return [];
+  if (referencePriceMinor === null && requireLowerPrice) return [];
 
   const lots: CandidateLot[] = await db.pharmacyInventoryLot.findMany({
     where: {
@@ -130,7 +136,7 @@ export async function findSubstituteProposals(
       normalized(presentation.dosageForm) !== normalized(requestedPresentation.dosageForm) ||
       normalized(presentation.route) !== normalized(requestedPresentation.route) ||
       availableCanonicalUnits < input.quantityCanonicalUnits ||
-      priceMinor >= referencePriceMinor
+      (requireLowerPrice && (referencePriceMinor === null || priceMinor >= referencePriceMinor))
     ) {
       return [];
     }
@@ -146,7 +152,7 @@ export async function findSubstituteProposals(
         route: presentation.route,
         availableCanonicalUnits,
         priceMinor,
-        priceDifferenceMinor: referencePriceMinor - priceMinor,
+        priceDifferenceMinor: referencePriceMinor === null ? 0 : referencePriceMinor - priceMinor,
         equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
       },
     ];

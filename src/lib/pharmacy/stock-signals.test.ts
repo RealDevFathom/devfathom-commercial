@@ -213,11 +213,23 @@ describe('PUR-07 — lot-level signals', () => {
     );
     expect(kinds(inside)).toEqual(['NEAR_EXPIRY']);
     expect(inside[0]!.explanation).toContain('expire in 45 days');
+    expect(inside[0]!.explanation).toContain('60-day near-expiry alert');
 
     const outside = evaluateStockSignals(
       facts({ lots: [lot({ expiresAt: new Date(AT.getTime() + 91 * DAY) })] })
     );
     expect(kinds(outside)).toEqual([]);
+  });
+
+  it('names the 30-day and 90-day near-expiry alerts', () => {
+    const soon = evaluateStockSignals(
+      facts({ lots: [lot({ expiresAt: new Date(AT.getTime() + 12 * DAY) })] })
+    );
+    const watch = evaluateStockSignals(
+      facts({ lots: [lot({ expiresAt: new Date(AT.getTime() + 75 * DAY) })] })
+    );
+    expect(soon[0]!.explanation).toContain('30-day near-expiry alert');
+    expect(watch[0]!.explanation).toContain('90-day near-expiry alert');
   });
 
   it('raises RETURN_WINDOW while the supplier deadline is closing and not once it has lapsed', () => {
