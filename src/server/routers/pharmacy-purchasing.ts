@@ -10,7 +10,10 @@ import {
   reverseGoodsReceipt,
   verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
-import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
+import {
+  assignedRegisterBranchIds,
+  listControlledPinWitnesses,
+} from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -1239,6 +1242,12 @@ const purchasingRouter = router({
         select: { branchId: true, qualifiedPersonUserId: true },
       });
       if (!receipt) throw new TRPCError({ code: 'NOT_FOUND' });
+      // The picker only lists witnesses from the receipt's branch, but nothing had
+      // confirmed the actor themselves may open that branch. Enforce it so a user
+      // assigned elsewhere cannot enumerate another branch's PIN holders.
+      const actorBranchIds = await assignedRegisterBranchIds(ctx.db, organizationId, actorId);
+      if (!actorBranchIds.includes(receipt.branchId))
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
       if (!receipt.qualifiedPersonUserId || receipt.qualifiedPersonUserId === actorId) return [];
       return listControlledPinWitnesses(
         ctx.db,
