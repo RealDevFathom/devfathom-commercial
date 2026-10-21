@@ -109,6 +109,7 @@ function dbFor(channel: 'DINE_IN' | 'TAKEAWAY') {
             ],
           },
         ],
+        bills: [] as { serviceChargeTotal: Prisma.Decimal }[],
         orderTables: [],
         kitchenTickets: [],
         deliveryFulfillment: null,
@@ -137,6 +138,28 @@ describe('order totals ignore stored tax and service', () => {
     expect(classifyTenderAmount(merchandiseOnly, due)).toBe('OK');
     expect(equals(merchandiseOnly, due)).toBe(false);
   });
+
+  it.each(['0.27', '0.45', '0.00'])(
+    'uses live bill service %s after comps or policy changes, including zero',
+    async (service) => {
+      const db = dbFor('DINE_IN');
+      const order = await db.restaurantOrder.findFirst();
+      order.bills = [{ serviceChargeTotal: D(service) }];
+      db.restaurantOrder.findFirst.mockResolvedValue(order);
+      const detail = await getOrderForBranch(db as unknown as ScopedDb, 'order-1', 'branch-1');
+      expect(detail?.totals.serviceCharge).toBe(service);
+      expect(db.restaurantOrder.findFirst).toHaveBeenLastCalledWith(
+        expect.objectContaining({
+          select: expect.objectContaining({
+            bills: {
+              where: { status: { not: 'VOID' } },
+              select: { serviceChargeTotal: true },
+            },
+          }),
+        })
+      );
+    }
+  );
 
   it('does not add the dine-in service rate to a takeaway order', async () => {
     const detail = await getOrderForBranch(
