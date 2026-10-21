@@ -5,7 +5,7 @@ import { redirect, unstable_rethrow } from 'next/navigation';
 import { TRPCError } from '@trpc/server';
 
 import { karachiLocalToIso, minorFromRupees } from '@/components/growth/format';
-import type { GrowthSegment } from '@/lib/growth/view';
+import type { CampaignKind } from '@/lib/growth/view';
 
 import { loadGrowthAccess } from './access';
 
@@ -44,68 +44,23 @@ function done(path: string, notice: string): never {
   redirect(`${path}${path.includes('?') ? '&' : '?'}notice=${encodeURIComponent(notice)}`);
 }
 
-function segmentFrom(form: FormData): GrowthSegment {
-  const type = text(form, 'segmentType');
-  if (type === 'churn_band') {
-    const band = text(form, 'band');
-    if (band !== 'low' && band !== 'medium' && band !== 'high' && band !== 'lost') {
-      return { type: 'churn_band', band: 'high' };
-    }
-    return { type: 'churn_band', band };
-  }
-  if (type === 'birthday') return { type: 'birthday', month: whole(form, 'month') ?? Number.NaN };
-  if (type === 'refill_due') {
-    return { type: 'refill_due', withinDays: whole(form, 'withinDays') ?? Number.NaN };
-  }
-  if (type === 'random') return { type: 'random', pct: whole(form, 'pct') ?? Number.NaN };
-  if (type === 'top_spenders')
-    return { type: 'top_spenders', n: whole(form, 'topN') ?? Number.NaN };
-  if (type === 'inactive_days') {
-    return {
-      type: 'inactive_days',
-      min: whole(form, 'inactiveMin') ?? Number.NaN,
-      max: whole(form, 'inactiveMax') ?? Number.NaN,
-    };
-  }
-  return { type: 'all' };
-}
-
-function discountKind(value: string): 'percent' | 'fixed' | 'none' {
-  if (value === 'fixed' || value === 'none') return value;
-  return 'percent';
-}
-
 function campaignInput(form: FormData) {
-  const type = discountKind(text(form, 'discountType'));
+  const discountType = text(form, 'discountType');
   const rawDiscount = text(form, 'discountValue');
-  const discountValue =
-    type === 'none'
-      ? null
-      : type === 'percent'
-        ? (whole(form, 'discountValue') ?? null)
-        : minorFromRupees(rawDiscount);
-  const budgetCapMinor = minorFromRupees(text(form, 'budgetRupees'));
-  const sendAt = karachiLocalToIso(text(form, 'sendAt'));
-  if (budgetCapMinor == null) {
-    redirect(
-      '/growth?error=' + encodeURIComponent('Enter the budget in rupees, like 2000 or 2000.50.')
-    );
-  }
-  if (!sendAt) {
-    redirect('/growth?error=' + encodeURIComponent('Choose the date and time to send.'));
-  }
-  if (type !== 'none' && discountValue == null) {
-    redirect('/growth?error=' + encodeURIComponent('Enter the discount.'));
-  }
   const rationale = text(form, 'rationale');
   return {
     name: text(form, 'name'),
-    kind: text(form, 'kind') as 'manual',
-    segment: segmentFrom(form),
-    sendAt,
-    discountType: type,
-    discountValue,
-    budgetCapMinor,
+    kind: text(form, 'kind') as CampaignKind,
+    segment: { type: 'all' as const },
+    sendAt: karachiLocalToIso(text(form, 'sendAt')) ?? '',
+    discountType: discountType as 'percent' | 'fixed' | 'none',
+    discountValue:
+      discountType === 'none'
+        ? null
+        : discountType === 'fixed'
+          ? minorFromRupees(rawDiscount)
+          : (whole(form, 'discountValue') ?? null),
+    budgetCapMinor: minorFromRupees(text(form, 'budgetRupees')) ?? Number.NaN,
     templateId: text(form, 'templateId'),
     rationale: rationale || null,
   };
@@ -145,13 +100,22 @@ export async function cancelCampaign(formData: FormData) {
 export async function saveCampaign(formData: FormData) {
   const id = text(formData, 'campaignId');
   const input = campaignInput(formData);
+  let approved = false;
   try {
     const api = await caller();
-    if (id) await api.campaigns.update({ ...input, id });
-    else await api.campaigns.create(input);
+    const saved = id
+      ? await api.campaigns.update({ ...input, id })
+      : await api.campaigns.create(input);
+    approved = saved.status === 'approved';
   } catch (error) {
     unstable_rethrow(error);
     fail('/growth', error);
+  }
+  if (approved) {
+    done(
+      '/growth?tab=scheduled',
+      'Under the auto-approve amount, so it is approved. The next send tick will schedule it.'
+    );
   }
   done('/growth?tab=proposed', 'Saved. It stays a proposal until you approve it.');
 }
@@ -191,19 +155,6 @@ export async function saveSettings(formData: FormData) {
     fail('/growth/settings', error);
   }
   done('/growth/settings', 'Settings saved.');
-}
-
-export async function sendTestMessage(formData: FormData) {
-  try {
-    await (await caller()).messages.sendTest({ toE164: text(formData, 'toE164') });
-  } catch (error) {
-    unstable_rethrow(error);
-    fail('/growth/settings', error);
-  }
-  done(
-    '/growth/settings',
-    'Test queued. It sends when WhatsApp is paired and quiet hours allow it.'
-  );
 }
 
 export async function updateTemplate(

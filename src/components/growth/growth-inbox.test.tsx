@@ -16,7 +16,7 @@ function campaign(overrides: Partial<GrowthCampaign> = {}): GrowthCampaign {
     status: 'proposed',
     name: 'Wapas aao',
     rationale,
-    segment: { type: 'churn_band', band: 'high' },
+    segment: { type: 'all' },
     sendAt: '2026-10-24T06:00:00.000Z',
     discountType: 'percent',
     discountValue: 10,
@@ -42,14 +42,6 @@ const templates: GrowthTemplate[] = [
   },
 ];
 
-const summary = {
-  optedInCustomers: 128,
-  highChurnCustomers: 17,
-  monthSpendMinor: 180_000,
-  monthlyBudgetMinor: 1_500_000,
-  redemptionsThisMonth: 2,
-};
-
 type FormAction = (formData: FormData) => void | Promise<void>;
 
 function renderInbox(extra: Partial<GrowthCampaign>[] = []) {
@@ -59,8 +51,7 @@ function renderInbox(extra: Partial<GrowthCampaign>[] = []) {
     <GrowthInbox
       campaigns={[campaign(), ...extra.map((item) => campaign(item))]}
       templates={templates}
-      summary={summary}
-      connection={{ status: 'needs_pairing', managerUrl: 'http://127.0.0.1:8080/manager' }}
+      connection={{ status: 'needs_pairing', managerUrl: 'http://127.0.0.1:8080' }}
       defaultSendAt="2026-10-22T11:00"
       approveAction={approve}
       rejectAction={reject}
@@ -71,13 +62,12 @@ function renderInbox(extra: Partial<GrowthCampaign>[] = []) {
 }
 
 describe('GrowthInbox', () => {
-  it('shows the month strip, a proposal, and the full rationale on hover', () => {
+  it('shows a proposal and the full rationale on hover', () => {
     renderInbox();
-    expect(screen.getByText('128')).toBeTruthy();
-    expect(screen.getByText('PKR 1,800.00')).toBeTruthy();
+    expect(screen.queryByText('This month')).toBeNull();
     expect(screen.getByText('WhatsApp needs pairing')).toBeTruthy();
     expect(screen.getByRole('link', { name: 'Pair in the manager' }).getAttribute('href')).toBe(
-      'http://127.0.0.1:8080/manager'
+      'http://127.0.0.1:8080'
     );
     expect(screen.getAllByTitle(rationale).length).toBeGreaterThan(0);
     expect(screen.getByTestId('campaign-cards').className).toContain('md:hidden');

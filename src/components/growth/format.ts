@@ -1,4 +1,4 @@
-import type { CampaignKind, GrowthSegment } from '@/lib/growth/view';
+import type { CampaignKind } from '@/lib/growth/view';
 
 export const growthFieldClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring';
@@ -57,25 +57,6 @@ export function formatDiscount(type: string | null, value: number | null): strin
   if (!type || type === 'none' || value == null) return 'No discount';
   if (type === 'percent') return `${value}%`;
   return formatPkr(value);
-}
-
-export function segmentLabel(segment: GrowthSegment): string {
-  switch (segment.type) {
-    case 'all':
-      return 'Everyone opted in';
-    case 'churn_band':
-      return `Churn ${segment.band}`;
-    case 'birthday':
-      return `Birthdays in month ${segment.month}`;
-    case 'refill_due':
-      return `Refill within ${segment.withinDays} days`;
-    case 'random':
-      return `Random ${segment.pct}%`;
-    case 'top_spenders':
-      return `Top ${segment.n} spenders`;
-    case 'inactive_days':
-      return `Quiet ${segment.min}-${segment.max} days`;
-  }
 }
 
 export function formatWhen(iso: string): string {

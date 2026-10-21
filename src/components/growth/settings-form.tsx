@@ -9,12 +9,10 @@ export function SettingsForm({
   settings,
   connection,
   save,
-  sendTest,
 }: {
   settings: GrowthSettingsView;
   connection: GrowthConnection;
   save: (formData: FormData) => void | Promise<void>;
-  sendTest: (formData: FormData) => void | Promise<void>;
 }) {
   return (
     <div className="min-w-0 space-y-6">
@@ -152,26 +150,6 @@ export function SettingsForm({
               Save settings
             </PendingButton>
           </div>
-        </form>
-      </SectionCard>
-      <SectionCard title="Test message" titleLevel={2}>
-        <p className="mb-4 text-sm text-text-muted">
-          Queued only. Nothing leaves the shop until WhatsApp is paired and quiet hours allow it.
-        </p>
-        <form action={sendTest} className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <label className="block min-w-0 flex-1 text-sm text-text-body">
-            Your WhatsApp number
-            <input
-              className={growthFieldClass}
-              name="toE164"
-              inputMode="tel"
-              placeholder="+923001234567"
-              required
-            />
-          </label>
-          <PendingButton variant="outline" pendingLabel="Queuing…" className="min-h-11">
-            Queue a test
-          </PendingButton>
         </form>
       </SectionCard>
     </div>

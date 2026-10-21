@@ -5,18 +5,12 @@ import { TRPCError } from '@trpc/server';
 import { buttonVariants } from '@/components/ui/button';
 import { SectionCard } from '@/components/ui/section-card';
 import { GrowthDenied, GrowthUnavailable } from '@/components/growth/growth-denied';
-import { MessageLog } from '@/components/growth/message-log';
 import { SettingsForm } from '@/components/growth/settings-form';
 import { TemplateEditor } from '@/components/growth/template-editor';
 import { cn } from '@/lib/utils';
-import type {
-  GrowthConnection,
-  GrowthMessage,
-  GrowthSettingsView,
-  GrowthTemplate,
-} from '@/lib/growth/view';
+import type { GrowthConnection, GrowthSettingsView, GrowthTemplate } from '@/lib/growth/view';
 
-import { saveSettings, sendTestMessage, updateTemplate } from '../actions';
+import { saveSettings, updateTemplate } from '../actions';
 import { loadGrowthAccess } from '../access';
 import { GrowthFrame } from '../frame';
 
@@ -28,7 +22,6 @@ type SettingsData = {
   settings: GrowthSettingsView;
   connection: GrowthConnection;
   templates: GrowthTemplate[];
-  messages: GrowthMessage[];
 };
 
 export default async function GrowthSettingsPage({
@@ -44,17 +37,15 @@ export default async function GrowthSettingsPage({
   let denied: 'flag' | 'permission' | null = null;
   let failed = false;
   try {
-    const [settings, connection, templates, messages] = await Promise.all([
+    const [settings, connection, templates] = await Promise.all([
       access.caller.settings.get(),
       access.caller.connection.status(),
       access.caller.templates.list(),
-      access.caller.messages.list(),
     ]);
     data = {
       settings,
       connection,
       templates: templates.templates,
-      messages: messages.messages,
     };
   } catch (error) {
     unstable_rethrow(error);
@@ -89,20 +80,9 @@ export default async function GrowthSettingsPage({
         </Link>
       }
     >
-      <SettingsForm
-        settings={data.settings}
-        connection={data.connection}
-        save={saveSettings}
-        sendTest={sendTestMessage}
-      />
+      <SettingsForm settings={data.settings} connection={data.connection} save={saveSettings} />
       <SectionCard title="Templates" titleLevel={2}>
         <TemplateEditor templates={data.templates} save={updateTemplate} />
-      </SectionCard>
-      <SectionCard title="Message log" titleLevel={2}>
-        <p className="mb-4 text-sm text-text-muted">
-          What went out and what came back. This is a log, not a chat.
-        </p>
-        <MessageLog messages={data.messages} />
       </SectionCard>
     </GrowthFrame>
   );

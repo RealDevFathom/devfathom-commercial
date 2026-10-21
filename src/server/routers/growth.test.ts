@@ -18,14 +18,16 @@ vi.mock('@/server/audit', () => ({
   annotateAudit: vi.fn(),
 }));
 
-import { growthRouter } from './growth';
+import { decryptSecret } from '@/lib/secret-crypto';
+
+import { growthRouter, growthStore } from './growth';
 
 let sequence = 0;
 
 function caller() {
   sequence += 1;
   const organizationId = `org_growth_ui_${sequence}`;
-  return growthRouter.createCaller({
+  const api = growthRouter.createCaller({
     db: {},
     entitlements: {
       organizationId,
@@ -50,167 +52,209 @@ function caller() {
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as never);
+  return { api, organizationId };
 }
 
+const proposal = {
+  name: 'Welcome back',
+  kind: 'manual' as const,
+  segment: { type: 'all' as const },
+  sendAt: '2026-10-24T06:00:00.000Z',
+  discountType: 'none' as const,
+  discountValue: null,
+  budgetCapMinor: 0,
+  templateId: 'tpl_generic',
+  rationale: null as string | null,
+};
+
 const settingsInput = {
-  monthlyBudgetMinor: 1_500_000,
-  autoApproveUnderMinor: 50_000,
+  monthlyBudgetMinor: 0,
+  autoApproveUnderMinor: 0,
   quietHoursStart: 22,
   quietHoursEnd: 8,
-  maxMsgsPerDay: 200,
+  maxMsgsPerDay: 30,
   maxDiscountPct: 25,
-  customDates: ['2026-11-09'],
-  waInstanceName: 'sehat-pharmacy',
+  customDates: [] as string[],
+  waInstanceName: 'shop',
   waApiUrl: 'http://127.0.0.1:8080',
 };
 
 beforeEach(() => {
   mocks.enabled.mockResolvedValue(true);
   mocks.can.mockResolvedValue(true);
+  process.env.PLATFORM_ENCRYPTION_KEY = 'a'.repeat(64);
 });
 
 describe('growth admin procedures', () => {
-  it('lists proposals and approves one onto the scheduled queue', async () => {
-    const api = caller();
+  it('lists the proposal and approves it onto the scheduled queue', async () => {
+    const { api } = caller();
     const proposed = await api.campaigns.list({ tab: 'proposed' });
-    expect(proposed.campaigns.map((campaign) => campaign.name)).toEqual([
-      'Wapas aao',
-      'November birthdays',
-    ]);
-    const approved = await api.campaigns.approve({ id: 'cmp_winback' });
+    expect(proposed.campaigns.map((campaign) => campaign.name)).toEqual(['Welcome back']);
+    const approved = await api.campaigns.approve({ id: 'cmp_proposal' });
     expect(approved.status).toBe('approved');
     expect(approved.approvedBy).toBe('user_owner');
     const scheduled = await api.campaigns.list({ tab: 'scheduled' });
-    expect(scheduled.campaigns.map((campaign) => campaign.id)).toContain('cmp_winback');
-    await expect(api.campaigns.approve({ id: 'cmp_winback' })).rejects.toBeInstanceOf(TRPCError);
+    expect(scheduled.campaigns.map((campaign) => campaign.id)).toContain('cmp_proposal');
+    await expect(api.campaigns.approve({ id: 'cmp_proposal' })).rejects.toBeInstanceOf(TRPCError);
   });
 
-  it('rejects a proposal and refuses edits after it has been sent', async () => {
-    const api = caller();
-    const rejected = await api.campaigns.cancel({ id: 'cmp_birthday' });
+  it('rejects a proposal and refuses edits once it is no longer proposed', async () => {
+    const { api } = caller();
+    const rejected = await api.campaigns.cancel({ id: 'cmp_proposal' });
     expect(rejected.status).toBe('cancelled');
     expect(
       (await api.campaigns.list({ tab: 'proposed' })).campaigns.map((campaign) => campaign.id)
-    ).not.toContain('cmp_birthday');
-    await expect(
-      api.campaigns.update({
-        id: 'cmp_eid',
-        name: 'Changed',
-        kind: 'holiday',
-        segment: { type: 'all' },
-        sendAt: '2026-10-24T06:00:00.000Z',
-        discountType: 'none',
-        discountValue: null,
-        budgetCapMinor: 0,
-        templateId: 'tpl_holiday',
-        rationale: null,
-      })
-    ).rejects.toMatchObject({ message: 'Only a proposal can be edited.' });
+    ).not.toContain('cmp_proposal');
+    await expect(api.campaigns.update({ ...proposal, id: 'cmp_proposal' })).rejects.toMatchObject({
+      message: 'Only a proposal can be edited.',
+    });
   });
 
-  it('edits a proposal and creates a manual one', async () => {
-    const api = caller();
+  it('edits a proposal and creates another that stays proposed when auto-approve is off', async () => {
+    const { api } = caller();
     const edited = await api.campaigns.update({
-      id: 'cmp_winback',
-      name: 'Wapas aao, softer',
-      kind: 'winback',
-      segment: { type: 'churn_band', band: 'high' },
-      sendAt: '2026-10-24T06:00:00.000Z',
-      discountType: 'percent',
-      discountValue: 5,
-      budgetCapMinor: 400_000,
-      templateId: 'tpl_winback',
-      rationale: 'A smaller code.',
+      ...proposal,
+      id: 'cmp_proposal',
+      name: 'Welcome back, softer',
+      rationale: 'A smaller note.',
     });
-    expect(edited.name).toBe('Wapas aao, softer');
-    expect(edited.discountValue).toBe(5);
+    expect(edited.name).toBe('Welcome back, softer');
+    expect(edited.status).toBe('proposed');
+    expect(edited.approvedBy).toBeNull();
     const created = await api.campaigns.create({
-      name: 'Manual Friday',
-      kind: 'manual',
-      segment: { type: 'all' },
-      sendAt: '2026-10-25T06:00:00.000Z',
-      discountType: 'percent',
-      discountValue: 10,
-      budgetCapMinor: 100_000,
-      templateId: 'tpl_generic',
-      rationale: 'Counter was quiet.',
+      ...proposal,
+      name: 'Friday',
+      templateId: 'tpl_winback',
     });
     expect(created.status).toBe('proposed');
     expect(created.createdBy).toBe('user_owner');
-    expect(created.estimatedReach).toBe(128);
+    expect(created.estimatedReach).toBe(0);
+    expect(created.segment).toEqual({ type: 'all' });
   });
 
-  it('masks phones and reports reach, spend, and redemptions', async () => {
-    const api = caller();
-    const detail = await api.campaigns.get({ id: 'cmp_eid' });
-    expect(detail.campaign.estimatedReach).toBe(40);
-    expect(detail.campaign.spentMinor).toBe(180_000);
-    expect(detail.campaign.budgetCapMinor).toBe(500_000);
-    expect(detail.campaign.redemptionCount).toBe(2);
-    expect(JSON.stringify(detail)).not.toContain('+923001112233');
-    expect(detail.recipients.map((recipient) => recipient.phoneMasked)).toContain('•••• 2233');
-    expect(detail.preview).toContain('Ayesha Khan');
-    const summary = await api.metrics.summary();
-    expect(summary.optedInCustomers).toBe(128);
-    expect(summary.highChurnCustomers).toBe(17);
-    expect(summary.monthlyBudgetMinor).toBe(1_500_000);
-    expect(summary.redemptionsThisMonth).toBe(2);
-    expect(summary.monthSpendMinor).toBe(180_000);
+  it('approves on the server when the cap is under autoApproveUnderMinor', async () => {
+    const { api } = caller();
+    await api.settings.update({ ...settingsInput, autoApproveUnderMinor: 50_000 });
+    const under = await api.campaigns.create({
+      ...proposal,
+      name: 'Small',
+      budgetCapMinor: 49_999,
+    });
+    expect(under.status).toBe('approved');
+    expect(under.approvedBy).toBe('user_owner');
+    expect(under.approvedAt).toEqual(expect.any(String));
+    const atThreshold = await api.campaigns.create({
+      ...proposal,
+      name: 'At the line',
+      budgetCapMinor: 50_000,
+    });
+    expect(atThreshold.status).toBe('proposed');
+    expect(atThreshold.approvedBy).toBeNull();
   });
 
-  it('round-trips quiet hours and never returns the API key', async () => {
-    const api = caller();
+  it('refuses a fixed discount larger than the campaign budget', async () => {
+    const { api } = caller();
+    await expect(
+      api.campaigns.create({
+        ...proposal,
+        name: 'Too much off',
+        discountType: 'fixed',
+        discountValue: 20_000,
+        budgetCapMinor: 10_000,
+      })
+    ).rejects.toMatchObject({
+      message: 'A fixed discount cannot be larger than the campaign budget.',
+    });
+    const saved = await api.campaigns.create({
+      ...proposal,
+      name: 'Fits',
+      discountType: 'fixed',
+      discountValue: 10_000,
+      budgetCapMinor: 10_000,
+    });
+    expect(saved.discountValue).toBe(10_000);
+    expect(saved.status).toBe('proposed');
+  });
+
+  it('returns no phone and no spend on the seeded proposal', async () => {
+    const { api } = caller();
+    const detail = await api.campaigns.get({ id: 'cmp_proposal' });
+    expect(detail.campaign.estimatedReach).toBe(0);
+    expect(detail.campaign.spentMinor).toBe(0);
+    expect(detail.campaign.redemptionCount).toBe(0);
+    expect(detail.recipients).toEqual([]);
+    expect(JSON.stringify(detail)).not.toContain('phone');
+    expect(detail.preview).toMatch(/STOP/);
+  });
+
+  it('stores the Evolution key as ciphertext and refuses a host that is not allowlisted', async () => {
+    const { api, organizationId } = caller();
     const saved = await api.settings.update({ ...settingsInput, waApiKey: 'new-secret-1234' });
     expect(saved.quietHoursStart).toBe(22);
     expect(saved.quietHoursEnd).toBe(8);
     expect(saved.waApiKeyHint).toBe('••••1234');
     expect(JSON.stringify(saved)).not.toContain('new-secret-1234');
-    expect(JSON.stringify(await api.settings.get())).not.toContain('fixture-key-9f3a');
+    const stored = growthStore(organizationId).settings.waApiKeyEnc;
+    expect(stored?.startsWith('v1.')).toBe(true);
+    expect(stored).not.toContain('new-secret-1234');
+    expect(decryptSecret(stored ?? '')).toBe('new-secret-1234');
+    expect(JSON.stringify(await api.settings.get())).not.toContain('new-secret-1234');
+    const kept = await api.settings.update({ ...settingsInput, waApiKey: undefined });
+    expect(growthStore(organizationId).settings.waApiKeyEnc).toBe(stored);
+    expect(kept.waApiKeyHint).toBe('••••1234');
+    expect((await api.connection.status()).managerUrl).toBe('http://127.0.0.1:8080');
+    await expect(
+      api.settings.update({ ...settingsInput, waApiUrl: 'https://evil.example' })
+    ).rejects.toMatchObject({ message: 'That Evolution host is not allowlisted.' });
     const cleared = await api.settings.update({ ...settingsInput, waInstanceName: null });
     expect(cleared.quietHoursStart).toBe(22);
     expect((await api.connection.status()).status).toBe('needs_pairing');
   });
 
-  it('refuses a template with an unknown variable and does not save it', async () => {
-    const api = caller();
-    const before = (await api.templates.list()).templates.find(
-      (template) => template.id === 'tpl_generic'
+  it('returns approved campaigns to proposed when their template changes', async () => {
+    const { api, organizationId } = caller();
+    await api.campaigns.approve({ id: 'cmp_proposal' });
+    const scheduled = growthStore(organizationId).campaigns.find(
+      (campaign) => campaign.id === 'cmp_proposal'
     );
+    if (scheduled) {
+      scheduled.status = 'scheduled';
+      scheduled.approvedBy = 'user_owner';
+      scheduled.approvedAt = '2026-10-20T00:00:00.000Z';
+    }
+    const other = await api.campaigns.create({
+      ...proposal,
+      name: 'Other template',
+      templateId: 'tpl_winback',
+    });
+    await api.campaigns.approve({ id: other.id });
     await expect(
       api.templates.update({ id: 'tpl_generic', body: 'Salaam {{nope}}. Reply STOP to opt out.' })
     ).rejects.toMatchObject({ message: expect.stringMatching(/\{\{nope\}\}/) });
-    const after = (await api.templates.list()).templates.find(
-      (template) => template.id === 'tpl_generic'
-    );
-    expect(after?.body).toBe(before?.body);
+    expect((await api.campaigns.get({ id: 'cmp_proposal' })).campaign.status).toBe('scheduled');
     await expect(
       api.templates.update({ id: 'tpl_generic', body: 'Salaam {{name}}' })
-    ).rejects.toMatchObject({
-      message: expect.stringMatching(/STOP/),
-    });
-  });
-
-  it('queues a test without storing the phone number', async () => {
-    const api = caller();
-    const message = await api.messages.sendTest({ toE164: '+923001234567' });
-    expect(message.status).toBe('queued');
-    expect(message.direction).toBe('out');
-    expect(message.body).toMatch(/STOP/);
-    expect(message.body).not.toContain('923001234567');
-    expect((await api.messages.list()).messages.some((row) => row.id === message.id)).toBe(true);
-    await expect(api.messages.sendTest({ toE164: '03001234567' })).rejects.toBeInstanceOf(
-      TRPCError
-    );
+    ).rejects.toMatchObject({ message: expect.stringMatching(/STOP/) });
+    const next = 'Salaam {{name}}. Reply STOP to opt out.';
+    await api.templates.update({ id: 'tpl_generic', body: next });
+    const reset = (await api.campaigns.get({ id: 'cmp_proposal' })).campaign;
+    expect(reset.status).toBe('proposed');
+    expect(reset.approvedBy).toBeNull();
+    expect(reset.approvedAt).toBeNull();
+    expect((await api.campaigns.get({ id: other.id })).campaign.status).toBe('approved');
+    expect(
+      (await api.templates.list()).templates.find((template) => template.id === 'tpl_generic')?.body
+    ).toBe(next);
   });
 
   it('denies a shop with the flag off and a cashier', async () => {
     mocks.enabled.mockResolvedValue(false);
-    await expect(caller().metrics.summary()).rejects.toMatchObject({
+    await expect(caller().api.campaigns.list()).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'Growth AI is off for this shop.',
     });
     mocks.enabled.mockResolvedValue(true);
     mocks.can.mockResolvedValue(false);
-    await expect(caller().metrics.summary()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(caller().api.campaigns.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });

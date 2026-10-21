@@ -23,9 +23,8 @@ describe('SettingsForm', () => {
     render(
       <SettingsForm
         settings={settings}
-        connection={{ status: 'connected', managerUrl: 'http://127.0.0.1:8080/manager' }}
+        connection={{ status: 'connected', managerUrl: 'http://127.0.0.1:8080' }}
         save={vi.fn()}
-        sendTest={vi.fn()}
       />
     );
     expect(screen.getByLabelText('Quiet hours start')).toHaveProperty('value', '21');

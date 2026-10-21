@@ -10,7 +10,6 @@ import { cn } from '@/lib/utils';
 import type {
   GrowthCampaign,
   GrowthConnection,
-  GrowthSummary,
   GrowthTab,
   GrowthTemplate,
 } from '@/lib/growth/view';
@@ -38,7 +37,6 @@ function tabFrom(value: string | undefined): GrowthTab {
 }
 
 type InboxData = {
-  summary: GrowthSummary;
   campaigns: GrowthCampaign[];
   connection: GrowthConnection;
   templates: GrowthTemplate[];
@@ -58,14 +56,12 @@ export default async function GrowthPage({
   let denied: 'flag' | 'permission' | null = null;
   let failed = false;
   try {
-    const [summary, list, connection, templates] = await Promise.all([
-      access.caller.metrics.summary(),
+    const [list, connection, templates] = await Promise.all([
       access.caller.campaigns.list({ tab: 'all' }),
       access.caller.connection.status(),
       access.caller.templates.list(),
     ]);
     data = {
-      summary,
       campaigns: list.campaigns,
       connection,
       templates: templates.templates,
@@ -110,7 +106,6 @@ export default async function GrowthPage({
         key={tab}
         campaigns={data.campaigns}
         templates={data.templates}
-        summary={data.summary}
         connection={data.connection}
         defaultSendAt={defaultSendAt()}
         initialTab={tab}

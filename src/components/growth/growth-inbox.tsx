@@ -14,7 +14,6 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog';
 import { SectionCard } from '@/components/ui/section-card';
-import { Stat } from '@/components/ui/stat';
 import { StatusPill, type StatusTone } from '@/components/ui/status-pill';
 import {
   Table,
@@ -30,8 +29,6 @@ import type {
   CampaignStatus,
   GrowthCampaign,
   GrowthConnection,
-  GrowthSegment,
-  GrowthSummary,
   GrowthTab,
   GrowthTemplate,
 } from '@/lib/growth/view';
@@ -44,7 +41,6 @@ import {
   growthFieldClass,
   KIND_LABEL,
   rupeesInput,
-  segmentLabel,
   TEMPLATE_LABEL,
 } from './format';
 import { ConnectionChip } from './growth-nav';
@@ -147,11 +143,7 @@ function CampaignFields({
   templates: GrowthTemplate[];
   defaultSendAt: string;
 }) {
-  const [segmentType, setSegmentType] = useState<GrowthSegment['type']>(
-    campaign?.segment.type ?? 'all'
-  );
   const [discountType, setDiscountType] = useState(campaign?.discountType ?? 'percent');
-  const segment = campaign?.segment;
   const discountDefault =
     campaign?.discountType === 'fixed' && campaign.discountValue != null
       ? rupeesInput(campaign.discountValue)
@@ -186,114 +178,7 @@ function CampaignFields({
             ))}
           </select>
         </label>
-        <label className="block text-sm text-text-body">
-          Who receives it
-          <select
-            className={growthFieldClass}
-            name="segmentType"
-            value={segmentType}
-            onChange={(event) => setSegmentType(event.target.value as GrowthSegment['type'])}
-          >
-            <option value="all">Everyone opted in</option>
-            <option value="churn_band">Churn band</option>
-            <option value="birthday">Birthdays</option>
-            <option value="refill_due">Refill due</option>
-            <option value="random">Random sample</option>
-            <option value="top_spenders">Top spenders</option>
-            <option value="inactive_days">Quiet for a while</option>
-          </select>
-        </label>
-        {segmentType === 'churn_band' ? (
-          <label className="block text-sm text-text-body">
-            Band
-            <select
-              className={growthFieldClass}
-              name="band"
-              defaultValue={segment?.type === 'churn_band' ? segment.band : 'high'}
-            >
-              <option value="low">Low</option>
-              <option value="medium">Medium</option>
-              <option value="high">High</option>
-              <option value="lost">Lost</option>
-            </select>
-          </label>
-        ) : null}
-        {segmentType === 'birthday' ? (
-          <label className="block text-sm text-text-body">
-            Month
-            <input
-              className={growthFieldClass}
-              name="month"
-              type="number"
-              min={1}
-              max={12}
-              defaultValue={segment?.type === 'birthday' ? segment.month : 11}
-            />
-          </label>
-        ) : null}
-        {segmentType === 'refill_due' ? (
-          <label className="block text-sm text-text-body">
-            Within days
-            <input
-              className={growthFieldClass}
-              name="withinDays"
-              type="number"
-              min={1}
-              max={30}
-              defaultValue={segment?.type === 'refill_due' ? segment.withinDays : 3}
-            />
-          </label>
-        ) : null}
-        {segmentType === 'random' ? (
-          <label className="block text-sm text-text-body">
-            Percent of customers
-            <input
-              className={growthFieldClass}
-              name="pct"
-              type="number"
-              min={1}
-              max={100}
-              defaultValue={segment?.type === 'random' ? segment.pct : 10}
-            />
-          </label>
-        ) : null}
-        {segmentType === 'top_spenders' ? (
-          <label className="block text-sm text-text-body">
-            How many
-            <input
-              className={growthFieldClass}
-              name="topN"
-              type="number"
-              min={1}
-              max={500}
-              defaultValue={segment?.type === 'top_spenders' ? segment.n : 20}
-            />
-          </label>
-        ) : null}
-        {segmentType === 'inactive_days' ? (
-          <>
-            <label className="block text-sm text-text-body">
-              Quiet at least (days)
-              <input
-                className={growthFieldClass}
-                name="inactiveMin"
-                type="number"
-                min={1}
-                defaultValue={segment?.type === 'inactive_days' ? segment.min : 30}
-              />
-            </label>
-            <label className="block text-sm text-text-body">
-              Quiet at most (days)
-              <input
-                className={growthFieldClass}
-                name="inactiveMax"
-                type="number"
-                min={1}
-                defaultValue={segment?.type === 'inactive_days' ? segment.max : 90}
-              />
-            </label>
-          </>
-        ) : null}
+        <p className="text-sm text-text-muted sm:col-span-2">Everyone who opted in.</p>
         <label className="block text-sm text-text-body">
           Send at (Karachi)
           <input
@@ -390,7 +275,6 @@ function toLocal(iso: string): string {
 export function GrowthInbox({
   campaigns,
   templates,
-  summary,
   connection,
   defaultSendAt,
   initialTab = 'proposed',
@@ -400,7 +284,6 @@ export function GrowthInbox({
 }: {
   campaigns: GrowthCampaign[];
   templates: GrowthTemplate[];
-  summary: GrowthSummary;
   connection: GrowthConnection;
   defaultSendAt: string;
   initialTab?: GrowthTab;
@@ -415,30 +298,6 @@ export function GrowthInbox({
 
   return (
     <div className="min-w-0 space-y-6">
-      <SectionCard title="This month" titleLevel={2}>
-        <div className="grid grid-cols-2 gap-5 lg:grid-cols-4">
-          <Stat
-            label="Opted in"
-            value={summary.optedInCustomers.toLocaleString('en-PK')}
-            sub="Said haan on WhatsApp"
-          />
-          <Stat
-            label="High churn"
-            value={summary.highChurnCustomers.toLocaleString('en-PK')}
-            sub="Score 60 and above"
-          />
-          <Stat
-            label="Budget used"
-            value={formatPkr(summary.monthSpendMinor)}
-            sub={`of ${formatPkr(summary.monthlyBudgetMinor)}`}
-          />
-          <Stat
-            label="Redemptions"
-            value={String(summary.redemptionsThisMonth)}
-            sub="Codes used this month"
-          />
-        </div>
-      </SectionCard>
       <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <ConnectionChip connection={connection} />
         <Button type="button" className="min-h-11" onClick={() => setDraft('new')}>
@@ -543,9 +402,7 @@ export function GrowthInbox({
                           >
                             {campaign.name}
                           </Link>
-                          <p className="text-xs text-text-muted">
-                            {segmentLabel(campaign.segment)}
-                          </p>
+                          <p className="text-xs text-text-muted">Everyone opted in</p>
                         </TableCell>
                         <TableCell>
                           <Badge variant="outline" mono>
@@ -598,7 +455,8 @@ export function GrowthInbox({
           <DialogHeader>
             <DialogTitle>{editing ? 'Edit campaign' : 'New campaign'}</DialogTitle>
             <DialogDescription>
-              Same fields the planner fills. It stays a proposal until you approve it.
+              It stays a proposal until you approve it, unless the budget is under the auto-approve
+              amount.
             </DialogDescription>
           </DialogHeader>
           {draft ? (

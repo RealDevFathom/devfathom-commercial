@@ -4,7 +4,7 @@ import { TRPCError } from '@trpc/server';
 import { CampaignDetail } from '@/components/growth/campaign-detail';
 import { GrowthDenied, GrowthUnavailable } from '@/components/growth/growth-denied';
 import { SectionCard } from '@/components/ui/section-card';
-import type { GrowthCampaign, GrowthMessage, GrowthRecipient } from '@/lib/growth/view';
+import type { GrowthCampaign, GrowthRecipient } from '@/lib/growth/view';
 
 import { cancelCampaign } from '../actions';
 import { loadGrowthAccess } from '../access';
@@ -15,7 +15,6 @@ export const metadata = { title: 'Campaign · Growth' };
 type DetailData = {
   campaign: GrowthCampaign;
   recipients: GrowthRecipient[];
-  messages: GrowthMessage[];
   preview: string | null;
 };
 
@@ -40,7 +39,6 @@ export default async function GrowthCampaignPage({
     data = {
       campaign: detail.campaign,
       recipients: detail.recipients,
-      messages: detail.messages,
       preview: detail.preview,
     };
   } catch (error) {
@@ -95,7 +93,6 @@ export default async function GrowthCampaignPage({
       <CampaignDetail
         campaign={data.campaign}
         recipients={data.recipients}
-        messages={data.messages}
         preview={data.preview}
         cancelAction={cancelCampaign}
       />

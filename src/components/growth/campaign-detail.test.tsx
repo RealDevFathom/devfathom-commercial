@@ -49,7 +49,6 @@ describe('CampaignDetail', () => {
       <CampaignDetail
         campaign={campaign}
         recipients={recipients}
-        messages={[]}
         preview="Salaam Ayesha Khan! 10% at Sehat Pharmacy. Reply STOP to opt out."
         cancelAction={vi.fn()}
       />
@@ -70,7 +69,6 @@ describe('CampaignDetail', () => {
       <CampaignDetail
         campaign={{ ...campaign, status: 'scheduled', id: 'cmp_tuesday', name: 'Tuesday' }}
         recipients={[]}
-        messages={[]}
         preview={null}
         cancelAction={vi.fn()}
       />

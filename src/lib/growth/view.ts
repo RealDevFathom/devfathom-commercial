@@ -38,14 +38,7 @@ export type CampaignStatus = (typeof CAMPAIGN_STATUSES)[number];
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
 export type GrowthTab = 'proposed' | 'scheduled' | 'sent' | 'all';
 
-export type GrowthSegment =
-  | { type: 'all' }
-  | { type: 'churn_band'; band: 'low' | 'medium' | 'high' | 'lost' }
-  | { type: 'birthday'; month: number; dayWindow?: number }
-  | { type: 'refill_due'; withinDays: number }
-  | { type: 'random'; pct: number; seed?: number }
-  | { type: 'top_spenders'; n: number }
-  | { type: 'inactive_days'; min: number; max: number };
+export type GrowthSegment = { type: 'all' };
 
 export type GrowthCampaign = {
   id: string;
@@ -90,17 +83,6 @@ export type GrowthTemplate = {
   body: string;
 };
 
-export type GrowthMessage = {
-  id: string;
-  customerId: string | null;
-  direction: 'out' | 'in';
-  body: string;
-  status: 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'received';
-  campaignId: string | null;
-  error: string | null;
-  createdAt: string;
-};
-
 export type GrowthSettingsView = {
   monthlyBudgetMinor: number;
   autoApproveUnderMinor: number;
@@ -112,14 +94,6 @@ export type GrowthSettingsView = {
   waInstanceName: string | null;
   waApiUrl: string | null;
   waApiKeyHint: string | null;
-};
-
-export type GrowthSummary = {
-  optedInCustomers: number;
-  highChurnCustomers: number;
-  monthSpendMinor: number;
-  monthlyBudgetMinor: number;
-  redemptionsThisMonth: number;
 };
 
 export type GrowthConnection = {

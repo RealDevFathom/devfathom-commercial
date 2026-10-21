@@ -14,15 +14,9 @@ import {
 } from '@/components/ui/table';
 import { UtilizationBar } from '@/components/ui/utilization-bar';
 import { cn } from '@/lib/utils';
-import type {
-  CampaignStatus,
-  GrowthCampaign,
-  GrowthMessage,
-  GrowthRecipient,
-} from '@/lib/growth/view';
+import type { CampaignStatus, GrowthCampaign, GrowthRecipient } from '@/lib/growth/view';
 
-import { formatDiscount, formatPkr, formatWhen, segmentLabel } from './format';
-import { MessageLog } from './message-log';
+import { formatDiscount, formatPkr, formatWhen } from './format';
 import { PendingButton } from './pending-button';
 
 const FLOW: CampaignStatus[] = ['proposed', 'approved', 'scheduled', 'sending', 'sent'];
@@ -48,13 +42,11 @@ const STATUS_TONE: Record<CampaignStatus, StatusTone> = {
 export function CampaignDetail({
   campaign,
   recipients,
-  messages,
   preview,
   cancelAction,
 }: {
   campaign: GrowthCampaign;
   recipients: GrowthRecipient[];
-  messages: GrowthMessage[];
   preview: string | null;
   cancelAction: (formData: FormData) => void | Promise<void>;
 }) {
@@ -68,7 +60,7 @@ export function CampaignDetail({
     <div className="min-w-0 space-y-6">
       <div className="flex flex-wrap items-center gap-3">
         <StatusPill status={campaign.status} tone={STATUS_TONE[campaign.status]} />
-        <p className="text-sm text-text-muted">{segmentLabel(campaign.segment)}</p>
+        <p className="text-sm text-text-muted">Everyone opted in</p>
       </div>
       {FLOW.includes(campaign.status) ? (
         <ol aria-label="Campaign progress" className="flex flex-wrap gap-2">
@@ -184,9 +176,6 @@ export function CampaignDetail({
             Nobody is on this list yet. Recipients are added when the campaign is scheduled.
           </p>
         )}
-      </SectionCard>
-      <SectionCard title="Messages" titleLevel={2}>
-        <MessageLog messages={messages} empty="No WhatsApp rows for this campaign yet." />
       </SectionCard>
       {cancellable ? (
         <SectionCard title="Stop this campaign" titleLevel={2}>
