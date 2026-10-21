@@ -54,17 +54,17 @@ it.skipIf(!process.env.GROWTH_METRICS_TEST_DATABASE_URL)(
       expect(byId.never).toMatchObject({
         orders90d: 0,
         totalOrders: 0,
-        spend90dMinor: 0n,
+        spend90dMinor: BigInt(0),
         lastPurchaseAt: null,
         medianGapDays: null,
       });
       expect(byId.low).toMatchObject({
         orders90d: 3,
         totalOrders: 3,
-        spend90dMinor: 6300n,
+        spend90dMinor: BigInt(6300),
         medianGapDays: 30,
       });
-      expect(byId.lost).toMatchObject({ orders90d: 0, totalOrders: 3, spend90dMinor: 0n });
+      expect(byId.lost).toMatchObject({ orders90d: 0, totalOrders: 3, spend90dMinor: BigInt(0) });
       for (const band of ['low', 'medium', 'high', 'lost'])
         expect(calculateChurn(byId[band], now).churnBand).toBe(band);
       expect(
@@ -81,7 +81,7 @@ it.skipIf(!process.env.GROWTH_METRICS_TEST_DATABASE_URL)(
       const largeSpend = (await client.query(sql.text, sql.values)).rows.find(
         (row) => row.customerId === 'low'
       );
-      expect(largeSpend.spend90dMinor).toBe(3000004100n);
+      expect(largeSpend.spend90dMinor).toBe(BigInt(3000004100));
     } finally {
       await client.query('ROLLBACK');
       await client.end();
