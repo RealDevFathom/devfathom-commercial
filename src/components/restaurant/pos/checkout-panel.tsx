@@ -41,6 +41,7 @@ type CheckoutSummary = {
     status: string;
     splitKind: string;
     grandTotal: string;
+    taxTotal: string;
     remainingDue: string;
     deliveryFeeTotal: string;
     compTotal: string;
@@ -726,6 +727,12 @@ export function CheckoutPanel({
                     <dt className="text-xs text-text-muted">Bill total</dt>
                     <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
                       {bill.grandTotal}
+                    </dd>
+                  </div>
+                  <div>
+                    <dt className="text-xs text-text-muted">Tax</dt>
+                    <dd className="font-mono text-lg font-semibold tabular-nums text-text-strong">
+                      {bill.taxTotal}
                     </dd>
                   </div>
                   {summary.deliveryFeeTotal !== null ? (

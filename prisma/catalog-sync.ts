@@ -4,6 +4,7 @@ import type { Prisma } from '../src/generated/prisma/client.js';
 import { MODULE_CATALOG } from '../src/lib/module-catalog.js';
 import {
   HOSPITALITY_PACKAGES,
+  packageDefaultSeats,
   PHARMACY_PACKAGES,
   RESTAURANT_PACKAGES,
 } from '../src/lib/vertical-catalog.js';
@@ -172,6 +173,10 @@ export async function syncPlatformCatalog(
         key: definition.key,
         name: definition.name,
         vertical: definition.vertical,
+        // Offer the package at its catalog seat ceiling rather than the column's
+        // single-seat default, so the operator sees Essentials 10 / Pro 50 /
+        // Chain 2500 for pharmacy instead of every tier reading "1 default seat".
+        defaultSeats: packageDefaultSeats(definition),
       },
     });
     packagesCreated += 1;

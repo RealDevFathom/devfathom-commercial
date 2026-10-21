@@ -26,6 +26,8 @@ export type CanOptions = {
 };
 
 function capabilityMatches(rule: string, action: string): boolean {
+  // Purchasing accepts legacy dot grants without widening clinical opt-in grants.
+  if (action === 'pharmacy:procurement') rule = rule.replace(/^pharmacy\./, 'pharmacy:');
   if (rule === '*' || rule === action) return true;
   if (!rule.endsWith(':*')) return false;
   return action.startsWith(rule.slice(0, -1));

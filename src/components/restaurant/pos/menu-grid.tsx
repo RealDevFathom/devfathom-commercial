@@ -1,4 +1,4 @@
-import { type FormEvent, useState } from 'react';
+import { type FormEvent, type KeyboardEvent, useState } from 'react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -12,6 +12,7 @@ export type EffectiveMenuItem = {
   product: { name: string };
   price: string | null;
   available: boolean;
+  barcode?: string | null;
   modifierGroups?: Array<{
     id: string;
     name: string;
@@ -57,31 +58,91 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
   const [seat, setSeat] = useState('');
   const [modifierIds, setModifierIds] = useState<string[]>([]);
   const [modifierError, setModifierError] = useState<string | null>(null);
+  const [filter, setFilter] = useState('');
+
+  const needle = filter.trim().toLowerCase();
+  const sections = (menu?.sections ?? [])
+    .map((section) => ({
+      ...section,
+      items: section.items.filter((item) => {
+        if (!needle) return true;
+        const name = (item.displayName ?? item.product.name).toLowerCase();
+        return (
+          name.includes(needle) || item.barcode?.trim().toLowerCase().includes(needle) === true
+        );
+      }),
+    }))
+    .filter((section) => !needle || section.items.length > 0);
 
   const selected = menu?.sections
     .flatMap((section) => section.items)
     .find((item) => item.id === selectedId);
 
-  function submit(event: FormEvent<HTMLFormElement>) {
-    event.preventDefault();
-    if (!selected?.available || selected.price === null || pending) return;
-    for (const group of selected.modifierGroups ?? []) {
-      const count = group.options.filter((option) => modifierIds.includes(option.id)).length;
+  function modifierProblem(item: EffectiveMenuItem, modifiers: string[]) {
+    for (const group of item.modifierGroups ?? []) {
+      const count = group.options.filter((option) => modifiers.includes(option.id)).length;
       if (count < group.minSelect || (group.maxSelect !== null && count > group.maxSelect)) {
-        setModifierError(
-          `${group.name} requires ${group.maxSelect === group.minSelect ? group.minSelect : `${group.minSelect}–${group.maxSelect ?? 'any'}`} selection${group.maxSelect === 1 ? '' : 's'}.`
-        );
-        return;
+        return `${group.name} requires ${group.maxSelect === group.minSelect ? group.minSelect : `${group.minSelect}–${group.maxSelect ?? 'any'}`} selection${group.maxSelect === 1 ? '' : 's'}.`;
       }
+    }
+    return null;
+  }
+
+  function commit(item: EffectiveMenuItem, modifiers: string[]) {
+    if (!menu?.channelOpen || !item.available || item.price === null || pending) return;
+    const problem = modifierProblem(item, modifiers);
+    if (problem) {
+      setSelectedId(item.id);
+      setModifierError(problem);
+      return;
     }
     setModifierError(null);
     onAdd({
-      menuItemId: selected.id,
+      menuItemId: item.id,
       quantity: Math.max(1, Number.parseInt(quantity, 10) || 1),
       course: Math.max(1, Number.parseInt(course, 10) || 1),
       seatNumber: seat ? Math.max(1, Number.parseInt(seat, 10) || 1) : null,
-      modifierOptionIds: modifierIds,
+      modifierOptionIds: modifiers,
     });
+  }
+
+  function submit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    if (!selected) return;
+    commit(selected, modifierIds);
+  }
+
+  function itemName(item: EffectiveMenuItem) {
+    return (item.displayName ?? item.product.name).trim().toLowerCase();
+  }
+
+  function onSearchKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== 'Enter') return;
+    event.preventDefault();
+    const visible = sections.flatMap((section) => section.items);
+    const selectedVisible = visible.find((candidate) => candidate.id === selectedId);
+    if (selectedVisible) {
+      commit(selectedVisible, modifierIds);
+      return;
+    }
+    const exact = needle
+      ? visible.filter(
+          (item) => itemName(item) === needle || item.barcode?.trim().toLowerCase() === needle
+        )
+      : [];
+    if (exact.length === 1) {
+      const item = exact[0]!;
+      setSelectedId(item.id);
+      setModifierIds([]);
+      setModifierError(null);
+      commit(item, []);
+      return;
+    }
+    const next = visible[0];
+    if (!next) return;
+    setSelectedId(next.id);
+    setModifierIds([]);
+    setModifierError(null);
   }
 
   return (
@@ -111,79 +172,125 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
           </div>
         ) : null
       }
-      className="min-w-0"
+      compact
+      className="flex h-full min-h-0 min-w-0 flex-col overflow-hidden"
     >
       {!menu ? (
         <p className="text-sm text-text-muted">Unlock terminal to load current published menu.</p>
       ) : menu.sections.length === 0 ? (
         <p className="text-sm text-text-muted">Published menu has no sections.</p>
       ) : (
-        <div className="space-y-5">
-          <div className="space-y-5">
-            {menu.sections.map((section) => (
-              <section key={section.id} aria-labelledby={`menu-section-${section.id}`}>
-                <h3
-                  id={`menu-section-${section.id}`}
-                  className="mb-2 font-mono text-xs font-semibold tracking-wide text-text-muted uppercase"
-                >
-                  {section.name}
-                </h3>
-                {section.items.length === 0 ? (
-                  <p className="text-sm text-text-faint">No items in section.</p>
-                ) : (
-                  <div className="grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-2 2xl:grid-cols-3">
-                    {section.items.map((item) => {
-                      const name = item.displayName ?? item.product.name;
-                      return (
-                        <Button
-                          data-demo-modifier-item={
-                            (item.modifierGroups?.length ?? 0) > 0 ? 'true' : undefined
-                          }
-                          key={item.id}
-                          type="button"
-                          variant={selectedId === item.id ? 'default' : 'outline'}
-                          aria-pressed={selectedId === item.id}
-                          disabled={
-                            !item.available || item.price === null || pending || !menu.channelOpen
-                          }
-                          onClick={() => {
-                            setSelectedId(item.id);
-                            setModifierIds([]);
-                            setModifierError(null);
-                          }}
-                          className="min-h-11 h-auto min-w-0 justify-between gap-2 px-3 py-2 text-left whitespace-normal"
-                        >
-                          <span className="min-w-0 truncate">{name}</span>
-                          <span className="shrink-0 font-mono text-xs tabular-nums">
-                            {!item.available ? '86' : (item.price ?? 'N/A')}
-                          </span>
-                        </Button>
-                      );
-                    })}
-                  </div>
-                )}
-              </section>
-            ))}
+        <div className="flex min-h-0 flex-1 flex-col gap-2">
+          <div className="shrink-0 space-y-1">
+            <Label htmlFor="pos-menu-search">Menu search</Label>
+            <Input
+              id="pos-menu-search"
+              autoFocus
+              autoComplete="off"
+              value={filter}
+              placeholder="Type a dish, then Enter"
+              aria-describedby="pos-menu-search-help"
+              onChange={(event) => setFilter(event.target.value)}
+              onKeyDown={onSearchKeyDown}
+              className="h-9"
+            />
+            <p id="pos-menu-search-help" className="text-xs text-text-muted">
+              F2 search · Enter add · F9 pay
+            </p>
+          </div>
+          <div className="min-h-24 flex-1 space-y-2 overflow-y-auto">
+            {sections.length === 0 ? (
+              <p className="text-sm text-text-muted">No dishes match “{filter.trim()}”.</p>
+            ) : (
+              sections.map((section) => (
+                <section key={section.id} aria-labelledby={`menu-section-${section.id}`}>
+                  <h3
+                    id={`menu-section-${section.id}`}
+                    className="mb-1 font-mono text-xs font-semibold tracking-wide text-text-muted uppercase"
+                  >
+                    {section.name}
+                  </h3>
+                  {section.items.length === 0 ? (
+                    <p className="text-sm text-text-faint">No items in section.</p>
+                  ) : (
+                    <div className="grid grid-cols-2 items-start gap-1 sm:grid-cols-3 lg:grid-cols-4">
+                      {section.items.map((item) => {
+                        const name = item.displayName ?? item.product.name;
+                        return (
+                          <Button
+                            data-demo-modifier-item={
+                              (item.modifierGroups?.length ?? 0) > 0 ? 'true' : undefined
+                            }
+                            key={item.id}
+                            type="button"
+                            variant={selectedId === item.id ? 'default' : 'outline'}
+                            aria-pressed={selectedId === item.id}
+                            disabled={
+                              !item.available || item.price === null || pending || !menu.channelOpen
+                            }
+                            onClick={() => {
+                              setSelectedId(item.id);
+                              setModifierIds([]);
+                              setModifierError(null);
+                            }}
+                            className="h-9 min-w-0 justify-between gap-2 px-2 text-left text-sm font-medium shadow-none hover:translate-y-0 active:translate-y-0"
+                          >
+                            <span className="min-w-0 truncate">{name}</span>
+                            <span className="w-12 shrink-0 text-right font-mono text-xs tabular-nums">
+                              {!item.available ? '86' : (item.price ?? 'N/A')}
+                            </span>
+                          </Button>
+                        );
+                      })}
+                    </div>
+                  )}
+                </section>
+              ))
+            )}
           </div>
 
-          <form onSubmit={submit} className="border-border-subtle space-y-3 border-t pt-4">
+          <form onSubmit={submit} className="shrink-0 space-y-2 border-t border-border-subtle pt-2">
             <p className="text-sm font-semibold text-text-strong">
               {selected ? (selected.displayName ?? selected.product.name) : 'Select an item'}
             </p>
             <div className="grid grid-cols-3 gap-2">
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 <Label htmlFor="pos-quantity">Quantity</Label>
-                <Input
-                  id="pos-quantity"
-                  type="number"
-                  min={1}
-                  inputMode="numeric"
-                  value={quantity}
-                  onChange={(event) => setQuantity(event.target.value)}
-                  className="h-11"
-                />
+                <div className="flex items-center gap-1">
+                  <button
+                    type="button"
+                    aria-label="Decrease quantity"
+                    className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle text-sm"
+                    onClick={() =>
+                      setQuantity((current) =>
+                        String(Math.max(1, (Number.parseInt(current, 10) || 1) - 1))
+                      )
+                    }
+                  >
+                    −
+                  </button>
+                  <Input
+                    id="pos-quantity"
+                    type="number"
+                    min={1}
+                    inputMode="numeric"
+                    value={quantity}
+                    onChange={(event) => setQuantity(event.target.value)}
+                    className="h-8 text-center tabular-nums"
+                  />
+                  <button
+                    type="button"
+                    aria-label="Increase quantity"
+                    className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle text-sm"
+                    onClick={() =>
+                      setQuantity((current) => String((Number.parseInt(current, 10) || 1) + 1))
+                    }
+                  >
+                    +
+                  </button>
+                </div>
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 <Label htmlFor="pos-course">Course</Label>
                 <Input
                   id="pos-course"
@@ -192,10 +299,10 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                   inputMode="numeric"
                   value={course}
                   onChange={(event) => setCourse(event.target.value)}
-                  className="h-11"
+                  className="h-8"
                 />
               </div>
-              <div className="space-y-1.5">
+              <div className="space-y-1">
                 <Label htmlFor="pos-seat">Seat</Label>
                 <Input
                   id="pos-seat"
@@ -205,7 +312,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                   placeholder="Optional"
                   value={seat}
                   onChange={(event) => setSeat(event.target.value)}
-                  className="h-11"
+                  className="h-8"
                 />
               </div>
             </div>
@@ -213,7 +320,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
               <fieldset
                 data-demo-modifier-group="true"
                 key={group.id}
-                className="space-y-2 rounded-lg border border-border-subtle p-3"
+                className="space-y-1 rounded-md border border-border-subtle p-2"
               >
                 <legend className="px-1 text-sm font-semibold text-text-strong">
                   {group.name}
@@ -232,7 +339,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
                     return (
                       <label
                         key={option.id}
-                        className="flex min-h-11 items-center gap-3 rounded-md border border-border-subtle px-3 py-2 text-sm focus-within:ring-3 focus-within:ring-ring/50"
+                        className="flex min-h-8 items-center gap-2 rounded-md border border-border-subtle px-2 py-1 text-sm focus-within:ring-3 focus-within:ring-ring/50"
                       >
                         <input
                           type="checkbox"
@@ -268,7 +375,7 @@ export function MenuGrid({ menu, pending, onAdd, cacheState = 'live' }: MenuGrid
               disabled={
                 !selected?.available || selected.price === null || pending || !menu.channelOpen
               }
-              className="h-11 w-full"
+              className="h-11 w-full shadow-none hover:translate-y-0 active:translate-y-0"
             >
               {pending ? 'Adding item…' : 'Add to order'}
             </Button>

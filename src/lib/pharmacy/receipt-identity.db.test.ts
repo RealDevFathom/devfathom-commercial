@@ -365,7 +365,7 @@ describeDatabase('numbered receipt issuance on migrated PostgreSQL', () => {
     const f = await fixture();
     await transaction((db) => changeSaleStatus(db, scope, f.sale.id, 'complete'));
     const receipt = await read(f.sale.id);
-    expect(receipt.receiptNumber).toBeNull();
+    expect(receipt.receiptNumber).toBeGreaterThan(0);
     expect(receipt.lines[0]).toMatchObject({
       identityStatus: 'UNAVAILABLE',
       medicineName: 'Historical identity unavailable',

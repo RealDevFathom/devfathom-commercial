@@ -754,6 +754,103 @@ export function demoRestaurantApproverUserId(seatNumber: number): string {
   return `user_demo_restaurant_seat_${seatNumber}_approver`;
 }
 
+const ORGANIZATION_SLUG_TAKEN = 'That organization slug is already taken.';
+const ORGANIZATION_SLUG_CONSTRAINT = 'organizations_slug_key';
+const ORGANIZATION_SLUG_CONSTRAINTS = new Set(['slug', ORGANIZATION_SLUG_CONSTRAINT]);
+const ORGANIZATION_SLUG_CONSTRAINT_IN_MESSAGE = new RegExp(
+  `(?:^|[^A-Za-z0-9_])${ORGANIZATION_SLUG_CONSTRAINT}(?:$|[^A-Za-z0-9_])`
+);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
+
+function pushConstraintName(names: string[], value: unknown) {
+  if (typeof value === 'string' && value.length > 0) names.push(value);
+}
+
+/**
+ * Structured names Prisma puts on a unique violation: meta.target, a top-level
+ * constraint, or the driver adapter's constraint index / fields. An absent
+ * constraint is not a name — the pg adapter omits it when Postgres sends no DETAIL.
+ */
+function constraintNames(meta: unknown): string[] {
+  const record = asRecord(meta);
+  if (!record) return [];
+  const names: string[] = [];
+  const target = record.target;
+  if (Array.isArray(target)) {
+    for (const field of target) pushConstraintName(names, field);
+  } else {
+    pushConstraintName(names, target);
+  }
+  const constraint = record.constraint;
+  if (constraint && typeof constraint === 'object') {
+    const structured = constraint as Record<string, unknown>;
+    pushConstraintName(names, structured.index);
+    pushConstraintName(names, structured.name);
+    if (Array.isArray(structured.fields)) {
+      for (const field of structured.fields) pushConstraintName(names, field);
+    }
+  } else {
+    pushConstraintName(names, constraint);
+  }
+  const adapter = asRecord(record.driverAdapterError);
+  if (adapter) names.push(...constraintNames(adapter.cause));
+  return names;
+}
+
+/**
+ * pg adapter 7.9 leaves `constraint` undefined when `detail` is empty, so the
+ * only slug signal is cause.originalCode 23505 plus the constraint name in
+ * cause.originalMessage. A structured name for a different constraint still wins:
+ * organizations_pkey and every other index are rethrown.
+ */
+function unspecifiedUniqueViolationNamesSlug(meta: unknown): boolean {
+  const cause = asRecord(asRecord(asRecord(meta)?.driverAdapterError)?.cause);
+  if (!cause || String(cause.originalCode) !== '23505') return false;
+  return (
+    typeof cause.originalMessage === 'string' &&
+    ORGANIZATION_SLUG_CONSTRAINT_IN_MESSAGE.test(cause.originalMessage)
+  );
+}
+
+/** Prisma names the organizations.slug unique index either as the column or the index. */
+function isOrganizationSlugConflict(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+  const names = constraintNames(error.meta);
+  if (names.some((name) => ORGANIZATION_SLUG_CONSTRAINTS.has(name))) return true;
+  if (names.length > 0) return false;
+  return unspecifiedUniqueViolationNamesSlug(error.meta);
+}
+
+function canonicalOrganizationSlug(slug: string): string {
+  return slug.trim().toLowerCase();
+}
+
+/**
+ * Insert the organization row. A duplicate slug is a client conflict (HTTP 409),
+ * the same status the control route already uses for a taken admin email. The
+ * unique index is the authority: a pre-check would still lose the race, and any
+ * other unique violation must keep failing as an internal error.
+ */
+async function createOrganizationRecord(
+  db: PrismaClient,
+  data: Parameters<PrismaClient['organization']['create']>[0]['data']
+) {
+  const slug = typeof data.slug === 'string' ? canonicalOrganizationSlug(data.slug) : data.slug;
+  try {
+    return await db.organization.create({ data: { ...data, slug } });
+  } catch (error) {
+    if (isOrganizationSlugConflict(error)) {
+      throw new PlatformSecurityError(ORGANIZATION_SLUG_TAKEN, 409);
+    }
+    throw error;
+  }
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
@@ -784,26 +881,24 @@ async function bootstrapOrganization(
     );
   }
   const password = demo ? null : await hash(input.adminPassword, 12);
-  const organization = await db.organization.create({
-    data: {
-      ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
-      slug: input.slug,
-      legalName: input.legalName,
-      displayName: input.displayName,
-      vertical: input.vertical,
-      status: 'ONBOARDING',
-      deploymentMode: input.deploymentMode,
-      packageId: input.packageId,
-      timezone: input.timezone,
-      locale: input.locale,
-      currency: input.currency,
-      seatLimit: input.seatLimit ?? packageRecord.defaultSeats,
-      gracePeriodDays: input.gracePeriodDays,
-      dataResidency: input.dataResidency,
-      primaryContactName: input.primaryContactName,
-      primaryContactEmail: input.primaryContactEmail,
-      notes: input.notes,
-    },
+  const organization = await createOrganizationRecord(db, {
+    ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
+    slug: input.slug,
+    legalName: input.legalName,
+    displayName: input.displayName,
+    vertical: input.vertical,
+    status: 'ONBOARDING',
+    deploymentMode: input.deploymentMode,
+    packageId: input.packageId,
+    timezone: input.timezone,
+    locale: input.locale,
+    currency: input.currency,
+    seatLimit: input.seatLimit ?? packageRecord.defaultSeats,
+    gracePeriodDays: input.gracePeriodDays,
+    dataResidency: input.dataResidency,
+    primaryContactName: input.primaryContactName,
+    primaryContactEmail: input.primaryContactEmail,
+    notes: input.notes,
   });
   const adminRole = await db.organizationRole.create({
     data: {

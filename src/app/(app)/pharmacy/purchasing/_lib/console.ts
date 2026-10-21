@@ -115,7 +115,38 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'stockLocationId',
   },
   NOT_FOUND: { message: 'That record no longer exists. Reload the page.' },
+  CONTROLLED_WITNESS_REQUIRED: {
+    message:
+      'A controlled medicine needs the qualified person named on the receipt to enter their PIN before it can be posted.',
+    field: 'witnessPin',
+  },
+  DUPLICATE_SERIAL: {
+    message:
+      'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.',
+    field: 'serialNumber',
+  },
+  GS1_INVALID: {
+    message:
+      'That 2D code could not be read. Scan it again, or enter the batch and expiry from the carton.',
+    field: 'serialNumber',
+  },
+  GTIN_MEDICINE_MISMATCH: {
+    message: 'This GTIN is not the barcode of the medicine on this line.',
+    field: 'serialNumber',
+  },
+  EXPIRED_PACK: {
+    message:
+      'This pack is already expired. Reject the units into quarantine, or do not receive it.',
+    field: 'printedExpiry',
+  },
 };
+
+const KNOWN_REJECTIONS = new Set([
+  'DUPLICATE_SERIAL',
+  'EXPIRED_PACK',
+  'GS1_INVALID',
+  'GTIN_MEDICINE_MISMATCH',
+]);
 
 export type ActionFailure = { message: string; field?: string };
 
@@ -136,10 +167,15 @@ export function purchasingOutcome() {
       };
     },
     failure(error: unknown, fallback: string): ActionFailure & { outcome: 'rejected' | 'unknown' } {
+      const raw = error instanceof Error ? error.message : '';
+      const known =
+        (!writeStarted && error instanceof PurchasingValidationError) ||
+        zodFailure(error) !== null ||
+        KNOWN_REJECTIONS.has(raw) ||
+        uniqueViolation(error, raw);
       return {
         ...actionFailure(error, fallback),
-        outcome:
-          !writeStarted && error instanceof PurchasingValidationError ? 'rejected' : 'unknown',
+        outcome: known ? 'rejected' : 'unknown',
       };
     },
   };
@@ -198,11 +234,26 @@ export function actionFailure(error: unknown, fallback: string): ActionFailure {
  * operator needs "that reference is already used", and the field it is on —
  * anything else is the network tab wearing a banner (UX rule 11).
  */
-function constraintFailure(error: unknown, raw: string): ActionFailure | null {
+function uniqueViolation(error: unknown, raw: string): boolean {
   const code = (error as { code?: unknown } | null)?.code;
-  const looksUnique =
-    code === 'P2002' || /unique constraint/i.test(raw) || /duplicate key value/i.test(raw);
-  if (!looksUnique) return null;
+  return code === 'P2002' || /unique constraint/i.test(raw) || /duplicate key value/i.test(raw);
+}
+
+function constraintTarget(error: unknown): string {
+  const target = (error as { meta?: { target?: unknown } } | null)?.meta?.target;
+  if (Array.isArray(target)) return target.join(' ');
+  return typeof target === 'string' ? target : '';
+}
+
+function constraintFailure(error: unknown, raw: string): ActionFailure | null {
+  if (!uniqueViolation(error, raw)) return null;
+  if (/serial|gtin/i.test(`${constraintTarget(error)} ${raw}`)) {
+    return {
+      message:
+        'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.',
+      field: 'serialNumber',
+    };
+  }
   return {
     message:
       'That reference is already used in this workspace. References identify one document, so pick another.',

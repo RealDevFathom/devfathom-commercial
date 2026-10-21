@@ -57,6 +57,29 @@ describe('counterAlertsFor (POS-09)', () => {
     expect(alerts[0]!.code).toBe('CONTROLLED_WITHOUT_PRESCRIPTION');
   });
 
+  it('lets a recorded emergency controlled supply be paid, keeping the follow-up notice', () => {
+    const alerts = counterAlertsFor(
+      [line({ medicine: medicine({ controlled: true }), emergencySupply: true })],
+      { at: AT }
+    );
+    expect(hasBlockingAlert(alerts)).toBe(false);
+    expect(alerts).toHaveLength(1);
+    expect(alerts[0]).toMatchObject({
+      severity: 'CLINICAL_ADVICE',
+      code: 'CONTROLLED_EMERGENCY_SUPPLY',
+      saleLineRef: 'line-1',
+    });
+  });
+
+  it('does not let the emergency flag excuse a non-controlled Rx line', () => {
+    const alerts = counterAlertsFor(
+      [line({ medicine: medicine({ rx: true }), emergencySupply: true })],
+      { at: AT }
+    );
+    expect(hasBlockingAlert(alerts)).toBe(true);
+    expect(alerts[0]!.code).toBe('RX_WITHOUT_PRESCRIPTION');
+  });
+
   it('clears once a verified, in-date, sufficient prescription is attached', () => {
     const alerts = counterAlertsFor(
       [

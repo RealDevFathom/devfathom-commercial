@@ -260,20 +260,23 @@ describe('hospitality capability namespace', () => {
   });
 });
 
-it('requires explicit procurement grants and honors denials', async () => {
-  await expect(
-    can(employee, 'pharmacy:procurement', undefined, {
-      db: authorizationDb({
-        rolePermissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
-      }),
-    })
-  ).resolves.toBe(true);
-  await expect(
-    can(employee, 'pharmacy:procurement', undefined, {
-      db: authorizationDb({
-        rolePermissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
-        overrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
-      }),
-    })
-  ).resolves.toBe(false);
-});
+it.each(['pharmacy:procurement', 'pharmacy.procurement', 'pharmacy.*'])(
+  'accepts procurement grant %s and honors a legacy denial',
+  async (capability) => {
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({
+          rolePermissions: [{ capability, effect: 'ALLOW' }],
+        }),
+      })
+    ).resolves.toBe(true);
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({
+          rolePermissions: [{ capability, effect: 'ALLOW' }],
+          overrides: [{ capability: 'pharmacy.procurement', effect: 'DENY' }],
+        }),
+      })
+    ).resolves.toBe(false);
+  }
+);
