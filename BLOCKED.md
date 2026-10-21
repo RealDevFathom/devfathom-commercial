@@ -1,45 +1,40 @@
-# BLOCKED — issue #132
-
-Stopped under the task's explicit rule: after two failed attempts at the same problem, write this file, commit and push the current branch, then exit.
+# BLOCKED — issue #132 (second builder)
 
 Issue: https://github.com/WhatTheStack1/devfathom-commercial/issues/132
 
-## Partial implementation
+Stopped under the explicit two-attempt rule after two unsuccessful browser QA harness attempts. No PR opened because required verification is incomplete.
 
-- Added a Studio manual Create medicine form on `/pharmacy/medicines`. It calls the existing `createMedicine` procedure with unreviewed provenance, no client-supplied organizationId, and `saleable: false`.
-- Exposed the existing review/publication and pack setup controls. Moved optional import tools and preserved staged-source review into disclosures, retaining one page H1.
-- Added UI regression tests and an in-memory procedure integration test for creation, review, publication, effective pack receiving, and onboarding step 8.
-- No server procedure, database, seed, migration, RLS, or unrelated issue changes.
+## Change
 
-## Repeated problem and exact failures
+Completed the missing `medicineAlias.create` in-memory delegate. The existing procedure integration test now passes creation, rejection of premature publication, review, publication, onboarding step 8 readiness, and pack availability for receiving. Caller-supplied organization scope is rejected. The prior manual creation UI and exposed review/publication/pack controls remain. No DB, RLS, seed, migration, server procedure, or unrelated branch changed.
 
-The new full-flow integration test fixture is incomplete. Two execution attempts failed:
+Read the complete issue and comments (none) via gh JSON after the requested comments invocation returned no text. Read the Studio contract and installed Next client/page documentation.
 
-1. `create-medicine.procedure.test.ts`: publication returned FORBIDDEN because the in-memory fixture lacked `user.findUnique`, required by the real ABAC evaluator. Added that fixture delegate.
-2. Rerunning that integration test reached publication but failed at `src/server/routers/pharmacy-medicine.ts:1068`: `tx.medicineAlias.create` is absent from the fixture. Per the two-attempt rule, no further fix or rerun was made.
+## Actual checks this builder
 
-The second failure is a test fixture failure, not evidence that publication succeeds end to end. The implementation must not be represented as complete.
+Commands used /usr/local/bin first on PATH (Node 24.10.0), TMPDIR=/tmp.
 
-## Actual checks
+- Create medicine procedure test: PASS, 2 tests.
+- Affected UI, pack procedure, staged review, onboarding, checklist: PASS, 6 files / 57 tests. Combined invocation failed to start the medicine router fork worker (timeout).
+- Medicine router retry with --maxWorkers=1 --pool=threads: PASS, 3 tests.
+- Total passing tests across runs: 62.
+- Focused ESLint on all eight changed implementation/test files: PASS.
+- git diff --check: PASS.
+- bun run typecheck with 12 GB heap: host SIGKILL, exit 137, no type diagnostics. Other worktrees had large concurrent compilers. No successful full typecheck; no second attempt this builder.
+- bun run build: Prisma generation passed; still compiling at stop rule. Terminated this worktree's build. No successful production build.
+- Real Postgres tests not run: no DB/RLS/seed changes. Flow test uses in-memory delegates.
 
-- `TMPDIR=/tmp bun install`: passed; generated Prisma client. No dependency manifest or lockfile changes.
-- Initial affected `bun run test`: could not start workers under system Node 20.19.2; installed undici requires Node >=22.19.0.
-- Retried affected suite with temporary npm-cached Node 22 and `--maxWorkers=2`: **8 files passed, 1 failed; 63 tests passed, 1 failed**. Passing files: create-medicine UI, medicine-pack-setup UI and procedure, staged-medicine-review UI, pharmacy-medicine router, pharmacy-medicine connector, onboarding, onboarding-checklist.
-- New integration test rerun with Node 22 and `--maxWorkers=1`: **1 test passed, 1 failed**, missing `medicineAlias.create` as above.
-- `bun run typecheck`: failed with default 4 GB V8 heap exhaustion. Retried with Node 22 and `NODE_OPTIONS=--max-old-space-size=12288`; still running when the stop rule triggered, so this task's tsc process was terminated. **No successful typecheck.**
-- Lint and production build: not run before stop rule triggered.
-- Real Postgres: not run; database/RLS/seed unchanged. Integration delegates are in memory.
+## Browser QA and stop rule
 
-## Visual QA matrix — not completed
+Original QA URL qa-clifton.localhost:3000 refuses connections. No configured local app environment.
 
-- Canonical design contract and installed Next forms, use-client, and page docs read before implementation.
-- Attempt to inspect `http://qa-clifton.localhost:3000/pharmacy/medicines`: connection refused. This worktree has no local environment file or running app server.
-- System Chromium was discovered, but no component harness or browser run was completed before the stop rule.
-- 375/768/1024/1440 px, light/dark, normal/reduced motion, keyboard/focus/Escape, overflow, UI state visuals, console, screenshots, and tenant Studio parity: **unverified in browser**.
-- UI tests cover first-medicine explanation, draft payload, simple-strength validation, preserved errors, permission denial, pending disable, and candidate invalidation. These do not replace visual or signed-in end-to-end QA.
+A temporary Vite harness used actual Studio components/CSS and mock transport, intending to check 375/768/1024/1440 widths, light/dark, normal/reduced motion, overflow, keyboard, and create/review/publish interactions.
 
-## Resume work needed
+1. First attempt failed on mock syntax and unavailable /usr/bin/chromium.
+2. Corrected syntax and used installed /opt/google/chrome/chrome; second browser run timed out navigating to the harness.
 
-Complete the procedure fixture, rerun affected tests and typecheck, run focused lint/build as feasible, and perform the visual QA matrix plus a signed-in medicine-to-pack smoke test. Review partial implementation for correctness before opening a PR against `integration/consolidation-20261019`.
+No visual QA pass or screenshot verification claimed. Stopped without a third run, removed temporary harness, and stopped this worktree's server/build. No other worktree processes modified.
 
-No PR was opened because the stop rule requires exit after commit/push. When ready, its body must contain `Fixes #132`, the issue URL above, and actual test/QA results.
+## Remaining
+
+Complete visual QA and authenticated repro against a configured app. Run full typecheck with sufficient available memory and production build. Remove BLOCKED.md after verification, push this branch, then open PR against integration/consolidation-20261019 containing Fixes #132, issue link, and actual check results.

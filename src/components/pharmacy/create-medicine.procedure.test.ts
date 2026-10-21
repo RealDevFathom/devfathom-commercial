@@ -117,6 +117,7 @@ it('creates, reviews, publishes and packs a manual medicine for receiving and on
       findFirst: vi.fn(async () => ({ id: 'manual-presentation' })),
     },
     medicineStrengthComponent: { create: vi.fn(async () => ({})) },
+    medicineAlias: { create: vi.fn(async () => ({})) },
     packLevel: {
       create: vi.fn(async ({ data }: { data: object }) => {
         const pack = { id: 'manual-pack', parentPackLevelId: null, effectiveTo: null, ...data };
