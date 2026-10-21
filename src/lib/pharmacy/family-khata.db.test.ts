@@ -164,6 +164,24 @@ suite('family Khata restricted PostgreSQL', () => {
       const decision=await db.pharmacyKhataLimitDecision.findFirstOrThrow({where:{familyAccountId:f.familyAccountId}});
       expect(JSON.stringify(decision.reasons)).toContain('Manager verified emergency');
       expect(decision.appliedLimitMinor).toBe(1001);
+      expect((await db.pharmacyFamilyAccount.findFirstOrThrow({where:{id:f.familyAccountId}})).creditLimitMinor).toBe(1000);
+      const originalSale = await db.pharmacySale.findFirstOrThrow({ where: { id: f.saleId } });
+      const nextSale = await db.pharmacySale.create({
+        data: {
+          organizationId: f.organizationId,
+          branchId: f.branchId,
+          customerId: originalSale.customerId,
+          createdByUserId: f.actorId,
+        },
+      });
+      await expect(
+        khata.authorizeKhataCharge(
+          db,
+          f,
+          { ...f, saleId: nextSale.id, amountMinor: 401 },
+          { authorized: false }
+        )
+      ).rejects.toMatchObject({ reason: 'CREDIT_LIMIT_EXCEEDED' });
     });
   });
   it('runs under LOGIN NOSUPERUSER NOBYPASSRLS', async () => {

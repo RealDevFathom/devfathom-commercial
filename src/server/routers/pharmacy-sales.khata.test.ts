@@ -53,6 +53,9 @@ function fixture() {
         where.id.in.map((id) => ({ id }))
       ),
     },
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'assignment-a' }),
+    },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
@@ -252,6 +255,7 @@ describe('Khata router trust and recovery boundary', () => {
       expect(decision).toMatchObject({
         organizationId: 'org-a',
         branchId: 'branch-a',
+        saleId: 'sale-a',
         kind: 'OVERRIDDEN',
         ownerActorId: 'owner-a',
         score: 88,
@@ -302,6 +306,27 @@ describe('Khata router trust and recovery boundary', () => {
       })
     );
     expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+    expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+  });
+
+  it('refuses a manager override at a branch they are not assigned to', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
+    vi.mocked(can).mockImplementation(
+      async (_subject, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+    );
+
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 125,
+        ownerOverride: true,
+        overrideReason: 'Requested from another branch',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
 
   it('refuses a manager override when its reason is blank', async () => {

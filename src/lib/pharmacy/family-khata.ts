@@ -257,6 +257,7 @@ export async function applyKhataLimitDecision(
     ownerAuthorizedByUserId?: string;
     ownerReauthenticatedAt?: Date;
     overrideLimitMinor?: number;
+    saleId?: string;
   }
 ) {
   const authorizedAt = new Date();
@@ -273,21 +274,27 @@ export async function applyKhataLimitDecision(
   const appliedLimitMinor = input.overrideLimitMinor ?? input.suggestion.suggestedLimitMinor;
   if (!Number.isSafeInteger(appliedLimitMinor) || appliedLimitMinor < 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
-  const account = await db.pharmacyFamilyAccount.update({
-    where: {
-      organizationId_branchId_id: {
-        organizationId: scope.organizationId,
-        branchId: scope.branchId,
-        id: input.familyAccountId,
-      },
-    },
-    data: { creditLimitMinor: appliedLimitMinor },
-  });
+  if (input.overrideLimitMinor !== undefined && !input.saleId)
+    throw new FamilyKhataError('OWNER_ACTION_REQUIRED');
+  const account =
+    input.overrideLimitMinor === undefined
+      ? await db.pharmacyFamilyAccount.update({
+          where: {
+            organizationId_branchId_id: {
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+              id: input.familyAccountId,
+            },
+          },
+          data: { creditLimitMinor: appliedLimitMinor },
+        })
+      : undefined;
   const decision = await db.pharmacyKhataLimitDecision.create({
     data: {
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       familyAccountId: input.familyAccountId,
+      saleId: input.saleId,
       kind: input.overrideLimitMinor === undefined ? 'ACCEPTED' : 'OVERRIDDEN',
       score: input.suggestion.score,
       method: input.suggestion.method,
@@ -448,6 +455,7 @@ export async function authorizeKhataCharge(
           ? undefined
           : new Date(owner.passwordAuthenticatedAt),
       overrideLimitMinor: projected,
+      saleId: input.saleId,
     });
     override = {
       amountOverLimitMinor: projected - account.creditLimitMinor,

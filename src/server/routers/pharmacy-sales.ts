@@ -791,6 +791,23 @@ export const pharmacySalesRouter = router({
           db: ctx.db,
           source: 'TRPC',
         }));
+      if (ownerAuthorized) {
+        const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+          where: {
+            organizationId: scope.organizationId,
+            branchId: scope.branchId,
+            userId: scope.actorId,
+            active: true,
+            branch: { organizationId: scope.organizationId, active: true },
+          },
+          select: { id: true },
+        });
+        if (!assignment)
+          throw new TRPCError({
+            code: 'FORBIDDEN',
+            message: 'Managers may only override Khata limits at an assigned branch.',
+          });
+      }
       return await ctx.db.$transaction(async (tx) => {
         const db = txDb(tx);
         await bindKhataBranch(db, scope);

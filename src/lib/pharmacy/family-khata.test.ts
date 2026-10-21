@@ -243,6 +243,7 @@ describe('CRM-L04 explainable health suggestion', () => {
           ownerAuthorizedByUserId: actor,
           ownerReauthenticatedAt: at,
           overrideLimitMinor: 15_000,
+          saleId: 'sale_1',
         }
       )
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
@@ -335,7 +336,7 @@ describe('counter Khata ledger gate', () => {
     ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
     expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
   });
-  it('records the freshly reauthenticated owner and raised limit', async () => {
+  it('records a sale-specific allowance without raising the permanent limit', async () => {
     const db = fixture();
     await authorizeKhataCharge(
       db as never,
@@ -348,8 +349,10 @@ describe('counter Khata ledger gate', () => {
       },
       { authorized: true, passwordAuthenticatedAt: Date.now() }
     );
+    expect(db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
     expect(db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
+        saleId: 'sale-a',
         appliedLimitMinor: 1100,
         ownerActorId: scope.actorId,
         reasons: expect.objectContaining({
@@ -358,6 +361,15 @@ describe('counter Khata ledger gate', () => {
         }),
       }),
     });
+
+    await expect(
+      authorizeKhataCharge(
+        db as never,
+        scope,
+        { ...input, saleId: 'sale-b', amountMinor: 600 },
+        { authorized: false }
+      )
+    ).rejects.toMatchObject({ reason: 'CREDIT_LIMIT_EXCEEDED' });
   });
   it('denies an account outside the sale customer membership and does not expose its statement', async () => {
     const db = fixture();
