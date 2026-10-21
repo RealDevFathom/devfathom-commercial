@@ -49,6 +49,32 @@ function handlers() {
 }
 
 describe('OrderTicketPanel', () => {
+  it.each([
+    { tax: null, serviceCharge: null, expected: null },
+    { tax: '0.00', serviceCharge: '0.00', expected: 'Tax 0.00 · Service 0.00' },
+    { tax: '2.40', serviceCharge: '1.20', expected: 'Tax 2.40 · Service 1.20' },
+  ])(
+    'renders priced totals and omits unpriced totals: $tax',
+    ({ tax, serviceCharge, expected }) => {
+      const { container } = render(
+        <OrderTicketPanel
+          order={{ ...order, totals: { ...order.totals, tax, serviceCharge } }}
+          actingOperatorId="staff-1"
+          pending={false}
+          {...handlers()}
+        />
+      );
+
+      expect(screen.getByText('24.00', { selector: 'span' })).toBeVisible();
+      if (expected) {
+        expect(screen.getByText(expected)).toBeVisible();
+      } else {
+        expect(screen.queryByText(/Tax |Service /)).not.toBeInTheDocument();
+      }
+      expect(container).not.toHaveTextContent('null');
+    }
+  );
+
   it('routes hold, fire, and whole-order send actions', () => {
     const actions = handlers();
     render(

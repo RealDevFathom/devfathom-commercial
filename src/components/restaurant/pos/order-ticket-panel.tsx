@@ -38,7 +38,12 @@ export type OrderDetail = {
   items: OrderItem[];
   kitchenTickets: Array<{ id: string; ticketNumber: number; stationId: string }>;
   tables: { id: string; tableId: string; active: boolean }[];
-  totals: { subtotal: string; tax: string; serviceCharge: string; deliveryFee?: string };
+  totals: {
+    subtotal: string;
+    tax: string | null;
+    serviceCharge: string | null;
+    deliveryFee?: string;
+  };
 };
 
 export type VoidItemInput = {
@@ -430,10 +435,15 @@ export function OrderTicketPanel({
               {order.totals.subtotal}
             </span>
             <span className="ml-2 font-mono tabular-nums">
-              Tax {order.totals.tax} · Service {order.totals.serviceCharge}
-              {order.channel === 'DELIVERY'
-                ? ` · Delivery fee ${order.totals.deliveryFee ?? '0'}`
-                : ''}
+              {[
+                order.totals.tax != null ? `Tax ${order.totals.tax}` : null,
+                order.totals.serviceCharge != null ? `Service ${order.totals.serviceCharge}` : null,
+                order.channel === 'DELIVERY'
+                  ? `Delivery fee ${order.totals.deliveryFee ?? '0'}`
+                  : null,
+              ]
+                .filter((amount) => amount !== null)
+                .join(' · ')}
             </span>
           </div>
           <Button
