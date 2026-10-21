@@ -50,6 +50,20 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
 const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
 
+async function lockActiveOrganizationAdmins(
+  tx: Prisma.TransactionClient,
+  organizationId: string
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT "id"
+    FROM "users"
+    WHERE "organizationId" = ${organizationId}
+      AND "role" = 'ADMIN'
+      AND "status" = 'ACTIVE'
+    FOR UPDATE
+  `;
+}
+
 // IMP-HR-01: inclusive whole-day span of a leave request (Jun 3 → Jun 5 = 3 days).
 // Normalize to local midnight so partial-day timestamps don't skew the count.
 function leaveDayCount(start: Date, end: Date): number {
@@ -872,24 +886,30 @@ export const teamRouter = router({
       }
       // Never strand the workspace without an admin: if the target is the last
       // active ADMIN, block the lay-off.
-      if (before.role === 'ADMIN') {
-        const otherActiveAdmins = await ctx.db.user.count({
-          where: { id: { not: input.id }, role: 'ADMIN', status: 'ACTIVE' },
-        });
-        if (otherActiveAdmins === 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'You cannot lay off the last active admin',
-          });
-        }
-      }
       const reason = input.reason.trim();
       // AUTH-01: revoke the laid-off member's live sessions immediately (the
       // status flip already blocks new auth; bumping tokenVersion cuts off any
       // already-issued JWT on its next revalidation rather than at token expiry).
-      const updated = await ctx.db.user.update({
-        where: { id: input.id },
-        data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+      const updated = await ctx.db.$transaction(async (tx) => {
+        if (before.role === 'ADMIN') {
+          // Serialize this invariant with every other active-admin removal path.
+          // Without the lock, two concurrent removals can both observe an
+          // "other" admin and leave the workspace with none.
+          await lockActiveOrganizationAdmins(tx, workspaceId(ctx));
+          const otherActiveAdmins = await tx.user.count({
+            where: { id: { not: input.id }, role: 'ADMIN', status: 'ACTIVE' },
+          });
+          if (otherActiveAdmins === 0) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'You cannot lay off the last active admin',
+            });
+          }
+        }
+        return tx.user.update({
+          where: { id: input.id },
+          data: { status: 'INACTIVE', tokenVersion: { increment: 1 } },
+        });
       });
       annotateAudit(ctx, {
         targetType: 'User',
