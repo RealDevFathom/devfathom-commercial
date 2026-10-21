@@ -44,6 +44,36 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain('SUM(t."amountMinor")');
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
+
+  it('reports overdue Khata principal net of payments for the selected branches', async () => {
+    const queryRaw = vi.fn().mockImplementation(async (query: { strings: readonly string[] }) =>
+      query.strings.join('?').includes('FROM "pharmacy_khata_events" charge')
+        ? [{ value: 4_250 }]
+        : []
+    );
+    const count = vi.fn().mockResolvedValue(0);
+    const result = await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04' }
+    );
+
+    expect(result.metrics.khataAgingMinor).toBe(4_250);
+    const khataQuery = queryRaw.mock.calls.find(([query]) =>
+      (query as { strings: readonly string[] }).strings
+        .join('?')
+        .includes('FROM "pharmacy_khata_events" charge')
+    )?.[0] as { strings: readonly string[]; values: unknown[] };
+    const sql = khataQuery.strings.join('?');
+    expect(sql).toContain('charge."amountMinor"-COALESCE(payments.paid,0)');
+    expect(sql).toContain(`charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`);
+    expect(khataQuery.values).toEqual(['branch_1', 'branch_1']);
+  });
 });
 
 // Query-shape regressions follow the existing cash-tender test seam.

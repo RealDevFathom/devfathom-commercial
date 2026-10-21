@@ -201,10 +201,10 @@ export const PHARMACY_METRIC_CONTRACT: readonly PharmacyMetricContract[] = [
   [
     'khataAgingMinor',
     'Khata aging',
-    'Unknown: customer open-item and due-date aging are not available. Recorded account balances in Finance are not aging.',
-    null,
-    'not asserted',
-    null,
+    'Outstanding amount on Khata charges whose due date has passed, net of payments allocated to each charge.',
+    'pharmacy_khata_events',
+    'selected branches at read time',
+    '/pharmacy/reports?section=finance',
     'reports:financial',
   ],
   [
@@ -283,7 +283,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
     },
     { from: parsed.from, to: parsed.to, by: 'branch' }
   );
-  const [money, stock, expiry, recalls, claims, receiving, coverage, safety, fiscal] =
+  const [money, stock, expiry, recalls, claims, receiving, coverage, khata, safety, fiscal] =
     await Promise.all([
       db.$queryRaw<MoneyCounts[]>(
         Prisma.sql`SELECT COALESCE((SELECT SUM(l."quantity" * l."unitPriceMinor" - l."discountMinor") FROM "pharmacy_sale_lines" l JOIN "pharmacy_sales" s ON s."organizationId"=l."organizationId" AND s."branchId"=l."branchId" AND s."id"=l."saleId" WHERE l."branchId" IN (${branches}) AND s."status"='COMPLETED' AND s."businessDate">=${parsed.from} AND s."businessDate"<${parsed.to}),0)::int AS "salesMinor", (SELECT SUM("grossMarginMinor")::int FROM (${marginQuery}) journal_margin) AS "marginMinor", COALESCE((SELECT SUM(t."amountMinor") FROM "pharmacy_tenders" t WHERE t."branchId" IN (${branches}) AND t."type"='CASH' AND t."businessDate">=${parsed.from} AND t."businessDate"<${parsed.to}),0)::int AS "cashMinor", COALESCE((SELECT SUM(r."amountMinor") FROM "pharmacy_refunds" r WHERE r."branchId" IN (${branches}) AND r."businessDate">=${parsed.from} AND r."businessDate"<${parsed.to}),0)::int AS "refundsMinor", COALESCE((SELECT SUM(c."cashVarianceMinor") FROM "pharmacy_daily_closes" c WHERE c."branchId" IN (${branches}) AND c."businessDate">=${parsed.from} AND c."businessDate"<${parsed.to} AND c."isFinal"=true AND NOT EXISTS (SELECT 1 FROM "pharmacy_daily_closes" newer WHERE newer."organizationId"=c."organizationId" AND newer."branchId"=c."branchId" AND newer."businessDate"=c."businessDate" AND newer."sequence">c."sequence")),0)::int AS "cashVarianceMinor"`
@@ -310,6 +310,9 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
           OR: [{ effectiveTo: null }, { effectiveTo: { gt: new Date() } }],
         },
       }),
+      db.$queryRaw<Array<{ value: number }>>(
+        Prisma.sql`WITH payments AS (SELECT "organizationId", "branchId", "settlesChargeId", SUM("amountMinor") AS paid FROM "pharmacy_khata_events" WHERE "branchId" IN (${branches}) AND "kind"='PAYMENT' GROUP BY "organizationId", "branchId", "settlesChargeId") SELECT COALESCE(SUM(GREATEST(charge."amountMinor"-COALESCE(payments.paid,0),0)),0)::int AS value FROM "pharmacy_khata_events" charge LEFT JOIN payments ON payments."organizationId"=charge."organizationId" AND payments."branchId"=charge."branchId" AND payments."settlesChargeId"=charge."id" WHERE charge."branchId" IN (${branches}) AND charge."kind"='CHARGE' AND charge."dueAt"<=CURRENT_TIMESTAMP`
+      ),
       db.$queryRaw<Array<{ value: number }>>(
         Prisma.sql`SELECT (SELECT COUNT(*)::int FROM "pharmacy_pharmacist_review_items" i WHERE i."organizationId"=current_setting('app.current_organization_id',true) AND NOT EXISTS (SELECT 1 FROM "pharmacy_pharmacist_review_decisions" d WHERE d."organizationId"=i."organizationId" AND d."reviewItemId"=i."id" AND d."kind"='SIGN')) + (SELECT COUNT(*)::int FROM "pharmacy_register_incidents" r WHERE r."organizationId"=current_setting('app.current_organization_id',true) AND r."status"='OPEN') AS value`
       ),
@@ -354,7 +357,7 @@ export async function readPharmacyOwnerCommandCentre(db: ScopedDb, filters: Phar
       rejectedFiscalDocuments: fiscal[0]?.rejected ?? 0,
       accountsPayableMinor: null,
       accountsReceivableMinor: null,
-      khataAgingMinor: null,
+      khataAgingMinor: khata[0]?.value ?? 0,
       deviceFiscalOfflineExceptions: null,
     },
   };
