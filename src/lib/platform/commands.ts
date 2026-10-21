@@ -45,7 +45,7 @@ import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
 import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
-import { defaultBookingEngineSlug } from '@/lib/hotel/property';
+import { defaultBookingEngineSlug, hotelLocalBusinessDate } from '@/lib/hotel/property';
 import {
   deactivateHotelProperty,
   reactivateHotelProperty,
@@ -1092,6 +1092,7 @@ async function bootstrapOrganization(
         addressLine: input.firstBranchAddress!,
         city: input.firstBranchCity!,
         timezone: input.timezone,
+        businessDate: hotelLocalBusinessDate(input.timezone),
         bookingEngineSlug: defaultBookingEngineSlug(input.slug, input.firstBranchName!),
       },
     });

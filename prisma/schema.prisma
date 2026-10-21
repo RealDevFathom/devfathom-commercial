@@ -14514,6 +14514,8 @@ model HotelProperty {
   mealAllocationPolicy Json @default("{}")
   /// HSP-NA business-date policy (roll rule, late-arrival handling).
   businessDatePolicy   Json @default("{}")
+  /// The hotel-local accounting day. It advances only through night audit.
+  businessDate         DateTime @db.Date
   active               Boolean @default(true)
 
   createdAt DateTime @default(now())
@@ -14529,6 +14531,22 @@ model HotelProperty {
   mealPlans        HotelMealPlan[]
   functionSpaces   HotelFunctionSpace[]
   journeyTemplates HotelJourneyTemplate[]
+  guests HotelGuest[]
+  reservations HotelReservation[]
+  reservationStayUnits HotelReservationStayUnit[]
+  roomAssignments HotelRoomAssignment[]
+  reservationEvents HotelReservationEvent[]
+  confirmationNumberSequences HotelConfirmationNumberSequence[]
+  operationIdempotencyKeys HotelOperationIdempotencyKey[]
+  folios HotelFolio[]
+  folioPostings HotelFolioPosting[]
+  paymentAttempts HotelPaymentAttempt[]
+  folioPayments HotelFolioPayment[]
+  paymentEvents HotelPaymentEvent[]
+  receiptNumberSequences HotelReceiptNumberSequence[]
+  nightAuditRuns HotelNightAuditRun[]
+  nightAuditStepRuns HotelNightAuditStepRun[]
+  dailySnapshots HotelDailySnapshot[]
 
   @@unique([organizationId, branchId], map: "hotel_properties_org_branch_key")
   @@unique([organizationId, bookingEngineSlug], map: "hotel_properties_org_slug_key")
@@ -14730,6 +14748,7 @@ model HotelRoomType {
   property    HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict, map: "hotel_room_types_property_fkey")
   rooms       HotelRoom[]   @relation("HotelRoomTypeScoped")
   roomsByKind HotelRoom[]   @relation("HotelRoomTypeKind")
+  reservationStayUnits HotelReservationStayUnit[]
 
   @@unique([organizationId, branchId, id], map: "hotel_room_types_scope_key")
   @@unique([organizationId, branchId, code], map: "hotel_room_types_org_branch_code_key")
@@ -14779,6 +14798,7 @@ model HotelRoom {
   bedsByKind     HotelBed[]             @relation("HotelBedRoomKind")
   statusEvents   HotelRoomStatusEvent[]
   blocks         HotelRoomBlock[]
+  assignments    HotelRoomAssignment[]
 
   @@unique([organizationId, branchId, id], map: "hotel_rooms_scope_key")
   @@unique([organizationId, branchId, number], map: "hotel_rooms_org_branch_number_key")
@@ -14811,6 +14831,7 @@ model HotelBed {
   room         HotelRoom              @relation("HotelBedRoomScoped", fields: [organizationId, branchId, roomId], references: [organizationId, branchId, id], onDelete: Cascade, map: "hotel_beds_room_fkey")
   roomKind     HotelRoom              @relation("HotelBedRoomKind", fields: [roomId, roomInventoryKind], references: [id, inventoryKind], onDelete: Cascade, map: "hotel_beds_room_kind_fkey")
   statusEvents HotelRoomStatusEvent[]
+  assignments  HotelRoomAssignment[]
 
   @@unique([organizationId, branchId, roomId, id], map: "hotel_beds_scope_key")
   @@unique([roomId, label], map: "hotel_beds_room_label_key")
@@ -14911,6 +14932,7 @@ model HotelMealPlan {
   updatedAt DateTime @updatedAt
 
   property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Cascade, map: "hotel_meal_plans_property_fkey")
+  reservationStayUnits HotelReservationStayUnit[]
 
   @@unique([organizationId, id], map: "hotel_meal_plans_org_id_key")
   @@unique([organizationId, branchId, code], map: "hotel_meal_plans_org_branch_code_key")
@@ -14923,6 +14945,410 @@ model HotelMealPlan {
 /// confirmed function. Both block the space, because a space double-sold to a
 /// tentative wedding and a confirmed one is the failure invariant 25 exists to
 /// prevent. The banquet lane (H6) owns what creates each kind.
+
+// ============================================
+// HOSPITALITY — HOTEL MVP OPERATIONS
+// ============================================
+
+enum HotelReservationStatus { HOLD CONFIRMED CHECKED_IN CHECKED_OUT CANCELLED NO_SHOW }
+enum HotelReservationSource { WALK_IN PHONE EMAIL DIRECT }
+enum HotelRoomAssignmentStatus { HELD ACTIVE RELEASED }
+enum HotelReservationEventKind { CREATED CONFIRMED ROOM_ASSIGNED ROOM_CHANGED CHECKED_IN CHECKED_OUT CANCELLED NO_SHOW NOTE_ADDED }
+enum HotelFolioStatus { OPEN CLOSED VOID }
+enum HotelFolioPostingKind { ROOM EXTRA TAX DISCOUNT ADJUSTMENT REVERSAL }
+enum HotelFolioSourceKind { NIGHT_AUDIT HOTEL_EXTRA MANUAL REVERSAL }
+enum HotelTenderType { CASH CARD }
+enum HotelPaymentDirection { COLLECTION REFUND }
+enum HotelPaymentAttemptStatus { PENDING SUCCEEDED FAILED CANCELLED }
+enum HotelPaymentEventKind { REQUESTED AUTHORIZED SETTLED FAILED CANCELLED REFUNDED }
+enum HotelNightAuditStatus { RUNNING COMPLETED FAILED }
+enum HotelNightAuditStep { PRECHECK NO_SHOWS ROOM_POSTINGS BALANCES ADVANCE_DATE }
+enum HotelNightAuditStepStatus { PENDING RUNNING COMPLETED FAILED }
+
+model HotelGuest {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  firstName String
+  lastName String
+  email String?
+  phone String?
+  countryCode String?
+  notes String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  reservations HotelReservation[]
+  folios HotelFolio[]
+  @@unique([organizationId, id])
+  @@index([organizationId, branchId, email])
+  @@index([organizationId, branchId, phone])
+  @@index([organizationId, branchId, lastName, firstName])
+  @@map("hotel_guests")
+}
+
+model HotelReservation {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  confirmationNumber String
+  status HotelReservationStatus
+  source HotelReservationSource
+  primaryGuestId String
+  arrivalDate DateTime @db.Date
+  departureDate DateTime @db.Date
+  adults Int
+  children Int @default(0)
+  specialRequests String?
+  currency String
+  bookedAt DateTime @default(now())
+  cancelledAt DateTime?
+  checkedInAt DateTime?
+  checkedOutAt DateTime?
+  noShowAt DateTime?
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  primaryGuest HotelGuest @relation(fields: [organizationId, primaryGuestId], references: [organizationId, id], onDelete: Restrict)
+  stayUnits HotelReservationStayUnit[]
+  events HotelReservationEvent[]
+  folio HotelFolio?
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, confirmationNumber])
+  @@index([organizationId, branchId, arrivalDate, status])
+  @@index([organizationId, branchId, departureDate, status])
+  @@index([organizationId, branchId, primaryGuestId])
+  @@map("hotel_reservations")
+}
+
+model HotelReservationStayUnit {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  reservationId String
+  roomTypeId String
+  mealPlanId String?
+  quantity Int @default(1)
+  adults Int
+  children Int @default(0)
+  nightlyRateMinor Int
+  taxMinorPerNight Int @default(0)
+  currency String
+  arrivalDate DateTime @db.Date
+  departureDate DateTime @db.Date
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  reservation HotelReservation @relation(fields: [organizationId, branchId, reservationId], references: [organizationId, branchId, id], onDelete: Restrict)
+  roomType HotelRoomType @relation(fields: [organizationId, branchId, roomTypeId], references: [organizationId, branchId, id], onDelete: Restrict)
+  mealPlan HotelMealPlan? @relation(fields: [organizationId, mealPlanId], references: [organizationId, id], onDelete: Restrict)
+  assignments HotelRoomAssignment[]
+  @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, roomTypeId, arrivalDate, departureDate])
+  @@index([organizationId, branchId, reservationId])
+  @@map("hotel_reservation_stay_units")
+}
+
+model HotelRoomAssignment {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  stayUnitId String
+  roomId String
+  bedId String?
+  startDate DateTime @db.Date
+  endDate DateTime @db.Date
+  status HotelRoomAssignmentStatus
+  assignedAt DateTime @default(now())
+  assignedById String
+  releasedAt DateTime?
+  releaseReason String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  stayUnit HotelReservationStayUnit @relation(fields: [organizationId, branchId, stayUnitId], references: [organizationId, branchId, id], onDelete: Restrict)
+  room HotelRoom @relation(fields: [organizationId, branchId, roomId], references: [organizationId, branchId, id], onDelete: Restrict)
+  bed HotelBed? @relation(fields: [organizationId, branchId, roomId, bedId], references: [organizationId, branchId, roomId, id], onDelete: Restrict)
+  @@index([organizationId, branchId, roomId, startDate, endDate])
+  @@index([organizationId, branchId, stayUnitId, status])
+  @@map("hotel_room_assignments")
+}
+
+model HotelReservationEvent {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  reservationId String
+  kind HotelReservationEventKind
+  fromStatus HotelReservationStatus?
+  toStatus HotelReservationStatus?
+  actorId String
+  occurredAt DateTime @default(now())
+  reason String?
+  metadata Json @default("{}")
+  createdAt DateTime @default(now())
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  reservation HotelReservation @relation(fields: [organizationId, branchId, reservationId], references: [organizationId, branchId, id], onDelete: Restrict)
+  @@index([organizationId, branchId, reservationId, occurredAt])
+  @@map("hotel_reservation_events")
+}
+
+model HotelConfirmationNumberSequence {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  nextNumber Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Cascade)
+  @@unique([organizationId, branchId])
+  @@map("hotel_confirmation_number_sequences")
+}
+
+model HotelOperationIdempotencyKey {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  scope String
+  key String
+  requestHash String
+  resultType String?
+  resultId String?
+  response Json?
+  createdAt DateTime @default(now())
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  paymentAttempts HotelPaymentAttempt[]
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, scope, key])
+  @@index([organizationId, branchId, createdAt])
+  @@map("hotel_operation_idempotency_keys")
+}
+
+model HotelFolio {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  reservationId String
+  folioNumber String
+  status HotelFolioStatus @default(OPEN)
+  guestId String
+  currency String
+  openedAt DateTime @default(now())
+  closedAt DateTime?
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  reservation HotelReservation @relation(fields: [organizationId, branchId, reservationId], references: [organizationId, branchId, id], onDelete: Restrict)
+  guest HotelGuest @relation(fields: [organizationId, guestId], references: [organizationId, id], onDelete: Restrict)
+  postings HotelFolioPosting[]
+  attempts HotelPaymentAttempt[]
+  payments HotelFolioPayment[]
+  @@unique([organizationId, branchId, reservationId])
+  @@unique([organizationId, branchId, folioNumber])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, status, openedAt])
+  @@map("hotel_folios")
+}
+
+model HotelFolioPosting {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  folioId String
+  kind HotelFolioPostingKind
+  sourceKind HotelFolioSourceKind
+  sourceId String?
+  reversesPostingId String?
+  serviceDate DateTime @db.Date
+  description String
+  quantity Int
+  unitAmountMinor Int
+  netMinor Int
+  taxMinor Int
+  totalMinor Int
+  currency String
+  postedAt DateTime @default(now())
+  postedById String
+  reason String?
+  createdAt DateTime @default(now())
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  folio HotelFolio @relation(fields: [organizationId, branchId, folioId], references: [organizationId, branchId, id], onDelete: Restrict)
+  reversesPosting HotelFolioPosting? @relation("HotelPostingReversals", fields: [organizationId, branchId, reversesPostingId], references: [organizationId, branchId, id], onDelete: Restrict)
+  reversals HotelFolioPosting[] @relation("HotelPostingReversals")
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, folioId, sourceKind, sourceId])
+  @@index([organizationId, branchId, folioId, postedAt])
+  @@index([organizationId, branchId, serviceDate, kind])
+  @@map("hotel_folio_postings")
+}
+
+model HotelPaymentAttempt {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  folioId String
+  tenderType HotelTenderType
+  direction HotelPaymentDirection
+  status HotelPaymentAttemptStatus
+  amountMinor Int
+  currency String
+  provider String?
+  externalReference String?
+  idempotencyKeyId String
+  requestedById String
+  failureCode String?
+  failureMessage String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  folio HotelFolio @relation(fields: [organizationId, branchId, folioId], references: [organizationId, branchId, id], onDelete: Restrict)
+  idempotencyKey HotelOperationIdempotencyKey @relation(fields: [organizationId, branchId, idempotencyKeyId], references: [organizationId, branchId, id], onDelete: Restrict)
+  settlement HotelFolioPayment?
+  events HotelPaymentEvent[]
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, folioId, createdAt])
+  @@index([organizationId, branchId, status, createdAt])
+  @@map("hotel_payment_attempts")
+}
+
+model HotelFolioPayment {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  folioId String
+  attemptId String
+  receiptNumber String
+  tenderType HotelTenderType
+  direction HotelPaymentDirection
+  amountMinor Int
+  currency String
+  refundsPaymentId String?
+  settledAt DateTime @default(now())
+  settledById String
+  createdAt DateTime @default(now())
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  folio HotelFolio @relation(fields: [organizationId, branchId, folioId], references: [organizationId, branchId, id], onDelete: Restrict)
+  attempt HotelPaymentAttempt @relation(fields: [organizationId, branchId, attemptId], references: [organizationId, branchId, id], onDelete: Restrict)
+  refundsPayment HotelFolioPayment? @relation("HotelPaymentRefunds", fields: [organizationId, branchId, refundsPaymentId], references: [organizationId, branchId, id], onDelete: Restrict)
+  refunds HotelFolioPayment[] @relation("HotelPaymentRefunds")
+  @@unique([organizationId, branchId, attemptId])
+  @@unique([organizationId, branchId, receiptNumber])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, folioId, settledAt])
+  @@map("hotel_folio_payments")
+}
+
+model HotelPaymentEvent {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  paymentAttemptId String
+  kind HotelPaymentEventKind
+  occurredAt DateTime @default(now())
+  providerReference String?
+  metadata Json @default("{}")
+  createdAt DateTime @default(now())
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  paymentAttempt HotelPaymentAttempt @relation(fields: [organizationId, branchId, paymentAttemptId], references: [organizationId, branchId, id], onDelete: Restrict)
+  @@unique([organizationId, branchId, paymentAttemptId, providerReference])
+  @@index([organizationId, branchId, paymentAttemptId, occurredAt])
+  @@map("hotel_payment_events")
+}
+
+model HotelReceiptNumberSequence {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  nextNumber Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Cascade)
+  @@unique([organizationId, branchId])
+  @@map("hotel_receipt_number_sequences")
+}
+
+model HotelNightAuditRun {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  businessDate DateTime @db.Date
+  status HotelNightAuditStatus
+  currentStep HotelNightAuditStep
+  startedAt DateTime @default(now())
+  startedById String
+  completedAt DateTime?
+  failedAt DateTime?
+  failureCode String?
+  failureMessage String?
+  summary Json @default("{}")
+  version Int @default(1)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  steps HotelNightAuditStepRun[]
+  snapshot HotelDailySnapshot?
+  @@unique([organizationId, branchId, businessDate])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, status, businessDate])
+  @@map("hotel_night_audit_runs")
+}
+
+model HotelNightAuditStepRun {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  auditRunId String
+  step HotelNightAuditStep
+  status HotelNightAuditStepStatus
+  attempt Int @default(1)
+  startedAt DateTime @default(now())
+  completedAt DateTime?
+  result Json @default("{}")
+  errorCode String?
+  errorMessage String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  auditRun HotelNightAuditRun @relation(fields: [organizationId, branchId, auditRunId], references: [organizationId, branchId, id], onDelete: Restrict)
+  @@unique([auditRunId, step])
+  @@index([organizationId, branchId, auditRunId, status])
+  @@map("hotel_night_audit_step_runs")
+}
+
+model HotelDailySnapshot {
+  id String @id @default(cuid())
+  organizationId String @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId String
+  auditRunId String
+  businessDate DateTime @db.Date
+  roomsAvailable Int
+  roomsOccupied Int
+  roomsOutOfOrder Int
+  arrivals Int
+  departures Int
+  noShows Int
+  roomRevenueMinor Int
+  extrasMinor Int
+  taxMinor Int
+  adjustmentsMinor Int
+  cashCollectionsMinor Int
+  cashRefundsMinor Int
+  cardCollectionsMinor Int
+  cardRefundsMinor Int
+  closingReceivableMinor Int
+  currency String
+  createdAt DateTime @default(now())
+  property HotelProperty @relation(fields: [organizationId, branchId], references: [organizationId, branchId], onDelete: Restrict)
+  auditRun HotelNightAuditRun @relation(fields: [organizationId, branchId, auditRunId], references: [organizationId, branchId, id], onDelete: Restrict)
+  @@unique([organizationId, branchId, businessDate])
+  @@unique([organizationId, branchId, auditRunId])
+  @@index([organizationId, branchId, businessDate])
+  @@map("hotel_daily_snapshots")
+}
+
 enum HotelSpaceBookingKind {
   HOLD
   FUNCTION

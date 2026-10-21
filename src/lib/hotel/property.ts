@@ -129,6 +129,22 @@ export const hotelPropertyUpdateInput = z.object({
 
 export type HotelPropertyUpdateInput = z.infer<typeof hotelPropertyUpdateInput>;
 
+/** Prisma representation of the calendar day currently shown at a property. */
+export function hotelLocalBusinessDate(timezone: string, instant: Date = new Date()): Date {
+  if (!isValidHotelTimezone(timezone) || Number.isNaN(instant.valueOf())) {
+    throw new RangeError('A valid instant and IANA timezone are required');
+  }
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: timezone,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(instant);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value;
+  return new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00.000Z`);
+}
+
 /**
  * The slug a newly provisioned property starts with, derived from the workspace
  * slug the operator already chose. Deterministic, so provisioning never has to

@@ -104,6 +104,7 @@ export async function seedHotelTenant(
           addressLine: `${index + 1} Fixture Street`,
           city: 'Lahore',
           timezone: 'Asia/Karachi',
+          businessDate: new Date('2026-01-01T00:00:00.000Z'),
           bookingEngineSlug: `${organizationId.replaceAll('_', '-').toLowerCase()}-${index + 1}`,
         },
       });
