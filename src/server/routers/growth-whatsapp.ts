@@ -14,7 +14,7 @@ import {
   MissingStop,
   UnknownTemplateVariable,
 } from '@/lib/growth/templates';
-import { InvalidWhatsAppPhone } from '@/lib/growth/whatsapp/phone';
+import { InvalidWhatsAppPhone, normalizeWhatsAppE164 } from '@/lib/growth/whatsapp/phone';
 import { growthStore } from '@/lib/growth/whatsapp/store';
 import { sealWebhookSecret } from '@/lib/growth/whatsapp/webhook-secret';
 import { annotateAudit } from '@/server/audit';
@@ -81,6 +81,62 @@ async function assertCounterOperator(ctx: TRPCContext) {
   }
 }
 
+/** Pharmacy ids and channel ids are distinct. Resolve only within this session's tenant. */
+async function counterCustomer(
+  ctx: TRPCContext,
+  customerId: string,
+  create: boolean,
+  phone?: string
+) {
+  const organizationId = organizationIdFrom(ctx);
+  const store = growthStore(ctx.db);
+  const direct = await store.customer(organizationId, customerId);
+  if (direct) return direct;
+  const pharmacy = await ctx.db.pharmacyCustomer.findFirst({
+    where: { id: customerId, organizationId },
+    select: {
+      displayName: true,
+      whatsappOptIn: true,
+      whatsappOptInChangedAt: true,
+      patient: { select: { phone: true } },
+    },
+  });
+  if (!pharmacy) throw new CustomerNotFound();
+  const normalized =
+    normalizeWhatsAppE164(pharmacy.patient.phone ?? '') ?? normalizeWhatsAppE164(phone ?? '');
+  if (!normalized) {
+    if (create) throw new InvalidWhatsAppPhone();
+    return null;
+  }
+  const existing = await store.customerByPhone(organizationId, normalized);
+  if (existing) return existing;
+  if (!create)
+    return {
+      id: customerId,
+      organizationId,
+      displayName: pharmacy.displayName,
+      whatsappE164: normalized,
+      whatsappOptIn: pharmacy.whatsappOptIn === true,
+      whatsappOptInAt: pharmacy.whatsappOptIn === true ? pharmacy.whatsappOptInChangedAt : null,
+      whatsappOptOutAt: pharmacy.whatsappOptIn === false ? pharmacy.whatsappOptInChangedAt : null,
+    };
+  const saved = await ctx.db.growthWaCustomer.upsert({
+    where: { organizationId_whatsappE164: { organizationId, whatsappE164: normalized } },
+    update: {},
+    create: {
+      // New channel rows keep the counter id, including customers without a patient phone.
+      id: customerId,
+      organizationId,
+      displayName: pharmacy.displayName,
+      whatsappE164: normalized,
+      whatsappOptIn: pharmacy.whatsappOptIn === true,
+      whatsappOptInAt: pharmacy.whatsappOptIn === true ? pharmacy.whatsappOptInChangedAt : null,
+      whatsappOptOutAt: pharmacy.whatsappOptIn === false ? pharmacy.whatsappOptInChangedAt : null,
+    },
+  });
+  return saved;
+}
+
 export const growthWhatsAppRouter = router({
   templates: router({
     list: manage.query(async ({ ctx }) => {
@@ -113,6 +169,21 @@ export const growthWhatsAppRouter = router({
       }),
   }),
   customers: router({
+    consent: member
+      .input(z.object({ customerId: z.string().trim().min(1).max(200) }).strict())
+      .query(async ({ ctx, input }) => {
+        assertGrowthEnabled(ctx);
+        await assertCounterOperator(ctx);
+        try {
+          const customer = await counterCustomer(ctx, input.customerId, false);
+          return {
+            whatsappOptIn: customer?.whatsappOptIn ?? false,
+            whatsappE164: customer?.whatsappE164 ?? null,
+          };
+        } catch (error) {
+          fail(error);
+        }
+      }),
     /** POS consent. Only till roles (pharmacy.counter or pos:operate) may record it. */
     setOptIn: member
       .input(
@@ -128,9 +199,11 @@ export const growthWhatsAppRouter = router({
         assertGrowthEnabled(ctx);
         await assertCounterOperator(ctx);
         try {
+          const customer = await counterCustomer(ctx, input.customerId, true, input.phone);
+          if (!customer) throw new CustomerNotFound();
           return await setCustomerOptIn(growthStore(ctx.db), {
             organizationId: organizationIdFrom(ctx),
-            customerId: input.customerId,
+            customerId: customer.id,
             whatsappOptIn: input.whatsappOptIn,
             phone: input.phone,
             now: new Date(),

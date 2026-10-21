@@ -94,11 +94,20 @@ export function CounterWhatsAppOffer({
   customerId: string;
   initialPhone: string;
 }) {
-  const setOptIn = trpc.growth.customers.setOptIn.useMutation();
+  const consent = trpc.growth.customers.consent.useQuery({ customerId });
+  const setOptIn = trpc.growth.customers.setOptIn.useMutation({
+    onSuccess: () => {
+      void consent.refetch();
+    },
+  });
+  if (consent.isLoading) return <p role="status">Loading WhatsApp preference…</p>;
+  if (consent.error) return <p role="alert">Could not load WhatsApp preference.</p>;
   return (
     <WhatsAppOfferConsent
+      key={`${customerId}:${consent.data?.whatsappOptIn}:${consent.data?.whatsappE164}`}
       customerId={customerId}
-      initialPhone={initialPhone}
+      initialPhone={consent.data?.whatsappE164 ?? initialPhone}
+      initialOptIn={consent.data?.whatsappOptIn ?? false}
       pending={setOptIn.isPending}
       onSave={(input) => setOptIn.mutateAsync(input)}
     />

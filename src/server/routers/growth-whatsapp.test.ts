@@ -179,3 +179,64 @@ describe('growth.whatsapp.rotateWebhookSecret', () => {
     vi.unstubAllEnvs();
   });
 });
+
+it('maps a pharmacy id to its tenant phone, upserts the channel row, and exposes current consent', async () => {
+  const fixture = dbFor(permissionsFor(PHARMACY_ROLE_TEMPLATES, 'cashier'));
+  // Use the same counter capability as the pharmacy cashier.
+  const pharmacyLookup = vi.fn(async () => ({
+    displayName: 'Ayesha',
+    whatsappOptIn: null,
+    whatsappOptInChangedAt: null,
+    patient: { phone: '03001234567' },
+  }));
+  let channel: ReturnType<typeof customerRow> | null = null;
+  const findFirst = vi.fn(
+    async ({ where }: { where: { id?: string; whatsappE164?: string; organizationId: string } }) =>
+      where.organizationId === 'org_1' &&
+      (where.id === channel?.id || where.whatsappE164 === channel?.whatsappE164)
+        ? channel
+        : null
+  );
+  const upsert = vi.fn(async () => {
+    channel = customerRow();
+    return channel;
+  });
+  const updateMany = vi.fn(async ({ data }: { data: Partial<ReturnType<typeof customerRow>> }) => {
+    Object.assign(channel!, data);
+    return { count: 1 };
+  });
+  const api = caller(
+    {
+      ...fixture.db,
+      pharmacyCustomer: { findFirst: pharmacyLookup },
+      growthWaCustomer: { findFirst, upsert, updateMany },
+    } as never,
+    'ADMIN'
+  );
+  expect(await api.customers.consent({ customerId: 'pharmacy_c1' })).toEqual({
+    whatsappOptIn: false,
+    whatsappE164: '+923001234567',
+  });
+  const saved = await api.customers.setOptIn({ customerId: 'pharmacy_c1', whatsappOptIn: true });
+  expect(saved.id).toBe('c1');
+  expect(saved.whatsappOptIn).toBe(true);
+  expect(pharmacyLookup).toHaveBeenCalledWith(
+    expect.objectContaining({ where: { id: 'pharmacy_c1', organizationId: 'org_1' } })
+  );
+  expect(upsert).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: {
+        organizationId_whatsappE164: { organizationId: 'org_1', whatsappE164: '+923001234567' },
+      },
+    })
+  );
+  expect(await api.customers.consent({ customerId: 'pharmacy_c1' })).toEqual({
+    whatsappOptIn: true,
+    whatsappE164: '+923001234567',
+  });
+  channel!.whatsappOptIn = false;
+  channel!.whatsappOptOutAt = new Date();
+  await expect(
+    api.customers.setOptIn({ customerId: 'pharmacy_c1', whatsappOptIn: true })
+  ).rejects.toThrow('Only the customer');
+});
