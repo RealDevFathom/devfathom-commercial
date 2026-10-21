@@ -19,10 +19,11 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useEntitlements } from '@/components/entitlements-provider';
+import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
-import { useEntitlements } from '@/components/entitlements-provider';
 import { enumLabel } from '@/lib/enum-label';
 import { cn } from '@/lib/utils';
 import { formatDistanceToNow } from 'date-fns';
@@ -47,11 +48,17 @@ const statusDot: Record<string, string> = {
 
 export function TeamContent() {
   const { data: session } = useSession();
-  const isAdmin = session?.user?.role === 'ADMIN';
+  const entitlements = useEntitlements();
+  const canReadDirectory = isModuleGranted('hr', entitlements.enabledModules);
+  const isAdmin =
+    session?.user?.role === 'ADMIN' &&
+    isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
   const [showAddMember, setShowAddMember] = useState(false);
-  const { data: team, isLoading } = trpc.team.getAll.useQuery();
+  const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
+    enabled: canReadDirectory,
+  });
 
   const departments = useMemo(() => {
     if (!team) return [];
@@ -129,7 +136,11 @@ export function TeamContent() {
       </div>
 
       {/* Team grid */}
-      {isLoading ? (
+      {!canReadDirectory ? (
+        <p className="text-sm text-text-muted">
+          Invite workspace members here. The team directory requires the HR module.
+        </p>
+      ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 8 }).map((_, i) => (
             <Card key={i} className="border-border/60">
