@@ -9,6 +9,7 @@ type AssistantState = {
   organizationId: string | null;
   askFathomEnabled: boolean | null;
   settingsUpdatedAt: number;
+  settingsFailed: boolean;
   open: boolean;
   hasOpened: boolean;
   panelEpoch: number;
@@ -29,9 +30,12 @@ export function isAssistantAvailable(
 }
 
 export function assistantAvailabilityMessage(
-  state: Pick<AssistantState, 'organizationId' | 'askFathomEnabled'>,
+  state: Pick<AssistantState, 'organizationId' | 'askFathomEnabled' | 'settingsFailed'>,
   organizationId: string | null | undefined
 ) {
+  if (state.organizationId === organizationId && state.settingsFailed) {
+    return 'Ask Fathom chat availability could not be confirmed. Reload to try again.';
+  }
   return organizationId &&
     state.organizationId === organizationId &&
     state.askFathomEnabled === false
@@ -44,6 +48,7 @@ export const useAssistant = create<AssistantState>((set) => ({
   organizationId: null,
   askFathomEnabled: null,
   settingsUpdatedAt: 0,
+  settingsFailed: false,
   open: false,
   hasOpened: false,
   panelEpoch: 0,
@@ -55,6 +60,7 @@ export const useAssistant = create<AssistantState>((set) => ({
             organizationId,
             askFathomEnabled: null,
             settingsUpdatedAt: 0,
+            settingsFailed: false,
             open: false,
             hasOpened: false,
             panelEpoch: state.panelEpoch + 1,
@@ -70,6 +76,7 @@ export const useAssistant = create<AssistantState>((set) => ({
       }
       return {
         askFathomEnabled: settings.askFathomEnabled,
+        settingsFailed: false,
         settingsUpdatedAt: updatedAt,
         ...(!settings.askFathomEnabled && {
           open: false,
@@ -84,6 +91,7 @@ export const useAssistant = create<AssistantState>((set) => ({
         ? state
         : {
             askFathomEnabled: null,
+            settingsFailed: true,
             settingsUpdatedAt: updatedAt,
             open: false,
             hasOpened: false,

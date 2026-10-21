@@ -23,6 +23,11 @@ DATABASE_URL=postgresql://devfathom_app:replace-with-local-app-password@localhos
 MIGRATION_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom
 SHADOW_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom_shadow
 
+# Used only by prisma/prepare-extensions.ts (step 3). It must authenticate as a
+# superuser or an extension-object owner. Locally that is the same superuser URL
+# as DATABASE_URL.
+EXTENSION_ADMIN_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom
+
 AUTH_SECRET=<random-secret>
 AUTH_URL=http://devfathom.localhost:3000
 NEXT_PUBLIC_APP_URL=http://devfathom.localhost:3000
@@ -87,6 +92,7 @@ Both columns must be `f` on the `DATABASE_URL` connection.
 
 ```bash
 bun install --frozen-lockfile
+bun prisma/prepare-extensions.ts
 bunx prisma migrate deploy
 ```
 
@@ -110,6 +116,14 @@ and it sets the platform-admin tenant setting inside its transaction:
 ```bash
 bun run db:seed
 ```
+
+`bun prisma/prepare-extensions.ts` must run **before** `prisma migrate deploy`. The trusted
+`btree_gist` and `pg_trgm` extensions install functions owned by PostgreSQL's extension bootstrap
+role, and that role grants `PUBLIC EXECUTE` on them. The hardening step revokes that grant as the
+extension administrator (`EXTENSION_ADMIN_DATABASE_URL`). Migration
+`20260830120000_btree_gist_public_execute_acl` verifies the revoke and **fails closed** with
+PostgreSQL `P0001` if it was skipped, so `migrate deploy` will stop on a fresh database until this
+step has run. Bun loads `EXTENSION_ADMIN_DATABASE_URL` from `.env.local`; set it as shown above.
 
 The seed creates the local DevFathom organization, platform operator, modules, users, and demo
 data. Platform login uses `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`; tenant login uses

@@ -17,6 +17,7 @@ vi.mock('@/lib/entitlements', () => ({
   resolveOrganizationEntitlements: async () => ({ enabledModules: [] }),
 }));
 
+import { bindSideEffects } from '@/lib/side-effects/scope';
 import { flushAuditWritesForTest, recordTrpcAudit } from './audit';
 import { createTRPCContext, protectedProcedure, router, type TRPCContext } from './trpc';
 
@@ -102,7 +103,11 @@ describe('transaction-bound seed audits', () => {
     ).toBeUndefined();
     await flushAuditWritesForTest();
     expect(create).not.toHaveBeenCalled();
-    expect(mocks.withTenantDb).toHaveBeenCalledWith(organizationId, expect.any(Function));
+    expect(mocks.withTenantDb).toHaveBeenCalledWith(organizationId, expect.any(Function), {
+      maxWait: 1000,
+      timeout: 5000,
+      skipDrain: true,
+    });
     expect(mocks.outsideCreate).toHaveBeenCalledWith({
       data: expect.objectContaining({
         organizationId,
@@ -110,6 +115,18 @@ describe('transaction-bound seed audits', () => {
         input: { password: '[REDACTED]' },
       }),
     });
+  });
+
+  it('defers normal audits until the owning transaction has settled', async () => {
+    const ctx = await context({} as ScopedDb, false);
+    await bindSideEffects(async (scope) => {
+      recordTrpcAudit({ ctx, path: 'payments', type: 'query', input: {}, outcome: 'SUCCESS' });
+      expect(mocks.outsideCreate).not.toHaveBeenCalled();
+      expect(scope.afterTransaction).toHaveLength(1);
+      scope.afterTransaction[0]();
+    });
+    await flushAuditWritesForTest();
+    expect(mocks.outsideCreate).toHaveBeenCalledOnce();
   });
 
   it('rejects an audit transaction belonging to another context', async () => {

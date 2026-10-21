@@ -41,6 +41,7 @@ import {
   HOSPITALITY_PACKAGES,
   PHARMACY_MODULES,
   PHARMACY_PACKAGES,
+  packageDefaultSeats,
   RESTAURANT_MODULES,
   RESTAURANT_PACKAGES,
 } from '@/lib/vertical-catalog';
@@ -74,7 +75,12 @@ let deps: Deps;
  * batteries sharing this database ensure their own anyway. */
 let createdPackageKeys: string[] = [];
 
-const sync = () => deps.withPlatformDb((db) => deps.syncPlatformCatalog(db));
+// The full-catalog reconcile upserts the whole module registry and every
+// vertical package in one interactive transaction. On slow CI IO that can run
+// past the 30s default, so give it a generous budget — this only lengthens the
+// transaction, it does not change what the pass asserts.
+const sync = () =>
+  deps.withPlatformDb((db) => deps.syncPlatformCatalog(db), { timeout: 180_000, maxWait: 60_000 });
 
 const resolve = (organizationId = ORG_ID) =>
   deps.resolveOrganizationEntitlements(organizationId, deps.createTenantDb(organizationId));
@@ -94,6 +100,7 @@ const registrySnapshot = () =>
         vertical: true,
         version: true,
         active: true,
+        defaultSeats: true,
         moduleLinks: {
           orderBy: { moduleId: 'asc' },
           select: { enabled: true, limits: true, module: { select: { key: true } } },
@@ -306,6 +313,7 @@ describeIfDatabase('platform catalog reconciliation, against PostgreSQL', () => 
       expect(registered).toBeDefined();
       expect(registered!.vertical).toBe(vertical);
       if (!createdKeys.has(definition.key)) return;
+      expect(registered!.defaultSeats).toBe(packageDefaultSeats(definition));
       expect(registered!.moduleLinks.map((link) => link.module.key).sort()).toEqual(
         [...definition.moduleKeys].sort()
       );

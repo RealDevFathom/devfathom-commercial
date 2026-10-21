@@ -5,10 +5,16 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { evaluateOrderSettlement } from './bills';
 import { buildReceiptForBranch, getOrderSettlementForBranch } from './checkout-routes';
+import { quoteOpenBillSettlement } from './tenders';
 
 vi.mock('./bills', async (importOriginal) => ({
   ...(await importOriginal<typeof import('./bills')>()),
   evaluateOrderSettlement: vi.fn(),
+}));
+
+vi.mock('./tenders', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./tenders')>()),
+  quoteOpenBillSettlement: vi.fn(),
 }));
 
 const decimal = (value: string) => new Prisma.Decimal(value);
@@ -32,6 +38,7 @@ describe('checkout money serialization', () => {
           status: 'SETTLED',
           splitKind: 'NONE',
           grandTotal: decimal(value),
+          taxTotal: decimal(value),
           remainingDue: decimal('0'),
           deliveryFeeTotal: decimal(value),
           compTotal: decimal(value),
@@ -58,6 +65,7 @@ describe('checkout money serialization', () => {
       bills: [
         {
           grandTotal: expected,
+          taxTotal: expected,
           remainingDue: '0.00',
           deliveryFeeTotal: expected,
           compTotal: expected,
@@ -132,6 +140,55 @@ describe('checkout money serialization', () => {
         roundingAdjustment: expected,
         grandTotal: expected,
       },
+    });
+  });
+
+  // QA-143: an OPEN bill's stored grandTotal is pre-tax and its taxTotal is 0, so the
+  // register summary must surface the live tax quote the tender will charge — not the
+  // bare bill total that hides tax and shows a due that cannot settle the bill.
+  it('surfaces the live tax quote for an OPEN bill instead of the pre-tax stored total', async () => {
+    vi.mocked(evaluateOrderSettlement).mockResolvedValue({
+      orderId: 'order-1',
+      settled: false,
+      blocker: 'BILLS_OPEN',
+      derivedOrderTotal: decimal('970.00'),
+      accountedTotal: decimal('970.00'),
+      unbilledItemIds: [],
+      bills: [
+        {
+          id: 'bill-1',
+          status: 'OPEN',
+          splitKind: 'NONE',
+          // Stored pre-tax figures: grandTotal has no tax, taxTotal is 0, and the
+          // recorded balance is the pre-tax total less the partial tender (970 − 970).
+          grandTotal: decimal('970.00'),
+          taxTotal: decimal('0.00'),
+          remainingDue: decimal('0.00'),
+          deliveryFeeTotal: decimal('0.00'),
+          compTotal: decimal('0.00'),
+          discountTotal: decimal('0.00'),
+          receiptNumber: null,
+        },
+      ],
+    });
+    // The live quote (15% exclusive) the next tender will charge after a 970 partial.
+    vi.mocked(quoteOpenBillSettlement).mockResolvedValue({
+      grandTotal: decimal('1115.50'),
+      tax: decimal('145.50'),
+      remainingDue: decimal('145.50'),
+    } as Awaited<ReturnType<typeof quoteOpenBillSettlement>>);
+
+    const summaryDb = {
+      restaurantOrder: {
+        findFirst: vi.fn().mockResolvedValue({ id: 'order-1', deliveryFulfillment: null }),
+      },
+    } as unknown as ScopedDb;
+    const summary = await getOrderSettlementForBranch(summaryDb, 'order-1', 'branch-1');
+
+    expect(summary?.bills[0]).toMatchObject({
+      grandTotal: '1115.50',
+      taxTotal: '145.50',
+      remainingDue: '145.50',
     });
   });
 });

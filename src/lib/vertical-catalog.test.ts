@@ -33,6 +33,8 @@ import {
   mandatoryModulesForVertical,
   modulesForVertical,
   packageByKey,
+  packageDefaultSeats,
+  HOSPITALITY_PACKAGES,
   packagesForVertical,
   restaurantModuleByKey,
   roleTemplatesForVertical,
@@ -154,6 +156,25 @@ describe('pharmacy registry (PLAT-01)', () => {
       'pharmacy-crm',
     ]);
     expect(PHARMACY_PACKAGES[2]?.moduleKeys).toEqual(PHARMACY_MODULES.map((module) => module.key));
+  });
+
+  it('offers each pharmacy package its active-user ceiling as default seats', () => {
+    expect(PHARMACY_PACKAGES.map((pkg) => packageDefaultSeats(pkg))).toEqual([10, 50, 2500]);
+  });
+});
+
+describe('package default seats', () => {
+  it('reads the per-vertical active-user limit', () => {
+    for (const pkg of [...RESTAURANT_PACKAGES, ...PHARMACY_PACKAGES, ...HOSPITALITY_PACKAGES]) {
+      const seats = packageDefaultSeats(pkg);
+      expect(typeof seats).toBe('number');
+      expect(seats).toBeGreaterThan(0);
+    }
+  });
+
+  it('matches the catalog user ceilings exactly', () => {
+    expect(RESTAURANT_PACKAGES.map((pkg) => packageDefaultSeats(pkg))).toEqual([10, 100, 2500]);
+    expect(HOSPITALITY_PACKAGES.map((pkg) => packageDefaultSeats(pkg))).toEqual([15, 75, 2500, 25]);
   });
 });
 

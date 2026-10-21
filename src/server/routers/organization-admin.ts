@@ -4,7 +4,6 @@ import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
-import { assertSeatAvailable } from '@/lib/entitlements';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { annotateAudit } from '@/server/audit';
@@ -29,6 +28,37 @@ const departmentKey = z
   .min(2)
   .max(80)
   .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
+const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
+
+function occupiesSeat(status: string): boolean {
+  return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
+}
+
+function duplicateMember(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
+}
+
+async function lockOrganizationSeat(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  seatLimit: number
+): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+  const activeSeats = await tx.user.count({
+    where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
+  });
+  if (activeSeats >= seatLimit) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: `Seat limit reached (${activeSeats}/${seatLimit}).`,
+    });
+  }
+}
 
 function inputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -149,6 +179,7 @@ export const organizationAdminRouter = router({
         legalName: true,
         displayName: true,
         status: true,
+        vertical: true,
         deploymentMode: true,
         timezone: true,
         locale: true,
@@ -156,7 +187,7 @@ export const organizationAdminRouter = router({
         primaryContactName: true,
         primaryContactEmail: true,
         activatedAt: true,
-        package: { select: { name: true } },
+        packageId: true,
         brand: true,
         emailSettings: {
           select: {
@@ -197,6 +228,11 @@ export const organizationAdminRouter = router({
             createdAt: true,
           },
         },
+        departments: {
+          where: { active: true },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+          select: { id: true, key: true, name: true },
+        },
         roles: {
           orderBy: { name: 'asc' },
           include: {
@@ -222,9 +258,26 @@ export const organizationAdminRouter = router({
       },
     });
     if (!organization) throw new TRPCError({ code: 'NOT_FOUND' });
+    // Package catalog rows are control-plane-only under RLS. Use only the
+    // package assigned to this session's organization, and expose its name.
+    const assignedPackage = organization.packageId
+      ? await withPlatformDb((db) =>
+          db.platformPackage.findUnique({
+            where: { id: organization.packageId! },
+            select: { name: true },
+          })
+        )
+      : null;
+    const pharmacyBranches = await ctx.db.pharmacyBranch.findMany({
+      where: { organizationId: id, active: true },
+      select: { id: true, name: true, code: true },
+      orderBy: { name: 'asc' },
+    });
     return {
+      pharmacyBranches,
       organization: {
         ...organization,
+        package: assignedPackage,
         emailSettings: organization.emailSettings
           ? {
               ...organization.emailSettings,
@@ -434,19 +487,7 @@ export const organizationAdminRouter = router({
         select: { id: true },
       });
       if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
-      const activating =
-        !['ACTIVE', 'ON_LEAVE', 'INVITED'].includes(before.status) &&
-        ['ACTIVE', 'ON_LEAVE', 'INVITED'].includes(input.status);
-      if (activating) {
-        try {
-          assertSeatAvailable(ctx.entitlements);
-        } catch (error) {
-          throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: error instanceof Error ? error.message : 'No license seat is available.',
-          });
-        }
-      }
+      const activating = !occupiesSeat(before.status) && occupiesSeat(input.status);
       if (input.organizationRoleId) {
         const role = await ctx.db.organizationRole.findFirst({
           where: { id: input.organizationRoleId, organizationId: id },
@@ -457,19 +498,22 @@ export const organizationAdminRouter = router({
       if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
-      const saved = await ctx.db.user.update({
-        where: { id: input.id },
-        data: {
-          role: input.role,
-          status: input.status,
-          organizationRoleId: input.organizationRoleId,
-          title: input.title,
-          department: input.department,
-          tokenVersion:
-            before.role !== input.role || before.status !== input.status
-              ? { increment: 1 }
-              : undefined,
-        },
+      const saved = await ctx.db.$transaction(async (tx) => {
+        if (activating) await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
+        return tx.user.update({
+          where: { id: input.id },
+          data: {
+            role: input.role,
+            status: input.status,
+            organizationRoleId: input.organizationRoleId,
+            title: input.title,
+            department: input.department,
+            tokenVersion:
+              before.role !== input.role || before.status !== input.status
+                ? { increment: 1 }
+                : undefined,
+          },
+        });
       });
       annotateAudit(ctx, {
         targetType: 'User',
@@ -479,6 +523,110 @@ export const organizationAdminRouter = router({
         metadata: { before, after: input },
       });
       return saved;
+    }),
+
+  createMember: adminProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(150),
+        email: z
+          .email()
+          .max(254)
+          .transform((value) => value.trim().toLowerCase()),
+        password: z.string().min(12).max(256),
+        title: z.string().trim().min(1).max(150),
+        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']),
+        department: departmentKey,
+        organizationRoleId: z.string().nullable().default(null),
+        branchIds: z.array(z.string().trim().min(1).max(64)).max(32).default([]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { organizationId: id, key: input.department, active: true },
+        select: { id: true },
+      });
+      if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+      if (input.organizationRoleId) {
+        const role = await ctx.db.organizationRole.findFirst({
+          where: { id: input.organizationRoleId, organizationId: id },
+          select: { id: true },
+        });
+        if (!role) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid custom role.' });
+      }
+      const existing = await ctx.db.user.findFirst({
+        where: { organizationId: id, email: input.email },
+        select: { id: true },
+      });
+      if (existing)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'A member with this email already exists in this workspace.',
+        });
+      const branchIds = [...new Set(input.branchIds)];
+      const created = await ctx.db.$transaction(async (tx) => {
+        await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
+        if (branchIds.length > 0) {
+          const branches = await tx.pharmacyBranch.findMany({
+            where: { organizationId: id, id: { in: branchIds }, active: true },
+            select: { id: true },
+          });
+          if (branches.length !== branchIds.length) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Choose an active pharmacy branch.',
+            });
+          }
+        }
+        let member;
+        try {
+          member = await tx.user.create({
+            data: {
+              organizationId: id,
+              name: input.name,
+              email: input.email,
+              password: await hash(input.password, 12),
+              passwordChangedAt: null,
+              mustChangePassword: true,
+              role: input.role,
+              department: input.department,
+              title: input.title,
+              organizationRoleId: input.organizationRoleId,
+              status: 'ACTIVE',
+            },
+            select: { id: true, email: true, name: true },
+          });
+        } catch (error) {
+          if (duplicateMember(error)) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'A member with this email already exists in this workspace.',
+            });
+          }
+          throw error;
+        }
+        if (branchIds.length > 0) {
+          await tx.pharmacyBranchAssignment.createMany({
+            data: branchIds.map((branchId) => ({
+              organizationId: id,
+              branchId,
+              userId: member.id,
+              active: true,
+            })),
+          });
+        }
+        return member;
+      });
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: created.id,
+        targetLabel: created.email,
+        operation: 'CREATE',
+        description: 'Added a workspace member',
+        metadata: { role: input.role, department: input.department },
+      });
+      return created;
     }),
 
   resetMemberPassword: adminProcedure
@@ -494,7 +642,8 @@ export const organizationAdminRouter = router({
         where: { id: user.id },
         data: {
           password: await hash(input.password, 12),
-          passwordChangedAt: new Date(),
+          passwordChangedAt: null,
+          mustChangePassword: true,
           tokenVersion: { increment: 1 },
         },
       });

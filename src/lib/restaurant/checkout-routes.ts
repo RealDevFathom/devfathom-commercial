@@ -30,7 +30,7 @@ import {
 } from './drawer-sessions';
 import { PaymentAdapterError } from './payment-adapter';
 import { RefundError, type RefundTenderResult } from './refunds';
-import { TenderError, type ApplyTenderResult } from './tenders';
+import { quoteOpenBillSettlement, TenderError, type ApplyTenderResult } from './tenders';
 import { OrderCommandError } from './orders';
 import {
   authenticateApprover,
@@ -563,7 +563,12 @@ const money = (value: Prisma.Decimal): string => value.toFixed(2);
  * Mirrors the back-office `getOrderSettlement` serialisation (Decimals as strings, C2).
  * Returns null when the order is not in the device's branch (route → 404).
  */
-export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string, branchId: string) {
+export async function getOrderSettlementForBranch(
+  db: ScopedDb,
+  orderId: string,
+  branchId: string,
+  at: Date = new Date()
+) {
   const order = await db.restaurantOrder.findFirst({
     where: { id: orderId, branchId },
     select: {
@@ -574,6 +579,26 @@ export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string,
   if (!order) return null;
 
   const settlement = await evaluateOrderSettlement(db, orderId);
+  const bills = await Promise.all(
+    settlement.bills.map(async (b) => {
+      // An OPEN bill's stored grandTotal is pre-tax and its taxTotal is 0 until a
+      // tender freezes it, so disclose the live tax quote the tender will charge —
+      // otherwise the register hides tax and shows a due that cannot settle the bill
+      // (QA-143). A SETTLED bill already carries its frozen tax/total.
+      const quote = b.status === 'OPEN' ? await quoteOpenBillSettlement(db, b.id, at) : null;
+      return {
+        id: b.id,
+        status: b.status,
+        splitKind: b.splitKind,
+        grandTotal: money(quote ? quote.grandTotal : b.grandTotal),
+        taxTotal: money(quote ? quote.tax : b.taxTotal),
+        remainingDue: money(quote ? quote.remainingDue : b.remainingDue),
+        deliveryFeeTotal: money(b.deliveryFeeTotal),
+        compTotal: money(b.compTotal),
+        receiptNumber: b.receiptNumber,
+      };
+    })
+  );
   return {
     orderId: settlement.orderId,
     settled: settlement.settled,
@@ -584,16 +609,7 @@ export async function getOrderSettlementForBranch(db: ScopedDb, orderId: string,
       ? money(order.deliveryFulfillment.deliveryFeeSnapshot)
       : null,
     unbilledItemIds: settlement.unbilledItemIds,
-    bills: settlement.bills.map((b) => ({
-      id: b.id,
-      status: b.status,
-      splitKind: b.splitKind,
-      grandTotal: money(b.grandTotal),
-      remainingDue: money(b.remainingDue),
-      deliveryFeeTotal: money(b.deliveryFeeTotal),
-      compTotal: money(b.compTotal),
-      receiptNumber: b.receiptNumber,
-    })),
+    bills,
   };
 }
 
