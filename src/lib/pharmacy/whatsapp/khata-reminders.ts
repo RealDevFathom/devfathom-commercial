@@ -7,6 +7,7 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 import { formatMinor } from '../counter-receipt';
 import { lockPatientConsent } from '../consent-writer';
+import { readKhataBalance } from '../family-khata';
 import { claimMessageLogInTransaction, sendClaimedMessage } from './message-log';
 import { canMessageCustomer, normalizeWhatsAppNumber, phoneLast4 } from './messages';
 import {
@@ -49,7 +50,9 @@ export function planKhataReminder(
   const week = Math.floor(now.getTime() / WEEK_MS);
   return {
     due,
-    dueDate: candidate.oldestOverdueAt ? candidate.oldestOverdueAt.toISOString().slice(0, 10) : null,
+    dueDate: candidate.oldestOverdueAt
+      ? candidate.oldestOverdueAt.toISOString().slice(0, 10)
+      : null,
     dedupeKey: `khata:${candidate.familyAccountId}:w${week}`,
   };
 }
@@ -112,55 +115,19 @@ export async function processDueWhatsAppKhataReminders(
     return { ...result, configured: false };
 
   const limit = Math.max(1, Math.min(500, Math.floor(options.limit ?? 100)));
-  // Platform admin read spans branches to total each account's open charges and
-  // find its earliest overdue due date in a single pass.
   const accounts = await withPlatformDb((db) =>
-    db.$queryRaw<DueAccount[]>(Prisma.sql`
-      WITH paid AS (
-        SELECT "organizationId", "branchId", "settlesChargeId" AS charge_id,
-               SUM("amountMinor")::bigint AS paid_minor
-        FROM "pharmacy_khata_events"
-        WHERE "kind" = 'PAYMENT' AND "settlesChargeId" IS NOT NULL
-          AND "organizationId" = ${organizationId}
-        GROUP BY "organizationId", "branchId", "settlesChargeId"
-      ),
-      open_charges AS (
-        SELECT ev."organizationId", ev."branchId", ev."familyAccountId", ev."id", ev."dueAt",
-               ev."amountMinor" - COALESCE(paid.paid_minor, 0) AS remaining_minor
-        FROM "pharmacy_khata_events" ev
-        LEFT JOIN paid ON paid."organizationId" = ev."organizationId"
-                      AND paid."branchId" = ev."branchId"
-                      AND paid.charge_id = ev."id"
-        WHERE ev."kind" = 'CHARGE' AND ev."organizationId" = ${organizationId}
-      )
-      SELECT acct."id" AS "familyAccountId", acct."organizationId", acct."branchId",
-             acct."displayName", acct."payerCustomerId",
-             SUM(oc.remaining_minor)::bigint AS "balanceMinor",
-             MIN(oc."dueAt") FILTER (
-               WHERE oc."dueAt" IS NOT NULL AND oc."dueAt" <= ${now} AND oc.remaining_minor > 0
-             ) AS "oldestOverdueAt"
-      FROM "pharmacy_family_accounts" acct
-      JOIN open_charges oc ON oc."organizationId" = acct."organizationId"
-                          AND oc."branchId" = acct."branchId"
-                          AND oc."familyAccountId" = acct."id"
-      WHERE acct."active" = true AND acct."organizationId" = ${organizationId}
-        AND oc.remaining_minor > 0
-      GROUP BY acct."id", acct."organizationId", acct."branchId", acct."displayName",
-               acct."payerCustomerId"
-      HAVING SUM(oc.remaining_minor) > 0
-         AND MIN(oc."dueAt") FILTER (
-               WHERE oc."dueAt" IS NOT NULL AND oc."dueAt" <= ${now} AND oc.remaining_minor > 0
-             ) IS NOT NULL
-      ORDER BY "oldestOverdueAt", acct."id"
-      LIMIT ${limit}
-    `)
+    readDueKhataAccounts(db, organizationId, now, limit)
   );
 
   for (const account of accounts) {
     result.scanned += 1;
     const balanceMinor = Number(account.balanceMinor);
     const plan = planKhataReminder(
-      { familyAccountId: account.familyAccountId, balanceMinor, oldestOverdueAt: account.oldestOverdueAt },
+      {
+        familyAccountId: account.familyAccountId,
+        balanceMinor,
+        oldestOverdueAt: account.oldestOverdueAt,
+      },
       now,
       minBalanceMinor
     );
@@ -231,22 +198,19 @@ export async function processDueWhatsAppKhataReminders(
         consent.recordedAt > now
       )
         return null;
-      const prior = await db.pharmacyMessageLog.count({
-        where: {
-          organizationId: account.organizationId,
-          customerId: customer.id,
-          direction: 'OUTBOUND',
-          kind: 'KHATA_REMINDER',
-          createdAt: { gte: new Date(now.getTime() - DAY_MS) },
-        },
-      });
-      if (prior) return null;
+      const day = new Intl.DateTimeFormat('en-CA', {
+        timeZone: organization.timezone,
+        year: 'numeric',
+        month: '2-digit',
+        day: '2-digit',
+      }).format(now);
       const logId = await claimMessageLogInTransaction(db, {
         organizationId: account.organizationId,
         direction: 'OUTBOUND',
         status: 'PENDING',
         kind: 'KHATA_REMINDER',
         dedupeKey: plan.dedupeKey,
+        customerDayKey: `khata:${customer.id}:${day}`,
         branchId: account.branchId,
         customerId: customer.id,
         patientId: customer.patientId,
@@ -283,7 +247,7 @@ export async function processDueWhatsAppKhataReminders(
           to: recipient.to,
           template: 'khataReminder',
           // Utility parameters only: who owes, and how much is outstanding.
-          parameters: [account.displayName, formatMinor(balanceMinor)],
+          parameters: [sanitizeReminderDisplayName(account.displayName), formatMinor(balanceMinor)],
         })
     );
     if (outcome === 'SENT') result.sent += 1;
@@ -291,6 +255,62 @@ export async function processDueWhatsAppKhataReminders(
     else if (outcome === 'UNKNOWN') result.unknown += 1;
     else if (outcome === 'FAILED') result.failed += 1;
     else result.duplicate += 1;
+  }
+  return result;
+}
+
+/** Template text must stay a short, single-line name without links. */
+export function sanitizeReminderDisplayName(name: string): string {
+  return (
+    Array.from(
+      name
+        .replace(
+          /(?:[a-z][a-z0-9+.-]*:\/\/|www\.)\S+|\b(?:[a-z0-9-]+\.)+[a-z]{2,}(?:[/:?#]\S*)?/gi,
+          ''
+        )
+        .replace(/[\r\n\u2028\u2029]+/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+    )
+      .slice(0, 40)
+      .join('') || 'Family account'
+  );
+}
+
+/** Platform scan only; balance uses exactly the statement's ledger function.
+ * Payments made from another counter are ledger credits on the account's branch.
+ */
+export async function readDueKhataAccounts(
+  db: import('@/lib/tenancy/scoped-db').ScopedDb,
+  organizationId: string,
+  now: Date,
+  limit: number
+): Promise<DueAccount[]> {
+  const accounts = await db.$queryRaw<Omit<DueAccount, 'balanceMinor'>[]>(Prisma.sql`
+    SELECT acct."id" AS "familyAccountId", acct."organizationId", acct."branchId",
+           acct."displayName", acct."payerCustomerId", MIN(ev."dueAt") AS "oldestOverdueAt"
+    FROM "pharmacy_family_accounts" acct
+    JOIN "pharmacy_khata_events" ev
+      ON ev."organizationId" = acct."organizationId"
+     AND ev."branchId" = acct."branchId" AND ev."familyAccountId" = acct."id"
+    WHERE acct."organizationId" = ${organizationId} AND acct."active" = true
+      AND ev."kind" = 'CHARGE' AND ev."dueAt" <= ${now}
+    GROUP BY acct."id", acct."organizationId", acct."branchId", acct."displayName", acct."payerCustomerId"
+    ORDER BY "oldestOverdueAt", acct."id"
+    LIMIT ${limit}
+  `);
+  const result: DueAccount[] = [];
+  for (const account of accounts) {
+    const balanceMinor = await readKhataBalance(
+      db,
+      {
+        organizationId,
+        branchId: account.branchId,
+        actorId: 'khata-reminder-job',
+      },
+      account.familyAccountId
+    );
+    result.push({ ...account, balanceMinor });
   }
   return result;
 }

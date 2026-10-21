@@ -224,3 +224,109 @@ suite('family Khata restricted PostgreSQL', () => {
     ).rejects.toThrow();
   });
 });
+
+suite('khata reminder PostgreSQL balance and idempotency', () => {
+  it('uses the statement balance for unallocated credits, refunds and reversals across scanned branches', async () => {
+    expect(process.env.TZ).toBe('UTC');
+    const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
+    const { readDueKhataAccounts } = await import('./whatsapp/khata-reminders');
+    const now = new Date('2026-10-21T08:00:00Z');
+    const scopes = [await fixture(orgA, 'ReminderA'), await fixture(orgA, 'ReminderB')];
+    for (const scope of scopes) {
+      await inScope(scope, async (db) => {
+        const charge = await db.pharmacyKhataEvent.findFirstOrThrow({
+          where: { familyAccountId: scope.familyAccountId, kind: 'CHARGE' },
+        });
+        await db.pharmacyKhataEvent.createMany({
+          data: [
+            // Account-level payment, intentionally not allocated to a charge.
+            {
+              organizationId: orgA,
+              branchId: scope.branchId,
+              familyAccountId: scope.familyAccountId,
+              kind: 'PAYMENT',
+              amountMinor: 200,
+              actorId: 'owner',
+            },
+            // Refund credit follows the same PAYMENT representation as refundTender.
+            {
+              organizationId: orgA,
+              branchId: scope.branchId,
+              familyAccountId: scope.familyAccountId,
+              kind: 'PAYMENT',
+              amountMinor: 100,
+              settlesChargeId: charge.id,
+              actorId: 'owner',
+              note: 'Refund',
+            },
+            {
+              organizationId: orgA,
+              branchId: scope.branchId,
+              familyAccountId: scope.familyAccountId,
+              kind: 'DISHONOURED_CHEQUE',
+              amountMinor: 50,
+              actorId: 'owner',
+            },
+          ],
+        });
+      });
+    }
+    // Fixtures use current due dates; scan after them using an explicit UTC instant.
+    const scanAt = new Date(Math.max(now.getTime(), Date.now() + 1000));
+    const rows = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, scanAt, 100));
+    for (const scope of scopes) {
+      const statement = await inScope(scope, (db) =>
+        khata.readSaleKhataStatement(db, scope, scope.saleId, scope.familyAccountId)
+      );
+      expect(statement.account.balanceMinor).toBe(350);
+      expect(rows.find((row) => row.familyAccountId === scope.familyAccountId)?.balanceMinor).toBe(
+        statement.account.balanceMinor
+      );
+      await inScope(scope, (db) =>
+        db.pharmacyKhataEvent.create({
+          data: {
+            organizationId: orgA,
+            branchId: scope.branchId,
+            familyAccountId: scope.familyAccountId,
+            kind: 'PAYMENT',
+            amountMinor: 350,
+            actorId: 'owner',
+          },
+        })
+      );
+    }
+    const cleared = await withPlatformDb((db) => readDueKhataAccounts(db, orgA, scanAt, 100));
+    for (const scope of scopes)
+      expect(
+        cleared.find((row) => row.familyAccountId === scope.familyAccountId)?.balanceMinor
+      ).toBe(0);
+  });
+
+  it('allows only one concurrent customer/day claim, even with different account keys', async () => {
+    const { claimMessageLogInTransaction } = await import('./whatsapp/message-log');
+    const customerId = await inScope(
+      sibling,
+      async (db) =>
+        (
+          await db.pharmacyFamilyAccount.findFirstOrThrow({
+            where: { id: sibling.familyAccountId },
+          })
+        ).payerCustomerId
+    );
+    const claim = (account: string, day: string) =>
+      tenant(orgA, (db) =>
+        claimMessageLogInTransaction(db, {
+          organizationId: orgA,
+          customerId,
+          kind: 'KHATA_REMINDER',
+          direction: 'OUTBOUND',
+          status: 'PENDING',
+          dedupeKey: `test:${suffix}:${account}`,
+          customerDayKey: `khata:${customerId}:${day}`,
+        })
+      );
+    const claims = await Promise.all([claim('a', '2026-10-21'), claim('b', '2026-10-21')]);
+    expect(claims.filter(Boolean)).toHaveLength(1);
+    expect(await claim('c', '2026-10-22')).toBeTruthy();
+  });
+});

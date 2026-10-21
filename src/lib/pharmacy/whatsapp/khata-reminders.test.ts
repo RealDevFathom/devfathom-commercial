@@ -29,6 +29,18 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         timezone: 'Asia/Karachi',
       }),
     },
+    pharmacyKhataEvent: {
+      groupBy: async ({ where }: { where: { familyAccountId: string } }) => [
+        {
+          kind: 'CHARGE',
+          _sum: {
+            amountMinor:
+              store.accounts.find((a) => a.familyAccountId === where.familyAccountId)
+                ?.balanceMinor ?? 0,
+          },
+        },
+      ],
+    },
     pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
     pharmacyCustomer: {
       findFirst: async ({ where }: { where: { id: string } }) =>
@@ -44,7 +56,10 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
         const row = data[0]!;
         if (
           store.logs.some(
-            (log) => log.organizationId === row.organizationId && log.dedupeKey === row.dedupeKey
+            (log) =>
+              log.organizationId === row.organizationId &&
+              (log.dedupeKey === row.dedupeKey ||
+                (row.customerDayKey && log.customerDayKey === row.customerDayKey))
           )
         )
           return [];
@@ -66,7 +81,11 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
 });
 
 import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
-import { planKhataReminder, processDueWhatsAppKhataReminders } from './khata-reminders';
+import {
+  planKhataReminder,
+  processDueWhatsAppKhataReminders,
+  sanitizeReminderDisplayName,
+} from './khata-reminders';
 
 const NOW = new Date('2026-10-21T08:00:00.000Z');
 const config = readWhatsAppConfig({
@@ -120,7 +139,8 @@ describe('planKhataReminder', () => {
         .due
     ).toBe(false);
     expect(
-      planKhataReminder({ familyAccountId: 'f', balanceMinor: 5_000, oldestOverdueAt: NOW }, NOW).due
+      planKhataReminder({ familyAccountId: 'f', balanceMinor: 5_000, oldestOverdueAt: NOW }, NOW)
+        .due
     ).toBe(false);
     expect(
       planKhataReminder(
@@ -162,8 +182,14 @@ describe('processDueWhatsAppKhataReminders', () => {
     const first = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
     const second = await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
 
-    expect(first).toMatchObject({ scanned: 1, sent: 0, prepared: 1, failed: 0, skippedNoConsent: 0 });
-    expect(second).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
+    expect(first).toMatchObject({
+      scanned: 1,
+      sent: 0,
+      prepared: 1,
+      failed: 0,
+      skippedNoConsent: 0,
+    });
+    expect(second).toMatchObject({ scanned: 1, sent: 0, duplicate: 1 });
     expect(provider.calls).toEqual([
       {
         kind: 'template',
@@ -212,5 +238,41 @@ describe('processDueWhatsAppKhataReminders', () => {
     });
     expect(result).toMatchObject({ configured: false, scanned: 0 });
     expect(provider.calls).toEqual([]);
+  });
+});
+
+describe('reminder text and daily customer dedupe', () => {
+  it('strips links and newlines, caps names, and supplies an empty-name fallback', () => {
+    expect(
+      sanitizeReminderDisplayName('Khan\r\nhttps://evil.test/a www.evil.test evil.test/path Family')
+    ).toBe('Khan Family');
+    expect(sanitizeReminderDisplayName('A'.repeat(90))).toHaveLength(40);
+    expect(sanitizeReminderDisplayName('https://evil.test')).toBe('Family account');
+  });
+  it('claims one daily slot across two accounts, branches and concurrent runs', async () => {
+    store.accounts = [account(), { ...account('family-2'), branchId: 'branch-2' }];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    await Promise.all([
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider }),
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider }),
+    ]);
+    expect(provider.calls).toHaveLength(1);
+    expect(store.logs[0].customerDayKey).toBe('khata:customer-1:2026-10-21');
+    await processDueWhatsAppKhataReminders({
+      now: new Date('2026-10-22T08:00:00Z'),
+      config,
+      provider,
+    });
+    expect(provider.calls).toHaveLength(2);
+  });
+  it('sends the sanitized name to the provider', async () => {
+    store.accounts = [{ ...account(), displayName: 'Khan\nhttps://evil.test' }];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+    await processDueWhatsAppKhataReminders({ now: NOW, config, provider });
+    expect(provider.calls[0]).toMatchObject({ parameters: ['Khan', '500.00'] });
   });
 });
