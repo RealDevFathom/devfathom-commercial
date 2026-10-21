@@ -51,7 +51,7 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
     saleable: false,
   };
   const decisions: object[] = [];
-  const packs: object[] = [];
+  const packs: { id: string; parentPackLevelId: string | null }[] = [];
   const entries: object[] = [];
   let published = false;
   const at = new Date('2026-10-21T12:00:00Z');
@@ -147,8 +147,17 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
     medicinePackMrp: { findMany: vi.fn(async () => []) },
     packLevel: {
       findMany: vi.fn(async () => packs),
-      create: vi.fn(async ({ data }: { data: object }) => {
-        const pack = { id: 'manual-pack', parentPackLevelId: null, effectiveTo: null, ...data };
+      findFirst: vi.fn(
+        async ({ where }: { where: { id: string } }) =>
+          packs.find((pack) => pack.id === where.id) ?? null
+      ),
+      create: vi.fn(async ({ data }: { data: { parentPackLevelId?: string } }) => {
+        const pack = {
+          ...data,
+          id: `manual-pack-${packs.length}`,
+          parentPackLevelId: data.parentPackLevelId ?? null,
+          effectiveTo: null,
+        };
         packs.push(pack);
         return pack;
       }),
@@ -257,10 +266,18 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
   expect(medicine.saleable).toBe(true);
   expect(entries).toHaveLength(6);
   expect(gate(await readiness())?.status).toBe('PASSED');
-  await api.createPackLevel({
+  const strip = await api.createPackLevel({
     presentationId: 'manual-presentation',
     versionGroupId: 'manual-pack-group',
     level: 'STRIP',
+    unitsPerParent: 1,
+    effectiveFrom: new Date('2026-01-01'),
+  });
+  await api.createPackLevel({
+    presentationId: 'manual-presentation',
+    parentPackLevelId: strip.id,
+    versionGroupId: 'manual-unit-group',
+    level: 'UNIT',
     unitsPerParent: 10,
     effectiveFrom: new Date('2026-01-01'),
   });
@@ -268,9 +285,11 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
     scoped as unknown as Parameters<typeof purchasingWorkspace>[0],
     { organizationId: 'org-a', actorId: 'admin-a' }
   );
-  expect(workspace.medicines[0].packs).toEqual([
-    expect.objectContaining({ canonicalUnitsPerPack: 10, packLevelId: 'manual-pack' }),
-  ]);
+  expect(workspace.medicines[0].packs).toEqual(
+    expect.arrayContaining([
+      expect.objectContaining({ canonicalUnitsPerPack: 10, packLevelId: strip.id }),
+    ])
+  );
   const stockDb = scoped as unknown as ScopedDb;
   const scope = { organizationId: 'org-a', branchId: 'branch-a', actorId: 'admin-a' };
   const search = () => searchCounterCatalog(stockDb, scope, { query: 'Paracetamol', at });

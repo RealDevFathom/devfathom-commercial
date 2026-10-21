@@ -180,6 +180,14 @@ describe('medicine pack setup', () => {
               effectiveTo: null,
             },
             {
+              id: 'unit',
+              level: 'UNIT',
+              unitsPerParent: 10,
+              parentPackLevelId: 'now',
+              effectiveFrom: new Date('2020-01-01'),
+              effectiveTo: null,
+            },
+            {
               id: 'later',
               level: 'BOX',
               unitsPerParent: 100,
