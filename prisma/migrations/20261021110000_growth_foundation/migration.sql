@@ -32,6 +32,9 @@ ALTER TABLE "pharmacy_customers"
 -- Collapse the old nullable opt-in to a strict boolean. A null meant "never
 -- asked"; for the growth channel that is "not allowed", so it becomes false —
 -- never a silent grant — before the column is made NOT NULL.
+-- Both customer backfills must see every tenant under FORCE RLS. Keep the
+-- platform-admin context local to the migration transaction.
+SELECT set_config('app.is_platform_admin', 'true', true);
 UPDATE "pharmacy_customers" SET "whatsappOptIn" = false WHERE "whatsappOptIn" IS NULL;
 ALTER TABLE "pharmacy_customers"
   ALTER COLUMN "whatsappOptIn" SET DEFAULT false,
