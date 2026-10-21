@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  findUnique: vi.fn(),
+  count: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
   roleFindFirst: vi.fn(),
@@ -19,7 +21,7 @@ vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
 vi.mock('@/lib/entitlements', () => ({
-  hasModule: vi.fn((_entitlements: unknown, key: string) => key === 'admin'),
+  hasModule: vi.fn((_entitlements: unknown, key: string) => key === 'admin' || key === 'hr'),
   resolveOrganizationEntitlements: vi.fn(async () => ({ enabledModules: [] })),
 }));
 vi.mock('@/server/audit', () => ({
@@ -44,7 +46,13 @@ import { teamRouter } from './team';
 import { router, type TRPCContext } from '../trpc';
 
 const db = {
-  user: { findFirst: mocks.findFirst, create: mocks.create, update: mocks.update },
+  user: {
+    findFirst: mocks.findFirst,
+    findUnique: mocks.findUnique,
+    create: mocks.create,
+    update: mocks.update,
+    count: mocks.count,
+  },
   organizationDepartment: { findFirst: mocks.departmentFindFirst },
   organizationRole: { findFirst: mocks.roleFindFirst },
   invitation: { upsert: mocks.invitationUpsert },
@@ -55,13 +63,13 @@ const db = {
     }),
 };
 
-function caller(activeSeats = 1) {
+function caller(activeSeats = 1, role = 'ADMIN') {
   return router({ team: teamRouter }).createCaller({
     db,
     entitlements: { enabledModules: [], modules: [], activeSeats, seatLimit: 50 },
     session: {
       expires: 'later',
-      user: { id: 'user_admin', role: 'ADMIN', department: 'LEADERSHIP', status: 'ACTIVE' },
+      user: { id: 'user_admin', role, department: 'LEADERSHIP', status: 'ACTIVE' },
     },
     organization: { id: 'org_test' },
     support: null,
@@ -95,7 +103,7 @@ describe('team.inviteMember duplicate guard', () => {
       });
       expect(mocks.findFirst).toHaveBeenCalledWith({
         where: { email: 'alex@company.com' },
-        select: { id: true, status: true },
+        select: { id: true, status: true, organizationRole: { select: { key: true } } },
       });
       expect(mocks.create).not.toHaveBeenCalled();
     }
@@ -113,6 +121,33 @@ describe('team.inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin' }),
+      'team:setRole',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+  });
+
+  it('does not let a capability holder assign a role above their own', async () => {
+    await expect(
+      caller(1, 'HR').inviteMember({ ...invite, email: 'new.person@company.com', role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.findFirst).not.toHaveBeenCalled();
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('does not change an owner when re-sending an invitation', async () => {
+    mocks.findFirst.mockResolvedValue({
+      id: 'user_owner',
+      status: 'INVITED',
+      organizationRole: { key: 'owner' },
+    });
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'owner@company.com' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'The owner role cannot be changed.' });
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 
   it('stores a restaurant role template on the invited member', async () => {
@@ -173,5 +208,54 @@ describe('team.inviteMember duplicate guard', () => {
       caller().inviteMember({ ...invite, email: 'new.person@company.com' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Invalid department.' });
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+});
+
+describe('team.adminUpdateMember role guard', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+  });
+
+  it('checks team:setRole before updating a role', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'user_1',
+      name: 'Member',
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'employee' },
+    });
+    mocks.update.mockResolvedValue({ id: 'user_1', name: 'Member', role: 'HR' });
+
+    await caller().adminUpdateMember({ id: 'user_1', role: 'HR' });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_admin' }),
+      'team:setRole',
+      undefined,
+      expect.objectContaining({ source: 'TRPC' })
+    );
+    expect(mocks.update).toHaveBeenCalledWith({ where: { id: 'user_1' }, data: { role: 'HR' } });
+  });
+
+  it('does not let a capability holder promote above their own role', async () => {
+    await expect(
+      caller(1, 'HR').adminUpdateMember({ id: 'user_1', role: 'ADMIN' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.findUnique).not.toHaveBeenCalled();
+    expect(mocks.update).not.toHaveBeenCalled();
+  });
+
+  it('does not change the agency owner role', async () => {
+    mocks.findUnique.mockResolvedValue({
+      id: 'user_owner',
+      name: 'Owner',
+      role: 'ADMIN',
+      organizationRole: { key: 'owner' },
+    });
+
+    await expect(
+      caller().adminUpdateMember({ id: 'user_owner', role: 'HR' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'The owner role cannot be changed.' });
+    expect(mocks.update).not.toHaveBeenCalled();
   });
 });

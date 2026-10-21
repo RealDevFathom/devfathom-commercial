@@ -50,6 +50,30 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
 const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
 
+const ROLE_LEVEL = { EMPLOYEE: 0, HR: 1, ADMIN: 2 } as const;
+
+async function assertCanAssignRole(
+  ctx: {
+    session: { user: Parameters<typeof subjectFromSession>[0] };
+    db: unknown;
+    requestMeta: { ip: string | null };
+  },
+  role: keyof typeof ROLE_LEVEL
+) {
+  const subject = subjectFromSession(ctx.session.user);
+  const allowed = await can(subject, 'team:setRole', undefined, {
+    db: ctx.db as Prisma.TransactionClient,
+    source: 'TRPC',
+    ip: ctx.requestMeta.ip,
+  });
+  if (!allowed || ROLE_LEVEL[role] > (ROLE_LEVEL[subject.role as keyof typeof ROLE_LEVEL] ?? -1)) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission to assign this role.',
+    });
+  }
+}
+
 // IMP-HR-01: inclusive whole-day span of a leave request (Jun 3 → Jun 5 = 3 days).
 // Normalize to local midnight so partial-day timestamps don't skew the count.
 function leaveDayCount(start: Date, end: Date): number {
@@ -151,6 +175,7 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertCanAssignRole(ctx, input.role);
       const email = input.email;
       const department = await ctx.db.organizationDepartment.findFirst({
         where: { key: input.department, active: true },
@@ -168,8 +193,11 @@ export const teamRouter = router({
       }
       const existing = await ctx.db.user.findFirst({
         where: { email },
-        select: { id: true, status: true },
+        select: { id: true, status: true, organizationRole: { select: { key: true } } },
       });
+      if (existing?.organizationRole?.key === 'owner') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'The owner role cannot be changed.' });
+      }
       // Only a still-pending invite may be re-sent; an active/real account blocks.
       if (existing && existing.status !== 'INVITED') {
         throw new TRPCError({ code: 'CONFLICT', message: 'A user with this email already exists' });
@@ -813,6 +841,7 @@ export const teamRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      if (input.role !== undefined) await assertCanAssignRole(ctx, input.role);
       if (input.department) {
         const department = await ctx.db.organizationDepartment.findFirst({
           where: { key: input.department, active: true },
@@ -834,11 +863,23 @@ export const teamRouter = router({
       ] as const;
       const before = await ctx.db.user.findUnique({
         where: { id },
-        select: Object.fromEntries(auditFields.map((f) => [f, true])) as Record<
-          (typeof auditFields)[number],
-          true
-        >,
+        select: {
+          name: true,
+          email: true,
+          role: true,
+          department: true,
+          title: true,
+          phone: true,
+          bio: true,
+          skills: true,
+          status: true,
+          organizationRole: { select: { key: true } },
+        },
       });
+
+      if (input.role !== undefined && before?.organizationRole?.key === 'owner') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'The owner role cannot be changed.' });
+      }
 
       // AUTHZ-02: never strand the workspace without an admin. Block demoting or
       // deactivating the LAST active admin (mirrors the layOffMember guard) — the
