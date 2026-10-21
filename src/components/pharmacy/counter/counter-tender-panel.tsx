@@ -164,9 +164,14 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
           setAccounts(rows);
           setAccountId(rows.length === 1 ? rows[0]!.id : '');
         })
-        .catch(() => {
+        .catch((error: unknown) => {
+          const data = (error as { data?: { code?: string; httpStatus?: number } } | null)?.data;
           if (live)
-            setKhataError('Khata accounts could not be loaded. Refresh the bill and retry.');
+            setKhataError(
+              data?.code === 'FORBIDDEN' || data?.httpStatus === 403
+                ? "You don't have access to Khata accounts. Ask your owner or manager for access."
+                : 'Khata accounts could not be loaded. Refresh the bill and retry.'
+            );
         })
         .finally(() => {
           if (live) setKhataLoading(false);
@@ -184,7 +189,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
       (!isKhata ||
         (Boolean(account) &&
           !khataLoading &&
-          (!overLimit || (ownerOverride && overrideReason.trim().length >= 3 && Boolean(password) && Boolean(reauthenticateOwner)))));
+          (!overLimit ||
+            (ownerOverride &&
+              overrideReason.trim().length >= 3 &&
+              Boolean(password) &&
+              Boolean(reauthenticateOwner)))));
 
     async function submitTender() {
       if (!submittable || amountMinor === null || submissionRef.current) return;
@@ -211,7 +220,11 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             type,
             amountMinor,
             ...(isKhata
-              ? { familyAccountId: accountId, ownerOverride: overLimit && ownerOverride, ...(overLimit ? { overrideReason: overrideReason.trim() } : {}) }
+              ? {
+                  familyAccountId: accountId,
+                  ownerOverride: overLimit && ownerOverride,
+                  ...(overLimit ? { overrideReason: overrideReason.trim() } : {}),
+                }
               : {}),
             ...(type === 'CASH' && cashReceivedMinor !== null ? { cashReceivedMinor } : {}),
           },
@@ -408,8 +421,9 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
             {overLimit ? (
               <>
                 <p role="alert" className="text-sm text-destructive">
-                  This charge exceeds the family credit limit. An owner or manager must re-enter their password
-                  to raise the limit to {formatMinor(account!.balanceMinor + amountMinor!)}.
+                  This charge exceeds the family credit limit. An owner or manager must re-enter
+                  their password to raise the limit to{' '}
+                  {formatMinor(account!.balanceMinor + amountMinor!)}.
                 </p>
                 <Label className="flex min-h-11 items-center gap-2">
                   <input
@@ -423,9 +437,16 @@ export const CounterTenderPanel = forwardRef<HTMLDivElement, CounterTenderPanelP
                 {ownerOverride ? (
                   <>
                     <Label htmlFor="khata-override-reason">Override reason</Label>
-                    <Input id="khata-override-reason" value={overrideReason} maxLength={500}
-                      disabled={!editable} onChange={(event) => setOverrideReason(event.target.value)} />
-                    <Label htmlFor="khata-password">Owner / manager password (current account)</Label>
+                    <Input
+                      id="khata-override-reason"
+                      value={overrideReason}
+                      maxLength={500}
+                      disabled={!editable}
+                      onChange={(event) => setOverrideReason(event.target.value)}
+                    />
+                    <Label htmlFor="khata-password">
+                      Owner / manager password (current account)
+                    </Label>
                     <Input
                       id="khata-password"
                       type="password"

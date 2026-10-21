@@ -273,6 +273,16 @@ beforeEach(() => {
 afterEach(() => vi.restoreAllMocks());
 
 describe('PharmacyCounterConsole authoritative bill state', () => {
+  it('provides a readable, named receipt scroll region with keyboard focus', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const receipt = screen.getByRole('region', { name: 'Sale receipt' });
+    expect(receipt).toHaveAttribute('tabindex', '0');
+    expect(receipt).not.toHaveClass('max-h-24');
+    expect(receipt).toHaveClass('min-h-48', 'shrink-0', 'overflow-y-auto');
+    receipt.focus();
+    expect(receipt).toHaveFocus();
+  });
+
   it.each([
     'missing',
     'loading',
@@ -1000,8 +1010,11 @@ it.each([404, 200])(
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
     fireEvent.change(screen.getByLabelText('Tender'), { target: { value: 'KHATA' } });
     await screen.findByText(/Ledger balance/);
-    fireEvent.click(screen.getByLabelText('Owner: authorize limit increase'));
-    fireEvent.change(screen.getByLabelText('Owner password (current account)'), {
+    fireEvent.click(screen.getByLabelText('Owner / manager: authorize limit increase'));
+    fireEvent.change(screen.getByLabelText('Override reason'), {
+      target: { value: 'Emergency approved' },
+    });
+    fireEvent.change(screen.getByLabelText('Owner / manager password (current account)'), {
       target: { value: 'test-only-password' },
     });
     fireEvent.click(screen.getByRole('button', { name: 'Take payment' }));
