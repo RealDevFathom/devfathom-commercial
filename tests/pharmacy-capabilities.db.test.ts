@@ -201,7 +201,7 @@ const legacy: Record<string, string[]> = {
       status: 'ACTIVE',
     });
     expect(await can(subject('pharmacist'), 'pharmacy:dispense', undefined, { db })).toBe(true);
-    expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(true);
+    expect(await can(subject('pharmacist'), 'pharmacy:safety', undefined, { db })).toBe(false);
     expect(await can(subject('owner'), 'reports:financial', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:orders', undefined, { db })).toBe(true);
     expect(await can(subject('cashier'), 'pharmacy:procurement', undefined, { db })).toBe(false);

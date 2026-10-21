@@ -13,7 +13,7 @@ export const intendedPharmacyGrants = {
     'pharmacy:catalogue-review',
     'pharmacy:safety',
   ],
-  pharmacist: ['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'],
+  pharmacist: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   manager: ['pharmacy:manage', 'pharmacy:orders'],
   cashier: ['pharmacy:counter', 'pharmacy:orders'],
   procurement: ['pharmacy:procurement'],
@@ -70,7 +70,7 @@ describe('canonical capability contract (#130)', () => {
   });
 
   it.each([
-    ['pharmacist', ['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review']],
+    ['pharmacist', ['pharmacy:dispense', 'pharmacy:catalogue-review']],
     ['cashier', ['pharmacy:counter', 'pharmacy:orders']],
     ['finance', ['reports:financial']],
     ['auditor', ['reports:operational']],

@@ -777,7 +777,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'pharmacist',
     name: 'Pharmacist',
     isSystem: true,
-    capabilities: ['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review'],
+    capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'],
   },
   {
     key: 'manager',
