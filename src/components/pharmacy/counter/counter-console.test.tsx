@@ -1203,6 +1203,26 @@ describe('PharmacyCounterConsole cash drawer (POS-07)', () => {
     expect(document.activeElement).not.toBe(tender);
     dialog.remove();
   });
+
+  it('runs F9 and Shift+F4 from the scan field, where focus rests for the whole bill (POS-01)', async () => {
+    mocks.mutations.transition!.mockResolvedValue({});
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    const search = screen.getByLabelText('Scan or search');
+    const tender = screen.getByLabelText('Amount').closest('[tabindex="-1"]');
+
+    search.focus();
+    expect(document.activeElement).toBe(search);
+    fireEvent.keyDown(search, { key: 'F9' });
+    expect(document.activeElement).toBe(tender);
+
+    search.focus();
+    fireEvent.keyDown(search, { key: 'F4', shiftKey: true });
+    await waitFor(() =>
+      expect(mocks.mutations.transition).toHaveBeenCalledWith(
+        expect.objectContaining({ saleId: 'sale-a', action: 'void' })
+      )
+    );
+  });
 });
 
 describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', () => {

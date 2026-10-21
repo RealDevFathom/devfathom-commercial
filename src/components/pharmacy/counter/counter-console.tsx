@@ -1828,6 +1828,8 @@ function ScopedPharmacyCounterConsole({
                   <Input
                     id="counter-search"
                     ref={searchRef}
+                    // POS-01: focus rests here for the whole bill, so F-keys stay live in this field.
+                    data-counter-scan=""
                     autoFocus
                     autoComplete="off"
                     value={query}
