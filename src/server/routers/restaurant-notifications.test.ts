@@ -57,6 +57,11 @@ import type { TRPCContext } from '../trpc';
 import { restaurantNotificationsRouter } from './restaurant-notifications';
 
 const db = {
+  restaurantBranch: {
+    findMany: vi.fn(async ({ where }: { where?: { id?: { in?: string[] } } }) =>
+      (where?.id?.in ?? []).map((id) => ({ id }))
+    ),
+  },
   restaurantStaffProfile: { findFirst: mocks.staffFindFirst },
   restaurantNotification: {
     findMany: mocks.notificationFindMany,
@@ -88,6 +93,7 @@ function caller() {
   return restaurantNotificationsRouter.createCaller({
     db,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-core'],
       activeSeats: 1,
       seatLimit: 50,

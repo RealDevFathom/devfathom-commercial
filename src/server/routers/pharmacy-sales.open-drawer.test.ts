@@ -28,9 +28,17 @@ const input = {
   openingFloatMinor: 0,
 };
 
-function fixture(options: { openDrawer?: { id: string } | null; createError?: unknown } = {}) {
+function fixture(
+  options: { openDrawer?: { id: string } | null; createError?: unknown; branch?: boolean } = {}
+) {
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
+    pharmacyBranch: {
+      findMany: vi.fn(
+        async ({ where }: { where: { id: { in: string[] }; organizationId: string } }) =>
+          options.branch === false ? [] : where.id.in.map((id) => ({ id }))
+      ),
+    },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerSession: {
       findFirst: vi.fn().mockResolvedValue(options.openDrawer ?? null),
@@ -61,6 +69,19 @@ function fixture(options: { openDrawer?: { id: string } | null; createError?: un
 }
 
 describe('pharmacySales.openDrawer', () => {
+  it('refuses a branch that is missing, inactive, or outside the session organization', async () => {
+    const f = fixture({ branch: false });
+    await expect(f.caller.openDrawer(input)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+      message: 'That record is not in this workspace.',
+    });
+    expect(f.db.pharmacyBranch.findMany).toHaveBeenCalledWith({
+      where: { id: { in: ['branch-1'] }, organizationId: 'org-1', active: true },
+      select: { id: true },
+    });
+    expect(f.db.pharmacyDrawerSession.create).not.toHaveBeenCalled();
+  });
+
   it('opens the first drawer for a device', async () => {
     const f = fixture();
     await expect(f.caller.openDrawer(input)).resolves.toMatchObject({ id: 'drawer-new' });

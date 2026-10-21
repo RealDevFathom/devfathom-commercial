@@ -149,11 +149,11 @@ function auditReasons(): string[] {
     .filter((reason): reason is string => typeof reason === 'string');
 }
 
-beforeEach(() => {
+beforeEach(async () => {
   vi.clearAllMocks();
   // The limiter is real and module-scoped: reset only the two keys under test.
-  clearRateLimit(IP_KEY);
-  clearRateLimit(ACCOUNT_KEY);
+  await clearRateLimit(IP_KEY);
+  await clearRateLimit(ACCOUNT_KEY);
 
   mocks.compare.mockImplementation(async (plain: string) => plain === PASSWORD);
   mocks.verifyTotp.mockReturnValue(false);

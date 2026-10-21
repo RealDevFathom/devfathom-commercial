@@ -267,11 +267,15 @@ export const restaurantTaxRouter = router({
           });
         return replay;
       }
-      const branch = await tx.restaurantBranch.findUnique({
-        where: { id: input.branchId },
-        select: { id: true, timezone: true, active: true },
+      const branch = await tx.restaurantBranch.findFirst({
+        where: {
+          id: input.branchId,
+          organizationId: ctx.entitlements.organizationId,
+          active: true,
+        },
+        select: { id: true, timezone: true },
       });
-      if (!branch?.active) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
       const effectiveFrom = zonedWallTimeToUtc(input.effectiveFrom, 0, branch.timezone).instant;
       const effectiveTo = input.effectiveTo
         ? zonedWallTimeToUtc(input.effectiveTo, 0, branch.timezone).instant
@@ -352,11 +356,15 @@ export const restaurantTaxRouter = router({
   scheduleEnd: adminProcedure.input(scheduleEndSchema).mutation(async ({ ctx, input }) => {
     const ended = await ctx.db.$transaction(async (tx) => {
       await tx.$executeRaw`SELECT pg_advisory_xact_lock(hashtextextended(${`${ctx.entitlements.organizationId}:${input.branchId}`}, 0))`;
-      const branch = await tx.restaurantBranch.findUnique({
-        where: { id: input.branchId },
-        select: { timezone: true, active: true },
+      const branch = await tx.restaurantBranch.findFirst({
+        where: {
+          id: input.branchId,
+          organizationId: ctx.entitlements.organizationId,
+          active: true,
+        },
+        select: { timezone: true },
       });
-      if (!branch?.active) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
+      if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
       const effectiveTo = zonedWallTimeToUtc(input.effectiveTo, 0, branch.timezone).instant;
       if (effectiveTo <= new Date())
         throw new TRPCError({
@@ -449,8 +457,12 @@ export const restaurantTaxRouter = router({
     const canonicalPayload = canonicalActivationPayload(input);
     const payloadHash = createHash('sha256').update(JSON.stringify(canonicalPayload)).digest('hex');
     const created = await ctx.db.$transaction(async (tx) => {
-      const branch = await tx.restaurantBranch.findUnique({
-        where: { id: input.branchId },
+      const branch = await tx.restaurantBranch.findFirst({
+        where: {
+          id: input.branchId,
+          organizationId: ctx.entitlements.organizationId,
+          active: true,
+        },
         select: { id: true },
       });
       if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });

@@ -117,6 +117,31 @@ describe('assistant inviteMember duplicate guard', () => {
     expect(mocks.invitationUpsert).not.toHaveBeenCalled();
   });
 
+  it('re-checks admin permission when the tool runs, ignoring the approval that built it', async () => {
+    mocks.findFirst.mockResolvedValue(null);
+    const helpers = {
+      db,
+      isAdmin: true,
+      isHr: false,
+      isAdminOrHr: true,
+      ctx: { userId: 'user_admin', name: 'Admin' },
+      can: vi.fn(async () => true),
+      audit: vi.fn(),
+    } as unknown as AssistantHelpers;
+    const tools = buildPeopleTools(helpers);
+    helpers.isAdmin = false;
+
+    const result = await (
+      tools.inviteMember as unknown as {
+        execute: (input: Record<string, unknown>) => Promise<{ error?: string }>;
+      }
+    ).execute({ ...base, email: 'new.person@company.com' });
+
+    expect(result.error).toBe('Only admins can invite members.');
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
   it('accepts a non-agency department key the workspace does configure', async () => {
     mocks.findFirst.mockResolvedValue(null);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_kitchen' });

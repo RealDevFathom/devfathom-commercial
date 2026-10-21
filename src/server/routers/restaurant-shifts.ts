@@ -78,7 +78,11 @@ export function boundedBusinessRange(from: string, to: string) {
 }
 
 async function managerAuthorization(ctx: TRPCContext, branchId: string) {
-  const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+  const authorization = await resolveStaffBranchAuthorization(
+    ctx.db,
+    ctx.session!.user,
+    ctx.entitlements.organizationId
+  );
   assertAuthorizedBranch(authorization, branchId);
   return authorization;
 }

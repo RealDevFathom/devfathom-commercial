@@ -155,7 +155,7 @@ export function withApiAuth<T extends unknown[]>(
     // REST-04: per-IP flood control BEFORE authentication, so a stream of
     // invalid tokens can't run an unbounded bcrypt compare per request.
     const ip = clientIp(request);
-    const ipGate = rateLimit(`api:ip:${ip}`, 120, 60_000);
+    const ipGate = await rateLimit(`api:ip:${ip}`, 120, 60_000);
     if (!ipGate.ok) {
       const res = NextResponse.json(
         { error: 'Too many requests' },
@@ -179,7 +179,7 @@ export function withApiAuth<T extends unknown[]>(
     }
 
     // REST-04: per-token throttle once the caller is identified.
-    const tokenGate = rateLimit(`api:token:${auth.tokenId}`, 240, 60_000);
+    const tokenGate = await rateLimit(`api:token:${auth.tokenId}`, 240, 60_000);
     if (!tokenGate.ok) {
       const res = NextResponse.json(
         { error: 'Too many requests' },

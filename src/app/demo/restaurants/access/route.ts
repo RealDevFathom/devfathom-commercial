@@ -71,7 +71,7 @@ export async function POST(request: Request) {
     existing?.organizationId === seat.organizationId && existing.seat === seat.seat;
   const reuseGrant = !parsed.data.code && grantMatches;
   if (!reuseGrant) {
-    const gate = rateLimit(
+    const gate = await rateLimit(
       `demo:access:${ipFromHeaders(request.headers) ?? 'unknown'}`,
       10,
       15 * 60_000

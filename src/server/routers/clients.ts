@@ -5,6 +5,7 @@ import { router, protectedProcedure, adminProcedure } from '../trpc';
 import { logActivity } from '../activity';
 import { notify } from '@/lib/notifications';
 import { optionalWebsiteUrl } from '@/lib/validators';
+import { assertInOrganization, workspaceId } from '../org-refs';
 
 // Contract `value` shares the Decimal(12,2) money columns used across finance, so
 // the largest value Postgres will accept is 9,999,999,999.99 — bound it here so an
@@ -214,9 +215,7 @@ export const clientsRouter = router({
   // "expiring soon" dashboard; the per-client Contracts tab derives its row chips
   // from each contract's endDate directly.
   getExpiringContracts: adminProcedure
-    .input(
-      z.object({ withinDays: z.number().int().positive().max(365).optional() }).optional()
-    )
+    .input(z.object({ withinDays: z.number().int().positive().max(365).optional() }).optional())
     .query(async ({ ctx, input }) => {
       const withinDays = input?.withinDays ?? 30;
       const now = new Date();
@@ -302,6 +301,7 @@ export const clientsRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertInOrganization(ctx.db.client, workspaceId(ctx), [input.clientId]);
       return ctx.db.clientContact.create({ data: input });
     }),
 
@@ -367,6 +367,9 @@ export const clientsRouter = router({
         })
     )
     .mutation(async ({ ctx, input }) => {
+      const orgId = workspaceId(ctx);
+      await assertInOrganization(ctx.db.client, orgId, [input.clientId]);
+      await assertInOrganization(ctx.db.project, orgId, [input.projectId]);
       // IMP-CLI-05: validate a supplied project link before persisting.
       if (input.projectId) await assertProjectExists(ctx.db, input.projectId);
       const contract = await ctx.db.contract.create({ data: input });
@@ -404,6 +407,7 @@ export const clientsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       const { id, ...data } = input;
+      await assertInOrganization(ctx.db.project, workspaceId(ctx), [data.projectId]);
       // IMP-CLI-05: validate a newly-set project link (null = clear, skip check).
       if (data.projectId) await assertProjectExists(ctx.db, data.projectId);
       // CON-02: stamp signedAt the first time the EDIT FORM marks a contract SIGNED

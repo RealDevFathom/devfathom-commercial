@@ -55,10 +55,15 @@ This project uses **Bun** as its package manager and runtime.
 bun install                      # install dependencies
 bun run db:generate              # generate the Prisma client
 bun prisma/prepare-extensions.ts # harden trusted extensions (required before migrate)
-bunx prisma migrate deploy
-bun run db:seed                  # (optional) seed demo data
+bunx prisma migrate deploy       # uses MIGRATION_DATABASE_URL when set
+bun run db:seed                  # same migration URL; the app role is RLS-bound
 bun run dev                      # start Next.js
 ```
+
+`DATABASE_URL` is the application role and must be `NOSUPERUSER` `NOBYPASSRLS`.
+`MIGRATION_DATABASE_URL` is used by Prisma migrations when it is set. Production
+startup refuses a database role that bypasses row-level security. The local
+setup guide has the role statements.
 
 `bun prisma/prepare-extensions.ts` must run before `prisma migrate deploy`: it revokes
 `PUBLIC EXECUTE` on the trusted `btree_gist` / `pg_trgm` functions as the extension administrator,
