@@ -713,6 +713,68 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
+  it('stores a scanned GTIN and serial without changing their case', async () => {
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [
+        {
+          ...RECEIPT_LINE,
+          gtin: '08961234567894',
+          serialNumber: 'a3f09c1e77b2',
+          gs1Warnings: ['SERIAL_FORMAT'],
+        },
+      ],
+    });
+    expect(db.pharmacyGoodsReceiptLine.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_a',
+        gtin: '08961234567894',
+        serialKey: 'A3F09C1E77B2',
+      },
+      select: { id: true },
+    });
+    expect(db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      gtin: '08961234567894',
+      serialNumber: 'a3f09c1e77b2',
+      serialKey: 'A3F09C1E77B2',
+      gs1Warnings: ['SERIAL_FORMAT'],
+    });
+  });
+
+  it('rejects a serial already stocked in for this organization', async () => {
+    db.pharmacyGoodsReceiptLine.findFirst.mockResolvedValue({ id: 'line_old' });
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'DUPLICATE_SERIAL' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('rejects the same serial twice on one receipt', async () => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [
+          { ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'A3F09C1E77B2' },
+          { ...RECEIPT_LINE, gtin: '08961234567894', serialNumber: 'a3f09c1e77b2' },
+        ],
+      })
+    ).rejects.toMatchObject({ message: 'DUPLICATE_SERIAL' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
+  it('refuses a serial that has no GTIN', async () => {
+    await expect(
+      caller().createGoodsReceipt({
+        ...RECEIPT,
+        lines: [{ ...RECEIPT_LINE, serialNumber: 'A3F09C1E77B2' }],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+  });
+
   it('splits accepted and rejected units without losing one', async () => {
     await caller().createGoodsReceipt({
       ...RECEIPT,

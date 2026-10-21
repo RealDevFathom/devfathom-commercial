@@ -796,6 +796,12 @@ const purchasingRouter = router({
                   taxCreditable: z.boolean().default(false),
                   stockLocationId: z.string().min(1),
                   quarantineLocationId: z.string().min(1).optional(),
+                  gtin: z
+                    .string()
+                    .regex(/^\d{14}$/)
+                    .optional(),
+                  serialNumber: z.string().trim().min(1).max(20).optional(),
+                  gs1Warnings: z.array(z.string().trim().min(1).max(40)).max(6).optional(),
                 })
                 .strict()
                 // PUR-04: rejected goods need somewhere that is not the shelf,
@@ -811,6 +817,10 @@ const purchasingRouter = router({
                     path: ['rejectedCanonicalUnits'],
                   }
                 )
+                .refine((line) => !line.serialNumber || Boolean(line.gtin), {
+                  message: 'A serial needs the GTIN it was scanned with.',
+                  path: ['serialNumber'],
+                })
             )
             .min(1),
         })
@@ -861,6 +871,7 @@ const purchasingRouter = router({
           : new Set<string>();
 
         const lines = [];
+        const seenSerials = new Set<string>();
         for (const [index, line] of input.lines.entries()) {
           if (
             !(await ctx.db.medicine.findFirst({ where: { id: line.medicineId, saleable: true } }))
@@ -873,6 +884,18 @@ const purchasingRouter = router({
           // something they were never ordered on.
           if (line.purchaseOrderLineId && !ownOrderLines.has(line.purchaseOrderLineId))
             throw new PharmacyReceivingError('CROSS_TENANT_REFERENCE');
+
+          const serialKey = line.serialNumber?.toUpperCase();
+          if (line.gtin && serialKey) {
+            const token = `${line.gtin}:${serialKey}`;
+            if (seenSerials.has(token)) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+            seenSerials.add(token);
+            const prior = await ctx.db.pharmacyGoodsReceiptLine.findFirst({
+              where: { organizationId: scope.organizationId, gtin: line.gtin, serialKey },
+              select: { id: true },
+            });
+            if (prior) throw new PharmacyReceivingError('DUPLICATE_SERIAL');
+          }
 
           const quantities = receiptLineQuantities({
             receivedPacks: line.receivedPacks,
@@ -917,6 +940,10 @@ const purchasingRouter = router({
             }),
             stockLocationId: line.stockLocationId,
             quarantineLocationId: line.quarantineLocationId ?? null,
+            gtin: line.gtin ?? null,
+            serialNumber: line.serialNumber ?? null,
+            serialKey: serialKey ?? null,
+            gs1Warnings: line.gs1Warnings ?? [],
           });
         }
 
@@ -1318,7 +1345,7 @@ const purchasingRouter = router({
    * product name, to the medicine the carton in the operator's hand contains.
    */
   resolveScan: protectedProcedure
-    .input(z.object({ term: z.string().trim().min(1).max(200) }).strict())
+    .input(z.object({ term: z.string().trim().min(1).max(512) }).strict())
     .query(({ ctx, input }) => resolveScan(ctx.db, tenantScope(ctx), input.term)),
 
   /** SAFE-05: audited, advisory pack authentication at the goods-in bench. */

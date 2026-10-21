@@ -12533,6 +12533,13 @@ model PharmacyGoodsReceiptLine {
   /// A human, never OCR confidence, confirms the regulated facts before posting.
   ocrRegulatedConfirmedAt   DateTime?
   ocrRegulatedConfirmedById String?
+  /// DRAP 2D stock-in. Null when the pack was typed by hand.
+  gtin                      String?
+  /// Case-preserved serial from AI 21.
+  serialNumber              String?
+  /// Uppercase serial. Duplicate stock-in is rejected per organization and GTIN.
+  serialKey                 String?
+  gs1Warnings               String[]                @default([])
   createdAt                 DateTime                @default(now())
 
   goodsReceipt       PharmacyGoodsReceipt         @relation(fields: [organizationId, branchId, goodsReceiptId], references: [organizationId, branchId, id], onDelete: Restrict, map: "pharmacy_grl_receipt_fkey")
@@ -12550,6 +12557,7 @@ model PharmacyGoodsReceiptLine {
   @@index([organizationId, goodsReceiptId], map: "pharmacy_grl_org_receipt_idx")
   @@index([organizationId, purchaseOrderLineId], map: "pharmacy_grl_org_order_line_idx")
   @@index([organizationId, medicineId], map: "pharmacy_grl_org_medicine_idx")
+  @@index([organizationId, gtin, serialKey], map: "pharmacy_grl_org_gtin_serial_idx")
   @@map("pharmacy_goods_receipt_lines")
 }
 
