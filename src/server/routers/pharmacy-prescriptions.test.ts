@@ -178,16 +178,41 @@ describe('prescription capture and private delivery', () => {
     });
     expect(mocks.can).toHaveBeenCalledWith(
       expect.anything(),
-      'pharmacy:orders',
+      'pharmacy:dispense',
       undefined,
       expect.objectContaining({ source: 'TRPC' })
     );
   });
 
-  it('allows dispensing capability without granting clinical decisions', async () => {
+  it('allows pharmacists with dispensing capability', async () => {
     mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:dispense');
     await expect(upload()).resolves.toHaveProperty('url');
     expect(mocks.create).not.toHaveBeenCalled();
+  });
+
+  it('allows tenant administrators without capability rows', async () => {
+    mocks.can.mockResolvedValue(false);
+    const admin = context();
+    admin.session.user.role = 'ADMIN';
+    await expect(
+      caller(admin).uploadSource({
+        patientId: 'patient-a',
+        contentType: 'image/png',
+        dataBase64: (
+          await sharp({ create: { width: 2, height: 2, channels: 3, background: 'white' } })
+            .png()
+            .toBuffer()
+        ).toString('base64'),
+      })
+    ).resolves.toHaveProperty('url');
+    expect(mocks.can).not.toHaveBeenCalled();
+  });
+
+  it('denies the cashier orders capability before showing the capture workspace or uploading', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:orders');
+    await expect(caller().workspace()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(upload()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.putUpload).not.toHaveBeenCalled();
   });
 
   it.each(['capture://rx.png', '/api/files/foreign.png', 'https://foreign.test/image.png'])(
