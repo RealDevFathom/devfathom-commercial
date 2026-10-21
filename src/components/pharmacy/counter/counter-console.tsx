@@ -1950,6 +1950,7 @@ function ScopedPharmacyCounterConsole({
                   selected={saleUnit}
                   quantity={quantity}
                   preview={preview}
+                  availableUnits={activeRow.onHandUnits}
                   disabled={busy}
                   onSelect={setSaleUnit}
                   onQuantityChange={setQuantity}
