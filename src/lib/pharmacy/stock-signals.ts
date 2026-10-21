@@ -21,7 +21,7 @@
  * documents.
  */
 
-import { nearExpiryAlertBand } from './near-expiry-alerts';
+import { daysUntilExpiry, nearExpiryAlertBand } from './near-expiry-alerts';
 
 export class PharmacyStockSignalError extends Error {
   constructor(readonly reason: 'INVALID_UNITS' | 'INVALID_POLICY' | 'NOT_FOUND' | 'INVALID_STATE') {
@@ -452,12 +452,13 @@ export function evaluateStockSignals(
       );
     }
 
+    const nearExpiryDays = daysUntilExpiry(lot.expiresAt, at);
     if (
       lot.disposition === 'AVAILABLE' &&
-      lot.expiresAt.getTime() > at.getTime() &&
-      lot.expiresAt.getTime() <= addDays(at, policy.nearExpiryDays).getTime()
+      nearExpiryDays > 0 &&
+      nearExpiryDays <= policy.nearExpiryDays
     ) {
-      const days = Math.ceil((lot.expiresAt.getTime() - at.getTime()) / DAY_MS);
+      const days = nearExpiryDays;
       const band = nearExpiryAlertBand(lot.expiresAt, at);
       signals.push(
         build(context, {

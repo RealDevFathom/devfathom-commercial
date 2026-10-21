@@ -1052,13 +1052,26 @@ export const pharmacySalesRouter = router({
           presentationId: z.string().min(1),
           quantityCanonicalUnits: z.number().int().positive(),
           referencePriceMinor: z.number().int().positive().optional(),
-          requireLowerPrice: z.boolean().optional(),
         })
         .strict()
     )
     .query(async ({ ctx, input }) => {
       try {
-        return await findSubstituteProposals(ctx.db, scopeFor(ctx, input.branchId), input);
+        const scope = scopeFor(ctx, input.branchId);
+        const branch = await ctx.db.pharmacyBranch.findFirst({
+          where: { id: input.branchId, organizationId: scope.organizationId, active: true },
+          select: { id: true },
+        });
+        if (!branch)
+          throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+        return await findSubstituteProposals(ctx.db, scope, {
+          medicineId: input.medicineId,
+          presentationId: input.presentationId,
+          quantityCanonicalUnits: input.quantityCanonicalUnits,
+          ...(input.referencePriceMinor !== undefined
+            ? { referencePriceMinor: input.referencePriceMinor }
+            : {}),
+        });
       } catch (error) {
         if (error instanceof PharmacySubstituteError) {
           throw new TRPCError({ code: 'NOT_FOUND', message: error.code });

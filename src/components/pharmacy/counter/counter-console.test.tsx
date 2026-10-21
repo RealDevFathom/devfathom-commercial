@@ -105,6 +105,7 @@ vi.mock('@/lib/trpc', () => {
         'substituteProposals',
       ]),
       pharmacyPrescriptions: router(['counterPatients', 'counterPatientPanel']),
+      pharmacyDispensing: router(['recordSubstitution']),
       pharmacySafety: router(['controlledPharmacists']),
     },
   };
@@ -244,6 +245,7 @@ beforeEach(() => {
     'linkCustomer',
     'redeemPoints',
     'authenticatePack',
+    'recordSubstitution',
   ])
     mocks.mutations[name] = vi.fn();
   mocks.mutations.tender!.mockResolvedValue(accepted());

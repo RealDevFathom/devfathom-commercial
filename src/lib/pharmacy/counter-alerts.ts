@@ -20,7 +20,7 @@
  */
 
 import type { BlockReason } from './inventory';
-import { nearExpiryAlertBand } from './near-expiry-alerts';
+import { daysUntilExpiry, nearExpiryAlertBand } from './near-expiry-alerts';
 
 export const COUNTER_ALERT_SEVERITIES = ['SAFETY_BLOCK', 'CLINICAL_ADVICE', 'COMMERCIAL'] as const;
 export type CounterAlertSeverity = (typeof COUNTER_ALERT_SEVERITIES)[number];
@@ -92,8 +92,6 @@ export type CounterAlertContext = {
   /** Days before expiry at which the counter starts warning commercially. */
   nearExpiryDays?: number;
 };
-
-const DAY_MS = 86_400_000;
 
 function push(alerts: CounterAlert[], alert: CounterAlert): void {
   alerts.push(alert);
@@ -215,10 +213,8 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
 
   const nearExpiryDays = context.nearExpiryDays ?? 90;
   if (line.nearestSafeExpiry) {
-    const remainingDays = Math.floor(
-      (line.nearestSafeExpiry.getTime() - context.at.getTime()) / DAY_MS
-    );
-    if (remainingDays >= 0 && remainingDays <= nearExpiryDays) {
+    const remainingDays = daysUntilExpiry(line.nearestSafeExpiry, context.at);
+    if (remainingDays > 0 && remainingDays <= nearExpiryDays) {
       const band = nearExpiryAlertBand(line.nearestSafeExpiry, context.at);
       push(alerts, {
         key: `near-expiry:${medicine.medicineId}`,
@@ -238,15 +234,26 @@ function alertsForLine(line: CounterAlertLine, context: CounterAlertContext): Co
  * Every alert the cart raises, deduplicated and ordered severity-first.
  *
  * Dedup keeps the FIRST occurrence, so the retained alert still points at a
- * real cart line the operator can jump to with the keyboard.
+ * real cart line the operator can jump to with the keyboard. Near-expiry is
+ * the exception: the soonest allocated lot of a medicine replaces an earlier
+ * line, because one tier per SKU would hide a nearer batch.
  */
 export function counterAlertsFor(
   lines: readonly CounterAlertLine[],
   context: CounterAlertContext
 ): CounterAlert[] {
   const byKey = new Map<string, CounterAlert>();
+  const soonestExpiry = new Map<string, number>();
   for (const line of lines) {
     for (const alert of alertsForLine(line, context)) {
+      if (alert.code === 'NEAR_EXPIRY_BATCH') {
+        const expiresAt = line.nearestSafeExpiry?.getTime() ?? Number.POSITIVE_INFINITY;
+        const kept = soonestExpiry.get(alert.key);
+        if (kept !== undefined && expiresAt >= kept) continue;
+        soonestExpiry.set(alert.key, expiresAt);
+        byKey.set(alert.key, alert);
+        continue;
+      }
       if (!byKey.has(alert.key)) byKey.set(alert.key, alert);
     }
   }

@@ -34,10 +34,13 @@ function lot(overrides: Record<string, unknown> = {}) {
   };
 }
 
-function dbWith(lots: unknown[]) {
+function dbWith(lots: unknown[], onHandUnits = 10) {
   return {
     medicine: { findFirst: async () => requested },
-    pharmacyInventoryLot: { findMany: async () => lots },
+    pharmacyStockBalance: {
+      aggregate: async () => ({ _sum: { onHandUnits } }),
+    },
+    pharmacyInventoryLot: { findMany: async () => lots, findFirst: async () => null },
   };
 }
 
@@ -71,6 +74,9 @@ describe('AI-05 deterministic substitute finder', () => {
     let where: unknown;
     const db = {
       medicine: { findFirst: async () => requested },
+      pharmacyStockBalance: {
+        aggregate: async () => ({ _sum: { onHandUnits: 10 } }),
+      },
       pharmacyInventoryLot: {
         findMany: async (args: { where: unknown }) => {
           where = args.where;
@@ -94,7 +100,13 @@ describe('AI-05 deterministic substitute finder', () => {
       batch: {
         state: 'ACTIVE',
         expiresAt: { gt: new Date('2026-09-05T00:00:00Z') },
-        medicine: { saleable: true },
+        medicine: {
+          saleable: true,
+          controlled: false,
+          rx: false,
+          restricted: false,
+          AND: [{ strengths: { some: { ingredientId: 'ingredient-a' } } }],
+        },
       },
       balances: { some: { disposition: 'AVAILABLE', onHandUnits: { gt: 0 } } },
     });
@@ -122,27 +134,119 @@ describe('AI-05 deterministic substitute finder', () => {
     ]);
   });
 
-  it('keeps cheaper-only suggestions unless the product is out of stock', async () => {
-    const db = dbWith([lot({ id: 'dearer', printedMrpMinor: 2_000 })]);
+  it('keeps cheaper-only suggestions unless this branch has none of the medicine on hand', async () => {
     const input = {
       medicineId: 'requested',
       presentationId: 'presentation-requested',
       quantityCanonicalUnits: 10,
       referencePriceMinor: 1_000,
     };
-    expect(await findSubstituteProposals(db as never, scope, input)).toEqual([]);
-    const rows = await findSubstituteProposals(db as never, scope, {
-      ...input,
-      requireLowerPrice: false,
-    });
+    expect(
+      await findSubstituteProposals(
+        dbWith([lot({ id: 'dearer', printedMrpMinor: 2_000 })], 10) as never,
+        scope,
+        input
+      )
+    ).toEqual([]);
+    const rows = await findSubstituteProposals(
+      dbWith([lot({ id: 'dearer', printedMrpMinor: 2_000 })], 0) as never,
+      scope,
+      input
+    );
     expect(
       rows.map((row) => [row.inventoryLotId, row.priceMinor, row.priceDifferenceMinor])
     ).toEqual([['dearer', 2_000, -1_000]]);
   });
 
+  it('refuses a candidate whose controlled, prescription, or restricted flag differs', async () => {
+    const rows = await findSubstituteProposals(
+      dbWith([
+        lot({
+          id: 'controlled',
+          batch: {
+            medicine: {
+              id: 'controlled-med',
+              productName: 'Controlled twin',
+              strengths: strength(),
+              controlled: true,
+            },
+          },
+        }),
+        lot({
+          id: 'rx',
+          batch: {
+            medicine: {
+              id: 'rx-med',
+              productName: 'Rx twin',
+              strengths: strength(),
+              rx: true,
+            },
+          },
+        }),
+        lot({
+          id: 'restricted',
+          batch: {
+            medicine: {
+              id: 'restricted-med',
+              productName: 'Restricted twin',
+              strengths: strength(),
+              restricted: true,
+            },
+          },
+        }),
+      ]) as never,
+      scope,
+      {
+        medicineId: 'requested',
+        presentationId: 'presentation-requested',
+        quantityCanonicalUnits: 10,
+        referencePriceMinor: 1_000,
+      }
+    );
+    expect(rows).toEqual([]);
+  });
+
+  it('puts matching regulatory flags on the proposal', async () => {
+    const regulated = { ...requested, controlled: true, rx: true, restricted: true };
+    const db = {
+      medicine: { findFirst: async () => regulated },
+      pharmacyStockBalance: { aggregate: async () => ({ _sum: { onHandUnits: 0 } }) },
+      pharmacyInventoryLot: {
+        findMany: async () => [
+          lot({
+            id: 'regulated-lot',
+            batch: {
+              medicine: {
+                id: 'alternate',
+                productName: 'Regulated generic',
+                strengths: strength(),
+                controlled: true,
+                rx: true,
+                restricted: true,
+              },
+            },
+          }),
+        ],
+      },
+    };
+    const rows = await findSubstituteProposals(db as never, scope, {
+      medicineId: 'requested',
+      presentationId: 'presentation-requested',
+      quantityCanonicalUnits: 10,
+      referencePriceMinor: 1_000,
+    });
+    expect(rows[0]).toMatchObject({
+      inventoryLotId: 'regulated-lot',
+      controlled: true,
+      rx: true,
+      restricted: true,
+    });
+  });
+
   it('suggests an in-stock equivalent when no reference price exists', async () => {
     const db = {
       medicine: { findFirst: async () => requested },
+      pharmacyStockBalance: { aggregate: async () => ({ _sum: { onHandUnits: 0 } }) },
       pharmacyInventoryLot: {
         findFirst: async () => null,
         findMany: async () => [lot({ id: 'in-stock', printedMrpMinor: 1_500 })],
@@ -152,13 +256,16 @@ describe('AI-05 deterministic substitute finder', () => {
       medicineId: 'requested',
       presentationId: 'presentation-requested',
       quantityCanonicalUnits: 1,
-      requireLowerPrice: false,
     });
     expect(rows).toEqual([
       expect.objectContaining({
         inventoryLotId: 'in-stock',
         priceMinor: 150,
         priceDifferenceMinor: 0,
+        controlled: false,
+        rx: false,
+        restricted: false,
+        availableCanonicalUnits: 20,
         equivalenceBasis: 'Exact ingredient(s), strength component(s), dosage form and route',
       }),
     ]);

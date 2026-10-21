@@ -1,80 +1,55 @@
 /**
- * Near-expiry alerts at 30, 60 and 90 days, plus the supplier-return list.
+ * Near-expiry alerts at 30, 60 and 90 days.
  *
- * Batch number and expiry already live on PharmacyManufacturingBatch
- * (`batchNumber`, `expiresAt`) and the received copy on PharmacyInventoryLot.
- * This module only classifies those instants. It never moves stock.
+ * A printed expiry is a calendar date in Asia/Karachi (UTC+5, no DST). The band
+ * and the day count both use that civil date, so a millisecond past an elapsed
+ * 30×86400000 boundary cannot rename a lot that is still inside 30 Karachi days.
  */
 
 const DAY_MS = 86_400_000;
+const KARACHI_TIME_ZONE = 'Asia/Karachi';
 
 export const NEAR_EXPIRY_ALERT_DAYS = [30, 60, 90] as const;
 export type NearExpiryAlertDays = (typeof NEAR_EXPIRY_ALERT_DAYS)[number];
 
-/** The tightest alert whose window still contains this expiry. Null once it has passed or is beyond 90 days. */
-export function nearExpiryAlertBand(expiresAt: Date, at: Date): NearExpiryAlertDays | null {
-  const remainingMs = expiresAt.getTime() - at.getTime();
-  if (!Number.isFinite(remainingMs) || remainingMs <= 0) return null;
-  for (const days of NEAR_EXPIRY_ALERT_DAYS) {
-    if (remainingMs <= days * DAY_MS) return days;
-  }
-  return null;
+function karachiCivilDay(instant: Date): number {
+  if (!Number.isFinite(instant.getTime())) return Number.NaN;
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: KARACHI_TIME_ZONE,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(instant);
+  const value = (type: Intl.DateTimeFormatPartTypes) =>
+    Number(parts.find((part) => part.type === type)?.value);
+  const year = value('year');
+  const month = value('month');
+  const day = value('day');
+  if (!year || !month || !day) return Number.NaN;
+  return Date.UTC(year, month - 1, day);
 }
-
-export function daysUntilExpiry(expiresAt: Date, at: Date): number {
-  return Math.ceil((expiresAt.getTime() - at.getTime()) / DAY_MS);
-}
-
-export type NearExpiryReturnLot = {
-  lotId: string;
-  medicineName: string;
-  batchNumber: string;
-  supplierId: string | null;
-  supplierName: string;
-  onHandUnits: number;
-  unitCostMinor: number;
-  expiresAt: Date;
-  /** Days before printed expiry when this supplier accepts a return. Null when none is recorded. */
-  returnWindowDays: number | null;
-};
-
-export type SupplierReturnRow = NearExpiryReturnLot & {
-  alertDays: NearExpiryAlertDays;
-  daysRemaining: number;
-  /** True when today is inside the recorded supplier return window. */
-  returnWindowOpen: boolean;
-  valueAtRiskMinor: number;
-};
 
 /**
- * Near-expiry stock a branch can send back. Lots with no supplier are omitted:
- * a return list that cannot name who takes the goods is not a return list.
+ * Whole Karachi calendar days from `at` until `expiresAt`.
+ *
+ * A later instant on the same civil date still counts as one day. An expiry
+ * instant that has already passed returns zero or a negative count.
  */
-export function listSupplierReturnCandidates(
-  lots: readonly NearExpiryReturnLot[],
-  at: Date
-): SupplierReturnRow[] {
-  const rows: SupplierReturnRow[] = [];
-  for (const lot of lots) {
-    const alertDays = nearExpiryAlertBand(lot.expiresAt, at);
-    if (alertDays === null || !Number.isSafeInteger(lot.onHandUnits) || lot.onHandUnits <= 0)
-      continue;
-    if (lot.supplierId === null && lot.supplierName.trim() === '') continue;
-    const windowStartsAt =
-      lot.returnWindowDays === null
-        ? null
-        : lot.expiresAt.getTime() - lot.returnWindowDays * DAY_MS;
-    rows.push({
-      ...lot,
-      alertDays,
-      daysRemaining: daysUntilExpiry(lot.expiresAt, at),
-      returnWindowOpen: windowStartsAt !== null && at.getTime() >= windowStartsAt,
-      valueAtRiskMinor: lot.onHandUnits * lot.unitCostMinor,
-    });
+export function daysUntilExpiry(expiresAt: Date, at: Date): number {
+  const remainingMs = expiresAt.getTime() - at.getTime();
+  if (!Number.isFinite(remainingMs)) return Number.NaN;
+  const days = Math.round((karachiCivilDay(expiresAt) - karachiCivilDay(at)) / DAY_MS);
+  if (!Number.isFinite(days)) return Number.NaN;
+  if (remainingMs > 0 && days <= 0) return 1;
+  return days;
+}
+
+/** The tightest alert whose window still contains this expiry. Null once it has passed or is beyond 90 days. */
+export function nearExpiryAlertBand(expiresAt: Date, at: Date): NearExpiryAlertDays | null {
+  const days = daysUntilExpiry(expiresAt, at);
+  if (!Number.isFinite(days) || days <= 0) return null;
+  for (const window of NEAR_EXPIRY_ALERT_DAYS) {
+    if (days <= window) return window;
   }
-  return rows.sort(
-    (left, right) =>
-      left.expiresAt.getTime() - right.expiresAt.getTime() ||
-      left.lotId.localeCompare(right.lotId, 'en')
-  );
+  return null;
 }
