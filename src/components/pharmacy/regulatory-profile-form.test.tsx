@@ -82,4 +82,26 @@ describe('PharmacyRegulatoryProfileForm version history', () => {
     // keyboard at 390px, where `min-w-[40rem]` forces horizontal overflow.
     expect(region.tabIndex).toBe(0);
   });
+
+  it('accurately explains that sales continue while rules await legal review', () => {
+    const provisional = {
+      ...initial,
+      branches: [{ ...initial.branches[0], provinceCode: 'PK-SD' }],
+      jurisdictions: [
+        {
+          ...initial.jurisdictions[0],
+          provinceCode: 'PK-SD',
+          provinceName: 'Sindh',
+          provisional: true,
+        },
+      ],
+    } as Regulatory;
+
+    render(<PharmacyRegulatoryProfileForm initial={provisional} />);
+
+    expect(
+      screen.getByText('These rules are pending legal review. Sales are allowed.')
+    ).toBeVisible();
+    expect(screen.queryByText(/cannot operate/i)).not.toBeInTheDocument();
+  });
 });

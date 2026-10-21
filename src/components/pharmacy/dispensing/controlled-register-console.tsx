@@ -11,6 +11,7 @@ import {
 import { trpc } from '@/lib/trpc';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
+import { StatusPill } from '@/components/ui/status-pill';
 import { WorkspaceState } from './field';
 
 const cell = 'break-words px-2 py-1.5 align-top text-xs text-text-body';
@@ -171,6 +172,15 @@ export function ControlledRegisterConsole() {
         <WorkspaceState title="Controlled register could not be loaded" tone="danger">
           {register.error.message}
         </WorkspaceState>
+      ) : null}
+      {register.data?.pendingLegalReview ? (
+        <div
+          className="rounded-md border border-warning/30 bg-warning/10 px-3 py-2 text-sm text-text-body"
+          role="status"
+        >
+          <StatusPill className="mb-1" status="Pending legal review" tone="warning" />
+          <p>These controlled-register rules are pending legal review. Sales are allowed.</p>
+        </div>
       ) : null}
       {register.data ? (
         <SectionCard title="Register" titleLevel={2}>
