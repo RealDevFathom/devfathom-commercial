@@ -490,13 +490,20 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
+  // The close family raises the same typed `PharmacySettlementError`s as the
+  // drawer family (OPEN_DRAWER, REOPEN_REASON_REQUIRED, DRAWER_NOT_OPEN, ...), so
+  // it answers through `fail` too: a typed refusal, never a 500 carrying the reason.
   closePreview: protectedProcedure
     .input(z.object({ branchId, businessDate: closeDate }).strict())
     .query(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction(async (tx) =>
-        readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
-      );
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          readPharmacyClose(txDb(tx), await scopeFor(ctx, input.branchId), input.businessDate)
+        );
+      } catch (error) {
+        fail(error);
+      }
     }),
   closeDay: protectedProcedure
     .input(
@@ -521,9 +528,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction(async (tx) =>
-        closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
-      );
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          closePharmacyDay(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
     }),
   customerSnapshot: protectedProcedure
     .input(
@@ -680,9 +691,13 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       requireCloseAccess(ctx);
-      return ctx.db.$transaction(async (tx) =>
-        cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
-      );
+      try {
+        return await ctx.db.$transaction(async (tx) =>
+          cutPharmacyDailyClose(txDb(tx), await scopeFor(ctx, input.branchId), input)
+        );
+      } catch (error) {
+        fail(error);
+      }
     }),
   tenderOutcome: protectedProcedure.input(tenderInput).query(async ({ ctx, input }) => {
     const scope =

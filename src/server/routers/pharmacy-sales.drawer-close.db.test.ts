@@ -11,7 +11,9 @@
  * caller's own organization: its open drawer could take cash movements and be
  * closed, and it could be cut a daily close. `scopeFor` refuses a branch that is
  * not an active branch of the caller's organization; every one of these
- * procedures must reach that refusal before it reads or writes anything.
+ * procedures must reach that refusal before it reads or writes anything. And the
+ * close family's typed refusals (a drawer still open, a second cut without a
+ * reason) must reach the caller as typed errors, the way the drawer family's do.
  *
  * Requires TEST_DATABASE_URL: a disposable, migrated database reached as the
  * restricted runtime role (neither SUPERUSER nor BYPASSRLS — asserted first).
@@ -285,5 +287,29 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
       asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
     ).resolves.toMatchObject({ branchName: `Branch ${ACTIVE}`, close: null });
     expect(await rowsFor(ACTIVE)).toEqual({ drawers: 1, movements: 3, closed: 1, closes: 0 });
+  });
+
+  it('answers the daily close’s typed refusals as typed errors, not as a 500', async () => {
+    // A later business day on the active branch, with a drawer still open.
+    const day = new Date('2026-10-21T00:00:00.000Z');
+    const drawer = await asAdmin((c) =>
+      c.openDrawer({ branchId: ACTIVE, deviceId: DEVICE, businessDate: day, openingFloatMinor: 0 })
+    );
+    await expect(
+      asAdmin((c) => c.dailyClose({ branchId: ACTIVE, businessDate: day }))
+    ).rejects.toMatchObject({ code: 'CONFLICT', message: 'OPEN_DRAWER' });
+    expect(await rowsFor(ACTIVE)).toMatchObject({ closes: 0 });
+
+    // Counted and closed, the day is cut once; cutting it again needs a reason.
+    await asAdmin((c) =>
+      c.closeDrawer({ branchId: ACTIVE, drawerSessionId: drawer!.id, countedCashMinor: 0 })
+    );
+    await expect(
+      asAdmin((c) => c.dailyClose({ branchId: ACTIVE, businessDate: day }))
+    ).resolves.toMatchObject({ branchId: ACTIVE, sequence: 1 });
+    await expect(
+      asAdmin((c) => c.dailyClose({ branchId: ACTIVE, businessDate: day }))
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'REOPEN_REASON_REQUIRED' });
+    expect(await rowsFor(ACTIVE)).toMatchObject({ closes: 1 });
   });
 });
