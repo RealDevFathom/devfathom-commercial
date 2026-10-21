@@ -15223,3 +15223,15 @@ model PharmacyPackPrice {
   @@index([organizationId, packLevelId, effectiveFrom])
   @@map("pharmacy_pack_prices")
 }
+
+/// Cross-instance fixed-window counters. Not tenant data and not under RLS:
+/// a limit is taken before a tenant scope exists. Startup still refuses a
+/// SUPERUSER or BYPASSRLS application role.
+model RateLimitBucket {
+  key     String   @id
+  count   Int
+  resetAt DateTime
+
+  @@index([resetAt])
+  @@map("rate_limit_buckets")
+}

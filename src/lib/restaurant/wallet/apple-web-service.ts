@@ -58,21 +58,24 @@ async function authenticate(request: Request, passTypeIdentifier: string, serial
 }
 
 function admitted(request: Request, serialNumber?: string) {
-  const ip = rateLimit(`wallet-apple:ip:${clientIp(request)}`, 120, 60_000);
-  const serial = serialNumber
-    ? rateLimit(`wallet-apple:serial:${walletAliasFingerprint(serialNumber)}`, 60, 60_000)
-    : { ok: true, retryAfter: 0 };
-  const blocked = !ip.ok ? ip : !serial.ok ? serial : null;
-  return blocked
-    ? new Response(null, { status: 429, headers: { 'Retry-After': String(blocked.retryAfter) } })
-    : null;
+  return Promise.all([
+    rateLimit(`wallet-apple:ip:${clientIp(request)}`, 120, 60_000),
+    serialNumber
+      ? rateLimit(`wallet-apple:serial:${walletAliasFingerprint(serialNumber)}`, 60, 60_000)
+      : Promise.resolve({ ok: true, retryAfter: 0, remaining: 0 }),
+  ]).then(([ip, serial]) => {
+    const blocked = !ip.ok ? ip : !serial.ok ? serial : null;
+    return blocked
+      ? new Response(null, { status: 429, headers: { 'Retry-After': String(blocked.retryAfter) } })
+      : null;
+  });
 }
 
 export async function registerApplePass(
   request: Request,
   input: { deviceLibraryIdentifier: string; passTypeIdentifier: string; serialNumber: string }
 ) {
-  const limited = admitted(request, input.serialNumber);
+  const limited = await admitted(request, input.serialNumber);
   if (limited) return limited;
   if (!ID_PATTERN.test(input.deviceLibraryIdentifier)) return EMPTY_401();
   const authenticated = await authenticate(request, input.passTypeIdentifier, input.serialNumber);
@@ -113,7 +116,7 @@ export async function unregisterApplePass(
   request: Request,
   input: { deviceLibraryIdentifier: string; passTypeIdentifier: string; serialNumber: string }
 ) {
-  const limited = admitted(request, input.serialNumber);
+  const limited = await admitted(request, input.serialNumber);
   if (limited) return limited;
   const authenticated = await authenticate(request, input.passTypeIdentifier, input.serialNumber);
   if (!authenticated) return EMPTY_401();
@@ -132,7 +135,7 @@ export async function listUpdatedApplePasses(
   request: Request,
   input: { deviceLibraryIdentifier: string; passTypeIdentifier: string }
 ) {
-  const limited = admitted(request);
+  const limited = await admitted(request);
   if (limited) return limited;
   if (!ID_PATTERN.test(input.deviceLibraryIdentifier)) return new Response(null, { status: 204 });
   const configured = await withPlatformDb((db) =>
@@ -163,7 +166,7 @@ export async function sendUpdatedApplePass(
   request: Request,
   input: { passTypeIdentifier: string; serialNumber: string }
 ) {
-  const limited = admitted(request, input.serialNumber);
+  const limited = await admitted(request, input.serialNumber);
   if (limited) return limited;
   const authenticated = await authenticate(request, input.passTypeIdentifier, input.serialNumber);
   if (!authenticated) return EMPTY_401();

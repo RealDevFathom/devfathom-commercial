@@ -1,30 +1,38 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
-import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
+import {
+  clearRateLimit,
+  clientIp,
+  interpretRateLimitRow,
+  RATE_LIMIT_UPSERT_SQL,
+  rateLimit,
+  rateLimitBackend,
+  rateLimitQuery,
+} from '@/lib/rate-limit';
 
 describe('clearRateLimit', () => {
-  it('restores a consumed bucket after a successful protected operation', () => {
+  it('restores a consumed bucket after a successful protected operation', async () => {
     const key = `test:successful-login:${crypto.randomUUID()}`;
 
-    expect(rateLimit(key, 1, 60_000).ok).toBe(true);
-    expect(rateLimit(key, 1, 60_000).ok).toBe(false);
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(false);
 
-    clearRateLimit(key);
+    await clearRateLimit(key);
 
-    expect(rateLimit(key, 1, 60_000).ok).toBe(true);
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
   });
 
-  it('does not alter a different credential bucket', () => {
+  it('does not alter a different credential bucket', async () => {
     const prefix = `test:credential-isolation:${crypto.randomUUID()}`;
     const firstKey = `${prefix}:first`;
     const secondKey = `${prefix}:second`;
 
-    expect(rateLimit(firstKey, 1, 60_000).ok).toBe(true);
-    expect(rateLimit(secondKey, 1, 60_000).ok).toBe(true);
+    expect((await rateLimit(firstKey, 1, 60_000)).ok).toBe(true);
+    expect((await rateLimit(secondKey, 1, 60_000)).ok).toBe(true);
 
-    clearRateLimit(firstKey);
+    await clearRateLimit(firstKey);
 
-    expect(rateLimit(firstKey, 1, 60_000).ok).toBe(true);
-    expect(rateLimit(secondKey, 1, 60_000).ok).toBe(false);
+    expect((await rateLimit(firstKey, 1, 60_000)).ok).toBe(true);
+    expect((await rateLimit(secondKey, 1, 60_000)).ok).toBe(false);
   });
 });
 
@@ -48,31 +56,128 @@ describe('restaurant integrated flood-limit opt-in', () => {
     ['test', undefined, '1'],
     ['test', '1', undefined],
     ['test', '1', '0'],
-  ])('still throttles with NODE_ENV=%s, lane=%s, opt-in=%s', (nodeEnv, lane, flag) => {
+  ])('still throttles with NODE_ENV=%s, lane=%s, opt-in=%s', async (nodeEnv, lane, flag) => {
     environment(nodeEnv, lane, flag);
     for (const prefix of ['terminal:ip:', 'terminal:device:']) {
       const key = `${prefix}${crypto.randomUUID()}`;
-      expect(rateLimit(key, 1, 60_000).ok).toBe(true);
-      expect(rateLimit(key, 1, 60_000)).toMatchObject({ ok: false, remaining: 0 });
+      expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+      expect(await rateLimit(key, 1, 60_000)).toMatchObject({ ok: false, remaining: 0 });
     }
   });
 
-  it('allows repeated synthetic terminal flood traffic only in the opted-in test lane', () => {
+  it('allows repeated synthetic terminal flood traffic only in the opted-in test lane', async () => {
     environment('test', '1', '1');
     for (const prefix of ['terminal:ip:', 'terminal:device:']) {
       const key = `${prefix}${crypto.randomUUID()}`;
       for (let attempt = 0; attempt < 3; attempt += 1) {
-        expect(rateLimit(key, 1, 60_000)).toMatchObject({ ok: true, retryAfter: 0 });
+        expect(await rateLimit(key, 1, 60_000)).toMatchObject({ ok: true, retryAfter: 0 });
       }
     }
   });
 
-  it('preserves credential and non-terminal throttles even in the opted-in test lane', () => {
+  it('preserves credential and non-terminal throttles even in the opted-in test lane', async () => {
     environment('test', '1', '1');
     for (const prefix of ['terminal:cred:', 'login:', 'api:']) {
       const key = `${prefix}${crypto.randomUUID()}`;
-      expect(rateLimit(key, 1, 60_000).ok).toBe(true);
-      expect(rateLimit(key, 1, 60_000).ok).toBe(false);
+      expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+      expect((await rateLimit(key, 1, 60_000)).ok).toBe(false);
     }
+  });
+});
+
+describe('shared rate-limit store', () => {
+  afterEach(() => {
+    rateLimitQuery.current = null;
+    vi.unstubAllEnvs();
+  });
+
+  it('uses postgres outside tests and memory inside vitest', () => {
+    expect(rateLimitBackend({ NODE_ENV: 'production' })).toBe('postgres');
+    expect(rateLimitBackend({ NODE_ENV: 'production', RATE_LIMIT_STORE: 'memory' })).toBe(
+      'postgres'
+    );
+    expect(rateLimitBackend({ NODE_ENV: 'test', VITEST: 'true' })).toBe('memory');
+    expect(rateLimitBackend({ NODE_ENV: 'test', RATE_LIMIT_STORE: 'postgres' })).toBe('postgres');
+  });
+
+  it('shares a fixed window across two callers of one postgres store', async () => {
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    const rows = new Map<string, { count: number; resetAt: Date }>();
+    rateLimitQuery.current = async (sql, params) => {
+      if (sql.includes('DELETE') && !sql.includes('RETURNING')) {
+        rows.delete(String(params[0]));
+        return [];
+      }
+      const key = String(params[0]);
+      const windowMs = Number(params[1]);
+      const limit = Number(params[2]);
+      const now = new Date();
+      const current = rows.get(key);
+      let count = 1;
+      let resetAt = new Date(now.getTime() + windowMs);
+      if (current && current.resetAt > now) {
+        count = current.count >= limit ? limit + 1 : current.count + 1;
+        resetAt = current.resetAt;
+      }
+      rows.set(key, { count, resetAt });
+      return [{ count, resetAt }];
+    };
+
+    const key = `shared:${crypto.randomUUID()}`;
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(true);
+    expect((await rateLimit(key, 1, 60_000)).ok).toBe(false);
+    expect(RATE_LIMIT_UPSERT_SQL).toContain('ON CONFLICT');
+    expect(RATE_LIMIT_UPSERT_SQL).not.toContain('${');
+  });
+
+  it('fails closed when the shared store errors', async () => {
+    vi.stubEnv('RATE_LIMIT_STORE', 'postgres');
+    rateLimitQuery.current = async () => {
+      throw new Error('connect ECONNREFUSED 10.0.0.5:5432');
+    };
+    await expect(rateLimit('boom', 5, 60_000)).resolves.toMatchObject({ ok: false, remaining: 0 });
+  });
+
+  it('turns a returned row into the same allow/deny shape as the memory window', () => {
+    const resetAt = new Date(Date.now() + 5_000);
+    expect(interpretRateLimitRow(1, resetAt, 2).ok).toBe(true);
+    expect(interpretRateLimitRow(3, resetAt, 2)).toMatchObject({ ok: false, remaining: 0 });
+  });
+});
+
+describe('clientIp', () => {
+  function request(headers: Record<string, string>) {
+    return new Request('http://app.example', { headers });
+  }
+
+  it('ignores a client-supplied forwarding header when no proxy is trusted', () => {
+    const req = request({ 'x-forwarded-for': '1.2.3.4, 10.0.0.8', 'x-real-ip': '1.2.3.4' });
+    expect(clientIp(req, {})).toBe('unknown');
+  });
+
+  it('uses the rightmost untrusted hop after trusted proxies', () => {
+    const req = request({ 'x-forwarded-for': '8.8.8.8, 203.0.113.10, 10.0.0.8' });
+    expect(clientIp(req, { TRUSTED_PROXY_CIDRS: '10.0.0.0/8' })).toBe('203.0.113.10');
+  });
+
+  it('rejects a forwarding list whose closest hop is not a trusted proxy', () => {
+    const req = request({ 'x-forwarded-for': '203.0.113.10, 198.51.100.4' });
+    expect(clientIp(req, { TRUSTED_PROXY_CIDRS: '10.0.0.0/8' })).toBe('unknown');
+  });
+
+  it('selects the hop appended by the configured number of proxies', () => {
+    const req = request({ 'x-forwarded-for': '8.8.8.8, 203.0.113.10, 10.0.0.8' });
+    expect(clientIp(req, { TRUSTED_PROXY_HOPS: '2' })).toBe('203.0.113.10');
+    expect(clientIp(req, { TRUSTED_PROXY_HOPS: '1' })).toBe('10.0.0.8');
+  });
+
+  it('prefers a configured header and its rightmost address', () => {
+    const req = request({
+      'cf-connecting-ip': '203.0.113.9',
+      'x-forwarded-for': '8.8.8.8',
+      'x-real-ip': '1.1.1.1, 198.51.100.20',
+    });
+    expect(clientIp(req, { CLIENT_IP_HEADER: 'cf-connecting-ip' })).toBe('203.0.113.9');
+    expect(clientIp(req, { CLIENT_IP_HEADER: 'x-real-ip' })).toBe('198.51.100.20');
   });
 });

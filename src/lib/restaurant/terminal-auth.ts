@@ -1,6 +1,10 @@
 import 'server-only';
 
-import { demoSeatFromOrganizationId, isCanonicalDemoOrganization, isReservedDemoOrganizationId } from '@/lib/tenancy/demo-identity';
+import {
+  demoSeatFromOrganizationId,
+  isCanonicalDemoOrganization,
+  isReservedDemoOrganizationId,
+} from '@/lib/tenancy/demo-identity';
 
 import { hash as bcryptHash } from 'bcryptjs';
 import { NextResponse } from 'next/server';
@@ -339,7 +343,7 @@ async function authenticateDevice(request: Request): Promise<DeviceDiscovery | N
   // Pre-auth per-IP throttle so a stream of invalid secrets can't run unbounded
   // lookups (mirrors REST-04 on the API transport).
   const ip = clientIp(request);
-  const ipGate = rateLimit(`terminal:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
+  const ipGate = await rateLimit(`terminal:ip:${ip}`, IP_LIMIT, IP_WINDOW_MS);
   if (!ipGate.ok) return tooManyRequests(ipGate.retryAfter);
 
   const credential = deviceSecretFromRequest(request);
@@ -354,7 +358,7 @@ async function authenticateDevice(request: Request): Promise<DeviceDiscovery | N
   const discovery = await bindDemoActor(request, discovered);
   if (discovery instanceof NextResponse) return discovery;
 
-  const deviceGate = rateLimit(
+  const deviceGate = await rateLimit(
     `terminal:device:${discovery.deviceId}`,
     DEVICE_LIMIT,
     DEVICE_WINDOW_MS
@@ -377,7 +381,9 @@ export function withDeviceAuth<T extends unknown[]>(
     request: Request,
     ...args: T
   ) => Promise<Response> | Response,
-  options: TerminalRouteOptions & { allowedDeviceKinds?: readonly RestaurantRegisteredDevice['kind'][] } = {}
+  options: TerminalRouteOptions & {
+    allowedDeviceKinds?: readonly RestaurantRegisteredDevice['kind'][];
+  } = {}
 ) {
   return async (request: Request, ...args: T): Promise<Response> => {
     const auth = await authenticateDevice(request);

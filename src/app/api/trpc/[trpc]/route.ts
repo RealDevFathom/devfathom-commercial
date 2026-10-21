@@ -366,7 +366,7 @@ async function handleAnonymous(req: Request): Promise<Response> {
 
   // Throttle BEFORE any database work, so neither the platform-scope token
   // lookup nor the tenant transaction can be driven by an unauthenticated flood.
-  const admitted = admitAnonymousRequest({ kind: routing.kind, token, ip: clientIp(req) });
+  const admitted = await admitAnonymousRequest({ kind: routing.kind, token, ip: clientIp(req) });
   if (!admitted.ok) {
     return Response.json(
       { error: 'Too many requests. Please try again later.' },

@@ -14,7 +14,7 @@ export async function POST(request: Request) {
   const parsed = inputSchema.safeParse(await request.json().catch(() => null));
   if (!context || !parsed.success) return Response.json(ACCEPTED, { status: 202 });
   const email = parsed.data.email.trim().toLowerCase();
-  const gate = admitWalletEnrollment({ ip: context.ip, token: parsed.data.token, email });
+  const gate = await admitWalletEnrollment({ ip: context.ip, token: parsed.data.token, email });
   if (!gate.ok) return limited(gate.retryAfter);
   const attempt = await startEnrollment({
     organizationId: context.organization.id,
