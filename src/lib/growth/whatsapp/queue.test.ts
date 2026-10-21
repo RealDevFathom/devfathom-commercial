@@ -151,6 +151,7 @@ describe('outbound queue', () => {
     });
     const sleeps: number[] = [];
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -193,6 +194,7 @@ describe('outbound queue', () => {
     });
     const fetchImpl = vi.fn();
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -231,6 +233,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
     });
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -308,6 +311,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: `wamid-${open}` } }), { status: 200 });
     });
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: async (run) => {
         open += 1;
         try {
@@ -379,6 +383,7 @@ describe('outbound queue', () => {
     expect(fetchImpl).toHaveBeenCalledTimes(1);
     expect(store.messages[0]?.status).toBe('sending');
     await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -414,6 +419,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
     });
     const result = await drainQueue({
+        checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -448,7 +454,7 @@ describe('outbound queue', () => {
       customerId: 'c1',
       direction: 'out',
       waMessageId: null,
-      body: 'Hello. Reply STOP to opt out.',
+      body: 'c1, your order from Demo Pharmacy is ready for pickup. Reply STOP to opt out.',
       status: 'queued',
       campaignId: null,
       recipientId: null,
@@ -660,7 +666,7 @@ describe('business local time', () => {
 });
 
 describe('campaign drain copy gate', () => {
-  it.each(['prohibited copy', 'catalog unavailable', 'missing gate'])(
+  it.each(['prohibited copy', 'catalog unavailable', 'missing gate', 'no campaign'])(
     'fails closed before provider send: %s',
     async (reason) => {
       const store = createMemoryStore();
@@ -671,7 +677,7 @@ describe('campaign drain copy gate', () => {
         direction: 'out',
         body: 'Xаnax offer. Reply STOP',
         status: 'queued',
-        campaignId: 'campaign',
+        campaignId: reason === 'no campaign' ? null : 'campaign',
         recipientId: null,
         waMessageId: null,
         error: null,

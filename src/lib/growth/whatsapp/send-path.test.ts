@@ -25,6 +25,7 @@ function sourceFiles(directory: string): string[] {
   const found: string[] = [];
   for (const name of readdirSync(directory)) {
     const path = join(directory, name);
+    if (path === join(process.cwd(), 'src/generated')) continue;
     if (statSync(path).isDirectory()) {
       found.push(...sourceFiles(path));
       continue;
@@ -42,7 +43,7 @@ function forbiddenSource(source: string, relative: string): boolean {
     source.includes('createEvolutionProvider') ||
     /\[sendText\]/.test(compact) ||
     (!relative.endsWith('/whatsapp/store.ts') &&
-      (source.includes('outboundGrowthStore') || /(?:\.|\[)insertMessage/.test(compact)))
+      (source.includes('outboundGrowthStore') || /(?:\.|\[|\{)insertMessage/.test(compact) || /growthWaMessage(?:\.|\[)(?:createMany|create|upsert)/.test(compact) || /Reflect\.get\([^,]+,(?:insertMessage|growthWaMessage)/.test(compact)))
   );
 }
 
@@ -54,6 +55,12 @@ describe('marketing sends go through enqueueMarketing', () => {
     "store['insert' + 'Message']({ direction: 'out' })",
     "store.insertMessage({ direction: 'out', status: 'queued' })",
     'const writer = outboundGrowthStore(db)',
+    'prisma.growthWaMessage.create({})',
+    'prisma.growthWaMessage.createMany({})',
+    'prisma.growthWaMessage.upsert({})',
+    'const { insertMessage: write } = store',
+    "Reflect.get(store, 'insertMessage')({})",
+    "Reflect.get(prisma, 'growthWaMessage').create({})",
   ])('rejects alternate send/write spelling: %s', (source) => {
     expect(forbiddenSource(source, 'src/lib/pharmacy/campaign.ts')).toBe(true);
   });

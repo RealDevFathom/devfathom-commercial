@@ -3,6 +3,9 @@ import { PROHIBITED_DRUG_NAMES } from './prohibited-drugs';
 import { assertMarketingCopyAllowed, bodyNamesProhibitedDrug } from './templates';
 
 const blocked = [
+  'Xan٤x', 'Xan۴x', 'Tramadօl', 'Xᴀnax', 'Ꮯodeine', 'Rıtalın', 'Tramadoł',
+  'زینیکس', 'treemadol', 'Ativan', '𝐗𝐚𝐧𝐚𝐱', 'Ⓧⓐⓝⓐⓧ', 'Xаnаx',
+  'X-a-n-a-x', 'X·a·n·a·x', 'Ⅹanax',
   'Xаnax',
   'Tramadοl',
   'Xánax',
@@ -58,7 +61,7 @@ describe('PR 175 regression corpus', () => {
   it.each(blocked)('blocks %s', (body) => {
     expect(bodyNamesProhibitedDrug(body, PROHIBITED_DRUG_NAMES)).toBe(true);
   });
-  it.each(['Insulated', 'Lyrical', 'ergonomic'])('allows %s', (body) => {
+  it.each(['Insulated', 'Lyrical', 'ergonomic', 'trams/Dolmen', 'Valiant', 'Medium', 'Codeword', 'Morphing', 'Paracetamol'])('allows %s', (body) => {
     expect(bodyNamesProhibitedDrug(body, PROHIBITED_DRUG_NAMES)).toBe(false);
   });
   it.each([
@@ -72,7 +75,7 @@ describe('PR 175 regression corpus', () => {
     expect(bodyNamesProhibitedDrug('scatters', ['cat'])).toBe(false);
   });
   const db = { medicine: { findMany: async () => [] } };
-  it.each(['insulin pen needles', 'insulin cooler bag', 'insulin syringes'])(
+  it.each(['insulin pen needles', 'insulin cooler bag', 'insulin syringes', 'Lithium batteries for glucometers', 'lithium cell', 'Insulin ka pen', 'insulin ka cooler'])(
     'allows device accessory %s',
     async (body) => {
       await expect(assertMarketingCopyAllowed(db, 'tenant', body)).resolves.toBeUndefined();

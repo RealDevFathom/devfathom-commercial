@@ -80,13 +80,19 @@ async function attemptRow(
     const next = await store.claimQueued(organizationId, row.id);
     if (!next) return null;
     const customer = next.customerId ? await store.customer(organizationId, next.customerId) : null;
-    return { row: next, customer };
+    return { row: next, customer, organization: await store.organization(organizationId) };
   });
   if (!claimed) return 'skipped';
   let result;
-  let copyChecked = !claimed.row.campaignId;
+  const utility = claimed.row.direction === 'out' && Object.values(ORDER_READY_BODIES).some(
+    (template) => claimed.row.body === renderTemplate(template, {
+      name: claimed.customer?.displayName ?? '',
+      business: claimed.organization?.displayName ?? '',
+    })
+  );
+  let copyChecked = utility;
   try {
-    if (claimed.row.campaignId) {
+    if (!utility) {
       if (!checkCopy) throw new ProhibitedDrugInCopy();
       await checkCopy(claimed.row.body);
       copyChecked = true;

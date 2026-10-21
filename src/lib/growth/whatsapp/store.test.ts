@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { DuplicateInboundMessage } from './duplicate';
-import { outboundGrowthStore as growthStore } from './store';
+import { growthStore as inboundStore, outboundGrowthStore as growthStore } from './store';
 
 type Call = { model: string; op: string; args: unknown };
 
@@ -218,4 +218,10 @@ describe('growth WhatsApp Prisma adapter', () => {
     expect(saved).toMatchObject({ id: 'c-won', whatsappOptIn: false, whatsappE164: phone });
     expect(calls).toEqual(['upsert', 'findFirst', 'updateMany', 'findFirst']);
   });
+});
+
+it('rejects outbound writes through the public store at runtime', async () => {
+  const { db, calls } = recordingDb();
+  await expect(inboundStore(db).insertMessage({ direction: 'out' } as never)).rejects.toThrow('only accepts inbound');
+  expect(calls).toEqual([]);
 });

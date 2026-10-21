@@ -1,5 +1,7 @@
 import type { GrowthWhatsAppStore, MessageTemplateRow } from '@/lib/growth/whatsapp/types';
 
+import confusables from './unicode-confusables';
+
 import { PROHIBITED_DRUG_NAMES } from './prohibited-drugs';
 
 export const TEMPLATE_KEYS = [
@@ -186,62 +188,26 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-// UTS #39-style subset for common Latin/Greek/Cyrillic lookalikes.
+// Policy folds supplement the full vendored UTS #39 skeleton.
 const DRUG_FOLD: Record<string, string> = {
-  '0': 'o',
-  '1': 'i',
-  '3': 'e',
-  '4': 'a',
-  '5': 's',
-  '7': 't',
-  '@': 'a',
-  $: 's',
-  '!': 'i',
-  '|': 'i',
-  '€': 'e',
-  l: 'i',
-  а: 'a',
-  е: 'e',
-  о: 'o',
-  р: 'p',
-  с: 'c',
-  х: 'x',
-  у: 'y',
-  і: 'i',
-  ј: 'j',
-  к: 'k',
-  м: 'm',
-  т: 't',
-  в: 'b',
-  н: 'h',
-  ѕ: 's',
-  α: 'a',
-  ο: 'o',
-  ρ: 'p',
-  χ: 'x',
-  ι: 'i',
-  κ: 'k',
-  τ: 't',
-  ν: 'v',
-  υ: 'y',
-  ε: 'e',
-  ϲ: 'c',
-  ي: 'ی',
-  ى: 'ی',
-  ك: 'ک',
-  ه: 'ہ',
-  ة: 'ہ',
+  '0': 'o', '1': 'i', '3': 'e', '4': 'a', '5': 's', '7': 't',
+  '@': 'a', '$': 's', '!': 'i', '|': 'i', '€': 'e', l: 'i',
+  'ᴀ': 'a',
+  ي: 'ی', ى: 'ی', ك: 'ک', ه: 'ہ', ة: 'ہ',
 };
 
 function foldDrugText(value: string): string {
-  return [
-    ...value
-      .normalize('NFKD')
-      .toLowerCase()
-      .replace(/[\p{M}\u0640]/gu, ''),
-  ]
-    .map((character) => DRUG_FOLD[character] ?? character)
-    .join('');
+  const digits = value.replace(/[\u0660-\u0669\u06f0-\u06f9]/g, (c) =>
+    String(c.charCodeAt(0) % 16)
+  );
+  const policy = [...digits].map((c) => DRUG_FOLD[c] ?? c).join('');
+  const skeleton = [...policy.normalize('NFKD')]
+    .map((c) => (confusables as Record<string, string>)[c] ?? c)
+    .join('')
+    .normalize('NFKD')
+    .toLowerCase()
+    .replace(/[\p{M}\u0640]/gu, '');
+  return [...skeleton].map((c) => DRUG_FOLD[c] ?? c).join('');
 }
 
 export function normalizeDrugName(value: string): string {
@@ -268,7 +234,7 @@ export function bodyNamesProhibitedDrug(body: string, names: readonly string[]):
     );
     const candidate =
       normalizeDrugName(raw) === normalizeDrugName('lyrica')
-        ? text.replace(/(?<![\p{L}\p{N}])iyricai(?![\p{L}\p{N}])/gu, '')
+        ? text.replace(new RegExp(`(?<![\\p{L}\\p{N}])${escapeRegExp(foldDrugText('lyrical'))}(?![\\p{L}\\p{N}])`, 'gu'), '')
         : text;
     if (pattern.test(candidate)) return true;
   }
@@ -383,9 +349,9 @@ export async function assertMarketingCopyAllowed(
   }
   // The accessory noun must immediately follow insulin; insulin elsewhere still blocks.
   const checkedBody = body.replace(
-    /\binsulin\s+(?:pen\s+needles|cooler\s+bags?|syringes)\b/giu,
+    /\binsulin\s+(?:pen\s+needles|cooler\s+bags?|syringes|ka\s+(?:pen|cooler))\b/giu,
     'device accessory'
-  );
+  ).replace(/\blithium\s+(?:batter(?:y|ies)|cells?)\b/giu, 'device battery');
   if (bodyNamesProhibitedDrug(checkedBody, [...prohibitedNames(rows), ...PROHIBITED_DRUG_NAMES])) {
     throw new ProhibitedDrugInCopy();
   }

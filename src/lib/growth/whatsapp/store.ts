@@ -443,5 +443,12 @@ export function outboundGrowthStore(db: object): GrowthWhatsAppStore {
 export function growthStore(db: object): Omit<GrowthWhatsAppStore, 'insertMessage'> & {
   insertMessage(input: NewMessage & { direction: 'in' }): Promise<MessageLogRow>;
 } {
-  return outboundGrowthStore(db);
+  const store = outboundGrowthStore(db);
+  return {
+    ...store,
+    async insertMessage(input) {
+      if (input.direction !== 'in') throw new Error('growthStore only accepts inbound messages.');
+      return store.insertMessage(input);
+    },
+  };
 }
