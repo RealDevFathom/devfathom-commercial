@@ -69,6 +69,7 @@ const ctx = {
   orgBBranch: `branch_org_b_${suffix}`,
   branchDay: `branch_d_${suffix}`,
   branchReplay: `branch_r_${suffix}`,
+  branchTax: `branch_t_${suffix}`,
   roleFull: `role_full_${suffix}`,
   roleNone: `role_none_${suffix}`,
   userA: `user_a_${suffix}`,
@@ -79,12 +80,20 @@ const ctx = {
   managerA: `staff_m_${suffix}`,
   managerForeign: `staff_fm_${suffix}`,
   staffNoCap: `staff_n_${suffix}`,
+  // QA-145: PIN-only approvers with NO linked user, carrying capabilities only via
+  // SOP-1 job roles. `floorApprover` holds a role with coauth:approve; `floorNoCoauth`
+  // holds a role without it.
+  jobRoleApprover: `jobrole_approver_${suffix}`,
+  jobRoleFloor: `jobrole_floor_${suffix}`,
+  floorApprover: `staff_floor_approver_${suffix}`,
+  floorNoCoauth: `staff_floor_nocoauth_${suffix}`,
   customerA: `customer_a_${suffix}`,
   productA: `prod_a_${suffix}`,
   posA: { deviceId: '', secret: '' },
   posB: { deviceId: '', secret: '' },
   posDay: { deviceId: '', secret: '' },
   posReplay: { deviceId: '', secret: '' },
+  posTax: { deviceId: '', secret: '' },
 };
 
 let orderSeq = 0;
@@ -253,6 +262,7 @@ beforeAll(async () => {
     import('@/app/api/restaurant/cash/day/correct/route'),
     import('@/app/api/restaurant/terminal/establish/route'),
     import('@/app/api/restaurant/terminal/unlock/route'),
+    import('@/app/api/restaurant/orders/close/route'),
   ]);
 
   const [
@@ -272,6 +282,7 @@ beforeAll(async () => {
     dayCorrect,
     establish,
     unlock,
+    orderClose,
   ] = routeMods as RouteModule[];
 
   deps = {
@@ -295,6 +306,7 @@ beforeAll(async () => {
       dayCurrent,
       dayClose,
       dayCorrect,
+      orderClose,
     },
     terminal: { establish, unlock },
   };
@@ -341,12 +353,41 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchB, name: 'B' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchDay, name: 'Day' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchReplay, name: 'Replay' } });
+    await tx.restaurantBranch.create({ data: { id: ctx.branchTax, name: 'Tax' } });
     await Promise.all([
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchA),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchB),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchDay),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchReplay),
     ]);
+    // Match the issue's customer-supplied profile without mutating published evidence.
+    const source = await tx.restaurantTaxOfficialSource.findFirstOrThrow();
+    const effectiveFrom = new Date('2026-08-01T00:00:00.000Z');
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        branchId: ctx.branchTax,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom,
+        approvalReference: 'QA-143 customer-supplied fixture',
+        approvedAt: effectiveFrom,
+        publishedAt: effectiveFrom,
+        rules: {
+          create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+            paymentCategory,
+            rate: '0.15',
+            priceMode: 'EXCLUSIVE',
+            ruleCode: `QA143_${paymentCategory}`,
+            officialSourceId: source.id,
+            status: 'PUBLISHED',
+            effectiveFrom,
+            approvedAt: effectiveFrom,
+            approvalReference: 'QA-143 customer-supplied fixture',
+            publishedAt: effectiveFrom,
+          })),
+        },
+      },
+    });
     await tx.restaurantProduct.create({ data: { id: ctx.productA, name: 'Widget' } });
     await tx.restaurantCustomer.create({
       data: { id: ctx.customerA, displayName: 'Delivery Guest' },
@@ -406,7 +447,7 @@ beforeAll(async () => {
         },
       });
       await tx.restaurantBranchAssignment.createMany({
-        data: [ctx.branchB, ctx.branchDay, ctx.branchReplay].map((branchId) => ({
+        data: [ctx.branchB, ctx.branchDay, ctx.branchReplay, ctx.branchTax].map((branchId) => ({
           branchId,
           userId,
         })),
@@ -416,6 +457,44 @@ beforeAll(async () => {
       where: { id: ctx.managerForeign },
       data: { primaryBranchId: ctx.branchDay },
     });
+
+    // QA-145: SOP-1 job roles carry capabilities independently of any linked `User`.
+    await tx.restaurantJobRole.create({
+      data: {
+        id: ctx.jobRoleApprover,
+        key: `owner_${suffix}`,
+        name: 'Owner',
+        capabilities: { create: [{ capability: 'coauth:approve' }] },
+      },
+    });
+    await tx.restaurantJobRole.create({
+      data: {
+        id: ctx.jobRoleFloor,
+        key: `floor_${suffix}`,
+        name: 'Floor',
+        capabilities: { create: [{ capability: 'orders:take' }] },
+      },
+    });
+    // Two PIN-only approvers: NO linked user, so the pre-fix linked-user-only gate would
+    // refuse both. The job role is what makes `floorApprover` eligible to co-authorize.
+    for (const [id, jobRoleId, name] of [
+      [ctx.floorApprover, ctx.jobRoleApprover, 'Floor Owner'],
+      [ctx.floorNoCoauth, ctx.jobRoleFloor, 'Floor Server'],
+    ] as const) {
+      await tx.restaurantStaffProfile.create({
+        data: { id, displayName: name, primaryBranchId: ctx.branchA, status: 'ACTIVE' },
+      });
+      await tx.restaurantOperatorCredential.create({
+        data: {
+          staffProfileId: id,
+          type: 'PIN',
+          credentialHash: await deps.hashOperatorCredential('PIN', PIN),
+        },
+      });
+      await tx.restaurantStaffJobRole.create({
+        data: { staffProfileId: id, jobRoleId, branchId: ctx.branchA },
+      });
+    }
   });
   await deps.withTenantDb(orgB, (tx) =>
     tx.restaurantBranch.create({ data: { id: ctx.orgBBranch, name: 'Other tenant' } })
@@ -425,6 +504,7 @@ beforeAll(async () => {
   ctx.posB = await enroll(ctx.branchB, 'posB');
   ctx.posDay = await enroll(ctx.branchDay, 'posDay');
   ctx.posReplay = await enroll(ctx.branchReplay, 'posReplay');
+  ctx.posTax = await enroll(ctx.branchTax, 'posTax');
 });
 
 // Today's UTC business date (branches default to UTC + a 00:00 cutoff).
@@ -710,6 +790,239 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(res.status).toBe(200);
       eqMoney(res.json.expectedCash, '130.01');
       eqMoney(res.json.variance, '0.00');
+    });
+  });
+
+  // QA-143 — on an EXCLUSIVE-tax bill the register summary must disclose tax and a
+  // remaining due that settles the bill, both before any tender and after a partial
+  // one. Before the fix the summary reported the stored pre-tax total with no tax, so
+  // the displayed due undercharged and a later summary read 0.00 due on an OPEN bill.
+  describe('QA-143 open-bill tax disclosure (EXCLUSIVE)', () => {
+    it('discloses tax up front, keeps the true remainder after a partial tender, and settles', async () => {
+      const token = await establishUnlock(ctx.posTax.secret, ctx.staffA, ctx.branchTax);
+
+      const drawer = await call(deps.routes.drawerOpen, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-open'),
+        body: { openingFloat: '0.00' },
+      });
+      expect(drawer.status).toBe(200);
+
+      const { orderId } = await seedOrder(ctx.branchTax, ctx.posTax.deviceId, TODAY, ['970.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      expect(cut.status).toBe(200);
+      const billId = (cut.json.billIds as string[])[0]!;
+
+      // Before any tender: tax (15% of 970) is disclosed and the due is the tax-inclusive
+      // total — not the bare 970.00 menu price the bill stores.
+      const readSummary = async () => {
+        const res = await call(deps.routes.summary, {
+          method: 'GET',
+          secret: ctx.posTax.secret,
+          session: token,
+          query: { orderId },
+        });
+        expect(res.status, JSON.stringify(res.json)).toBe(200);
+        return res.json;
+      };
+      const before = await readSummary();
+      const billBefore = (before.bills as Record<string, unknown>[])[0]!;
+      eqMoney(billBefore.grandTotal, '1115.50');
+      eqMoney(billBefore.taxTotal, '145.50');
+      eqMoney(billBefore.remainingDue, '1115.50');
+      expect(before.settled).toBe(false);
+
+      // Partial cash tender of the menu price (970) leaves the 145.50 tax remainder.
+      const partial = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-partial'),
+        body: {
+          billId,
+          tender: { type: 'CASH', amount: '970.00', cashReceived: '5000.00' },
+        },
+      });
+      expect(partial.status, JSON.stringify(partial.json)).toBe(200);
+      expect(partial.json.settled).toBe(false);
+      eqMoney(partial.json.changeGiven, '4030.00');
+      eqMoney(partial.json.remainingDue, '145.50');
+
+      // The summary after the partial must show the true 145.50 remainder on the still
+      // OPEN bill — never 0.00 due with a BILLS_OPEN blocker (the reported defect).
+      const after = await readSummary();
+      const billAfter = (after.bills as Record<string, unknown>[])[0]!;
+      expect(billAfter.status).toBe('OPEN');
+      eqMoney(billAfter.taxTotal, '145.50');
+      eqMoney(billAfter.remainingDue, '145.50');
+      expect(after.settled).toBe(false);
+      expect(after.blocker).toBe('BILLS_OPEN');
+
+      // Tendering exactly the displayed remainder settles the bill and issues a receipt.
+      const settle = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-settle'),
+        body: {
+          billId,
+          tender: { type: 'CASH', amount: '145.50', cashReceived: '200.00' },
+        },
+      });
+      expect(settle.status, JSON.stringify(settle.json)).toBe(200);
+      expect(settle.json.settled).toBe(true);
+      expect(typeof settle.json.receiptNumber).toBe('number');
+      eqMoney(settle.json.remainingDue, '0.00');
+      const settled = await readSummary();
+      expect(settled.settled).toBe(true);
+      expect((settled.bills as Record<string, unknown>[])[0]).toMatchObject({
+        status: 'SETTLED',
+        taxTotal: '145.50',
+        grandTotal: '1115.50',
+        remainingDue: '0.00',
+      });
+
+      const cardOrder = await seedOrder(
+        ctx.branchTax,
+        ctx.posTax.deviceId,
+        TODAY,
+        ['120.00'],
+        'TAKEAWAY'
+      );
+      const cardBill = await call(deps.routes.bill, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-card-cut'),
+        body: { orderId: cardOrder.orderId, split: { kind: 'NONE' } },
+      });
+      expect(cardBill.status).toBe(200);
+      const cardSummary = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId: cardOrder.orderId },
+      });
+      expect(cardSummary.status).toBe(200);
+      const quotedCardBill = (cardSummary.json.bills as Record<string, unknown>[])[0]!;
+      eqMoney(quotedCardBill.taxTotal, '18.00');
+      eqMoney(quotedCardBill.remainingDue, '138.00');
+      const cardTender = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-card'),
+        body: {
+          billId: (cardBill.json.billIds as string[])[0],
+          tender: { type: 'CARD', amount: quotedCardBill.remainingDue, tipAmount: '20.00' },
+        },
+      });
+      expect(cardTender.status, JSON.stringify(cardTender.json)).toBe(200);
+      expect(cardTender.json.settled).toBe(true);
+      eqMoney(cardTender.json.remainingDue, '0.00');
+      const cardSettled = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId: cardOrder.orderId },
+      });
+      expect(cardSettled.status, JSON.stringify(cardSettled.json)).toBe(200);
+      expect(cardSettled.json.settled).toBe(true);
+      expect(cardSettled.json.blocker).toBeNull();
+      expect((cardSettled.json.bills as Record<string, unknown>[])[0]).toMatchObject({
+        status: 'SETTLED',
+        taxTotal: '18.00',
+        grandTotal: '138.00',
+        remainingDue: '0.00',
+      });
+    });
+
+    it('leaves the bill open and refuses order close when only the pre-tax amount is paid', async () => {
+      const token = await establishUnlock(ctx.posTax.secret, ctx.staffA, ctx.branchTax);
+      const drawer = await call(deps.routes.drawerOpen, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-open'),
+        body: { openingFloat: '0.00' },
+      });
+      if (drawer.status !== 200) {
+        expect(JSON.stringify(drawer.json)).toMatch(/already has an open drawer/);
+      }
+
+      const { orderId } = await seedOrder(ctx.branchTax, ctx.posTax.deviceId, TODAY, ['970.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      expect(cut.status, JSON.stringify(cut.json)).toBe(200);
+      const billId = (cut.json.billIds as string[])[0]!;
+
+      const partial = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay'),
+        body: {
+          billId,
+          tender: { type: 'CASH', amount: '970.00', cashReceived: '1000.00' },
+        },
+      });
+      expect(partial.status, JSON.stringify(partial.json)).toBe(200);
+      expect(partial.json.settled).toBe(false);
+      eqMoney(partial.json.remainingDue, '145.50');
+
+      const summary = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId },
+      });
+      expect(summary.status, JSON.stringify(summary.json)).toBe(200);
+      expect(summary.json.settled).toBe(false);
+      expect(summary.json.blocker).toBe('BILLS_OPEN');
+      const bill = (summary.json.bills as Record<string, unknown>[])[0]!;
+      expect(bill.status).toBe('OPEN');
+      eqMoney(bill.remainingDue, '145.50');
+
+      // SERVED → PAYMENT_PENDING parks an unsettled order. Closing that pending
+      // order is the refusal: the bill is still short the exclusive tax.
+      const parked = await call(deps.routes.orderClose, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-park'),
+        body: { orderId },
+      });
+      expect(parked.status, JSON.stringify(parked.json)).toBe(200);
+      const pending = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+      );
+      expect(pending?.status).toBe('PAYMENT_PENDING');
+
+      const refused = await call(deps.routes.orderClose, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-underpay-close'),
+        body: { orderId },
+      });
+      expect(refused.status, JSON.stringify(refused.json)).toBe(400);
+      expect(refused.json.error).toBe(
+        'The order cannot close until it is fully settled (BILLS_OPEN).'
+      );
+      const stillOpen = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantOrder.findUnique({ where: { id: orderId }, select: { status: true } })
+      );
+      expect(stillOpen?.status).toBe('PAYMENT_PENDING');
+      const afterRefusal = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId },
+      });
+      expect(afterRefusal.status).toBe(200);
+      expect((afterRefusal.json.bills as Record<string, unknown>[])[0]?.status).toBe('OPEN');
     });
   });
 
@@ -1425,6 +1738,117 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
         },
       });
       expect(res.status).toBe(403);
+    });
+  });
+
+  // QA-145 (SEV1): co-authorization must honour SOP-1 job-role capabilities, not only the
+  // linked `User` org-role permissions. A PIN-only floor manager holding the Owner job
+  // role (which carries `coauth:approve`) must be able to approve a refund and a comp;
+  // one whose job role lacks it stays denied and writes nothing.
+  describe('QA-145 job-role co-authorization', () => {
+    it('lets a PIN-only approver with the coauth:approve job role authorize a refund', async () => {
+      const token = await establishUnlock(ctx.posA.secret);
+      const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['12.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      const billId = (cut.json.billIds as string[])[0]!;
+      const tender = await call(deps.routes.tender, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-tender'),
+        body: { billId, tender: { type: 'CARD', amount: '12.00' } },
+      });
+      expect(tender.status, JSON.stringify(tender.json)).toBe(200);
+
+      const res = await call(deps.routes.refund, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-refund'),
+        body: {
+          originalTenderId: tender.json.tenderId as string,
+          amount: '12.00',
+          reason: 'guest complaint',
+          approving: { staffProfileId: ctx.floorApprover, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(res.status, JSON.stringify(res.json)).toBe(200);
+      eqMoney(res.json.amount, '12.00');
+      const coAuth = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantCoAuthorization.findFirst({
+          where: { approvingStaffProfileId: ctx.floorApprover, capability: 'payments:refund' },
+          select: { actingStaffProfileId: true },
+        })
+      );
+      expect(coAuth?.actingStaffProfileId).toBe(ctx.staffA);
+    });
+
+    it('lets the same PIN-only approver authorize a comp', async () => {
+      const token = await establishUnlock(ctx.posA.secret);
+      const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-comp-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      const billId = (cut.json.billIds as string[])[0]!;
+      const line = await deps.withTenantDb(orgA, (tx) =>
+        tx.restaurantBillLine.findFirst({ where: { billId }, select: { id: true } })
+      );
+
+      const res = await call(deps.routes.comp, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-comp'),
+        body: {
+          billId,
+          billLineId: line!.id,
+          reason: 'kitchen error',
+          approving: { staffProfileId: ctx.floorApprover, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(res.status, JSON.stringify(res.json)).toBe(200);
+      expect(res.json.billId).toBe(billId);
+    });
+
+    it('still denies a PIN-only approver whose job role lacks coauth:approve, writing nothing', async () => {
+      const token = await establishUnlock(ctx.posA.secret);
+      const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['6.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-deny-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      const billId = (cut.json.billIds as string[])[0]!;
+      const tender = await call(deps.routes.tender, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-deny-tender'),
+        body: { billId, tender: { type: 'CARD', amount: '6.00' } },
+      });
+      expect(tender.status).toBe(200);
+
+      const before = await deps.withTenantDb(orgA, (tx) => tx.restaurantRefund.count());
+      const res = await call(deps.routes.refund, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('qa145-deny-refund'),
+        body: {
+          originalTenderId: tender.json.tenderId as string,
+          amount: '6.00',
+          reason: 'no capability',
+          approving: { staffProfileId: ctx.floorNoCoauth, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(res.status).toBe(403);
+      expect(res.json.error).toContain('coauth:approve');
+      const after = await deps.withTenantDb(orgA, (tx) => tx.restaurantRefund.count());
+      expect(after).toBe(before);
     });
   });
 });

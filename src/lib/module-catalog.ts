@@ -233,6 +233,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   pharmacyDispensing: 'pharmacy-dispensing',
   pharmacySafety: 'pharmacy-safety',
   pharmacySales: 'pharmacy-counter',
+  pharmacyBranchAssignments: 'pharmacy-core',
   pharmacyCameras: 'pharmacy-core',
   pharmacyMarketing: 'pharmacy-crm',
   pharmacyFinance: 'pharmacy-finance',
@@ -266,6 +267,8 @@ export const ACCOUNT_PROCEDURES: ReadonlySet<string> = new Set([
 ]);
 
 export function moduleForProcedure(path: string): string | null {
+  // Inviting workspace users is baseline administration in every vertical.
+  if (path === 'team.inviteMember') return 'admin';
   if (ACCOUNT_PROCEDURES.has(path)) return null;
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
@@ -353,6 +356,7 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
   ['/pharmacy/finance', 'pharmacy-finance'],
   ['/pharmacy/reports', 'pharmacy-reports'],
   ['/pharmacy/medicines', 'pharmacy-core'],
+  ['/pharmacy/settings/branches', 'pharmacy-core'],
   ['/pharmacy/marketing', 'pharmacy-crm'],
   ['/pharmacy/loyalty', 'pharmacy-crm'],
   ['/pharmacy/cameras', 'pharmacy-core'],
@@ -366,6 +370,8 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
 
 /** Resolve the module that owns a route. Dashboard is a baseline module for every vertical. */
 export function moduleForPath(pathname: string, _vertical?: OrganizationVertical): string | null {
+  // Invitations are baseline administration; member detail and HR remain licensed.
+  if (pathname === '/team') return moduleForProcedure('team.inviteMember');
   void _vertical; // Retained for source compatibility; baseline dashboard no longer dispatches.
   const moduleKey =
     ROUTE_MODULES.find(

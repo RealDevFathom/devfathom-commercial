@@ -26,17 +26,32 @@ export const terminalEventSchema = z
 
 export type TerminalEvent = z.infer<typeof terminalEventSchema>;
 
+/** Reject terminal webhooks whose signed timestamp is outside this window. */
+export const TERMINAL_SIGNATURE_WINDOW_MS = 5 * 60 * 1000;
+
+/**
+ * HMAC-SHA256 over `timestamp.source.rawBody`. `timestamp` is Unix seconds from
+ * `x-webhook-timestamp`. A missing secret, a non-canonical timestamp, or a skew
+ * outside ±5 minutes fails closed. Unequal digest lengths return FAILED without
+ * calling `timingSafeEqual`, which throws on a length mismatch.
+ */
 export function verifyTerminalSignature(
   source: string,
   rawBody: string,
-  signature: string | null
+  signature: string | null,
+  timestamp: string | null,
+  now: number = Date.now()
 ): 'VERIFIED' | 'FAILED' {
   const secret = process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
-  if (!secret || !signature) return 'FAILED';
+  if (!secret || !signature || timestamp == null || !/^\d{10}$/.test(timestamp)) return 'FAILED';
+  const issuedMs = Number(timestamp) * 1000;
+  if (Math.abs(now - issuedMs) > TERMINAL_SIGNATURE_WINDOW_MS) return 'FAILED';
   const encoded = signature.startsWith('sha256=') ? signature.slice(7) : signature;
-  if (!/^[a-f\d]{64}$/i.test(encoded)) return 'FAILED';
-  const expected = createHmac('sha256', secret).update(`${source}.${rawBody}`).digest();
+  const expected = createHmac('sha256', secret)
+    .update(`${timestamp}.${source}.${rawBody}`)
+    .digest();
   const actual = Buffer.from(encoded, 'hex');
+  if (expected.length !== actual.length) return 'FAILED';
   return timingSafeEqual(expected, actual) ? 'VERIFIED' : 'FAILED';
 }
 

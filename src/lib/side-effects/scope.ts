@@ -9,6 +9,7 @@ import { AsyncLocalStorage } from 'node:async_hooks';
 export type SideEffectScope = {
   pending: Promise<unknown>[];
   enqueued: boolean;
+  afterTransaction: (() => void)[];
   flush: () => Promise<void>;
   settle: () => Promise<void>;
 };
@@ -27,11 +28,19 @@ export function trackSideEffect(work: Promise<unknown>): void {
   scope.enqueued = true;
 }
 
+/** Defer independent work until the owning transaction releases its connection. */
+export function afterTenantTransaction(work: () => void): void {
+  const scope = storage.getStore();
+  if (scope) scope.afterTransaction.push(work);
+  else work();
+}
+
 export function bindSideEffects<T>(run: (scope: SideEffectScope) => Promise<T>): Promise<T> {
   const pending: Promise<unknown>[] = [];
   const scope: SideEffectScope = {
     pending,
     enqueued: false,
+    afterTransaction: [],
     flush: () => Promise.all(pending).then(() => undefined),
     settle: () => Promise.allSettled(pending).then(() => undefined),
   };

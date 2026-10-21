@@ -7,6 +7,7 @@ vi.mock('@/lib/storage', async (original) => ({
   putUpload: mocks.put,
 }));
 import { StorageUnavailableError } from '@/lib/storage';
+import { PasswordChangeRequiredError } from '@/lib/auth/session-state';
 import { POST } from './route';
 function request(name = 'proof.png', type = 'image/png') {
   const form = new FormData();
@@ -46,6 +47,20 @@ test('configured storage success keeps tenant and attachment contract', async ()
     Buffer.from('proof'),
     'image/png'
   );
+});
+// #164: a non-tRPC /api/* route must honour the temporary-password gate.
+// resolveTenantActor throws PasswordChangeRequiredError for an API request while
+// a reset is outstanding (pinned in tenant-actor.test.ts); the route must turn
+// that into the 403 envelope the client reads, not a generic 500.
+test('a temporary password gates the upload with 403 PASSWORD_CHANGE_REQUIRED', async () => {
+  mocks.actor.mockRejectedValue(new PasswordChangeRequiredError());
+  const response = await POST(request());
+  expect(response.status).toBe(403);
+  expect(await response.json()).toEqual({
+    code: 'PASSWORD_CHANGE_REQUIRED',
+    error: 'PASSWORD_CHANGE_REQUIRED',
+  });
+  expect(mocks.put).not.toHaveBeenCalled();
 });
 test('generic failures are sanitized in response and logging', async () => {
   mocks.put.mockRejectedValue(new Error('fake sensitive credential detail'));

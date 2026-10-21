@@ -115,6 +115,11 @@ const DOMAIN_MESSAGES: Record<string, { message: string; field?: string }> = {
     field: 'stockLocationId',
   },
   NOT_FOUND: { message: 'That record no longer exists. Reload the page.' },
+  CONTROLLED_WITNESS_REQUIRED: {
+    message:
+      'A controlled medicine needs the qualified person named on the receipt to enter their PIN before it can be posted.',
+    field: 'witnessPin',
+  },
   DUPLICATE_SERIAL: {
     message:
       'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.',

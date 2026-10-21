@@ -60,7 +60,7 @@ export function CounterUnitToggle({
   }
 
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       <div
         role="radiogroup"
         aria-label="Sale unit"
@@ -92,9 +92,9 @@ export function CounterUnitToggle({
                     : options[(index - 1 + options.length) % options.length]!;
                 onSelect(next.kind);
               }}
-              className={`flex min-h-11 min-w-0 flex-col items-start gap-0.5 rounded-md border px-3 py-2 text-left transition-colors focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
+              className={`flex min-h-9 min-w-0 flex-col items-start gap-0.5 rounded-md border px-2 py-1 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50 ${
                 active
-                  ? 'border-primary bg-primary text-primary-foreground'
+                  ? 'border-primary bg-surface-sunken text-text-strong'
                   : 'border-border-subtle bg-surface-card text-text-strong hover:bg-surface-sunken'
               }`}
             >
@@ -104,11 +104,7 @@ export function CounterUnitToggle({
                   <span className="ml-1 font-normal opacity-80">({option.levelLabel})</span>
                 ) : null}
               </span>
-              <span
-                className={`font-mono text-[0.625rem] tracking-wide ${
-                  active ? 'opacity-90' : 'text-text-muted'
-                }`}
-              >
+              <span className="font-mono text-[0.625rem] tracking-wide text-text-muted">
                 {option.canonicalUnitsPerSaleUnit} units{chord ? ` · ${chord}` : ''}
               </span>
             </button>
@@ -116,31 +112,51 @@ export function CounterUnitToggle({
         })}
       </div>
 
-      <div className="space-y-1.5">
+      <div className="space-y-1">
         <Label htmlFor={quantityId}>Quantity</Label>
-        <Input
-          id={quantityId}
-          type="number"
-          min={1}
-          step={1}
-          inputMode="numeric"
-          value={quantity}
-          disabled={disabled}
-          aria-describedby={preview ? `${quantityId}-preview` : undefined}
-          aria-invalid={preview ? !preview.sufficient : undefined}
-          onChange={(event) => {
-            const next = Number.parseInt(event.target.value, 10);
-            onQuantityChange(Number.isSafeInteger(next) && next > 0 ? next : 1);
-          }}
-          className="h-11 w-32"
-        />
+        <div className="flex items-center gap-1">
+          <button
+            type="button"
+            aria-label="Decrease quantity"
+            disabled={disabled || quantity <= 1}
+            onClick={() => onQuantityChange(Math.max(1, quantity - 1))}
+            className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            −
+          </button>
+          <Input
+            id={quantityId}
+            type="number"
+            min={1}
+            step={1}
+            inputMode="numeric"
+            value={quantity}
+            disabled={disabled}
+            aria-describedby={preview ? `${quantityId}-preview` : undefined}
+            aria-invalid={preview ? !preview.sufficient : undefined}
+            onChange={(event) => {
+              const next = Number.parseInt(event.target.value, 10);
+              onQuantityChange(Number.isSafeInteger(next) && next > 0 ? next : 1);
+            }}
+            className="h-8 w-16 text-center tabular-nums"
+          />
+          <button
+            type="button"
+            aria-label="Increase quantity"
+            disabled={disabled}
+            onClick={() => onQuantityChange(quantity + 1)}
+            className="inline-flex size-8 items-center justify-center rounded-md border border-border-subtle bg-surface-card text-sm text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 disabled:opacity-50"
+          >
+            +
+          </button>
+        </div>
       </div>
 
       {preview ? (
         <dl
           id={`${quantityId}-preview`}
           aria-live="polite"
-          className="grid grid-cols-2 gap-x-4 gap-y-1 rounded-md bg-surface-sunken p-3 text-sm sm:grid-cols-4"
+          className="grid grid-cols-2 gap-x-3 gap-y-1 text-xs sm:grid-cols-4"
         >
           <div>
             <dt className="font-mono text-[0.625rem] tracking-wide text-text-muted uppercase">

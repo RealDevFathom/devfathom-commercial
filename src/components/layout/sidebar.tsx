@@ -26,6 +26,7 @@ import {
   Monitor,
   BookOpen,
   UtensilsCrossed,
+  FileUp,
   LayoutGrid,
   ReceiptText,
   CookingPot,
@@ -86,6 +87,8 @@ interface NavItem {
    * Hospitality entry that names none never shows.
    */
   hotelCapabilities?: readonly HotelCapability[];
+  /** Shown only when the signed-in user holds one of these capabilities. */
+  pharmacyCapabilities?: readonly string[];
 }
 
 // Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
@@ -245,6 +248,17 @@ export const navigation: NavItem[] = [
     group: 'Restaurant',
   },
   {
+    // R-lane (WHA-210): the OCR menu-import console. Gated to admins because
+    // `menu:import` is held only by templates carrying `*` (the restaurant
+    // Owner), which is the same set the page itself admits.
+    label: 'Menu import',
+    href: '/restaurant/menu-import',
+    icon: FileUp,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-menu',
+  },
+  {
     label: 'Offers',
     href: '/restaurant/promotions',
     icon: Tags,
@@ -386,11 +400,20 @@ export const navigation: NavItem[] = [
     icon: BookLock,
     group: 'Pharmacy',
     module: 'pharmacy-safety',
+    pharmacyCapabilities: ['pharmacy:safety'],
   },
   {
     label: 'Regulatory profile',
     href: '/pharmacy/regulatory',
     icon: ShieldCheck,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  {
+    label: 'Branch assignments',
+    href: '/pharmacy/settings/branches',
+    icon: MapPin,
     adminOnly: true,
     group: 'Pharmacy',
     module: 'pharmacy-core',
@@ -512,7 +535,8 @@ const NO_HOTEL_CAPABILITIES: readonly HotelCapability[] = [];
 export function visibleNavigation(
   entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
   role?: string,
-  hotelCapabilities: readonly HotelCapability[] = NO_HOTEL_CAPABILITIES
+  hotelCapabilities: readonly HotelCapability[] = NO_HOTEL_CAPABILITIES,
+  pharmacyCapabilities: readonly string[] = []
 ) {
   const isAdmin = role === 'ADMIN';
   const isHr = role === 'HR';
@@ -530,6 +554,11 @@ export function visibleNavigation(
         return (item.hotelCapabilities ?? []).some((capability) =>
           hotelCapabilities.includes(capability)
         );
+      if (
+        item.pharmacyCapabilities?.length &&
+        !item.pharmacyCapabilities.some((capability) => pharmacyCapabilities.includes(capability))
+      )
+        return false;
       if (item.hrAccess) return isAdmin || isHr;
       if (item.adminOnly) return isAdmin;
       return true;
@@ -577,7 +606,21 @@ function useVisibleNavigation() {
     current && properties.data
       ? [...new Set(properties.data.properties.flatMap((property) => property.capabilities))]
       : NO_HOTEL_CAPABILITIES;
-  const filteredNav = visibleNavigation(entitlements, session?.user?.role, hotelCapabilities);
+  const safetyModule =
+    entitlements.vertical === 'PHARMACY' &&
+    isModuleGranted('pharmacy-safety', entitlements.enabledModules);
+  const safetyAccess = trpc.pharmacySafety.access.useQuery(undefined, {
+    enabled: safetyModule,
+    retry: false,
+    staleTime: 30_000,
+  });
+  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  const filteredNav = visibleNavigation(
+    entitlements,
+    session?.user?.role,
+    hotelCapabilities,
+    pharmacyCapabilities
+  );
 
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
   const matchingHrefs = filteredNav

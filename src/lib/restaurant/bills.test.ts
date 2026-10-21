@@ -18,7 +18,15 @@ import { beforeAll, describe, expect, it } from 'vitest';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import { deriveOrderTotal, planBills, validateTenderTaxAllocations } from './bills';
+import {
+  deriveOrderTotal,
+  evaluateOrderSettlement,
+  exclusiveTaxFromSettlementSnapshots,
+  exclusiveTaxOutsideOrderTotal,
+  planBills,
+  validateTenderTaxAllocations,
+} from './bills';
+import type { SettlementTaxSnapshot } from './bills';
 import type { FinalizeBillSettlementInput } from './bills';
 
 // ── Pure fixtures ────────────────────────────────────────────────────────────
@@ -138,6 +146,154 @@ describe('deriveOrderTotal (pure, C4)', () => {
       { id: 'c', unitPrice: '9.99', quantity: 1, status: 'VOIDED' }, // excluded
     ]);
     expect(deriveOrderTotal(o.items.filter((i) => i.status !== 'VOIDED')).toString()).toBe('31.25');
+  });
+});
+
+describe('exclusiveTaxOutsideOrderTotal', () => {
+  it('subtracts only exclusive bucket tax, which is what settlement adds to grandTotal', () => {
+    expect(
+      exclusiveTaxOutsideOrderTotal({
+        taxTotal: D('6.50'),
+        buckets: [
+          { priceMode: 'EXCLUSIVE', taxAmount: D('1.50') },
+          { priceMode: 'INCLUSIVE', taxAmount: D('5.00') },
+        ],
+        rulePriceModes: ['EXCLUSIVE', 'INCLUSIVE'],
+      }).toString()
+    ).toBe('1.5');
+  });
+
+  it('uses the snapshot tax when a bucket-less fractional bill is uniformly exclusive', () => {
+    expect(
+      exclusiveTaxOutsideOrderTotal({
+        taxTotal: D('145.50'),
+        buckets: [],
+        rulePriceModes: ['EXCLUSIVE', 'EXCLUSIVE'],
+      }).toString()
+    ).toBe('145.5');
+    expect(
+      exclusiveTaxOutsideOrderTotal({
+        taxTotal: D('10.00'),
+        buckets: [],
+        rulePriceModes: ['INCLUSIVE'],
+      }).toString()
+    ).toBe('0');
+  });
+});
+
+function settlementSnapshot(input: {
+  id: string;
+  tax: string;
+  settledAt: string;
+  reversesSnapshotId?: string;
+  reversals?: readonly { id: string }[];
+}): SettlementTaxSnapshot {
+  return {
+    id: input.id,
+    billId: 'bill-1',
+    settledAt: new Date(input.settledAt),
+    createdAt: new Date(input.settledAt),
+    reversesSnapshotId: input.reversesSnapshotId ?? null,
+    reversals: input.reversals ?? [],
+    taxTotal: D(input.tax),
+    buckets: [{ priceMode: 'EXCLUSIVE', taxAmount: D(input.tax) }],
+    profile: { rules: [{ priceMode: 'EXCLUSIVE' }] },
+  };
+}
+
+describe('exclusiveTaxFromSettlementSnapshots', () => {
+  const reversedAndRefrozen = [
+    settlementSnapshot({
+      id: 'original',
+      tax: '145.50',
+      settledAt: '2026-08-01T12:00:00.000Z',
+      reversals: [{ id: 'reversal' }],
+    }),
+    settlementSnapshot({
+      id: 'reversal',
+      tax: '-145.50',
+      settledAt: '2026-08-01T12:05:00.000Z',
+      reversesSnapshotId: 'original',
+    }),
+    settlementSnapshot({
+      id: 'refreeze',
+      tax: '145.50',
+      settledAt: '2026-08-01T12:10:00.000Z',
+    }),
+  ];
+
+  it('subtracts a reversed and re-frozen exclusive tax once', () => {
+    const totals = exclusiveTaxFromSettlementSnapshots(reversedAndRefrozen);
+    expect(totals.size).toBe(1);
+    expect(totals.get('bill-1')?.toString()).toBe('145.5');
+  });
+
+  it('keeps the order settled when that tax would otherwise be subtracted twice', async () => {
+    const db = {
+      restaurantOrder: {
+        findFirst: async () => ({
+          id: 'order-1',
+          branchId: 'branch-1',
+          status: 'PAYMENT_PENDING',
+          businessDate: new Date('2026-08-01T00:00:00.000Z'),
+          serviceChargePolicyVersion: null,
+          deliveryFulfillment: null,
+          items: [
+            {
+              id: 'item-1',
+              status: 'SERVED',
+              seatNumber: null,
+              name: 'Chicken Karahi',
+              unitPrice: D('970.00'),
+              quantity: 1,
+              modifiers: [],
+            },
+          ],
+        }),
+      },
+      restaurantBill: {
+        findMany: async () => [
+          {
+            id: 'bill-1',
+            status: 'SETTLED',
+            splitKind: 'NONE',
+            grandTotal: D('1115.50'),
+            deliveryFeeTotal: D('0.00'),
+            compTotal: D('0.00'),
+            discountTotal: D('0.00'),
+            taxTotal: D('145.50'),
+            receiptNumber: 1,
+            lines: [{ orderItemId: 'item-1' }],
+            tenders: [{ amount: D('1115.50') }],
+          },
+        ],
+      },
+      restaurantTaxTransactionSnapshot: {
+        findMany: async () => reversedAndRefrozen,
+      },
+    } as unknown as ScopedDb;
+
+    const settlement = await evaluateOrderSettlement(db, 'order-1');
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.accountedTotal.toString()).toBe('970');
+    expect(settlement.accountedTotal.toString()).toBe(settlement.derivedOrderTotal.toString());
+  });
+
+  it('uses only the latest live snapshot when two freezes are both still in force', () => {
+    const totals = exclusiveTaxFromSettlementSnapshots([
+      settlementSnapshot({
+        id: 'older',
+        tax: '10.00',
+        settledAt: '2026-08-01T12:00:00.000Z',
+      }),
+      settlementSnapshot({
+        id: 'newer',
+        tax: '1.50',
+        settledAt: '2026-08-01T12:10:00.000Z',
+      }),
+    ]);
+    expect(totals.get('bill-1')?.toString()).toBe('1.5');
   });
 });
 

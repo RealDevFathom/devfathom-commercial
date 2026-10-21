@@ -173,6 +173,7 @@ export const passwordResetRouter = router({
           data: {
             password: hashed,
             passwordChangedAt: new Date(),
+            mustChangePassword: false,
             tokenVersion: { increment: 1 },
           },
         });

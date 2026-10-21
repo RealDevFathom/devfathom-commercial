@@ -1079,7 +1079,7 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
       });
     });
 
-    const { billId } = await openBill(1);
+    const { billId, orderId } = await openBill(1);
     const db = deps.createTenantDb(orgId);
     const at = new Date('2026-07-15T18:00:00.000Z');
     const partial = await deps.tenders.applyTender(db, {
@@ -1096,6 +1096,13 @@ describeIfDatabase('split tenders + settlement exactness (real DB)', () => {
     });
     expect(partial).toMatchObject({ settled: false });
     expect(final).toMatchObject({ settled: true });
+    // Exclusive tax is frozen into grandTotal. The order summary must still
+    // agree with the tender: settled, and nothing left due.
+    const settlement = await deps.bills.evaluateOrderSettlement(db, orderId);
+    expect(settlement.settled).toBe(true);
+    expect(settlement.blocker).toBeNull();
+    expect(settlement.bills[0]!.remainingDue.toFixed(2)).toBe('0.00');
+    expect(settlement.accountedTotal.toFixed(2)).toBe(settlement.derivedOrderTotal.toFixed(2));
 
     const evidence = await read(async (tx) => ({
       snapshot: await tx.restaurantTaxTransactionSnapshot.findFirstOrThrow({

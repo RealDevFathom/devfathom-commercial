@@ -22,6 +22,7 @@ function receiptDb(line: {
   const batchFind = vi.fn().mockResolvedValue(null);
   const lineUpdate = vi.fn().mockResolvedValue({});
   const db = {
+    medicine: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyGoodsReceipt: {
       findFirst: vi.fn().mockResolvedValue({
         id: 'gr',

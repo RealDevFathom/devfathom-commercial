@@ -4,6 +4,7 @@ import { useId, useRef, useState } from 'react';
 import { useRouter } from 'next/navigation';
 import type { inferRouterInputs } from '@trpc/server';
 
+import { browserUuid } from '@/lib/browser-uuid';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { trpc } from '@/lib/trpc';
@@ -172,7 +173,7 @@ export function BreakPackForm(props: BreakPackFormProps) {
                       inventoryLotId: props.inventoryLotId,
                       stockLocationId: props.stockLocationId,
                       requiredLooseUnits,
-                      idempotencyKey: `inventory-break-pack:${crypto.randomUUID()}`,
+                      idempotencyKey: `inventory-break-pack:${browserUuid()}`,
                     },
                     sealedPacks: props.sealedPacks,
                     looseUnits: props.looseUnits,
