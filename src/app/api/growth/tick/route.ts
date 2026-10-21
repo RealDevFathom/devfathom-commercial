@@ -22,9 +22,13 @@ export async function POST(request: Request) {
     db.organization.findMany({ where: { status: 'ACTIVE' }, select: { id: true } })
   );
   for (const organization of organizations) {
-    if (await isGrowthEnabled(organization.id)) {
-      await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
-      await dispatchCampaignMessages(organization.id);
+    try {
+      if (await isGrowthEnabled(organization.id)) {
+        await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
+        await dispatchCampaignMessages(organization.id);
+      }
+    } catch (error) {
+      console.error('Growth organization tick failed', { organizationId: organization.id, error });
     }
   }
   return NextResponse.json({ ok: true });

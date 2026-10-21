@@ -48,9 +48,16 @@ describe('POS sale voiding', () => {
     ];
     const reversals: Array<Record<string, unknown>> = [];
     let allocationQuery: Record<string, unknown> | undefined;
+    const campaignUpdate = vi.fn(async () => ({}));
     const db = {
+      $queryRaw: vi.fn(async () => []),
+      campaignRecipient: {
+        findFirst: async () => ({ campaignId: 'campaign', campaign: { status: 'exhausted' } }),
+      },
+      campaign: { update: campaignUpdate },
+      pharmacySaleLine: { findMany: async () => [{ discountMinor: 100 }] },
       pharmacySale: {
-        findFirst: async () => ({ id: 'sale-a', status }),
+        findFirst: async () => ({ id: 'sale-a', status, discountCode: 'CODE' }),
         // Keeps this regression runnable against the original implementation:
         // baseline reaches reversal assertions and fails on missing behavior,
         // rather than failing because its former update method is absent.
@@ -89,6 +96,10 @@ describe('POS sale voiding', () => {
 
     await changeSaleStatus(db as never, scope, 'sale-a', 'void', 'Customer cancelled');
 
+    expect(campaignUpdate).toHaveBeenCalledWith({
+      where: { organizationId: 'org-a', id: 'campaign' },
+      data: { spentMinor: { decrement: 100 }, status: 'sent' },
+    });
     expect(allocationQuery).toMatchObject({
       where: {
         organizationId: 'org-a',

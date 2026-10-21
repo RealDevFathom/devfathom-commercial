@@ -1,3 +1,5 @@
+import { TRPCError } from '@trpc/server';
+import { monthlyCampaignSpend } from './spend';
 import { randomBytes } from 'node:crypto';
 import type { Campaign } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -33,10 +35,10 @@ export function validateCode(
     (campaign.codeExpiresAt && campaign.codeExpiresAt <= now) ||
     recipient.redeemedAt ||
     ['redeemed', 'skipped', 'failed'].includes(recipient.status) ||
-    (customerId && customerId !== recipient.customerId) ||
+    customerId !== recipient.customerId ||
     campaign.spentMinor >= campaign.budgetCapMinor
   )
-    throw new Error('Campaign code is unavailable.');
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Campaign code is unavailable.' });
 }
 export async function redeemCode(
   db: ScopedDb,
@@ -49,19 +51,24 @@ export async function redeemCode(
     where: { organizationId, code: input.code.trim().toUpperCase() },
     include: { campaign: true },
   });
-  if (!recipient) throw new Error('Campaign code is unavailable.');
+  if (!recipient)
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Campaign code is unavailable.' });
   let sale = await db.pharmacySale.findFirst({
     where: { organizationId, id: input.saleId, branchId: input.branchId },
     include: { lines: { include: { medicine: true } } },
   });
   if (!sale || sale.status !== 'OPEN' || sale.discountCode || !sale.lines.length)
-    throw new Error('An open sale without a campaign code is required.');
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'An open sale without a campaign code is required.',
+    });
   // Same row lock protocol as addSaleLine: tender/void cannot race the discount.
   const locked = await db.pharmacySale.updateMany({
     where: { organizationId, id: sale.id, status: 'OPEN', discountCode: null },
     data: { status: 'OPEN' },
   });
-  if (locked.count !== 1) throw new Error('Sale changed; retry.');
+  if (locked.count !== 1)
+    throw new TRPCError({ code: 'CONFLICT', message: 'Sale changed; retry.' });
   sale = await db.pharmacySale.findFirstOrThrow({
     where: { organizationId, id: input.saleId, branchId: input.branchId },
     include: { lines: { include: { medicine: true } } },
@@ -69,15 +76,7 @@ export async function redeemCode(
   const campaign = recipient.campaign;
   validateCode(recipient, campaign, sale.customerId, now);
   const settings = await db.growthSettings.findUniqueOrThrow({ where: { organizationId } });
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-  const monthly = await db.campaignRecipient.findMany({
-    where: { organizationId, redeemedAt: { gte: monthStart } },
-    select: { sale: { select: { lines: { select: { discountMinor: true } } } } },
-  });
-  const monthSpent = monthly.reduce(
-    (sum, r) => sum + (r.sale?.lines.reduce((s, l) => s + l.discountMinor, 0) ?? 0),
-    0
-  );
+  const monthSpent = await monthlyCampaignSpend(db, organizationId, now);
   // Meta policy: never promote any medicine, including OTC. Only front-shop products.
   const eligible = sale.lines.filter(
     (l) =>
@@ -87,7 +86,10 @@ export async function redeemCode(
       !l.medicine.controlled
   );
   if (!eligible.length || sale.lines.some((l) => l.discountMinor > 0))
-    throw new Error('Code requires non-medicine items without an existing discount.');
+    throw new TRPCError({
+      code: 'BAD_REQUEST',
+      message: 'Code requires non-medicine items without an existing discount.',
+    });
   const gross = eligible.reduce((s, l) => s + l.unitPriceMinor * l.quantity, 0);
   const discount = discountFor(campaign, gross);
   if (
@@ -95,7 +97,7 @@ export async function redeemCode(
     campaign.spentMinor + discount > campaign.budgetCapMinor ||
     monthSpent + discount > settings.monthlyBudgetMinor
   )
-    throw new Error('Campaign budget exceeded.');
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Campaign budget exceeded.' });
   let remaining = discount;
   for (const [index, line] of eligible.entries()) {
     const lineGross = line.quantity * line.unitPriceMinor;
@@ -122,7 +124,7 @@ export async function redeemCode(
   }
   await db.pharmacySale.update({
     where: { id: sale.id },
-    data: { customerId: recipient.customerId, discountCode: recipient.code },
+    data: { discountCode: recipient.code },
   });
   await db.campaignRecipient.update({
     where: { id: recipient.id },

@@ -1,6 +1,7 @@
+import { monthlyCampaignSpend } from './spend';
 import 'server-only';
 import { z } from 'zod';
-import { assertNonClinicalMarketingBody } from '@/lib/pharmacy/marketing';
+import { assertMarketingCopyAllowed } from './drug-guard';
 import type { Campaign } from '@/generated/prisma/client';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -57,7 +58,6 @@ export function assertCampaignPolicy(
   key: string
 ) {
   const segment = segmentInput.parse(c.segment);
-  assertNonClinicalMarketingBody(body);
   if (c.kind === 'refill') {
     if (
       segment.type !== 'refill_due' ||
@@ -115,6 +115,7 @@ export async function createCampaign(
     where: { organizationId, id: input.templateId },
   });
   assertCampaignPolicy(input, template.body, template.key);
+  if (input.kind !== 'refill') await assertMarketingCopyAllowed(db, organizationId, template.body);
   return db.campaign.create({
     data: { ...input, organizationId, createdBy: actorId, status: 'proposed' },
   });
@@ -132,6 +133,7 @@ export async function transitionCampaign(
     where: {
       organizationId,
       id,
+      ...(action === 'approve' ? { createdBy: { not: actorId } } : {}),
       status: {
         in: action === 'approve' ? ['proposed'] : ['proposed', 'approved', 'scheduled', 'sending'],
       },
@@ -162,74 +164,85 @@ export async function advanceCampaigns(db: ScopedDb, organizationId: string, now
     take: 50,
   });
   for (const campaign of campaigns) {
-    assertCampaignPolicy(campaign, campaign.template.body, campaign.template.key);
-    if (campaign.status === 'approved' && campaign.sendAt.getTime() <= now.getTime() + 15 * 60000) {
-      const candidates = await materializeSegment(db, organizationId, campaign.segment, now);
-      const metrics = await db.customerMetrics.aggregate({
-        where: { organizationId },
-        _sum: { spend90dMinor: true, orders90d: true },
-      });
-      const avg = Math.ceil(
-        (metrics._sum.spend90dMinor ?? 0) / Math.max(1, metrics._sum.orders90d ?? 0)
-      );
-      const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
-      const spend = await db.campaignRecipient.findMany({
-        where: { organizationId, redeemedAt: { gte: monthStart } },
-        select: { sale: { select: { lines: { select: { discountMinor: true } } } } },
-      });
-      const spent = spend.reduce(
-        (s, r) => s + (r.sale?.lines.reduce((v, l) => v + l.discountMinor, 0) ?? 0),
-        0
-      );
-      // Reserve estimates of other active campaigns as well as actual monthly spend.
-      const active = await db.campaign.findMany({
-        where: {
-          organizationId,
-          id: { not: campaign.id },
-          status: { in: ['scheduled', 'sending'] },
-        },
-      });
-      const reserved = active.reduce(
-        (s, c) =>
-          s + Math.max(0, Math.ceil(c.estimatedReach * 0.08 * discountFor(c, avg)) - c.spentMinor),
-        0
-      );
-      const reach = affordableReach(
-        candidates.length,
-        campaign,
-        avg,
-        settings.monthlyBudgetMinor - spent - reserved
-      );
-      const ids = candidates
-        .sort((a, b) => sampleKey(a, campaign.id).localeCompare(sampleKey(b, campaign.id)))
-        .slice(0, reach);
-      if (ids.length)
-        await db.campaignRecipient.createMany({
-          data: ids.map((customerId) => ({
-            organizationId,
-            campaignId: campaign.id,
-            customerId,
-            code: campaign.discountType === 'none' ? null : campaignCode(organization.displayName),
-            status: 'queued',
-          })),
-          skipDuplicates: false,
+    await db.$executeRawUnsafe('SAVEPOINT growth_campaign');
+    try {
+      assertCampaignPolicy(campaign, campaign.template.body, campaign.template.key);
+      if (campaign.kind !== 'refill')
+        await assertMarketingCopyAllowed(db, organizationId, campaign.template.body);
+      if (
+        campaign.status === 'approved' &&
+        campaign.sendAt.getTime() <= now.getTime() + 15 * 60000
+      ) {
+        const candidates = await materializeSegment(db, organizationId, campaign.segment, now);
+        const metrics = await db.customerMetrics.aggregate({
+          where: { organizationId },
+          _sum: { spend90dMinor: true, orders90d: true },
         });
+        const avg = Math.ceil(
+          (metrics._sum.spend90dMinor ?? 0) / Math.max(1, metrics._sum.orders90d ?? 0)
+        );
+        const spent = await monthlyCampaignSpend(db, organizationId, now);
+        // Reserve estimates of other active campaigns as well as actual monthly spend.
+        const active = await db.campaign.findMany({
+          where: {
+            organizationId,
+            id: { not: campaign.id },
+            status: { in: ['scheduled', 'sending'] },
+          },
+        });
+        const reserved = active.reduce(
+          (s, c) =>
+            s +
+            Math.max(0, Math.ceil(c.estimatedReach * 0.08 * discountFor(c, avg)) - c.spentMinor),
+          0
+        );
+        const reach = affordableReach(
+          candidates.length,
+          campaign,
+          avg,
+          settings.monthlyBudgetMinor - spent - reserved
+        );
+        const ids = candidates
+          .sort((a, b) => sampleKey(a, campaign.id).localeCompare(sampleKey(b, campaign.id)))
+          .slice(0, reach);
+        if (ids.length)
+          await db.campaignRecipient.createMany({
+            data: ids.map((customerId) => ({
+              organizationId,
+              campaignId: campaign.id,
+              customerId,
+              code:
+                campaign.discountType === 'none' ? null : campaignCode(organization.displayName),
+              status: 'queued',
+            })),
+            skipDuplicates: false,
+          });
+        await db.campaign.update({
+          where: { id: campaign.id },
+          data: {
+            status: ids.length ? 'scheduled' : 'sent',
+            estimatedReach: ids.length,
+            rationale: `${campaign.rationale ?? ''}${reach < candidates.length ? `\nBudget trimmed reach from ${candidates.length} to ${reach}.` : ''}`,
+          },
+        });
+      } else if (campaign.status === 'scheduled' && campaign.sendAt <= now) {
+        await db.campaign.update({ where: { id: campaign.id }, data: { status: 'sending' } });
+      } else if (campaign.status === 'sending') {
+        const pending = await db.campaignRecipient.count({
+          where: { organizationId, campaignId: campaign.id, status: 'queued' },
+        });
+        if (!pending)
+          await db.campaign.update({ where: { id: campaign.id }, data: { status: 'sent' } });
+      }
+      await db.$executeRawUnsafe('RELEASE SAVEPOINT growth_campaign');
+    } catch (error) {
+      await db.$executeRawUnsafe('ROLLBACK TO SAVEPOINT growth_campaign');
+      await db.$executeRawUnsafe('RELEASE SAVEPOINT growth_campaign');
       await db.campaign.update({
-        where: { id: campaign.id },
-        data: {
-          status: ids.length ? 'scheduled' : 'sent',
-          estimatedReach: ids.length,
-          rationale: `${campaign.rationale ?? ''}${reach < candidates.length ? `\nBudget trimmed reach from ${candidates.length} to ${reach}.` : ''}`,
-        },
+        where: { organizationId, id: campaign.id },
+        data: { status: 'blocked' },
       });
-    } else if (campaign.status === 'scheduled' && campaign.sendAt <= now) {
-      await db.campaign.update({ where: { id: campaign.id }, data: { status: 'sending' } });
-    } else if (campaign.status === 'sending') {
-      const pending = await db.campaignRecipient.count({
-        where: { organizationId, campaignId: campaign.id, status: 'queued' },
-      });
-      if (!pending)
-        await db.campaign.update({ where: { id: campaign.id }, data: { status: 'sent' } });
+      console.error('Campaign tick failed', { organizationId, campaignId: campaign.id, error });
     }
   }
 }
@@ -308,12 +321,14 @@ export async function dispatchCampaignMessage(
       business: org.displayName,
       discount:
         c.discountType === 'percent'
-          ? `${c.discountValue}% on non-medicine products only`
-          : `${c.discountValue ?? 0} minor units on non-medicine products only`,
+          ? `${c.discountValue}% on front-shop products only`
+          : `Rs ${((c.discountValue ?? 0) / 100).toFixed(2)} on front-shop products only`,
       code: recipient.code ?? '',
       product: 'item',
       expires: c.codeExpiresAt?.toISOString().slice(0, 10) ?? '',
     });
+    assertCampaignPolicy(c, body, c.template.key);
+    if (c.kind !== 'refill') await assertMarketingCopyAllowed(db, organizationId, body);
     const entry = {
       organizationId,
       kind: c.kind === 'refill' ? ('REFILL_REMINDER' as const) : ('GROWTH_CAMPAIGN' as const),
@@ -333,7 +348,7 @@ export async function dispatchCampaignMessage(
     // A claimed recipient is terminal for scheduling; UNKNOWN stays visible in the log.
     await db.campaignRecipient.update({
       where: { id: recipient.id },
-      data: { status: 'failed', error: 'PROVIDER_OUTCOME_PENDING' },
+      data: { status: 'unknown', error: 'PROVIDER_OUTCOME_PENDING' },
     });
     return { entry, logId, recipientId: recipient.id, to: customer.whatsappE164, body };
   });
@@ -347,7 +362,7 @@ export async function dispatchCampaignMessage(
       data:
         outcome === 'SENT'
           ? { status: 'sent', sentAt: now, error: null }
-          : { status: 'failed', error: outcome },
+          : { status: outcome === 'UNKNOWN' ? 'unknown' : 'failed', error: outcome },
     })
   );
   return outcome;

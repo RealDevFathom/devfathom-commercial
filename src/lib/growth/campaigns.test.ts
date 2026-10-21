@@ -14,10 +14,12 @@ import {
   affordableReach,
   assertCampaignPolicy,
   campaignInput,
+  createCampaign,
   dispatchCampaignMessage,
   renderCampaign,
   transitionCampaign,
 } from './campaigns';
+import { assertMarketingCopyAllowed } from './drug-guard';
 import { type WhatsAppProvider } from '@/lib/pharmacy/whatsapp/provider';
 
 const now = new Date('2026-10-21T08:00:00Z');
@@ -116,6 +118,57 @@ describe('G5 segments', () => {
 });
 
 describe('G5 policy, rendering and budgets', () => {
+  it.each(['دوائی', 'dawai', 'Panadol', 'x a n a x'])(
+    'rejects prohibited create copy %s',
+    async (word) => {
+      const db = {
+        medicine: { findMany: vi.fn(async () => []) },
+        messageTemplate: {
+          findFirstOrThrow: vi.fn(async () => ({ body: `Offer ${word}. STOP`, key: 'generic' })),
+        },
+        campaign: { create: vi.fn() },
+      };
+      const input = {
+        kind: 'manual' as const,
+        name: 'Offer',
+        segment: { type: 'all' },
+        sendAt: now,
+        templateId: 'template-1',
+        discountType: 'none' as const,
+        discountValue: 0,
+        budgetCapMinor: 100,
+      };
+      await expect(
+        createCampaign(db as unknown as ScopedDb, 'org-1', 'maker', input)
+      ).rejects.toThrow();
+      expect(db.messageTemplate.findFirstOrThrow).toHaveBeenCalled();
+      expect(db.campaign.create).not.toHaveBeenCalled();
+    }
+  );
+
+  it('checks rendered products and tenant-specific drug names, failing closed on lookup errors', async () => {
+    const db = {
+      medicine: {
+        findMany: vi.fn(async () => [
+          { productName: 'LocalBrand', brandName: null, aliases: [], strengths: [] },
+        ]),
+      },
+    };
+    for (const product of ['Xanax', 'LocalBrand']) {
+      await expect(
+        assertMarketingCopyAllowed(
+          db,
+          'org-1',
+          renderCampaign('Offer {{product}} STOP', { product })
+        )
+      ).rejects.toThrow();
+    }
+    expect(db.medicine.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org-1' }) })
+    );
+    db.medicine.findMany.mockRejectedValue(new Error('lookup unavailable'));
+    await expect(assertMarketingCopyAllowed(db, 'org-1', 'Hello STOP')).rejects.toThrow();
+  });
   it('shrinks fixed and percent reach against campaign and monthly caps', () => {
     expect(affordableReach(100, campaign(), 10000, 80)).toBe(10);
     expect(
@@ -180,6 +233,8 @@ function fixture(patch = {}) {
     minSecondsBetweenMsgs: 4,
   };
   const db = {
+    $executeRawUnsafe: vi.fn(async () => 0),
+    medicine: { findMany: vi.fn(async () => []) },
     $queryRaw: vi.fn(async () => []),
     organization: {
       findUniqueOrThrow: async () => ({ displayName: 'Demo Pharmacy', timezone: 'Asia/Karachi' }),
@@ -193,19 +248,26 @@ function fixture(patch = {}) {
     },
     campaign: {
       findMany: async ({ where }: { where: { id?: unknown } }) => (where.id ? [] : [{ ...c }]),
-      update: vi.fn(async ({ data }: { data: Record<string, unknown> }) => {
-        Object.assign(c, data);
-        return c;
-      }),
+      update: vi.fn(
+        async ({ where, data }: { where: { id: string }; data: Record<string, unknown> }) => {
+          if (where.id !== c.id) return c;
+          Object.assign(c, data);
+          return c;
+        }
+      ),
       updateMany: vi.fn(
         async ({
           where,
           data,
         }: {
-          where: { organizationId: string; status: { in: string[] } };
+          where: { organizationId: string; status: { in: string[] }; createdBy?: { not: string } };
           data: object;
         }) => {
-          if (where.organizationId !== c.organizationId || !where.status.in.includes(c.status))
+          if (
+            where.organizationId !== c.organizationId ||
+            where.createdBy?.not === c.createdBy ||
+            !where.status.in.includes(c.status)
+          )
             return { count: 0 };
           Object.assign(c, data);
           return { count: 1 };
@@ -259,6 +321,42 @@ function provider() {
 }
 beforeEach(() => vi.clearAllMocks());
 describe('G5 lifecycle and existing outbox', () => {
+  it('rejects creator approval while allowing another actor', async () => {
+    const f = fixture({ status: 'proposed' });
+    await expect(transitionCampaign(f.db, 'org-1', 'owner-1', f.c.id, 'approve')).rejects.toThrow();
+    expect(f.c.status).toBe('proposed');
+    await transitionCampaign(f.db, 'org-1', 'reviewer', f.c.id, 'approve');
+    expect(f.c.approvedBy).toBe('reviewer');
+  });
+  it('logs a broken campaign and advances the following campaign', async () => {
+    const f = fixture();
+    const log = vi.spyOn(console, 'error').mockImplementation(() => {});
+    f.raw.campaign.findMany = async ({ where }) =>
+      where.id
+        ? []
+        : [{ ...f.c, id: 'bad', template: { ...f.c.template, body: 'Rx sale STOP' } }, f.c];
+    await advanceCampaigns(f.db, 'org-1', now);
+    expect(f.c.status).toBe('scheduled');
+    expect(log).toHaveBeenCalledWith(
+      'Campaign tick failed',
+      expect.objectContaining({ campaignId: 'bad' })
+    );
+    expect(f.raw.$executeRawUnsafe).toHaveBeenCalledWith('ROLLBACK TO SAVEPOINT growth_campaign');
+    log.mockRestore();
+  });
+  it.each(['Xanax', 'زاناکس', 'Xаnаx', 'x a n a x'])(
+    'blocks rendered customer drug text %s before claiming or sending',
+    async (name) => {
+      const f = fixture();
+      const p = provider();
+      await advanceCampaigns(f.db, 'org-1', now);
+      await advanceCampaigns(f.db, 'org-1', now);
+      f.customers[0].displayName = name;
+      await expect(dispatchCampaignMessage('org-1', now, p)).rejects.toThrow();
+      expect(p.sendText).not.toHaveBeenCalled();
+      expect(f.logs).toHaveLength(0);
+    }
+  );
   it('moves three recipients approved → scheduled → sending → sent in three ticks', async () => {
     const f = fixture();
     const p = provider();
@@ -314,13 +412,13 @@ describe('G5 lifecycle and existing outbox', () => {
     await advanceCampaigns(f.db, 'org-1', now);
     await advanceCampaigns(f.db, 'org-1', now);
     expect(await dispatchCampaignMessage('org-1', now, p)).toBe('UNKNOWN');
-    expect(f.recipients[0].status).toBe('failed');
+    expect(f.recipients[0].status).toBe('unknown');
     expect(f.logs[0].status).toBe('PENDING');
   });
 });
 
 describe('G5 POS redemption', () => {
-  it('redeems once, attaches customer, reuses line discount and exhausts budget', async () => {
+  it('rejects walk-ins, then redeems once for the matching customer and exhausts budget', async () => {
     const c = campaign({ status: 'sent', budgetCapMinor: 100 });
     const r = {
       id: 'recipient',
@@ -352,6 +450,7 @@ describe('G5 POS redemption', () => {
       ],
     };
     const db = {
+      organization: { findUniqueOrThrow: async () => ({ timezone: 'Asia/Karachi' }) },
       $queryRaw: vi.fn(),
       growthSettings: { findUniqueOrThrow: async () => ({ monthlyBudgetMinor: 1000 }) },
       campaignRecipient: {
@@ -386,6 +485,17 @@ describe('G5 POS redemption', () => {
         now
       )
     ).rejects.toThrow();
+    await expect(
+      redeemCode(
+        db as unknown as ScopedDb,
+        'org-1',
+        { code: r.code, saleId: 'sale', branchId: 'branch' },
+        now
+      )
+    ).rejects.toThrow('unavailable');
+    expect(sale.customerId).toBeNull();
+    expect(db.pharmacySaleLine.update).not.toHaveBeenCalled();
+    sale.customerId = 'a';
     const result = await redeemCode(
       db as unknown as ScopedDb,
       'org-1',
@@ -414,6 +524,7 @@ describe('G5 POS redemption', () => {
     const r = { redeemedAt: null, status: 'sent', customerId: 'a' };
     const c = campaign({ status: 'sent' });
     expect(() => validateCode(r, c, 'a', now)).not.toThrow();
+    expect(() => validateCode({ ...r, status: 'unknown' }, c, 'a', now)).not.toThrow();
     for (const bad of [
       { ...c, status: 'cancelled' },
       { ...c, status: 'exhausted' },
