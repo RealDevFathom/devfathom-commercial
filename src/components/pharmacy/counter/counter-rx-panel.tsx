@@ -175,7 +175,7 @@ function CounterRxPhotoCapture({
         custodyState: String(data.get('custodyState')) as 'NOT_HELD' | 'HELD_AT_PHARMACY',
         validFrom: new Date(isoDay()),
         validUntil: new Date(String(data.get('validUntil'))),
-        authorizedRepeats: 0,
+        authorizedRepeats: Number(data.get('authorizedRepeats')),
         lines: [
           {
             lineNumber: 1,
@@ -419,6 +419,23 @@ function CounterRxPhotoCapture({
                 />
               </div>
               <div className="space-y-1.5">
+                <Label htmlFor="counter-rx-repeats">Authorized repeats</Label>
+                <Input
+                  id="counter-rx-repeats"
+                  name="authorizedRepeats"
+                  type="number"
+                  min={0}
+                  step={1}
+                  required
+                  defaultValue={0}
+                  aria-describedby="counter-rx-repeats-hint"
+                  className="h-11"
+                />
+                <p id="counter-rx-repeats-hint" className="text-xs text-text-muted">
+                  Number of refills beyond the first fill. Total authorised = units × (repeats + 1).
+                </p>
+              </div>
+              <div className="space-y-1.5">
                 <Label htmlFor="counter-rx-custody">Original custody</Label>
                 <select
                   id="counter-rx-custody"
@@ -525,6 +542,9 @@ export type CounterRxPanelProps = {
   onSelectPatient: (patientId: string) => void;
   onClearPatient: () => void;
   onCapturePrescription?: (context: { patientId: string }) => void;
+  /** #235: sign (pharmacist-verify) a cart Rx line without leaving the counter. */
+  onSignPrescriptionLine?: (prescriptionLineId: string) => void;
+  signing?: boolean;
 };
 
 /**
@@ -560,6 +580,8 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
       onSelectPatient,
       onClearPatient,
       onCapturePrescription,
+      onSignPrescriptionLine,
+      signing = false,
     },
     ref
   ) {
@@ -938,6 +960,18 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                                 }
                               />
                             )}
+                            {!line.verified && onSignPrescriptionLine ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                disabled={disabled || signing || !prescription.inDate}
+                                onClick={() =>
+                                  onSignPrescriptionLine(line.prescriptionLineId)
+                                }
+                              >
+                                {signing ? 'Signing…' : 'Sign as pharmacist'}
+                              </Button>
+                            ) : null}
                           </li>
                         ))}
                       </ul>

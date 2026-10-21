@@ -66,7 +66,11 @@ import {
 import { COUNTER_ERROR_MESSAGES, counterErrorMessage } from '@/lib/pharmacy/counter-messages';
 import { PaymentSandboxPanel } from './payment-sandbox-panel';
 import { refreshCounterQueries } from '@/lib/pharmacy/counter-query-refresh';
-import { previewSaleLine, type SaleUnitKind } from '@/lib/pharmacy/counter-pricing';
+import {
+  previewSaleLine,
+  type SaleUnitKind,
+  type SaleUnitOption,
+} from '@/lib/pharmacy/counter-pricing';
 import { formatMinor, type CounterReceiptLocale } from '@/lib/pharmacy/counter-receipt';
 import {
   buildCounterBrowserReceipt,
@@ -493,6 +497,7 @@ function ScopedPharmacyCounterConsole({
 
   const createSale = trpc.pharmacySales.create.useMutation();
   const addLine = trpc.pharmacySales.addLine.useMutation();
+  const signRxLine = trpc.pharmacySales.signRxLine.useMutation();
   const transition = trpc.pharmacySales.transition.useMutation();
   const tender = trpc.pharmacySales.tender.useMutation({ retry: false });
   const openDrawer = trpc.pharmacySales.openDrawer.useMutation();
@@ -619,9 +624,14 @@ function ScopedPharmacyCounterConsole({
               id: prescriptionLine.entry.prescriptionLineId,
               verified: prescriptionLine.entry.verified,
               expiresAt: new Date(prescriptionLine.prescription.validUntil),
+              // The panel's remaining already subtracts the fill THIS cart line
+              // wrote when it was gated in, so add that line's units back to
+              // judge whether the line itself fits. Applies to every regulated
+              // line backed by a prescription (#235: a fill equal to the full
+              // authorization must not read as over-quantity), not just signed
+              // controlled lines — signing is a separate safety block.
               remainingAuthorizedUnits:
-                prescriptionLine.entry.remainingAuthorizedUnits +
-                (line.controlled && prescriptionLine.entry.verified ? line.canonicalUnits : 0),
+                prescriptionLine.entry.remainingAuthorizedUnits + line.canonicalUnits,
             }
           : null,
         requestedCanonicalUnits: line.canonicalUnits,
@@ -827,9 +837,59 @@ function ScopedPharmacyCounterConsole({
   const stageRow = useCallback((row: CounterSearchRow) => {
     setActiveRow(row);
     setQuantity(1);
-    setSaleUnit(row.saleUnits[0]?.kind ?? null);
+    // #241: a regulated line defaults to the SMALLEST sale unit, so one add
+    // never silently consumes a whole pack's worth of a prescription. OTC lines
+    // keep the first (largest) sale unit the search returned.
+    const regulated =
+      row.restriction.rx || row.restriction.restricted || row.restriction.controlled;
+    const smallest = row.saleUnits.reduce<SaleUnitOption | null>(
+      (best, option) =>
+        !best || option.canonicalUnitsPerSaleUnit < best.canonicalUnitsPerSaleUnit ? option : best,
+      null
+    );
+    setSaleUnit((regulated ? smallest : row.saleUnits[0])?.kind ?? null);
     setLotOverride(null);
   }, []);
+
+  // #235: a pharmacist signs the Rx line that is already in the cart. A cashier
+  // actor must have entered an independent pharmacist PIN (reusing the Rx
+  // authorization PIN field); a pharmacist actor signs with their own session.
+  const signRxPrescriptionLine = useCallback(
+    async (prescriptionLineId: string) => {
+      const entry = patient?.prescriptions
+        .flatMap((prescription) => prescription.lines)
+        .find((rxLine) => rxLine.prescriptionLineId === prescriptionLineId);
+      const cartLine = entry
+        ? (cart?.lines ?? []).find((cartRow) => cartRow.medicineId === entry.medicineId)
+        : undefined;
+      if (!branchId || !cartLine) {
+        setNotice({
+          tone: 'warning',
+          message: 'Add this prescription line to the cart before a pharmacist signs it.',
+        });
+        return;
+      }
+      try {
+        const result = await signRxLine.mutateAsync({
+          branchId,
+          saleLineId: cartLine.saleLineId,
+          ...(rxPermission.data === true
+            ? {}
+            : { staffProfileId: rxAuth.staffProfileId, pin: rxAuth.pin }),
+        });
+        if (result && 'blocked' in result && typeof result.blocked === 'string') {
+          setNotice({ tone: 'warning', message: result.blocked });
+          return;
+        }
+        setRxAuth((current) => ({ ...current, pin: '' }));
+        await utils.pharmacyPrescriptions.counterPatientPanel.invalidate();
+        setNotice({ tone: 'success', message: 'Prescription signed by the pharmacist.' });
+      } catch (error) {
+        setNotice({ tone: 'danger', message: messageFrom(error) });
+      }
+    },
+    [branchId, cart, patient, rxAuth, rxPermission.data, signRxLine, utils]
+  );
 
   const ensureSale = useCallback(async () => {
     if (saleId) return saleId;
@@ -2250,6 +2310,8 @@ function ScopedPharmacyCounterConsole({
               }}
               alerts={alerts}
               patient={patient}
+              onSignPrescriptionLine={signRxPrescriptionLine}
+              signing={signRxLine.isPending}
               candidates={patientsQuery.data?.patients ?? []}
               query={patientQuery}
               state={

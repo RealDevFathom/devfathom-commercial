@@ -95,6 +95,7 @@ vi.mock('@/lib/trpc', () => {
         'drawerStatus',
         'create',
         'addLine',
+        'signRxLine',
         'transition',
         'tender',
         'openDrawer',
