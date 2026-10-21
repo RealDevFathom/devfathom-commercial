@@ -34,7 +34,7 @@ export function CounterKeymapLegend({
 }: CounterKeymapLegendProps) {
   const overridden = new Set(keymap.overriddenActions);
   return (
-    <div className="space-y-4">
+    <div className="space-y-2">
       <div className="space-y-1.5">
         <Label htmlFor="counter-keymap-preset">Keymap</Label>
         <select
@@ -68,10 +68,10 @@ export function CounterKeymapLegend({
         ) : null}
       </div>
 
-      <dl className="grid grid-cols-1 gap-x-4 gap-y-1 sm:grid-cols-2">
+      <dl className="grid grid-cols-1 gap-x-3 gap-y-0.5 sm:grid-cols-2">
         {COUNTER_ACTIONS.map((action) => (
-          <div key={action} className="flex items-center justify-between gap-3 py-0.5">
-            <dt className="min-w-0 truncate text-sm text-text-body">
+          <div key={action} className="flex items-center justify-between gap-2 py-0.5">
+            <dt className="min-w-0 truncate text-xs text-text-body">
               {COUNTER_ACTION_LABELS[action]}
             </dt>
             <dd className="flex shrink-0 items-center gap-1.5">

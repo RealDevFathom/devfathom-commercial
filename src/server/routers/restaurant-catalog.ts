@@ -3,6 +3,8 @@ import { TRPCError } from '@trpc/server';
 
 import { router, capabilityProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
+import { assertInOrganization, workspaceId } from '../org-refs';
+import { catalogOrganizationId } from '@/lib/restaurant/catalog-scope';
 import { CatalogError } from '@/lib/restaurant/catalog';
 import { resolveEntitlementLimit, RESTAURANT_BRANDS_LIMIT } from '@/lib/entitlement-limits';
 import {
@@ -86,7 +88,8 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  *
  * Read procedures gate on `menu:read`; mutations gate on `menu:write`. Both
  * require the `restaurant-menu` module (module-catalog.ts). Tenant scoping is
- * by the RLS-forced `organizationId` default on every row (C1); no input field
+ * by explicit organization predicates from the trusted session scope, backed by
+ * FORCE RLS (C1); no input field
  * accepts a `branchId` on any canonical mutation (C2 shadow-copy guard — see
  * named checks in the issue description).
  *
@@ -95,7 +98,40 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  */
 
 const readProcedure = capabilityProcedure('menu:read');
-const writeProcedure = capabilityProcedure('menu:write');
+const writeProcedure = capabilityProcedure('menu:write').use(async ({ ctx, getRawInput, next }) => {
+  const organizationId = workspaceId(ctx);
+  const raw = await getRawInput();
+  if (raw && typeof raw === 'object') {
+    // FK existence alone does not prove tenant ownership, even with FORCE RLS.
+    const refs = {
+      parentId: ctx.db.restaurantCategory,
+      categoryId: ctx.db.restaurantCategory,
+      productId: ctx.db.restaurantProduct,
+      comboProductId: ctx.db.restaurantProduct,
+      variantId: ctx.db.restaurantProductVariant,
+      modifierGroupId: ctx.db.restaurantModifierGroup,
+      componentGroupId: ctx.db.restaurantComboComponentGroup,
+      allergenId: ctx.db.restaurantAllergen,
+      ingredientId: ctx.db.restaurantIngredient,
+      substituteIngredientId: ctx.db.restaurantIngredient,
+      fromUnitId: ctx.db.restaurantUnit,
+      toUnitId: ctx.db.restaurantUnit,
+      baseUnitId: ctx.db.restaurantUnit,
+      unitId: ctx.db.restaurantUnit,
+      yieldUnitId: ctx.db.restaurantUnit,
+      recipeId: ctx.db.restaurantRecipe,
+      subRecipeId: ctx.db.restaurantRecipe,
+      recipeVersionId: ctx.db.restaurantRecipeVersion,
+      versionId: ctx.db.restaurantRecipeVersion,
+      recipeLineId: ctx.db.restaurantRecipeLine,
+    };
+    for (const [key, delegate] of Object.entries(refs)) {
+      const id = (raw as Record<string, unknown>)[key];
+      if (typeof id === 'string') await assertInOrganization(delegate, organizationId, [id]);
+    }
+  }
+  return next();
+});
 
 /** Translate catalog/recipe domain errors to tRPC status. Rethrows unknown errors. */
 function mapCatalogError(err: unknown): never {
@@ -158,16 +194,21 @@ function serializeRecipeCost(cost: RecipeCostResult) {
 }
 
 async function recipePriceComparisons(db: ScopedDb, cost: RecipeCostResult) {
+  const organizationId = await catalogOrganizationId(db);
   const recipe = await db.restaurantRecipe.findUnique({
-    where: { id: cost.recipeId },
+    where: { organizationId, id: cost.recipeId },
     select: { productId: true, variantId: true },
   });
   if (!recipe) return [];
 
   const [defaultList, publications] = await Promise.all([
-    db.restaurantPriceList.findFirst({ where: { isDefault: true }, select: { id: true } }),
+    db.restaurantPriceList.findFirst({
+      where: { organizationId, isDefault: true },
+      select: { id: true },
+    }),
     db.restaurantBranchMenuPublication.findMany({
       where: {
+        organizationId,
         status: 'PUBLISHED',
         menu: {
           sections: {
@@ -1030,8 +1071,8 @@ export const restaurantCatalogRouter = router({
     .query(async ({ ctx, input }) => {
       try {
         const selector = input.versionId
-          ? { organizationId: ctx.entitlements.organizationId, recipeVersionId: input.versionId }
-          : { organizationId: ctx.entitlements.organizationId, recipeId: input.recipeId };
+          ? { organizationId: workspaceId(ctx), recipeVersionId: input.versionId }
+          : { organizationId: workspaceId(ctx), recipeId: input.recipeId };
         const cost = await computeRecipeCost(selector);
         return {
           ...serializeRecipeCost(cost),
@@ -1050,7 +1091,7 @@ export const restaurantCatalogRouter = router({
           input?.recipeIds ??
           (
             await ctx.db.restaurantRecipe.findMany({
-              where: { organizationId: ctx.entitlements.organizationId },
+              where: { organizationId: workspaceId(ctx) },
               select: { id: true },
               orderBy: { createdAt: 'asc' },
             })
@@ -1059,7 +1100,7 @@ export const restaurantCatalogRouter = router({
           recipeIds.map(async (recipeId) => {
             try {
               const cost = await computeRecipeCost({
-                organizationId: ctx.entitlements.organizationId,
+                organizationId: workspaceId(ctx),
                 recipeId,
               });
               if (cost.missing.length > 0 || cost.costPerPortion === null) {
@@ -1089,12 +1130,12 @@ export const restaurantCatalogRouter = router({
 
   listRecipes: readProcedure.query(async ({ ctx }) => {
     const recipes = await ctx.db.restaurantRecipe.findMany({
-      where: { organizationId: ctx.entitlements.organizationId },
+      where: { organizationId: workspaceId(ctx) },
       select: {
         id: true,
         name: true,
         versions: {
-          where: { status: 'ACTIVE' },
+          where: { organizationId: workspaceId(ctx), status: 'ACTIVE' },
           select: { id: true, portionCount: true },
           take: 1,
         },

@@ -213,8 +213,8 @@ describe('demo device session recovery', () => {
     const result = await prepareDemoDeviceSession(db as never, user as never, 'POS', NOW);
 
     expect(mocks.capability.mock.calls).toEqual([
-      [db, 'staff_1', 'terminal:operate', NOW],
-      [db, 'staff_1', 'pos:operate', NOW],
+      [db, 'staff_1', 'terminal:operate', NOW, 'branch_1'],
+      [db, 'staff_1', 'pos:operate', NOW, 'branch_1'],
     ]);
     expect(mocks.lock.mock.calls[0]?.[1]).toBe(
       'demo-device-session:org_demo_restaurant_seat_1:manager:POS'
@@ -394,7 +394,13 @@ describe('demo device session recovery', () => {
 
     await prepareDemoDeviceSession(db as never, user as never, 'KDS', NOW);
 
-    expect(mocks.capability).toHaveBeenCalledWith(db, 'staff_1', 'kitchen:operate', NOW);
+    expect(mocks.capability).toHaveBeenCalledWith(
+      db,
+      'staff_1',
+      'kitchen:operate',
+      NOW,
+      'branch_1'
+    );
     expect(mocks.lock.mock.calls[0]?.[1]).toBe(
       'demo-device-session:org_demo_restaurant_seat_1:manager:KDS'
     );

@@ -659,7 +659,12 @@ export const teamRouter = router({
       // password change.)
       await ctx.db.user.update({
         where: { id: ctx.session.user.id },
-        data: { password: hashed, passwordChangedAt: new Date(), tokenVersion: { increment: 1 } },
+        data: {
+          password: hashed,
+          passwordChangedAt: new Date(),
+          mustChangePassword: false,
+          tokenVersion: { increment: 1 },
+        },
       });
       return { success: true };
     }),
@@ -812,7 +817,12 @@ export const teamRouter = router({
       // AUTH-01: an admin reset must also revoke the member's existing sessions.
       const user = await ctx.db.user.update({
         where: { id: input.id },
-        data: { password: hashed, passwordChangedAt: new Date(), tokenVersion: { increment: 1 } },
+        data: {
+          password: hashed,
+          passwordChangedAt: null,
+          mustChangePassword: true,
+          tokenVersion: { increment: 1 },
+        },
         select: { name: true },
       });
       // The new password is redacted by the audit layer; record only that a

@@ -9,7 +9,10 @@ import { Prisma } from '@/generated/prisma/client';
 import { readJson } from '@/lib/api-json';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import { loadBranchCommercialTerms } from './branch-commercial-terms';
+import { reviveCommercialTerms } from './commercial-terms';
 import { CoAuthorizationError } from './co-authorization';
+import { quoteDraftCheckBreakdown } from './draft-check-total';
 import { operatorHasCapability } from './checkout-routes';
 import { KitchenTicketError } from './kitchen-tickets';
 import { DELIVERY_CHANNEL_UNAVAILABLE_MESSAGE, orderChannelSchema } from './order-channels';
@@ -226,12 +229,13 @@ export async function requireOrderTakingCapability(
   requireCustomerRead = false
 ): Promise<NextResponse | null> {
   const now = new Date();
-  if (!(await operatorHasCapability(ctx.db, staffProfileId, 'orders:take', now))) {
+  const branchId = ctx.device.branchId;
+  if (!(await operatorHasCapability(ctx.db, staffProfileId, 'orders:take', now, branchId))) {
     return json({ error: 'This operator lacks the "orders:take" capability.' }, 403);
   }
   if (
     requireCustomerRead &&
-    !(await operatorHasCapability(ctx.db, staffProfileId, 'customers:read', now))
+    !(await operatorHasCapability(ctx.db, staffProfileId, 'customers:read', now, branchId))
   ) {
     return json({ error: 'This operator lacks the "customers:read" capability.' }, 403);
   }
@@ -534,6 +538,22 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
   if (!order) return null;
 
   const activeItems = order.items.filter((i) => i.status !== 'VOIDED');
+  const at = new Date();
+  const terms = reviveCommercialTerms(await loadBranchCommercialTerms(db, order.branchId, at));
+  const quoted = quoteDraftCheckBreakdown({
+    at,
+    lines: activeItems.map((item) => ({
+      id: item.id,
+      unitPrice: item.unitPrice.toString(),
+      quantity: item.quantity,
+      modifierDeltas: item.modifiers.map((modifier) => modifier.priceDelta.toString()),
+    })),
+    serviceChargeRate: order.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0',
+    deliveryFee: (
+      order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)
+    ).toString(),
+    ...(terms.profiles.length > 0 ? { profiles: terms.profiles, rules: terms.rules } : {}),
+  });
   return {
     id: order.id,
     branchId: order.branchId,
@@ -583,8 +603,8 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     })),
     totals: {
       subtotal: money(deriveSubtotal(activeItems)),
-      tax: money(new Prisma.Decimal(0)),
-      serviceCharge: money(new Prisma.Decimal(0)),
+      tax: quoted.tax,
+      serviceCharge: quoted.serviceCharge,
       deliveryFee: money(order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)),
     },
   };

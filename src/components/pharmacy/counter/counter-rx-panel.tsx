@@ -497,7 +497,25 @@ export type CounterRxPanelProps = {
     pharmacists: ReadonlyArray<{ id: string; name: string }>;
     loading: boolean;
     error: boolean;
-    onChange: (field: 'prescriptionLineId' | 'staffProfileId' | 'pin', value: string) => void;
+    patientAddress: string;
+    rxSerialWritten: boolean;
+    emergency: boolean;
+    prescriberName: string;
+    prescriberRegNo: string;
+    refSerial: string;
+    onChange: (
+      field:
+        | 'prescriptionLineId'
+        | 'staffProfileId'
+        | 'pin'
+        | 'patientAddress'
+        | 'prescriberName'
+        | 'prescriberRegNo'
+        | 'refSerial'
+        | 'rxSerialWritten'
+        | 'emergency',
+      value: string | boolean
+    ) => void;
   };
   alerts: readonly CounterAlert[];
   patient: CounterPatientPanel | null;
@@ -560,10 +578,57 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
             className="space-y-3 rounded-md border border-border-subtle p-3"
           >
             <h4 className="font-semibold text-text-strong">Controlled medicine authorization</h4>
-            <p className="text-sm text-text-body">
-              Attach a patient with ID on file, select the prescription, and ask an independent
-              pharmacist to enter their PIN. Online only.
+            <p className="text-xs text-text-muted">
+              Patient address and a pharmacist PIN are required. Use a prescription, or record an
+              emergency supply. Online only.
             </p>
+            <Label className="text-xs text-text-muted" htmlFor="controlled-address">
+              Patient address
+            </Label>
+            <Input
+              id="controlled-address"
+              className="h-9"
+              disabled={disabled || !patient}
+              value={controlled.patientAddress}
+              onChange={(event) => controlled.onChange('patientAddress', event.target.value)}
+            />
+            <label
+              className="flex items-center gap-2 text-xs text-text-muted"
+              htmlFor="controlled-emergency"
+            >
+              <input
+                id="controlled-emergency"
+                type="checkbox"
+                checked={controlled.emergency}
+                disabled={disabled}
+                onChange={(event) => controlled.onChange('emergency', event.target.checked)}
+              />
+              Emergency supply, no prescription
+            </label>
+            {controlled.emergency ? (
+              <>
+                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-name">
+                  Prescriber name
+                </Label>
+                <Input
+                  id="controlled-prescriber-name"
+                  className="h-9"
+                  disabled={disabled}
+                  value={controlled.prescriberName}
+                  onChange={(event) => controlled.onChange('prescriberName', event.target.value)}
+                />
+                <Label className="text-xs text-text-muted" htmlFor="controlled-prescriber-reg">
+                  Prescriber registration
+                </Label>
+                <Input
+                  id="controlled-prescriber-reg"
+                  className="h-9"
+                  disabled={disabled}
+                  value={controlled.prescriberRegNo}
+                  onChange={(event) => controlled.onChange('prescriberRegNo', event.target.value)}
+                />
+              </>
+            ) : null}
             <Label htmlFor="controlled-prescription">Prescription line</Label>
             <select
               id="controlled-prescription"
@@ -621,9 +686,33 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
               value={controlled.pin}
               onChange={(event) => controlled.onChange('pin', event.target.value)}
             />
+            <label
+              className="flex items-center gap-2 text-xs text-text-muted"
+              htmlFor="controlled-rx-serial"
+            >
+              <input
+                id="controlled-rx-serial"
+                type="checkbox"
+                checked={controlled.rxSerialWritten}
+                disabled={disabled}
+                onChange={(event) => controlled.onChange('rxSerialWritten', event.target.checked)}
+              />
+              Register serial written on the prescription
+            </label>
+            <Label className="text-xs text-text-muted" htmlFor="controlled-ref-serial">
+              Earlier register serial
+            </Label>
+            <Input
+              id="controlled-ref-serial"
+              className="h-9"
+              inputMode="numeric"
+              disabled={disabled}
+              value={controlled.refSerial}
+              onChange={(event) => controlled.onChange('refSerial', event.target.value)}
+            />
             <p className="text-xs text-text-muted">
-              PIN is cleared after each attempt. Five incorrect attempts lock the credential for 15
-              minutes.
+              Leave the earlier serial blank unless this repeats a previous entry. PIN is cleared
+              after each attempt.
             </p>
           </section>
         ) : null}

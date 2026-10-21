@@ -24,3 +24,28 @@ exports[`50 × 30 mm dispensing labels > snapshots both issued batch labels with
 <div>Batch: <bdi>B</bdi> · Expiry / <span lang="ur" dir="rtl">میعاد</span>: <bdi>2028-02-02</bdi></div>
 </section></body></html>"
 `;
+
+exports[`50 × 30 mm dispensing labels snapshots both issued batch labels with exact bilingual source text 1`] = `
+"<!doctype html><html lang="en" dir="ltr"><head><meta charset="utf-8"><title>Rx dispensing labels</title>
+<style>@page { size: 50mm 30mm; margin: 0; }
+* { box-sizing: border-box; } body { margin: 0; width: 50mm; font: 7pt/1.2 monospace; color: black; background: white; }
+.dispensing-label { width: 50mm; height: 30mm; padding: 1.5mm; break-inside: avoid; break-after: page; overflow-wrap: anywhere; }
+.dispensing-label:last-child { break-after: auto; }
+.dispensing-label div { white-space: pre-wrap; }
+</style></head><body><section class="dispensing-label" aria-label="Rx dispensing label">
+<div><strong>Test pharmacy</strong> · Licence: <bdi>TEST-LICENCE</bdi></div>
+<div>Pharmacist: <bdi>REG</bdi></div>
+<div><strong>Test medicine · 500 mg · Tablet</strong></div>
+<div lang="en" dir="ltr">English directions fixture</div>
+<div lang="ur" dir="rtl">اردو</div>
+<div>Batch: <bdi>A</bdi> · Expiry / <span lang="ur" dir="rtl">میعاد</span>: <bdi>2027-01-01</bdi></div>
+</section>
+<section class="dispensing-label" aria-label="Rx dispensing label">
+<div><strong>Test pharmacy</strong> · Licence: <bdi>TEST-LICENCE</bdi></div>
+<div>Pharmacist: <bdi>REG</bdi></div>
+<div><strong>Test medicine · 500 mg · Tablet</strong></div>
+<div lang="en" dir="ltr">English directions fixture</div>
+<div lang="ur" dir="rtl">اردو</div>
+<div>Batch: <bdi>B</bdi> · Expiry / <span lang="ur" dir="rtl">میعاد</span>: <bdi>2028-02-02</bdi></div>
+</section></body></html>"
+`;

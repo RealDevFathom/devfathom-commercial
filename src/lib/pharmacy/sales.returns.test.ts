@@ -26,6 +26,7 @@ function fixture() {
     saleId: 'sale',
     canonicalUnits: 10,
     sale: { status: 'COMPLETED' },
+    medicine: { controlled: false },
     allocations: [
       { id: 'a1', inventoryLotId: 'lot1', stockLocationId: 'shelf1', canonicalUnits: 4 },
       { id: 'a2', inventoryLotId: 'lot2', stockLocationId: 'shelf2', canonicalUnits: 6 },

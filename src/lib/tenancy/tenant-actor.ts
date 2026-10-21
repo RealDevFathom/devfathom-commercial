@@ -1,8 +1,12 @@
 import 'server-only';
 
-import { demoSeatFromOrganizationId, isCanonicalDemoOrganization } from '@/lib/tenancy/demo-identity';
+import {
+  demoSeatFromOrganizationId,
+  isCanonicalDemoOrganization,
+} from '@/lib/tenancy/demo-identity';
 
 import { cache } from 'react';
+import { tenantHostUrl, normalizeHost } from '@/lib/tenancy/host-routing';
 import { headers } from 'next/headers';
 import type { Session } from 'next-auth';
 import {
@@ -22,8 +26,10 @@ import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
 import { demoPersonaForUser } from '@/lib/demo/personas';
 import {
   evaluateSessionUser,
+  isPasswordChangeApiExempt,
   isSessionUsable,
   liveDemoAccessExpiry,
+  PasswordChangeRequiredError,
   type SessionDenialKind,
 } from '@/lib/auth/session-state';
 
@@ -181,6 +187,14 @@ async function resolveTenantActorUncached(
     // never loads a page. Audited support sessions keep their own validity model
     // (`getSupportSession` already enforces expiry and revocation).
     if (!isSessionUsable(session.user)) return null;
+    if (
+      session.user.mustChangePassword === true &&
+      options.request &&
+      new URL(options.request.url).pathname.startsWith('/api/') &&
+      !isPasswordChangeApiExempt(options.request)
+    ) {
+      throw new PasswordChangeRequiredError();
+    }
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
     if (organization.isDemo || session.user.demoAccessExpiresAt !== undefined) {
@@ -226,4 +240,22 @@ export function resolveTenantActor(
     return resolveServerComponentTenantActor();
   }
   return resolveTenantActorUncached(options);
+}
+
+/** Only a verified session and a live database slug may choose a login host. */
+export async function resolveTenantMismatchLoginPath(): Promise<string | null> {
+  const session = await requestSession();
+  if (!isUsableSession(session) || !isSessionUsable(session.user)) return null;
+  const host = await currentRequestHost();
+  if (isSharedHost(host)) return null;
+  const hostOrganization = await resolveOrganizationByHost(host);
+  if (!hostOrganization || hostOrganization.id === session.user.organizationId) return null;
+  const organization = await resolveOrganizationById(session.user.organizationId);
+  if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
+  const normalizedHost = normalizeHost(host);
+  if (normalizedHost.endsWith('.localhost')) {
+    const port = host?.match(/:(\d+)$/)?.[1];
+    return `http://${organization.slug}.localhost${port ? `:${port}` : ''}/login`;
+  }
+  return tenantHostUrl(organization.slug);
 }

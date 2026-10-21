@@ -170,6 +170,23 @@ describe('shouldHandleCounterKey', () => {
     expect(shouldHandleCounterKey({ key: 'a' })).toBe(false);
     expect(shouldHandleCounterKey({ key: '5' })).toBe(false);
   });
+
+  it('does not fire F-keys from an input, textarea, or select, or while a dialog is open', () => {
+    const input = document.createElement('input');
+    const textarea = document.createElement('textarea');
+    const select = document.createElement('select');
+    document.body.append(input, textarea, select);
+    expect(shouldHandleCounterKey({ key: 'F9', target: input })).toBe(false);
+    expect(shouldHandleCounterKey({ key: 'F2', target: textarea })).toBe(false);
+    expect(shouldHandleCounterKey({ key: 'F6', target: select })).toBe(false);
+    input.focus();
+    expect(shouldHandleCounterKey({ key: 'F9', target: document.body })).toBe(false);
+    input.blur();
+    expect(shouldHandleCounterKey({ key: 'F9' }, true)).toBe(false);
+    input.remove();
+    textarea.remove();
+    select.remove();
+  });
 });
 
 describe('formatBinding', () => {

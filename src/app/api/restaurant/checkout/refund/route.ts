@@ -19,7 +19,13 @@ export const GET = moneyReadRoute({
     const candidate = await resolveDemoApproverIdentity(ctx, now);
     const demoApproval =
       candidate &&
-      (await operatorHasCapability(ctx.db, candidate.staffProfileId, 'coauth:approve', now))
+      (await operatorHasCapability(
+        ctx.db,
+        candidate.staffProfileId,
+        'coauth:approve',
+        now,
+        ctx.device.branchId
+      ))
         ? candidate
         : undefined;
     const tenders = await ctx.db.restaurantTender.findMany({

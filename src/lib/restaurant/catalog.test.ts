@@ -58,6 +58,7 @@ function makeDb() {
     delete: vi.fn().mockResolvedValue({}),
   });
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([{ organizationId: 'org_1' }]),
     restaurantBrand: model(),
     restaurantCategory: model(),
     restaurantProduct: model(),
@@ -95,7 +96,7 @@ describe('ensureDefaultBrand (C6 — idempotent, uncounted baseline)', () => {
   it('lazily creates the default when none exists', async () => {
     const brand = await ensureDefaultBrand(scoped());
     expect(db.restaurantBrand.create).toHaveBeenCalledWith({
-      data: { name: 'Default Brand', isDefault: true },
+      data: { organizationId: 'org_1', name: 'Default Brand', isDefault: true },
     });
     expect(brand).toMatchObject({ isDefault: true });
   });
@@ -128,7 +129,7 @@ describe('createBrand (restaurant.brands.max)', () => {
     db.restaurantBrand.count.mockResolvedValue(1);
     await createBrand(scoped(), { name: '  Virtual  ', nameLocalized: { ar: 'افتراضي' } }, 3);
     expect(db.restaurantBrand.create).toHaveBeenCalledWith({
-      data: { name: 'Virtual', nameLocalized: { ar: 'افتراضي' } },
+      data: { organizationId: 'org_1', name: 'Virtual', nameLocalized: { ar: 'افتراضي' } },
     });
   });
 });
@@ -143,11 +144,11 @@ describe('setDefaultBrand (atomic single-default flip)', () => {
     await setDefaultBrand(scoped(), 'brand_2');
     expect(db.$transaction).toHaveBeenCalledOnce();
     expect(db.restaurantBrand.updateMany).toHaveBeenCalledWith({
-      where: { isDefault: true, id: { not: 'brand_2' } },
+      where: { organizationId: 'org_1', isDefault: true, id: { not: 'brand_2' } },
       data: { isDefault: false },
     });
     expect(db.restaurantBrand.update).toHaveBeenCalledWith({
-      where: { id: 'brand_2' },
+      where: { organizationId: 'org_1', id: 'brand_2' },
       data: { isDefault: true },
     });
   });
@@ -204,7 +205,13 @@ describe('category hierarchy (cycle guard)', () => {
     db.restaurantCategory.findUnique.mockResolvedValue({ id: 'cat_parent' });
     await createCategory(scoped(), { name: 'Drinks', parentId: 'cat_parent', sortOrder: 2 });
     expect(db.restaurantCategory.create).toHaveBeenCalledWith({
-      data: { name: 'Drinks', nameLocalized: undefined, parentId: 'cat_parent', sortOrder: 2 },
+      data: {
+        organizationId: 'org_1',
+        name: 'Drinks',
+        nameLocalized: undefined,
+        parentId: 'cat_parent',
+        sortOrder: 2,
+      },
     });
   });
 });
@@ -232,7 +239,7 @@ describe('products & variants', () => {
     db.restaurantProduct.findUnique.mockResolvedValue({ id: 'prod_1', type: 'ITEM' });
     await setProductStatus(scoped(), 'prod_1', 'ARCHIVED');
     expect(db.restaurantProduct.update).toHaveBeenCalledWith({
-      where: { id: 'prod_1' },
+      where: { organizationId: 'org_1', id: 'prod_1' },
       data: { status: 'ARCHIVED' },
     });
     expect(db.restaurantProduct.delete).not.toHaveBeenCalled?.();
@@ -248,7 +255,9 @@ describe('products & variants', () => {
   it('deletes an unreferenced variant', async () => {
     db.restaurantProductVariant.findUnique.mockResolvedValue({ id: 'var_2' });
     await deleteVariant(scoped(), 'var_2');
-    expect(db.restaurantProductVariant.delete).toHaveBeenCalledWith({ where: { id: 'var_2' } });
+    expect(db.restaurantProductVariant.delete).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: 'var_2' },
+    });
   });
 
   it('creates a variant only for an existing product', async () => {
@@ -312,7 +321,7 @@ describe('product-allergen attachment', () => {
     db.restaurantAllergen.findUnique.mockResolvedValue({ id: 'alg_1' });
     await attachProductAllergen(scoped(), 'prod_1', 'alg_1');
     expect(db.restaurantProductAllergen.create).toHaveBeenCalledWith({
-      data: { productId: 'prod_1', allergenId: 'alg_1' },
+      data: { organizationId: 'org_1', productId: 'prod_1', allergenId: 'alg_1' },
     });
   });
 });
@@ -323,6 +332,7 @@ describe('read models (console read-contract)', () => {
     const brands = await listBrands(scoped());
     expect(brands).toHaveLength(1);
     expect(db.restaurantBrand.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1' },
       orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
     });
   });
@@ -338,6 +348,7 @@ describe('read models (console read-contract)', () => {
     db.restaurantCategory.findMany.mockResolvedValue([]);
     await listCategories(scoped());
     expect(db.restaurantCategory.findMany).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1' },
       orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
     });
   });
@@ -349,7 +360,11 @@ describe('read models (console read-contract)', () => {
       where: Record<string, unknown>;
       include: Record<string, unknown>;
     };
-    expect(call.where).toMatchObject({ categoryId: 'cat_1', status: 'ACTIVE' });
+    expect(call.where).toMatchObject({
+      organizationId: 'org_1',
+      categoryId: 'cat_1',
+      status: 'ACTIVE',
+    });
     expect(call.include).toHaveProperty('category');
     expect(call.include).toHaveProperty('variants');
     expect(call.include).toHaveProperty('modifierGroups');
