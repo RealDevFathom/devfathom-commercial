@@ -754,6 +754,43 @@ export function demoRestaurantApproverUserId(seatNumber: number): string {
   return `user_demo_restaurant_seat_${seatNumber}_approver`;
 }
 
+const ORGANIZATION_SLUG_TAKEN = 'That organization slug is already taken.';
+
+/** Prisma names the organizations.slug unique index either as the column or the index. */
+function isOrganizationSlugConflict(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+  const target = error.meta?.target;
+  const fields = Array.isArray(target)
+    ? target.map((field) => String(field))
+    : typeof target === 'string'
+      ? [target]
+      : [];
+  if (fields.some((field) => field === 'slug' || field === 'organizations_slug_key')) return true;
+  return error.message.includes('(`slug`)') || error.message.includes('organizations_slug_key');
+}
+
+/**
+ * Insert the organization row. A duplicate slug is a client conflict (HTTP 409),
+ * the same status the control route already uses for a taken admin email. The
+ * unique index is the authority: a pre-check would still lose the race, and any
+ * other unique violation must keep failing as an internal error.
+ */
+async function createOrganizationRecord(
+  db: PrismaClient,
+  data: Parameters<PrismaClient['organization']['create']>[0]['data']
+) {
+  try {
+    return await db.organization.create({ data });
+  } catch (error) {
+    if (isOrganizationSlugConflict(error)) {
+      throw new PlatformSecurityError(ORGANIZATION_SLUG_TAKEN, 409);
+    }
+    throw error;
+  }
+}
+
 async function bootstrapOrganization(
   db: PrismaClient,
   actor: PlatformIdentity | null,
@@ -784,26 +821,24 @@ async function bootstrapOrganization(
     );
   }
   const password = demo ? null : await hash(input.adminPassword, 12);
-  const organization = await db.organization.create({
-    data: {
-      ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
-      slug: input.slug,
-      legalName: input.legalName,
-      displayName: input.displayName,
-      vertical: input.vertical,
-      status: 'ONBOARDING',
-      deploymentMode: input.deploymentMode,
-      packageId: input.packageId,
-      timezone: input.timezone,
-      locale: input.locale,
-      currency: input.currency,
-      seatLimit: input.seatLimit ?? packageRecord.defaultSeats,
-      gracePeriodDays: input.gracePeriodDays,
-      dataResidency: input.dataResidency,
-      primaryContactName: input.primaryContactName,
-      primaryContactEmail: input.primaryContactEmail,
-      notes: input.notes,
-    },
+  const organization = await createOrganizationRecord(db, {
+    ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
+    slug: input.slug,
+    legalName: input.legalName,
+    displayName: input.displayName,
+    vertical: input.vertical,
+    status: 'ONBOARDING',
+    deploymentMode: input.deploymentMode,
+    packageId: input.packageId,
+    timezone: input.timezone,
+    locale: input.locale,
+    currency: input.currency,
+    seatLimit: input.seatLimit ?? packageRecord.defaultSeats,
+    gracePeriodDays: input.gracePeriodDays,
+    dataResidency: input.dataResidency,
+    primaryContactName: input.primaryContactName,
+    primaryContactEmail: input.primaryContactEmail,
+    notes: input.notes,
   });
   const adminRole = await db.organizationRole.create({
     data: {

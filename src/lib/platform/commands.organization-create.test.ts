@@ -5,6 +5,8 @@
  */
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
+import { Prisma } from '@/generated/prisma/client';
+
 const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
 
 vi.mock('server-only', () => ({}));
@@ -140,6 +142,60 @@ describe('organization.create dedicated provisioning preflight', () => {
     });
     expect(platformDb.organization.create).not.toHaveBeenCalled();
     expect(platformDb.platformPackage.findUnique).not.toHaveBeenCalled();
+  });
+});
+
+describe('organization.create duplicate slug', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it('maps a slug unique violation to a conflict and does not continue onboarding', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`slug`)', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { modelName: 'Organization', target: ['slug'] },
+      })
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'That organization slug is already taken.',
+    });
+    expect(platformDb.organizationRole.create).not.toHaveBeenCalled();
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it('leaves a non-slug unique violation as an internal error', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the fields: (`id`)', {
+        code: 'P2002',
+        clientVersion: 'test',
+        meta: { modelName: 'Organization', target: ['id'] },
+      })
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).toMatchObject({ code: 'P2002' });
+    expect(error).not.toBeInstanceOf(PlatformSecurityError);
   });
 });
 
