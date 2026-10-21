@@ -1,4 +1,5 @@
 import 'server-only';
+import { assertSaleLinesCleared } from './rx-gate';
 import { createHash, randomUUID } from 'node:crypto';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
@@ -93,6 +94,8 @@ export async function executeSandboxPayment(
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
   );
+  // SEC: a sandbox charge is still a payment; refunds return money and stay allowed.
+  if (input.action !== 'REFUND') await assertSaleLinesCleared(db, scope, input.saleId);
   const target = JSON.stringify([
     scope.branchId,
     input.saleId,

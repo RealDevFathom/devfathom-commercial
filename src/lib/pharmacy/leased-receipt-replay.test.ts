@@ -79,6 +79,8 @@ function fixture() {
       .mockResolvedValueOnce(authenticatedRow)
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
+      // Rx gate: locked sale lines with current medicine flags (none regulated).
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([{ receipt_number: 41 }])
       .mockResolvedValue(authenticatedRow),
     // F3: the business day is open (no daily close row).
@@ -235,6 +237,7 @@ describe('leased receipt replay', () => {
     db.$queryRaw
       .mockReset()
       .mockResolvedValueOnce(authenticatedRow)
+      .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([])
       .mockResolvedValueOnce([]);

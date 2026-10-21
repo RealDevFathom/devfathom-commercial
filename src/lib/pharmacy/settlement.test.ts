@@ -108,6 +108,8 @@ describe('pharmacy settlement invariants', () => {
         .fn()
         .mockResolvedValueOnce([])
         .mockResolvedValueOnce([])
+        // Rx gate: locked sale lines with current medicine flags (none regulated).
+        .mockResolvedValueOnce([])
         .mockResolvedValueOnce([{ receipt_number: 41 }]),
       pharmacyMoneyIdempotencyKey: {
         findUnique: vi.fn().mockImplementation(async () => idempotency),
@@ -236,7 +238,7 @@ describe('pharmacy settlement invariants', () => {
       orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
       select: { id: true },
     });
-    expect(db.$queryRaw).toHaveBeenCalledTimes(3);
+    expect(db.$queryRaw).toHaveBeenCalledTimes(4);
   });
 });
 

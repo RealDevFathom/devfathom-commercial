@@ -1,4 +1,5 @@
 import { createHmac, timingSafeEqual } from 'node:crypto';
+import { assertSaleLinesCleared } from './rx-gate';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -377,6 +378,8 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  // SEC: completing a bill re-validates every regulated line under a row lock.
+  if (action === 'complete') await assertSaleLinesCleared(db, scope, saleId);
   const claimed = await db.pharmacySale.updateMany({
     where: {
       id: saleId,
