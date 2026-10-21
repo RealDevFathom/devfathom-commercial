@@ -40,8 +40,8 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
       [staff, org]
     );
     await owner.query(
-      `INSERT INTO restaurant_registered_devices (id,"organizationId","branchId",name,"deviceSecretHash","updatedAt") VALUES ($1,$2,$3,'Seed device','fixture',now())`,
-      [device, org, branch]
+      `INSERT INTO restaurant_registered_devices (id,"organizationId","branchId",name,"deviceSecretHash","updatedAt") VALUES ($1,$2,$3,'Seed device',$4,now())`,
+      [device, org, branch, `${prefix}_secret`]
     );
     await owner.query(
       `INSERT INTO restaurant_drawer_sessions (id,"organizationId","branchId","deviceId","staffProfileId","businessDate","openingFloat",status,"countedCash","closedAt","updatedAt","createdAt") SELECT $1 || '_' || lpad(n::text,5,'0'),$2,$3,$4,$5,$6::date,0,'CLOSED',1,$6::date + interval '20 hours',now(),$6::date FROM generate_series(1,1201) n`,
@@ -53,8 +53,14 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
     );
   }, 30000);
   afterAll(async () => {
-    // Disposable database fixtures remain available for manual EXPLAIN/timing.
-    await owner?.end();
+    if (owner) {
+      await owner.query('DELETE FROM audit_logs WHERE "organizationId"=$1', [org]);
+      await owner.query('DELETE FROM restaurant_daily_closes WHERE "organizationId"=$1', [org]);
+      await owner.query('DELETE FROM restaurant_drawer_sessions WHERE "organizationId"=$1', [org]);
+      await owner.query('DELETE FROM users WHERE "organizationId"=$1', [org]);
+      await owner.query('DELETE FROM organizations WHERE id=$1', [org]);
+      await owner.end();
+    }
     const { db } = await import('@/lib/db');
     await db.$disconnect();
   });
@@ -135,6 +141,52 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
     expect(rows[0].organizationId).toBe(org);
   });
 
+  it('persists failure audits after rollback without committing the action', async () => {
+    await expect(
+      tenancy.withTenantDb(org, async (tx) => {
+        await tx.user.update({ where: { id: actor }, data: { name: 'Rolled back' } });
+        audit.recordTrpcAudit({
+          ctx: { session: { user: { id: actor, organizationId: org } } },
+          path: 'rollback-probe',
+          type: 'mutation',
+          input: {},
+          outcome: 'FAILURE',
+        });
+        throw new Error('action failed');
+      })
+    ).rejects.toThrow('action failed');
+    await audit.flushAuditWritesForTest();
+    const result = await tenancy.withTenantDb(org, async (tx) => ({
+      user: await tx.user.findUniqueOrThrow({ where: { id: actor } }),
+      rows: await tx.auditLog.findMany({ where: { action: 'rollback-probe' } }),
+    }));
+    expect(result.user.name).toBe('Committed action');
+    expect(result.rows).toHaveLength(1);
+    expect(result.rows[0].outcome).toBe('FAILURE');
+  });
+
+  it('keeps the action committed when independent audit persistence fails', async () => {
+    await expect(
+      tenancy.withTenantDb(org, async (tx) => {
+        await tx.user.update({ where: { id: actor }, data: { name: 'Survives audit failure' } });
+        audit.recordTrpcAudit({
+          ctx: { session: { user: { id: `${prefix}_missing`, organizationId: org } } },
+          path: 'audit-failure-probe',
+          type: 'mutation',
+          input: {},
+          outcome: 'SUCCESS',
+        });
+        return 'committed';
+      })
+    ).resolves.toBe('committed');
+    // Test mode exposes audit failures through the explicit flush hook.
+    await expect(audit.flushAuditWritesForTest()).rejects.toThrow();
+    const user = await tenancy.withTenantDb(org, (tx) =>
+      tx.user.findUniqueOrThrow({ where: { id: actor } })
+    );
+    expect(user.name).toBe('Survives audit failure');
+  });
+
   it('streams all 1201 drawer rows without dropping totals and finishes affected report reads within five seconds', async () => {
     const db = tenancy.createTenantDb(org);
     const range = { branchIds: [branch], from: day, to: day };
@@ -152,12 +204,18 @@ suite('QA #144 real PostgreSQL audits and reports (migrated disposable database)
       reports.readWastageReport,
       reports.readCateringReport,
       reports.readSopReport,
+      reports.readFoodCostReport,
+      reports.readDishProfitabilityReport,
+      reports.readStockMovementReport,
+      reports.readPurchasingReport,
     ]) {
       const at = performance.now();
       await read(db, range);
       timings[read.name] = performance.now() - at;
     }
+    const workforceStart = performance.now();
     await reports.readWorkforceReport(db, range, { includeLabourCosts: true });
+    timings.workforceFinancial = performance.now() - workforceStart;
     const elapsed = performance.now() - start;
     timings.batch = elapsed;
     writeFileSync('/tmp/qa144-report-timings.json', JSON.stringify(timings, null, 2));
