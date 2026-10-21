@@ -439,7 +439,9 @@ Resources:
   # ---------------------------------------------------------------- uploads
   UploadsBucket:
     Type: AWS::S3::Bucket
-    DeletionPolicy: Retain
+    # Kept when the stack is deleted, but removed if the first create rolls
+    # back, so a failed create leaves no orphan holding the bucket name.
+    DeletionPolicy: RetainExceptOnCreate
     UpdateReplacePolicy: Retain
     Properties:
       BucketName: !Sub devfathom-${EnvironmentName}-uploads-${AWS::AccountId}

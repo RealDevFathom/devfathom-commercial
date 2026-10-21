@@ -12,7 +12,9 @@ phases:
       - set -euo pipefail
       - '[[ "${IMAGE_TAG:-}" =~ ^[0-9a-f]{40}$ ]] || { echo "IMAGE_TAG must be the 40-character source commit sha"; exit 1; }'
       - REGISTRY="${ECR_REPOSITORY_URI%%/*}"
-      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
+      # <account>.dkr.ecr.<region>.amazonaws.com: the registry may be in another region than the build.
+      - REGISTRY_REGION="$(cut -d. -f4 <<<"$REGISTRY")"
+      - aws ecr get-login-password --region "$REGISTRY_REGION" | docker login --username AWS --password-stdin "$REGISTRY"
       - (cd infra/aws && sha256sum -c rds-global-bundle.pem.sha256)
   build:
     on-failure: ABORT
@@ -25,4 +27,4 @@ phases:
     on-failure: ABORT
     commands:
       - docker push "${ECR_REPOSITORY_URI}:${IMAGE_TAG}"
-      - aws ecr describe-images --repository-name "${ECR_REPOSITORY_URI##*/}" --image-ids "imageTag=${IMAGE_TAG}" --query 'imageDetails[0].imageDigest' --output text
+      - aws ecr describe-images --region "$REGISTRY_REGION" --repository-name "${ECR_REPOSITORY_URI##*/}" --image-ids "imageTag=${IMAGE_TAG}" --query 'imageDetails[0].imageDigest' --output text
