@@ -3,6 +3,7 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { logActivity } from '@/server/activity';
 import { readJson } from '@/lib/api-json';
+import { allocateInvoiceNumber } from '@/lib/finance/invoice-number';
 
 export const GET = withApiAuth('finance:read', async (ctx, request) => {
   const url = new URL(request.url);
@@ -78,12 +79,8 @@ export const POST = withApiAuth('finance:write', async (ctx, request) => {
   const tax = round2(parsed.data.tax);
   const total = round2(subtotal + tax);
 
-  // FIN-09: per-year sequence — scope the count to this year so it resets to -001.
   const year = new Date().getFullYear();
-  const count = await ctx.db.invoice.count({
-    where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-  });
-  const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
+  const invoiceNumber = await allocateInvoiceNumber(ctx.db, ctx.organizationId, year);
 
   const invoice = await ctx.db.invoice.create({
     data: {

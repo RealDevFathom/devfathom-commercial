@@ -6,6 +6,7 @@ import { logActivity } from '../activity';
 import { notify } from '@/lib/notifications';
 import { optionalWebsiteUrl } from '@/lib/validators';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { allocateInvoiceNumber } from '@/lib/finance/invoice-number';
 
 // Contract `value` shares the Decimal(12,2) money columns used across finance, so
 // the largest value Postgres will accept is 9,999,999,999.99 — bound it here so an
@@ -487,12 +488,8 @@ export const clientsRouter = router({
         });
       }
 
-      // FIN-09: scope the sequence to THIS year's invoices so it resets each Jan.
       const year = new Date().getFullYear();
-      const count = await ctx.db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-      });
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
+      const invoiceNumber = await allocateInvoiceNumber(ctx.db, workspaceId(ctx), year);
       const dueDate = new Date(Date.now() + input.dueInDays * 24 * 60 * 60 * 1000);
 
       const invoice = await ctx.db.invoice.create({

@@ -14,6 +14,7 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import { allocateInvoiceNumber } from '@/lib/finance/invoice-number';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -261,14 +262,8 @@ export const financeRouter = router({
       const tax = round2(input.tax ?? 0);
       const total = round2(subtotal + tax);
 
-      // Generate invoice number. FIN-09: scope the count to THIS year's invoices
-      // so the sequence resets to -001 each January (was a global count that never
-      // reset across years).
       const year = new Date().getFullYear();
-      const count = await ctx.db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${year}-` } },
-      });
-      const invoiceNumber = `INV-${year}-${String(count + 1).padStart(3, '0')}`;
+      const invoiceNumber = await allocateInvoiceNumber(ctx.db, orgId, year);
 
       const invoice = await ctx.db.invoice.create({
         data: {

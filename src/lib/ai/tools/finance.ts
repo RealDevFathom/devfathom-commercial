@@ -19,6 +19,7 @@ import { Prisma } from '@/generated/prisma/client';
 import { templates, appUrl } from '@/lib/email';
 import type { AssistantHelpers, ToolSet } from '@/lib/ai/context';
 import { fromCurrencyGroups, diffByCurrency } from '@/lib/finance/currency';
+import { allocateInvoiceNumber } from '@/lib/finance/invoice-number';
 
 // Money columns are Decimal(12,2) — Postgres caps a value at 9,999,999,999.99.
 // Bound amounts here so an oversized input is a clean validation error, not a
@@ -522,13 +523,8 @@ export function buildFinanceTools(h: AssistantHelpers): ToolSet {
       const total = round2(subtotal + taxAmount);
       const invCurrency = currency ?? 'USD';
 
-      // Invoice number: INV-<year>-<sequence>. Mirrors the tRPC mutation.
-      // FIN-09: per-year sequence so it resets to -001 each January.
       const invYear = new Date().getFullYear();
-      const count = await db.invoice.count({
-        where: { invoiceNumber: { startsWith: `INV-${invYear}-` } },
-      });
-      const invoiceNumber = `INV-${invYear}-${String(count + 1).padStart(3, '0')}`;
+      const invoiceNumber = await allocateInvoiceNumber(db, h.ctx.organizationId, invYear);
 
       const invoice = await db.invoice.create({
         data: {

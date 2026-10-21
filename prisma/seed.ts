@@ -35,7 +35,7 @@ async function seedTenantData(tx: Prisma.TransactionClient) {
   }
   const password = await hash(seedPassword, 12);
 
-  if (await tx.invoice.findUnique({ where: { invoiceNumber: 'INV-2026-001' } })) {
+  if (await tx.invoice.findFirst({ where: { invoiceNumber: 'INV-2026-001' } })) {
     await tx.user.updateMany({
       where: {
         organizationId: 'org_devfathom',
