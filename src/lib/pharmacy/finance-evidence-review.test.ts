@@ -204,11 +204,10 @@ describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
     expect(byKey.refundsMinor?.source).toBe('pharmacy_refunds');
   });
 
-  it('marks exactly four metrics as having no source', () => {
+  it('marks exactly three metrics as having no source', () => {
     expect(PHARMACY_METRIC_CONTRACT.filter((m) => m.source === null).map((m) => m.key)).toEqual([
       'accountsPayableMinor',
       'accountsReceivableMinor',
-      'khataAgingMinor',
       'deviceFiscalOfflineExceptions',
     ]);
   });

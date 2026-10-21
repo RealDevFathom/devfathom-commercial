@@ -161,6 +161,14 @@ describe('planKhataReminder', () => {
 });
 
 describe('processDueWhatsAppKhataReminders', () => {
+  it('uses the Urdu template language for an Urdu-speaking customer', async () => {
+    store.accounts = [account()];
+    store.customers = [{...customer(true), preferredLanguage:'ur'}];
+    store.consents = [{patientId:'patient-1',granted:true,revokedAt:null}];
+    const provider = new MockWhatsAppProvider(config);
+    await processDueWhatsAppKhataReminders({now:NOW,config,provider});
+    expect(provider.calls[0]).toMatchObject({kind:'template',template:'khataReminder',language:'ur'});
+  });
   it('sends once per family account per week across repeated runs', async () => {
     store.accounts = [account()];
     store.customers = [customer(true)];
@@ -183,6 +191,7 @@ describe('processDueWhatsAppKhataReminders', () => {
         kind: 'template',
         to: '923001234567',
         template: 'khataReminder',
+        language: 'en',
         templateName: 'khata_due_v1',
         parameters: ['Khan household', '500.00'],
       },
