@@ -252,3 +252,49 @@ describe('a temporary password on an API route', () => {
     expect(servedBy()).toBe('real');
   });
 });
+
+// Exercise the actual resolver and shared route wrapper, not a mocked policy verdict.
+describe('temporary-password API policy', () => {
+  beforeEach(() => {
+    mocks.auth.mockResolvedValue({
+      expires: 'later',
+      user: {
+        id: 'user_flagged',
+        organizationId: 'org_acme',
+        role: 'ADMIN',
+        status: 'ACTIVE',
+        mustChangePassword: true,
+      },
+    });
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: 'org_acme',
+      slug: 'acme',
+      status: 'ACTIVE',
+    });
+  });
+
+  it('maps the real resolver rejection to 403 before executing a protected route', async () => {
+    const response = await GET(new Request(url('clients.getAll')));
+    expect(response.status).toBe(403);
+    await expect(response.json()).resolves.toEqual({
+      code: 'PASSWORD_CHANGE_REQUIRED',
+      error: 'PASSWORD_CHANGE_REQUIRED',
+    });
+    expect(mocks.fetchRequestHandler).not.toHaveBeenCalled();
+  });
+
+  it.each(['team.changePassword', 'team.signOutEverywhere'])(
+    'keeps %s available',
+    async (procedure) => {
+      const response = await POST(new Request(url(procedure), { method: 'POST' }));
+      expect(response.status).toBe(200);
+      expect(servedBy()).toBe('real');
+    }
+  );
+
+  it('preserves the original non-password error', async () => {
+    const failure = new Error('session database unavailable');
+    mocks.auth.mockRejectedValueOnce(failure);
+    await expect(GET(new Request(url('clients.getAll')))).rejects.toBe(failure);
+  });
+});

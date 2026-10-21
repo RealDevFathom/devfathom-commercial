@@ -16,7 +16,7 @@ import {
 } from '@/lib/restaurant/staff-branch-authorization';
 import { TERMINAL_DEVICE_COOKIE } from '@/lib/restaurant/terminal-auth';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
-import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { withApiRoute } from '@/lib/api-route';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { ipFromHeaders, recordAudit } from '@/server/audit';
 
@@ -32,7 +32,7 @@ function reject(message: string, status: number) {
   return NextResponse.json({ error: message }, { status });
 }
 
-export async function POST(request: Request) {
+async function handlePOST(request: Request) {
   const origin = request.headers.get('origin');
   let exactOrigin = false;
   try {
@@ -45,14 +45,7 @@ export async function POST(request: Request) {
     return reject('Enrollment request origin was not accepted.', 403);
   }
 
-  let actor;
-  try {
-    actor = await resolveTenantActor({ request });
-  } catch (error) {
-    const passwordChange = responseForPasswordChange(error);
-    if (passwordChange) return passwordChange;
-    throw error;
-  }
+  const actor = await resolveTenantActor({ request });
   if (!actor?.session.user || !evaluateSessionUser(actor.session.user).ok) {
     return reject('A current administrator session is required.', 401);
   }
@@ -158,3 +151,5 @@ export async function POST(request: Request) {
   }
   return response;
 }
+
+export const POST = withApiRoute(handlePOST);

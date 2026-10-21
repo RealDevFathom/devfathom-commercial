@@ -1,7 +1,7 @@
 import * as Ably from 'ably';
 import { channelRoom, userRoom, typingRoom, PRESENCE_CHANNEL } from '@/lib/chat/contract';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
-import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { withApiRoute } from '@/lib/api-route';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 /**
@@ -29,15 +29,8 @@ const ABLY_API_KEY = process.env.ABLY_API_KEY;
 // shared across users.
 export const dynamic = 'force-dynamic';
 
-export const GET = async (request: Request) => {
-  let actor;
-  try {
-    actor = await resolveTenantActor({ request });
-  } catch (error) {
-    const passwordChange = responseForPasswordChange(error);
-    if (passwordChange) return passwordChange;
-    throw error;
-  }
+const handleGET = async (request: Request) => {
+  const actor = await resolveTenantActor({ request });
   if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
@@ -78,3 +71,5 @@ export const GET = async (request: Request) => {
 
   return Response.json(tokenRequest);
 };
+
+export const GET = withApiRoute(handleGET);

@@ -9,7 +9,7 @@
 // delivery against object storage remains the linked production enhancement.
 
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
-import { responseForPasswordChange } from '@/lib/auth/session-state';
+import { withApiRoute } from '@/lib/api-route';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { getUpload, StorageUnavailableError } from '@/lib/storage';
 
@@ -30,15 +30,8 @@ const MIME: Record<string, string> = {
   mp3: 'audio/mpeg',
 };
 
-export async function GET(request: Request, ctx: { params: Promise<{ name: string }> }) {
-  let actor;
-  try {
-    actor = await resolveTenantActor({ request });
-  } catch (error) {
-    const passwordChange = responseForPasswordChange(error);
-    if (passwordChange) return passwordChange;
-    throw error;
-  }
+async function handleGET(request: Request, ctx: { params: Promise<{ name: string }> }) {
+  const actor = await resolveTenantActor({ request });
   if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
@@ -125,3 +118,5 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
     return new Response('Not found', { status: 404 });
   }
 }
+
+export const GET = withApiRoute(handleGET);
