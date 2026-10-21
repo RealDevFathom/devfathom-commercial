@@ -85,6 +85,28 @@ describe('CounterCartPanel FEFO chips', () => {
     expect(second).toHaveTextContent('Batch override');
     expect(second).not.toHaveTextContent('Near expiry');
   });
+
+  it('keeps controlled, prescription, high-alert, and cold-chain badges outside the truncated line', () => {
+    const value = cart([inDays(400)]);
+    value.lines[0] = {
+      ...value.lines[0]!,
+      presentation: 'A presentation long enough to be truncated beside a price',
+      controlled: true,
+      rx: true,
+      highAlert: true,
+      coldChain: true,
+    };
+    render(<CounterCartPanel cart={value} state="ready" onRetry={vi.fn()} now={NOW} />);
+    const sale = screen.getByText(/A presentation long enough/);
+    expect(sale.tagName).toBe('P');
+    expect(sale.className).toContain('truncate');
+    expect(sale).not.toHaveTextContent('Controlled');
+    for (const label of ['Controlled', 'Prescription only', 'High alert', 'Cold chain']) {
+      const badge = screen.getByText(label);
+      expect(badge.closest('p')).toBeNull();
+      expect(badge.closest('[data-slot="status-pill"]')).toHaveClass('whitespace-nowrap');
+    }
+  });
 });
 
 const lots: CounterLotOption[] = [
