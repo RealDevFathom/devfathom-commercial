@@ -39,6 +39,15 @@ function AskFathomChat({ organizationId }: { organizationId: string }) {
   const panelEpoch = useAssistant((state) => state.panelEpoch);
 
   useEffect(() => {
+    if (settings.isFetchedAfterMount) return;
+    // A stalled transport must finish in a closed, actionable state too.
+    const timeout = window.setTimeout(() => {
+      useAssistant.getState().markUnavailable(organizationId, Date.now());
+    }, 15_000);
+    return () => window.clearTimeout(timeout);
+  }, [organizationId, settings.isFetchedAfterMount]);
+
+  useEffect(() => {
     useAssistant.getState().setOrganization(organizationId);
     return () => {
       useAssistant.getState().setOrganization(null);
