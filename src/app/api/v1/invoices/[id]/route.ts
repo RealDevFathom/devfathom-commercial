@@ -24,6 +24,14 @@ const updateSchema = z.object({
   status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']).optional(),
 });
 
+const ALLOWED_STATUS_TRANSITIONS: Record<string, string[]> = {
+  DRAFT: ['SENT', 'CANCELLED'],
+  SENT: ['OVERDUE', 'CANCELLED', 'DRAFT'],
+  OVERDUE: ['CANCELLED', 'SENT'],
+  PAID: ['CANCELLED'],
+  CANCELLED: ['DRAFT'],
+};
+
 export const PATCH = withApiAuth(
   'finance:write',
   async (authCtx, request, ctx: { params: Promise<{ id: string }> }) => {
@@ -39,12 +47,40 @@ export const PATCH = withApiAuth(
       );
     }
 
-    const existing = await authCtx.db.invoice.findUnique({ where: { id }, select: { id: true } });
+    const existing = await authCtx.db.invoice.findUnique({
+      where: { id },
+      include: { client: { select: { name: true } } },
+    });
     if (!existing) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
 
+    const next = parsed.data.status;
+    if (next === 'PAID') {
+      return NextResponse.json(
+        { error: 'Record a payment to mark an invoice as paid.' },
+        { status: 400 }
+      );
+    }
+
+    if (next === existing.status) return NextResponse.json({ data: existing });
+
+    if (
+      next &&
+      next !== existing.status &&
+      !ALLOWED_STATUS_TRANSITIONS[existing.status]?.includes(next)
+    ) {
+      return NextResponse.json(
+        { error: `Cannot change an invoice from ${existing.status} to ${next}.` },
+        { status: 400 }
+      );
+    }
+
     const data: Record<string, unknown> = { ...parsed.data };
-    if (parsed.data.status === 'PAID') data.paidAt = new Date();
-    if (parsed.data.status === 'SENT') data.sentAt = new Date();
+    if (next === 'SENT') data.sentAt = new Date();
+    if (existing.status === 'PAID') data.paidAt = null;
+    if (next === 'DRAFT') {
+      data.sentAt = null;
+      data.paidAt = null;
+    }
 
     const invoice = await authCtx.db.invoice.update({
       where: { id },
@@ -52,17 +88,10 @@ export const PATCH = withApiAuth(
       include: { client: { select: { name: true } } },
     });
 
-    if (parsed.data.status === 'SENT') {
+    if (next === 'SENT' && existing.status !== 'SENT') {
       logActivity(authCtx.db, authCtx.userId, {
         type: 'invoice_sent',
         message: `sent invoice ${invoice.invoiceNumber} to ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
-        entityType: 'Invoice',
-        entityId: invoice.id,
-      });
-    } else if (parsed.data.status === 'PAID') {
-      logActivity(authCtx.db, authCtx.userId, {
-        type: 'invoice_paid',
-        message: `marked invoice ${invoice.invoiceNumber} as paid ($${Number(invoice.total).toLocaleString()})`,
         entityType: 'Invoice',
         entityId: invoice.id,
       });
