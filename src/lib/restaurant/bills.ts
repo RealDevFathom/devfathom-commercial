@@ -921,7 +921,16 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
     await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
     const bill = await tx.restaurantBill.findFirst({
       where: { id: input.billId, branchId: input.branchId },
-      select: { id: true, status: true, compTotal: true, discountTotal: true, grandTotal: true },
+      select: {
+        id: true,
+        status: true,
+        subtotal: true,
+        compTotal: true,
+        discountTotal: true,
+        grandTotal: true,
+        serviceChargeRate: true,
+        serviceChargeTotal: true,
+      },
     });
     if (!bill) {
       throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -960,8 +969,17 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       throw new BillCommandError('The line is already comped.', 'ALREADY_COMPED');
     }
 
+    // Use the pinned rate on gross merchandise less comps, before order discounts.
+    const serviceChargeBasis = sub(sub(bill.subtotal, bill.compTotal), line.lineSubtotal);
+    const serviceChargeTotal =
+      bill.serviceChargeRate === null
+        ? bill.serviceChargeTotal
+        : serviceChargeFor(serviceChargeBasis, bill.serviceChargeRate);
+    const serviceChargeReduction = sub(bill.serviceChargeTotal, serviceChargeTotal);
+    const compDeduction = add(line.lineSubtotal, serviceChargeReduction);
+
     // What the comp cannot absorb out of the bill's own balance (B3).
-    const shortfall = sub(line.lineSubtotal, bill.grandTotal);
+    const shortfall = sub(compDeduction, bill.grandTotal);
     let releasedDiscount = ZERO;
     if (compare(shortfall, ZERO) > 0 && compare(bill.discountTotal, ZERO) > 0) {
       const release = await releaseLoyaltyRedemption(tx, {
@@ -977,7 +995,7 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
       // it — so this call applies no further delta.
       releasedDiscount = release.replayed ? ZERO : release.value;
     }
-    const grandTotal = sub(add(bill.grandTotal, releasedDiscount), line.lineSubtotal);
+    const grandTotal = sub(add(bill.grandTotal, releasedDiscount), compDeduction);
     if (compare(grandTotal, ZERO) < 0) {
       // The bill carries a deduction this lane cannot release, so the comp would
       // leave a negative grand total. Refuse rather than record an untrue total.
@@ -1006,9 +1024,29 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
         compCoAuthorizationId: coAuthorizationId,
       },
     });
+    if (bill.serviceChargeRate !== null) {
+      const lines = await tx.restaurantBillLine.findMany({
+        where: { billId: bill.id },
+        orderBy: { id: 'asc' },
+        select: { id: true, lineSubtotal: true, compAmount: true },
+      });
+      const weights = lines.map((entry) =>
+        sub(entry.lineSubtotal, entry.compAmount).mul(100).toNumber()
+      );
+      const charges = serviceChargeBasis.isZero()
+        ? lines.map(() => ZERO)
+        : allocate(serviceChargeTotal, weights);
+      for (const [index, entry] of lines.entries()) {
+        await tx.restaurantBillLine.update({
+          where: { id: entry.id },
+          data: { serviceChargeAmount: charges[index]! },
+        });
+      }
+    }
     await tx.restaurantBill.update({
       where: { id: bill.id },
       data: {
+        ...(bill.serviceChargeRate !== null ? { serviceChargeBasis, serviceChargeTotal } : {}),
         compTotal: add(bill.compTotal, line.lineSubtotal),
         discountTotal: sub(bill.discountTotal, releasedDiscount),
         grandTotal,
