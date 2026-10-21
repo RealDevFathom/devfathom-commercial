@@ -288,12 +288,9 @@ export async function readDueKhataAccounts(
   return db.$queryRaw<DueAccount[]>(Prisma.sql`
     WITH payments AS (
       SELECT "organizationId", "branchId", "familyAccountId", "settlesChargeId",
-             SUM(CASE WHEN "kind" = 'PAYMENT' THEN "amountMinor"::bigint
-                      ELSE -"amountMinor"::bigint END) AS paid
+             SUM("amountMinor") AS paid
       FROM "pharmacy_khata_events"
-      WHERE "organizationId" = ${organizationId}
-        AND "kind" IN ('PAYMENT', 'DISHONOURED_CHEQUE')
-        AND "settlesChargeId" IS NOT NULL
+      WHERE "organizationId" = ${organizationId} AND "kind" = 'PAYMENT'
       GROUP BY "organizationId", "branchId", "familyAccountId", "settlesChargeId"
     )
     SELECT acct."id" AS "familyAccountId", acct."organizationId", acct."branchId",

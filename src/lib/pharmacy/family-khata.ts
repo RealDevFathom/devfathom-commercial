@@ -168,24 +168,12 @@ export async function settleFamilyKhata(
     orderBy: [{ occurredAt: 'asc' }, { id: 'asc' }],
   });
   const paidByCharge = new Map<string, number>();
-  for (const event of events) {
-    if (!event.settlesChargeId) continue;
-    if (event.kind === 'PAYMENT') {
+  for (const event of events)
+    if (event.kind === 'PAYMENT' && event.settlesChargeId)
       paidByCharge.set(
         event.settlesChargeId,
         (paidByCharge.get(event.settlesChargeId) ?? 0) + event.amountMinor
       );
-    } else if (event.kind === 'DISHONOURED_CHEQUE') {
-      // A dishonoured cheque reverses the settlement against the same charge.
-      // Keeping that amount in the allocation map makes the restored debt
-      // payable again instead of leaving the statement and payment paths at
-      // odds with one another.
-      paidByCharge.set(
-        event.settlesChargeId,
-        (paidByCharge.get(event.settlesChargeId) ?? 0) - event.amountMinor
-      );
-    }
-  }
   const openCharges = events
     .filter((event) => event.kind === 'CHARGE')
     .map((charge) => ({

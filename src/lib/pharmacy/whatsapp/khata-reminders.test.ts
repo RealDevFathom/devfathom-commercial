@@ -72,7 +72,6 @@ import { MockWhatsAppProvider, readWhatsAppConfig } from './provider';
 import {
   planKhataReminder,
   processDueWhatsAppKhataReminders,
-  readDueKhataAccounts,
   sanitizeReminderDisplayName,
 } from './khata-reminders';
 
@@ -158,19 +157,6 @@ describe('planKhataReminder', () => {
     );
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
-  });
-});
-
-describe('readDueKhataAccounts', () => {
-  it('nets a linked dishonoured cheque out of the payment applied to an overdue charge', async () => {
-    const queryRaw = vi.fn().mockResolvedValue([]);
-
-    await readDueKhataAccounts({ $queryRaw: queryRaw } as never, 'org_a', NOW, 100, 10_000);
-
-    const query = queryRaw.mock.calls[0]![0] as { sql: string };
-    expect(query.sql).toContain("\"kind\" IN ('PAYMENT', 'DISHONOURED_CHEQUE')");
-    expect(query.sql).toContain('ELSE -"amountMinor"::bigint END');
-    expect(query.sql).toContain('"settlesChargeId" IS NOT NULL');
   });
 });
 

@@ -79,53 +79,6 @@ describe('CRM-L02 family privacy and khata settlement', () => {
       { settlesChargeId: 'charge_b', amountMinor: 3_000 },
     ]);
   });
-
-  it('makes a dishonoured cheque balance payable again against its original charge', async () => {
-    const create = vi.fn(async ({ data }) => ({ id: 'replacement_payment', ...data }));
-    const db = {
-      $queryRaw: vi.fn(),
-      pharmacyKhataEvent: {
-        findMany: vi.fn().mockResolvedValue([
-          {
-            id: 'charge_a',
-            kind: 'CHARGE',
-            amountMinor: 10_000,
-            occurredAt: new Date('2026-07-01'),
-          },
-          {
-            id: 'cheque_payment',
-            kind: 'PAYMENT',
-            amountMinor: 10_000,
-            settlesChargeId: 'charge_a',
-            occurredAt: new Date('2026-07-02'),
-          },
-          {
-            id: 'dishonour',
-            kind: 'DISHONOURED_CHEQUE',
-            amountMinor: 10_000,
-            settlesChargeId: 'charge_a',
-            occurredAt: new Date('2026-07-03'),
-          },
-        ]),
-        create,
-      },
-    };
-
-    const result = await settleFamilyKhata(db as never, scope, {
-      familyAccountId: 'family_1',
-      amountMinor: 10_000,
-      occurredAt: new Date('2026-07-04'),
-    });
-
-    expect(result).toMatchObject({ paidMinor: 10_000, remainingBalanceMinor: 0 });
-    expect(create).toHaveBeenCalledWith({
-      data: expect.objectContaining({
-        kind: 'PAYMENT',
-        settlesChargeId: 'charge_a',
-        amountMinor: 10_000,
-      }),
-    });
-  });
 });
 
 describe('CRM-L04 explainable health suggestion', () => {
