@@ -58,6 +58,8 @@ COPY --chown=bun:bun --from=builder /app/.next/static ./.next/static
 COPY --chown=bun:bun --from=builder /app/public ./public
 COPY --chown=bun:bun --from=builder /app/scripts ./scripts
 COPY --chown=bun:bun --from=builder /app/src ./src
+# The staging demo seed reuses the pharmacy counter fixture ids (scripts/seed-staging-demo.ts).
+COPY --chown=bun:bun --from=builder /app/tests/e2e/pharmacy-counter-fixture.ts ./tests/e2e/pharmacy-counter-fixture.ts
 COPY --chown=bun:bun --from=builder /app/tsconfig.json ./tsconfig.json
 EXPOSE 3000
 CMD ["bun", "server.js"]

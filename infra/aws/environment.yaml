@@ -397,6 +397,19 @@ Resources:
         PasswordLength: 24
         ExcludePunctuation: true
 
+  # Staging only: the access code for the passwordless restaurant demo seats
+  # (/demo/restaurants). Unset means the demo entry stays disabled.
+  DemoAccessCodeSecret:
+    Type: AWS::SecretsManager::Secret
+    Condition: MigrationSeeds
+    Properties:
+      Name: !Sub devfathom/${EnvironmentName}/demo-access-code
+      GenerateSecretString:
+        SecretStringTemplate: '{}'
+        GenerateStringKey: value
+        PasswordLength: 20
+        ExcludePunctuation: true
+
   AdminPasswordSecret:
     Type: AWS::SecretsManager::Secret
     Properties:
@@ -586,6 +599,7 @@ Resources:
                   - !Ref SeedPasswordSecret
                   - !Ref AdminPasswordSecret
                   - !Ref PlatformAdminPasswordSecret
+                  - !If [MigrationSeeds, !Ref DemoAccessCodeSecret, !Ref AWS::NoValue]
 
   WebTaskRole:
     Type: AWS::IAM::Role
@@ -686,6 +700,11 @@ Resources:
               ValueFrom: !Sub '${CameraCredentialKeySecret}:value::'
             - Name: CRON_SECRET
               ValueFrom: !Sub '${CronSecret}:value::'
+            - !If
+              - MigrationSeeds
+              - Name: DEMO_ACCESS_CODE
+                ValueFrom: !Sub '${DemoAccessCodeSecret}:value::'
+              - !Ref AWS::NoValue
           LogConfiguration:
             LogDriver: awslogs
             Options:
@@ -723,7 +742,7 @@ Resources:
               - 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts${After}'
               - After: !If
                   - MigrationSeeds
-                  - ' && bun prisma/seed.ts'
+                  - ' && bun prisma/seed.ts && bun scripts/seed-staging-demo.ts --skip-base'
                   - !If [MigrationBootstraps, ' && bun prisma/bootstrap.ts', '']
           Environment:
             - Name: NODE_ENV

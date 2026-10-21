@@ -13,6 +13,14 @@ const REQUIRED = ['PHARMACY_E2E_ADMIN_EMAIL', 'PHARMACY_E2E_ADMIN_PASSWORD'] as 
 export function resolvePharmacyE2eDatabaseUrl(
   env: Record<string, string | undefined> = process.env
 ): string {
+  // Staging demo seeding (scripts/seed-staging-demo.ts) targets the real staging
+  // database on purpose. It names that URL explicitly and is never inferred.
+  if (env.STAGING_DEMO_SEED === '1') {
+    const target = env.STAGING_DEMO_DATABASE_URL;
+    if (!target) throw new Error('STAGING_DEMO_DATABASE_URL is required for STAGING_DEMO_SEED=1.');
+    for (const name of REQUIRED) if (!env[name]) throw new Error(`${name} is required.`);
+    return target;
+  }
   if (env.PHARMACY_E2E !== '1') throw new Error('PHARMACY_E2E=1 explicit opt-in is required.');
   const configured = env.PHARMACY_E2E_DATABASE_URL;
   if (!configured) throw new Error('PHARMACY_E2E_DATABASE_URL is required.');
