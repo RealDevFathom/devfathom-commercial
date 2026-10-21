@@ -16,6 +16,7 @@ const mocks = vi.hoisted(() => ({
   validate: vi.fn<(snapshot: unknown, sale: unknown) => { validated: unknown }>((snapshot) => ({
     validated: snapshot,
   })),
+  assertMayOperate: vi.fn<() => Promise<void>>().mockResolvedValue(undefined),
   post: vi
     .fn<(db: unknown, scope: unknown, entry: { saleLineId: string; at: Date }) => Promise<void>>()
     .mockResolvedValue(undefined),
@@ -23,6 +24,7 @@ const mocks = vi.hoisted(() => ({
 
 vi.mock('server-only', () => ({}));
 vi.mock('./finance-postings', () => ({ postSaleLineEntry: mocks.post }));
+vi.mock('./regulatory', () => ({ assertStoredBranchMayOperate: mocks.assertMayOperate }));
 vi.mock('./receipt-identity', () => {
   class PharmacyReceiptIdentityError extends Error {
     constructor() {
@@ -122,6 +124,9 @@ beforeEach(() => {
   order = [];
   db = makeDb();
   mocks.validate.mockClear();
+  mocks.assertMayOperate.mockClear().mockImplementation(async () => {
+    order.push('licence-check');
+  });
   mocks.post.mockClear().mockImplementation(async () => {
     order.push('posting');
   });
@@ -130,6 +135,12 @@ beforeEach(() => {
 describe('R1 receipt identity carries every batch fact', () => {
   it('hands the validator all three allocations with batch, expiry and units, and stores its result', async () => {
     await expect(complete(sale())).resolves.toBe(41);
+    expect(mocks.assertMayOperate).toHaveBeenCalledWith(db, 'org_a', 'branch_a', {
+      name: 'COMPLETE_SALE',
+      at: expect.any(Date),
+      requiresQualifiedPerson: false,
+    });
+    expect(order.slice(0, 2)).toEqual(['licence-check', 'sequence']);
     expect(mocks.validate).toHaveBeenCalledTimes(1);
     const snapshot = mocks.validate.mock.calls[0]![0] as {
       receiptNumber: number;
@@ -208,6 +219,19 @@ describe('R1 receipt identity carries every batch fact', () => {
         businessDate: input.businessDate,
       }),
     });
+  });
+});
+
+describe('sale-time licence enforcement', () => {
+  it('refuses charging before consuming a receipt number or completing the sale', async () => {
+    mocks.assertMayOperate.mockRejectedValueOnce(new Error('LICENCE_INVALID'));
+
+    await expect(complete(sale())).rejects.toThrow('LICENCE_INVALID');
+
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+    expect(db.pharmacySale.update).not.toHaveBeenCalled();
+    expect(db.pharmacySaleEvent.create).not.toHaveBeenCalled();
+    expect(mocks.post).not.toHaveBeenCalled();
   });
 });
 
