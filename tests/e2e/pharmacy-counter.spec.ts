@@ -129,7 +129,8 @@ async function stageFirstResult(page: Page, medicineName: string) {
 }
 
 async function setQuantity(page: Page, quantity: number) {
-  const field = page.getByLabel('Quantity');
+  // Exact: the stepper's "Decrease quantity" and "Increase quantity" buttons also carry the word.
+  const field = page.getByLabel('Quantity', { exact: true });
   await field.focus();
   await field.fill(String(quantity));
   // Blur via the keyboard so React commits the controlled value.
@@ -149,11 +150,16 @@ async function tenderCash(page: Page, amount: string) {
 
 test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt', async ({ page }) => {
   const otc = PHARMACY_E2E.medicines.otc;
+  // The barcode scan adds one pack at the printed MRP to the bill that holds the two strips.
+  const packPrice = (otc.printedMrpMinor / 100).toFixed(2);
+  const billTotal = (Number(packPrice) + Number(PHARMACY_E2E_EXPECTED.otcTwoStripTotal)).toFixed(2);
   await openCounter(page);
   await openDrawer(page);
 
-  // POS-02: a scanned barcode resolves to exactly one presentation.
-  await search(page, otc.barcode);
+  // POS-02: the row is read from a name search. Enter on a barcode adds the medicine rather
+  // than staging it (scan-to-add, below), and the add draws the pack from the stock this row
+  // reports.
+  await search(page, otc.brandName);
   await stageFirstResult(page, otc.name);
 
   const row = page
@@ -182,6 +188,7 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   const cart = page.getByRole('list', { name: 'Cart lines' });
   await expect(cart).toContainText(otc.name, { timeout: 15_000 });
   await expect(cart).toContainText('2 ×');
+  await expect(page.getByText('Bill open · 1 line')).toBeVisible();
 
   // POS-03: the cart shows the FEFO allocation, batch and expiry included.
   const allocation = page.getByRole('list', { name: `FEFO allocation for ${otc.name}` });
@@ -191,7 +198,17 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(allocation).toContainText('FEFO');
   await expect(allocation).not.toContainText('Batch override');
 
-  await tenderCash(page, PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
+  // POS-02: a scanned barcode resolves to exactly one presentation, and Enter on a barcode
+  // with a single match adds one of its first sale unit (scan-to-add, 699d5c1d; pinned by
+  // counter-console.test.tsx "adds a barcode on Enter only when the search returns that
+  // single medicine"). Nothing is added unless the scan matched exactly this medicine.
+  await search(page, otc.barcode);
+  await expect(page.getByText(`1 × ${otc.name} added.`)).toBeVisible({ timeout: 15_000 });
+  await expect(page.getByText('Bill open · 2 lines')).toBeVisible();
+  await expect(cart).toContainText(`1 × ${otc.name}`);
+  await expect(cart).toContainText(`pack · ${otc.unitsPerPack} units @ ${packPrice}`);
+
+  await tenderCash(page, billTotal);
 
   // POS-08: a settled bill renders a receipt carrying medicine, strength,
   // batch and expiry, and a receipt number the tender issued.
@@ -201,7 +218,14 @@ test('bill 1 — barcode scan, strip unit, cash tender and a bilingual receipt',
   await expect(receipt).toContainText(otc.strength);
   await expect(receipt).toContainText(otc.batchNumber);
   await expect(receipt).toContainText('2028-06-30');
-  await expect(receipt).toContainText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal);
+  // The strip line's own total, matched whole: "50.00" is also inside the pack's "250.00".
+  const stripLine = receipt
+    .getByRole('listitem')
+    .filter({ hasText: `× ${PHARMACY_E2E_EXPECTED.otcStripPrice}` });
+  await expect(
+    stripLine.getByText(PHARMACY_E2E_EXPECTED.otcTwoStripTotal, { exact: true })
+  ).toBeVisible();
+  await expect(receipt).toContainText(billTotal);
 
   // POS-08: Urdu renders the same bill with Urdu field names, right-to-left.
   const localeSelect = page.getByLabel('Language');
@@ -536,7 +560,7 @@ test('Khata ledger limit, owner override, statement and loyalty regression', asy
     const makeBill = async () => {
       const scan = page.getByLabel('Scan or search');
       await scan.focus();
-      await scan.fill(PHARMACY_E2E.medicines.otc.barcode);
+      await scan.fill(PHARMACY_E2E.medicines.otc.brandName);
       await scan.press('Enter');
       await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
       const strip = page.getByRole('radio', { name: /Strip/ });
@@ -675,7 +699,7 @@ test('sell → return → refund → reprint from the counter', async ({ page })
   await page.goto('/pharmacy/counter');
   await expect(page.getByRole('heading', { name: 'Counter', level: 1 })).toBeVisible();
   await openDrawer(page);
-  await search(page, PHARMACY_E2E.medicines.otc.barcode);
+  await search(page, PHARMACY_E2E.medicines.otc.brandName);
   await stageFirstResult(page, PHARMACY_E2E.medicines.otc.name);
   await page.keyboard.press('F4');
   await setQuantity(page, 1);
@@ -784,7 +808,7 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await openCounter(page);
   await openDrawer(page);
   const otc = PHARMACY_E2E.medicines.otc;
-  await search(page, otc.barcode);
+  await search(page, otc.brandName);
   await stageFirstResult(page, otc.name);
   await page.keyboard.press('F4');
   await setQuantity(page, 2);
@@ -844,7 +868,7 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
   await expect(
     page.getByRole('alert').filter({ hasText: /This business day is closed/ })
   ).toBeVisible();
-  await search(page, otc.barcode);
+  await search(page, otc.brandName);
   await stageFirstResult(page, otc.name);
   await page.keyboard.press('F4');
   await setQuantity(page, 1);
