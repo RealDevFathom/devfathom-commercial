@@ -16,18 +16,17 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
   it('backfills both tenants before enforcing NOT NULL without granting consent', async () => {
     const client = new pg.Client({ connectionString: url });
     await client.connect();
+    const schema = `growth_migration_${randomUUID().replaceAll('-', '')}`;
     try {
       const role = await client.query(
         'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
       );
       expect(role.rows[0]).toEqual({ rolsuper: false, rolbypassrls: false });
-      await client.query('BEGIN');
-      const schema = `growth_migration_${randomUUID().replaceAll('-', '')}`;
       await client.query(`CREATE SCHEMA "${schema}"`);
-      await client.query(`SET LOCAL search_path TO "${schema}"`);
+      await client.query(`SET search_path TO "${schema}"`);
       await client.query(`
-        SELECT set_config('app.is_platform_admin', 'false', true);
-        SELECT set_config('app.current_organization_id', '', true);
+        SELECT set_config('app.is_platform_admin', 'false', false);
+        SELECT set_config('app.current_organization_id', '', false);
         CREATE TABLE organizations (id TEXT PRIMARY KEY);
         CREATE TABLE pharmacy_patients (
           id TEXT PRIMARY KEY, "organizationId" TEXT NOT NULL, phone TEXT
@@ -64,7 +63,30 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
       }
       // Confirm the owner cannot see the fixture before the migration elevates.
       expect((await client.query('SELECT * FROM pharmacy_customers')).rows).toEqual([]);
-      await client.query(sql);
+      // This migration has no procedural blocks or semicolons in SQL literals.
+      // Send each statement separately, with no test-owned outer transaction:
+      // only the migration's explicit BEGIN/COMMIT may retain local settings.
+      const statements = sql
+        .replace(/--[^\n]*/g, '')
+        .split(';')
+        .filter((s) => s.trim());
+      const backfilledCounts: number[] = [];
+      for (const statement of statements) {
+        const result = await client.query(statement);
+        if (result.command === 'UPDATE') {
+          expect(result.rowCount).toBeGreaterThan(0);
+          backfilledCounts.push(result.rowCount!);
+        }
+      }
+      expect(backfilledCounts).toEqual([2, 2]);
+      const context = await client.query(
+        "SELECT current_setting('app.is_platform_admin', true) AS admin"
+      );
+      expect(context.rows[0].admin).not.toBe('true');
+      expect((await client.query('SELECT * FROM pharmacy_customers')).rows).toEqual([]);
+      // Elevate separately for inspection after confirming migration scope ended.
+      await client.query('BEGIN');
+      await client.query("SELECT set_config('app.is_platform_admin', 'true', true)");
       const customers = await client.query(`
         SELECT id, "whatsappOptIn", "whatsappE164"
         FROM pharmacy_customers ORDER BY id
@@ -84,13 +106,22 @@ describe.skipIf(!url)('growth foundation migration under FORCE RLS', () => {
         [schema]
       );
       expect(column.rows[0].is_nullable).toBe('NO');
-      await client.query('ROLLBACK');
-      const context = await client.query(
-        "SELECT current_setting('app.is_platform_admin', true) AS admin"
+      const metrics = await client.query(
+        `SELECT column_name, data_type FROM information_schema.columns
+         WHERE table_schema = $1 AND
+         ((table_name = 'customer_metrics' AND column_name = 'spend90dMinor')
+         OR (table_name = 'growth_settings' AND column_name = 'lastMetricsRunAt'))
+         ORDER BY column_name`,
+        [schema]
       );
-      expect(context.rows[0].admin).not.toBe('true');
+      expect(metrics.rows).toEqual([
+        { column_name: 'lastMetricsRunAt', data_type: 'timestamp without time zone' },
+        { column_name: 'spend90dMinor', data_type: 'bigint' },
+      ]);
     } finally {
       await client.query('ROLLBACK');
+      await client.query('RESET search_path');
+      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await client.end();
     }
   });

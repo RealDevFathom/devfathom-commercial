@@ -34,6 +34,7 @@ ALTER TABLE "pharmacy_customers"
 -- never a silent grant — before the column is made NOT NULL.
 -- Both customer backfills must see every tenant under FORCE RLS. Keep the
 -- platform-admin context local to the migration transaction.
+BEGIN;
 SELECT set_config('app.is_platform_admin', 'true', true);
 UPDATE "pharmacy_customers" SET "whatsappOptIn" = false WHERE "whatsappOptIn" IS NULL;
 ALTER TABLE "pharmacy_customers"
@@ -52,6 +53,8 @@ WHERE p."organizationId" = c."organizationId"
   AND p."phone" IS NOT NULL
   AND regexp_replace(p."phone", '\D', '', 'g') ~ '^03[0-9]{9}$';
 
+COMMIT;
+
 -- Campaign messaging reuses the existing pharmacy message log.
 ALTER TABLE "pharmacy_message_logs"
   ADD COLUMN "body" TEXT,
@@ -69,7 +72,7 @@ CREATE TABLE "customer_metrics" (
     "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),
     "lastPurchaseAt" TIMESTAMP(3),
     "orders90d" INTEGER NOT NULL DEFAULT 0,
-    "spend90dMinor" INTEGER NOT NULL DEFAULT 0,
+    "spend90dMinor" BIGINT NOT NULL DEFAULT 0,
     "medianGapDays" INTEGER,
     "churnScore" INTEGER NOT NULL DEFAULT 0,
     "churnBand" TEXT NOT NULL DEFAULT 'low',
@@ -90,6 +93,7 @@ CREATE TABLE "growth_settings" (
     "quietHoursEnd" INTEGER NOT NULL DEFAULT 9,
     "maxMsgsPerDay" INTEGER NOT NULL DEFAULT 200,
     "minSecondsBetweenMsgs" INTEGER NOT NULL DEFAULT 4,
+    "lastMetricsRunAt" TIMESTAMP(3),
     "waInstanceName" TEXT,
     "waApiUrl" TEXT,
     "waApiKeyEnc" TEXT,
@@ -176,7 +180,8 @@ CREATE INDEX "campaigns_organizationId_status_sendAt_idx" ON "campaigns"("organi
 -- CreateIndex
 CREATE UNIQUE INDEX "campaigns_organizationId_id_key" ON "campaigns"("organizationId", "id");
 
--- CreateIndex
+-- Global uniqueness prevents collisions; redemption lookups must additionally
+-- filter organizationId derived from the authenticated session. FORCE RLS remains required.
 CREATE UNIQUE INDEX "campaign_recipients_code_key" ON "campaign_recipients"("code");
 
 -- CreateIndex
