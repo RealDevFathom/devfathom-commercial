@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 // Real PostgreSQL coverage for the fill trigger shipped in
-// 20261021180000_pharmacy_rx_fill_release (#234). The trigger function is read
+// 20261021180100_pharmacy_rx_fill_release (#234). The trigger function is read
 // straight from the migration file and installed on throwaway tables, so this
 // asserts the ACTUAL migrated SQL — not a mock of $queryRaw — agrees with the
 // application rule: allowance = authorizedCanonicalUnits * (authorizedRepeats +
@@ -16,7 +16,7 @@ describe.skipIf(!process.env.RX_GATE_DATABASE_URL)('Rx fill trigger (PostgreSQL)
     const triggerSql = readFileSync(
       path.join(
         process.cwd(),
-        'prisma/migrations/20261021180000_pharmacy_rx_fill_release/migration.sql'
+        'prisma/migrations/20261021180100_pharmacy_rx_fill_release/migration.sql'
       ),
       'utf8'
     );

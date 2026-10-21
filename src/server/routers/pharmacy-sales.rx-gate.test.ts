@@ -505,8 +505,13 @@ describe.skipIf(!process.env.RX_GATE_DATABASE_URL)('Rx quantity concurrency (Pos
       ).rejects.toThrow('row-level security');
     } finally {
       await Promise.all(clients.map((client) => client.end()));
-      await admin.query(`DROP SCHEMA ${schema} CASCADE; DROP ROLE IF EXISTS ${schema}`);
-      await admin.end();
+      try {
+        // Setup can roll back before the schema exists (for example, a test
+        // role without CREATEROLE). Preserve that failure instead of masking it.
+        await admin.query(`DROP SCHEMA IF EXISTS ${schema} CASCADE; DROP ROLE IF EXISTS ${schema}`);
+      } finally {
+        await admin.end();
+      }
     }
   }, 20_000);
 });
