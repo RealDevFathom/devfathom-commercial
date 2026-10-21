@@ -60,29 +60,19 @@ export function calculateKhataHealthSuggestion(
   const charges = entries.filter((entry) => entry.kind === 'CHARGE');
   const payments = entries.filter((entry) => entry.kind === 'PAYMENT');
   const dishonouredCheques = entries.filter((entry) => entry.kind === 'DISHONOURED_CHEQUE').length;
-  const settlements = new Map<string, Date>();
-  for (const charge of charges) {
-    let paidMinor = 0;
-    for (const payment of payments
-      .filter((candidate) => candidate.settlesChargeId === charge.id)
-      .sort(
-        (left, right) =>
-          left.occurredAt.getTime() - right.occurredAt.getTime() || left.id.localeCompare(right.id)
-      )) {
-      paidMinor += payment.amountMinor;
-      if (paidMinor >= charge.amountMinor) {
-        settlements.set(charge.id, payment.occurredAt);
-        break;
-      }
-    }
-  }
+  const paidChargeIds = new Set(payments.map((payment) => payment.settlesChargeId));
   const overdueChargeCount = charges.filter(
-    (charge) => charge.dueAt && charge.dueAt < windowEnd && !settlements.has(charge.id)
+    (charge) => charge.dueAt && charge.dueAt < windowEnd && !paidChargeIds.has(charge.id)
   ).length;
-  const paymentDays = charges.flatMap((charge) => {
-    const settledAt = settlements.get(charge.id);
-    return settledAt
-      ? [Math.max(0, Math.round((settledAt.getTime() - charge.occurredAt.getTime()) / DAY_MS))]
+  const paymentDays = payments.flatMap((payment) => {
+    const charge = charges.find((candidate) => candidate.id === payment.settlesChargeId);
+    return charge
+      ? [
+          Math.max(
+            0,
+            Math.round((payment.occurredAt.getTime() - charge.occurredAt.getTime()) / DAY_MS)
+          ),
+        ]
       : [];
   });
   const averageDaysToPay = paymentDays.length

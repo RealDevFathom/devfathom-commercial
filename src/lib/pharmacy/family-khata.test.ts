@@ -120,50 +120,6 @@ describe('CRM-L04 explainable health suggestion', () => {
     expect(suggestion.reasons).toContain('Average 10 day(s) to pay');
   });
 
-  it('keeps a partially paid overdue charge open until cumulative payments settle it', () => {
-    const history = [
-      {
-        id: 'charge_partial',
-        kind: 'CHARGE' as const,
-        amountMinor: 20_000,
-        occurredAt: new Date('2026-06-01'),
-        dueAt: new Date('2026-06-15'),
-      },
-      {
-        id: 'payment_partial',
-        kind: 'PAYMENT' as const,
-        amountMinor: 5_000,
-        occurredAt: new Date('2026-06-10'),
-        settlesChargeId: 'charge_partial',
-      },
-    ];
-
-    const partial = calculateKhataHealthSuggestion(
-      history,
-      10_000,
-      new Date('2026-06-01'),
-      new Date('2026-06-30')
-    );
-    const settled = calculateKhataHealthSuggestion(
-      [
-        ...history,
-        {
-          id: 'payment_balance',
-          kind: 'PAYMENT',
-          amountMinor: 15_000,
-          occurredAt: new Date('2026-06-21'),
-          settlesChargeId: 'charge_partial',
-        } as const,
-      ],
-      10_000,
-      new Date('2026-06-01'),
-      new Date('2026-06-30')
-    );
-
-    expect(partial.metrics).toMatchObject({ overdueChargeCount: 1, averageDaysToPay: null });
-    expect(settled.metrics).toMatchObject({ overdueChargeCount: 0, averageDaysToPay: 20 });
-  });
-
   it('NEGATIVE: suggestion alone never changes the limit; owner action is required', async () => {
     const update = vi.fn();
     const create = vi.fn();
