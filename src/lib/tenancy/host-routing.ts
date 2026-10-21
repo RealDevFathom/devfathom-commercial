@@ -155,10 +155,23 @@ export function isSharedHost(hostValue: string | null | undefined): boolean {
  * Returns null when no base domain is configured, so the caller can omit the
  * link rather than render a broken one.
  */
-export function tenantHostUrl(slug: string, path = '/login'): string | null {
-  const baseDomain = configuredBaseDomain();
+export function tenantHostUrl(slug: string, path = '/login', sourceHost?: string | null): string | null {
+  const localSource = normalizeHost(sourceHost);
+  const baseDomain = localSource.endsWith('.localhost') ? 'localhost' : configuredBaseDomain();
   if (!baseDomain || !slug) return null;
   const protocol =
     LOCAL_HOSTS.has(baseDomain) || baseDomain.endsWith('.localhost') ? 'http' : 'https';
-  return `${protocol}://${slug}.${baseDomain}${path}`;
+  // Share the authority rule between invite links and #151 login redirects.
+  const configuredUrl = process.env.NEXT_PUBLIC_APP_URL ?? process.env.AUTH_URL;
+  let authority = sourceHost ?? process.env.PLATFORM_BASE_DOMAIN ?? '';
+  if (!sourceHost && configuredUrl) {
+    try {
+      const url = new URL(configuredUrl);
+      if (normalizeHost(url.host) === baseDomain || normalizeHost(url.host).endsWith(`.${baseDomain}`)) {
+        authority = url.host;
+      }
+    } catch { /* The base-domain configuration remains authoritative. */ }
+  }
+  const port = authority.match(/:(\d+)$/)?.[1];
+  return `${protocol}://${slug}.${baseDomain}${port ? `:${port}` : ''}${path}`;
 }

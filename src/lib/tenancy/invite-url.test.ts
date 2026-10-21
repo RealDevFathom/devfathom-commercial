@@ -15,3 +15,10 @@ it.each([
     expect.objectContaining({ where: { id: 'session_org' } })
   );
 });
+
+it('preserves the configured development port through the shared host helper', async () => {
+  vi.stubEnv('PLATFORM_BASE_DOMAIN', 'localhost');
+  vi.stubEnv('NEXT_PUBLIC_APP_URL', 'http://agency.localhost:3100');
+  const db = { organization: { findUnique: vi.fn(async () => ({ slug: 'bistro', domains: [] })) } } as unknown as ScopedDb;
+  expect(await tenantInviteUrl(db, 'session_org', 'token')).toBe('http://bistro.localhost:3100/invite/token');
+});

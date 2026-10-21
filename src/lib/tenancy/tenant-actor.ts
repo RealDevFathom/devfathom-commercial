@@ -6,7 +6,7 @@ import {
 } from '@/lib/tenancy/demo-identity';
 
 import { cache } from 'react';
-import { tenantHostUrl, normalizeHost } from '@/lib/tenancy/host-routing';
+import { tenantHostUrl } from '@/lib/tenancy/host-routing';
 import { headers } from 'next/headers';
 import type { Session } from 'next-auth';
 import {
@@ -252,10 +252,5 @@ export async function resolveTenantMismatchLoginPath(): Promise<string | null> {
   if (!hostOrganization || hostOrganization.id === session.user.organizationId) return null;
   const organization = await resolveOrganizationById(session.user.organizationId);
   if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
-  const normalizedHost = normalizeHost(host);
-  if (normalizedHost.endsWith('.localhost')) {
-    const port = host?.match(/:(\d+)$/)?.[1];
-    return `http://${organization.slug}.localhost${port ? `:${port}` : ''}/login`;
-  }
-  return tenantHostUrl(organization.slug);
+  return tenantHostUrl(organization.slug, '/login', host);
 }
