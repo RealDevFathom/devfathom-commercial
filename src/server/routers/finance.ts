@@ -14,6 +14,10 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import {
+  invoiceStatusTransitionError,
+  invoiceStatusUpdate,
+} from '@/lib/finance/invoice-status';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -462,6 +466,14 @@ export const financeRouter = router({
       const prior = current.status;
       const next = input.status;
 
+      const transitionError = invoiceStatusTransitionError(prior, next);
+      if (transitionError) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: transitionError,
+        });
+      }
+
       // No-op: don't overwrite paidAt/sentAt or re-emit activity/notifications.
       if (prior === next) {
         return ctx.db.invoice.findUniqueOrThrow({
@@ -470,33 +482,18 @@ export const financeRouter = router({
         });
       }
 
-      const ALLOWED: Record<string, string[]> = {
-        DRAFT: ['SENT', 'CANCELLED'],
-        SENT: ['PAID', 'OVERDUE', 'CANCELLED', 'DRAFT'],
-        OVERDUE: ['PAID', 'CANCELLED', 'SENT'],
-        PAID: ['CANCELLED'],
-        CANCELLED: ['DRAFT'],
-      };
-      if (!ALLOWED[prior]?.includes(next)) {
+      const changed = await ctx.db.invoice.updateMany({
+        where: { id: input.id, status: prior },
+        data: invoiceStatusUpdate(prior, next, new Date()),
+      });
+      if (changed.count !== 1) {
         throw new TRPCError({
-          code: 'BAD_REQUEST',
-          message: `Cannot change an invoice from ${prior} to ${next}.`,
+          code: 'CONFLICT',
+          message: 'Invoice status changed concurrently. Refresh and try again.',
         });
       }
-
-      const data: Record<string, unknown> = { status: next };
-      if (next === 'PAID') data.paidAt = new Date();
-      if (next === 'SENT') data.sentAt = new Date();
-      // Clear stamps when the invoice leaves the corresponding state.
-      if (prior === 'PAID' && next !== 'PAID') data.paidAt = null;
-      if (next === 'DRAFT') {
-        data.sentAt = null;
-        data.paidAt = null;
-      }
-
-      const invoice = await ctx.db.invoice.update({
+      const invoice = await ctx.db.invoice.findUniqueOrThrow({
         where: { id: input.id },
-        data,
         include: { client: { select: { name: true } } },
       });
 
@@ -504,13 +501,6 @@ export const financeRouter = router({
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'invoice_sent',
           message: `sent invoice ${invoice.invoiceNumber} to ${invoice.client.name} ($${Number(invoice.total).toLocaleString()})`,
-          entityType: 'Invoice',
-          entityId: invoice.id,
-        });
-      } else if (next === 'PAID') {
-        logActivity(ctx.db, ctx.session.user.id, {
-          type: 'invoice_paid',
-          message: `marked invoice ${invoice.invoiceNumber} as paid ($${Number(invoice.total).toLocaleString()})`,
           entityType: 'Invoice',
           entityId: invoice.id,
         });
@@ -676,7 +666,7 @@ export const financeRouter = router({
   markOverdueInvoices: adminProcedure.mutation(async ({ ctx }) => {
     const result = await ctx.db.invoice.updateMany({
       where: { status: 'SENT', dueDate: { lt: new Date() } },
-      data: { status: 'OVERDUE' },
+      data: { status: 'OVERDUE', sentAt: null },
     });
     return { count: result.count };
   }),
