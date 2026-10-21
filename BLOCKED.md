@@ -1,3 +1,38 @@
+# Growth G2 blocked — 2026-10-21
+
+G2 cannot start on the supplied G1 dependency. Stopped under the user instruction:
+“If same problem fails twice stop, write BLOCKED.md root explaining, commit and
+push branch, exit.” The inherited G1 report below records two P1012 failures;
+the required initial `bun install` reproduced that exact failure in postinstall.
+No further retry or schema repair was attempted.
+
+## G2 evidence and disposition
+
+- Worktree: `/workspace/wt/improve/ai-growth-g2`; branch `improve/ai-growth-g2`.
+- `git merge-base --is-ancestor improve/ai-growth-g1 HEAD` passed. Starting HEAD
+  is `97e9d2c4` (`wip(growth): record blocked G1 schema draft`).
+- Read root AGENTS.md, `/workspace/ai-growth-plan.md` including G2 and churn,
+  and installed Next.js route-handler documentation before any implementation.
+- `node_modules` was absent; ran `bun install` first. Dependencies installed,
+  but postinstall `prisma generate` failed with P1012 at schema.prisma:15257:
+  CustomerMetrics requires `@@unique([organizationId, customerId])` for its
+  organization-scoped one-to-one PharmacyCustomer relation.
+- G1 has no growth migration, no growth RLS policies, and no settings/template
+  seed. A minimal G2 ALTER migration cannot safely build on nonexistent tables
+  or preserve nonexistent growth FORCE RLS. Repair and validate G1 first.
+- Actual model mappings already established by G1: Organization/organizationId,
+  PharmacyCustomer, PharmacySale (`pharmacy_sales`), GrowthSettings
+  (`growth_settings`); flag uses existing organization entitlements. Scheduler
+  currently uses withPlatformDb for discovery; tenant operations must use
+  withTenantDb. No G2 SQL, churn, refill, scheduling, fixtures, UI or messages
+  were added.
+- Checks: ancestry passed; install/postinstall failed. Typecheck, relevant/full
+  tests, lint, build and demo tick were not run after the mandatory stop.
+  No G2 performance, idempotence, tenant-isolation or database claims are made.
+- Only this blocker document changed. No migration or database mutation occurred.
+
+---
+
 # Growth G1 blocked — 2026-10-21
 
 Stopped under the explicit instruction to stop when the same problem fails twice.
