@@ -1,6 +1,9 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('./patient-prescriptions', () => ({ auditPatientRead: vi.fn() }));
+vi.mock('./settlement', () => ({ recordPharmacyCashMovement: vi.fn() }));
+
+import { recordPharmacyCashMovement } from './settlement';
 
 import {
   applyKhataLimitDecision,
@@ -69,6 +72,7 @@ describe('CRM-L02 family privacy and khata settlement', () => {
 
     const result = await settleFamilyKhata(db as never, scope, {
       familyAccountId: 'family_1',
+      drawerSessionId: 'drawer_1',
       amountMinor: 7_000,
       occurredAt: new Date('2026-07-10'),
     });
@@ -78,6 +82,12 @@ describe('CRM-L02 family privacy and khata settlement', () => {
       { settlesChargeId: 'charge_a', amountMinor: 4_000 },
       { settlesChargeId: 'charge_b', amountMinor: 3_000 },
     ]);
+    expect(recordPharmacyCashMovement).toHaveBeenCalledWith(db, scope, {
+      drawerSessionId: 'drawer_1',
+      kind: 'PAID_IN',
+      amountMinor: 7_000,
+      reason: 'Khata collection for family account family_1',
+    });
   });
 });
 

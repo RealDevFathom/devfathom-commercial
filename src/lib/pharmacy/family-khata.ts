@@ -4,6 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { auditPatientRead } from './patient-prescriptions';
+import { recordPharmacyCashMovement } from './settlement';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
 
@@ -152,7 +153,12 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date }
+  input: {
+    familyAccountId: string;
+    drawerSessionId: string;
+    amountMinor: number;
+    occurredAt: Date;
+  }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -205,6 +211,12 @@ export async function settleFamilyKhata(
     );
     remaining -= amountMinor;
   }
+  await recordPharmacyCashMovement(db, scope, {
+    drawerSessionId: input.drawerSessionId,
+    kind: 'PAID_IN',
+    amountMinor: input.amountMinor,
+    reason: `Khata collection for family account ${input.familyAccountId}`,
+  });
   return {
     paidMinor: input.amountMinor,
     remainingBalanceMinor: balanceMinor - input.amountMinor,
