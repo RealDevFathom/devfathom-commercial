@@ -6,7 +6,16 @@
  * error so the bench can fall back to manual entry.
  */
 
-export type Gs1WarningCode = 'EXPIRY_END_OF_MONTH' | 'SERIAL_FORMAT';
+export type Gs1WarningCode = 'EXPIRY_END_OF_MONTH' | 'SERIAL_FORMAT' | 'NEAR_EXPIRY';
+
+export const GS1_WARNING_CODES = [
+  'EXPIRY_END_OF_MONTH',
+  'SERIAL_FORMAT',
+  'NEAR_EXPIRY',
+] as const satisfies readonly Gs1WarningCode[];
+
+/** Near-expiry window used at goods-in. Matches the stock-signal policy. */
+export const GOODS_IN_NEAR_EXPIRY_DAYS = 90;
 
 export type Gs1Warning = { code: Gs1WarningCode; message: string };
 
@@ -153,6 +162,12 @@ function parseElements(value: string, now: Date): Gs1DataMatrixParseResult {
     if (!field || field.length > maximum) {
       return { kind: 'invalid', reason: `GS1 AI ${matched.code} has an invalid length.` };
     }
+    if (separator === -1 && followedByKnownAi(field, maximum)) {
+      return {
+        kind: 'invalid',
+        reason: `GS1 AI ${matched.code} is not terminated before the next AI.`,
+      };
+    }
     elements.push({ ai: matched.code, value: field });
     offset = end;
   }
@@ -191,10 +206,55 @@ function parseParenthesized(raw: string, now: Date): Gs1DataMatrixParseResult {
   return build(elements, now);
 }
 
+function followedByKnownAi(field: string, max: number): boolean {
+  const limit = Math.min(field.length, max);
+  for (let split = 1; split < field.length && split <= limit; split += 1) {
+    const matched = matchAi(field, split);
+    if (!matched.malformed && !('unknown' in matched)) return true;
+  }
+  return false;
+}
+
+/** Calendar day in UTC. Goods-in dates are stored at UTC midnight. */
+export function utcDay(value: Date): number {
+  return Date.UTC(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate());
+}
+
+export function packIsExpired(expiry: Date, now: Date): boolean {
+  if (Number.isNaN(expiry.getTime())) return true;
+  return utcDay(expiry) < utcDay(now);
+}
+
+export function nearExpiryWarning(expiryDate: string, now: Date): Gs1Warning | null {
+  const expiry = new Date(`${expiryDate}T00:00:00.000Z`);
+  if (Number.isNaN(expiry.getTime()) || packIsExpired(expiry, now)) return null;
+  const horizon = utcDay(now) + GOODS_IN_NEAR_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+  if (utcDay(expiry) <= horizon) {
+    return {
+      code: 'NEAR_EXPIRY',
+      message: 'This pack expires within 90 days. Confirm it before it is sold.',
+    };
+  }
+  return null;
+}
+
+/** One serialized pack is one unit. A scan without a serial keeps the outstanding order quantity. */
+export function receivedPacksForScan(serial: string | null | undefined, outstandingPacks: number) {
+  if (serial) return 1;
+  return outstandingPacks;
+}
+
 function build(
   elements: Array<{ ai: string; value: string }>,
   now: Date
 ): Gs1DataMatrixParseResult {
+  const seen = new Set<string>();
+  for (const element of elements) {
+    if (CORE_AIS.has(element.ai) && seen.has(element.ai)) {
+      return { kind: 'invalid', reason: `GS1 AI ${element.ai} is repeated.` };
+    }
+    seen.add(element.ai);
+  }
   const first = new Map<string, string>();
   for (const element of elements) if (!first.has(element.ai)) first.set(element.ai, element.value);
 
@@ -223,6 +283,8 @@ function build(
     if ('error' in resolved) return { kind: 'invalid', reason: resolved.error };
     expiryDate = resolved.expiryDate;
     warnings.push(...resolved.warnings);
+    const near = nearExpiryWarning(resolved.expiryDate, now);
+    if (near) warnings.push(near);
   }
 
   const batch = first.get('10') ?? null;

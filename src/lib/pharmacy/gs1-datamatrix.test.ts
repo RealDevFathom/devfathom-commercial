@@ -1,6 +1,12 @@
 import { describe, expect, it } from 'vitest';
 
-import { gtinCheckDigit, gs1Year, parseGs1DataMatrix } from './gs1-datamatrix';
+import {
+  gtinCheckDigit,
+  gs1Year,
+  packIsExpired,
+  parseGs1DataMatrix,
+  receivedPacksForScan,
+} from './gs1-datamatrix';
 
 const NOW = new Date('2026-10-21T00:00:00.000Z');
 const GS = '\u001d';
@@ -142,6 +148,48 @@ describe('parseGs1DataMatrix', () => {
     [`(01)${GTIN}(10)${'A'.repeat(21)}`, 'GS1 AI 10 has an invalid length.'],
   ])('rejects %s', (payload, reason) => {
     expect(elementString(payload)).toEqual({ kind: 'invalid', reason });
+  });
+
+  it('rejects a repeated core AI', () => {
+    expect(elementString(`(01)${GTIN}(01)${GTIN}`)).toEqual({
+      kind: 'invalid',
+      reason: 'GS1 AI 01 is repeated.',
+    });
+    expect(elementString(`01${GTIN}01${GTIN}`)).toEqual({
+      kind: 'invalid',
+      reason: 'GS1 AI 01 is repeated.',
+    });
+    expect(elementString(`(01)${GTIN}(17)271231(17)280101`)).toEqual({
+      kind: 'invalid',
+      reason: 'GS1 AI 17 is repeated.',
+    });
+  });
+
+  it('rejects a variable AI that runs into the next AI without a separator', () => {
+    expect(elementString(`01${GTIN}10ABCD123417271231`)).toEqual({
+      kind: 'invalid',
+      reason: 'GS1 AI 10 is not terminated before the next AI.',
+    });
+    expect(elementString(`01${GTIN}21A3F09C1E77B217271231`)).toEqual({
+      kind: 'invalid',
+      reason: 'GS1 AI 21 is not terminated before the next AI.',
+    });
+  });
+
+  it('warns when the pack expires within 90 days and does not warn on a far date', () => {
+    const near = elementString(`(01)${GTIN}(17)261130(10)EXP-NEAR-1`);
+    if (near.kind !== 'parsed') throw new Error('expected a parsed near-expiry pack');
+    expect(near.fields.warnings.map((warning) => warning.code)).toContain('NEAR_EXPIRY');
+    const far = elementString(`(01)${GTIN}(17)271231(10)ABCD1234`);
+    if (far.kind !== 'parsed') throw new Error('expected a parsed far pack');
+    expect(far.fields.warnings.map((warning) => warning.code)).not.toContain('NEAR_EXPIRY');
+  });
+
+  it('treats a past calendar day as expired and a serialized scan as one pack', () => {
+    expect(packIsExpired(new Date('2025-12-31T00:00:00.000Z'), NOW)).toBe(true);
+    expect(packIsExpired(new Date('2026-11-30T00:00:00.000Z'), NOW)).toBe(false);
+    expect(receivedPacksForScan('A3F09C1E77B2', 10)).toBe(1);
+    expect(receivedPacksForScan(null, 10)).toBe(10);
   });
 
   it.each(['', '8901234567890', 'ABC-123', ']E012345'])('classifies %s as non-GS1', (payload) => {
