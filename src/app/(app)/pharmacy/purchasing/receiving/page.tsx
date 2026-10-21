@@ -201,7 +201,7 @@ export default async function PharmacyReceivingPage({
   let witnessLoadFailed = false;
   if (needsWitness) {
     try {
-      witnesses = await caller.controlledWitnesses();
+      witnesses = await caller.controlledWitnesses({ goodsReceiptId: selectedReceipt!.id });
     } catch {
       witnessLoadFailed = true;
     }

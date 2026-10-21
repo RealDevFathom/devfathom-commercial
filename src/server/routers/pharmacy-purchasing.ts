@@ -1219,21 +1219,28 @@ const purchasingRouter = router({
     }),
 
   /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
-    const actorId = ctx.session?.user?.id;
-    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    const actor = subjectFromSession(ctx.session!.user);
-    if (
-      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db })) &&
-      !(await can(actor, 'pharmacy:procurement', undefined, { db: ctx.db }))
-    ) {
-      throw new TRPCError({ code: 'FORBIDDEN' });
-    }
-    const organizationId = ctx.session?.user?.organizationId;
-    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
-    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
-  }),
+  controlledWitnesses: protectedProcedure
+    .input(z.object({ goodsReceiptId: z.string().min(1) }).strict())
+    .query(async ({ ctx, input }) => {
+      const actorId = ctx.session?.user?.id;
+      if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const actor = subjectFromSession(ctx.session!.user);
+      if (
+        !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db })) &&
+        !(await can(actor, 'pharmacy:procurement', undefined, { db: ctx.db }))
+      ) {
+        throw new TRPCError({ code: 'FORBIDDEN' });
+      }
+      const organizationId = ctx.entitlements?.organizationId;
+      if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      const receipt = await ctx.db.pharmacyGoodsReceipt.findFirst({
+        where: { id: input.goodsReceiptId, organizationId },
+        select: { branchId: true },
+      });
+      if (!receipt) throw new TRPCError({ code: 'NOT_FOUND' });
+      return listControlledPinWitnesses(ctx.db, organizationId, actorId, receipt.branchId);
+    }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was

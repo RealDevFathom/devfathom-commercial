@@ -23,12 +23,15 @@ function fixture(capability: string) {
         permissionOverrides: [],
       }),
     },
+    pharmacyGoodsReceipt: { findFirst: vi.fn().mockResolvedValue({ branchId: 'draft-branch' }) },
     restaurantStaffProfile: { findMany: vi.fn().mockResolvedValue([]) },
   };
   const ctx = {
     db,
     entitlements: { organizationId: 'org', modules: [] },
-    session: { user: { id: 'actor', organizationId: 'org', role: 'EMPLOYEE', status: 'ACTIVE' } },
+    session: {
+      user: { id: 'actor', organizationId: 'session-org', role: 'EMPLOYEE', status: 'ACTIVE' },
+    },
     requestMeta: { ip: null },
     audit: { detail: {} },
   } as unknown as TRPCContext;
@@ -39,8 +42,10 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
     return surface === 'safety'
       ? f.caller.safety.controlledPharmacists()
       : (
-          f.caller.purchasing as unknown as { controlledWitnesses: () => Promise<unknown> }
-        ).controlledWitnesses();
+          f.caller.purchasing as unknown as {
+            controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+          }
+        ).controlledWitnesses({ goodsReceiptId: 'draft' });
   }
   it('denies a cashier before enumerating PIN holders', async () => {
     const f = fixture('pharmacy.counter');
@@ -54,7 +59,7 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
       expect.objectContaining({
         where: expect.objectContaining({
           organizationId: 'org',
-          user: { organizationId: 'org', status: 'ACTIVE' },
+          user: expect.objectContaining({ organizationId: 'org', status: 'ACTIVE' }),
           userId: { not: 'actor' },
         }),
       })
@@ -68,8 +73,10 @@ it.each(['pharmacy:procurement', 'pharmacy.procurement'])(
     const f = fixture(capability);
     await expect(
       (
-        f.caller.purchasing as unknown as { controlledWitnesses: () => Promise<unknown> }
-      ).controlledWitnesses()
+        f.caller.purchasing as unknown as {
+          controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+        }
+      ).controlledWitnesses({ goodsReceiptId: 'draft' })
     ).resolves.toEqual([]);
     await expect(f.caller.safety.controlledPharmacists()).rejects.toMatchObject({
       code: 'FORBIDDEN',
@@ -79,3 +86,39 @@ it.each(['pharmacy:procurement', 'pharmacy.procurement'])(
     );
   }
 );
+
+it('scopes purchasing witnesses to the tenant draft branch', async () => {
+  const f = fixture('pharmacy:procurement');
+  await (
+    f.caller.purchasing as unknown as {
+      controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+    }
+  ).controlledWitnesses({ goodsReceiptId: 'draft' });
+  expect(f.db.pharmacyGoodsReceipt.findFirst).toHaveBeenCalledWith({
+    where: { id: 'draft', organizationId: 'org' },
+    select: { branchId: true },
+  });
+  expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+    expect.objectContaining({
+      where: expect.objectContaining({
+        user: expect.objectContaining({
+          pharmacyBranchAssignments: {
+            some: { organizationId: 'org', branchId: 'draft-branch', active: true },
+          },
+        }),
+      }),
+    })
+  );
+});
+it('does not enumerate witnesses for a missing or foreign draft', async () => {
+  const f = fixture('pharmacy:procurement');
+  f.db.pharmacyGoodsReceipt.findFirst.mockResolvedValueOnce(null as never);
+  await expect(
+    (
+      f.caller.purchasing as unknown as {
+        controlledWitnesses: (input: { goodsReceiptId: string }) => Promise<unknown>;
+      }
+    ).controlledWitnesses({ goodsReceiptId: 'foreign' })
+  ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+  expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+});

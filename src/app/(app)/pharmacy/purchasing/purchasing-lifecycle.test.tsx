@@ -794,6 +794,7 @@ it.each([false, true])(
       })
     );
     render(await ReceivingPage({ searchParams: params({ receipt: receipt.id }) }));
+    expect(witnesses).toHaveBeenCalledExactlyOnceWith({ goodsReceiptId: receipt.id });
     const button = screen.getByRole('button', { name: 'Post into stock' });
     if (fails) {
       expect(button).toBeDisabled();
