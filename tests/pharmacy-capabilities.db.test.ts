@@ -13,6 +13,7 @@ const client = new pg.Client({ connectionString: url });
 const suffix = randomUUID().replaceAll('-', '');
 const org = `qa130_${suffix}`;
 const other = `${org}_other`;
+const third = `${org}_third`;
 const runtimeRole = `qa130_${suffix}`;
 const id = (key: string) => `${org}_${key}`;
 const migration = readFileSync(
@@ -45,7 +46,7 @@ const legacy: Record<string, string[]> = {
     await client.query(
       `GRANT SELECT ON organization_roles, organization_role_permissions, user_permission_overrides, users TO "${runtimeRole}"`
     );
-    for (const organizationId of [org, other]) {
+    for (const organizationId of [org, other, third]) {
       await client.query(
         `INSERT INTO organizations (id,slug,"legalName","displayName",status,"deploymentMode",vertical,"createdAt","updatedAt") VALUES ($1,$1,$1,$1,'ACTIVE','SHARED','PHARMACY',now(),now())`,
         [organizationId]
@@ -109,17 +110,19 @@ const legacy: Record<string, string[]> = {
       }
     }
     // Owner backfill: an existing report DENY survives; a custom pharmacy.* role is not widened.
-    for (const [key, roleKey] of [
-      ['other_owner', 'owner'],
-      ['other_custom', 'custom-all'],
-    ]) {
+    // A custom role that merely reuses key 'owner' (isSystem=false) is not an Owner.
+    for (const [key, roleKey, isSystem, roleOrg] of [
+      ['other_owner', 'owner', true, other],
+      ['other_custom', 'custom-all', false, other],
+      ['other_fake_owner', 'owner', false, third],
+    ] as const) {
       await client.query(
-        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$3,false,now())`,
-        [id(key), other, roleKey]
+        `INSERT INTO organization_roles (id,"organizationId",key,name,"isSystem","updatedAt") VALUES ($1,$2,$3,$4,$5,now())`,
+        [id(key), roleOrg, roleKey, `${key}`, isSystem]
       );
       await client.query(
         `INSERT INTO organization_role_permissions (id,"organizationId","organizationRoleId",capability,effect) VALUES ($1,$2,$3,'pharmacy.*','ALLOW')`,
-        [id(`${key}_star`), other, id(key)]
+        [id(`${key}_star`), roleOrg, id(key)]
       );
     }
     await client.query(
@@ -172,8 +175,8 @@ const legacy: Record<string, string[]> = {
       [org]
     );
     const rolesBefore = await client.query(
-      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2) ORDER BY id`,
-      [org, other]
+      `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
+      [org, other, third]
     );
     const ownerOther = await client.query(
       `SELECT capability,effect FROM organization_role_permissions WHERE "organizationRoleId"=$1 ORDER BY capability`,
@@ -200,6 +203,13 @@ const legacy: Record<string, string[]> = {
         'pharmacy:procurement',
       ].sort()
     );
+    const fakeOwner = await client.query(
+      `SELECT capability FROM organization_role_permissions WHERE "organizationRoleId"=$1`,
+      [id('other_fake_owner')]
+    );
+    expect(fakeOwner.rows.map((r) => r.capability).sort()).toEqual(
+      custom.rows.map((r) => r.capability).sort()
+    );
     const ownerOverride = await client.query(
       `SELECT capability FROM user_permission_overrides WHERE "userId"=$1 ORDER BY capability`,
       [id('user_owner')]
@@ -220,8 +230,8 @@ const legacy: Record<string, string[]> = {
     expect(
       (
         await client.query(
-          `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2) ORDER BY id`,
-          [org, other]
+          `SELECT * FROM organization_role_permissions WHERE "organizationId" IN ($1,$2,$3) ORDER BY id`,
+          [org, other, third]
         )
       ).rows
     ).toEqual(rolesBefore.rows);
