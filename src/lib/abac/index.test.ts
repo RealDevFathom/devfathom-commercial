@@ -154,7 +154,6 @@ describe('custom ABAC decisions', () => {
       'customers:read',
       'customers:manage',
       'loyalty:redeem',
-      'reports:financial',
       'workforce:rates',
       'restaurant:configure',
       'catering:read',
@@ -165,14 +164,6 @@ describe('custom ABAC decisions', () => {
       // WHA-863: browser enrollment and revocation use the narrower device
       // capability instead of inheriting broad administrator authority.
       'devices:manage',
-      // Pharmacy RX-03/04 and RX-05: pharmacist dispense decisions, substitution
-      // evidence, controlled register and incident approval. Org-role-driven
-      // through the DB customDecision path with no static agency-role policy,
-      // so they stay default-deny like the restaurant capabilities above.
-      'pharmacy:dispense',
-      'pharmacy:safety',
-      'pharmacy:catalogue-review',
-      'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
     expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
@@ -183,6 +174,33 @@ describe('custom ABAC decisions', () => {
         false
       );
     }
+  });
+
+  it('allows a tenant administrator through pharmacy and report gates without widening Cashier', async () => {
+    const ungranted = authorizationDb({});
+    const admin = { ...employee, role: 'ADMIN' };
+    for (const action of [
+      'pharmacy:counter',
+      'pharmacy:dispense',
+      'reports:operational',
+      'reports:financial',
+    ] as const) {
+      await expect(can(admin, action, undefined, { db: ungranted })).resolves.toBe(true);
+    }
+
+    const cashier = authorizationDb({
+      rolePermissions: [
+        { capability: 'pharmacy:counter', effect: 'ALLOW' },
+        { capability: 'pharmacy:orders', effect: 'ALLOW' },
+      ],
+    });
+    await expect(can(employee, 'pharmacy:counter', undefined, { db: cashier })).resolves.toBe(true);
+    await expect(can(employee, 'reports:operational', undefined, { db: cashier })).resolves.toBe(
+      false
+    );
+    await expect(can(employee, 'reports:financial', undefined, { db: cashier })).resolves.toBe(
+      false
+    );
   });
 });
 

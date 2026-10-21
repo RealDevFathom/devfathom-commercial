@@ -198,9 +198,12 @@ export const POLICIES: Record<Action, Policy[]> = {
   // Restaurant M7-L2: background-operations console (scheduler queue, execution
   // history, dead-letter + requeue, outbox status, webhook inbox). Granted through
   // an organization role/override carrying `reports:operational` (or `*`), evaluated
-  // by the DB `customDecision` path in `can()`; no static agency-role policy, so a
-  // subject without an explicit grant is denied by default.
-  'reports:operational': [],
+  // by the DB `customDecision` path in `can()`. Tenant administrators also retain
+  // their system-level access; other subjects without a grant are denied by default.
+  // Tenant administrators retain the pharmacy administrator access implied by
+  // their system role even when a post-hire organization-role assignment does
+  // not repeat the report grants. Explicit custom DENYs still win in `can()`.
+  'reports:operational': [isAdmin],
   // Restaurant M7-L3: SOP authoring console (templates, versions, steps, branch
   // assignments, schedule preview). Granted through an organization role/override
   // carrying `sop:manage` (or `*`, e.g. the restaurant Owner or SOP/Compliance
@@ -213,13 +216,14 @@ export const POLICIES: Record<Action, Policy[]> = {
   // restaurant M7-L4: SOP verification decisions — org-role-driven, no static agency-role
   // policy (default-deny without an explicit grant via customDecision path).
   'sop:verify': [],
-  // Restaurant M8 capabilities use the existing organization-role
-  // customDecision path. Empty static policies preserve default deny; labour
-  // cost requires BOTH reports:financial and workforce:rates at the report gate.
+  // Restaurant M8 capabilities use the existing organization-role customDecision
+  // path. Tenant administrators retain financial-report access, while the other
+  // actions remain default deny; labour cost still requires BOTH reports:financial
+  // and workforce:rates at the report gate.
   'customers:read': [],
   'customers:manage': [],
   'loyalty:redeem': [],
-  'reports:financial': [],
+  'reports:financial': [isAdmin],
   'workforce:rates': [],
   'restaurant:configure': [],
 
@@ -230,14 +234,18 @@ export const POLICIES: Record<Action, Policy[]> = {
   // no static agency-role policy, so it is DEFAULT DENY until an organization
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
-  'pharmacy:counter': [],
-  'pharmacy:manage': [],
-  'pharmacy:procurement': [],
-  'pharmacy:inventory': [],
-  'pharmacy:dispense': [],
-  'pharmacy:safety': [],
-  'pharmacy:catalogue-review': [],
-  'pharmacy:orders': [],
+  // A tenant ADMIN is the pharmacy administrator. Organization-role grants
+  // continue to authorize bounded staff roles (for example Cashier), while
+  // the static admin policy prevents a post-hire role assignment from removing
+  // the administrator's pharmacy access. Explicit custom DENYs remain decisive.
+  'pharmacy:counter': [isAdmin],
+  'pharmacy:manage': [isAdmin],
+  'pharmacy:procurement': [isAdmin],
+  'pharmacy:inventory': [isAdmin],
+  'pharmacy:dispense': [isAdmin],
+  'pharmacy:safety': [isAdmin],
+  'pharmacy:catalogue-review': [isAdmin],
+  'pharmacy:orders': [isAdmin],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.
