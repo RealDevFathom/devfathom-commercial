@@ -998,9 +998,16 @@ const purchasingRouter = router({
     }),
 
   /** Qualified people who can enter a PIN when a controlled receipt is posted. */
-  controlledWitnesses: protectedProcedure.query(({ ctx }) => {
+  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
     const actorId = ctx.session?.user?.id;
     if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const actor = subjectFromSession(ctx.session!.user);
+    if (
+      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+    ) {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    }
     return listControlledPinWitnesses(ctx.db, actorId);
   }),
 

@@ -52,9 +52,16 @@ export const pharmacySafetyRouter = router({
       }),
     };
   }),
-  controlledPharmacists: protectedProcedure.query(({ ctx }) =>
-    listControlledPinWitnesses(ctx.db, ctx.session!.user.id)
-  ),
+  controlledPharmacists: protectedProcedure.query(async ({ ctx }) => {
+    const actor = subjectFromSession(ctx.session!.user);
+    if (
+      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+    ) {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    }
+    return listControlledPinWitnesses(ctx.db, actor.id);
+  }),
   branches: safety.query(async ({ ctx }) => {
     const organizationId = ctx.entitlements?.organizationId;
     const userId = ctx.session?.user?.id;
