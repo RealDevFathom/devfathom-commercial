@@ -51,6 +51,16 @@ function contextStub(enabledModules = ['pharmacy-procurement']) {
     session: actor.session,
     organization: actor.organization,
     entitlements: { organizationId: 'org-1', enabledModules },
+    db: {
+      user: {
+        findUnique: vi.fn().mockResolvedValue({
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        }),
+      },
+    },
   };
 }
 
@@ -198,6 +208,32 @@ describe('tenancy and licensing (UX rule 7)', () => {
       screen.getByRole('heading', { name: 'Pharmacy Procurement is not licensed' })
     ).toBeDefined();
     expect(screen.getByText(/no allowance has been consumed/i)).toBeDefined();
+    expect(mocks.createCaller).not.toHaveBeenCalled();
+  });
+
+  it('closes goods-in for a cashier who lacks the procurement capability', async () => {
+    mocks.createTRPCContext.mockResolvedValue({
+      ...contextStub(),
+      db: {
+        user: {
+          findUnique: vi.fn().mockResolvedValue({
+            organizationRole: {
+              permissions: [
+                { capability: 'pharmacy.counter', effect: 'ALLOW' },
+                { capability: 'pharmacy:orders', effect: 'ALLOW' },
+              ],
+            },
+            permissionOverrides: [],
+          }),
+        },
+      },
+    });
+
+    render(await ReceivingPage({ searchParams: params() }));
+
+    expect(
+      screen.getByRole('heading', { name: 'You do not have purchasing access' })
+    ).toBeDefined();
     expect(mocks.createCaller).not.toHaveBeenCalled();
   });
 
@@ -750,5 +786,99 @@ describe('WHA-1349 action-boundary retry safety', () => {
     mocks.resolveTenantActor.mockRejectedValue(new Error('backend unavailable'));
     const result = new URL(await action(new FormData()), 'https://workspace.test');
     expect(result.searchParams.get('outcome')).toBe('unknown');
+  });
+});
+
+describe('goods-in scan and duplicate serial', () => {
+  const order = {
+    id: 'po-1',
+    reference: 'PO-1',
+    status: 'SENT',
+    supplierId: 'sup-ok',
+    supplier: { id: 'sup-ok', name: 'Karachi Distributors' },
+    lines: [
+      {
+        id: 'line-1',
+        medicineId: 'med-1',
+        packLevelId: 'pack-1',
+        orderedPacks: 10,
+        bonusPacks: 0,
+        canonicalUnitsPerPack: 10,
+        orderedCanonicalUnits: 100,
+        bonusCanonicalUnits: 0,
+        listPricePerPackMinor: 1000,
+        medicine: { productName: 'Amoxicillin 500mg' },
+        packLevel: { level: 'STRIP' },
+      },
+    ],
+  };
+
+  it('focuses the scan box above the exception queue and counts one serialized pack', async () => {
+    const payload = ']d201089612345678941727123110ABCD1234|21A3F09C1E77B2';
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        purchaseOrders: vi.fn().mockResolvedValue([order]),
+        resolveScan: vi.fn().mockResolvedValue({
+          kind: 'gs1',
+          medicineId: 'med-1',
+          packLevelId: 'pack-1',
+          label: 'Amoxicillin 500mg',
+          gtin: '08961234567894',
+          batch: 'ABCD1234',
+          expiryDate: '2027-12-31',
+          rawExpiry: '271231',
+          serial: 'A3F09C1E77B2',
+          warnings: [],
+        }),
+      })
+    );
+
+    render(await ReceivingPage({ searchParams: params({ order: 'po-1', scan: payload }) }));
+
+    const scan = screen.getByLabelText(/Scan or search/);
+    const queue = screen.getByRole('heading', { name: /Match exceptions/ });
+    expect(scan.compareDocumentPosition(queue) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(scan).toHaveFocus();
+    const line = screen.getByRole('group', { name: 'Amoxicillin 500mg' });
+    expect(within(line).getByLabelText('Packs received')).toHaveValue(1);
+    expect(within(line).getByLabelText(/Invoice corrects the printed batch/)).toBeDefined();
+    expect(line.querySelector('input[name="gs1Payload:line-1"]')).toHaveValue(payload);
+  });
+
+  it('reports a duplicate serial as a rejection the operator can correct', async () => {
+    const write = vi.fn().mockRejectedValue(new Error('DUPLICATE_SERIAL'));
+    mocks.createCaller.mockReturnValue(
+      callerStub({
+        purchaseOrders: vi.fn().mockResolvedValue([order]),
+        createGoodsReceipt: write,
+      })
+    );
+    const action = findAction(
+      await ReceivingPage({ searchParams: params({ order: 'po-1' }) }),
+      'receiveAgainstOrder'
+    );
+    const form = new FormData();
+    form.set('branchId', 'branch-1');
+    form.set('purchaseOrderId', 'po-1');
+    form.set('reference', 'GRN-1');
+    form.set('supplierInvoiceRef', 'INV-1');
+    form.set('supplierInvoiceDate', '2026-10-21');
+    form.set('warrantyEvidenceRef', 'WAR-1');
+    form.set('receivedAt', '2026-10-21');
+    form.set('batchNumber:line-1', 'ABCD1234');
+    form.set('printedExpiry:line-1', '2027-12-31');
+    form.set('printedMrp:line-1', '25.00');
+    form.set('receivedPacks:line-1', '1');
+    form.set('invoicedPrice:line-1', '10.00');
+    form.set('stockLocation:line-1', 'loc-1');
+    form.set('serialNumber:line-1', 'A3F09C1E77B2');
+    form.set('gtin:line-1', '08961234567894');
+    const result = new URL(await action(form), 'https://workspace.test');
+    expect(write).toHaveBeenCalledTimes(1);
+    expect(result.searchParams.get('outcome')).toBe('rejected');
+    expect(result.searchParams.get('notice')).toBe(
+      'This GTIN and serial were already received in this pharmacy. Treat it as a duplicate pack and do not stock it in again.'
+    );
+    expect(result.searchParams.get('field')).toBe('serialNumber');
   });
 });

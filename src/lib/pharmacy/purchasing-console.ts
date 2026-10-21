@@ -20,6 +20,7 @@
  */
 
 import { z } from 'zod';
+import { parseGs1DataMatrix, type Gs1Warning } from './gs1-datamatrix';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
 import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
@@ -781,8 +782,35 @@ export async function listReturnableLots(db: ScopedDb, scope: BranchScope) {
  */
 export type ScanResolution =
   | { kind: 'barcode'; medicineId: string; packLevelId: string | null; label: string }
+  | {
+      kind: 'gs1';
+      medicineId: string | null;
+      packLevelId: string | null;
+      label: string;
+      gtin: string;
+      batch: string | null;
+      expiryDate: string | null;
+      rawExpiry: string | null;
+      serial: string | null;
+      warnings: readonly Gs1Warning[];
+    }
   | { kind: 'medicine'; medicineId: string; packLevelId: null; label: string }
+  | { kind: 'manual'; label: string; reason: string }
   | { kind: 'unresolved'; label: string };
+
+async function barcodeForCodes(db: ScopedDb, scope: OrganizationScope, codes: string[]) {
+  return db.medicineBarcode.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      normalizedCode: { in: codes.map((code) => normalizeMedicineText(code)) },
+      presentation: { medicine: { saleable: true } },
+    },
+    select: {
+      packLevelId: true,
+      presentation: { select: { medicineId: true, medicine: { select: { productName: true } } } },
+    },
+  });
+}
 
 export async function resolveScan(
   db: ScopedDb,
@@ -791,6 +819,27 @@ export async function resolveScan(
 ): Promise<ScanResolution> {
   const term = raw.trim();
   if (!term) return { kind: 'unresolved', label: '' };
+
+  const parsed = parseGs1DataMatrix(term);
+  if (parsed.kind === 'invalid') return { kind: 'manual', label: term, reason: parsed.reason };
+  if (parsed.kind === 'parsed') {
+    const codes = [parsed.fields.gtin, parsed.fields.gtin13].filter((code): code is string =>
+      Boolean(code)
+    );
+    const linked = await barcodeForCodes(db, scope, codes);
+    return {
+      kind: 'gs1',
+      medicineId: linked?.presentation.medicineId ?? null,
+      packLevelId: linked?.packLevelId ?? null,
+      label: linked?.presentation.medicine.productName ?? parsed.fields.gtin,
+      gtin: parsed.fields.gtin,
+      batch: parsed.fields.batch,
+      expiryDate: parsed.fields.expiryDate,
+      rawExpiry: parsed.fields.expiry,
+      serial: parsed.fields.serial,
+      warnings: parsed.fields.warnings,
+    };
+  }
 
   const barcode = await db.medicineBarcode.findFirst({
     where: {

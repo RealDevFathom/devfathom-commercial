@@ -51,6 +51,10 @@ export class PharmacyReceivingError extends Error {
       | 'NOT_FOUND'
       | 'CROSS_TENANT_REFERENCE'
       | 'CROSS_BRANCH_REFERENCE'
+      | 'DUPLICATE_SERIAL'
+      | 'GS1_INVALID'
+      | 'GTIN_MEDICINE_MISMATCH'
+      | 'EXPIRED_PACK'
   ) {
     super(reason);
   }

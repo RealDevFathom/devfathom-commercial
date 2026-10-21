@@ -8,6 +8,12 @@ import { SectionCard } from '@/components/ui/section-card';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { hasModule } from '@/lib/entitlements';
+import {
+  GS1_WARNING_CODES,
+  receivedPacksForScan,
+  type Gs1WarningCode,
+} from '@/lib/pharmacy/gs1-datamatrix';
+import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import type {
   GoodsReceiptDetail,
   MedicineOption,
@@ -77,8 +83,8 @@ const DIRECT_SLOTS = [0, 1, 2] as const;
  * PUR-02 receiving, PUR-04 match exceptions and PUR-05 direct purchase.
  *
  * The layout is ordered the way the bench works rather than the way the data
- * model is drawn: what is blocked (the exception queue), then what is in front
- * of you (the capture form), then what you have already filed. The pack → unit
+ * model is drawn: the scan box first, then what is blocked (the exception
+ * queue), then the capture form, then what you have already filed. The pack → unit
  * conversion, the outstanding balance and the resulting unit cost are all read
  * back beside the field that drives them, because a number that is only visible
  * after posting is a number nobody checked.
@@ -98,6 +104,9 @@ export default async function PharmacyReceivingPage({
     return (
       <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled={moduleEnabled} />
     );
+  }
+  if (!(await actorCanProcure(ctx.db, ctx.session.user.id))) {
+    return <AccessState heading={HEADING} description={DESCRIPTION} moduleEnabled />;
   }
   const caller = await purchasingCaller();
   if (!caller) {
@@ -420,6 +429,26 @@ export default async function PharmacyReceivingPage({
 
   return (
     <Frame branch={scope} notice={notice}>
+      <form action={ROUTE} className="flex flex-wrap items-end gap-3" method="get">
+        <input name="branch" type="hidden" value={branchId} />
+        {selectedOrder ? <input name="order" type="hidden" value={selectedOrder.id} /> : null}
+        {selectedReceipt ? <input name="receipt" type="hidden" value={selectedReceipt.id} /> : null}
+        <label className="min-w-56 flex-1 text-sm font-medium text-text-body" htmlFor="scan">
+          Scan or search
+          <input
+            autoComplete="off"
+            autoFocus
+            className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
+            defaultValue={scanTerm ?? ''}
+            id="scan"
+            name="scan"
+            placeholder="Scan a 2D or linear code, or type a product name"
+          />
+        </label>
+        <SubmitButton variant="secondary">Find line</SubmitButton>
+      </form>
+      {scan ? <ScanNotice scan={scan} onThisOrder={scanOnOrder(scan, selectedOrder)} /> : null}
+
       <div className="grid gap-6 sm:grid-cols-4">
         <Stat
           label="Open exceptions"
@@ -537,6 +566,7 @@ export default async function PharmacyReceivingPage({
           <>
             <form action={ROUTE} className="flex flex-wrap items-end gap-3" method="get">
               <input name="branch" type="hidden" value={branchId} />
+              {scanTerm ? <input name="scan" type="hidden" value={scanTerm} /> : null}
               <label className="min-w-56 text-sm font-medium text-text-body" htmlFor="order-pick">
                 Purchase order
                 <select
@@ -553,29 +583,8 @@ export default async function PharmacyReceivingPage({
                   ))}
                 </select>
               </label>
-              <label className="min-w-56 flex-1 text-sm font-medium text-text-body" htmlFor="scan">
-                Scan or search
-                <input
-                  autoComplete="off"
-                  className="mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2"
-                  defaultValue={scanTerm ?? ''}
-                  id="scan"
-                  name="scan"
-                  placeholder="Scan a barcode or type a product name"
-                />
-              </label>
-              <SubmitButton variant="secondary">Find line</SubmitButton>
+              <SubmitButton variant="secondary">Open order</SubmitButton>
             </form>
-            {scan ? (
-              <p
-                className={`mt-3 text-sm ${scan.kind === 'unresolved' ? 'text-destructive' : 'text-text-muted'}`}
-                role={scan.kind === 'unresolved' ? 'alert' : 'status'}
-              >
-                {scan.kind === 'unresolved'
-                  ? `Nothing in this workspace matches “${scan.label}”. Check the code, or pick the line by name below.`
-                  : `Matched ${scan.label}. Its line is highlighted below.`}
-              </p>
-            ) : null}
 
             {selectedOrder ? (
               <PurchasingActionForm
@@ -625,11 +634,18 @@ export default async function PharmacyReceivingPage({
                     const already = outstanding[line.id];
                     const orderedUnits = line.orderedCanonicalUnits + line.bonusCanonicalUnits;
                     const remaining = Math.max(0, orderedUnits - (already?.receivedUnits ?? 0));
+                    const prefillId =
+                      scan?.kind === 'gs1' && scan.medicineId
+                        ? selectedOrder.lines.find((row) => row.medicineId === scan.medicineId)?.id
+                        : undefined;
                     return (
                       <CaptureFieldset
                         highlighted={
-                          scan?.kind !== 'unresolved' && scan?.medicineId === line.medicineId
+                          scan?.kind !== 'unresolved' &&
+                          scan?.kind !== 'manual' &&
+                          scan?.medicineId === line.medicineId
                         }
+                        prefill={prefillId === line.id ? gs1Prefill(scan, scanTerm) : undefined}
                         key={line.id}
                         keyPrefix={line.id}
                         locations={locations}
@@ -637,11 +653,12 @@ export default async function PharmacyReceivingPage({
                         subtitle={`Ordered ${line.orderedPacks} ${line.packLevel.level}${
                           line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''
                         } · ${units(orderedUnits)} · already received ${units(already?.receivedUnits ?? 0)} · outstanding ${units(remaining)}`}
-                        suggestedPacks={
+                        suggestedPacks={receivedPacksForScan(
+                          prefillId === line.id && scan?.kind === 'gs1' ? scan.serial : null,
                           line.canonicalUnitsPerPack > 0
                             ? Math.floor(remaining / line.canonicalUnitsPerPack)
                             : 0
-                        }
+                        )}
                         suggestedPriceMinor={line.listPricePerPackMinor}
                         title={line.medicine.productName}
                         unitsPerPack={line.canonicalUnitsPerPack}
@@ -759,6 +776,9 @@ export default async function PharmacyReceivingPage({
               {DIRECT_SLOTS.map((slot) => (
                 <div key={slot} className="space-y-3">
                   <SelectField
+                    defaultValue={
+                      slot === 0 ? directPackValue(scan, workspace.medicines) : undefined
+                    }
                     emptyHint="No medicine has an effective pack level."
                     label={`Line ${slot + 1} — medicine and pack`}
                     name={`directPack-${slot}`}
@@ -770,7 +790,13 @@ export default async function PharmacyReceivingPage({
                     keyPrefix={`d${slot}`}
                     locations={locations}
                     notice={notice}
-                    subtitle="Fill this only if you chose a medicine above."
+                    prefill={slot === 0 ? gs1Prefill(scan, scanTerm) : undefined}
+                    suggestedPacks={
+                      slot === 0 && scan?.kind === 'gs1' && scan.serial
+                        ? receivedPacksForScan(scan.serial, 0)
+                        : undefined
+                    }
+                    subtitle="Fill this only if you chose a medicine above. A pack with no 2D code is entered by hand."
                     title={`Line ${slot + 1} capture`}
                     unitsPerPack={null}
                   />
@@ -897,6 +923,7 @@ function CaptureFieldset({
   suggestedPacks,
   suggestedPriceMinor,
   highlighted,
+  prefill,
 }: {
   keyPrefix: string;
   title: string;
@@ -907,6 +934,7 @@ function CaptureFieldset({
   suggestedPacks?: number;
   suggestedPriceMinor?: number;
   highlighted?: boolean;
+  prefill?: Gs1Prefill;
 }) {
   const stock = locations.filter((location) => location.kind !== 'QUARANTINE');
   const quarantine = locations.filter((location) => location.kind === 'QUARANTINE');
@@ -918,26 +946,56 @@ function CaptureFieldset({
     >
       <legend className="px-1 text-sm font-medium text-text-strong">{title}</legend>
       <p className="text-xs text-text-muted">{subtitle}</p>
+      {prefill?.warnings.length ? (
+        <p className="mt-1 text-xs text-text-muted">{prefill.warnings.join(' ')}</p>
+      ) : null}
       {unitsPerPack ? (
         <Derived label="Pack conversion" value={`1 pack = ${unitsPerPack} units`} />
       ) : null}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <TextField
+          defaultValue={prefill?.batchNumber}
           label="Batch number"
           name={`batchNumber:${keyPrefix}`}
           notice={notice}
-          hint="Leave blank if this line did not arrive."
+          hint="Leave blank if this line did not arrive. A 2D scan fills this in."
         />
         <TextField
+          defaultValue={prefill?.printedExpiry}
           label="Printed expiry"
           name={`printedExpiry:${keyPrefix}`}
           notice={notice}
           type="date"
+          hint={
+            prefill?.printedExpiry
+              ? 'Filled from the scan. Confirm it against the supplier invoice.'
+              : undefined
+          }
         />
+        <TextField
+          defaultValue={prefill?.serialNumber}
+          label="Serial"
+          name={`serialNumber:${keyPrefix}`}
+          notice={notice}
+          hint="From the 2D code. Leave blank on an older pack with no serial."
+        />
+        {prefill?.gtin ? (
+          <input name={`gtin:${keyPrefix}`} type="hidden" value={prefill.gtin} />
+        ) : null}
+        {prefill?.payload ? (
+          <input name={`gs1Payload:${keyPrefix}`} type="hidden" value={prefill.payload} />
+        ) : null}
+        {prefill?.warningCodes.length ? (
+          <input
+            name={`gs1Warnings:${keyPrefix}`}
+            type="hidden"
+            value={prefill.warningCodes.join('\n')}
+          />
+        ) : null}
         <SelectField
-          defaultValue="MONTH"
+          defaultValue={prefill?.expiryPrecision ?? 'MONTH'}
           emptyHint="—"
-          hint="Most cartons print a month only."
+          hint="Most cartons print a month only. Day 00 on a 2D code is the end of the month."
           label="Expiry precision"
           name={`expiryPrecision:${keyPrefix}`}
           notice={notice}
@@ -961,8 +1019,20 @@ function CaptureFieldset({
           name={`receivedPacks:${keyPrefix}`}
           notice={notice}
           type="number"
-          hint={suggestedPacks ? 'Pre-filled with the outstanding balance.' : undefined}
+          hint={
+            prefill?.serialNumber
+              ? 'One serialized pack counts as one unit.'
+              : suggestedPacks
+                ? 'Pre-filled with the outstanding balance.'
+                : undefined
+          }
         />
+        {prefill ? (
+          <label className="flex min-h-11 items-center gap-2 text-sm text-text-body sm:col-span-2">
+            <input name={`invoiceCorrection:${keyPrefix}`} type="checkbox" value="yes" />
+            Invoice corrects the printed batch or expiry
+          </label>
+        ) : null}
         <TextField
           inputMode="numeric"
           label="Free / bonus packs"
@@ -1096,7 +1166,9 @@ function ReceiptDetail({
               </span>
             </div>
             <p className="mt-1 text-xs text-text-muted">
-              Batch {line.batchNumber} · expires {dateOnly(line.printedExpiry)} (
+              Batch {line.batchNumber}
+              {line.serialNumber ? ` · serial ${line.serialNumber}` : ''}
+              {line.gtin ? ` · GTIN ${line.gtin}` : ''} · expires {dateOnly(line.printedExpiry)} (
               {line.expiryPrecision.toLowerCase()} precision) · MRP {money(line.printedMrpMinor)} ·{' '}
               {line.receivedPacks} {line.packLevel.level}
               {line.bonusPacks > 0 ? ` + ${line.bonusPacks} free` : ''} ×{' '}
@@ -1209,6 +1281,14 @@ function packOptions(medicines: MedicineOption[]) {
   );
 }
 
+function warningCodes(form: FormData, key: string): Gs1WarningCode[] {
+  const allowed = new Set<string>(GS1_WARNING_CODES);
+  return (optionalField(form, `gs1Warnings:${key}`) ?? '')
+    .split('\n')
+    .map((code) => code.trim())
+    .filter((code): code is Gs1WarningCode => allowed.has(code));
+}
+
 function readPack(value: string) {
   const [medicineId, packLevelId, unitsPerPack] = value.split('|');
   if (!medicineId || !packLevelId || !unitsPerPack) return null;
@@ -1240,6 +1320,11 @@ function readCaptureFields(form: FormData, key: string) {
   return {
     batchNumber: field(form, `batchNumber:${key}`),
     printedExpiry: dateField(form, `printedExpiry:${key}`, 'Printed expiry'),
+    gtin: optionalField(form, `gtin:${key}`),
+    serialNumber: optionalField(form, `serialNumber:${key}`),
+    gs1Payload: optionalField(form, `gs1Payload:${key}`),
+    invoiceCorrection: field(form, `invoiceCorrection:${key}`) === 'yes',
+    gs1Warnings: warningCodes(form, key),
     expiryPrecision: (field(form, `expiryPrecision:${key}`) === 'DAY' ? 'DAY' : 'MONTH') as
       'DAY' | 'MONTH',
     printedMrpMinor: moneyFieldMinor(form, `printedMrp:${key}`, 'Printed MRP'),
@@ -1261,6 +1346,92 @@ function readCaptureFields(form: FormData, key: string) {
     taxCreditable: field(form, `taxCreditable:${key}`) === 'yes',
     stockLocationId: field(form, `stockLocation:${key}`),
   };
+}
+
+type Gs1Prefill = {
+  batchNumber?: string;
+  printedExpiry?: string;
+  expiryPrecision?: 'DAY' | 'MONTH';
+  serialNumber?: string;
+  gtin?: string;
+  payload?: string;
+  warnings: string[];
+  warningCodes: string[];
+};
+
+function gs1Prefill(scan: ScanResolution | null, rawScan?: string): Gs1Prefill | undefined {
+  if (scan?.kind !== 'gs1') return undefined;
+  const dayZero = scan.rawExpiry?.endsWith('00') === true;
+  return {
+    batchNumber: scan.batch ?? undefined,
+    printedExpiry: scan.expiryDate ?? undefined,
+    expiryPrecision: scan.expiryDate ? (dayZero ? 'MONTH' : 'DAY') : undefined,
+    serialNumber: scan.serial ?? undefined,
+    gtin: scan.serial ? scan.gtin : undefined,
+    payload: rawScan,
+    warnings: scan.warnings.map((warning) => warning.message),
+    warningCodes: scan.warnings.map((warning) => warning.code),
+  };
+}
+
+function scanOnOrder(scan: ScanResolution, order: PurchaseOrderDetail | null): boolean {
+  if (!order || !('medicineId' in scan) || !scan.medicineId) return false;
+  return order.lines.some((line) => line.medicineId === scan.medicineId);
+}
+
+function directPackValue(
+  scan: ScanResolution | null,
+  medicines: MedicineOption[]
+): string | undefined {
+  if (scan?.kind !== 'gs1' || !scan.medicineId || !scan.packLevelId) return undefined;
+  return packOptions(medicines).find((option) =>
+    option.value.startsWith(`${scan.medicineId}|${scan.packLevelId}|`)
+  )?.value;
+}
+
+function ScanNotice({ scan, onThisOrder }: { scan: ScanResolution; onThisOrder: boolean }) {
+  if (scan.kind === 'unresolved') {
+    return (
+      <p className="mt-3 text-xs text-destructive" role="alert">
+        Nothing in this workspace matches “{scan.label}”. Check the code, or pick the line by name
+        below.
+      </p>
+    );
+  }
+  if (scan.kind === 'manual') {
+    return (
+      <p className="mt-3 text-xs text-text-muted" role="alert">
+        This code could not be read ({scan.reason}). Enter the product, batch and expiry by hand.
+        Older packs without a 2D code stay receivable.
+      </p>
+    );
+  }
+  if (scan.kind === 'barcode') {
+    return (
+      <p className="mt-3 text-xs text-text-muted" role="status">
+        Linear code matched {scan.label}. It has no batch or expiry, so enter those by hand.
+      </p>
+    );
+  }
+  if (scan.kind === 'medicine') {
+    return (
+      <p className="mt-3 text-xs text-text-muted" role="status">
+        Matched {scan.label}. Enter batch, expiry and serial by hand.
+      </p>
+    );
+  }
+  const warning = scan.warnings.map((item) => item.message).join(' ');
+  const where = scan.medicineId
+    ? onThisOrder
+      ? `Matched ${scan.label}. Batch, expiry and serial are filled on that line. Confirm the expiry against the invoice.`
+      : `${scan.label} matches GTIN ${scan.gtin}, but it is not a line on this order. Enter it by hand or receive it as a direct purchase.`
+    : `GTIN ${scan.gtin} is not linked to a product. Batch ${scan.batch ?? '—'}, expiry ${scan.expiryDate ?? '—'}, serial ${scan.serial ?? '—'}. Link the GTIN, or type the line by hand.`;
+  return (
+    <p className="mt-3 text-xs text-text-muted" role="status">
+      {where}
+      {warning ? ` ${warning}` : ''}
+    </p>
+  );
 }
 
 function linkTo(query: SearchQuery, branchId: string, next: Record<string, string>): string {
