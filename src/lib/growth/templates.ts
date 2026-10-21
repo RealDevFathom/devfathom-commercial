@@ -92,7 +92,7 @@ export const TEMPLATE_PURPOSE: Record<TemplateKey, TemplatePurpose> = {
  * Promotional campaigns may name only these product families. Anything else,
  * including an empty list, is refused. Utility templates do not use this list.
  */
-const PROMO_PRODUCT_CATEGORIES = new Set(['front_shop', 'device', 'alternative']);
+const PROMO_PRODUCT_CATEGORIES = new Set(['front_shop', 'device']);
 
 export class DrugCategoryInPromo extends Error {
   readonly categories: readonly string[];
@@ -122,7 +122,8 @@ export function assertPromoProductCategories(categories: readonly string[]): voi
 }
 
 /**
- * Marketing sends allow only front-shop, device, and alternative families.
+ * Marketing sends allow only front-shop and device families.
+ * Herbal and homeopathic products are medicines under Meta policy, so ALTERNATIVE is excluded.
  * A utility template such as `refill_reminder` or `order_ready` may name a medicine.
  * An unknown template key and an empty marketing list both fail closed.
  */

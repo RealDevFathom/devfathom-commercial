@@ -48,9 +48,21 @@ describe('message templates', () => {
     expect(() =>
       assertCampaignProducts({
         templateKey: 'slow_day',
-        productCategories: ['Front Shop', 'DEVICE', 'ALTERNATIVE'],
+        productCategories: ['Front Shop', 'DEVICE'],
       })
     ).not.toThrow();
+    expect(() =>
+      assertCampaignProducts({
+        templateKey: 'slow_day',
+        productCategories: ['ALTERNATIVE'],
+      })
+    ).toThrow(DrugCategoryInPromo);
+    expect(() =>
+      assertCampaignProducts({
+        templateKey: 'holiday',
+        productCategories: ['herbal', 'homeopathic'],
+      })
+    ).toThrow(DrugCategoryInPromo);
     expect(() =>
       assertCampaignProducts({ templateKey: 'birthday_offer', productCategories: [] })
     ).toThrow(DrugCategoryInPromo);

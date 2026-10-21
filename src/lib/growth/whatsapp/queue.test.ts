@@ -26,11 +26,7 @@ vi.mock('./store', () => ({
   },
 }));
 
-import {
-  DrugCategoryInPromo,
-  ProductNotAllowlisted,
-  ProhibitedDrugInCopy,
-} from '@/lib/growth/templates';
+import { DrugCategoryInPromo, ProhibitedDrugInCopy } from '@/lib/growth/templates';
 
 import { EvolutionWhatsAppProvider } from './evolution';
 import { createMemoryStore } from './memory-store';
@@ -584,7 +580,7 @@ describe('outbound queue', () => {
         templateKey: 'slow_day',
         medicineIds: ['alt'],
       })
-    ).rejects.toBeInstanceOf(ProductNotAllowlisted);
+    ).rejects.toBeInstanceOf(DrugCategoryInPromo);
   });
 
   it('refuses marketing copy that names a restricted medicine and fails closed', async () => {

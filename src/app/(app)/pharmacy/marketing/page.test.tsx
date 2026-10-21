@@ -1,6 +1,6 @@
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { renderToStaticMarkup } from 'react-dom/server';
-import { render, screen } from '@testing-library/react';
+import { cleanup, render, screen } from '@testing-library/react';
 import { TRPCError } from '@trpc/server';
 import { beforeEach, expect, it, vi } from 'vitest';
 const mocks = vi.hoisted(() => ({
@@ -9,8 +9,14 @@ const mocks = vi.hoisted(() => ({
   history: vi.fn(),
   review: vi.fn(),
   deliveryHistory: vi.fn(),
+  role: null as string | null,
 }));
-vi.mock('@/server/trpc', () => ({ createTRPCContext: async () => ({}) }));
+vi.mock('@/server/trpc', () => ({
+  createTRPCContext: async () => ({ session: { user: { role: mocks.role } } }),
+}));
+vi.mock('./whatsapp-webhook-settings', () => ({
+  WhatsAppWebhookSettings: () => <section>WhatsApp webhook secret</section>,
+}));
 vi.mock('@/server/routers/pharmacy-marketing', () => ({
   pharmacyMarketingRouter: { createCaller: () => mocks },
 }));
@@ -27,6 +33,7 @@ const campaign = {
 };
 beforeEach(() => {
   vi.resetAllMocks();
+  mocks.role = null;
   mocks.growthHistory.mockResolvedValue({ insights: [], reviews: [] });
   mocks.deliveryHistory.mockResolvedValue({
     accepted: 0,
@@ -54,6 +61,15 @@ function snapshot(name: string, content: React.ReactNode) {
     `<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><link rel="stylesheet" href="studio.css"><title>Marketing synthetic review</title></head><body style="padding:24px;background:var(--surface-page);color:var(--text-body)">${renderToStaticMarkup(content)}</body></html>`
   );
 }
+it('shows the webhook secret control only to an administrator', async () => {
+  const hidden = await Page({ searchParams: Promise.resolve({}) });
+  render(hidden);
+  expect(screen.queryByText('WhatsApp webhook secret')).not.toBeInTheDocument();
+  cleanup();
+  mocks.role = 'ADMIN';
+  render(await Page({ searchParams: Promise.resolve({}) }));
+  expect(screen.getByText('WhatsApp webhook secret')).toBeInTheDocument();
+});
 it('shows empty and disabled states with honest preparation language', async () => {
   const page = await Page({ searchParams: Promise.resolve({}) });
   snapshot('empty', page);
