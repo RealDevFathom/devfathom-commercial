@@ -137,7 +137,7 @@ const demandReason = z.enum([
 const txDb = (tx: unknown) => tx as ScopedDb;
 
 async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
-  const organizationId = ctx.session?.user?.organizationId;
+  const organizationId = ctx.entitlements?.organizationId;
   const actorId = ctx.session?.user?.id;
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
@@ -1466,7 +1466,7 @@ export const pharmacySalesRouter = router({
 
   /** The branches this counter may open a bill against, with the money format. */
   counterBranches: protectedProcedure.query(async ({ ctx }) => {
-    const organizationId = ctx.session?.user?.organizationId;
+    const organizationId = ctx.entitlements?.organizationId;
     if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     const [branches, organization] = await Promise.all([
       ctx.db.pharmacyBranch.findMany({
@@ -1677,7 +1677,7 @@ export const pharmacySalesRouter = router({
 
   /** This operator's resolved keymap, falling back to the shipped default. */
   counterKeymap: protectedProcedure.query(async ({ ctx }) => {
-    const organizationId = ctx.session?.user?.organizationId;
+    const organizationId = ctx.entitlements?.organizationId;
     const userId = ctx.session?.user?.id;
     if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
     const stored = await ctx.db.pharmacyCounterKeymapPreference.findFirst({
@@ -1729,7 +1729,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const organizationId = ctx.session?.user?.organizationId;
+      const organizationId = ctx.entitlements?.organizationId;
       const userId = ctx.session?.user?.id;
       if (!organizationId || !userId) throw new TRPCError({ code: 'UNAUTHORIZED' });
       try {
