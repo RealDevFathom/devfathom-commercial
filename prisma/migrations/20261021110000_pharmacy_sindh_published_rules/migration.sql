@@ -14,9 +14,9 @@
 --
 -- The jurisdiction table is FORCE row-level security with a platform-admin-only
 -- INSERT policy. The migration role is not a superuser on the gate cluster or
--- on Azure, so we assert the platform-admin flag for this transaction before
+-- on AWS, so we assert the platform-admin flag for this transaction before
 -- the INSERT — exactly the predicate the policy's WITH CHECK reads.
-SELECT set_config('app.is_platform_admin', 'true', false);
+SELECT set_config('app.is_platform_admin', 'true', true);
 
 INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   "id", "code", "version", "effectiveFrom", "licenceCategories",

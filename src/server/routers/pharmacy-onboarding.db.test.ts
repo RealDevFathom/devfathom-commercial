@@ -242,6 +242,23 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('refuses a province that differs from the branch’s own province (QA-129)', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          effectiveFrom: '2026-10-15',
+          provinceCode: 'PK-SD',
+          licenceCategory: 'RETAIL',
+          permittedSchedules: ['G'],
+        })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('This branch is registered in'),
+      });
+    });
+  });
+
   it('saves version 1 and leaves the licences step outstanding while the rules are provisional', async () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile(profile);
