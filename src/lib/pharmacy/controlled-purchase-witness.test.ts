@@ -19,6 +19,8 @@ const credential = {
   credentialHash: 'hash',
   failedAttempts: 0,
   lockedUntil: null,
+  revokedAt: null,
+  deviceId: null,
   staffProfile: {
     status: 'ACTIVE',
     user: {
