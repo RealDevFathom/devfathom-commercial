@@ -50,6 +50,20 @@ const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 // IMP-HR-01: the leave types we track balances for (mirrors the LeaveType enum).
 const LEAVE_TYPES = ['VACATION', 'SICK', 'REMOTE'] as const;
 
+async function lockActiveOrganizationAdmins(
+  tx: Prisma.TransactionClient,
+  organizationId: string
+): Promise<void> {
+  await tx.$queryRaw`
+    SELECT "id"
+    FROM "users"
+    WHERE "organizationId" = ${organizationId}
+      AND "role" = 'ADMIN'
+      AND "status" = 'ACTIVE'
+    FOR UPDATE
+  `;
+}
+
 // IMP-HR-01: inclusive whole-day span of a leave request (Jun 3 → Jun 5 = 3 days).
 // Normalize to local midnight so partial-day timestamps don't skew the count.
 function leaveDayCount(start: Date, end: Date): number {
@@ -777,19 +791,25 @@ export const teamRouter = router({
       // sole remaining admin could otherwise lock everyone out by editing self.
       const demoting = input.role !== undefined && input.role !== 'ADMIN';
       const deactivating = input.status !== undefined && input.status !== 'ACTIVE';
-      if ((before as { role?: string } | null)?.role === 'ADMIN' && (demoting || deactivating)) {
-        const otherActiveAdmins = await ctx.db.user.count({
-          where: { id: { not: id }, role: 'ADMIN', status: 'ACTIVE' },
-        });
-        if (otherActiveAdmins === 0) {
-          throw new TRPCError({
-            code: 'BAD_REQUEST',
-            message: 'Cannot demote or deactivate the last active admin.',
+      const removingActiveAdmin =
+        (before as { role?: string; status?: string } | null)?.role === 'ADMIN' &&
+        (before as { status?: string } | null)?.status === 'ACTIVE' &&
+        (demoting || deactivating);
+      const updated = await ctx.db.$transaction(async (tx) => {
+        if (removingActiveAdmin) {
+          await lockActiveOrganizationAdmins(tx, workspaceId(ctx));
+          const otherActiveAdmins = await tx.user.count({
+            where: { id: { not: id }, role: 'ADMIN', status: 'ACTIVE' },
           });
+          if (otherActiveAdmins === 0) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Cannot demote or deactivate the last active admin.',
+            });
+          }
         }
-      }
-
-      const updated = await ctx.db.user.update({ where: { id }, data });
+        return tx.user.update({ where: { id }, data });
+      });
       annotateAudit(ctx, {
         targetType: 'User',
         targetId: id,
