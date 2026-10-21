@@ -999,7 +999,7 @@ function CaptureFieldset({
         <p className="mt-1 text-xs text-text-muted">{prefill.warnings.join(' ')}</p>
       ) : null}
       {unitsPerPack ? (
-        <Derived label="Pack conversion" value={`1 pack = ${unitsPerPack} units`} />
+        <Derived label="Pack conversion" value={`1 pack = ${units(unitsPerPack)}`} />
       ) : null}
       <div className="mt-3 grid gap-3 sm:grid-cols-2 lg:grid-cols-4">
         <TextField

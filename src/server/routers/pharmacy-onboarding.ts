@@ -40,6 +40,7 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
+import { pakistanBusinessDate } from '@/lib/pharmacy/regulatory';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -130,10 +131,11 @@ async function readOverview(ctx: TRPCContext) {
 
 /** Published jurisdiction rules in force on a date, newest first per province. */
 async function jurisdictionsInForce(ctx: TRPCContext, at: Date) {
+  const businessDate = pakistanBusinessDate(at);
   const ruleSets = await ctx.db.jurisdictionRuleSet.findMany({
     where: {
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      effectiveFrom: { lte: businessDate },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: businessDate } }],
     },
     orderBy: [{ code: 'asc' }, { effectiveFrom: 'desc' }],
   });
@@ -267,6 +269,7 @@ export const pharmacyOnboardingRouter = router({
     .query(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const now = new Date();
+      const businessDate = pakistanBusinessDate(now);
       const branches = await ctx.db.pharmacyBranch.findMany({
         where: { organizationId, active: true },
         orderBy: { name: 'asc' },
@@ -320,8 +323,8 @@ export const pharmacyOnboardingRouter = router({
           // "In force" is a date comparison, not a flag, so a future-dated
           // version reads as scheduled rather than as the current one.
           inForce:
-            version.effectiveFrom <= now &&
-            (version.effectiveTo === null || version.effectiveTo > now),
+            version.effectiveFrom <= businessDate &&
+            (version.effectiveTo === null || version.effectiveTo > businessDate),
         })),
       };
     }),

@@ -237,6 +237,24 @@ describe('counter Khata ledger gate', () => {
       $queryRaw: vi.fn().mockResolvedValue([]),
       pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
       pharmacyFamilyAccount: {
+        findFirstOrThrow: vi.fn().mockResolvedValue({
+          khataEvents: [
+            {
+              id: 'charge-a',
+              kind: 'CHARGE',
+              amountMinor: 1200,
+              occurredAt: new Date(),
+              dueAt: null,
+            },
+            {
+              id: 'payment-a',
+              kind: 'PAYMENT',
+              amountMinor: 700,
+              occurredAt: new Date(),
+              settlesChargeId: 'charge-a',
+            },
+          ],
+        }),
         findMany: vi.fn().mockResolvedValue([
           {
             id: 'family-a',
@@ -305,6 +323,8 @@ describe('counter Khata ledger gate', () => {
           ownerAuthorizedByUserId: scope.actorId,
           ownerAuthorizedAt: expect.any(String),
         }),
+        score: 100,
+        suggestedLimitMinor: 1200,
       }),
     });
   });

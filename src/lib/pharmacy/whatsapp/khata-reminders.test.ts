@@ -158,6 +158,13 @@ describe('planKhataReminder', () => {
     expect(sameInstant.dedupeKey).toBe(base.dedupeKey);
     expect(nextWeek.dedupeKey).not.toBe(base.dedupeKey);
   });
+
+  it('starts a new week at Monday midnight in Pakistan, not at a UTC epoch boundary', () => {
+    const candidate = { familyAccountId: 'family-1', balanceMinor: 50_000, oldestOverdueAt: NOW };
+    const sunday = planKhataReminder(candidate, new Date('2026-10-18T18:59:59.999Z'));
+    const monday = planKhataReminder(candidate, new Date('2026-10-18T19:00:00.000Z'));
+    expect(monday.dedupeKey).not.toBe(sunday.dedupeKey);
+  });
 });
 
 describe('processDueWhatsAppKhataReminders', () => {

@@ -81,6 +81,12 @@ describe('AppShell module guard', () => {
       )
     );
 
+    expect(screen.getByRole('link', { name: 'Skip to main content' })).toHaveAttribute(
+      'href',
+      '#main-content'
+    );
+    expect(screen.getByRole('main')).toHaveAttribute('id', 'main-content');
+
     fireEvent.click(screen.getByRole('button', { name: 'Open menu' }));
     expect(screen.getByRole('dialog', { name: 'Mobile navigation' })).toBeInTheDocument();
 

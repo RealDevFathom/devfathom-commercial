@@ -39,6 +39,13 @@ async function submitCredentials() {
 }
 
 describe('SharedLoginForm rate-limit reporting', () => {
+  it('keeps the password visibility control in the keyboard tab order', () => {
+    render(<SharedLoginForm callbackUrl="/" />);
+    expect(screen.getByRole('button', { name: 'Show password' })).not.toHaveAttribute(
+      'tabindex',
+      '-1'
+    );
+  });
   beforeEach(() => {
     vi.clearAllMocks();
     vi.unstubAllGlobals();

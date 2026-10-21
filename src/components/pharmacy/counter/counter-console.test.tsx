@@ -796,6 +796,9 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
       await waitFor(() => expect(screen.getByLabelText('Amount')).toHaveValue(''));
       if (kind === 'success') {
         expect(screen.getByText('Settled')).toBeInTheDocument();
+        expect(screen.getByRole('status').querySelector('[data-tone="success"]')).toHaveClass(
+          'text-text-strong'
+        );
         expect(readTenderAttempt(scope)).toEqual({ status: 'empty' });
       } else {
         expect(screen.queryByText('Settled')).not.toBeInTheDocument();

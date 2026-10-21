@@ -17,7 +17,6 @@ import {
 } from './provider';
 
 const DAY_MS = 86_400_000;
-const WEEK_MS = 7 * DAY_MS;
 
 /** Do not nag over a few paisa: a reminder needs a real outstanding balance. */
 const DEFAULT_MIN_BALANCE_MINOR = 10_000;
@@ -46,7 +45,15 @@ export function planKhataReminder(
     candidate.oldestOverdueAt.getTime() <= now.getTime() &&
     Number.isSafeInteger(candidate.balanceMinor) &&
     candidate.balanceMinor >= floor;
-  const week = Math.floor(now.getTime() / WEEK_MS);
+  const localDate = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now);
+  const localDay = Date.parse(`${localDate}T00:00:00.000Z`) / DAY_MS;
+  // Stable Monday-based week bucket computed from the Pakistan business date.
+  const week = Math.floor((localDay + 3) / 7);
   return {
     due,
     dueDate: candidate.oldestOverdueAt
@@ -75,6 +82,7 @@ export type KhataReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  skippedQuietHours: number;
   notDue: number;
 };
 
@@ -107,6 +115,7 @@ export async function processDueWhatsAppKhataReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     notDue: 0,
   };
   const organizationId = config.organizationId;
@@ -165,7 +174,7 @@ export async function processDueWhatsAppKhataReminders(
           hourCycle: 'h23',
         }).format(now)
       );
-      if (hour >= 22 || hour < 8) return null;
+      if (hour >= 22 || hour < 8) return { quietHours: true as const };
       const customer = await db.pharmacyCustomer.findFirst({
         where: { organizationId: account.organizationId, id: account.payerCustomerId },
         select: {
@@ -219,6 +228,10 @@ export async function processDueWhatsAppKhataReminders(
       });
       return { customerId: customer.id, patientId: customer.patientId, to, logId };
     });
+    if (recipient && 'quietHours' in recipient) {
+      result.skippedQuietHours += 1;
+      continue;
+    }
     if (!recipient) {
       result.skippedNoConsent += 1;
       continue;

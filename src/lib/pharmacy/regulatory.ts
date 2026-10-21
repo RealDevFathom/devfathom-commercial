@@ -51,6 +51,19 @@ function stringValues(value: unknown): readonly string[] {
   return Array.isArray(values) && values.every((item) => typeof item === 'string') ? values : [];
 }
 
+/** Calendar date used by Pakistan pharmacy licences and effective-dated profiles. */
+export function pakistanBusinessDate(at: Date): Date {
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: 'Asia/Karachi',
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)!.value;
+  return new Date(`${part('year')}-${part('month')}-${part('day')}T00:00:00.000Z`);
+}
+
 /**
  * PLAT-02 fail-closed primitive. Every denial is typed and audited before it is
  * thrown; callers cannot downgrade it to a warning by inspecting a boolean.
@@ -60,6 +73,7 @@ export function assertBranchMayOperate(
   action: BranchOperationAction
 ): void {
   const at = action.at ?? new Date();
+  const businessDate = pakistanBusinessDate(at);
   const deny = (reason: BranchOperationDenialReason): never => {
     branch.auditDenied(reason, action);
     throw new BranchOperationDeniedError(reason);
@@ -77,8 +91,8 @@ export function assertBranchMayOperate(
   if (
     !branch.licenceCategory.trim() ||
     !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
-    at < branch.licenceValidFrom ||
-    at >= branch.licenceValidTo
+    businessDate < branch.licenceValidFrom ||
+    businessDate > branch.licenceValidTo
   ) {
     deny('LICENCE_INVALID');
   }
@@ -87,8 +101,8 @@ export function assertBranchMayOperate(
     action.requiresQualifiedPerson !== false &&
     (!branch.qualifiedPersonRegistration.trim() ||
       !branch.qualifiedPersonCoverageRosterRef.trim() ||
-      at < branch.qualifiedPersonValidFrom ||
-      at >= branch.qualifiedPersonValidTo)
+      businessDate < branch.qualifiedPersonValidFrom ||
+      businessDate > branch.qualifiedPersonValidTo)
   ) {
     deny('QUALIFIED_PERSON_COVERAGE_MISSING');
   }
@@ -109,12 +123,13 @@ export async function assertStoredBranchMayOperate(
   action: BranchOperationAction
 ): Promise<void> {
   const at = action.at ?? new Date();
+  const businessDate = pakistanBusinessDate(at);
   const profile = await db.branchRegulatoryProfile.findFirst({
     where: {
       organizationId,
       branchId,
-      effectiveFrom: { lte: at },
-      OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+      effectiveFrom: { lte: businessDate },
+      OR: [{ effectiveTo: null }, { effectiveTo: { gt: businessDate } }],
     },
     include: { jurisdictionRuleSet: true },
     orderBy: { effectiveFrom: 'desc' },

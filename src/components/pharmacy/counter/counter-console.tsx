@@ -1773,7 +1773,11 @@ function ScopedPharmacyCounterConsole({
                     : 'border-border-subtle bg-surface-sunken'
             }`}
           >
-            <StatusPill status={notice.tone} tone={notice.tone} />
+            <StatusPill
+              status={notice.tone}
+              tone={notice.tone}
+              className={notice.tone === 'success' ? 'text-text-strong' : undefined}
+            />
             <div className="min-w-0 space-y-2 text-sm text-text-body">
               <p>{notice.message}</p>
               {notice.inventoryBranchId ? (

@@ -81,11 +81,21 @@ export default async function LoginPage(props: LoginPageProps) {
 
   return (
     <div className="min-h-dvh bg-background text-foreground lg:grid lg:grid-cols-[minmax(0,1.08fr)_minmax(26rem,0.92fr)]">
+      <a
+        href="#login-main"
+        className="sr-only fixed left-4 top-4 z-50 rounded-[3px] bg-primary px-4 py-2 text-primary-foreground focus:not-sr-only"
+      >
+        Skip to sign in
+      </a>
       {/* Blueprint field panel — desktop only */}
       <LoginHero />
 
       {/* Sign-in sheet */}
-      <div className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10">
+      <main
+        id="login-main"
+        tabIndex={-1}
+        className="relative flex min-h-dvh items-center justify-center px-5 py-10 sm:px-10"
+      >
         <div className="w-full max-w-[25rem] animate-slide-up">
           <div className="mb-8 flex items-center gap-3 lg:hidden">
             <Logo variant="auto" size="md" textClassName="text-foreground" />
@@ -138,7 +148,7 @@ export default async function LoginPage(props: LoginPageProps) {
             Need access? Contact your workspace admin.
           </p>
         </div>
-      </div>
+      </main>
     </div>
   );
 }

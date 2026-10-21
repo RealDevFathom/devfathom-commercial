@@ -70,6 +70,7 @@ export type RefillReminderRunResult = {
   failed: number;
   duplicate: number;
   skippedNoConsent: number;
+  skippedQuietHours: number;
   notDue: number;
 };
 
@@ -99,6 +100,7 @@ export async function processDueWhatsAppRefillReminders(
     failed: 0,
     duplicate: 0,
     skippedNoConsent: 0,
+    skippedQuietHours: 0,
     notDue: 0,
   };
   if (!result.configured || config.provider === 'meta') return { ...result, configured: false };
@@ -183,7 +185,7 @@ export async function processDueWhatsAppRefillReminders(
           hourCycle: 'h23',
         }).format(now)
       );
-      if (hour >= 22 || hour < 8) return null;
+      if (hour >= 22 || hour < 8) return { quietHours: true as const };
       await lockPatientConsent(db, capture.organizationId, capture.patientId);
       const [customer, consent] = await Promise.all([
         db.pharmacyCustomer.findFirst({
@@ -242,6 +244,10 @@ export async function processDueWhatsAppRefillReminders(
       });
       return { customerId: customer.id, to, logId };
     });
+    if (recipient && 'quietHours' in recipient) {
+      result.skippedQuietHours += 1;
+      continue;
+    }
     if (!recipient) {
       result.skippedNoConsent += 1;
       continue;

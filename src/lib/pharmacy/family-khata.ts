@@ -375,16 +375,18 @@ export async function authorizeKhataCharge(
   if (projected > account.creditLimitMinor) {
     if (!input.ownerOverride) throw new FamilyKhataError('CREDIT_LIMIT_EXCEEDED');
     const now = new Date();
+    const healthAccount = await db.pharmacyFamilyAccount.findFirstOrThrow({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: account.id,
+      },
+      select: { khataEvents: true },
+    });
     await applyKhataLimitDecision(db, scope, {
       familyAccountId: account.id,
       suggestion: calculateKhataHealthSuggestion(
-        await db.pharmacyKhataEvent.findMany({
-          where: {
-            organizationId: scope.organizationId,
-            branchId: scope.branchId,
-            familyAccountId: account.id,
-          },
-        }),
+        healthAccount.khataEvents,
         account.creditLimitMinor,
         new Date(now.getTime() - 180 * DAY_MS),
         now
