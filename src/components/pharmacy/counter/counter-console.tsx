@@ -2226,7 +2226,6 @@ function ScopedPharmacyCounterConsole({
                   onCollect={async (input) => {
                     await utils.client.pharmacySales.settleFamilyKhata.mutate({
                       branchId,
-                      deviceId: counterDeviceId(),
                       paymentMethod: 'CASH',
                       ...input,
                     });

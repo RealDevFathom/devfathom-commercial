@@ -542,7 +542,6 @@ export const pharmacySalesRouter = router({
   }),
   settleFamilyKhata: protectedProcedure.input(z.object({
     branchId, familyAccountId: z.string().min(1), amountMinor: z.number().int().positive().max(2147483647),
-    deviceId: z.string().trim().min(1).max(128),
     paymentMethod: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET']),
     idempotencyKey: z.string().trim().min(1).max(128),
   }).strict()).mutation(async ({ ctx, input }) => {
@@ -571,13 +570,13 @@ export const pharmacySalesRouter = router({
           SELECT id FROM pharmacy_drawer_sessions
           WHERE "organizationId"=${scope.organizationId}
             AND "branchId"=${scope.branchId}
-            AND "deviceId"=${input.deviceId}
+            AND "openedByActorId"=${scope.actorId}
             AND status='OPEN'
           FOR UPDATE`);
         const drawer = await db.pharmacyDrawerSession.findFirst({ where: {
           organizationId: scope.organizationId,
           branchId: scope.branchId,
-          deviceId: input.deviceId,
+          openedByActorId: scope.actorId,
           status: 'OPEN',
         }, select: { id: true } });
         if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');

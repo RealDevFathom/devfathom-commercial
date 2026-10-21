@@ -19,6 +19,13 @@ const mocks = vi.hoisted(() => ({
   createDraft: vi.fn(),
   queryRaw: vi.fn().mockResolvedValue([]),
   count: vi.fn().mockResolvedValue(0),
+  commandCentreRead: vi.fn(),
+  recordTrpcAudit: vi.fn(),
+}));
+
+vi.mock('@/lib/pharmacy/reports', async () => ({
+  ...(await vi.importActual<typeof import('@/lib/pharmacy/reports')>('@/lib/pharmacy/reports')),
+  readPharmacyOwnerCommandCentre: mocks.commandCentreRead,
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -62,8 +69,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: mocks.recordTrpcAudit,
 }));
 
 import { hasModule } from '@/lib/entitlements';
@@ -274,6 +281,62 @@ describe('pharmacy owner digest capability boundary', () => {
       caller().proposeExpiryReturn({ branchId: 'branch_1', lotId: 'lot_1' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(mocks.branchFindMany).not.toHaveBeenCalled();
+  });
+});
+
+describe('owner command centre security boundary', () => {
+  const input = { from: '2026-09-01', to: '2026-09-10' };
+
+  beforeEach(() => {
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.commandCentreRead.mockResolvedValue({
+      metrics: {
+        salesMinor: 100,
+        marginMinor: 20,
+        cashMinor: 80,
+        cashVarianceMinor: 1,
+        refundsMinor: 2,
+        accountsPayableMinor: 3,
+        accountsReceivableMinor: 4,
+        khataAgingMinor: 5,
+      },
+    });
+  });
+
+  it('audits an owner financial read', async () => {
+    mocks.can.mockResolvedValue(true);
+
+    const result = await caller().commandCentre(input);
+
+    expect(result.permissions.financial).toBe(true);
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({
+        path: 'commandCentre',
+        type: 'query',
+        outcome: 'SUCCESS',
+      })
+    );
+  });
+
+  it('does not let the admin shortcut bypass reports:financial', async () => {
+    mocks.can.mockImplementation(async (_subject, action) => action === 'admin:access');
+
+    const result = await caller().commandCentre(input);
+
+    expect(result.permissions.financial).toBe(false);
+    expect(result.metrics).toEqual(
+      expect.objectContaining({
+        salesMinor: null,
+        marginMinor: null,
+        cashMinor: null,
+        cashVarianceMinor: null,
+        refundsMinor: null,
+        accountsPayableMinor: null,
+        accountsReceivableMinor: null,
+        khataAgingMinor: null,
+      })
+    );
   });
 });
 

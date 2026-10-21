@@ -428,7 +428,7 @@ export const pharmacyReportsRouter = router({
       }
       return readRepeatPurchasing(ctx.db, ctx.entitlements.organizationId, scoped);
     }),
-  commandCentre: protectedProcedure.input(filters).query(async ({ ctx, input }) => {
+  commandCentre: auditedProtectedProcedure.input(filters).query(async ({ ctx, input }) => {
     const subject = subjectFromSession(ctx.session!.user);
     const owner = ctx.session!.user.role === 'ADMIN' && await can(subject, 'admin:access', undefined, { db: ctx.db });
     if (!owner && !await can(subject, 'reports:operational', undefined, { db: ctx.db }))
@@ -447,7 +447,7 @@ export const pharmacyReportsRouter = router({
       });
     try {
       const result = await readPharmacyOwnerCommandCentre(ctx.db, { ...input, branchIds });
-      const financial = owner || await can(
+      const financial = await can(
         subjectFromSession(ctx.session!.user),
         'reports:financial',
         undefined,

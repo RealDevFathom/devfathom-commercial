@@ -128,7 +128,7 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
-  it('adds a cash Khata collection to the collecting device drawer', async () => {
+  it('adds a cash Khata collection to the actor drawer without trusting a client device', async () => {
     const f = fixture();
     f.db.pharmacyKhataEvent.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
       { id: 'charge-a', kind: 'CHARGE', amountMinor: 250, occurredAt: new Date() },
@@ -139,13 +139,12 @@ describe('Khata router trust and recovery boundary', () => {
       branchId: 'branch-a',
       familyAccountId: 'family-a',
       amountMinor: 250,
-      deviceId: 'device-a',
       paymentMethod: 'CASH',
       idempotencyKey: 'collection-a',
     });
 
     expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
-      where: expect.objectContaining({ deviceId: 'device-a', status: 'OPEN' }),
+      where: expect.objectContaining({ openedByActorId: 'owner-a', status: 'OPEN' }),
       select: { id: true },
     });
     expect(f.db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({ data: {
@@ -173,7 +172,6 @@ describe('Khata router trust and recovery boundary', () => {
       branchId: 'branch-a',
       familyAccountId: 'family-a',
       amountMinor: 250,
-      deviceId: 'device-a',
       paymentMethod: 'CARD',
       idempotencyKey: 'collection-card-a',
     });
