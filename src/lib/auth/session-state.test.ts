@@ -6,10 +6,14 @@ import {
   TEMPORARY_PASSWORD_MESSAGE,
   WORKSPACE_UNAVAILABLE_MESSAGE,
   evaluateSessionUser,
+  isPasswordChangeApiExempt,
   isSessionUsable,
   liveDemoAccessExpiry,
+  responseForPasswordChange,
   signInRedirectPath,
   temporaryPasswordBlocks,
+  workspaceRedirectForPasswordChange,
+  PasswordChangeRequiredError,
   type SessionUserState,
 } from './session-state';
 
@@ -135,10 +139,45 @@ describe('temporaryPasswordBlocks', () => {
     expect(temporaryPasswordBlocks({ mustChangePassword: true }, 'team.changePassword')).toBe(
       false
     );
+    expect(temporaryPasswordBlocks({ mustChangePassword: true }, 'team.signOutEverywhere')).toBe(
+      false
+    );
     expect(temporaryPasswordBlocks({ mustChangePassword: false }, 'team.updateProfile')).toBe(
       false
     );
     expect(temporaryPasswordBlocks(undefined, 'team.updateProfile')).toBe(false);
+  });
+});
+
+describe('password change gate', () => {
+  it('redirects workspace pages and leaves the change-password screen to its own page', () => {
+    expect(workspaceRedirectForPasswordChange(true)).toBe('/change-password');
+    expect(workspaceRedirectForPasswordChange(false)).toBeNull();
+    expect(workspaceRedirectForPasswordChange(undefined)).toBeNull();
+  });
+
+  it('exempts only the change-password and sign-out API calls', () => {
+    const request = (path: string, method = 'POST') =>
+      new Request(`https://tenant.test${path}`, { method });
+    expect(isPasswordChangeApiExempt(request('/api/trpc/team.changePassword?batch=1'))).toBe(true);
+    expect(isPasswordChangeApiExempt(request('/api/trpc/team.signOutEverywhere'))).toBe(true);
+    expect(isPasswordChangeApiExempt(request('/api/auth/signout'))).toBe(true);
+    expect(isPasswordChangeApiExempt(request('/api/login', 'DELETE'))).toBe(true);
+    expect(isPasswordChangeApiExempt(request('/api/login', 'POST'))).toBe(false);
+    expect(
+      isPasswordChangeApiExempt(request('/api/trpc/team.changePassword,team.updateProfile'))
+    ).toBe(false);
+    expect(isPasswordChangeApiExempt(request('/api/upload'))).toBe(false);
+  });
+
+  it('answers the API with 403 PASSWORD_CHANGE_REQUIRED', async () => {
+    const response = responseForPasswordChange(new PasswordChangeRequiredError());
+    expect(response?.status).toBe(403);
+    await expect(response?.json()).resolves.toEqual({
+      code: 'PASSWORD_CHANGE_REQUIRED',
+      error: 'PASSWORD_CHANGE_REQUIRED',
+    });
+    expect(responseForPasswordChange(new Error('other'))).toBeNull();
   });
 });
 

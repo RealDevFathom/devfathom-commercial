@@ -1,6 +1,7 @@
 import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { putUpload, StorageUnavailableError } from '@/lib/storage';
 
@@ -88,6 +89,8 @@ export async function POST(request: Request) {
       type: file.type,
     });
   } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
     if (error instanceof StorageUnavailableError) {
       return NextResponse.json({ error: 'Uploads are unavailable.' }, { status: 503 });
     }
