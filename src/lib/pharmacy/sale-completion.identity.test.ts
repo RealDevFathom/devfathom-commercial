@@ -96,7 +96,8 @@ function sale() {
 let order: string[];
 function makeDb() {
   return {
-    $queryRaw: vi.fn<(sql: unknown) => Promise<{ receipt_number: number }[]>>(async () => {
+    $queryRaw: vi.fn<(sql: unknown) => Promise<{ receipt_number: number }[]>>(async (sql) => {
+      if (String((sql as { sql: string }).sql).includes('JOIN pharmacy_medicines')) return [];
       order.push('sequence');
       return [{ receipt_number: 41 }];
     }),
@@ -197,7 +198,7 @@ describe('R1 receipt identity carries every batch fact', () => {
 
   it('numbers receipts per organisation, scope branch and device, never from sale data', async () => {
     await complete(sale());
-    const sql = db.$queryRaw.mock.calls[0]![0] as unknown as { values: unknown[] };
+    const sql = db.$queryRaw.mock.calls[1]![0] as unknown as { values: unknown[] };
     expect(sql.values.slice(1)).toEqual(['org_a', 'branch_a', 'counter-a']);
     expect(db.pharmacySale.update).toHaveBeenCalledWith({
       where: { organizationId_id: { organizationId: 'org_a', id: 'sale_1' } },
@@ -290,7 +291,7 @@ describe('R3 device identity', () => {
   // The mocked client has no device delegate, so any registry read would throw here.
   it('uses the supplied deviceId verbatim and reads no device registry', async () => {
     await expect(complete(sale())).resolves.toBe(41);
-    expect(db.$queryRaw).toHaveBeenCalledTimes(1);
+    expect(db.$queryRaw).toHaveBeenCalledTimes(2);
     expect(mocks.validate.mock.calls[0]![0]).toMatchObject({ deviceId: 'counter-a' });
   });
 });
