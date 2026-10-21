@@ -50,6 +50,9 @@ function fixture() {
         where.id.in.map((id) => ({ id }))
       ),
     },
+    pharmacyBranchAssignment: {
+      findFirst: vi.fn().mockResolvedValue({ branchId: 'branch-a' }),
+    },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
@@ -224,6 +227,27 @@ describe('Khata router trust and recovery boundary', () => {
     await expect(
       f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+  it('denies a cashier who is not assigned to the sale branch before money writes', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.db.pharmacyBranchAssignment.findFirst.mockResolvedValue(null as never);
+
+    await expect(f.caller().tender(input)).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+
+    expect(f.db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-a',
+        userId: 'owner-a',
+        branchId: 'branch-a',
+        active: true,
+      },
+      select: { branchId: true },
+    });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
   it('appends a refund payment once without editing the original charge', async () => {

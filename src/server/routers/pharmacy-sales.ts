@@ -164,6 +164,19 @@ async function khataScope(ctx: TRPCContext, branch: string) {
   });
   if (!available)
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  if (ctx.session!.user.role !== 'ADMIN') {
+    const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        userId: scope.actorId,
+        branchId: branch,
+        active: true,
+      },
+      select: { branchId: true },
+    });
+    if (!assignment)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
   return scope;
 }
 
