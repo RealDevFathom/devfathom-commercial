@@ -490,6 +490,20 @@ function CounterRxPhotoCapture({
 }
 
 export type CounterRxPanelProps = {
+  rxAuthorization?: {
+    prescriptionLineId: string;
+    reason: string;
+    staffProfileId: string;
+    pin: string;
+    actorCanDispense: boolean;
+    loading: boolean;
+    error: boolean;
+    pharmacists: ReadonlyArray<{ id: string; name: string }>;
+    onChange: (
+      field: 'prescriptionLineId' | 'reason' | 'staffProfileId' | 'pin',
+      value: string
+    ) => void;
+  };
   controlled?: {
     prescriptionLineId: string;
     staffProfileId: string;
@@ -533,6 +547,7 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
   function CounterRxPanel(
     {
       controlled,
+      rxAuthorization: rx,
       alerts,
       patient,
       candidates,
@@ -554,6 +569,82 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
 
     return (
       <div ref={ref} tabIndex={-1} className="space-y-5 focus-visible:outline-none">
+        {rx ? (
+          <fieldset
+            disabled={disabled}
+            className="space-y-3 rounded-md border border-border-subtle p-3"
+          >
+            <legend className="font-semibold text-text-strong">
+              Rx and restricted authorization
+            </legend>
+            <p className="text-sm text-text-body">
+              Select a prescription line below, or record a pharmacist override.
+            </p>
+            {rx.prescriptionLineId ? (
+              <div role="status">
+                Prescription line selected.
+                <Button
+                  type="button"
+                  variant="outline"
+                  onClick={() => rx.onChange('prescriptionLineId', '')}
+                >
+                  Use pharmacist override
+                </Button>
+              </div>
+            ) : (
+              <>
+                <Label htmlFor="rx-reason">Pharmacist override reason</Label>
+                <Input
+                  id="rx-reason"
+                  className="h-11"
+                  maxLength={500}
+                  value={rx.reason}
+                  onChange={(event) => rx.onChange('reason', event.target.value)}
+                />
+                {!rx.actorCanDispense ? (
+                  <>
+                    <Label htmlFor="rx-staff">Override pharmacist</Label>
+                    <select
+                      id="rx-staff"
+                      className="h-11 w-full rounded-md border border-border-subtle bg-surface-raised px-3 focus-visible:outline-2 focus-visible:outline-ring"
+                      disabled={rx.loading || rx.error}
+                      value={rx.staffProfileId}
+                      onChange={(event) => rx.onChange('staffProfileId', event.target.value)}
+                    >
+                      <option value="">Select pharmacist</option>
+                      {rx.pharmacists.map((staff) => (
+                        <option key={staff.id} value={staff.id}>
+                          {staff.name}
+                        </option>
+                      ))}
+                    </select>
+                    <Label htmlFor="rx-pin">Override pharmacist PIN</Label>
+                    <Input
+                      id="rx-pin"
+                      className="h-11"
+                      type="password"
+                      inputMode="numeric"
+                      autoComplete="off"
+                      maxLength={8}
+                      disabled={!rx.staffProfileId}
+                      value={rx.pin}
+                      onChange={(event) => rx.onChange('pin', event.target.value)}
+                    />
+                    {rx.loading ? (
+                      <p role="status">Checking pharmacist authorization…</p>
+                    ) : rx.error ? (
+                      <p role="alert">Authorization could not be loaded. Refresh the counter.</p>
+                    ) : rx.pharmacists.length === 0 ? (
+                      <p role="status">
+                        No independent pharmacist with an active PIN is available.
+                      </p>
+                    ) : null}
+                  </>
+                ) : null}
+              </>
+            )}
+          </fieldset>
+        ) : null}
         {controlled ? (
           <section
             aria-label="Controlled medicine authorization"
@@ -813,6 +904,19 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
                             className="flex flex-wrap items-center gap-x-3 gap-y-1 text-xs"
                           >
                             <span className="text-text-strong">{line.medicineName}</span>
+                            {rx ? (
+                              <Button
+                                type="button"
+                                variant="outline"
+                                disabled={disabled || !prescription.inDate}
+                                aria-pressed={rx.prescriptionLineId === line.prescriptionLineId}
+                                onClick={() =>
+                                  rx.onChange('prescriptionLineId', line.prescriptionLineId)
+                                }
+                              >
+                                Select for Rx authorization
+                              </Button>
+                            ) : null}
                             <span className="font-mono tabular-nums text-text-muted">
                               {line.remainingAuthorizedUnits} of {line.authorizedCanonicalUnits}{' '}
                               units left

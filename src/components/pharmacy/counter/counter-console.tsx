@@ -283,6 +283,13 @@ function ScopedPharmacyCounterConsole({
     staffProfileId: '',
     pin: '',
   });
+  const [rxAuth, setRxAuth] = useState({
+    prescriptionLineId: '',
+    reason: '',
+    staffProfileId: '',
+    pin: '',
+  });
+  const rxPermission = trpc.pharmacySales.rxOverridePermission.useQuery();
   const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
   const [patientId, setPatientId] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -866,7 +873,35 @@ function ScopedPharmacyCounterConsole({
         rxPanelRef.current?.focus();
         return;
       }
+      const regulated =
+        !controlled && (activeRow.restriction.rx || activeRow.restriction.restricted);
+      if (
+        regulated &&
+        !rxAuth.prescriptionLineId &&
+        (rxAuth.reason.trim().length < 3 ||
+          (rxPermission.data !== true && (!rxAuth.staffProfileId || !/^\d{4,8}$/.test(rxAuth.pin))))
+      ) {
+        setNotice({
+          tone: 'danger',
+          message:
+            'Select a prescription line in the prescription panel or complete the pharmacist override.',
+        });
+        rxPanelRef.current?.focus();
+        return;
+      }
       const added = await addLine.mutateAsync({
+        rxAuthorization: regulated
+          ? rxAuth.prescriptionLineId
+            ? { prescriptionLineId: rxAuth.prescriptionLineId }
+            : {
+                override: {
+                  reason: rxAuth.reason.trim(),
+                  ...(rxPermission.data === true
+                    ? {}
+                    : { staffProfileId: rxAuth.staffProfileId, pin: rxAuth.pin }),
+                },
+              }
+          : undefined,
         controlledAuthorization:
           controlled && patient ? { ...controlledAuth, patientId: patient.patientId } : undefined,
         branchId,
@@ -891,7 +926,7 @@ function ScopedPharmacyCounterConsole({
           : {}),
       });
       if ('blocked' in added) {
-        setNotice({ tone: 'warning', message: added.blocked });
+        setNotice({ tone: 'danger', message: added.blocked });
         return;
       }
       await refreshCart();
@@ -916,12 +951,15 @@ function ScopedPharmacyCounterConsole({
       });
     } finally {
       setControlledAuth((value) => ({ ...value, pin: '' }));
+      setRxAuth((value) => ({ ...value, pin: '' }));
       setPending(null);
     }
   }, [
     activeRow,
     addLine,
     controlledAuth,
+    rxAuth,
+    rxPermission.data,
     patient,
     branchId,
     busy,
@@ -2201,6 +2239,15 @@ function ScopedPharmacyCounterConsole({
                 onChange: (field, value) =>
                   setControlledAuth((current) => ({ ...current, [field]: value })),
               }}
+              rxAuthorization={{
+                ...rxAuth,
+                actorCanDispense: rxPermission.data === true,
+                pharmacists: pharmacistsQuery.data ?? [],
+                loading: pharmacistsQuery.isLoading || rxPermission.isLoading,
+                error: pharmacistsQuery.isError || rxPermission.isError,
+                onChange: (field, value) =>
+                  setRxAuth((current) => ({ ...current, [field]: value })),
+              }}
               alerts={alerts}
               patient={patient}
               candidates={patientsQuery.data?.patients ?? []}
@@ -2228,9 +2275,13 @@ function ScopedPharmacyCounterConsole({
               disabled={busy}
               onQueryChange={setPatientQuery}
               onSearch={() => setSubmittedPatientQuery(patientQuery.trim())}
-              onSelectPatient={setPatientId}
+              onSelectPatient={(id) => {
+                setPatientId(id);
+                setRxAuth({ prescriptionLineId: '', reason: '', staffProfileId: '', pin: '' });
+              }}
               onClearPatient={() => {
                 setPatientId(null);
+                setRxAuth({ prescriptionLineId: '', reason: '', staffProfileId: '', pin: '' });
                 setSubmittedPatientQuery('');
                 setPatientQuery('');
               }}
