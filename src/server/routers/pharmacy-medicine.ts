@@ -482,6 +482,7 @@ export const pharmacyMedicineRouter = router({
         saleable: false,
         provenance: {
           some: {
+            supersededBy: { none: {} },
             OR: [
               { status: 'UNREVIEWED' },
               {
@@ -493,7 +494,7 @@ export const pharmacyMedicineRouter = router({
         },
       },
       include: {
-        provenance: { orderBy: { createdAt: 'asc' } },
+        provenance: { where: { supersededBy: { none: {} } }, orderBy: { createdAt: 'asc' } },
         presentations: true,
         aliases: true,
         strengths: { include: { ingredient: true } },
@@ -853,7 +854,11 @@ export const pharmacyMedicineRouter = router({
       }
       const [medicineCount, assertions] = await Promise.all([
         tx.medicine.count({ where: { id: { in: medicineIds } } }),
-        tx.medicineProvenance.findMany({ where: { id: { in: assertionIds } } }),
+        tx.medicineProvenance.findMany({
+          // Provenance is append-only (DB trigger): a reviewed assertion is superseded by
+          // a new row, never updated. Only the current head of each chain is reviewable.
+          where: { id: { in: assertionIds }, supersededBy: { none: {} } },
+        }),
       ]);
       if (medicineCount !== medicineIds.length || assertions.length !== assertionIds.length) {
         throw new TRPCError({
@@ -873,18 +878,46 @@ export const pharmacyMedicineRouter = router({
         });
       }
 
-      let reviewedAssertionIds = assertionIds;
-      if (input.action === 'ACCEPT' || input.action === 'REJECT') {
-        const transitioned = await tx.medicineProvenance.updateMany({
-          where: { id: { in: assertionIds }, status: 'UNREVIEWED' },
+      // Serialize concurrent decisions on the same assertions without UPDATE (a row lock
+      // does not fire the append-only trigger), then re-check nothing superseded them.
+      await tx.$queryRaw`SELECT id FROM "pharmacy_medicine_provenance" WHERE id = ANY(${assertionIds}) FOR UPDATE`;
+      const raced = await tx.medicineProvenance.count({
+        where: { supersedesId: { in: assertionIds } },
+      });
+      if (raced > 0) {
+        throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+      }
+
+      const appendReviewed = (
+        assertion: (typeof assertions)[number],
+        status: 'ACCEPTED' | 'REJECTED' | 'CORRECTED',
+        assertedValue: Prisma.InputJsonValue | undefined
+      ) =>
+        tx.medicineProvenance.create({
           data: {
-            status: input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED',
+            medicineId: assertion.medicineId,
+            field: assertion.field,
+            source: assertion.source,
+            sourceType: assertion.sourceType,
+            retrievedAt: status === 'CORRECTED' ? new Date() : assertion.retrievedAt,
+            confidence: assertion.confidence,
             reviewer: ctx.session.user.id,
+            status,
+            supersedesId: assertion.id,
+            assertedValue,
           },
         });
-        if (transitioned.count !== assertionIds.length) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
+      const jsonValue = (value: unknown) =>
+        value === null || value === undefined ? undefined : (value as Prisma.InputJsonValue);
+
+      let reviewedAssertionIds = assertionIds;
+      if (input.action === 'ACCEPT' || input.action === 'REJECT') {
+        const status = input.action === 'ACCEPT' ? 'ACCEPTED' : 'REJECTED';
+        const created = [];
+        for (const assertion of assertions) {
+          created.push(await appendReviewed(assertion, status, jsonValue(assertion.assertedValue)));
         }
+        reviewedAssertionIds = created.map((assertion) => assertion.id);
       } else if (input.action === 'CORRECT') {
         const corrections = new Map(
           input.payload.corrections.map((item) => [item.assertionId, item.value])
@@ -901,46 +934,16 @@ export const pharmacyMedicineRouter = router({
         const created = [];
         for (const assertion of assertions) {
           const value = corrections.get(assertion.id);
-          if (!value) continue;
-          const envelope = assertedEnvelope.parse(assertion.assertedValue);
-          created.push(
-            await tx.medicineProvenance.create({
-              data: {
-                medicineId: assertion.medicineId,
-                field: assertion.field,
-                source: assertion.source,
-                sourceType: assertion.sourceType,
-                retrievedAt: new Date(),
-                confidence: assertion.confidence,
-                reviewer: ctx.session.user.id,
-                status: 'CORRECTED',
-                supersedesId: assertion.id,
-                assertedValue: { ...envelope, value },
-              },
-            })
-          );
+          if (value) {
+            const envelope = assertedEnvelope.parse(assertion.assertedValue);
+            created.push(await appendReviewed(assertion, 'CORRECTED', { ...envelope, value }));
+          } else {
+            created.push(
+              await appendReviewed(assertion, 'ACCEPTED', jsonValue(assertion.assertedValue))
+            );
+          }
         }
-        const corrected = await tx.medicineProvenance.updateMany({
-          where: { id: { in: [...corrections.keys()] }, status: 'UNREVIEWED' },
-          data: { status: 'SUPERSEDED', reviewer: ctx.session.user.id },
-        });
-        if (corrected.count !== corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
-        reviewedAssertionIds = [
-          ...assertionIds.filter((id) => !corrections.has(id)),
-          ...created.map((assertion) => assertion.id),
-        ];
-        const accepted = await tx.medicineProvenance.updateMany({
-          where: {
-            id: { in: assertionIds.filter((id) => !corrections.has(id)) },
-            status: 'UNREVIEWED',
-          },
-          data: { status: 'ACCEPTED', reviewer: ctx.session.user.id },
-        });
-        if (accepted.count !== assertionIds.length - corrections.size) {
-          throw new TRPCError({ code: 'CONFLICT', message: 'Review assertion state changed.' });
-        }
+        reviewedAssertionIds = created.map((assertion) => assertion.id);
       }
 
       return tx.medicineReviewDecision.create({

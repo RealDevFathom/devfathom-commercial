@@ -84,20 +84,26 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       { organizationId: 'org-a', actorId: 'admin-a' },
       { at: new Date('2026-09-06') }
     );
-    expect(workspace.medicines[0].packs).toEqual([
-      expect.objectContaining({
-        packLevelId: 'new-pack',
-        canonicalUnitsPerPack: 10,
-        presentation: '10 tablets',
-        level: 'STRIP',
-      }),
-    ]);
+    // The UNIT leaf is itself a (1-unit) purchasable level; the created STRIP must be
+    // selectable with its derived unit count.
+    expect(workspace.medicines[0].packs).toEqual(
+      expect.arrayContaining([
+        expect.objectContaining({
+          packLevelId: 'new-pack',
+          canonicalUnitsPerPack: 10,
+          presentation: '10 tablets',
+          level: 'STRIP',
+        }),
+      ])
+    );
     const earlier = await purchasingWorkspace(
       db as unknown as Parameters<typeof purchasingWorkspace>[0],
       { organizationId: 'org-a' },
       { at: new Date('2026-08-01') }
     );
-    expect(earlier.medicines[0].packs).toEqual([]);
+    expect(earlier.medicines[0].packs.map((p: { packLevelId: string }) => p.packLevelId)).not.toContain(
+      'new-pack'
+    );
   });
 
   it.each([0, -1, 1.5])('rejects invalid units %s before persistence', async (unitsPerParent) => {

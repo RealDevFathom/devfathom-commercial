@@ -107,10 +107,25 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
       ),
     },
     medicineProvenance: {
-      findMany: vi.fn(async () => assertions),
-      updateMany: vi.fn(async ({ data }: { data: { status: string; reviewer: string } }) => {
-        assertions = assertions.map((p) => ({ ...p, ...data }));
-        return { count: assertions.length };
+      // Append-only like the DB trigger: no update/updateMany delegate exists.
+      findMany: vi.fn(
+        async ({ where }: { where?: { id?: { in: string[] }; supersededBy?: object } } = {}) =>
+          assertions.filter(
+            (p) =>
+              (!where?.id || where.id.in.includes(p.id)) &&
+              (!where?.supersededBy ||
+                !assertions.some((q) => (q as { supersedesId?: string }).supersedesId === p.id))
+          )
+      ),
+      count: vi.fn(async ({ where }: { where: { supersedesId: { in: string[] } } }) =>
+        assertions.filter((p) =>
+          where.supersedesId.in.includes((p as { supersedesId?: string }).supersedesId ?? '')
+        ).length
+      ),
+      create: vi.fn(async ({ data }: { data: Assertion }) => {
+        const row = { ...data, id: `reviewed-${assertions.length}` } as Assertion;
+        assertions = [...assertions, row];
+        return row;
       }),
     },
     medicineReviewDecision: {
@@ -218,6 +233,7 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
   };
   const scoped = Object.assign(db, {
     $transaction: async (fn: (tx: typeof db) => unknown) => fn(db),
+    $queryRaw: vi.fn(async () => []),
   });
   const api = caller(scoped);
   const readiness = () => evaluatePharmacyReadiness(scoped as unknown as PrismaClient, 'org-a');
@@ -267,7 +283,11 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
     medicineIds: [medicine.id],
     payload: { assertionIds },
   });
-  await api.publishAssertions({ assertionIds });
+  // Accept appends reviewed rows superseding the originals (sev1: never UPDATE).
+  const reviewed = assertions.filter((p) => (p as { supersedesId?: string }).supersedesId);
+  expect(reviewed).toHaveLength(assertionIds.length);
+  expect(reviewed.every((p) => p.status === 'ACCEPTED')).toBe(true);
+  await api.publishAssertions({ assertionIds: reviewed.map((p) => p.id) });
   expect(medicine.saleable).toBe(true);
   expect(entries).toHaveLength(6);
   expect(gate(await readiness())?.status).toBe('PASSED');
