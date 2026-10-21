@@ -22,16 +22,22 @@ this region"), and ECS throttled cluster creation. Singapore is where the app ra
 
 ## Stacks
 
-| Stack                    | Template            | Region         | What it holds                                                                                                        |
-| ------------------------ | ------------------- | -------------- | -------------------------------------------------------------------------------------------------------------------- |
-| `devfathom-shared`       | `shared.yaml`       | ap-southeast-1 | ECR repository `devfathom-commercial`, build-source bucket, CodeBuild project `devfathom-image`                      |
-| `devfathom-staging-dns`  | `dns.yaml`          | me-central-1*  | Route 53 zone for `staging.devfathom.com`                                                                            |
-| `devfathom-staging`      | `environment.yaml`  | ap-southeast-1 | VPC, RDS PostgreSQL 16, secrets, uploads bucket, ECS cluster and services, load balancer, DNS records, jobs schedule |
-| `devfathom-staging-cert` | `certificate.yaml`  | ap-southeast-1 | ACM certificate for `staging.devfathom.com` and `*.staging.devfathom.com`                                            |
-| `devfathom-build`        | `build-remote.yaml` | us-east-1      | spare image build (not needed while Singapore CodeBuild works)                                                       |
+| Stack                    | Template           | Region         | What it holds                                                                                                        |
+| ------------------------ | ------------------ | -------------- | -------------------------------------------------------------------------------------------------------------------- |
+| `devfathom-shared`       | `shared.yaml`      | ap-southeast-1 | ECR repository `devfathom-commercial`, build-source bucket, CodeBuild project `devfathom-image`                      |
+| `devfathom-staging-dns`  | `dns.yaml`         | me-central-1*  | Route 53 zone for `staging.devfathom.com`                                                                            |
+| `devfathom-staging`      | `environment.yaml` | ap-southeast-1 | VPC, RDS PostgreSQL 16, secrets, uploads bucket, ECS cluster and services, load balancer, DNS records, jobs schedule |
+| `devfathom-staging-cert` | `certificate.yaml` | ap-southeast-1 | ACM certificate for `staging.devfathom.com` and `*.staging.devfathom.com`                                            |
 
 \* Route 53 is global, so the zone serves every region. The stack happens to live in the
 region that was tried first.
+
+`build-remote.yaml` builds in a second region and pushes to the app region's repository, for a
+region whose CodeBuild has no capacity. Singapore's has, so nothing uses it.
+
+Left over from the me-central-1 attempt, both empty: `devfathom-build` in us-east-1 (it targets
+the me-central-1 repository, which no longer exists) and `devfathom-staging` in me-central-1
+(a failed create, `ROLLBACK_FAILED`, with termination protection on). Either can be deleted.
 
 The parent zone, `devfathom.com`, is on Cloudflare. It delegates `staging` to the Route 53
 zone with four NS records (the `NameServers` output of `devfathom-staging-dns`).
@@ -55,10 +61,26 @@ zone with four NS records (the `NameServers` output of `devfathom-staging-dns`).
   template, a parameter or the stack events.
   - Database: `database-master-password`, `database-app-password`, `database-admin-url`, `database-app-url`.
   - App: `auth-secret`, `platform-encryption-key`, `camera-credential-key`, `cron-secret`.
-  - Initialization only: `seed-password`, `admin-password`, `platform-admin-password`.
-- **Uploads.** A private, versioned bucket `devfathom-<env>-uploads-<account>`. The web task's
-  role may get, put and delete objects in it, and nothing else. The app uses it once
-  `StorageAdapter=s3` and the image has the S3 adapter (`src/lib/storage.ts`).
+  - Initialization only: `seed-password`, `admin-password`, `platform-admin-password`. They
+    reach the migration task only in `seed` or `bootstrap` mode (see below).
+  - The database passwords and the two encryption keys are kept if the stack is deleted, as
+    the database's final snapshot is: data encrypted under a lost key (MFA, SSO and camera
+    credentials) could not be recovered. A new stack with the same `EnvironmentName` has to
+    delete or rename those secrets first.
+- **Uploads.** A private, versioned, TLS-only bucket `devfathom-<env>-uploads-<account>`. The
+  web task's role may get, put and delete objects and list the bucket, and nothing else; the
+  listing permission is what makes S3 answer 404, not 403, for a missing object. The app uses
+  the bucket once `StorageAdapter=s3` (`src/lib/storage.ts`). An overwritten or deleted upload
+  stays as an old version for 30 days, so a delete, a purge included, becomes permanent only
+  after that window.
+- **Plain HTTP.** Never served. Until `CertificateArn` is set, port 80 answers 503 with a short
+  notice; once it is set, port 80 redirects to HTTPS (TLS 1.2 minimum). Meanwhile a listener
+  rule that no request can match keeps the target group attached, because the load balancer
+  health-checks only a target group that some rule uses.
+- **Health checks.** The load balancer checks `/api/live`, which reads nothing, because ECS
+  replaces the tasks that fail it: a check on the database would fail on every task at once
+  during a failover or maintenance. `/api/ready` (half-applied migrations, schema drift on the
+  generated client) is the deploy-time check below.
 
 ## Build an image
 
@@ -77,36 +99,55 @@ Dockerfile's `tsc --noEmit` runs with an 8 GB heap.
 
 ## Deploy an image
 
-1. Update stack `devfathom-staging` with the new `ImageUri`, keeping every other parameter.
-   This registers new task-definition revisions. The web service then rolls, with the
-   deployment circuit breaker set to roll back.
-2. Run the migration task **before** the new web tasks need the new schema:
-   - `aws ecs run-task --cluster devfathom-staging --launch-type FARGATE --task-definition devfathom-staging-migrate …`
-   - Use the stack outputs `TaskSubnetIds` and `AppSecurityGroupId`, with public IP enabled.
-   - Its default command is the migration-only path from `infra/environment.bicep`:
-     `bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts`.
-   - The load balancer health check is `/api/ready`, which fails while migrations are
-     pending, so a web task never takes traffic against an unmigrated database.
-3. Watch the service until it is stable, then check `https://staging.devfathom.com/api/ready`.
+Migrate first, then roll the web service, as the Azure staging workflow did
+(`.github/workflows/deploy-staging.yml`). Nothing else enforces that order: `/api/ready`
+fails for a migration that stopped part-way, but not for one that has not started.
 
-**First deploy of a new environment.** Override the migration command to append
-`&& bun prisma/seed.ts` (staging: demo data) or `&& bun prisma/bootstrap.ts`
-(production: first administrators, no demo data). The first sign-ins are `admin@<base>`
-and `platform-admin@<base>`. Their passwords are in Secrets Manager, in `admin-password` and
-`platform-admin-password`.
+1. Update the stack with `MigrateImageUri=<new image>`, keeping every other parameter. Only
+   the migration task definition changes; the web service keeps its image.
+2. Run the migration task and wait for exit code 0:
+   - `aws ecs run-task --cluster devfathom-<env> --launch-type FARGATE --task-definition <MigrateTaskDefinitionArn output> …`
+   - Use the stack outputs `TaskSubnetIds` and `AppSecurityGroupId`, with public IP enabled.
+   - Its log is in `/devfathom/<env>/migrate`.
+   - Its command is the migration path from `infra/environment.bicep`,
+     `bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts`,
+     followed by what `MigrationMode` selects. Staging runs `seed`, as it did on Azure: every
+     release re-runs `prisma/seed.ts`, which creates the demo data once and refreshes the
+     platform administrator's password. Production runs `migrate`.
+3. Update the stack with `ImageUri=<new image>` and `MigrateImageUri` empty. The web service
+   rolls; the deployment circuit breaker rolls back a task that will not start or fails
+   `/api/live`.
+4. Check `https://<TenantHost>/api/ready`: 200 with `{"status":"ok","schema":"current"}`.
+
+**First deploy of a new environment.** Create the stack with `ImageUri` set, `DesiredCount=0`
+and `MigrationMode=seed` (staging) or `bootstrap` (production, which creates the first
+administrators and no demo data). Run the migration task, then update `DesiredCount=1`; in
+production, also set `MigrationMode=migrate` again, because the bootstrap runs once. The
+first sign-ins, with passwords in Secrets Manager:
+
+- staging: the platform console as `platform-admin@<base>` (`platform-admin-password`), and
+  the workspace as `alex@company.com` or `jordan@company.com`, the seeded administrators
+  (`seed-password`, shared by all eight seeded users);
+- production: `admin@<base>` (`admin-password`) and `platform-admin@<base>`
+  (`platform-admin-password`).
 
 **Rollback.** Update `ImageUri` back to the previous digest. Migrations only go forward, so
 roll back only to an image whose schema expectations are still met.
 
 ## HTTPS and the jobs schedule
 
-1. Once the Cloudflare delegation answers, create `certificate.yaml` (`DomainName`,
-   `HostedZoneId`). It validates through the Route 53 zone.
+1. Create `certificate.yaml` (`DomainName`, `HostedZoneId`). It validates through the Route 53
+   zone, so the stack completes only once the Cloudflare delegation answers.
 2. Update the environment stack:
    - Set `CertificateArn`. Port 80 then redirects to 443, with TLS 1.2 minimum.
    - Set `EnableJobsSchedule=true`. Every 5 minutes a small Lambda function calls
      `POST https://<TenantHost>/api/platform/jobs/process` with `Authorization: Bearer <cron-secret>`,
      replacing `vercel.json`'s cron.
+
+A failed call is not retried; the next run is 5 minutes later, and overlapping runs are safe
+(jobs are claimed with `SKIP LOCKED`). `maxDuration` is advisory outside Vercel, so a run
+longer than the load balancer's 310 s idle timeout ends in a 504 for the caller while the
+work itself continues.
 
 ## Database access for people
 
