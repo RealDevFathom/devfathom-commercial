@@ -5,6 +5,7 @@ import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { WhatsAppProviderError, type WhatsAppSendResult } from './provider';
 
 export type MessageLogKind =
+  | 'GROWTH_CAMPAIGN'
   | 'REFILL_REMINDER'
   | 'ORDER_REQUEST'
   | 'ORDER_CONFIRMATION'
