@@ -2,7 +2,8 @@ import { timingSafeEqual } from 'node:crypto';
 import { NextResponse } from 'next/server';
 
 import { isGrowthEnabled } from '@/lib/growth';
-import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { advanceCampaigns, dispatchCampaignMessages } from '@/lib/growth/campaigns';
+import { withTenantDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 
 function safeEqual(left: string, right: string): boolean {
   const leftBuffer = Buffer.from(left);
@@ -22,7 +23,8 @@ export async function POST(request: Request) {
   );
   for (const organization of organizations) {
     if (await isGrowthEnabled(organization.id)) {
-      console.info(`[growth] tick organizationId=${organization.id}`);
+      await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
+      await dispatchCampaignMessages(organization.id);
     }
   }
   return NextResponse.json({ ok: true });
