@@ -60,6 +60,7 @@ function makeDb() {
     pharmacyDebitNote: model(),
     pharmacySupplierCredit: model(),
     pharmacyBranch: model(),
+    pharmacyCentralPurchasingAccess: model(),
   };
   return Object.assign(db, {
     $transaction: vi.fn(async (fn: (tx: typeof db) => unknown) => fn(db)),
@@ -98,7 +99,25 @@ function orderableSupplier() {
 
 function resolvableCatalog() {
   db.medicine.findFirst.mockResolvedValue({ id: 'medicine_a' });
-  db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+  db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
+  db.packLevel.findMany.mockResolvedValue([
+    {
+      id: 'pack_a',
+      level: 'BOX',
+      unitsPerParent: 1,
+      parentPackLevelId: null,
+      effectiveFrom: PAST,
+      effectiveTo: null,
+    },
+    {
+      id: 'unit_a',
+      level: 'UNIT',
+      unitsPerParent: 10,
+      parentPackLevelId: 'pack_a',
+      effectiveFrom: PAST,
+      effectiveTo: null,
+    },
+  ]);
 }
 
 const ORDER_LINE = {
@@ -405,7 +424,25 @@ describe('PUR-02 approval', () => {
 
 describe('PUR-02 tenant boundaries', () => {
   it('rejects a cross-tenant medicine ID substitution on a requisition', async () => {
-    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a' });
+    db.packLevel.findFirst.mockResolvedValue({ id: 'pack_a', presentationId: 'presentation_a' });
+    db.packLevel.findMany.mockResolvedValue([
+      {
+        id: 'pack_a',
+        level: 'BOX',
+        unitsPerParent: 1,
+        parentPackLevelId: null,
+        effectiveFrom: PAST,
+        effectiveTo: null,
+      },
+      {
+        id: 'unit_a',
+        level: 'UNIT',
+        unitsPerParent: 10,
+        parentPackLevelId: 'pack_a',
+        effectiveFrom: PAST,
+        effectiveTo: null,
+      },
+    ]);
     await expect(
       caller().createRequisition({
         reference: 'REQ-1',
@@ -607,7 +644,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
-    await caller().createGoodsReceipt(RECEIPT);
+    await caller().createGoodsReceipt({
+      ...RECEIPT,
+      lines: [{ ...RECEIPT_LINE, canonicalUnitsPerPack: 1000000 }],
+    });
     const line = db.pharmacyGoodsReceipt.create.mock.calls[0]![0].data.lines.create[0];
     // 10 paid packs + 2 free at 10 units each, and 100_000 minor over 120 units.
     expect(line).toMatchObject({
@@ -620,6 +660,28 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     // The tenant and branch are not repeated on the nested line: they travel in
     // the composite key of the header.
     expect(line).not.toHaveProperty('organizationId');
+  });
+
+  it('refuses receipt creation without procurement permission before reading or writing', async () => {
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
+    expect(db.packLevel.findFirst).not.toHaveBeenCalled();
+  });
+
+  it('rejects a pack belonging to another medicine and pins lookup scope', async () => {
+    db.packLevel.findFirst.mockResolvedValue(null);
+    await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
+      code: 'BAD_REQUEST',
+    });
+    expect(db.packLevel.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'pack_a',
+        organizationId: 'org_a',
+        presentation: { organizationId: 'org_a', medicineId: 'medicine_a' },
+      },
+    });
+    expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
   });
 
   it('takes the receiver from the session, never from the payload', async () => {
@@ -834,5 +896,104 @@ describe('PUR-06 — the returns and settlement transport', () => {
         where: expect.objectContaining({ organizationId: 'org_a', branchId: 'branch_a' }),
       })
     );
+  });
+});
+
+describe('server-owned purchasing conversions', () => {
+  beforeEach(() => {
+    resolvableCatalog();
+    orderableSupplier();
+  });
+
+  it('ignores inflated requisition and purchase order conversions', async () => {
+    await caller().createRequisition({
+      reference: 'REQ-secure',
+      lines: [
+        {
+          medicineId: 'medicine_a',
+          packLevelId: 'pack_a',
+          quantityPacks: 2,
+          canonicalUnitsPerPack: 1000000,
+        },
+      ],
+    });
+    expect(db.pharmacyRequisition.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      canonicalUnitsPerPack: 10,
+      canonicalUnits: 20,
+    });
+    await caller().createPurchaseOrder({
+      reference: 'PO-secure',
+      supplierId: 'supplier_a',
+      lines: [{ ...ORDER_LINE, canonicalUnitsPerPack: 1000000, bonusPacks: 2 }],
+    });
+    expect(db.pharmacyPurchaseOrder.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      canonicalUnitsPerPack: 10,
+      orderedCanonicalUnits: 100,
+      bonusCanonicalUnits: 20,
+    });
+  });
+
+  it('resolves quote conversion using the requisition medicine and pack', async () => {
+    db.pharmacyRequisition.findFirst.mockResolvedValue({
+      id: 'req_a',
+      lines: [
+        {
+          id: 'reqline_a',
+          medicineId: 'medicine_a',
+          packLevelId: 'pack_a',
+        },
+      ],
+    });
+    await caller().recordQuote({
+      requisitionId: 'req_a',
+      supplierId: 'supplier_a',
+      quotedAt: PAST,
+      validUntil: FUTURE,
+      lines: [
+        { requisitionLineId: 'reqline_a', pricePerPackMinor: 1000, canonicalUnitsPerPack: 1000000 },
+      ],
+    });
+    expect(db.pharmacyQuote.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      canonicalUnitsPerPack: 10,
+    });
+    expect(db.packLevel.findFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'pack_a',
+        organizationId: 'org_a',
+        presentation: { organizationId: 'org_a', medicineId: 'medicine_a' },
+      },
+    });
+  });
+
+  it('ignores inflated central purchase order conversion', async () => {
+    db.pharmacyCentralPurchasingAccess.findMany.mockResolvedValue([{ branchId: null }]);
+    await caller().createCentralPurchaseOrder({
+      reference: 'CENTRAL-secure',
+      supplierId: 'supplier_a',
+      receivingBranchId: 'branch_a',
+      lines: [{ ...ORDER_LINE, canonicalUnitsPerPack: 1000000 }],
+    });
+    expect(db.pharmacyPurchaseOrder.create.mock.calls[0]![0].data.lines.create[0]).toMatchObject({
+      canonicalUnitsPerPack: 10,
+      orderedCanonicalUnits: 100,
+    });
+  });
+
+  it('rejects unresolved hierarchies before persisting a requisition', async () => {
+    db.packLevel.findMany.mockResolvedValue([]);
+    await expect(
+      caller().createRequisition({
+        reference: 'REQ-unresolved',
+        lines: [
+          {
+            medicineId: 'medicine_a',
+            packLevelId: 'pack_a',
+            quantityPacks: 1,
+            canonicalUnitsPerPack: 1000000,
+          },
+        ],
+      })
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(db.pharmacyRequisition.create).not.toHaveBeenCalled();
   });
 });

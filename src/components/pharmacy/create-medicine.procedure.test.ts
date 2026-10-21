@@ -170,7 +170,12 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
     pharmacySupplier: { findMany: vi.fn(async () => []), count: vi.fn(async () => 0) },
     user: {
       findMany: vi.fn(async () => []),
-      findUnique: vi.fn(async () => ({ organizationRole: null, permissionOverrides: [] })),
+      findUnique: vi.fn(async () => ({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      })),
     },
     organization: { findUnique: vi.fn(async () => null) },
     pharmacyOnboardingGateState: { findMany: vi.fn(async () => []) },
@@ -341,7 +346,17 @@ it('creates, reviews, publishes and packs a manual medicine through stock-in and
 it('rejects caller-supplied organization scope in manual creation', async () => {
   const create = vi.fn();
   await expect(
-    caller({ medicine: { create } }).createMedicine({
+    caller({
+      medicine: { create },
+      user: {
+        findUnique: vi.fn(async () => ({
+          organizationRole: {
+            permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+          },
+          permissionOverrides: [],
+        })),
+      },
+    }).createMedicine({
       productName: 'Other tenant',
       productFamily: 'PHARMACEUTICAL',
       organizationId: 'org-b',

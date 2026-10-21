@@ -72,6 +72,7 @@ export const ALL_ACTIONS = [
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
+  'pharmacy:procurement', // Purchasing and medicine creation require an explicit organization grant.
   'pharmacy:orders', // MKT-03/05: staff acceptance and fulfilment of customer proposals
   // H1-01: hospitality capabilities use explicit organization-role grants.
   // Property scope is enforced separately by the consuming procedures.
@@ -230,6 +231,7 @@ export const POLICIES: Record<Action, Policy[]> = {
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],
   'pharmacy:orders': [],
+  'pharmacy:procurement': [],
 
   // H1-01: no static agency-role policy grants hospitality capabilities.
   // Explicit capabilities and wildcards use the existing customDecision path.

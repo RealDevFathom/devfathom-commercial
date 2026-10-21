@@ -507,7 +507,7 @@ export const pharmacyMedicineRouter = router({
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
     .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
 
-  createMedicine: protectedProcedure
+  createMedicine: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({

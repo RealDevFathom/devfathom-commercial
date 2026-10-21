@@ -40,7 +40,16 @@ beforeEach(() => {
 
 describe('existing pack procedure to receiving options (in-memory delegates, no DB)', () => {
   it('makes the created effective pack selectable with the derived unit count', async () => {
-    const packs: Array<object> = [];
+    const packs: Array<object> = [
+      {
+        id: 'unit-leaf',
+        level: 'UNIT',
+        unitsPerParent: 10,
+        parentPackLevelId: 'new-pack',
+        effectiveFrom: input.effectiveFrom,
+        effectiveTo: null,
+      },
+    ];
     const db = {
       presentation: { findFirst: vi.fn(async () => ({ id: input.presentationId })) },
       packLevel: {
