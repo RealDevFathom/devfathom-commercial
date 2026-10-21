@@ -58,8 +58,10 @@ function divideRoundHalfUp(numerator: number, denominator: number): number {
 export type SupplierLicenceEvidence = {
   /** Exclusive: a licence that expires today is still valid for the whole of today. */
   expiresAt: Date;
-  /** A superseded or unverified filing is evidence of paperwork, not of a licence. */
+  /** An unverified filing is evidence of paperwork, not of a licence. */
   verified: boolean;
+  /** A replacement filing has made this evidence non-governing. */
+  superseded: boolean;
 };
 
 /**
@@ -74,7 +76,8 @@ export function assertSupplierEligible(input: {
 }): void {
   if (!input.authorized) throw new PharmacyPurchasingError('SUPPLIER_NOT_AUTHORIZED');
   const valid = input.licences.some(
-    (licence) => licence.verified && licence.expiresAt.getTime() >= input.at.getTime()
+    (licence) =>
+      licence.verified && !licence.superseded && licence.expiresAt.getTime() >= input.at.getTime()
   );
   if (!valid) throw new PharmacyPurchasingError('SUPPLIER_LICENCE_EXPIRED');
 }
