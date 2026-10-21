@@ -3,6 +3,11 @@ import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
 import { logActivity } from '@/server/activity';
+import {
+  invoiceStatusTransitionError,
+  invoiceStatusUpdate,
+  type InvoiceStatusValue,
+} from '@/lib/finance/invoice-status';
 
 export const GET = withApiAuth(
   'finance:read',
@@ -23,14 +28,6 @@ export const GET = withApiAuth(
 const updateSchema = z.object({
   status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']).optional(),
 });
-
-const ALLOWED_STATUS_TRANSITIONS: Record<string, string[]> = {
-  DRAFT: ['SENT', 'CANCELLED'],
-  SENT: ['OVERDUE', 'CANCELLED', 'DRAFT'],
-  OVERDUE: ['CANCELLED', 'SENT'],
-  PAID: ['CANCELLED'],
-  CANCELLED: ['DRAFT'],
-};
 
 export const PATCH = withApiAuth(
   'finance:write',
@@ -54,37 +51,30 @@ export const PATCH = withApiAuth(
     if (!existing) return NextResponse.json({ error: 'Invoice not found' }, { status: 404 });
 
     const next = parsed.data.status;
-    if (next === 'PAID') {
-      return NextResponse.json(
-        { error: 'Record a payment to mark an invoice as paid.' },
-        { status: 400 }
-      );
+    const transitionError = next
+      ? invoiceStatusTransitionError(existing.status as InvoiceStatusValue, next)
+      : null;
+    if (transitionError) {
+      return NextResponse.json({ error: transitionError }, { status: 400 });
     }
 
     if (next === existing.status) return NextResponse.json({ data: existing });
+    if (!next) return NextResponse.json({ data: existing });
 
-    if (
-      next &&
-      next !== existing.status &&
-      !ALLOWED_STATUS_TRANSITIONS[existing.status]?.includes(next)
-    ) {
+    // Compare-and-set makes the state check and write one atomic operation. Only
+    // the request that wins this update may emit transition side effects.
+    const changed = await authCtx.db.invoice.updateMany({
+      where: { id, status: existing.status },
+      data: invoiceStatusUpdate(existing.status as InvoiceStatusValue, next, new Date()),
+    });
+    if (changed.count !== 1) {
       return NextResponse.json(
-        { error: `Cannot change an invoice from ${existing.status} to ${next}.` },
-        { status: 400 }
+        { error: 'Invoice status changed concurrently. Refresh and try again.' },
+        { status: 409 }
       );
     }
-
-    const data: Record<string, unknown> = { ...parsed.data };
-    if (next === 'SENT') data.sentAt = new Date();
-    if (existing.status === 'PAID') data.paidAt = null;
-    if (next === 'DRAFT') {
-      data.sentAt = null;
-      data.paidAt = null;
-    }
-
-    const invoice = await authCtx.db.invoice.update({
+    const invoice = await authCtx.db.invoice.findUniqueOrThrow({
       where: { id },
-      data,
       include: { client: { select: { name: true } } },
     });
 
