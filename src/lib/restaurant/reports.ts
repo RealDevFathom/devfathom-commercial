@@ -340,13 +340,22 @@ async function readCashCountCoverage(
       { close, counted: ZERO, incomplete: false },
     ])
   );
-  const drawers = closes.length
-    ? await db.restaurantDrawerSession.findMany({
+  // Stream drawer evidence: a busy 90-day range can contain arbitrarily many
+  // sessions, while the fold only retains one accumulator per closed day.
+  async function* drawerPages() {
+    if (!closes.length) return;
+    let cursor: string | undefined;
+    while (true) {
+      const page = await db.restaurantDrawerSession.findMany({
+        take: 500,
+        orderBy: { id: 'asc' },
+        ...(cursor ? { cursor: { id: cursor }, skip: 1 } : {}),
         where: {
           branchId: { in: range.branchIds },
           businessDate: { gte: parsed.from, lte: parsed.to },
         },
         select: {
+          id: true,
           branchId: true,
           businessDate: true,
           createdAt: true,
@@ -354,12 +363,16 @@ async function readCashCountCoverage(
           status: true,
           countedCash: true,
         },
-      })
-    : [];
+      });
+      yield* page;
+      if (page.length < 500) return;
+      cursor = page[page.length - 1].id;
+    }
+  }
   let drawerSessionCount = 0;
   let missingCountSessionCount = 0;
   let unverifiedCloseSessionCount = 0;
-  for (const drawer of drawers) {
+  for await (const drawer of drawerPages()) {
     const day = days.get(`${drawer.branchId}:${dateKey(drawer.businessDate)}`);
     // Match the source close's drawer business date and creation cutoff. Later
     // sessions and days without an authoritative close cannot validate its cash.

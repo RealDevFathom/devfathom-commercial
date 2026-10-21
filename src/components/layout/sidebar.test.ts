@@ -50,6 +50,29 @@ describe('restaurant navigation', () => {
     expect(withInsights).toContain('/restaurant/insights');
   });
 
+  it('links the menu-import console for admins holding the menu module, and hides it otherwise', () => {
+    const forAdmin = visibleNavigation(
+      { vertical: 'RESTAURANT', enabledModules: ['restaurant-core', 'restaurant-menu'] },
+      'ADMIN'
+    ).map((item) => item.href);
+    expect(forAdmin).toContain('/restaurant/menu-import');
+
+    // menu:import is admin-only (only `*`-bearing templates hold it), so a
+    // non-admin must not see the link it could not use.
+    const forEmployee = visibleNavigation(
+      { vertical: 'RESTAURANT', enabledModules: ['restaurant-core', 'restaurant-menu'] },
+      'EMPLOYEE'
+    ).map((item) => item.href);
+    expect(forEmployee).not.toContain('/restaurant/menu-import');
+
+    // Without the menu module the entry is gone even for an admin.
+    const withoutModule = visibleNavigation(
+      { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
+      'ADMIN'
+    ).map((item) => item.href);
+    expect(withoutModule).not.toContain('/restaurant/menu-import');
+  });
+
   it('keeps restaurant routes out of an Agency workspace', () => {
     const visible = visibleNavigation(
       { vertical: 'AGENCY', enabledModules: ['dashboard', 'projects'] },

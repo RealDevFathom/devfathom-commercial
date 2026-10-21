@@ -11,6 +11,7 @@ import { PageHeader } from '@/components/ui/page-header';
 import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { useAssistant } from '@/lib/assistant-store';
+import { verticalForModuleKey } from '@/lib/module-catalog';
 
 const inputClass =
   'h-10 w-full rounded-lg border border-border bg-background px-3 text-sm outline-none transition focus:border-primary focus:ring-2 focus:ring-primary/15 aria-invalid:border-destructive aria-invalid:ring-2 aria-invalid:ring-destructive/20';
@@ -371,20 +372,26 @@ export function OrganizationAdminContent() {
         description="Your platform operator controls package, contract, seat ceiling, and expiry."
       >
         <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-          {entitlements.modules.map((module) => (
-            <div key={module.key} className="rounded-xl border border-border/60 p-3">
-              <div className="flex items-center justify-between gap-3">
-                <p className="text-sm font-semibold">{module.name}</p>
-                <Status value={module.enabled ? 'ENABLED' : 'DISABLED'} />
+          {entitlements.modules
+            .filter(
+              (module) =>
+                module.source !== 'NONE' ||
+                verticalForModuleKey(module.key) === organization.vertical
+            )
+            .map((module) => (
+              <div key={module.key} className="rounded-xl border border-border/60 p-3">
+                <div className="flex items-center justify-between gap-3">
+                  <p className="text-sm font-semibold">{module.name}</p>
+                  <Status value={module.enabled ? 'ENABLED' : 'DISABLED'} />
+                </div>
+                <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
+                  {module.source}
+                  {module.expiresAt
+                    ? ` · expires ${new Date(module.expiresAt).toLocaleDateString()}`
+                    : ''}
+                </p>
               </div>
-              <p className="mt-2 font-mono text-[9px] uppercase tracking-[0.1em] text-muted-foreground">
-                {module.source}
-                {module.expiresAt
-                  ? ` · expires ${new Date(module.expiresAt).toLocaleDateString()}`
-                  : ''}
-              </p>
-            </div>
-          ))}
+            ))}
         </div>
       </Card>
 

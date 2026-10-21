@@ -7509,6 +7509,7 @@ model RestaurantDrawerSession {
   @@index([businessDate])
   @@index([status])
   @@map("restaurant_drawer_sessions")
+  @@index([organizationId, branchId, businessDate, id], map: "qa144_drawer_report_idx")
 }
 
 /// M5/C3/C8: the APPEND-ONLY drawer ledger. Every cash event writes exactly one
@@ -7596,6 +7597,7 @@ model RestaurantDailyClose {
   @@index([businessDate])
   @@index([supersedesCloseId])
   @@map("restaurant_daily_closes")
+  @@index([organizationId, branchId, businessDate, createdAt, id], map: "qa144_close_report_idx")
 }
 
 /// M5/C3/C9: the APPEND-ONLY per-tender-type child of a daily close (amount,
@@ -8663,6 +8665,7 @@ model RestaurantSopOccurrence {
   // The pool query: unclaimed ROLE-target occurrences for one role at one branch.
   @@index([poolJobRoleId, branchId, claimedByStaffProfileId])
   @@map("restaurant_sop_occurrences")
+  @@index([organizationId, branchId, businessDate], map: "qa144_sop_report_idx")
 }
 
 /// M7/§11.5: per-step completion state of an occurrence, referencing the pinned
@@ -14403,6 +14406,7 @@ model PharmacyMessageLog {
   kind              String
   status            String
   dedupeKey         String
+  customerDayKey    String?
   phoneLast4        String?
   templateName      String?
   providerMessageId String?
@@ -14418,6 +14422,7 @@ model PharmacyMessageLog {
   customer     PharmacyCustomer? @relation(fields: [organizationId, customerId], references: [organizationId, id], onDelete: Restrict)
 
   @@unique([organizationId, dedupeKey], map: "pharmacy_message_logs_dedupe_key")
+  @@unique([organizationId, customerDayKey], map: "pharmacy_message_logs_customer_day_key")
   @@index([organizationId, customerId, createdAt(sort: Desc)], map: "pharmacy_message_logs_customer_idx")
   @@index([organizationId, kind, status], map: "pharmacy_message_logs_kind_status_idx")
   @@map("pharmacy_message_logs")

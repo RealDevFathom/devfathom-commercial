@@ -80,11 +80,11 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
-  it('leaves existing owners without new clinical or report grants', async () => {
+  it('grants owners pharmacy actions and both report actions', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        action === 'pharmacy:orders'
+        true
       );
     }
   });
@@ -176,7 +176,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(42);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toEqual([]);

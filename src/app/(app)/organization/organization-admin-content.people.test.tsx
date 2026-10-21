@@ -168,3 +168,21 @@ describe('organization people and access — staff onboarding', () => {
     expect(options).toEqual(['Counter', 'Dispensary', 'Store']);
   });
 });
+
+it('limits the license ledger to workspace modules and explicit grants', () => {
+  const data = overviewData.current as { entitlements: { modules: unknown[] } };
+  data.entitlements.modules = [
+    { key: 'pharmacy-inventory', name: 'Pharmacy Inventory', source: 'PACKAGE', enabled: true },
+    { key: 'pharmacy-crm', name: 'Pharmacy CRM', source: 'NONE', enabled: false },
+    { key: 'restaurant-core', name: 'Restaurant Core', source: 'NONE', enabled: false },
+    { key: 'hr', name: 'HR', source: 'NONE', enabled: false },
+    { key: 'notes', name: 'Notes', source: 'OVERRIDE', enabled: true },
+  ];
+  render(<OrganizationAdminContent />);
+  const ledger = screen.getByRole('heading', { name: 'License and modules' }).closest('section')!;
+  expect(within(ledger).getByText('Pharmacy Inventory')).toBeInTheDocument();
+  expect(within(ledger).getByText('Pharmacy CRM')).toBeInTheDocument();
+  expect(within(ledger).getByText('Notes')).toBeInTheDocument();
+  expect(within(ledger).queryByText('Restaurant Core')).not.toBeInTheDocument();
+  expect(within(ledger).queryByText('HR')).not.toBeInTheDocument();
+});

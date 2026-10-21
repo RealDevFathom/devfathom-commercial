@@ -244,6 +244,18 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
     expect(useAssistant.getState().open).toBe(false);
   });
 
+  it('finishes a stalled availability check with an actionable error', () => {
+    vi.useFakeTimers();
+    try {
+      render(shell());
+      act(() => vi.advanceTimersByTime(15_000));
+      expect(screen.getAllByText(/availability could not be confirmed/).length).toBeGreaterThan(0);
+      for (const button of launchers()) expect(button).toBeDisabled();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
   it('closes on query failure and does not fetch settings without an authenticated session', () => {
     confirm(true, 10);
     const view = render(shell());
@@ -252,6 +264,7 @@ describe('both real Ask Fathom launch buttons and shell lifecycle', () => {
     view.rerender(shell());
     expect(screen.queryByLabelText('Chat draft')).not.toBeInTheDocument();
     for (const button of launchers()) expect(button).toBeDisabled();
+    expect(screen.getAllByText(/availability could not be confirmed/).length).toBeGreaterThan(0);
     mocks.settingsQuery.mockClear();
     mocks.session.status = 'unauthenticated';
     view.rerender(shell());
