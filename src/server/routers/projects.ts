@@ -690,7 +690,9 @@ export const projectsRouter = router({
       await assertColumnAccess(ctx, input.targetColumnId);
       const task = await ctx.db.task.findUnique({
         where: { id: input.taskId },
-        include: { column: { select: { name: true } } },
+        include: {
+          column: { select: { name: true, board: { select: { projectId: true } } } },
+        },
       });
       if (!task) throw new TRPCError({ code: 'NOT_FOUND' });
 
@@ -717,6 +719,12 @@ export const projectsRouter = router({
             await tx.task.update({ where: { id: sourceIds[i] }, data: { order: i } });
           }
         } else {
+          const targetColumn = await tx.column.findUnique({
+            where: { id: input.targetColumnId },
+            select: { board: { select: { projectId: true } } },
+          });
+          if (!targetColumn) throw new TRPCError({ code: 'NOT_FOUND' });
+
           // Renumber the source column with the moved task removed.
           for (let i = 0; i < sourceIds.length; i++) {
             await tx.task.update({ where: { id: sourceIds[i] }, data: { order: i } });
@@ -734,6 +742,20 @@ export const projectsRouter = router({
             where: { id: input.taskId },
             data: { columnId: input.targetColumnId },
           });
+
+          // A cross-project move must not leak the destination board through My
+          // Tasks. Keep only assignees who are members of the destination project.
+          if (task.column.board.projectId !== targetColumn.board.projectId) {
+            await tx.taskAssignee.deleteMany({
+              where: {
+                taskId: input.taskId,
+                user: {
+                  projectMembers: { none: { projectId: targetColumn.board.projectId } },
+                },
+              },
+            });
+          }
+
           for (let i = 0; i < targetIds.length; i++) {
             await tx.task.update({ where: { id: targetIds[i] }, data: { order: i } });
           }
