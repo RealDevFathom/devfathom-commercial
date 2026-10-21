@@ -24,6 +24,10 @@ JOIN "organizations" o ON o."id" = u."organizationId"
 JOIN "pharmacy_branches" b ON b."organizationId" = u."organizationId"
 LEFT JOIN "organization_roles" r ON r."id" = u."organizationRoleId"
 WHERE o."vertical" = 'PHARMACY'::"OrganizationVertical"
+  AND NOT EXISTS (
+    SELECT 1 FROM "pharmacy_branch_assignments" a
+    WHERE a."organizationId" = o."id"
+  )
   AND b."active" = true
   AND u."status" IN ('ACTIVE'::"UserStatus", 'ON_LEAVE'::"UserStatus")
   AND (

@@ -1,5 +1,5 @@
 -- Replay the original data predicate under platform scope (#218).
--- Preserve configured department names and enrolled MFA users.
+-- Preserve configured department keys; name collisions abort for explicit resolution.
 BEGIN;
 SELECT set_config('app.is_platform_admin', 'true', true);
 
@@ -19,6 +19,6 @@ CROSS JOIN LATERAL (
   ) AS defaults(key, name, position, vertical)
   WHERE defaults.vertical = o."vertical"
 ) d
-ON CONFLICT DO NOTHING;
+ON CONFLICT ("organizationId", "key") DO NOTHING;
 
 COMMIT;

@@ -11,11 +11,13 @@ const repairs = [
   '20261021180300_repair_outbound_effect_cleanup',
   '20261021180400_repair_platform_mfa_initialization',
   '20261021180500_repair_department_defaults',
+  '20261021180600_repair_invitation_email_lowercase',
+  '20261021180700_repair_delivery_payment_mode',
 ];
 const sql = (name: string) => readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8');
 
 describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
-  it('reproduces lost scope, restores all six data changes, and permits replay', async () => {
+  it('reproduces lost scope, repairs safe data changes without restoring revoked access, and permits replay', async () => {
     const db = new pg.Client({ connectionString: url });
     await db.connect();
     try {
@@ -24,7 +26,8 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
         FROM pg_roles, pg_database WHERE rolname = current_user AND datname = current_database()`);
       expect(attributes.rows).toEqual([{ rolsuper: false, rolbypassrls: false, owns_database: true }]);
       const tables = ['organization_modules', 'organization_roles', 'organization_role_permissions',
-        'users', 'pharmacy_branches', 'pharmacy_branch_assignments', 'outbound_effects'];
+        'users', 'pharmacy_branches', 'pharmacy_branch_assignments', 'outbound_effects',
+        'invitations', 'restaurant_delivery_fulfillments', 'organization_departments', 'platform_users'];
       const policies = await db.query(`SELECT relname FROM pg_class
         WHERE relname = ANY($1) AND relrowsecurity AND relforcerowsecurity
         AND relowner = (SELECT oid FROM pg_roles WHERE rolname = current_user)`, [tables]);
@@ -45,7 +48,7 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
           VALUES ('sweep218_pm','sweep218_pkg','sweep218_mod');
         INSERT INTO organization_modules (id,"organizationId","moduleId",reason,"updatedAt") VALUES
           ('sweep218_copy','sweep218_a','sweep218_mod','Included with Sweep 218',now()),
-          ('sweep218_override','sweep218_b','sweep218_mod','Operator override',now());
+          ('sweep218_override','sweep218_b','sweep218_mod',NULL,now());
         INSERT INTO organization_roles (id,"organizationId",key,name,"updatedAt") VALUES
           ('sweep218_role_a','sweep218_a','pharmacist','Pharmacist',now()),
           ('sweep218_role_b','sweep218_b','pharmacist','Other tenant',now());
@@ -61,13 +64,37 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
           ('sweep218_branch','sweep218_a','SWEEP218','Sweep','Test','Karachi','SD',true,now()),
           ('sweep218_closed','sweep218_a','SWEEP218C','Closed','Test','Karachi','SD',false,now());
         INSERT INTO outbound_effects (id,"organizationId",kind,payload,status,"updatedAt") VALUES
-          ('sweep218_webhook','sweep218_a','webhook','{"secret":"old","url":"old","keep":1}','PENDING',now()),
+          ('sweep218_webhook','sweep218_a','webhook','{"secret":"old","url":"old","meta":{"secret":"nested","keep":2},"keep":1}','PENDING',now()),
           ('sweep218_failed','sweep218_a','email','{"personal":"old"}','FAILED',now());
+
+        INSERT INTO invitations (id,"organizationId","userId",email,"tokenHash","expiresAt","updatedAt")
+          VALUES ('sweep218_invite','sweep218_a','sweep218_active',' Invite@Example.invalid ','sweep218_token',now()+interval '1 day',now());
+        INSERT INTO restaurant_branches (id,"organizationId",name,"updatedAt")
+          VALUES ('sweep218_restbranch','sweep218_b','Test',now());
+        INSERT INTO restaurant_customers (id,"organizationId","displayName","updatedAt")
+          VALUES ('sweep218_customer','sweep218_b','Test',now());
+        INSERT INTO restaurant_staff_profiles (id,"organizationId","displayName","updatedAt")
+          VALUES ('sweep218_staff','sweep218_b','Test',now());
+        INSERT INTO restaurant_registered_devices (id,"organizationId","branchId",name,"deviceSecretHash","updatedAt")
+          VALUES ('sweep218_device','sweep218_b','sweep218_restbranch','Test','unused',now());
+        INSERT INTO restaurant_orders (id,"organizationId","branchId","orderNumber","businessDate",channel,"customerId","staffProfileId","deviceId","updatedAt")
+          VALUES ('sweep218_order','sweep218_b','sweep218_restbranch',1,current_date,'DELIVERY','sweep218_customer','sweep218_staff','sweep218_device',now());
+        SELECT set_config('app.current_organization_id', 'sweep218_b', true);
+        INSERT INTO restaurant_delivery_fulfillments (id,"organizationId","branchId","customerId","orderId","paymentMode",
+          "recipientNameSnapshot","normalizedPhoneSnapshot","addressLine1Snapshot","localitySnapshot","countryCodeSnapshot",
+          "deliveryFeeSnapshot","promisedMinutesSnapshot","promisedAt","updatedAt")
+          VALUES ('sweep218_delivery','sweep218_b','sweep218_restbranch','sweep218_customer','sweep218_order','COD',
+            'Test','+12025550123','Test','Test','US',0,30,now(),now());
         COMMIT;`);
 
       // Separate queries model the autocommit execution path that loses LOCAL scope.
       await db.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
-      expect((await db.query(`SELECT count(*)::int n FROM users WHERE id LIKE 'sweep218_%'`)).rows[0].n).toBe(0);
+      if (pass === 0) await db.query(`BEGIN;
+          SELECT set_config('app.is_platform_admin', 'true', true);
+          INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,status,"updatedAt")
+          VALUES ('sweep218_new','sweep218_a','sweep218_role_a','New','sweep218-new@example.invalid','test','test','ACTIVE',now());
+          COMMIT;`);
+        expect((await db.query(`SELECT count(*)::int n FROM users WHERE id LIKE 'sweep218_%'`)).rows[0].n).toBe(0);
       for (const name of repairs) {
         const body = sql(name).split("SELECT set_config('app.is_platform_admin', 'true', true);")[1]
           .replace(/COMMIT;\s*$/, '');
@@ -75,9 +102,12 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
       }
 
       async function counts() {
-        await db.query(`BEGIN; SELECT set_config('app.is_platform_admin', 'true', true)`);
+        await db.query(`BEGIN; SELECT set_config('app.is_platform_admin', 'true', true); SELECT set_config('app.current_organization_id', 'sweep218_b', true)`);
         try {
           const result = await db.query(`SELECT
+            (SELECT count(*)::int FROM invitations WHERE id='sweep218_invite' AND email='invite@example.invalid') AS invitations,
+            (SELECT count(*)::int FROM restaurant_delivery_fulfillments WHERE id='sweep218_delivery' AND "paymentMode" IS NOT NULL) AS pending_modes,
+            (SELECT count(*)::int FROM organization_modules WHERE id='sweep218_override') AS pins,
             (SELECT count(*)::int FROM platform_users WHERE id='sweep218_unenrolled' AND "mfaRequired") AS unenrolled_required,
             (SELECT count(*)::int FROM platform_users WHERE id='sweep218_enrolled' AND "mfaRequired") AS enrolled_required,
             (SELECT count(*)::int FROM organization_departments WHERE "organizationId"='sweep218_b' AND key IN ('KITCHEN','FRONT_OF_HOUSE')) AS defaults,
@@ -87,17 +117,22 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
             (SELECT count(*)::int FROM organization_role_permissions WHERE "organizationRoleId"='sweep218_role_b') AS other_permissions,
             (SELECT count(*)::int FROM pharmacy_branch_assignments WHERE "organizationId"='sweep218_a') AS assignments,
             (SELECT count(*)::int FROM outbound_effects WHERE id='sweep218_failed') AS failed,
-            (SELECT count(*)::int FROM outbound_effects WHERE id='sweep218_webhook' AND payload='{"keep":1}'::jsonb) AS sanitized`);
+            (SELECT count(*)::int FROM outbound_effects WHERE id='sweep218_webhook' AND payload='{"meta":{"keep":2},"keep":1}'::jsonb) AS sanitized`);
           return result.rows[0];
         } finally { await db.query('COMMIT'); }
       }
-      expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 0, copies: 1, overrides: 1, permissions: 0, other_permissions: 0, assignments: 0, failed: 1, sanitized: 0 });
+      expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 0, copies: 1, overrides: 1, invitations: 0, pending_modes: 1, pins: 1, permissions: 0, other_permissions: 0, assignments: 0, failed: 1, sanitized: 0 });
       for (let pass = 0; pass < 2; pass++) {
         for (const name of repairs) await db.query(sql(name));
-        expect(await counts()).toEqual({ unenrolled_required: 0, enrolled_required: 1, defaults: 2, copies: 0, overrides: 1, permissions: 1, other_permissions: 0, assignments: 2, failed: 0, sanitized: 1 });
+        expect(await counts()).toEqual({ unenrolled_required: 1, enrolled_required: 1, defaults: 2, copies: 0, overrides: 1, invitations: 1, pending_modes: 0, pins: 1, permissions: 0, other_permissions: 0, assignments: 2, failed: 0, sanitized: 1 });
+        if (pass === 0) await db.query(`BEGIN;
+          SELECT set_config('app.is_platform_admin', 'true', true);
+          INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,status,"updatedAt")
+          VALUES ('sweep218_new','sweep218_a','sweep218_role_a','New','sweep218-new@example.invalid','test','test','ACTIVE',now());
+          COMMIT;`);
         expect((await db.query(`SELECT count(*)::int n FROM pharmacy_branch_assignments`)).rows[0].n).toBe(0);
       }
-      console.info('#218 row counts: copies 1→0; overrides 1→1; permissions 0→1; assignments 0→2; failed 1→0; sanitized 0→1; replay unchanged; unscoped assignments 0');
+      console.info('#245 row counts: MFA requirements 2→2; removed grants 0→0; invitations normalized 0→1; pending payment modes 1→0; null-reason pins 1→1; copies 1→0; overrides 1→1; permissions 0→0; assignments 0→2; failed 1→0; sanitized 0→1; replay unchanged; unscoped assignments 0');
     } finally {
       await db.query('ROLLBACK').catch(() => undefined);
       await db.end();

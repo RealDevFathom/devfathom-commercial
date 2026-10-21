@@ -12,7 +12,7 @@ WHERE o.id = om."organizationId" AND o."packageId" IS NOT NULL
   AND m.id = om."moduleId" AND m.active = true
   AND om.status = 'ENABLED'
   AND om."seatLimit" IS NULL AND om."expiresAt" IS NULL AND om.overrides IS NULL
-  AND (om.reason = 'Included with ' || p.name OR om.reason IS NULL);
+  AND om.reason = 'Included with ' || p.name;
 
 -- Surface, but never delete, onboarding-marked copies that did NOT match the
 -- predicate above (e.g. the org's package changed since onboarding so the name
