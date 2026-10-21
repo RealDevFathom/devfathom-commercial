@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { catalogOrganizationId } from './catalog-scope';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { RestaurantBrandStatus, RestaurantProductStatus } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -9,7 +11,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
  * variants, modifiers, combos, product-allergen links).
  *
  * Every function takes a tenant-scoped `ScopedDb`: `organizationId` is supplied
- * by the RLS default on each row and is never forged by the caller (C1). This
+ * by the trusted transaction scope on each row and is never forged by the caller (C1). This
  * module owns the *canonical* catalog only — the organization-wide product
  * definitions that branches later publish. Two binding invariants shape it:
  *
@@ -89,15 +91,20 @@ function decimal(value: string): Prisma.Decimal {
  * `restaurant.brands.max`.
  */
 export async function ensureDefaultBrand(db: ScopedDb, name = 'Default Brand') {
-  const existing = await db.restaurantBrand.findFirst({ where: { isDefault: true } });
+  const organizationId = await catalogOrganizationId(db);
+  const existing = await db.restaurantBrand.findFirst({
+    where: { organizationId, isDefault: true },
+  });
   if (existing) return existing;
   try {
     return await db.restaurantBrand.create({
-      data: { name: requireName(name, 'brand name'), isDefault: true },
+      data: { organizationId, name: requireName(name, 'brand name'), isDefault: true },
     });
   } catch (err) {
     if (err instanceof Prisma.PrismaClientKnownRequestError && err.code === 'P2002') {
-      const raced = await db.restaurantBrand.findFirst({ where: { isDefault: true } });
+      const raced = await db.restaurantBrand.findFirst({
+        where: { organizationId, isDefault: true },
+      });
       if (raced) return raced;
     }
     throw err;
@@ -116,8 +123,11 @@ export type CreateBrandInput = {
  * are never created as the default; use `setDefaultBrand` to move the flag.
  */
 export async function createBrand(db: ScopedDb, input: CreateBrandInput, brandsMax: number) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'brand name');
-  const activeCount = await db.restaurantBrand.count({ where: { status: 'ACTIVE' } });
+  const activeCount = await db.restaurantBrand.count({
+    where: { organizationId, status: 'ACTIVE' },
+  });
   if (activeCount >= brandsMax) {
     throw new CatalogError(
       `This plan allows at most ${brandsMax} active brand(s).`,
@@ -125,7 +135,7 @@ export async function createBrand(db: ScopedDb, input: CreateBrandInput, brandsM
     );
   }
   return db.restaurantBrand.create({
-    data: { name, nameLocalized: localizedWrite(input.nameLocalized) },
+    data: { organizationId, name, nameLocalized: localizedWrite(input.nameLocalized) },
   });
 }
 
@@ -135,11 +145,12 @@ export type UpdateBrandInput = {
 };
 
 export async function updateBrand(db: ScopedDb, id: string, patch: UpdateBrandInput) {
+  const organizationId = await catalogOrganizationId(db);
   await requireBrand(db, id);
   const data: Prisma.RestaurantBrandUncheckedUpdateInput = {};
   if (patch.name !== undefined) data.name = requireName(patch.name, 'brand name');
   if (patch.nameLocalized !== undefined) data.nameLocalized = localizedWrite(patch.nameLocalized);
-  return db.restaurantBrand.update({ where: { id }, data });
+  return db.restaurantBrand.update({ where: { organizationId, id }, data });
 }
 
 /**
@@ -149,16 +160,17 @@ export async function updateBrand(db: ScopedDb, id: string, patch: UpdateBrandIn
  * brand cannot be the default.
  */
 export async function setDefaultBrand(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const brand = await requireBrand(db, id);
   if (brand.status !== 'ACTIVE') {
     throw new CatalogError('An archived brand cannot be made the default.', 'INVALID');
   }
   return db.$transaction(async (tx) => {
     await tx.restaurantBrand.updateMany({
-      where: { isDefault: true, id: { not: id } },
+      where: { organizationId, isDefault: true, id: { not: id } },
       data: { isDefault: false },
     });
-    return tx.restaurantBrand.update({ where: { id }, data: { isDefault: true } });
+    return tx.restaurantBrand.update({ where: { organizationId, id }, data: { isDefault: true } });
   });
 }
 
@@ -168,6 +180,7 @@ export async function setDefaultBrand(db: ScopedDb, id: string) {
  * invariant meaningful: the default is always an ACTIVE brand).
  */
 export async function setBrandStatus(db: ScopedDb, id: string, status: RestaurantBrandStatus) {
+  const organizationId = await catalogOrganizationId(db);
   const brand = await requireBrand(db, id);
   if (status === 'ARCHIVED' && brand.isDefault) {
     throw new CatalogError(
@@ -175,12 +188,13 @@ export async function setBrandStatus(db: ScopedDb, id: string, status: Restauran
       'DEFAULT_BRAND_PROTECTED'
     );
   }
-  return db.restaurantBrand.update({ where: { id }, data: { status } });
+  return db.restaurantBrand.update({ where: { organizationId, id }, data: { status } });
 }
 
 async function requireBrand(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const brand = await db.restaurantBrand.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true, status: true, isDefault: true },
   });
   if (!brand) throw new CatalogError('Brand not found.', 'NOT_FOUND');
@@ -197,10 +211,12 @@ export type CreateCategoryInput = {
 };
 
 export async function createCategory(db: ScopedDb, input: CreateCategoryInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'category name');
   if (input.parentId) await requireCategory(db, input.parentId);
   return db.restaurantCategory.create({
     data: {
+      organizationId,
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
       parentId: input.parentId ?? null,
@@ -222,6 +238,7 @@ export type UpdateCategoryInput = {
  * unresolvable tree. A self-parent and any path back to `id` are rejected.
  */
 export async function updateCategory(db: ScopedDb, id: string, patch: UpdateCategoryInput) {
+  const organizationId = await catalogOrganizationId(db);
   await requireCategory(db, id);
   const data: Prisma.RestaurantCategoryUncheckedUpdateInput = {};
   if (patch.name !== undefined) data.name = requireName(patch.name, 'category name');
@@ -237,7 +254,7 @@ export async function updateCategory(db: ScopedDb, id: string, patch: UpdateCate
     }
     data.parentId = patch.parentId;
   }
-  return db.restaurantCategory.update({ where: { id }, data });
+  return db.restaurantCategory.update({ where: { organizationId, id }, data });
 }
 
 /**
@@ -247,12 +264,14 @@ export async function updateCategory(db: ScopedDb, id: string, patch: UpdateCate
  * plain delete is safe here (unlike products, which are archived).
  */
 export async function deleteCategory(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireCategory(db, id);
-  await db.restaurantCategory.delete({ where: { id } });
+  await db.restaurantCategory.delete({ where: { organizationId, id } });
 }
 
 /** Walk from `fromParentId` up the parent chain; reaching `childId` is a cycle. */
 async function assertNoCategoryCycle(db: ScopedDb, childId: string, fromParentId: string) {
+  const organizationId = await catalogOrganizationId(db);
   let cursor: string | null = fromParentId;
   const seen = new Set<string>();
   while (cursor) {
@@ -262,7 +281,7 @@ async function assertNoCategoryCycle(db: ScopedDb, childId: string, fromParentId
     if (seen.has(cursor)) break; // pre-existing cycle guard — never loop forever
     seen.add(cursor);
     const parent: { parentId: string | null } | null = await db.restaurantCategory.findUnique({
-      where: { id: cursor },
+      where: { organizationId, id: cursor },
       select: { parentId: true },
     });
     cursor = parent?.parentId ?? null;
@@ -270,7 +289,11 @@ async function assertNoCategoryCycle(db: ScopedDb, childId: string, fromParentId
 }
 
 async function requireCategory(db: ScopedDb, id: string) {
-  const category = await db.restaurantCategory.findUnique({ where: { id }, select: { id: true } });
+  const organizationId = await catalogOrganizationId(db);
+  const category = await db.restaurantCategory.findUnique({
+    where: { organizationId, id },
+    select: { id: true },
+  });
   if (!category) throw new CatalogError('Category not found.', 'NOT_FOUND');
   return category;
 }
@@ -290,10 +313,12 @@ export type CreateProductInput = {
 };
 
 export async function createProduct(db: ScopedDb, input: CreateProductInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'product name');
   if (input.categoryId) await requireCategory(db, input.categoryId);
   return db.restaurantProduct.create({
     data: {
+      organizationId,
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
       description: input.description ?? null,
@@ -315,6 +340,7 @@ export type UpdateProductInput = {
 };
 
 export async function updateProduct(db: ScopedDb, id: string, patch: UpdateProductInput) {
+  const organizationId = await catalogOrganizationId(db);
   await requireProduct(db, id);
   const data: Prisma.RestaurantProductUncheckedUpdateInput = {};
   if (patch.name !== undefined) data.name = requireName(patch.name, 'product name');
@@ -328,7 +354,7 @@ export async function updateProduct(db: ScopedDb, id: string, patch: UpdateProdu
     if (patch.categoryId) await requireCategory(db, patch.categoryId);
     data.categoryId = patch.categoryId;
   }
-  return db.restaurantProduct.update({ where: { id }, data });
+  return db.restaurantProduct.update({ where: { organizationId, id }, data });
 }
 
 /**
@@ -337,8 +363,9 @@ export async function updateProduct(db: ScopedDb, id: string, patch: UpdateProdu
  * canonical row so historical references keep resolving.
  */
 export async function setProductStatus(db: ScopedDb, id: string, status: RestaurantProductStatus) {
+  const organizationId = await catalogOrganizationId(db);
   await requireProduct(db, id);
-  return db.restaurantProduct.update({ where: { id }, data: { status } });
+  return db.restaurantProduct.update({ where: { organizationId, id }, data: { status } });
 }
 
 export type CreateVariantInput = {
@@ -349,10 +376,12 @@ export type CreateVariantInput = {
 };
 
 export async function createVariant(db: ScopedDb, input: CreateVariantInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'variant name');
   await requireProduct(db, input.productId);
   return db.restaurantProductVariant.create({
     data: {
+      organizationId,
       productId: input.productId,
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
@@ -368,8 +397,9 @@ export type UpdateVariantInput = {
 };
 
 export async function updateVariant(db: ScopedDb, id: string, patch: UpdateVariantInput) {
+  const organizationId = await catalogOrganizationId(db);
   const variant = await db.restaurantProductVariant.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!variant) throw new CatalogError('Variant not found.', 'NOT_FOUND');
@@ -377,7 +407,7 @@ export async function updateVariant(db: ScopedDb, id: string, patch: UpdateVaria
   if (patch.name !== undefined) data.name = requireName(patch.name, 'variant name');
   if (patch.nameLocalized !== undefined) data.nameLocalized = localizedWrite(patch.nameLocalized);
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
-  return db.restaurantProductVariant.update({ where: { id }, data });
+  return db.restaurantProductVariant.update({ where: { organizationId, id }, data });
 }
 
 /**
@@ -388,14 +418,15 @@ export async function updateVariant(db: ScopedDb, id: string, patch: UpdateVaria
  * recipe references use `SetNull` and simply detach.
  */
 export async function deleteVariant(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const variant = await db.restaurantProductVariant.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!variant) throw new CatalogError('Variant not found.', 'NOT_FOUND');
   const [priceEntries, menuItems] = await Promise.all([
-    db.restaurantPriceListEntry.count({ where: { variantId: id } }),
-    db.restaurantMenuItem.count({ where: { variantId: id } }),
+    db.restaurantPriceListEntry.count({ where: { organizationId, variantId: id } }),
+    db.restaurantMenuItem.count({ where: { organizationId, variantId: id } }),
   ]);
   if (priceEntries > 0 || menuItems > 0) {
     throw new CatalogError(
@@ -403,12 +434,13 @@ export async function deleteVariant(db: ScopedDb, id: string) {
       'REFERENCED'
     );
   }
-  await db.restaurantProductVariant.delete({ where: { id } });
+  await db.restaurantProductVariant.delete({ where: { organizationId, id } });
 }
 
 async function requireProduct(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const product = await db.restaurantProduct.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true, type: true },
   });
   if (!product) throw new CatalogError('Product not found.', 'NOT_FOUND');
@@ -433,11 +465,13 @@ function assertSelectionBounds(minSelect: number, maxSelect: number | null | und
 }
 
 export async function createModifierGroup(db: ScopedDb, input: CreateModifierGroupInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'modifier group name');
   const minSelect = input.minSelect ?? 0;
   assertSelectionBounds(minSelect, input.maxSelect);
   return db.restaurantModifierGroup.create({
     data: {
+      organizationId,
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
       minSelect,
@@ -458,8 +492,9 @@ export async function updateModifierGroup(
   id: string,
   patch: UpdateModifierGroupInput
 ) {
+  const organizationId = await catalogOrganizationId(db);
   const group = await db.restaurantModifierGroup.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { minSelect: true, maxSelect: true },
   });
   if (!group) throw new CatalogError('Modifier group not found.', 'NOT_FOUND');
@@ -471,17 +506,18 @@ export async function updateModifierGroup(
   if (patch.nameLocalized !== undefined) data.nameLocalized = localizedWrite(patch.nameLocalized);
   if (patch.minSelect !== undefined) data.minSelect = patch.minSelect;
   if (patch.maxSelect !== undefined) data.maxSelect = patch.maxSelect;
-  return db.restaurantModifierGroup.update({ where: { id }, data });
+  return db.restaurantModifierGroup.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteModifierGroup(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const group = await db.restaurantModifierGroup.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!group) throw new CatalogError('Modifier group not found.', 'NOT_FOUND');
   // Options and product attachments cascade (schema onDelete: Cascade).
-  await db.restaurantModifierGroup.delete({ where: { id } });
+  await db.restaurantModifierGroup.delete({ where: { organizationId, id } });
 }
 
 export type CreateModifierOptionInput = {
@@ -493,14 +529,16 @@ export type CreateModifierOptionInput = {
 };
 
 export async function createModifierOption(db: ScopedDb, input: CreateModifierOptionInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'modifier option name');
   const group = await db.restaurantModifierGroup.findUnique({
-    where: { id: input.modifierGroupId },
+    where: { organizationId, id: input.modifierGroupId },
     select: { id: true },
   });
   if (!group) throw new CatalogError('Modifier group not found.', 'NOT_FOUND');
   return db.restaurantModifierOption.create({
     data: {
+      organizationId,
       modifierGroupId: input.modifierGroupId,
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
@@ -522,8 +560,9 @@ export async function updateModifierOption(
   id: string,
   patch: UpdateModifierOptionInput
 ) {
+  const organizationId = await catalogOrganizationId(db);
   const option = await db.restaurantModifierOption.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!option) throw new CatalogError('Modifier option not found.', 'NOT_FOUND');
@@ -532,16 +571,17 @@ export async function updateModifierOption(
   if (patch.nameLocalized !== undefined) data.nameLocalized = localizedWrite(patch.nameLocalized);
   if (patch.priceDelta !== undefined) data.priceDelta = decimal(patch.priceDelta);
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
-  return db.restaurantModifierOption.update({ where: { id }, data });
+  return db.restaurantModifierOption.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteModifierOption(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const option = await db.restaurantModifierOption.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!option) throw new CatalogError('Modifier option not found.', 'NOT_FOUND');
-  await db.restaurantModifierOption.delete({ where: { id } });
+  await db.restaurantModifierOption.delete({ where: { organizationId, id } });
 }
 
 /**
@@ -555,21 +595,22 @@ export async function attachModifierGroup(
   modifierGroupId: string,
   sortOrder = 0
 ) {
+  const organizationId = await catalogOrganizationId(db);
   await requireProduct(db, productId);
   const group = await db.restaurantModifierGroup.findUnique({
-    where: { id: modifierGroupId },
+    where: { organizationId, id: modifierGroupId },
     select: { id: true },
   });
   if (!group) throw new CatalogError('Modifier group not found.', 'NOT_FOUND');
   const existing = await db.restaurantProductModifierGroup.findUnique({
-    where: { productId_modifierGroupId: { productId, modifierGroupId } },
+    where: { organizationId, productId_modifierGroupId: { productId, modifierGroupId } },
     select: { id: true },
   });
   if (existing) {
     throw new CatalogError('That modifier group is already attached.', 'ALREADY_ATTACHED');
   }
   return db.restaurantProductModifierGroup.create({
-    data: { productId, modifierGroupId, sortOrder },
+    data: { organizationId, productId, modifierGroupId, sortOrder },
   });
 }
 
@@ -578,12 +619,13 @@ export async function detachModifierGroup(
   productId: string,
   modifierGroupId: string
 ) {
+  const organizationId = await catalogOrganizationId(db);
   const attachment = await db.restaurantProductModifierGroup.findUnique({
-    where: { productId_modifierGroupId: { productId, modifierGroupId } },
+    where: { organizationId, productId_modifierGroupId: { productId, modifierGroupId } },
     select: { id: true },
   });
   if (!attachment) throw new CatalogError('That attachment does not exist.', 'NOT_FOUND');
-  await db.restaurantProductModifierGroup.delete({ where: { id: attachment.id } });
+  await db.restaurantProductModifierGroup.delete({ where: { organizationId, id: attachment.id } });
 }
 
 // ── Combo component seam (A08 — schema + minimal CRUD only) ──────────────────
@@ -603,6 +645,7 @@ export type CreateComboGroupInput = {
  * `NOT_A_COMBO`.
  */
 export async function createComboGroup(db: ScopedDb, input: CreateComboGroupInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'combo group name');
   const product = await requireProduct(db, input.comboProductId);
   if (product.type !== 'COMBO') {
@@ -612,6 +655,7 @@ export async function createComboGroup(db: ScopedDb, input: CreateComboGroupInpu
   assertSelectionBounds(minChoose, input.maxChoose);
   return db.restaurantComboComponentGroup.create({
     data: {
+      organizationId,
       comboProductId: input.comboProductId,
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
@@ -631,8 +675,9 @@ export type UpdateComboGroupInput = {
 };
 
 export async function updateComboGroup(db: ScopedDb, id: string, patch: UpdateComboGroupInput) {
+  const organizationId = await catalogOrganizationId(db);
   const group = await db.restaurantComboComponentGroup.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { minChoose: true, maxChoose: true },
   });
   if (!group) throw new CatalogError('Combo group not found.', 'NOT_FOUND');
@@ -645,16 +690,17 @@ export async function updateComboGroup(db: ScopedDb, id: string, patch: UpdateCo
   if (patch.minChoose !== undefined) data.minChoose = patch.minChoose;
   if (patch.maxChoose !== undefined) data.maxChoose = patch.maxChoose;
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
-  return db.restaurantComboComponentGroup.update({ where: { id }, data });
+  return db.restaurantComboComponentGroup.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteComboGroup(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const group = await db.restaurantComboComponentGroup.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!group) throw new CatalogError('Combo group not found.', 'NOT_FOUND');
-  await db.restaurantComboComponentGroup.delete({ where: { id } });
+  await db.restaurantComboComponentGroup.delete({ where: { organizationId, id } });
 }
 
 export type CreateComboOptionInput = {
@@ -667,8 +713,9 @@ export type CreateComboOptionInput = {
 
 /** Add a selectable component (a product, optional variant) to a combo group. */
 export async function createComboOption(db: ScopedDb, input: CreateComboOptionInput) {
+  const organizationId = await catalogOrganizationId(db);
   const group = await db.restaurantComboComponentGroup.findUnique({
-    where: { id: input.componentGroupId },
+    where: { organizationId, id: input.componentGroupId },
     select: { id: true },
   });
   if (!group) throw new CatalogError('Combo group not found.', 'NOT_FOUND');
@@ -676,6 +723,7 @@ export async function createComboOption(db: ScopedDb, input: CreateComboOptionIn
   if (input.variantId) await requireVariantOfProduct(db, input.variantId, input.productId);
   return db.restaurantComboComponentOption.create({
     data: {
+      organizationId,
       componentGroupId: input.componentGroupId,
       productId: input.productId,
       variantId: input.variantId ?? null,
@@ -691,30 +739,33 @@ export type UpdateComboOptionInput = {
 };
 
 export async function updateComboOption(db: ScopedDb, id: string, patch: UpdateComboOptionInput) {
+  const organizationId = await catalogOrganizationId(db);
   const option = await db.restaurantComboComponentOption.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!option) throw new CatalogError('Combo option not found.', 'NOT_FOUND');
   const data: Prisma.RestaurantComboComponentOptionUncheckedUpdateInput = {};
   if (patch.priceDelta !== undefined) data.priceDelta = decimal(patch.priceDelta);
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
-  return db.restaurantComboComponentOption.update({ where: { id }, data });
+  return db.restaurantComboComponentOption.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteComboOption(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const option = await db.restaurantComboComponentOption.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!option) throw new CatalogError('Combo option not found.', 'NOT_FOUND');
-  await db.restaurantComboComponentOption.delete({ where: { id } });
+  await db.restaurantComboComponentOption.delete({ where: { organizationId, id } });
 }
 
 /** A referenced variant must belong to the referenced product (in-scope). */
 async function requireVariantOfProduct(db: ScopedDb, variantId: string, productId: string) {
+  const organizationId = await catalogOrganizationId(db);
   const variant = await db.restaurantProductVariant.findUnique({
-    where: { id: variantId },
+    where: { organizationId, id: variantId },
     select: { productId: true },
   });
   if (!variant) throw new CatalogError('Variant not found.', 'NOT_FOUND');
@@ -731,14 +782,15 @@ async function requireVariantOfProduct(db: ScopedDb, variantId: string, productI
  * managed in `recipes.ts`; this only links an existing allergen to a product.
  */
 export async function attachProductAllergen(db: ScopedDb, productId: string, allergenId: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireProduct(db, productId);
   const allergen = await db.restaurantAllergen.findUnique({
-    where: { id: allergenId },
+    where: { organizationId, id: allergenId },
     select: { id: true },
   });
   if (!allergen) throw new CatalogError('Allergen not found.', 'NOT_FOUND');
   const existing = await db.restaurantProductAllergen.findUnique({
-    where: { productId_allergenId: { productId, allergenId } },
+    where: { organizationId, productId_allergenId: { productId, allergenId } },
     select: { id: true },
   });
   if (existing) {
@@ -747,39 +799,49 @@ export async function attachProductAllergen(db: ScopedDb, productId: string, all
       'ALREADY_ATTACHED'
     );
   }
-  return db.restaurantProductAllergen.create({ data: { productId, allergenId } });
+  return db.restaurantProductAllergen.create({ data: { organizationId, productId, allergenId } });
 }
 
 export async function detachProductAllergen(db: ScopedDb, productId: string, allergenId: string) {
+  const organizationId = await catalogOrganizationId(db);
   const link = await db.restaurantProductAllergen.findUnique({
-    where: { productId_allergenId: { productId, allergenId } },
+    where: { organizationId, productId_allergenId: { productId, allergenId } },
     select: { id: true },
   });
   if (!link) throw new CatalogError('That allergen is not declared on this product.', 'NOT_FOUND');
-  await db.restaurantProductAllergen.delete({ where: { id: link.id } });
+  await db.restaurantProductAllergen.delete({ where: { organizationId, id: link.id } });
 }
 
 // ── Read models (catalog console read-contract) ───────────────────────────────
 // Capability-gated (menu:read) list/read surfaces the brands/catalog consoles
-// need. All are tenant-scoped by the RLS `organizationId` default (C1); none
+// need. All use explicit organization predicates in addition to RLS (C1); none
 // carry monetary Decimal fields at the returned level, so no C4 serialization is
 // required here (recipe/costing reads that do are serialized at the router).
 
 /** All brands for the organization, default brand first then alphabetical. */
 export async function listBrands(db: ScopedDb) {
-  return db.restaurantBrand.findMany({ orderBy: [{ isDefault: 'desc' }, { name: 'asc' }] });
+  const organizationId = await catalogOrganizationId(db);
+  return db.restaurantBrand.findMany({
+    where: { organizationId },
+    orderBy: [{ isDefault: 'desc' }, { name: 'asc' }],
+  });
 }
 
 /** A single brand by id (any status). Missing id is NOT_FOUND. */
 export async function getBrand(db: ScopedDb, id: string) {
-  const brand = await db.restaurantBrand.findUnique({ where: { id } });
+  const organizationId = await catalogOrganizationId(db);
+  const brand = await db.restaurantBrand.findUnique({ where: { organizationId, id } });
   if (!brand) throw new CatalogError('Brand not found.', 'NOT_FOUND');
   return brand;
 }
 
 /** All catalog categories, ordered for tree display (sortOrder then name). */
 export async function listCategories(db: ScopedDb) {
-  return db.restaurantCategory.findMany({ orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] });
+  const organizationId = await catalogOrganizationId(db);
+  return db.restaurantCategory.findMany({
+    where: { organizationId },
+    orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+  });
 }
 
 /**
@@ -788,11 +850,16 @@ export async function listCategories(db: ScopedDb) {
  * (which carry a Decimal `priceDelta`) are intentionally not expanded here — a
  * console fetches those per group — so product reads stay Decimal-free.
  */
-const PRODUCT_CONSOLE_INCLUDE = {
-  category: true,
-  variants: { orderBy: { sortOrder: 'asc' } },
-  modifierGroups: { orderBy: { sortOrder: 'asc' }, include: { modifierGroup: true } },
-} satisfies Prisma.RestaurantProductInclude;
+const productConsoleInclude = (organizationId: string) =>
+  ({
+    category: { where: { organizationId } },
+    variants: { where: { organizationId }, orderBy: { sortOrder: 'asc' } },
+    modifierGroups: {
+      where: { organizationId, modifierGroup: { organizationId } },
+      orderBy: { sortOrder: 'asc' },
+      include: { modifierGroup: true },
+    },
+  }) satisfies Prisma.RestaurantProductInclude;
 
 export type ListProductsFilter = {
   categoryId?: string | null;
@@ -802,22 +869,24 @@ export type ListProductsFilter = {
 
 /** Canonical products (with category/variants/modifier groups) for the console. */
 export async function listProducts(db: ScopedDb, filter: ListProductsFilter = {}) {
-  const where: Prisma.RestaurantProductWhereInput = {};
+  const organizationId = await catalogOrganizationId(db);
+  const where: Prisma.RestaurantProductWhereInput = { organizationId };
   if (filter.categoryId !== undefined) where.categoryId = filter.categoryId;
   if (filter.status !== undefined) where.status = filter.status;
   if (filter.type !== undefined) where.type = filter.type;
   return db.restaurantProduct.findMany({
     where,
-    include: PRODUCT_CONSOLE_INCLUDE,
+    include: productConsoleInclude(organizationId),
     orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
   });
 }
 
 /** A single product with its category, variants, and attached modifier groups. */
 export async function getProduct(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const product = await db.restaurantProduct.findUnique({
-    where: { id },
-    include: PRODUCT_CONSOLE_INCLUDE,
+    where: { organizationId, id },
+    include: productConsoleInclude(organizationId),
   });
   if (!product) throw new CatalogError('Product not found.', 'NOT_FOUND');
   return product;

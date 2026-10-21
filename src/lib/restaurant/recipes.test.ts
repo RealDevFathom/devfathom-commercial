@@ -60,6 +60,7 @@ function makeDb() {
   });
 
   const db = {
+    $queryRaw: vi.fn().mockResolvedValue([{ organizationId: 'org_1' }]),
     restaurantUnit: model(),
     restaurantUnitConversion: model(),
     restaurantAllergen: model(),
@@ -108,7 +109,9 @@ describe('deleteUnit', () => {
   it('deletes when unit exists', async () => {
     db.restaurantUnit.findUnique.mockResolvedValue({ id: 'u1' });
     await deleteUnit(scoped(), 'u1');
-    expect(db.restaurantUnit.delete).toHaveBeenCalledWith({ where: { id: 'u1' } });
+    expect(db.restaurantUnit.delete).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: 'u1' },
+    });
   });
 });
 
@@ -185,7 +188,9 @@ describe('deleteAllergen', () => {
   it('deletes when present', async () => {
     db.restaurantAllergen.findUnique.mockResolvedValue({ id: 'a1' });
     await deleteAllergen(scoped(), 'a1');
-    expect(db.restaurantAllergen.delete).toHaveBeenCalledWith({ where: { id: 'a1' } });
+    expect(db.restaurantAllergen.delete).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: 'a1' },
+    });
   });
 });
 
@@ -216,7 +221,9 @@ describe('attachIngredientAllergen', () => {
     db.restaurantIngredientAllergen.findUnique.mockResolvedValue(null);
     await attachIngredientAllergen(scoped(), 'i1', 'a1');
     expect(db.restaurantIngredientAllergen.create).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { ingredientId: 'i1', allergenId: 'a1' } })
+      expect.objectContaining({
+        data: { organizationId: 'org_1', ingredientId: 'i1', allergenId: 'a1' },
+      })
     );
   });
 
@@ -351,7 +358,9 @@ describe('getRecipeVersion', () => {
     const version = await getRecipeVersion(scoped(), 'v1');
     expect(version).toMatchObject({ id: 'v1', status: 'SUPERSEDED', notes: 'original' });
     // findUnique fetches the full row (no field select) so history is complete.
-    expect(db.restaurantRecipeVersion.findUnique).toHaveBeenCalledWith({ where: { id: 'v1' } });
+    expect(db.restaurantRecipeVersion.findUnique).toHaveBeenCalledWith({
+      where: { organizationId: 'org_1', id: 'v1' },
+    });
   });
 
   it('throws NOT_FOUND for a missing version', async () => {
@@ -373,7 +382,7 @@ describe('listRecipeVersions', () => {
     expect(versions.map((v) => v.id)).toEqual(['v2', 'v1']);
     expect(db.restaurantRecipeVersion.findMany).toHaveBeenCalledWith(
       expect.objectContaining({
-        where: { recipeId: 'r1' },
+        where: { organizationId: 'org_1', recipeId: 'r1' },
         orderBy: { versionNumber: 'desc' },
       })
     );
@@ -473,6 +482,7 @@ describe('recipe ingredient substitutes', () => {
     });
     expect(db.restaurantRecipeLineSubstitute.create).toHaveBeenCalledWith({
       data: {
+        organizationId: 'org_1',
         recipeLineId: 'line_1',
         substituteIngredientId: 'ingredient_substitute',
       },

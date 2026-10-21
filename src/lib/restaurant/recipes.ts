@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { catalogOrganizationId } from './catalog-scope';
+
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
@@ -68,9 +70,10 @@ export type CreateUnitInput = {
 };
 
 export async function createUnit(db: ScopedDb, input: CreateUnitInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'unit name');
   return db.restaurantUnit.create({
-    data: { name, abbreviation: input.abbreviation ?? null },
+    data: { organizationId, name, abbreviation: input.abbreviation ?? null },
   });
 }
 
@@ -80,22 +83,28 @@ export type UpdateUnitInput = {
 };
 
 export async function updateUnit(db: ScopedDb, id: string, patch: UpdateUnitInput) {
+  const organizationId = await catalogOrganizationId(db);
   await requireUnit(db, id);
   const data: Prisma.RestaurantUnitUncheckedUpdateInput = {};
   if (patch.name !== undefined) data.name = requireName(patch.name, 'unit name');
   if (patch.abbreviation !== undefined) data.abbreviation = patch.abbreviation;
-  return db.restaurantUnit.update({ where: { id }, data });
+  return db.restaurantUnit.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteUnit(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireUnit(db, id);
   // Restrict FKs on ingredient.baseUnit, recipeLine.unit, recipeVersion.yieldUnit
   // surface as P2003; map to friendly REFERENCED in the router.
-  await db.restaurantUnit.delete({ where: { id } });
+  await db.restaurantUnit.delete({ where: { organizationId, id } });
 }
 
 async function requireUnit(db: ScopedDb, id: string) {
-  const unit = await db.restaurantUnit.findUnique({ where: { id }, select: { id: true } });
+  const organizationId = await catalogOrganizationId(db);
+  const unit = await db.restaurantUnit.findUnique({
+    where: { organizationId, id },
+    select: { id: true },
+  });
   if (!unit) throw new RecipeError('Unit not found.', 'NOT_FOUND');
   return unit;
 }
@@ -114,6 +123,7 @@ export async function upsertConversion(
   toUnitId: string,
   factor: string
 ) {
+  const organizationId = await catalogOrganizationId(db);
   await requireUnit(db, fromUnitId);
   await requireUnit(db, toUnitId);
   if (fromUnitId === toUnitId) {
@@ -121,23 +131,25 @@ export async function upsertConversion(
   }
   await assertNoConversionCycle(db, fromUnitId, toUnitId);
   return db.restaurantUnitConversion.upsert({
-    where: { fromUnitId_toUnitId: { fromUnitId, toUnitId } },
-    create: { fromUnitId, toUnitId, factor: decimal(factor) },
+    where: { organizationId, fromUnitId_toUnitId: { fromUnitId, toUnitId } },
+    create: { organizationId, fromUnitId, toUnitId, factor: decimal(factor) },
     update: { factor: decimal(factor) },
   });
 }
 
 export async function deleteConversion(db: ScopedDb, fromUnitId: string, toUnitId: string) {
+  const organizationId = await catalogOrganizationId(db);
   const existing = await db.restaurantUnitConversion.findUnique({
-    where: { fromUnitId_toUnitId: { fromUnitId, toUnitId } },
+    where: { organizationId, fromUnitId_toUnitId: { fromUnitId, toUnitId } },
     select: { id: true },
   });
   if (!existing) throw new RecipeError('Conversion not found.', 'NOT_FOUND');
-  await db.restaurantUnitConversion.delete({ where: { id: existing.id } });
+  await db.restaurantUnitConversion.delete({ where: { organizationId, id: existing.id } });
 }
 
 /** Walk outgoing conversions from `start`; if we reach `origin` it's a cycle. */
 async function assertNoConversionCycle(db: ScopedDb, origin: string, start: string) {
+  const organizationId = await catalogOrganizationId(db);
   const visited = new Set<string>();
   let frontier = [start];
   while (frontier.length > 0) {
@@ -152,7 +164,7 @@ async function assertNoConversionCycle(db: ScopedDb, origin: string, start: stri
       if (visited.has(nodeId)) continue;
       visited.add(nodeId);
       const edges = await db.restaurantUnitConversion.findMany({
-        where: { fromUnitId: nodeId },
+        where: { organizationId, fromUnitId: nodeId },
         select: { toUnitId: true },
       });
       next.push(...edges.map((e: { toUnitId: string }) => e.toUnitId));
@@ -169,9 +181,10 @@ export type CreateAllergenInput = {
 };
 
 export async function createAllergen(db: ScopedDb, input: CreateAllergenInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'allergen name');
   return db.restaurantAllergen.create({
-    data: { name, nameLocalized: localizedWrite(input.nameLocalized) },
+    data: { organizationId, name, nameLocalized: localizedWrite(input.nameLocalized) },
   });
 }
 
@@ -181,21 +194,27 @@ export type UpdateAllergenInput = {
 };
 
 export async function updateAllergen(db: ScopedDb, id: string, patch: UpdateAllergenInput) {
+  const organizationId = await catalogOrganizationId(db);
   await requireAllergen(db, id);
   const data: Prisma.RestaurantAllergenUncheckedUpdateInput = {};
   if (patch.name !== undefined) data.name = requireName(patch.name, 'allergen name');
   if (patch.nameLocalized !== undefined) data.nameLocalized = localizedWrite(patch.nameLocalized);
-  return db.restaurantAllergen.update({ where: { id }, data });
+  return db.restaurantAllergen.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteAllergen(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireAllergen(db, id);
   // Cascade FKs on productAllergens and ingredientAllergens remove junction rows.
-  await db.restaurantAllergen.delete({ where: { id } });
+  await db.restaurantAllergen.delete({ where: { organizationId, id } });
 }
 
 async function requireAllergen(db: ScopedDb, id: string) {
-  const allergen = await db.restaurantAllergen.findUnique({ where: { id }, select: { id: true } });
+  const organizationId = await catalogOrganizationId(db);
+  const allergen = await db.restaurantAllergen.findUnique({
+    where: { organizationId, id },
+    select: { id: true },
+  });
   if (!allergen) throw new RecipeError('Allergen not found.', 'NOT_FOUND');
   return allergen;
 }
@@ -210,10 +229,12 @@ export type CreateIngredientInput = {
 };
 
 export async function createIngredient(db: ScopedDb, input: CreateIngredientInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'ingredient name');
   await requireUnit(db, input.baseUnitId);
   return db.restaurantIngredient.create({
     data: {
+      organizationId,
       name,
       nameLocalized: localizedWrite(input.nameLocalized),
       baseUnitId: input.baseUnitId,
@@ -230,6 +251,7 @@ export type UpdateIngredientInput = {
 };
 
 export async function updateIngredient(db: ScopedDb, id: string, patch: UpdateIngredientInput) {
+  const organizationId = await catalogOrganizationId(db);
   await requireIngredient(db, id);
   const data: Prisma.RestaurantIngredientUncheckedUpdateInput = {};
   if (patch.name !== undefined) data.name = requireName(patch.name, 'ingredient name');
@@ -241,18 +263,20 @@ export async function updateIngredient(db: ScopedDb, id: string, patch: UpdateIn
   if (patch.referenceCost !== undefined) {
     data.referenceCost = patch.referenceCost != null ? decimal(patch.referenceCost) : null;
   }
-  return db.restaurantIngredient.update({ where: { id }, data });
+  return db.restaurantIngredient.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteIngredient(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireIngredient(db, id);
   // RESTRICT FK on recipeLine.ingredient blocks deletion if referenced.
-  await db.restaurantIngredient.delete({ where: { id } });
+  await db.restaurantIngredient.delete({ where: { organizationId, id } });
 }
 
 async function requireIngredient(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const ingredient = await db.restaurantIngredient.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true },
   });
   if (!ingredient) throw new RecipeError('Ingredient not found.', 'NOT_FOUND');
@@ -266,10 +290,11 @@ export async function attachIngredientAllergen(
   ingredientId: string,
   allergenId: string
 ) {
+  const organizationId = await catalogOrganizationId(db);
   await requireIngredient(db, ingredientId);
   await requireAllergen(db, allergenId);
   const existing = await db.restaurantIngredientAllergen.findUnique({
-    where: { ingredientId_allergenId: { ingredientId, allergenId } },
+    where: { organizationId, ingredientId_allergenId: { ingredientId, allergenId } },
     select: { id: true },
   });
   if (existing) {
@@ -278,7 +303,9 @@ export async function attachIngredientAllergen(
       'ALREADY_ATTACHED'
     );
   }
-  return db.restaurantIngredientAllergen.create({ data: { ingredientId, allergenId } });
+  return db.restaurantIngredientAllergen.create({
+    data: { organizationId, ingredientId, allergenId },
+  });
 }
 
 export async function detachIngredientAllergen(
@@ -286,13 +313,14 @@ export async function detachIngredientAllergen(
   ingredientId: string,
   allergenId: string
 ) {
+  const organizationId = await catalogOrganizationId(db);
   const link = await db.restaurantIngredientAllergen.findUnique({
-    where: { ingredientId_allergenId: { ingredientId, allergenId } },
+    where: { organizationId, ingredientId_allergenId: { ingredientId, allergenId } },
     select: { id: true },
   });
   if (!link)
     throw new RecipeError('That allergen is not declared on this ingredient.', 'NOT_FOUND');
-  await db.restaurantIngredientAllergen.delete({ where: { id: link.id } });
+  await db.restaurantIngredientAllergen.delete({ where: { organizationId, id: link.id } });
 }
 
 // ── Recipes ───────────────────────────────────────────────────────────────────
@@ -305,14 +333,15 @@ export type CreateRecipeInput = {
 
 /** Create the recipe identity. No version is created here; use `createRecipeVersion`. */
 export async function createRecipe(db: ScopedDb, input: CreateRecipeInput) {
+  const organizationId = await catalogOrganizationId(db);
   const name = requireName(input.name, 'recipe name');
   const product = await db.restaurantProduct.findUnique({
-    where: { id: input.productId },
+    where: { organizationId, id: input.productId },
     select: { id: true },
   });
   if (!product) throw new RecipeError('Product not found.', 'NOT_FOUND');
   return db.restaurantRecipe.create({
-    data: { productId: input.productId, variantId: input.variantId ?? null, name },
+    data: { organizationId, productId: input.productId, variantId: input.variantId ?? null, name },
   });
 }
 
@@ -328,15 +357,17 @@ export type CreateRecipeVersionInput = {
 
 /** Fork a new DRAFT version for the recipe. Always creates; never edits ACTIVE/SUPERSEDED. */
 export async function createRecipeVersion(db: ScopedDb, input: CreateRecipeVersionInput) {
+  const organizationId = await catalogOrganizationId(db);
   await requireRecipe(db, input.recipeId);
   if (input.yieldUnitId) await requireUnit(db, input.yieldUnitId);
   const existingVersions = await db.restaurantRecipeVersion.findMany({
-    where: { recipeId: input.recipeId },
+    where: { organizationId, recipeId: input.recipeId },
     select: { id: true, versionNumber: true, status: true },
   });
   const versionNumber = nextVersionNumber(existingVersions);
   return db.restaurantRecipeVersion.create({
     data: {
+      organizationId,
       recipeId: input.recipeId,
       versionNumber,
       status: 'DRAFT',
@@ -364,6 +395,7 @@ export async function updateRecipeVersion(
   id: string,
   patch: UpdateRecipeVersionInput
 ) {
+  const organizationId = await catalogOrganizationId(db);
   const version = await requireRecipeVersion(db, id);
   assertVersionMutable(version); // C3 immutability guard
   if (patch.yieldUnitId !== undefined && patch.yieldUnitId) {
@@ -376,7 +408,7 @@ export async function updateRecipeVersion(
   if (patch.yieldUnitId !== undefined) data.yieldUnitId = patch.yieldUnitId;
   if (patch.portionCount !== undefined) data.portionCount = patch.portionCount;
   if (patch.notes !== undefined) data.notes = patch.notes;
-  return db.restaurantRecipeVersion.update({ where: { id }, data });
+  return db.restaurantRecipeVersion.update({ where: { organizationId, id }, data });
 }
 
 /**
@@ -385,35 +417,41 @@ export async function updateRecipeVersion(
  * transaction, preserving GOV-2.
  */
 export async function activateRecipeVersion(db: ScopedDb, recipeId: string, versionId: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireRecipe(db, recipeId);
   const allVersions = await db.restaurantRecipeVersion.findMany({
-    where: { recipeId },
+    where: { organizationId, recipeId },
     select: { id: true, status: true, versionNumber: true },
   });
   const plan = planActivation(allVersions as VersionRecord[], versionId, new Date());
   return db.$transaction(async (tx) => {
     if (plan.supersede) {
       await tx.restaurantRecipeVersion.update({
-        where: { id: plan.supersede.id },
+        where: { organizationId, id: plan.supersede.id },
         data: plan.supersede.patch,
       });
     }
     return tx.restaurantRecipeVersion.update({
-      where: { id: plan.activate.id },
+      where: { organizationId, id: plan.activate.id },
       data: plan.activate.patch,
     });
   });
 }
 
 async function requireRecipe(db: ScopedDb, id: string) {
-  const recipe = await db.restaurantRecipe.findUnique({ where: { id }, select: { id: true } });
+  const organizationId = await catalogOrganizationId(db);
+  const recipe = await db.restaurantRecipe.findUnique({
+    where: { organizationId, id },
+    select: { id: true },
+  });
   if (!recipe) throw new RecipeError('Recipe not found.', 'NOT_FOUND');
   return recipe;
 }
 
 async function requireRecipeVersion(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const version = await db.restaurantRecipeVersion.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true, status: true, recipeId: true },
   });
   if (!version) throw new RecipeError('Recipe version not found.', 'NOT_FOUND');
@@ -446,6 +484,7 @@ export type CreateRecipeLineInput =
  * may not reference itself directly or transitively.
  */
 export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInput) {
+  const organizationId = await catalogOrganizationId(db);
   if ((!input.ingredientId && !input.subRecipeId) || (input.ingredientId && input.subRecipeId)) {
     throw new RecipeError('Exactly one of ingredientId or subRecipeId must be set.', 'INVALID');
   }
@@ -461,7 +500,7 @@ export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInpu
     ingredientId = input.ingredientId;
   } else {
     const subRecipe = await db.restaurantRecipe.findUnique({
-      where: { id: input.subRecipeId! },
+      where: { organizationId, id: input.subRecipeId! },
       select: { id: true },
     });
     if (!subRecipe) throw new RecipeError('Sub-recipe not found.', 'NOT_FOUND');
@@ -471,6 +510,7 @@ export async function createRecipeLine(db: ScopedDb, input: CreateRecipeLineInpu
 
   return db.restaurantRecipeLine.create({
     data: {
+      organizationId,
       recipeVersionId: input.recipeVersionId,
       ingredientId,
       subRecipeId,
@@ -488,8 +528,9 @@ export type UpdateRecipeLineInput = {
 };
 
 export async function updateRecipeLine(db: ScopedDb, id: string, patch: UpdateRecipeLineInput) {
+  const organizationId = await catalogOrganizationId(db);
   const line = await db.restaurantRecipeLine.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true, recipeVersionId: true },
   });
   if (!line) throw new RecipeError('Recipe line not found.', 'NOT_FOUND');
@@ -500,26 +541,28 @@ export async function updateRecipeLine(db: ScopedDb, id: string, patch: UpdateRe
   if (patch.quantity !== undefined) data.quantity = decimal(patch.quantity);
   if (patch.unitId !== undefined) data.unitId = patch.unitId;
   if (patch.sortOrder !== undefined) data.sortOrder = patch.sortOrder;
-  return db.restaurantRecipeLine.update({ where: { id }, data });
+  return db.restaurantRecipeLine.update({ where: { organizationId, id }, data });
 }
 
 export async function deleteRecipeLine(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const line = await db.restaurantRecipeLine.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true, recipeVersionId: true },
   });
   if (!line) throw new RecipeError('Recipe line not found.', 'NOT_FOUND');
   const version = await requireRecipeVersion(db, line.recipeVersionId);
   assertVersionMutable(version);
-  await db.restaurantRecipeLine.delete({ where: { id } });
+  await db.restaurantRecipeLine.delete({ where: { organizationId, id } });
 }
 
 export async function addRecipeLineSubstitute(
   db: ScopedDb,
   input: { recipeLineId: string; substituteIngredientId: string }
 ) {
+  const organizationId = await catalogOrganizationId(db);
   const line = await db.restaurantRecipeLine.findUnique({
-    where: { id: input.recipeLineId },
+    where: { organizationId, id: input.recipeLineId },
     select: { id: true, recipeVersionId: true, ingredientId: true },
   });
   if (!line) throw new RecipeError('Recipe line not found.', 'NOT_FOUND');
@@ -534,9 +577,7 @@ export async function addRecipeLineSubstitute(
   await requireIngredient(db, input.substituteIngredientId);
 
   const existing = await db.restaurantRecipeLineSubstitute.findUnique({
-    where: {
-      recipeLineId_substituteIngredientId: input,
-    },
+    where: { organizationId, recipeLineId_substituteIngredientId: input },
     select: { id: true },
   });
   if (existing) {
@@ -545,18 +586,19 @@ export async function addRecipeLineSubstitute(
       'ALREADY_ATTACHED'
     );
   }
-  return db.restaurantRecipeLineSubstitute.create({ data: input });
+  return db.restaurantRecipeLineSubstitute.create({ data: { ...input, organizationId } });
 }
 
 export async function removeRecipeLineSubstitute(db: ScopedDb, id: string) {
+  const organizationId = await catalogOrganizationId(db);
   const substitute = await db.restaurantRecipeLineSubstitute.findUnique({
-    where: { id },
+    where: { organizationId, id },
     select: { id: true, recipeLine: { select: { recipeVersionId: true } } },
   });
   if (!substitute) throw new RecipeError('Recipe line substitute not found.', 'NOT_FOUND');
   const version = await requireRecipeVersion(db, substitute.recipeLine.recipeVersionId);
   assertVersionMutable(version);
-  await db.restaurantRecipeLineSubstitute.delete({ where: { id } });
+  await db.restaurantRecipeLineSubstitute.delete({ where: { organizationId, id } });
 }
 
 /**
@@ -566,6 +608,7 @@ export async function removeRecipeLineSubstitute(db: ScopedDb, id: string) {
  * a cycle.
  */
 async function assertNoRecipeCycle(db: ScopedDb, parentRecipeId: string, subRecipeId: string) {
+  const organizationId = await catalogOrganizationId(db);
   const visited = new Set<string>();
   let frontier = [subRecipeId];
   while (frontier.length > 0) {
@@ -581,7 +624,7 @@ async function assertNoRecipeCycle(db: ScopedDb, parentRecipeId: string, subReci
       visited.add(recipeId);
       // Walk every version's lines to catch cycles regardless of version status.
       const lines = await db.restaurantRecipeLine.findMany({
-        where: { recipeVersion: { recipeId } },
+        where: { organizationId, recipeVersion: { recipeId } },
         select: { subRecipeId: true },
       });
       const reachable = lines
@@ -596,9 +639,10 @@ async function assertNoRecipeCycle(db: ScopedDb, parentRecipeId: string, subReci
 // ── Read models: version history (GOV-2) ──────────────────────────────────────
 
 export async function getActiveRecipeVersion(db: ScopedDb, recipeId: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireRecipe(db, recipeId);
   const versions = await db.restaurantRecipeVersion.findMany({
-    where: { recipeId },
+    where: { organizationId, recipeId },
     select: { id: true, status: true, versionNumber: true },
   });
   return resolveActiveVersion(versions as VersionRecord[]);
@@ -611,7 +655,8 @@ export async function getActiveRecipeVersion(db: ScopedDb, recipeId: string) {
  * version — it returns exactly the version asked for. Missing id is NOT_FOUND.
  */
 export async function getRecipeVersion(db: ScopedDb, id: string) {
-  const version = await db.restaurantRecipeVersion.findUnique({ where: { id } });
+  const organizationId = await catalogOrganizationId(db);
+  const version = await db.restaurantRecipeVersion.findUnique({ where: { organizationId, id } });
   if (!version) throw new RecipeError('Recipe version not found.', 'NOT_FOUND');
   return version;
 }
@@ -622,9 +667,10 @@ export async function getRecipeVersion(db: ScopedDb, id: string) {
  * (GOV-2); the recipe must exist in scope.
  */
 export async function listRecipeVersions(db: ScopedDb, recipeId: string) {
+  const organizationId = await catalogOrganizationId(db);
   await requireRecipe(db, recipeId);
   return db.restaurantRecipeVersion.findMany({
-    where: { recipeId },
+    where: { organizationId, recipeId },
     orderBy: { versionNumber: 'desc' },
   });
 }
