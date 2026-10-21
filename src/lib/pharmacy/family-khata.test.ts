@@ -199,14 +199,14 @@ describe('CRM-L04 explainable health suggestion', () => {
       ownerAuthorizedByUserId: scope.actorId,
       ownerReauthenticatedAt: now,
       overrideLimitMinor: 15_000,
+      saleId: 'sale_1',
     });
-    expect(update).toHaveBeenCalledWith(
-      expect.objectContaining({ data: { creditLimitMinor: 15_000 } })
-    );
+    expect(update).not.toHaveBeenCalled();
     expect(create).toHaveBeenCalledWith(
       expect.objectContaining({
         data: expect.objectContaining({
           kind: 'OVERRIDDEN',
+          saleId: 'sale_1',
           appliedLimitMinor: 15_000,
           ownerActorId: scope.actorId,
           reasons: {
@@ -218,6 +218,31 @@ describe('CRM-L04 explainable health suggestion', () => {
         }),
       })
     );
+  });
+
+  it('refuses an explicit owner override without a sale ID', async () => {
+    const update = vi.fn();
+    const create = vi.fn();
+
+    await expect(
+      applyKhataLimitDecision(
+        {
+          pharmacyFamilyAccount: { update },
+          pharmacyKhataLimitDecision: { create },
+        } as never,
+        scope,
+        {
+          familyAccountId: 'family_1',
+          suggestion,
+          ownerAuthorized: true,
+          ownerAuthorizedByUserId: scope.actorId,
+          ownerReauthenticatedAt: now,
+          overrideLimitMinor: 15_000,
+        }
+      )
+    ).rejects.toMatchObject({ reason: 'OWNER_ACTION_REQUIRED' });
+    expect(update).not.toHaveBeenCalled();
+    expect(create).not.toHaveBeenCalled();
   });
 
   it.each([
