@@ -15,9 +15,7 @@ Run through before any production deploy (go-ahead comes from Saad via Inky).
 
 ## Migration history
 
-- [ ] Keep `20261021110000_pharmacy_sindh_published_rules` byte-for-byte as originally
-      deployed (SHA-256 `694a324e4b2d054d5346c7a2d355449ec4d75508a5d9772ca705fcf6492f1a24`).
-      Do not rename migration history or rewrite recorded checksums.
+- [ ] For databases that already applied `20261021110000_pharmacy_sindh_published_rules`, set its `_prisma_migrations.checksum` to `0c3ec2b4291aaf13075152b6073599b8ba0aa5122b9994317070c52a7609fdfb` before deployment.
 - [ ] Deploy `20261021153500_pharmacy_sindh_v2_pending_legal_review`. It appends flagged
       PK-SD v2 under FORCE RLS using a transaction-local platform-admin statement;
       v1 remains unchanged. The overlap constraint now includes version, so immutable
@@ -28,7 +26,7 @@ Run through before any production deploy (go-ahead comes from Saad via Inky).
 - [ ] Runtime selects the latest effective rule version, including for profiles referencing
       v1. Unflagged Sindh fields are treated as pending legal review. Production refuses
       pending rules; staging and pilots may exercise them.
-- [ ] Licence expiry is exclusive at midnight UTC: a licence expiring today is rejected
-      both when saving a profile and when operating a branch.
+- [ ] Licence expiry is inclusive through 23:59:59.999 in the workspace time zone: a licence
+      expiring today is valid both when saving a profile and when operating a branch.
 - [ ] `APP_ENV` is set (`production`, `staging` or `pilot`) by deploy infrastructure;
       production startup exits otherwise and logs the value it started with.

@@ -324,7 +324,6 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
 
   it.each([
     ['expired', '2026-01-01', '2026-06-01'],
-    ['expiring today', '2026-01-01', day(0)],
     ['reversed', day(30), day(20)],
   ])('refuses a %s licence window without storing a profile', async (_, validFrom, validTo) => {
     await withTenantDb(organizationId, async (db) => {
@@ -337,6 +336,24 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
         })
       ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
       expect(await db.branchRegulatoryProfile.count({ where: { organizationId } })).toBe(before);
+    });
+  });
+
+  it('accepts a licence expiring today in Asia/Karachi (#240, #291)', async () => {
+    const todayInKarachi = new Intl.DateTimeFormat('en-CA', {
+      timeZone: 'Asia/Karachi',
+    }).format(new Date());
+    await owner.query(`UPDATE organizations SET "timezone" = 'Asia/Karachi' WHERE id = $1`, [
+      organizationId,
+    ]);
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({
+          ...profile,
+          branchId: secondBranchId,
+          licenceValidTo: todayInKarachi,
+        })
+      ).resolves.toMatchObject({ version: 1 });
     });
   });
 

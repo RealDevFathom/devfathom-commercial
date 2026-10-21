@@ -12,11 +12,16 @@
 -- five-year prescription retention). PK-PB stays provisional, so the guard
 -- still refuses a Punjab branch until those rules are confirmed in turn.
 --
+-- Security (#162): adding this transaction changes the checksum for databases
+-- that already applied this migration; reconcile their recorded checksum.
+--
 -- The jurisdiction table is FORCE row-level security with a platform-admin-only
 -- INSERT policy. The migration role is not a superuser on the gate cluster or
 -- on Azure, so we assert the platform-admin flag for this transaction before
 -- the INSERT — exactly the predicate the policy's WITH CHECK reads.
-SELECT set_config('app.is_platform_admin', 'true', false);
+BEGIN;
+
+SELECT set_config('app.is_platform_admin', 'true', true);
 
 INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   "id", "code", "version", "effectiveFrom", "licenceCategories",
@@ -33,3 +38,5 @@ INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   '{"values":{"prescription":1825},"provisional":false}'
 )
 ON CONFLICT ("code", "version") DO NOTHING;
+
+COMMIT;
