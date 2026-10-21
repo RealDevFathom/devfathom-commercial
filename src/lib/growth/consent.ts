@@ -5,7 +5,7 @@ import { InvalidWhatsAppPhone, normalizeWhatsAppE164 } from './whatsapp/phone';
 import type { WhatsAppProvider } from './whatsapp/provider';
 import type { GrowthCustomer, GrowthWhatsAppStore } from './whatsapp/types';
 
-const STOP_KEYWORDS = new Set(['stop', 'unsubscribe', 'band karo', 'بند']);
+const STOP_PHRASES = ['stop', 'unsubscribe', 'band karo', 'بند', 'رک جاؤ', 'ruk jao', 'ruk jaao', 'band kar do'];
 const START_KEYWORDS = new Set(['start', 'yes', 'haan', 'ہاں']);
 
 export class CustomerNotFound extends Error {
@@ -23,21 +23,26 @@ export class RecordedOptOut extends Error {
   }
 }
 
-export function consentKeyword(text: string): 'stop' | 'start' | null {
-  const normalized = text
-    .normalize('NFKC')
+function normalizeConsentText(text: string): string {
+  return text
+    .normalize('NFKD')
+    .replace(/[\p{M}\p{Cf}\u0640]/gu, '')
     .replace(/[^\p{L}\p{N}\s]+/gu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
     .toLowerCase();
+}
+
+export function consentKeyword(text: string): 'stop' | 'start' | null {
+  const normalized = normalizeConsentText(text);
   if (!normalized) return null;
-  if (normalized === 'band karo' || normalized.startsWith('band karo ')) return 'stop';
-  if (normalized === 'بند' || normalized.startsWith('بند ')) return 'stop';
+  for (const phrase of STOP_PHRASES) {
+    const letters = [...normalizeConsentText(phrase).replace(/ /g, '')];
+    const pattern = new RegExp(`^${letters.join('\\s*')}(?: |$)`, 'u');
+    if (pattern.test(normalized)) return 'stop';
+  }
   const first = normalized.split(' ')[0] ?? '';
-  if (first === 'stop' || first === 'unsubscribe') return 'stop';
-  if (first === 'start' || first === 'yes' || first === 'haan' || first === 'ہاں') return 'start';
-  if (STOP_KEYWORDS.has(normalized)) return 'stop';
-  if (START_KEYWORDS.has(normalized)) return 'start';
+  if (START_KEYWORDS.has(first)) return 'start';
   return null;
 }
 

@@ -56,6 +56,14 @@ describe('STOP and START', () => {
     'STOP ALL',
     'Unsubscribe',
     'Band Karo!',
+    ...['رک جاؤ', 'ruk jao', 'ruk jaao', 'band kar do'].flatMap((phrase) => [
+      phrase,
+      phrase.replace(/ /g, ''),
+      phrase.replace(/ /g, '  \t'),
+      [...phrase].join(' '),
+      phrase.replace(/ /g, '\u200c'),
+      [...phrase].map((letter) => letter === ' ' ? letter : `${letter}\u064e`).join(''),
+    ]),
   ])('opts out and replies once for %s', async (text) => {
     const { store, sendText, result } = await inbound(text, customer());
     expect(result).toBe('opt_out');
