@@ -19,7 +19,6 @@ import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 
 export const ALL_ACTIONS = [
   'admin:access', // the legacy "is this person an admin" gate
-  'growth.manage', // growth administration; explicit permissions still take precedence
   'hr:access', // HR console: people-ops surfaces
   'team:view', // read the team directory
   'team:layoff', // terminate / deactivate a member (resource: { targetRole })
@@ -70,6 +69,10 @@ export const ALL_ACTIONS = [
   'workforce:rates', // restaurant M8: restricted labour-cost facts — org-role driven, default deny
   'restaurant:configure', // restaurant M8: loyalty configuration and consolidated access — org-role driven
   'menu:import', // R-lane WHA-194: OCR menu import — upload, review queue, confirmed catalog import
+  'pharmacy:counter',
+  'pharmacy:manage',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
   'pharmacy:dispense', // RX-03/04: pharmacist decisions and substitution evidence
   'pharmacy:safety', // RX-05: controlled register and incident approval
   'pharmacy:catalogue-review', // MED-06: confirm or reject regulated connector proposals
@@ -111,7 +114,6 @@ const isActiveMember: Policy = ({ subject }) =>
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
   'admin:access': [isAdmin],
-  'growth.manage': [isAdmin],
   'hr:access': [isHrOrAdmin],
   'finance:read': [isAdmin], // HR does NOT get finance
   'team:view': [isActiveMember],
@@ -228,6 +230,10 @@ export const POLICIES: Record<Action, Policy[]> = {
   // no static agency-role policy, so it is DEFAULT DENY until an organization
   // grants it explicitly (or holds `*`, e.g. the restaurant Owner template).
   'menu:import': [],
+  'pharmacy:counter': [],
+  'pharmacy:manage': [],
+  'pharmacy:procurement': [],
+  'pharmacy:inventory': [],
   'pharmacy:dispense': [],
   'pharmacy:safety': [],
   'pharmacy:catalogue-review': [],

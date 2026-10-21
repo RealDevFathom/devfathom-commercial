@@ -1,1 +1,0 @@
-export { isGrowthEnabled } from './flag';
