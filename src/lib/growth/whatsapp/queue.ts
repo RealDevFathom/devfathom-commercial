@@ -1,4 +1,10 @@
-import { assertBodyHasStop, MissingStop } from '@/lib/growth/templates';
+import {
+  assertBodyHasStop,
+  MissingStop,
+  ORDER_READY_BODIES,
+  renderTemplate,
+  type OrderReadyLanguage,
+} from '@/lib/growth/templates';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 
 import { createEvolutionProvider, evolutionConfigured } from './evolution';
@@ -144,6 +150,28 @@ export async function drainQueue(input: {
     if (outcome === 'sent') sent += 1;
   }
   return { sent, reason: 'ok' };
+}
+
+/** Pickup-ready notice. Pharmacy and restaurant share it. Opt-in is required. */
+export async function enqueueOrderReady(
+  store: GrowthWhatsAppStore,
+  input: {
+    organizationId: string;
+    customerId: string;
+    language: OrderReadyLanguage;
+    name: string;
+    business: string;
+  }
+): Promise<MessageLogRow> {
+  const body = renderTemplate(ORDER_READY_BODIES[input.language], {
+    name: input.name,
+    business: input.business,
+  });
+  return enqueueOutbound(store, {
+    organizationId: input.organizationId,
+    customerId: input.customerId,
+    body,
+  });
 }
 
 /** Never enqueues a customer who is not opted in, or a body without STOP. */

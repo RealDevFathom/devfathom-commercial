@@ -28,7 +28,13 @@ vi.mock('./store', () => ({
 
 import { EvolutionWhatsAppProvider } from './evolution';
 import { createMemoryStore } from './memory-store';
-import { drainQueue, drainOrganizationQueue, enqueueOutbound, type StoreUnit } from './queue';
+import {
+  drainQueue,
+  drainOrganizationQueue,
+  enqueueOrderReady,
+  enqueueOutbound,
+  type StoreUnit,
+} from './queue';
 import { effectiveDailyCap, isQuietHours, zonedDayStart } from './time';
 import { NotOptedIn, type GrowthCustomer, type GrowthSettings } from './types';
 
@@ -438,6 +444,42 @@ describe('outbound queue', () => {
     expect(tx.httpInside).toBe(false);
     expect(tx.max).toBe(1);
     expect(store.messages[0]).toMatchObject({ status: 'sent', waMessageId: 'wamid-live' });
+  });
+
+  it('sends order_ready in English and Urdu only to an opted-in customer', async () => {
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    store.putCustomer(customer('c2', '+923002222222', false));
+    const pharmacy = await enqueueOrderReady(store, {
+      organizationId: 'org_1',
+      customerId: 'c1',
+      language: 'en',
+      name: 'Ayesha',
+      business: 'Sehat Pharmacy',
+    });
+    const restaurant = await enqueueOrderReady(store, {
+      organizationId: 'org_1',
+      customerId: 'c1',
+      language: 'ur',
+      name: 'Ayesha',
+      business: 'Karachi Kitchen',
+    });
+    expect(pharmacy.body).toBe(
+      'Ayesha, your order from Sehat Pharmacy is ready for pickup. Reply STOP to opt out.'
+    );
+    expect(restaurant.body).toContain('Karachi Kitchen');
+    expect(restaurant.body).toContain('تیار');
+    expect(restaurant.body).toContain('STOP');
+    await expect(
+      enqueueOrderReady(store, {
+        organizationId: 'org_1',
+        customerId: 'c2',
+        language: 'en',
+        name: 'Ayesha',
+        business: 'Sehat Pharmacy',
+      })
+    ).rejects.toBeInstanceOf(NotOptedIn);
+    expect(store.messages.map((row) => row.customerId)).toEqual(['c1', 'c1']);
   });
 
   it('does not enqueue a customer who has not opted in', async () => {

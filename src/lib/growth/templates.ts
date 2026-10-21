@@ -9,6 +9,7 @@ export const TEMPLATE_KEYS = [
   'review_request',
   'referral',
   'generic',
+  'order_ready',
 ] as const;
 
 export type TemplateKey = (typeof TEMPLATE_KEYS)[number];
@@ -28,8 +29,16 @@ export type TemplateVariable = (typeof TEMPLATE_VARIABLES)[number];
 
 export const DEFAULT_TEMPLATE_LANGUAGE = 'ur-en';
 
+/** Pickup-ready notice for a pharmacy or a restaurant. Both bodies name STOP. */
+export const ORDER_READY_BODIES = {
+  en: '{{name}}, your order from {{business}} is ready for pickup. Reply STOP to opt out.',
+  ur: '{{name}}، {{business}} سے آپ کا آرڈر لینے کے لیے تیار ہے۔ Reply STOP to opt out.',
+} as const;
+
+export type OrderReadyLanguage = keyof typeof ORDER_READY_BODIES;
+
 /** Seed bodies. Every one names STOP so the renderer can send it. */
-export const DEFAULT_TEMPLATES: Record<TemplateKey, string> = {
+export const DEFAULT_TEMPLATES: Record<Exclude<TemplateKey, 'order_ready'>, string> = {
   birthday_offer:
     'Salaam {{name}}! {{discount}} off at {{business}} till {{expires}}. Code {{code}}. Reply STOP to opt out.',
   refill_reminder:
@@ -66,7 +75,7 @@ export class MissingTemplateVariable extends Error {
 
 export type TemplatePurpose = 'marketing' | 'utility';
 
-/** `refill_reminder` is a utility template. Every other default is marketing. */
+/** `refill_reminder` and `order_ready` are utility templates. The rest are marketing. */
 export const TEMPLATE_PURPOSE: Record<TemplateKey, TemplatePurpose> = {
   birthday_offer: 'marketing',
   refill_reminder: 'utility',
@@ -76,6 +85,7 @@ export const TEMPLATE_PURPOSE: Record<TemplateKey, TemplatePurpose> = {
   review_request: 'marketing',
   referral: 'marketing',
   generic: 'marketing',
+  order_ready: 'utility',
 };
 
 /**
@@ -184,6 +194,18 @@ export async function ensureDefaultTemplates(
   const existing = await store.templates(organizationId);
   const have = new Set(existing.map((row) => `${row.key}:${row.language}`));
   for (const key of TEMPLATE_KEYS) {
+    if (key === 'order_ready') {
+      for (const language of Object.keys(ORDER_READY_BODIES) as OrderReadyLanguage[]) {
+        if (have.has(`${key}:${language}`)) continue;
+        await store.saveTemplate({
+          organizationId,
+          key,
+          language,
+          body: ORDER_READY_BODIES[language],
+        });
+      }
+      continue;
+    }
     if (have.has(`${key}:${DEFAULT_TEMPLATE_LANGUAGE}`)) continue;
     await store.saveTemplate({
       organizationId,

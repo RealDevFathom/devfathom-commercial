@@ -27,10 +27,11 @@ const vars = {
 };
 
 describe('message templates', () => {
-  it('marks refill_reminder as utility and every other default as marketing', () => {
+  it('marks refill_reminder and order_ready as utility and every other default as marketing', () => {
     expect(TEMPLATE_PURPOSE.refill_reminder).toBe('utility');
+    expect(TEMPLATE_PURPOSE.order_ready).toBe('utility');
     for (const key of TEMPLATE_KEYS) {
-      if (key === 'refill_reminder') continue;
+      if (key === 'refill_reminder' || key === 'order_ready') continue;
       expect(TEMPLATE_PURPOSE[key]).toBe('marketing');
     }
   });
@@ -105,20 +106,22 @@ describe('message templates', () => {
     }
   });
 
-  it('seeds the eight default templates once', async () => {
+  it('seeds the default templates once, including order_ready in English and Urdu', async () => {
     const store = createMemoryStore();
     await ensureDefaultTemplates(store, 'org_1');
     await ensureDefaultTemplates(store, 'org_1');
     const rows = await store.templates('org_1');
-    expect(rows.map((row) => row.key).sort()).toEqual([
-      'birthday_offer',
-      'generic',
-      'holiday',
-      'referral',
-      'refill_reminder',
-      'review_request',
-      'slow_day',
-      'winback',
+    expect(rows.map((row) => `${row.key}:${row.language}`).sort()).toEqual([
+      'birthday_offer:ur-en',
+      'generic:ur-en',
+      'holiday:ur-en',
+      'order_ready:en',
+      'order_ready:ur',
+      'referral:ur-en',
+      'refill_reminder:ur-en',
+      'review_request:ur-en',
+      'slow_day:ur-en',
+      'winback:ur-en',
     ]);
   });
 });
