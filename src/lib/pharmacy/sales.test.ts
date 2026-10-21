@@ -50,7 +50,7 @@ describe('POS sale voiding', () => {
     let allocationQuery: Record<string, unknown> | undefined;
     const db = {
       pharmacySale: {
-        findFirst: async () => ({ id: 'sale-a', status }),
+        findFirst: async () => ({ id: 'sale-a', status, lines: [] }),
         // Keeps this regression runnable against the original implementation:
         // baseline reaches reversal assertions and fails on missing behavior,
         // rather than failing because its former update method is absent.
@@ -369,6 +369,7 @@ describe('POS-06 linked returns', () => {
           saleId: 'sale-a',
           canonicalUnits: 10,
           sale: { status: 'COMPLETED' },
+          medicine: { controlled: false },
           allocations: [{ canonicalUnits: 10 }],
           unidentifiedReturnHolds: [],
           returnLines: [{ canonicalUnits: 7 }],
@@ -416,6 +417,7 @@ describe('POS-06 linked returns', () => {
           saleId: 'sale-a',
           canonicalUnits: 10,
           sale: { status: 'COMPLETED' },
+          medicine: { controlled: false },
           allocations: [{ id: 'allocation-a', inventoryLotId: 'lot-a', canonicalUnits: 10 }],
           unidentifiedReturnHolds: [],
           returnLines: [],

@@ -387,6 +387,7 @@ export async function appendControlledRestorations(
     branchId: string;
     recordedByUserId: string;
     reason: string;
+    witness?: import('./controlled-restoration-authorization').ControlledRestorationWitness;
     lines: readonly {
       sourceMovementId: string;
       quantityCanonicalUnits: number;
@@ -405,6 +406,7 @@ export async function appendControlledRestorations(
     },
   });
   if (sources.length === 0) return;
+  if (!input.witness) throw new Error('Fresh controlled restoration witness is required');
   await lockRegister(db, input.organizationId, input.branchId);
   for (const line of input.lines) {
     const source = sources.find((entry) => entry.stockMovementId === line.sourceMovementId);
@@ -449,8 +451,8 @@ export async function appendControlledRestorations(
       balanceDelta,
       runningBalance,
       recordedByUserId: input.recordedByUserId,
-      witnessedByUserId: source.witnessedByUserId,
-      signatureRef: source.signatureRef,
+      witnessedByUserId: input.witness.witnessedByUserId,
+      signatureRef: input.witness.signatureRef,
       rxSerialWritten: source.rxSerialWritten,
       emergency: source.emergency,
       counterpartyName: source.counterpartyName,
@@ -493,8 +495,10 @@ export async function listControlledPinWitnesses(db: ScopedDb, actorId: string) 
   });
   const eligible: Array<{ id: string; name: string }> = [];
   for (const profile of staff) {
-    if (profile.user?.status === 'ACTIVE' &&
-      (await can(profile.user, 'pharmacy:dispense', undefined, { db }))) {
+    if (
+      profile.user?.status === 'ACTIVE' &&
+      (await can(profile.user, 'pharmacy:dispense', undefined, { db }))
+    ) {
       eligible.push({ id: profile.id, name: profile.displayName });
     }
   }

@@ -9,6 +9,10 @@ import { checkEnvelope } from './offline-snapshot-envelope';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { checkSafetyLease } from './offline-safety-lease';
 import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
+import {
+  authorizeControlledRestoration,
+  type ControlledRestorationPin,
+} from './controlled-restoration-authorization';
 import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
@@ -169,6 +173,7 @@ export function validateDiscount(input: {
 async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: { lines: { include: { medicine: true } } },
   });
   if (!sale) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   return sale;
@@ -367,7 +372,8 @@ export async function changeSaleStatus(
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'complete' | 'void',
   reason?: string,
-  deviceId?: string
+  deviceId?: string,
+  controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
   const transitions = {
@@ -379,6 +385,10 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  const witness =
+    action === 'void' && sale.lines.some((line) => line.medicine.controlled)
+      ? await authorizeControlledRestoration(db, scope, controlledWitness)
+      : undefined;
   const claimed = await db.pharmacySale.updateMany({
     where: {
       id: saleId,
@@ -417,6 +427,7 @@ export async function changeSaleStatus(
       organizationId: scope.organizationId,
       branchId: scope.branchId,
       recordedByUserId: scope.actorId,
+      witness,
       reason: reason ?? 'Sale voided',
       lines: movements.map((movement) => ({
         sourceMovementId: movement.id,
@@ -596,6 +607,7 @@ export async function returnSaleLine(
   scope: LedgerScope,
   input: {
     saleLineId: string;
+    controlledWitness?: ControlledRestorationPin;
     lotId?: string;
     canonicalUnits: number;
     quarantineLocationId?: string;
@@ -615,16 +627,23 @@ export async function returnSaleLine(
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
       sale: true,
+      medicine: true,
       allocations: { orderBy: { id: 'asc' } },
       returnLines: true,
       unidentifiedReturnHolds: true,
     },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
+  const witness = line.medicine.controlled
+    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
+    : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
   // Keep legacy request fingerprints stable; never infer physical identity from allocations.
-  const fingerprint = JSON.stringify({ ...input, disposition: requestedDisposition });
+  // Credentials are transient and never become event payloads or replay fingerprints.
+  const { controlledWitness: _pin, ...fingerprintInput } = input;
+  void _pin;
+  const fingerprint = JSON.stringify({ ...fingerprintInput, disposition: requestedDisposition });
   const prior = await db.pharmacySaleEvent.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -852,6 +871,7 @@ export async function returnSaleLine(
     organizationId: scope.organizationId,
     branchId: scope.branchId,
     recordedByUserId: scope.actorId,
+    witness,
     reason: disposition === 'RESTOCK' ? 'Returned to stock' : 'Returned to quarantine',
     lines: restorations,
   });

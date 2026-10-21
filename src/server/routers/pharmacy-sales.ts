@@ -1,3 +1,4 @@
+import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { hasModule } from '@/lib/entitlements';
 import {
   executeSandboxPayment,
@@ -171,6 +172,8 @@ function ledgerTender(input: z.infer<typeof tenderInput>) {
 }
 
 function fail(error: unknown): never {
+  if (error instanceof ControlledRestorationDenied)
+    throw new TRPCError({ code: 'FORBIDDEN', message: error.message });
   if (error instanceof PharmacyPaymentSandboxError)
     throw new TRPCError({ code: 'BAD_REQUEST', message: error.message });
   if (error instanceof FamilyKhataError)
@@ -781,7 +784,11 @@ export const pharmacySalesRouter = router({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
           if (!medicine?.controlled) return addSaleLine(db, scope, input);
-          if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, { db }))) {
+          if (
+            !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+              db,
+            }))
+          ) {
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: 'You do not have permission to dispense a controlled medicine.',
@@ -817,10 +824,7 @@ export const pharmacySalesRouter = router({
             isLockedOut(credential, now)
           )
             return blocked;
-          if (
-            !(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))
-          )
-            return blocked;
+          if (!(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))) return blocked;
           if (
             !(await verifyOperatorCredential('PIN', authorization.pin, credential.credentialHash))
           ) {
@@ -1045,22 +1049,33 @@ export const pharmacySalesRouter = router({
           saleId: z.string().min(1),
           action: z.enum(['hold', 'resume', 'convertQuotation', 'complete', 'void']),
           reason: z.string().trim().min(1).optional(),
+          controlledWitness: z
+            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
+            .strict()
+            .optional(),
           deviceId: z.string().trim().min(1).max(200).optional(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          changeSaleStatus(
-            txDb(tx),
-            scopeFor(ctx, input.branchId),
-            input.saleId,
-            input.action,
-            input.reason,
-            input.deviceId
-          )
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          try {
+            return await changeSaleStatus(
+              txDb(tx),
+              scopeFor(ctx, input.branchId),
+              input.saleId,
+              input.action,
+              input.reason,
+              input.deviceId,
+              input.controlledWitness
+            );
+          } catch (error) {
+            if (error instanceof ControlledRestorationDenied && !error.forbidden)
+              return { blocked: error.message };
+            throw error;
+          }
+        });
       } catch (error) {
         fail(error);
       }
@@ -1097,6 +1112,10 @@ export const pharmacySalesRouter = router({
         .object({
           branchId,
           saleLineId: z.string().min(1),
+          controlledWitness: z
+            .object({ staffProfileId: z.string().min(1), pin: z.string().regex(/^\d{4,8}$/) })
+            .strict()
+            .optional(),
           // Omitted legacy/unknown lot is accepted only into unidentified quarantine custody.
           lotId: z.string().min(1).optional(),
           canonicalUnits: z.number().int().positive(),
@@ -1110,9 +1129,15 @@ export const pharmacySalesRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          returnSaleLine(txDb(tx), scopeFor(ctx, input.branchId), input)
-        );
+        return await ctx.db.$transaction(async (tx) => {
+          try {
+            return await returnSaleLine(txDb(tx), scopeFor(ctx, input.branchId), input);
+          } catch (error) {
+            if (error instanceof ControlledRestorationDenied && !error.forbidden)
+              return { blocked: error.message };
+            throw error;
+          }
+        });
       } catch (error) {
         fail(error);
       }

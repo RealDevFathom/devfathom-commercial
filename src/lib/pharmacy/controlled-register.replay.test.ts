@@ -154,10 +154,15 @@ describe('controlled register replay', () => {
     await appendControlledRestorations(db, {
       ...scope,
       recordedByUserId: 'pharmacist',
+      witness: { witnessedByUserId: 'new-witness', signatureRef: 'pin:fresh-void' },
       reason: 'Sale voided',
       lines: [{ sourceMovementId: 'm-sale-2', quantityCanonicalUnits: 2, restoreSellable: true }],
     });
     expectOnHand('lot-a');
+    expect(rows.at(-1)).toMatchObject({
+      witnessedByUserId: 'new-witness',
+      signatureRef: 'pin:fresh-void',
+    });
     expect(rows.filter((row) => row.correctionReason === 'Sale voided')).toHaveLength(1);
 
     stock.set('lot-a', 9);
@@ -168,6 +173,7 @@ describe('controlled register replay', () => {
     await appendControlledRestorations(db, {
       ...scope,
       recordedByUserId: 'pharmacist',
+      witness: { witnessedByUserId: 'return-witness', signatureRef: 'pin:fresh-return' },
       reason: 'Returned to stock',
       lines: [{ sourceMovementId: 'm-sale-1', quantityCanonicalUnits: 1, restoreSellable: true }],
     });
