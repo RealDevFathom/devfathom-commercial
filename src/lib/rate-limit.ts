@@ -40,7 +40,16 @@ RETURNING count, "resetAt"
 const CLEAR_SQL = `DELETE FROM rate_limit_buckets WHERE key = $1`;
 const SWEEP_SQL = `DELETE FROM rate_limit_buckets WHERE "resetAt" <= NOW()`;
 
-export function rateLimitBackend(env: NodeJS.ProcessEnv = runtimeEnv): 'memory' | 'postgres' {
+type RateLimitEnv = {
+  NODE_ENV?: string;
+  VITEST?: string;
+  RATE_LIMIT_STORE?: string;
+  CLIENT_IP_HEADER?: string;
+  TRUSTED_PROXY_CIDRS?: string;
+  TRUSTED_PROXY_HOPS?: string;
+};
+
+export function rateLimitBackend(env: RateLimitEnv = runtimeEnv): 'memory' | 'postgres' {
   if (env.NODE_ENV === 'production' && env.VITEST !== 'true') return 'postgres';
   if (env.RATE_LIMIT_STORE === 'postgres') return 'postgres';
   if (env.RATE_LIMIT_STORE === 'memory') return 'memory';
@@ -210,7 +219,7 @@ function isTrusted(ip: string, list: BlockList): boolean {
  * from the right (the one the outermost proxy appended). With neither setting,
  * forwarded headers are ignored.
  */
-export function clientIp(request: Request, env: NodeJS.ProcessEnv = runtimeEnv): string {
+export function clientIp(request: Request, env: RateLimitEnv = runtimeEnv): string {
   const configured = env.CLIENT_IP_HEADER?.trim();
   if (configured) {
     const hops = addresses(request.headers.get(configured));

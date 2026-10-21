@@ -63,8 +63,8 @@ describe('tenant transaction side effects', () => {
 
   it('writes notification and webhook rows before commit and delivers after', async () => {
     const tx = client();
-    mocks.transaction.mockImplementation(async (run: (tx: typeof tx) => Promise<unknown>) =>
-      run(tx)
+    mocks.transaction.mockImplementation(
+      async (run: (inner: ReturnType<typeof client>) => Promise<unknown>) => run(tx)
     );
 
     await withTenantDb('org_1', async (db) => {
@@ -99,8 +99,8 @@ describe('tenant transaction side effects', () => {
 
   it('does not deliver when the transaction throws', async () => {
     const tx = client();
-    mocks.transaction.mockImplementation(async (run: (tx: typeof tx) => Promise<unknown>) =>
-      run(tx)
+    mocks.transaction.mockImplementation(
+      async (run: (inner: ReturnType<typeof client>) => Promise<unknown>) => run(tx)
     );
 
     await expect(
@@ -121,8 +121,8 @@ describe('tenant transaction side effects', () => {
   it('rolls the transaction back when the outbox write fails', async () => {
     const tx = client();
     tx.outboundEffect.createMany.mockRejectedValue(new Error('disk full'));
-    mocks.transaction.mockImplementation(async (run: (tx: typeof tx) => Promise<unknown>) =>
-      run(tx)
+    mocks.transaction.mockImplementation(
+      async (run: (inner: ReturnType<typeof client>) => Promise<unknown>) => run(tx)
     );
 
     await expect(
