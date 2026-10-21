@@ -542,6 +542,8 @@ export const pharmacySalesRouter = router({
   }),
   settleFamilyKhata: protectedProcedure.input(z.object({
     branchId, familyAccountId: z.string().min(1), amountMinor: z.number().int().positive().max(2147483647),
+    deviceId: z.string().trim().min(1).max(128),
+    paymentMethod: z.enum(['CASH', 'CARD', 'BANK_TRANSFER', 'WALLET']),
     idempotencyKey: z.string().trim().min(1).max(128),
   }).strict()).mutation(async ({ ctx, input }) => {
     const scope = await khataScope(ctx, input.branchId);
@@ -563,7 +565,39 @@ export const pharmacySalesRouter = router({
           throw new TRPCError({ code: 'CONFLICT' });
         return { paidMinor: input.amountMinor, replayed: true };
       }
-      return settleFamilyKhata(db, scope, { ...input, occurredAt: new Date(), collectionKey: key });
+      let drawerSessionId: string | undefined;
+      if (input.paymentMethod === 'CASH') {
+        await db.$queryRaw(Prisma.sql`
+          SELECT id FROM pharmacy_drawer_sessions
+          WHERE "organizationId"=${scope.organizationId}
+            AND "branchId"=${scope.branchId}
+            AND "deviceId"=${input.deviceId}
+            AND status='OPEN'
+          FOR UPDATE`);
+        const drawer = await db.pharmacyDrawerSession.findFirst({ where: {
+          organizationId: scope.organizationId,
+          branchId: scope.branchId,
+          deviceId: input.deviceId,
+          status: 'OPEN',
+        }, select: { id: true } });
+        if (!drawer) throw new PharmacySettlementError('DRAWER_NOT_OPEN');
+        drawerSessionId = drawer.id;
+      }
+      const result = await settleFamilyKhata(db, scope, {
+        familyAccountId: input.familyAccountId,
+        amountMinor: input.amountMinor,
+        occurredAt: new Date(),
+        collectionKey: key,
+      });
+      if (drawerSessionId) await db.pharmacyDrawerMovement.create({ data: {
+        organizationId: scope.organizationId,
+        drawerSessionId,
+        kind: 'CASH_SALE',
+        amountMinor: input.amountMinor,
+        reason: 'Khata cash collection',
+        actorId: scope.actorId,
+      } });
+      return result;
     });
   }),
   customerSnapshot: protectedProcedure

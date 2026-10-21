@@ -23,6 +23,7 @@ vi.mock('@/lib/pharmacy/settlement', async (original) => ({
 }));
 import {
   applyPharmacyTender,
+  foldExpectedCash,
   readPharmacyTenderOutcome,
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
@@ -69,6 +70,16 @@ function fixture() {
       findMany: vi.fn().mockResolvedValue([]),
       create: vi.fn().mockResolvedValue({}),
     },
+    pharmacyDrawerSession: {
+      findFirst: vi.fn().mockResolvedValue({ id: 'drawer-a' }),
+    },
+    pharmacyDrawerMovement: { create: vi.fn().mockResolvedValue({}) },
+    financeJournalEntry: {
+      findFirst: vi.fn().mockResolvedValue(null),
+      create: vi.fn().mockResolvedValue({ id: 'journal-a' }),
+      findFirstOrThrow: vi.fn().mockResolvedValue({ id: 'journal-a', lines: [] }),
+    },
+    financeJournalLine: { create: vi.fn().mockResolvedValue({}) },
     pharmacyKhataLimitDecision: { create: vi.fn().mockResolvedValue({}) },
   };
   db.$transaction.mockImplementation(async (callback) => callback(db));
@@ -111,6 +122,60 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
+  it('adds a cash Khata collection to the collecting device drawer', async () => {
+    const f = fixture();
+    f.db.pharmacyKhataEvent.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { id: 'charge-a', kind: 'CHARGE', amountMinor: 250, occurredAt: new Date() },
+    ] as never);
+    f.db.pharmacyKhataEvent.create.mockResolvedValue({ id: 'payment-a', amountMinor: 250 } as never);
+
+    await f.caller().settleFamilyKhata({
+      branchId: 'branch-a',
+      familyAccountId: 'family-a',
+      amountMinor: 250,
+      deviceId: 'device-a',
+      paymentMethod: 'CASH',
+      idempotencyKey: 'collection-a',
+    });
+
+    expect(f.db.pharmacyDrawerSession.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({ deviceId: 'device-a', status: 'OPEN' }),
+      select: { id: true },
+    });
+    expect(f.db.pharmacyDrawerMovement.create).toHaveBeenCalledWith({ data: {
+      organizationId: 'org-a',
+      drawerSessionId: 'drawer-a',
+      kind: 'CASH_SALE',
+      amountMinor: 250,
+      reason: 'Khata cash collection',
+      actorId: 'owner-a',
+    } });
+    expect(foldExpectedCash([
+      { kind: 'OPENING_FLOAT', amountMinor: 1_000 },
+      { kind: 'CASH_SALE', amountMinor: 250 },
+    ])).toBe(1_250);
+  });
+
+  it('does not add a non-cash Khata collection to the drawer', async () => {
+    const f = fixture();
+    f.db.pharmacyKhataEvent.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
+      { id: 'charge-a', kind: 'CHARGE', amountMinor: 250, occurredAt: new Date() },
+    ] as never);
+    f.db.pharmacyKhataEvent.create.mockResolvedValue({ id: 'payment-a', amountMinor: 250 } as never);
+
+    await f.caller().settleFamilyKhata({
+      branchId: 'branch-a',
+      familyAccountId: 'family-a',
+      amountMinor: 250,
+      deviceId: 'device-a',
+      paymentMethod: 'CARD',
+      idempotencyKey: 'collection-card-a',
+    });
+
+    expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
+    expect(f.db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+  });
+
   it('allows a cashier with counter permission to charge exactly the limit without override', async () => {
     const f = fixture();
     f.user.role = 'EMPLOYEE';
@@ -163,6 +228,8 @@ describe('Khata router trust and recovery boundary', () => {
           reasons: expect.arrayContaining([
             '1 charge(s) in the stated window',
             '1 overdue unsettled charge(s)',
+            'Charge amount: 101 minor units',
+            'Credit limit before override: 100 minor units',
             'Override reason: Emergency approved',
           ]),
         },

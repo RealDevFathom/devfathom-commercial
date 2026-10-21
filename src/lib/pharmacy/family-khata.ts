@@ -425,6 +425,8 @@ export async function authorizeKhataCharge(
       windowStart,
       now
     );
+    suggestion.reasons.push(`Charge amount: ${input.amountMinor} minor units`);
+    suggestion.reasons.push(`Credit limit before override: ${account.creditLimitMinor} minor units`);
     suggestion.reasons.push(`Override reason: ${input.overrideReason.trim()}`);
     await applyKhataLimitDecision(db, scope, {
       familyAccountId: account.id,
