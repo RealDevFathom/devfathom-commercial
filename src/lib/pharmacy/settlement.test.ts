@@ -2,12 +2,17 @@ import { createHash } from 'node:crypto';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
-const postings = vi.hoisted(() => ({ postTenderEntry: vi.fn(), postSaleLineEntry: vi.fn() }));
+const postings = vi.hoisted(() => ({
+  postTenderEntry: vi.fn(),
+  postSaleLineEntry: vi.fn(),
+  postDailyCloseEntry: vi.fn(),
+}));
 // Keep settlement, receipt identity, idempotency and evidence logic real.
 vi.mock('./finance-postings', async () => ({
   ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
   postTenderEntry: postings.postTenderEntry,
   postSaleLineEntry: postings.postSaleLineEntry,
+  postDailyCloseEntry: postings.postDailyCloseEntry,
 }));
 
 import { Prisma } from '@/generated/prisma/client';
@@ -16,6 +21,7 @@ import {
   applyPharmacyTender,
   assertRefundWithinTender,
   computePharmacyClose,
+  cutPharmacyDailyClose,
   foldExpectedCash,
   openPharmacyDrawer,
   PharmacySettlementError,
@@ -23,6 +29,65 @@ import {
   requireReleaseSafeAdapter,
   saleTotalMinor,
 } from './settlement';
+
+describe('cutPharmacyDailyClose finance integration', () => {
+  it('posts the persisted close at its creation time before requesting evidence', async () => {
+    const createdAt = new Date('2026-10-20T23:59:00.000Z');
+    const close = {
+      id: 'close-1',
+      branchId: 'branch-1',
+      businessDate: new Date('2026-10-20T00:00:00.000Z'),
+      sequence: 1,
+      cashVarianceMinor: -50,
+      createdAt,
+    };
+    const calls: string[] = [];
+    postings.postDailyCloseEntry.mockImplementationOnce(async () => {
+      calls.push('finance');
+      return { id: 'journal-1' };
+    });
+    const db = {
+      $queryRaw: vi.fn().mockResolvedValue([]),
+      pharmacyDrawerSession: {
+        count: vi.fn().mockResolvedValue(0),
+        findMany: vi.fn().mockResolvedValue([]),
+      },
+      pharmacyDailyClose: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce(null)
+          .mockImplementationOnce(async () => {
+            calls.push('evidence');
+            return { id: close.id };
+          }),
+        create: vi.fn().mockResolvedValue(close),
+      },
+      pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
+      pharmacyParallelRunWindow: { count: vi.fn().mockResolvedValue(0) },
+      camera: { findFirst: vi.fn().mockResolvedValue(null) },
+    };
+
+    await expect(
+      cutPharmacyDailyClose(
+        db as never,
+        { organizationId: 'org-1', branchId: 'branch-1', actorId: 'actor-1' },
+        { businessDate: close.businessDate }
+      )
+    ).resolves.toBe(close);
+
+    expect(postings.postDailyCloseEntry).toHaveBeenCalledExactlyOnceWith(
+      db,
+      {
+        organizationId: 'org-1',
+        branchId: 'branch-1',
+        actorId: 'actor-1',
+      },
+      { closeId: close.id, at: createdAt }
+    );
+    expect(calls).toEqual(['finance', 'evidence']);
+  });
+});
 
 describe('pharmacy settlement invariants', () => {
   it('uses exact integer minor units for split coverage', () => {
