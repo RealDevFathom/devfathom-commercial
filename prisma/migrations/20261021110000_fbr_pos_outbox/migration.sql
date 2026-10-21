@@ -1,10 +1,10 @@
 ALTER TABLE pharmacy_sales ADD COLUMN "fbrStatus" TEXT,
   ADD COLUMN "fbrInvoiceNumber" TEXT;
-ALTER TABLE pharmacy_sales ADD CONSTRAINT pharmacy_sales_fbr_state_check CHECK (
+ALTER TABLE pharmacy_sales ADD CONSTRAINT pharmacy_sales_fbr_state_check CHECK (COALESCE((
   ("fbrStatus" IS NULL AND "fbrInvoiceNumber" IS NULL) OR
   ("fbrStatus" = 'PENDING' AND "fbrInvoiceNumber" IS NULL) OR
   ("fbrStatus" = 'SUBMITTED' AND "fbrInvoiceNumber" IS NOT NULL)
-);
+), false));
 CREATE TABLE fiscal_invoice_outbox (
   id TEXT PRIMARY KEY,
   "organizationId" TEXT NOT NULL DEFAULT current_setting('app.current_organization_id', true),

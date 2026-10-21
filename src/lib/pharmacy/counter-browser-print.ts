@@ -1,3 +1,4 @@
+import { fiscalReceiptDetails } from '@/lib/fiscal/receipt';
 import { buildDispensingLabels, type DispensingLabelSource } from './dispensing-label';
 import {
   buildCounterZReportPreview,
@@ -88,6 +89,7 @@ export function buildCounterBrowserReceipt(
     throw new Error('Load a settled receipt before printing.');
   }
   if (format === 'LABEL_50x30') return buildDispensingLabels(receipt, labelSources);
+  const fiscal = fiscalReceiptDetails(receipt.fiscal);
   const width = format === 'THERMAL_58' ? '58mm' : format === 'THERMAL' ? '80mm' : '190mm';
   const preview = buildCounterReceiptPreview(
     receipt,
@@ -101,7 +103,7 @@ export function buildCounterBrowserReceipt(
 <style>@page { size: ${format === 'A4' ? 'A4' : 'auto'}; margin: ${format === 'A4' ? '10mm' : '0'}; }
 * { box-sizing: border-box; } body { margin: 0; width: ${width}; max-width: 100%; padding: 3mm; font: 12px monospace; color: black; background: white; }
 pre { white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; }</style>
-</head><body><pre>${escapeHtml(preview)}</pre></body></html>`;
+</head><body><pre>${escapeHtml(preview)}</pre>${fiscal ? `<p>${escapeHtml(fiscal.text)}</p>${fiscal.qr ? `<img src="${fiscal.qr}" width="27" height="27" style="width:7mm;height:7mm" alt="FBR sandbox invoice QR">` : ''}` : ''}</body></html>`;
 }
 
 /** Opens only an isolated receipt. Returning does not confirm physical printing. */

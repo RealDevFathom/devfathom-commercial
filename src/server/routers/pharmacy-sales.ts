@@ -275,10 +275,13 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       if (!hasModule(ctx.entitlements, 'pharmacy-core')) throw new TRPCError({ code: 'FORBIDDEN' });
       const organizationId = ctx.session?.user?.organizationId;
-      if (!organizationId || organizationId !== ctx.entitlements.organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+      if (!organizationId || organizationId !== ctx.entitlements.organizationId)
+        throw new TRPCError({ code: 'UNAUTHORIZED' });
       const adapter = configuredFiscalAdapter();
-      if (!adapter) throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'FBR mock mode is disabled.' });
-      return ctx.db.$transaction((tx) => dispatchFbrInvoices(txDb(tx), { organizationId, branchId: input.branchId }, adapter));
+      if (!adapter)
+        throw new TRPCError({ code: 'PRECONDITION_FAILED', message: 'FBR mock mode is disabled.' });
+      const scope = await scopeFor(ctx, input.branchId);
+      return ctx.db.$transaction((tx) => dispatchFbrInvoices(txDb(tx), scope, adapter));
     }),
   sandboxPayment: adminProcedure.input(sandboxPaymentInput).mutation(async ({ ctx, input }) => {
     annotateAudit(ctx, { skipInput: true });
