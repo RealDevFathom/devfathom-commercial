@@ -25,6 +25,9 @@ vi.mock('@/server/routers/pharmacy-staged-review', () => ({
 vi.mock('@/components/pharmacy/medicine-reference-workbench', () => ({
   MedicineReferenceWorkbench: () => <div>Existing workbench</div>,
 }));
+vi.mock('@/components/pharmacy/create-medicine', () => ({
+  CreateMedicine: () => <div>Create medicine form</div>,
+}));
 import MedicinePage from '@/app/(app)/pharmacy/medicines/page';
 import Page from '@/app/(app)/pharmacy/medicines/staged/page';
 import Loading from '@/app/(app)/pharmacy/medicines/staged/loading';
@@ -51,6 +54,11 @@ describe('staged medicine review UI', () => {
     expect(screen.getByRole('heading', { name: 'Medicine catalogue', level: 1 })).toBeTruthy();
     expect(mocks.batches).toHaveBeenCalledWith({ branchId: 'branch_a', page: 1 });
     expect(screen.getByText('Existing workbench')).toBeTruthy();
+    expect(screen.getByText('Create medicine form')).toBeVisible();
+    expect(screen.getAllByRole('heading', { level: 1 })).toHaveLength(1);
+    expect(
+      screen.getByText('Preserved import source review').closest('details')
+    ).not.toHaveAttribute('open');
   });
   it('defaults to an authorized branch and explains workflow states', async () => {
     render(await Page({ searchParams: Promise.resolve({}) }));

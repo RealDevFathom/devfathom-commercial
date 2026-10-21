@@ -56,10 +56,12 @@ export async function StagedMedicineCatalogue({
   searchParams,
   route = '/pharmacy/medicines',
   heading = 'Medicine catalogue',
+  showHeader = true,
 }: {
   searchParams: Promise<Record<string, string | string[] | undefined>>;
   route?: string;
   heading?: string;
+  showHeader?: boolean;
 }) {
   const params = await searchParams;
   const text = (key: string) => (typeof params[key] === 'string' ? (params[key] as string) : '');
@@ -74,13 +76,13 @@ export async function StagedMedicineCatalogue({
     }
     return `${route}?${next.toString()}`;
   };
-  const header = (
+  const header = showHeader ? (
     <PageHeader
       eyebrow="Pharmacy / source review"
       heading={heading}
       description="Review preserved medicine names, source counts and prices before catalogue or stock approval."
     />
-  );
+  ) : null;
   if ('errorCode' in loaded) {
     return (
       <div className="min-w-0 space-y-6">
