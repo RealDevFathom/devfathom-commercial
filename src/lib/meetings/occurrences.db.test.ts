@@ -74,10 +74,11 @@ let deps: Deps;
 
 type Actor = { id: string; role: 'ADMIN' | 'EMPLOYEE' };
 
-const caller = (db: unknown, actor: Actor) =>
+const caller = (db: unknown, actor: Actor, organizationId: string) =>
   deps.meetingsRouter.createCaller({
     db,
-    session: { user: { id: actor.id, role: actor.role, status: 'ACTIVE' } },
+    session: { user: { id: actor.id, role: actor.role, status: 'ACTIVE', organizationId } },
+    organization: { id: organizationId },
     entitlements: { enabledModules: ['meetings'] },
   } as never);
 
@@ -105,7 +106,7 @@ const createMeeting = (
   }
 ) =>
   deps.withTenantDb(organizationId, (db) =>
-    caller(db, actor).create({
+    caller(db, actor, organizationId).create({
       title: input.title,
       startTime: input.startTime,
       endTime: input.endTime,
@@ -312,7 +313,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
 
     // Daily → monthly. Most future daily slots leave the rule.
     await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).update({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).update({
         id: meeting.id,
         recurrence: 'monthly',
       })
@@ -365,7 +366,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     const movedEnd = new Date(movedStart.getTime() + 45 * MINUTE);
 
     const moved = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).rescheduleOccurrence({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).rescheduleOccurrence({
         occurrenceId: target.id,
         scheduledStart: movedStart,
         scheduledEnd: movedEnd,
@@ -414,7 +415,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     const target = rows[1];
 
     const cancelled = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).cancelOccurrence({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).cancelOccurrence({
         occurrenceId: target.id,
         reason: 'Host away',
       })
@@ -432,7 +433,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
 
     // A second cancel is a race, not a conflict.
     const twice = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).cancelOccurrence({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).cancelOccurrence({
         occurrenceId: target.id,
         reason: null,
       })
@@ -465,7 +466,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     expect(before?.id).toBe(live.id);
 
     await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).cancelOccurrence({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).cancelOccurrence({
         occurrenceId: live.id,
         reason: null,
       })
@@ -495,7 +496,9 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     );
 
     const asMember = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: MEMBER_A, role: 'EMPLOYEE' }).getOccurrences({ meetingId: meeting.id })
+      caller(db, { id: MEMBER_A, role: 'EMPLOYEE' }, ORGANIZATION_A).getOccurrences({
+        meetingId: meeting.id,
+      })
     );
     expect(asMember).toHaveLength(1);
     // A join PATH, carrying the locator and nothing else.
@@ -507,14 +510,16 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     // Same tenant, not on the meeting, not an admin.
     await expect(
       deps.withTenantDb(ORGANIZATION_A, (db) =>
-        caller(db, { id: OUTSIDER_A, role: 'EMPLOYEE' }).getOccurrences({ meetingId: meeting.id })
+        caller(db, { id: OUTSIDER_A, role: 'EMPLOYEE' }, ORGANIZATION_A).getOccurrences({
+          meetingId: meeting.id,
+        })
       )
     ).rejects.toThrow();
 
     // ...and an outsider cannot mutate an instance either.
     await expect(
       deps.withTenantDb(ORGANIZATION_A, (db) =>
-        caller(db, { id: OUTSIDER_A, role: 'EMPLOYEE' }).cancelOccurrence({
+        caller(db, { id: OUTSIDER_A, role: 'EMPLOYEE' }, ORGANIZATION_A).cancelOccurrence({
           occurrenceId: asMember[0].id,
           reason: null,
         })
@@ -552,7 +557,9 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     // empty result is therefore evidence the boundary held; a populated one
     // would mean RLS was off.
     const leaked = await deps.withTenantDb(ORGANIZATION_B, (db) =>
-      caller(db, { id: HOST_B, role: 'ADMIN' }).getOccurrences({ meetingId: meeting.id })
+      caller(db, { id: HOST_B, role: 'ADMIN' }, ORGANIZATION_B).getOccurrences({
+        meetingId: meeting.id,
+      })
     );
     expect(leaked).toEqual([]);
 
@@ -561,7 +568,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     // missing one.
     await expect(
       deps.withTenantDb(ORGANIZATION_B, (db) =>
-        caller(db, { id: HOST_B, role: 'ADMIN' }).cancelOccurrence({
+        caller(db, { id: HOST_B, role: 'ADMIN' }, ORGANIZATION_B).cancelOccurrence({
           occurrenceId: occurrence.id,
           reason: null,
         })
@@ -591,7 +598,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     const [occurrence] = await occurrenceRows(ORGANIZATION_A, meeting.id);
 
     const invite = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: occurrence.id,
         displayName: 'Outside Counsel',
       })
@@ -657,7 +664,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     const [first, second] = rows;
 
     const invite = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: first.id,
         displayName: 'Guest',
       })
@@ -700,7 +707,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     const [occurrence] = await occurrenceRows(ORGANIZATION_A, meeting.id);
 
     const invite = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: occurrence.id,
         displayName: 'Revoked Guest',
       })
@@ -715,7 +722,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     ).toBe(true);
 
     await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).revokeGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).revokeGuestInvitation({
         occurrenceParticipantId: invite.occurrenceParticipantId,
       })
     );
@@ -744,7 +751,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     );
     const [secondOccurrence] = await occurrenceRows(ORGANIZATION_A, second.id);
     const secondInvite = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: secondOccurrence.id,
         displayName: 'Cancelled Guest',
       })
@@ -759,7 +766,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     ).toBe(true);
 
     await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).cancelOccurrence({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).cancelOccurrence({
         occurrenceId: secondOccurrence.id,
         reason: null,
       })
@@ -791,7 +798,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
 
     // An explicit cap SHORTER than the occurrence is honoured.
     const short = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: occurrence.id,
         displayName: 'Short Lived',
         maxTtlMinutes: 5,
@@ -802,7 +809,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     // A cap LONGER than the occurrence is NOT honoured: nothing on this row may
     // outlive the occurrence it belongs to.
     const long = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: occurrence.id,
         displayName: 'Would Outlive',
         maxTtlMinutes: 60 * 24 * 20,
@@ -836,7 +843,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     const [occurrence] = await occurrenceRows(ORGANIZATION_A, meeting.id);
 
     const invite = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: occurrence.id,
         displayName: 'Too Early',
       })
@@ -886,7 +893,7 @@ describeIfDatabase('meeting occurrences, against PostgreSQL', () => {
     const [occurrenceB] = await occurrenceRows(ORGANIZATION_B, meetingB.id);
 
     const inviteA = await deps.withTenantDb(ORGANIZATION_A, (db) =>
-      caller(db, { id: HOST_A, role: 'EMPLOYEE' }).createGuestInvitation({
+      caller(db, { id: HOST_A, role: 'EMPLOYEE' }, ORGANIZATION_A).createGuestInvitation({
         occurrenceId: occurrenceA.id,
         displayName: 'A Guest',
       })
