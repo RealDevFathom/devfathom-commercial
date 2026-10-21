@@ -567,12 +567,12 @@ function NotificationsView(props: NotificationsViewProps) {
                             {timeZoneLabel}
                           </p>
                           {notification.readAt ? (
-                            <p className="mt-1 font-mono text-xs text-text-faint">
+                            <p className="mt-1 font-mono text-xs text-text-muted">
                               Read {formatTimestamp(notification.readAt, timeZone)} · {timeZone}
                             </p>
                           ) : null}
                           {notification.entityType || notification.entityId ? (
-                            <p className="mt-2 font-mono text-xs break-all text-text-faint">
+                            <p className="mt-2 font-mono text-xs break-all text-text-muted">
                               Related: {notification.entityType ?? 'entity'} ·{' '}
                               {notification.entityId ?? '—'}
                             </p>
