@@ -798,7 +798,13 @@ export async function closePharmacyDrawer(
 export async function cutPharmacyDailyClose(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { businessDate: Date; reopenReason?: string; controlledCountHook?: unknown }
+  input: {
+    businessDate: Date;
+    reopenReason?: string;
+    /** The operator's explanation of a counted variance; never stands in for a reopen reason. */
+    varianceNote?: string;
+    controlledCountHook?: unknown;
+  }
 ) {
   await db.$queryRaw(
     Prisma.sql`SELECT pg_advisory_xact_lock(hashtext(${`${scope.organizationId}:${scope.branchId}:${input.businessDate.toISOString().slice(0, 10)}`}))`
@@ -870,7 +876,9 @@ export async function cutPharmacyDailyClose(
       businessDate: input.businessDate,
       sequence: (prior?.sequence ?? 0) + 1,
       supersedesCloseId: prior?.id,
-      reason: input.reopenReason?.trim(),
+      // The row is append-only, so its one reason is written here: the reopen reason when given,
+      // as before, otherwise the variance note.
+      reason: input.reopenReason?.trim() ?? (input.varianceNote?.trim() || undefined),
       ...aggregate,
       isFinal,
       controlledCountHook: input.controlledCountHook as Prisma.InputJsonValue | undefined,
