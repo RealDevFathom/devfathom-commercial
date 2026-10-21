@@ -10,6 +10,7 @@ import { Input } from '@/components/ui/input';
 import { PageHeader } from '@/components/ui/page-header';
 import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
+import { pharmacyActionErrorMessage } from '@/lib/pharmacy/action-error-message';
 import {
   Table,
   TableBody,
@@ -251,12 +252,10 @@ export default async function PharmacyFinancePage({
       throw new Error('Choose a supported action.');
     } catch (error) {
       if (error && typeof error === 'object' && 'digest' in error) throw error;
-      const message =
-        error instanceof Error ? error.message.replaceAll('_', ' ').toLowerCase() : 'Action failed';
       redirect(
         destination(
           branchId || branch.id,
-          `Could not save: ${message}. Review the named fields and try again.`,
+          pharmacyActionErrorMessage('finance', error),
           'error'
         )
       );
