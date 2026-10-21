@@ -36,9 +36,3 @@ INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   '{"values":{"prescription":1825},"provisional":false,"pendingLegalReview":true}'
 )
 ON CONFLICT ("code", "version") DO NOTHING;
-
--- Security (#162): a regulatory profile must name a province. NOT VALID keeps any
--- legacy row from blocking the deploy while enforcing every new/updated row.
-ALTER TABLE "pharmacy_branch_regulatory_profiles"
-  ADD CONSTRAINT "pharmacy_branch_regulatory_profiles_province_nonempty"
-  CHECK (btrim("provinceCode") <> '') NOT VALID;

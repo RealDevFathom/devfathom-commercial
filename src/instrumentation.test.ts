@@ -79,4 +79,23 @@ describe('register', () => {
     exit.mockRestore();
     vi.restoreAllMocks();
   });
+
+  it('exits when APP_ENV is unset on a production server, and starts when it is set', async () => {
+    const exit = vi.spyOn(process, 'exit').mockImplementation(() => {
+      throw new Error('exit');
+    });
+    vi.spyOn(console, 'error').mockImplementation(() => undefined);
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('NEXT_RUNTIME', 'nodejs');
+    vi.stubEnv('NEXT_PHASE', '');
+    vi.stubEnv('APP_ENV', '');
+    await expect(register()).rejects.toThrow('exit');
+    expect(exit).toHaveBeenCalledWith(1);
+    exit.mockClear();
+    vi.stubEnv('APP_ENV', 'staging');
+    await register();
+    expect(exit).not.toHaveBeenCalled();
+    exit.mockRestore();
+    vi.restoreAllMocks();
+  });
 });
