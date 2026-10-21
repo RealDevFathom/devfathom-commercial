@@ -39,6 +39,15 @@ function AskFathomChat({ organizationId }: { organizationId: string }) {
   const panelEpoch = useAssistant((state) => state.panelEpoch);
 
   useEffect(() => {
+    if (settings.isFetchedAfterMount) return;
+    // A stalled transport must finish in a closed, actionable state too.
+    const timeout = window.setTimeout(() => {
+      useAssistant.getState().markUnavailable(organizationId, Date.now());
+    }, 15_000);
+    return () => window.clearTimeout(timeout);
+  }, [organizationId, settings.isFetchedAfterMount]);
+
+  useEffect(() => {
     useAssistant.getState().setOrganization(organizationId);
     return () => {
       useAssistant.getState().setOrganization(null);
@@ -167,7 +176,9 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
   const currentModule = moduleForPath(pathname, entitlements.vertical);
   const moduleEnabled =
     !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
-  const immersive = pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
+  const counterPos = pathname === '/pharmacy/counter';
+  const immersive =
+    counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
   const brandStyle = tenantBrandTokens(brand) as CSSProperties;
 
   useEffect(() => {
@@ -232,9 +243,13 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
         <TopNavigation />
         <main
           data-slot="app-canvas"
-          className="studio-canvas relative min-h-0 flex-1 overflow-y-auto scroll-pt-24"
+          className={cn(
+            'studio-canvas relative min-h-0 flex-1 scroll-pt-24',
+            counterPos ? 'overflow-hidden' : 'overflow-y-auto'
+          )}
         >
           <PageTransition
+            travel={!counterPos}
             className={cn(
               'studio-stage mx-auto w-full',
               immersive

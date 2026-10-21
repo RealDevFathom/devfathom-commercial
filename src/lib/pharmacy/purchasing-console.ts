@@ -20,6 +20,7 @@
  */
 
 import { z } from 'zod';
+import { can, subjectFromSession } from '@/lib/abac';
 import { parseGs1DataMatrix, type Gs1Warning } from './gs1-datamatrix';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
@@ -324,15 +325,33 @@ export async function purchasingWorkspace(
         ...(scope.actorId ? { id: { not: scope.actorId } } : {}),
       },
       orderBy: [{ name: 'asc' }, { id: 'asc' }],
-      select: { id: true, name: true, email: true },
+      select: {
+        id: true,
+        name: true,
+        email: true,
+        organizationRole: {
+          select: { permissions: { select: { capability: true, effect: true } } },
+        },
+        permissionOverrides: {
+          where: { OR: [{ expiresAt: null }, { expiresAt: { gt: at } }] },
+          select: { capability: true, effect: true },
+        },
+      },
     }),
   ]);
 
+  const eligibleApprovers = [];
+  for (const user of approvers) {
+    if (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at })) {
+      eligibleApprovers.push(user);
+    }
+  }
   return {
     branches,
     stockLocations,
     suppliers,
-    approvers,
+    approvers: eligibleApprovers
+      .map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,
       productName: medicine.productName,
@@ -464,7 +483,7 @@ export async function listGoodsReceipts(db: ScopedDb, scope: BranchScope) {
       lines: {
         orderBy: { lineNumber: 'asc' },
         include: {
-          medicine: { select: { id: true, productName: true } },
+          medicine: { select: { id: true, productName: true, controlled: true } },
           packLevel: { select: { id: true, level: true } },
           stockLocation: { select: { id: true, name: true } },
           quarantineLocation: { select: { id: true, name: true } },

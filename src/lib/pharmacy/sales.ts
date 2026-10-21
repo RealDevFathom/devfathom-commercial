@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
@@ -9,6 +9,11 @@ import { checkEnvelope } from './offline-snapshot-envelope';
 import type { OfflineSnapshotEnvelope } from './offline-snapshot-envelope';
 import { checkSafetyLease } from './offline-safety-lease';
 import { SNAPSHOT_SIGNING_KEY_ID, verifySnapshotSignature } from './offline-snapshots';
+import {
+  authorizeControlledRestoration,
+  type ControlledRestorationPin,
+} from './controlled-restoration-authorization';
+import { appendControlledRestorations } from './controlled-register';
 import { allocateForSale, allocateReservedForSale, reverseMovements } from './stock-ledger';
 import type { LedgerScope, ReservedSaleAllocation } from './stock-ledger';
 import { postSaleReturnEntry } from './finance-postings';
@@ -168,6 +173,7 @@ export function validateDiscount(input: {
 async function saleInScope(db: ScopedDb, scope: LedgerScope, saleId: string) {
   const sale = await db.pharmacySale.findFirst({
     where: { id: saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    include: { lines: { include: { medicine: true } } },
   });
   if (!sale) throw new PharmacySaleError('CROSS_BRANCH_REFERENCE');
   return sale;
@@ -365,7 +371,9 @@ export async function changeSaleStatus(
   scope: LedgerScope,
   saleId: string,
   action: 'hold' | 'resume' | 'convertQuotation' | 'complete' | 'void',
-  reason?: string
+  reason?: string,
+  deviceId?: string,
+  controlledWitness?: ControlledRestorationPin
 ) {
   const sale = await saleInScope(db, scope, saleId);
   const transitions = {
@@ -377,6 +385,10 @@ export async function changeSaleStatus(
   } as const;
   const [from, to, kind] = transitions[action];
   if (sale.status !== from) throw new PharmacySaleError('INVALID_STATE');
+  const witness =
+    action === 'void' && sale.lines.some((line) => line.medicine.controlled)
+      ? await authorizeControlledRestoration(db, scope, controlledWitness)
+      : undefined;
   const claimed = await db.pharmacySale.updateMany({
     where: {
       id: saleId,
@@ -398,11 +410,57 @@ export async function changeSaleStatus(
       orderBy: { createdAt: 'asc' },
       select: { stockMovementId: true },
     });
-    await reverseMovements(db, scope, {
+    const reversals = await reverseMovements(db, scope, {
       movementIds: allocations.map((allocation) => allocation.stockMovementId),
       reason: reason ?? 'Sale voided',
       at: new Date(),
     });
+    const movements = await db.pharmacyStockMovement.findMany({
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        id: { in: allocations.map((allocation) => allocation.stockMovementId) },
+      },
+      select: { id: true, quantityUnits: true },
+    });
+    await appendControlledRestorations(db, {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      recordedByUserId: scope.actorId,
+      witness,
+      reason: reason ?? 'Sale voided',
+      lines: movements.map((movement) => ({
+        sourceMovementId: movement.id,
+        restorationMovementId: reversals.find((row) => row.reversesMovementId === movement.id)!.id,
+        quantityCanonicalUnits: -movement.quantityUnits,
+        restoreSellable: true,
+      })),
+    });
+  }
+
+  if (action === 'complete') {
+    const completed = await saleInScope(db, scope, saleId);
+    if (completed.receiptNumber == null) {
+      const receiptDeviceId = deviceId?.trim() || completed.receiptDeviceId || 'counter';
+      const rows = await db.$queryRaw<Array<{ receipt_number: number }>>(Prisma.sql`
+        INSERT INTO pharmacy_receipt_number_sequences (id, "organizationId", "branchId", "deviceId", "nextNumber", "updatedAt")
+        VALUES (${randomUUID()}, ${scope.organizationId}, ${scope.branchId}, ${receiptDeviceId}, 2, now())
+        ON CONFLICT ("organizationId", "branchId", "deviceId")
+        DO UPDATE SET "nextNumber" = pharmacy_receipt_number_sequences."nextNumber" + 1, "updatedAt" = now()
+        RETURNING "nextNumber" - 1 AS receipt_number`);
+      const receiptNumber = rows[0]?.receipt_number;
+      if (!Number.isSafeInteger(receiptNumber) || receiptNumber < 1) {
+        throw new PharmacySaleError('INVALID_STATE');
+      }
+      await db.pharmacySale.update({
+        where: { organizationId_id: { organizationId: scope.organizationId, id: saleId } },
+        data: {
+          receiptNumber,
+          receiptDeviceId,
+          businessDate: completed.businessDate ?? new Date(),
+        },
+      });
+    }
   }
 
   await event(db, scope, saleId, kind, reason);
@@ -550,6 +608,7 @@ export async function returnSaleLine(
   scope: LedgerScope,
   input: {
     saleLineId: string;
+    controlledWitness?: ControlledRestorationPin;
     lotId?: string;
     canonicalUnits: number;
     quarantineLocationId?: string;
@@ -569,16 +628,23 @@ export async function returnSaleLine(
     where: { id: input.saleLineId, organizationId: scope.organizationId, branchId: scope.branchId },
     include: {
       sale: true,
+      medicine: true,
       allocations: { orderBy: { id: 'asc' } },
       returnLines: true,
       unidentifiedReturnHolds: true,
     },
   });
   if (!line || line.sale.status !== 'COMPLETED') throw new PharmacySaleError('NOT_FOUND');
+  const witness = line.medicine.controlled
+    ? await authorizeControlledRestoration(db, scope, input.controlledWitness)
+    : undefined;
   const requestedDisposition = input.disposition ?? 'QUARANTINE';
   const disposition = input.lotId ? requestedDisposition : 'QUARANTINE';
   // Keep legacy request fingerprints stable; never infer physical identity from allocations.
-  const fingerprint = JSON.stringify({ ...input, disposition: requestedDisposition });
+  // Credentials are transient and never become event payloads or replay fingerprints.
+  const { controlledWitness: _pin, ...fingerprintInput } = input;
+  void _pin;
+  const fingerprint = JSON.stringify({ ...fingerprintInput, disposition: requestedDisposition });
   const prior = await db.pharmacySaleEvent.findFirst({
     where: {
       organizationId: scope.organizationId,
@@ -718,6 +784,12 @@ export async function returnSaleLine(
   let remaining = input.canonicalUnits;
   let firstReturnLine: Awaited<ReturnType<typeof db.pharmacySaleReturnLine.create>> | undefined;
   let firstMovement: Awaited<ReturnType<typeof db.pharmacyStockMovement.create>> | undefined;
+  const restorations: Array<{
+    sourceMovementId: string;
+    restorationMovementId: string;
+    quantityCanonicalUnits: number;
+    restoreSellable: boolean;
+  }> = [];
   const consumed = new Map<string, number>();
   for (const row of line.returnLines)
     consumed.set(row.inventoryLotId, (consumed.get(row.inventoryLotId) ?? 0) + row.canonicalUnits);
@@ -787,9 +859,25 @@ export async function returnSaleLine(
     });
     firstReturnLine ??= returnedLine;
     firstMovement ??= movement;
+    if (allocation.stockMovementId) {
+      restorations.push({
+        sourceMovementId: allocation.stockMovementId,
+        restorationMovementId: movement.id,
+        quantityCanonicalUnits: units,
+        restoreSellable: disposition === 'RESTOCK',
+      });
+    }
     remaining -= units;
     if (!remaining) break;
   }
+  await appendControlledRestorations(db, {
+    organizationId: scope.organizationId,
+    branchId: scope.branchId,
+    recordedByUserId: scope.actorId,
+    witness,
+    reason: disposition === 'RESTOCK' ? 'Returned to stock' : 'Returned to quarantine',
+    lines: restorations,
+  });
   if (remaining || !firstReturnLine || !firstMovement)
     throw new PharmacySaleError('INVALID_QUANTITY');
   await event(db, scope, line.saleId, 'RETURNED', input.reason, {

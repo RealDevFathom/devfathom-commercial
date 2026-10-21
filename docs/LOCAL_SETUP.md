@@ -23,6 +23,11 @@ DATABASE_URL=postgresql://devfathom_app:replace-with-local-app-password@localhos
 MIGRATION_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom
 SHADOW_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom_shadow
 
+# Used only by prisma/prepare-extensions.ts (step 3). It must authenticate as a
+# superuser or an extension-object owner. Locally that is the same superuser URL
+# as DATABASE_URL.
+EXTENSION_ADMIN_DATABASE_URL=postgresql://postgres:postgres@localhost:5432/devfathom
+
 AUTH_SECRET=<random-secret>
 AUTH_URL=http://devfathom.localhost:3000
 NEXT_PUBLIC_APP_URL=http://devfathom.localhost:3000
@@ -87,6 +92,7 @@ Both columns must be `f` on the `DATABASE_URL` connection.
 
 ```bash
 bun install --frozen-lockfile
+bun prisma/prepare-extensions.ts
 bunx prisma migrate deploy
 ```
 
@@ -111,6 +117,14 @@ and it sets the platform-admin tenant setting inside its transaction:
 bun run db:seed
 ```
 
+`bun prisma/prepare-extensions.ts` must run **before** `prisma migrate deploy`. The trusted
+`btree_gist` and `pg_trgm` extensions install functions owned by PostgreSQL's extension bootstrap
+role, and that role grants `PUBLIC EXECUTE` on them. The hardening step revokes that grant as the
+extension administrator (`EXTENSION_ADMIN_DATABASE_URL`). Migration
+`20260830120000_btree_gist_public_execute_acl` verifies the revoke and **fails closed** with
+PostgreSQL `P0001` if it was skipped, so `migrate deploy` will stop on a fresh database until this
+step has run. Bun loads `EXTENSION_ADMIN_DATABASE_URL` from `.env.local`; set it as shown above.
+
 The seed creates the local DevFathom organization, platform operator, modules, users, and demo
 data. Platform login uses `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`; tenant login uses
 an email printed by the seed and the `SEED_PASSWORD` value.
@@ -130,6 +144,25 @@ Open:
 - Admin panel: [http://admin.localhost:3000/platform](http://admin.localhost:3000/platform)
 
 Stop the server with `Ctrl+C`. Start it again with `bun run dev`.
+
+### First platform sign-in requires authenticator (MFA) enrollment
+
+The first platform sign-in always enrolls an authenticator, regardless of
+`PLATFORM_MFA_ENFORCE`. At [http://admin.localhost:3000/platform/login](http://admin.localhost:3000/platform/login):
+
+1. Sign in with `PLATFORM_ADMIN_EMAIL` and `PLATFORM_ADMIN_PASSWORD`. Because no
+   authenticator is enrolled yet, the form switches to **Set up authenticator**
+   instead of going straight to `/platform`.
+2. Click **Set up authenticator**. The page shows a **setup key** (a TOTP
+   secret). Add it to any authenticator app (1Password, Google Authenticator,
+   Authy, …) as a manually-entered key.
+3. Enter the **six-digit code** the app generates and click **Verify
+   authenticator**.
+4. Save the one-time **recovery codes** shown after verification, then continue.
+   You land on `/platform`.
+
+On later sign-ins the same login form asks only for a current six-digit code
+from the enrolled authenticator.
 
 ## 5. Verify the setup
 

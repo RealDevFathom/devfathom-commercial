@@ -1,6 +1,6 @@
 import type { Metadata } from 'next';
 import { redirect } from 'next/navigation';
-import { signInRedirectPath } from '@/lib/auth/session-state';
+import { signInRedirectPath, workspaceRedirectForPasswordChange } from '@/lib/auth/session-state';
 import { AppShell } from '@/components/layout/app-shell';
 import { TenantSessionBoundary } from '@/components/tenant-session-boundary';
 import {
@@ -40,6 +40,8 @@ export default async function AppLayout({ children }: { children: React.ReactNod
     const denial = await resolveTenantSessionDenial();
     redirect(denial ? signInRedirectPath(denial) : '/login');
   }
+  const passwordChange = workspaceRedirectForPasswordChange(actor.session.user.mustChangePassword);
+  if (passwordChange) redirect(passwordChange);
   const { entitlements, brand } = await withTenantDb(actor.organization.id, async (db) => {
     const [entitlementSnapshot, organization] = await Promise.all([
       resolveOrganizationEntitlements(actor.organization.id, db),

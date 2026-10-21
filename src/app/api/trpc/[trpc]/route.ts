@@ -21,6 +21,7 @@ import {
 } from '@/lib/tenancy/host';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 import { anonymousToken, classifyAnonymousRequest } from '@/lib/auth/anonymous-access';
 import { organizationForAnonymousToken } from '@/lib/auth/anonymous-tenant';
@@ -405,6 +406,8 @@ async function handler(req: Request) {
       support: actor.support,
     });
   } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
     if (error instanceof TenantHostError) {
       return Response.json({ error: error.message }, { status: error.status });
     }

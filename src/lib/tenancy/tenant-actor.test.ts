@@ -100,6 +100,42 @@ describe('resolveTenantActor', () => {
     expect(mocks.requireOrganizationForRequest).not.toHaveBeenCalled();
   });
 
+  it('rejects an API call while a temporary password is outstanding', async () => {
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+    const blocked = sessionFor({ status: 'ACTIVE', mustChangePassword: true });
+
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://devfathom.localhost:3000/api/upload'),
+        session: blocked,
+      })
+    ).rejects.toMatchObject({ code: 'PASSWORD_CHANGE_REQUIRED', status: 403 });
+    expect(mocks.requireOrganizationForRequest).not.toHaveBeenCalled();
+
+    await expect(
+      resolveTenantActor({
+        request: new Request(
+          'http://devfathom.localhost:3000/api/trpc/team.changePassword?batch=1'
+        ),
+        session: blocked,
+      })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://devfathom.localhost:3000/api/auth/signout', {
+          method: 'POST',
+        }),
+        session: blocked,
+      })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://devfathom.localhost:3000/dashboard'),
+        session: blocked,
+      })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+  });
+
   it('still builds an actor for an ON_LEAVE session', async () => {
     mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
 

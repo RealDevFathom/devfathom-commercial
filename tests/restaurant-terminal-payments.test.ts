@@ -70,18 +70,43 @@ describe('provider-neutral terminal payments', () => {
     expect(() => terminalEventSchema.parse({ ...baseEvent, pan: '4111111111111111' })).toThrow();
   });
 
-  it('authenticates the exact source and raw webhook body with HMAC-SHA256', () => {
+  it('authenticates a timestamp plus the source and raw body, and rejects skew and short digests', () => {
     process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET = 'test-terminal-secret';
     const source = 'provider-neutral';
+    const now = 1_700_000_000_000;
+    const timestamp = String(Math.floor(now / 1000));
     const rawBody = JSON.stringify({ externalEventId: 'event-1', payload: baseEvent });
-    const signature = createHmac('sha256', 'test-terminal-secret')
+    const sign = (at: string, signedSource = source, body = rawBody) =>
+      createHmac('sha256', 'test-terminal-secret')
+        .update(`${at}.${signedSource}.${body}`)
+        .digest('hex');
+    const signature = sign(timestamp);
+    const bodyOnly = createHmac('sha256', 'test-terminal-secret')
       .update(`${source}.${rawBody}`)
       .digest('hex');
+    const edge = String(Number(timestamp) - 5 * 60);
+    const stale = String(Number(timestamp) - 5 * 60 - 1);
+    const future = String(Number(timestamp) + 5 * 60 + 1);
 
-    expect(verifyTerminalSignature(source, rawBody, `sha256=${signature}`)).toBe('VERIFIED');
-    expect(verifyTerminalSignature('other-source', rawBody, signature)).toBe('FAILED');
-    expect(verifyTerminalSignature(source, `${rawBody} `, signature)).toBe('FAILED');
-    expect(verifyTerminalSignature(source, rawBody, 'not-a-signature')).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, `sha256=${signature}`, timestamp, now)).toBe(
+      'VERIFIED'
+    );
+    expect(verifyTerminalSignature('other-source', rawBody, signature, timestamp, now)).toBe(
+      'FAILED'
+    );
+    expect(verifyTerminalSignature(source, `${rawBody} `, signature, timestamp, now)).toBe(
+      'FAILED'
+    );
+    expect(verifyTerminalSignature(source, rawBody, bodyOnly, timestamp, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, signature, null, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, sign(edge), edge, now)).toBe('VERIFIED');
+    expect(verifyTerminalSignature(source, rawBody, sign(stale), stale, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, sign(future), future, now)).toBe('FAILED');
+    expect(() => verifyTerminalSignature(source, rawBody, 'aa', timestamp, now)).not.toThrow();
+    expect(verifyTerminalSignature(source, rawBody, 'aa', timestamp, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, 'not-a-signature', timestamp, now)).toBe(
+      'FAILED'
+    );
   });
 
   it('turns an approved event into the existing CARD tender path exactly once', async () => {

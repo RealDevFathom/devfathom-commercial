@@ -7,7 +7,9 @@ import {
   postGoodsReceipt,
   resolveReceivingException,
   reverseGoodsReceipt,
+  verifyControlledPurchaseWitness,
 } from '@/lib/pharmacy/goods-receipt';
+import { listControlledPinWitnesses } from '@/lib/pharmacy/controlled-register';
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import {
   allocateCentralReceipt,
@@ -892,6 +894,7 @@ const purchasingRouter = router({
             .strict()
             .optional(),
           note: z.string().trim().max(2000).optional(),
+          qualifiedPersonUserId: z.string().trim().min(1).optional(),
           lines: z
             .array(
               z
@@ -1103,6 +1106,7 @@ const purchasingRouter = router({
             bypassApprovedByUserId: input.directPurchase?.approvedByUserId ?? null,
             bypassApprovedAt: input.directPurchase ? new Date() : null,
             note: input.note,
+            qualifiedPersonUserId: input.qualifiedPersonUserId ?? null,
             lines: { create: lines },
           },
           include: { lines: { orderBy: { lineNumber: 'asc' } } },
@@ -1120,21 +1124,61 @@ const purchasingRouter = router({
    * status and the order's move to RECEIVING commit together or not at all.
    */
   postGoodsReceipt: protectedProcedure
-    .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
+    .input(
+      z
+        .object({
+          branchId,
+          goodsReceiptId: z.string().min(1),
+          staffProfileId: z.string().trim().min(1).optional(),
+          pin: z
+            .string()
+            .regex(/^\d{4,8}$/)
+            .optional(),
+        })
+        .strict()
+    )
     .mutation(async ({ ctx, input }) => {
       await assertProcurement(ctx);
       const scope = receivingScope(ctx, input.branchId);
+      // Lockout counters commit even when the PIN is refused. Stock posting is
+      // a second transaction, so a refused PIN never leaves a half-posted receipt.
+      const attempt = await ctx.db.$transaction((tx) =>
+        verifyControlledPurchaseWitness(txDb(tx), scope, {
+          goodsReceiptId: input.goodsReceiptId,
+          staffProfileId: input.staffProfileId,
+          pin: input.pin,
+        })
+      );
+      if ('blocked' in attempt) return attempt;
       try {
         return await ctx.db.$transaction((tx) =>
           postGoodsReceipt(txDb(tx), scope, {
             goodsReceiptId: input.goodsReceiptId,
             at: new Date(),
+            staffProfileId: input.staffProfileId,
+            pin: input.pin,
           })
         );
       } catch (error) {
         domainError(error);
       }
     }),
+
+  /** Qualified people who can enter a PIN when a controlled receipt is posted. */
+  controlledWitnesses: protectedProcedure.query(async ({ ctx }) => {
+    const actorId = ctx.session?.user?.id;
+    if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    const actor = subjectFromSession(ctx.session!.user);
+    if (
+      !(await can(actor, 'pharmacy:safety', undefined, { db: ctx.db })) &&
+      !(await can(actor, 'pharmacy:dispense', undefined, { db: ctx.db }))
+    ) {
+      throw new TRPCError({ code: 'FORBIDDEN' });
+    }
+    const organizationId = ctx.entitlements?.organizationId;
+    if (!organizationId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+    return listControlledPinWitnesses(ctx.db, organizationId, actorId);
+  }),
 
   /**
    * PUR-04: undo a posting with linked compensating movements. Nothing that was

@@ -26,8 +26,10 @@ import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
 import { demoPersonaForUser } from '@/lib/demo/personas';
 import {
   evaluateSessionUser,
+  isPasswordChangeApiExempt,
   isSessionUsable,
   liveDemoAccessExpiry,
+  PasswordChangeRequiredError,
   type SessionDenialKind,
 } from '@/lib/auth/session-state';
 
@@ -185,6 +187,14 @@ async function resolveTenantActorUncached(
     // never loads a page. Audited support sessions keep their own validity model
     // (`getSupportSession` already enforces expiry and revocation).
     if (!isSessionUsable(session.user)) return null;
+    if (
+      session.user.mustChangePassword === true &&
+      options.request &&
+      new URL(options.request.url).pathname.startsWith('/api/') &&
+      !isPasswordChangeApiExempt(options.request)
+    ) {
+      throw new PasswordChangeRequiredError();
+    }
     const organization = await organizationForActor(session.user.organizationId, options.request);
     if (!organization) return null;
     if (organization.isDemo || session.user.demoAccessExpiresAt !== undefined) {

@@ -113,7 +113,13 @@ export function connectedReadRoute(opts: {
       const operator = requireActingOperator(ctx);
       if (!operator.ok) return operator.response;
       if (
-        !(await operatorHasCapability(ctx.db, operator.staffProfileId, opts.capability, new Date()))
+        !(await operatorHasCapability(
+          ctx.db,
+          operator.staffProfileId,
+          opts.capability,
+          new Date(),
+          ctx.device.branchId
+        ))
       ) {
         return forbidden(opts.capability);
       }
@@ -173,11 +179,27 @@ export function connectedMutationRoute<S extends z.ZodTypeAny, R extends boolean
       if (!operator.ok) return operator.response;
 
       const now = new Date();
-      if (!(await operatorHasCapability(ctx.db, operator.staffProfileId, opts.capability, now))) {
+      if (
+        !(await operatorHasCapability(
+          ctx.db,
+          operator.staffProfileId,
+          opts.capability,
+          now,
+          ctx.device.branchId
+        ))
+      ) {
         return forbidden(opts.capability);
       }
       for (const capability of opts.additionalCapabilities ?? []) {
-        if (!(await operatorHasCapability(ctx.db, operator.staffProfileId, capability, now))) {
+        if (
+          !(await operatorHasCapability(
+            ctx.db,
+            operator.staffProfileId,
+            capability,
+            now,
+            ctx.device.branchId
+          ))
+        ) {
           return forbidden(capability);
         }
       }

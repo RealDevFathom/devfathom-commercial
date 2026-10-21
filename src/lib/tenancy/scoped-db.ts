@@ -126,7 +126,14 @@ export async function withTenantDb<T>(
   if (options.skipDrain) return execute();
 
   return bindSideEffects(async (scope) => {
-    const result = await execute(scope);
+    let result: T;
+    try {
+      result = await execute(scope);
+    } finally {
+      // Failure audits also run after rollback; never compete with the owning
+      // transaction for a pool connection or locks held on its actor row.
+      for (const work of scope.afterTransaction) work();
+    }
     if (scope.enqueued) {
       const { drainOrganization } = await import('@/lib/side-effects/drain');
       await drainOrganization(organizationId).catch((error) => {

@@ -69,7 +69,10 @@ export async function createInspectionPack(
       table === 'audit_logs'
         ? ''
         : "AND (to_jsonb(t)->>'branchId' IS NULL OR to_jsonb(t)->>'branchId' = $3)";
-    const query = `SELECT to_jsonb(t) - 'organizationId' AS record FROM "${table}" t WHERE "${timestamp}" >= $1 AND "${timestamp}" <= $2 ${branchPredicate} ORDER BY "${timestamp}", "id"`;
+    const query =
+      name === 'controlled-register'
+        ? `SELECT (to_jsonb(t) - 'organizationId' - 'witnessedByUserId') || jsonb_build_object('witnessName', w."name") AS record FROM "${table}" t LEFT JOIN "users" w ON w."id" = t."witnessedByUserId" AND w."organizationId" = t."organizationId" WHERE t."${timestamp}" >= $1 AND t."${timestamp}" <= $2 AND (to_jsonb(t)->>'branchId' IS NULL OR to_jsonb(t)->>'branchId' = $3) ORDER BY t."${timestamp}", t."id"`
+        : `SELECT to_jsonb(t) - 'organizationId' AS record FROM "${table}" t WHERE "${timestamp}" >= $1 AND "${timestamp}" <= $2 ${branchPredicate} ORDER BY "${timestamp}", "id"`;
     const records =
       table === 'audit_logs'
         ? await db.$queryRawUnsafe<JsonRecord[]>(query, input.from, input.to)
