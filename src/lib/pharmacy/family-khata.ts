@@ -99,7 +99,7 @@ export function calculateKhataHealthSuggestion(
   ];
   const observedChargesMinor = charges.reduce((sum, charge) => sum + charge.amountMinor, 0);
   const base = Math.max(currentLimitMinor, observedChargesMinor);
-  const suggestedLimitMinor = Math.max(0, Math.floor((base * score) / 100 / 100) * 100);
+  const suggestedLimitMinor = Math.max(0, Math.floor((base * score) / 100));
 
   return {
     score,
@@ -490,6 +490,21 @@ export async function dishonourKhataPayment(
     where: { id, organizationId: scope.organizationId, branchId: scope.branchId },
   });
   if (prior) return prior;
+  const originalCollectionLine = await db.financeJournalLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      side: 'DEBIT',
+      accountCode: { in: ['CASH', 'BANK'] },
+      entry: {
+        sourceKind: 'PHARMACY_KHATA_EVENT',
+        sourceId: payment.id,
+        idempotencyKey: `khata-collection:${payment.id}`,
+      },
+    },
+    select: { accountCode: true },
+  });
+  if (!originalCollectionLine) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
   const event = await db.pharmacyKhataEvent.create({
     data: {
       id,
@@ -518,7 +533,7 @@ export async function dishonourKhataPayment(
         branchId: scope.branchId,
       },
       {
-        accountCode: 'CASH',
+        accountCode: originalCollectionLine.accountCode,
         side: 'CREDIT',
         amountMinor: payment.amountMinor,
         branchId: scope.branchId,

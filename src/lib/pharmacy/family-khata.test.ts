@@ -8,6 +8,7 @@ import {
   readKhataBalance,
   readSaleKhataStatement,
   calculateKhataHealthSuggestion,
+  dishonourKhataPayment,
   FamilyKhataError,
   readFamilyMemberDispensing,
   settleFamilyKhata,
@@ -120,6 +121,50 @@ describe('CRM-L02 family privacy and khata settlement', () => {
       data: expect.objectContaining({ accountCode, side: 'DEBIT', amountMinor: 500 }),
     });
   });
+
+  it.each([
+    ['CASH', 'CASH'],
+    ['CARD', 'BANK'],
+    ['BANK_TRANSFER', 'BANK'],
+    ['WALLET', 'BANK'],
+  ] as const)('reverses a dishonoured %s collection from %s', async (_paymentMethod, accountCode) => {
+    const db = {
+      $queryRaw: vi.fn(),
+      financeJournalEntry: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'dishonour-journal' }),
+        findFirstOrThrow: vi.fn().mockResolvedValue({ id: 'dishonour-journal', lines: [] }),
+      },
+      financeJournalLine: {
+        findFirst: vi.fn().mockResolvedValue({ accountCode }),
+        create: vi.fn().mockResolvedValue({}),
+      },
+      pharmacyKhataEvent: {
+        findFirst: vi
+          .fn()
+          .mockResolvedValueOnce({ id: 'payment_a', familyAccountId: 'family_1', amountMinor: 500 })
+          .mockResolvedValueOnce(null),
+        create: vi.fn().mockResolvedValue({ id: 'dishonour:payment_a', amountMinor: 500 }),
+      },
+    };
+
+    await dishonourKhataPayment(db as never, scope, {
+      paymentId: 'payment_a',
+      reason: 'Collection returned',
+      occurredAt: new Date('2026-07-11'),
+    });
+
+    expect(db.financeJournalLine.findFirst).toHaveBeenCalledWith({
+      where: expect.objectContaining({
+        accountCode: { in: ['CASH', 'BANK'] },
+        entry: expect.objectContaining({ sourceId: 'payment_a' }),
+      }),
+      select: { accountCode: true },
+    });
+    expect(db.financeJournalLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ accountCode, side: 'CREDIT', amountMinor: 500 }),
+    });
+  });
 });
 
 describe('CRM-L04 explainable health suggestion', () => {
@@ -159,6 +204,26 @@ describe('CRM-L04 explainable health suggestion', () => {
       metrics: { chargeCount: 1, overdueChargeCount: 0, averageDaysToPay: 10 },
     });
     expect(suggestion.reasons).toContain('Average 10 day(s) to pay');
+  });
+
+  it('keeps a suggestion in minor units instead of rounding it down to whole rupees', () => {
+    const result = calculateKhataHealthSuggestion(
+      [
+        {
+          id: 'charge_minor',
+          kind: 'CHARGE',
+          amountMinor: 10_002,
+          occurredAt: new Date('2026-06-01'),
+          dueAt: new Date('2026-06-15'),
+        },
+      ],
+      0,
+      new Date('2026-06-01'),
+      new Date('2026-06-30')
+    );
+
+    expect(result.score).toBe(88);
+    expect(result.suggestedLimitMinor).toBe(8_801);
   });
 
   it('NEGATIVE: suggestion alone never changes the limit; owner action is required', async () => {
