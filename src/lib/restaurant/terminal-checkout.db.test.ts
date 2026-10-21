@@ -69,6 +69,7 @@ const ctx = {
   orgBBranch: `branch_org_b_${suffix}`,
   branchDay: `branch_d_${suffix}`,
   branchReplay: `branch_r_${suffix}`,
+  branchTax: `branch_t_${suffix}`,
   roleFull: `role_full_${suffix}`,
   roleNone: `role_none_${suffix}`,
   userA: `user_a_${suffix}`,
@@ -85,6 +86,7 @@ const ctx = {
   posB: { deviceId: '', secret: '' },
   posDay: { deviceId: '', secret: '' },
   posReplay: { deviceId: '', secret: '' },
+  posTax: { deviceId: '', secret: '' },
 };
 
 let orderSeq = 0;
@@ -341,12 +343,41 @@ beforeAll(async () => {
     await tx.restaurantBranch.create({ data: { id: ctx.branchB, name: 'B' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchDay, name: 'Day' } });
     await tx.restaurantBranch.create({ data: { id: ctx.branchReplay, name: 'Replay' } });
+    await tx.restaurantBranch.create({ data: { id: ctx.branchTax, name: 'Tax' } });
     await Promise.all([
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchA),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchB),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchDay),
       ensureRestaurantTaxProfile(tx, orgA, ctx.branchReplay),
     ]);
+    // Match the issue's customer-supplied profile without mutating published evidence.
+    const source = await tx.restaurantTaxOfficialSource.findFirstOrThrow();
+    const effectiveFrom = new Date('2026-08-01T00:00:00.000Z');
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        branchId: ctx.branchTax,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom,
+        approvalReference: 'QA-143 customer-supplied fixture',
+        approvedAt: effectiveFrom,
+        publishedAt: effectiveFrom,
+        rules: {
+          create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+            paymentCategory,
+            rate: '0.15',
+            priceMode: 'EXCLUSIVE',
+            ruleCode: `QA143_${paymentCategory}`,
+            officialSourceId: source.id,
+            status: 'PUBLISHED',
+            effectiveFrom,
+            approvedAt: effectiveFrom,
+            approvalReference: 'QA-143 customer-supplied fixture',
+            publishedAt: effectiveFrom,
+          })),
+        },
+      },
+    });
     await tx.restaurantProduct.create({ data: { id: ctx.productA, name: 'Widget' } });
     await tx.restaurantCustomer.create({
       data: { id: ctx.customerA, displayName: 'Delivery Guest' },
@@ -406,7 +437,7 @@ beforeAll(async () => {
         },
       });
       await tx.restaurantBranchAssignment.createMany({
-        data: [ctx.branchB, ctx.branchDay, ctx.branchReplay].map((branchId) => ({
+        data: [ctx.branchB, ctx.branchDay, ctx.branchReplay, ctx.branchTax].map((branchId) => ({
           branchId,
           userId,
         })),
@@ -425,6 +456,7 @@ beforeAll(async () => {
   ctx.posB = await enroll(ctx.branchB, 'posB');
   ctx.posDay = await enroll(ctx.branchDay, 'posDay');
   ctx.posReplay = await enroll(ctx.branchReplay, 'posReplay');
+  ctx.posTax = await enroll(ctx.branchTax, 'posTax');
 });
 
 // Today's UTC business date (branches default to UTC + a 00:00 cutoff).
@@ -710,6 +742,138 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(res.status).toBe(200);
       eqMoney(res.json.expectedCash, '130.01');
       eqMoney(res.json.variance, '0.00');
+    });
+  });
+
+  // QA-143 — on an EXCLUSIVE-tax bill the register summary must disclose tax and a
+  // remaining due that settles the bill, both before any tender and after a partial
+  // one. Before the fix the summary reported the stored pre-tax total with no tax, so
+  // the displayed due undercharged and a later summary read 0.00 due on an OPEN bill.
+  describe('QA-143 open-bill tax disclosure (EXCLUSIVE)', () => {
+    it('discloses tax up front, keeps the true remainder after a partial tender, and settles', async () => {
+      const token = await establishUnlock(ctx.posTax.secret, ctx.staffA, ctx.branchTax);
+
+      const drawer = await call(deps.routes.drawerOpen, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-open'),
+        body: { openingFloat: '0.00' },
+      });
+      expect(drawer.status).toBe(200);
+
+      const { orderId } = await seedOrder(ctx.branchTax, ctx.posTax.deviceId, TODAY, ['970.00']);
+      const cut = await call(deps.routes.bill, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-cut'),
+        body: { orderId, split: { kind: 'NONE' } },
+      });
+      expect(cut.status).toBe(200);
+      const billId = (cut.json.billIds as string[])[0]!;
+
+      // Before any tender: tax (15% of 970) is disclosed and the due is the tax-inclusive
+      // total — not the bare 970.00 menu price the bill stores.
+      const readSummary = async () => {
+        const res = await call(deps.routes.summary, {
+          method: 'GET',
+          secret: ctx.posTax.secret,
+          session: token,
+          query: { orderId },
+        });
+        expect(res.status, JSON.stringify(res.json)).toBe(200);
+        return res.json;
+      };
+      const before = await readSummary();
+      const billBefore = (before.bills as Record<string, unknown>[])[0]!;
+      eqMoney(billBefore.grandTotal, '1115.50');
+      eqMoney(billBefore.taxTotal, '145.50');
+      eqMoney(billBefore.remainingDue, '1115.50');
+      expect(before.settled).toBe(false);
+
+      // Partial cash tender of the menu price (970) leaves the 145.50 tax remainder.
+      const partial = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-partial'),
+        body: {
+          billId,
+          tender: { type: 'CASH', amount: '970.00', cashReceived: '5000.00' },
+        },
+      });
+      expect(partial.status, JSON.stringify(partial.json)).toBe(200);
+      expect(partial.json.settled).toBe(false);
+      eqMoney(partial.json.changeGiven, '4030.00');
+      eqMoney(partial.json.remainingDue, '145.50');
+
+      // The summary after the partial must show the true 145.50 remainder on the still
+      // OPEN bill — never 0.00 due with a BILLS_OPEN blocker (the reported defect).
+      const after = await readSummary();
+      const billAfter = (after.bills as Record<string, unknown>[])[0]!;
+      expect(billAfter.status).toBe('OPEN');
+      eqMoney(billAfter.taxTotal, '145.50');
+      eqMoney(billAfter.remainingDue, '145.50');
+      expect(after.settled).toBe(false);
+      expect(after.blocker).toBe('BILLS_OPEN');
+
+      // Tendering exactly the displayed remainder settles the bill and issues a receipt.
+      const settle = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-settle'),
+        body: {
+          billId,
+          tender: { type: 'CASH', amount: '145.50', cashReceived: '200.00' },
+        },
+      });
+      expect(settle.status, JSON.stringify(settle.json)).toBe(200);
+      expect(settle.json.settled).toBe(true);
+      expect(typeof settle.json.receiptNumber).toBe('number');
+      eqMoney(settle.json.remainingDue, '0.00');
+      const settled = await readSummary();
+      expect(settled.settled).toBe(true);
+      expect((settled.bills as Record<string, unknown>[])[0]).toMatchObject({
+        status: 'SETTLED',
+        taxTotal: '145.50',
+        grandTotal: '1115.50',
+        remainingDue: '0.00',
+      });
+
+      const cardOrder = await seedOrder(
+        ctx.branchTax,
+        ctx.posTax.deviceId,
+        TODAY,
+        ['120.00'],
+        'TAKEAWAY'
+      );
+      const cardBill = await call(deps.routes.bill, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-card-cut'),
+        body: { orderId: cardOrder.orderId, split: { kind: 'NONE' } },
+      });
+      expect(cardBill.status).toBe(200);
+      const cardSummary = await call(deps.routes.summary, {
+        method: 'GET',
+        secret: ctx.posTax.secret,
+        session: token,
+        query: { orderId: cardOrder.orderId },
+      });
+      expect(cardSummary.status).toBe(200);
+      const quotedCardBill = (cardSummary.json.bills as Record<string, unknown>[])[0]!;
+      eqMoney(quotedCardBill.taxTotal, '18.00');
+      eqMoney(quotedCardBill.remainingDue, '138.00');
+      const cardTender = await call(deps.routes.tender, {
+        secret: ctx.posTax.secret,
+        session: token,
+        key: uniqueKey('qa143-card'),
+        body: {
+          billId: (cardBill.json.billIds as string[])[0],
+          tender: { type: 'CARD', amount: quotedCardBill.remainingDue, tipAmount: '20.00' },
+        },
+      });
+      expect(cardTender.status, JSON.stringify(cardTender.json)).toBe(200);
+      expect(cardTender.json.settled).toBe(true);
+      eqMoney(cardTender.json.remainingDue, '0.00');
     });
   });
 

@@ -1602,6 +1602,8 @@ export type OrderSettlement = {
     deliveryFeeTotal: Prisma.Decimal;
     compTotal: Prisma.Decimal;
     discountTotal: Prisma.Decimal;
+    /** Frozen tax on a SETTLED bill; 0 on an OPEN bill until a tender freezes it. */
+    taxTotal: Prisma.Decimal;
     /** Recorded balance; comps/discounts are already included in grandTotal. */
     remainingDue: Prisma.Decimal;
     receiptNumber: number | null;
@@ -1647,6 +1649,7 @@ export async function evaluateOrderSettlement(
       deliveryFeeTotal: true,
       compTotal: true,
       discountTotal: true,
+      taxTotal: true,
       receiptNumber: true,
       lines: { select: { orderItemId: true } },
       tenders: { select: { amount: true } },
@@ -1674,6 +1677,7 @@ export async function evaluateOrderSettlement(
     deliveryFeeTotal: b.deliveryFeeTotal,
     compTotal: b.compTotal,
     discountTotal: b.discountTotal,
+    taxTotal: b.taxTotal,
     remainingDue:
       b.status === 'SETTLED' ? ZERO : sub(b.grandTotal, sum(b.tenders.map((t) => t.amount))),
     receiptNumber: b.receiptNumber,
