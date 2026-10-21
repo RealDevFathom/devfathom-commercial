@@ -52,14 +52,40 @@ export const layout = {
   hairline: palette.paper200,
 } as const;
 
+// Safe fallback when the configured URL is missing or not a usable web URL.
+const DEFAULT_APP_URL = 'https://dev-fathom-hub.vercel.app';
+
 // The app's public base URL, used to build deep links and load the logo.
 export function appUrl(): string {
-  return (
+  const configuredUrl = (
     process.env.NEXT_PUBLIC_APP_URL ??
     process.env.NEXTAUTH_URL ??
     process.env.AUTH_URL ??
-    'https://dev-fathom-hub.vercel.app'
+    DEFAULT_APP_URL
   ).replace(/\/$/, '');
+
+  // Fail closed: only parseable http(s) URLs are honoured. Anything else — an
+  // unparseable value or a non-web scheme (javascript:, data:, file:, ftp:,
+  // mailto:, protocol-relative //host, …) — falls back to the safe default so
+  // we never embed a dangerous scheme in an email link.
+  let parsed: URL;
+  try {
+    parsed = new URL(configuredUrl);
+  } catch {
+    return DEFAULT_APP_URL;
+  }
+
+  if (parsed.protocol !== 'http:' && parsed.protocol !== 'https:') {
+    return DEFAULT_APP_URL;
+  }
+
+  if (parsed.protocol === 'https:') return configuredUrl;
+
+  const hostname = parsed.hostname.toLowerCase();
+  const isDevelopmentHost =
+    hostname === 'localhost' || hostname === 'lvh.me' || hostname.endsWith('.localhost');
+
+  return isDevelopmentHost ? configuredUrl : configuredUrl.replace(/^http:/, 'https:');
 }
 
 // Hosted logo mark (the chevron on an Abyss tile). Overridable via env so it can

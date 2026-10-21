@@ -86,7 +86,7 @@ beforeEach(() => {
 describe('pharmacySales.addLine controlled actor', () => {
   it('denies a cashier before the witness PIN and writes no register row', async () => {
     const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy.counter', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -97,7 +97,7 @@ describe('pharmacySales.addLine controlled actor', () => {
 
   it('honors an explicit ABAC deny even when the role grants dispense', async () => {
     const { caller, credential, register } = callerFor([
-      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
       { capability: 'pharmacy:dispense', effect: 'DENY' },
     ]);
     await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -107,7 +107,7 @@ describe('pharmacySales.addLine controlled actor', () => {
 
   it('lets a pharmacist past the actor check', async () => {
     const { caller, credential } = callerFor([
-      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
     ]);
     const { controlledAuthorization, ...plain } = line;
     void controlledAuthorization;
