@@ -755,20 +755,51 @@ export function demoRestaurantApproverUserId(seatNumber: number): string {
 }
 
 const ORGANIZATION_SLUG_TAKEN = 'That organization slug is already taken.';
+const ORGANIZATION_SLUG_CONSTRAINTS = new Set(['slug', 'organizations_slug_key']);
+
+function pushConstraintName(names: string[], value: unknown) {
+  if (typeof value === 'string' && value.length > 0) names.push(value);
+}
+
+/**
+ * Names Prisma puts on a unique violation: meta.target, a top-level constraint,
+ * or the driver adapter's constraint index / fields. The message text is not a
+ * source — it can mention a constraint the structured target does not name.
+ */
+function constraintNames(meta: unknown): string[] {
+  if (!meta || typeof meta !== 'object') return [];
+  const record = meta as Record<string, unknown>;
+  const names: string[] = [];
+  const target = record.target;
+  if (Array.isArray(target)) {
+    for (const field of target) pushConstraintName(names, field);
+  } else {
+    pushConstraintName(names, target);
+  }
+  const constraint = record.constraint;
+  if (constraint && typeof constraint === 'object') {
+    const structured = constraint as Record<string, unknown>;
+    pushConstraintName(names, structured.index);
+    pushConstraintName(names, structured.name);
+    if (Array.isArray(structured.fields)) {
+      for (const field of structured.fields) pushConstraintName(names, field);
+    }
+  } else {
+    pushConstraintName(names, constraint);
+  }
+  const adapter = record.driverAdapterError;
+  if (adapter && typeof adapter === 'object') {
+    names.push(...constraintNames((adapter as Record<string, unknown>).cause));
+  }
+  return names;
+}
 
 /** Prisma names the organizations.slug unique index either as the column or the index. */
 function isOrganizationSlugConflict(error: unknown): boolean {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
     return false;
   }
-  const target = error.meta?.target;
-  const fields = Array.isArray(target)
-    ? target.map((field) => String(field))
-    : typeof target === 'string'
-      ? [target]
-      : [];
-  if (fields.some((field) => field === 'slug' || field === 'organizations_slug_key')) return true;
-  return error.message.includes('(`slug`)') || error.message.includes('organizations_slug_key');
+  return constraintNames(error.meta).some((name) => ORGANIZATION_SLUG_CONSTRAINTS.has(name));
 }
 
 /**

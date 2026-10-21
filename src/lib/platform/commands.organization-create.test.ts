@@ -197,6 +197,82 @@ describe('organization.create duplicate slug', () => {
     expect(error).toMatchObject({ code: 'P2002' });
     expect(error).not.toBeInstanceOf(PlatformSecurityError);
   });
+
+  it('maps the Prisma driver-adapter slug constraint to a conflict', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the constraint: `organizations_slug_key`',
+        {
+          code: 'P2002',
+          clientVersion: '7.9.1',
+          meta: {
+            modelName: 'Organization',
+            driverAdapterError: {
+              cause: {
+                originalCode: '23505',
+                originalMessage:
+                  'duplicate key value violates unique constraint "organizations_slug_key"',
+                kind: 'UniqueConstraintViolation',
+                constraint: { index: 'organizations_slug_key' },
+                table: 'organizations',
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'That organization slug is already taken.',
+    });
+    expect(platformDb.organizationRole.create).not.toHaveBeenCalled();
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it('does not treat a slug mentioned only in the error message as a slug conflict', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the constraint: `organizations_slug_key`',
+        {
+          code: 'P2002',
+          clientVersion: '7.9.1',
+          meta: {
+            modelName: 'Organization',
+            driverAdapterError: {
+              cause: {
+                originalCode: '23505',
+                originalMessage:
+                  'duplicate key value violates unique constraint "organizations_slug_key"',
+                kind: 'UniqueConstraintViolation',
+                constraint: { index: 'organizations_pkey' },
+                table: 'organizations',
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).toMatchObject({ code: 'P2002' });
+    expect(error).not.toBeInstanceOf(PlatformSecurityError);
+  });
 });
 
 describe('organization.create package seat fallback', () => {
