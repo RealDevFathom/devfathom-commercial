@@ -187,7 +187,7 @@ export const organizationAdminRouter = router({
         primaryContactName: true,
         primaryContactEmail: true,
         activatedAt: true,
-        package: { select: { name: true } },
+        packageId: true,
         brand: true,
         emailSettings: {
           select: {
@@ -258,6 +258,16 @@ export const organizationAdminRouter = router({
       },
     });
     if (!organization) throw new TRPCError({ code: 'NOT_FOUND' });
+    // Package catalog rows are control-plane-only under RLS. Use only the
+    // package assigned to this session's organization, and expose its name.
+    const assignedPackage = organization.packageId
+      ? await withPlatformDb((db) =>
+          db.platformPackage.findUnique({
+            where: { id: organization.packageId! },
+            select: { name: true },
+          })
+        )
+      : null;
     const pharmacyBranches = await ctx.db.pharmacyBranch.findMany({
       where: { organizationId: id, active: true },
       select: { id: true, name: true, code: true },
@@ -267,6 +277,7 @@ export const organizationAdminRouter = router({
       pharmacyBranches,
       organization: {
         ...organization,
+        package: assignedPackage,
         emailSettings: organization.emailSettings
           ? {
               ...organization.emailSettings,
