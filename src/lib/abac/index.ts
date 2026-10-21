@@ -55,6 +55,7 @@ async function customDecision(
   const user = await db.user.findUnique({
     where: { id: userId },
     select: {
+      role: true,
       organizationRole: {
         select: { permissions: { select: { capability: true, effect: true } } },
       },
@@ -75,6 +76,9 @@ async function customDecision(
   if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
   if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  // Legacy tenant administrators without a custom role retain purchasing only.
+  if (!user.organizationRole && user.role === 'ADMIN' && action === 'pharmacy:procurement')
+    return true;
   return null;
 }
 

@@ -1,6 +1,6 @@
-import { describe, expect, it } from 'vitest';
+import { describe, expect, it, vi } from 'vitest';
 
-import { procurementCapabilityGranted } from './procurement-access';
+import { actorCanProcure, procurementCapabilityGranted } from './procurement-access';
 
 describe('procurementCapabilityGranted', () => {
   it('allows the procurement capability and refuses a cashier', () => {
@@ -36,3 +36,28 @@ describe('procurementCapabilityGranted', () => {
     ).toBe(false);
   });
 });
+
+it('grants Goods-in to role-less ADMIN but respects an explicit denial', () => {
+  expect(procurementCapabilityGranted({ overrides: [], role: [], rolelessAdmin: true })).toBe(true);
+  expect(
+    procurementCapabilityGranted({
+      overrides: [{ capability: '*', effect: 'DENY' }],
+      role: [],
+      rolelessAdmin: true,
+    })
+  ).toBe(false);
+});
+
+it.each(['ADMIN', 'EMPLOYEE'])(
+  'derives role-less Goods-in access from the persisted %s role',
+  async (role) => {
+    const db = {
+      user: {
+        findUnique: vi
+          .fn()
+          .mockResolvedValue({ role, organizationRole: null, permissionOverrides: [] }),
+      },
+    };
+    await expect(actorCanProcure(db as never, 'actor')).resolves.toBe(role === 'ADMIN');
+  }
+);

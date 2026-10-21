@@ -10,6 +10,7 @@ import { ALL_ACTIONS, POLICIES, type Action } from './policies';
 type Permission = { capability: string; effect: 'ALLOW' | 'DENY' };
 
 function authorizationDb(options: {
+  role?: string;
   overrides?: Permission[];
   rolePermissions?: Permission[];
   throws?: boolean;
@@ -19,6 +20,7 @@ function authorizationDb(options: {
       findUnique: options.throws
         ? vi.fn().mockRejectedValue(new Error('database unavailable'))
         : vi.fn().mockResolvedValue({
+            role: options.role ?? 'EMPLOYEE',
             organizationRole: options.rolePermissions
               ? { permissions: options.rolePermissions }
               : null,
@@ -354,3 +356,37 @@ it.each(['pharmacy.safety', 'pharmacy.catalogue-review', 'pharmacy.procurement.e
     }
   }
 );
+
+it('preserves Manager procurement without clinical access', async () => {
+  const manager = roleTemplatesForVertical('PHARMACY').find((role) => role.key === 'manager')!;
+  expect(manager.capabilities).toContain('pharmacy:procurement');
+  const db = authorizationDb({
+    rolePermissions: manager.capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+  });
+  await expect(can(employee, 'pharmacy:procurement', undefined, { db })).resolves.toBe(true);
+  for (const action of clinicalActions)
+    await expect(can(employee, action, undefined, { db })).resolves.toBe(false);
+});
+it('preserves role-less ADMIN procurement, respects denials and does not grant clinical access', async () => {
+  const admin = { ...employee, role: 'ADMIN' };
+  await expect(
+    can(admin, 'pharmacy:procurement', undefined, { db: authorizationDb({ role: 'ADMIN' }) })
+  ).resolves.toBe(true);
+  await expect(
+    can(admin, 'pharmacy:procurement', undefined, {
+      db: authorizationDb({
+        role: 'ADMIN',
+        overrides: [{ capability: 'pharmacy:*', effect: 'DENY' }],
+      }),
+    })
+  ).resolves.toBe(false);
+  await expect(
+    can(admin, 'pharmacy:procurement', undefined, {
+      db: authorizationDb({ role: 'ADMIN', rolePermissions: [] }),
+    })
+  ).resolves.toBe(false);
+  for (const action of clinicalActions)
+    await expect(
+      can(admin, action, undefined, { db: authorizationDb({ role: 'ADMIN' }) })
+    ).resolves.toBe(false);
+});

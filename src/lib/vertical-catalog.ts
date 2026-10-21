@@ -728,6 +728,7 @@ export const PHARMACY_CAPABILITIES: readonly string[] = [
   'pharmacy.manage',
   'pharmacy.counter',
   'pharmacy.procurement',
+  'pharmacy:procurement',
   'pharmacy.inventory',
   'pharmacy.finance',
   'pharmacy.audit',
@@ -772,7 +773,7 @@ export const PHARMACY_ROLE_TEMPLATES: readonly RoleTemplate[] = [
     key: 'manager',
     name: 'Manager',
     isSystem: true,
-    capabilities: ['pharmacy.manage', 'pharmacy:orders'],
+    capabilities: ['pharmacy.manage', 'pharmacy:orders', 'pharmacy:procurement'],
   },
   {
     key: 'cashier',
