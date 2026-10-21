@@ -9,7 +9,7 @@ import { join } from 'node:path';
 
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 
-import { runMigrationSql, splitSqlStatements } from './split-sql-statements';
+import { splitSqlStatements } from './split-sql-statements';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 if (databaseUrl) process.env.DATABASE_URL = databaseUrl;
@@ -112,23 +112,15 @@ describeIfDatabase('pharmacy branch assignment backfill as the migrator', () => 
       'SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user'
     );
     expect(role).toEqual({ rolsuper: false, rolbypassrls: false });
-    expect(splitSqlStatements(sql)).toHaveLength(3);
+    expect(splitSqlStatements(sql)).toHaveLength(5);
 
     await seedOrg({ id: orgA, status: 'ACTIVE', userStatus: 'ACTIVE', withBranch: true });
     await seedOrg({ id: orgB, status: 'ACTIVE', userStatus: 'ACTIVE', withBranch: true });
     await seedOrg({ id: orgIdle, status: 'ACTIVE', userStatus: 'INACTIVE', withBranch: true });
 
-    const apply = () =>
-      db.$transaction(
-        async (tx) => {
-          await tx.$queryRawUnsafe(
-            `SELECT set_config('app.is_platform_admin', 'false', true),
-                    set_config('app.current_organization_id', '', true)`
-          );
-          await runMigrationSql(tx, sql);
-        },
-        { timeout: 60_000 }
-      );
+    // Exercise the migration's own transaction. Without BEGIN/COMMIT the
+    // transaction-local platform flag expires before the RLS-protected INSERT.
+    const apply = () => db.$executeRawUnsafe(sql);
 
     await apply();
     await apply();
@@ -140,7 +132,7 @@ describeIfDatabase('pharmacy branch assignment backfill as the migrator', () => 
 
   it('raises when an active pharmacy organization with eligible members has no assignments', async () => {
     await seedOrg({ id: orgGap, status: 'ACTIVE', userStatus: 'ACTIVE', withBranch: true });
-    const guard = splitSqlStatements(sql).at(-1);
+    const guard = splitSqlStatements(sql).at(-2);
     expect(guard).toContain('RAISE EXCEPTION');
     await expect(
       db.$transaction(async (tx) => {

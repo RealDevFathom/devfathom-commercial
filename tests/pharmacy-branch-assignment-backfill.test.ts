@@ -4,6 +4,7 @@ import { join } from 'node:path';
 import { describe, expect, it } from 'vitest';
 
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
+import { splitSqlStatements } from './split-sql-statements';
 
 const sql = readFileSync(
   join(
@@ -18,6 +19,16 @@ const original = readFileSync(
 );
 
 describe('pharmacy branch assignment backfill', () => {
+  it('keeps the transaction-local platform scope and backfill in one atomic migration', () => {
+    const statements = splitSqlStatements(sql).map((statement) =>
+      statement.replace(/^(?:\s*--[^\n]*\n)+/, '').trim()
+    );
+
+    expect(statements[0]).toBe('BEGIN');
+    expect(statements[1]).toBe("SELECT set_config('app.is_platform_admin', 'true', true)");
+    expect(statements.at(-1)).toBe('COMMIT');
+  });
+
   it('assigns every pharmacy role template and pharmacy capability inside pharmacy organizations only', () => {
     expect(sql).toContain(`o."vertical" = 'PHARMACY'`);
     expect(sql).toContain(`u."status" IN ('ACTIVE'::"UserStatus", 'ON_LEAVE'::"UserStatus")`);
