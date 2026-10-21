@@ -36,10 +36,12 @@ vi.mock('@/lib/pharmacy/sales', async (original) => ({
   createSale: vi.fn(),
   addSaleLine: vi.fn(),
   changeSaleStatus: vi.fn(),
+  returnSaleLine: vi.fn(async () => ({ returnId: 'return-a' })),
 }));
 vi.mock('@/lib/pharmacy/settlement', async (original) => ({
   ...(await original<typeof import('@/lib/pharmacy/settlement')>()),
   applyPharmacyTender: vi.fn(async () => ({ tenderId: 'tender-1' })),
+  refundPharmacyTender: vi.fn(async () => ({ refundId: 'refund-a' })),
 }));
 vi.mock('@/lib/pharmacy/dispensing-label-source', () => ({
   readDispensingLabelSources: vi.fn(async () => []),
@@ -72,8 +74,9 @@ import {
   changeSaleStatus,
   createSale,
   readReturnHistory,
+  returnSaleLine,
 } from '@/lib/pharmacy/sales';
-import { applyPharmacyTender } from '@/lib/pharmacy/settlement';
+import { applyPharmacyTender, refundPharmacyTender } from '@/lib/pharmacy/settlement';
 import {
   buildPharmacyReceiptEscPosJob,
   readPharmacyReceiptFormat,
@@ -132,6 +135,9 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
         },
       ]),
     },
+    pharmacyTender: {
+      findFirst: vi.fn(async () => ({ type: 'CASH' })),
+    },
     medicine: { findFirst: vi.fn(async () => ({ controlled: false })) },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
     $transaction: vi.fn(),
@@ -183,6 +189,39 @@ beforeEach(() => {
 });
 
 type Caller = ReturnType<ReturnType<typeof fixture>['caller']>;
+
+const reversalPaths = [
+  {
+    name: 'refund',
+    run: (caller: Caller) =>
+      caller.refundTender({
+        branchId: 'branch-a',
+        originalTenderId: 'tender-a',
+        deviceId: 'device-a',
+        businessDate: new Date('2026-10-01T00:00:00.000Z'),
+        amountMinor: 100,
+        reason: 'Customer request',
+        idempotencyKey: 'refund-a',
+      }),
+    operation: refundPharmacyTender,
+    result: { refundId: 'refund-a' },
+  },
+  {
+    name: 'sale-line return',
+    run: (caller: Caller) =>
+      caller.returnLine({
+        branchId: 'branch-a',
+        saleLineId: 'line-a',
+        canonicalUnits: 1,
+        disposition: 'QUARANTINE',
+        reason: 'Customer request',
+        integrityDecision: 'Seal intact',
+        idempotencyKey: 'return-a',
+      }),
+    operation: returnSaleLine,
+    result: { returnId: 'return-a' },
+  },
+] as const;
 
 const paths: {
   name: string;
@@ -358,6 +397,59 @@ describe('counter receipt authorization', () => {
       undefined,
       undefined,
       undefined
+    );
+  });
+
+  it.each(
+    reversalPaths.flatMap((path) => (['role', 'user'] as const).map((source) => ({ path, source })))
+  )(
+    'denies a $path.name when a $source rule explicitly denies receipt access, even for an administrator',
+    async ({ path, source }) => {
+      const denied = [{ capability: 'pharmacy:receipt', effect: 'DENY' as const }];
+      const f = fixture(source === 'role' ? denied : dispense, 'ADMIN');
+      assign(f, ['branch-a']);
+      if (source === 'user') {
+        f.db.user.findUnique.mockResolvedValue({
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+          organizationRole: { permissions: dispense },
+          permissionOverrides: denied,
+        });
+      }
+
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(path.operation).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(reversalPaths)(
+    'gates a $name for an employee without counter capability',
+    async (path) => {
+      const f = fixture([]);
+      assign(f, ['branch-a']);
+
+      await expect(path.run(f.caller())).rejects.toMatchObject({
+        code: 'FORBIDDEN',
+        message: 'You do not have permission for this action.',
+      });
+      expect(path.operation).not.toHaveBeenCalled();
+      expect(f.db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(reversalPaths)('lets an assigned dispenser perform a $name', async (path) => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+
+    await expect(path.run(f.caller())).resolves.toMatchObject(path.result);
+    expect(path.operation).toHaveBeenCalledWith(
+      f.db,
+      { organizationId: 'org-a', branchId: 'branch-a', actorId: 'user-a' },
+      expect.objectContaining({ branchId: 'branch-a' })
     );
   });
 
