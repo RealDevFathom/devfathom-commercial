@@ -230,4 +230,27 @@ describe('clientIp', () => {
     expect(clientIp(req, { CLIENT_IP_HEADER: 'cf-connecting-ip' })).toBe('203.0.113.9');
     expect(clientIp(req, { CLIENT_IP_HEADER: 'x-real-ip' })).toBe('198.51.100.20');
   });
+
+  it('writes IPv6 in standard form, unwraps IPv4-mapped addresses, and keys IPv6 by /64', () => {
+    const env = { NODE_ENV: 'development' as const };
+    expect(clientIp(request({ 'x-forwarded-for': '2001:DB8:0:0:1:2:3:4' }), env)).toBe(
+      '2001:db8::'
+    );
+    expect(clientIp(request({ 'x-forwarded-for': '2001:db8::1:2:3:4' }), env)).toBe('2001:db8::');
+    expect(clientIp(request({ 'x-forwarded-for': '2001:db8:1:2::aaaa' }), env)).toBe(
+      '2001:db8:1:2::'
+    );
+    expect(clientIp(request({ 'x-forwarded-for': '2001:db8:1:2:ffff:ffff:ffff:ffff' }), env)).toBe(
+      '2001:db8:1:2::'
+    );
+    expect(clientIp(request({ 'x-forwarded-for': '::ffff:203.0.113.10' }), env)).toBe(
+      '203.0.113.10'
+    );
+    expect(clientIp(request({ 'x-forwarded-for': '::FFFF:7f00:1' }), env)).toBe('127.0.0.1');
+
+    const proxied = request({ 'x-forwarded-for': '2001:db8:1:2::5, 2001:db8:9:9::1' });
+    expect(clientIp(proxied, { TRUSTED_PROXY_CIDRS: '2001:db8:9:9::1/128' })).toBe(
+      '2001:db8:1:2::'
+    );
+  });
 });

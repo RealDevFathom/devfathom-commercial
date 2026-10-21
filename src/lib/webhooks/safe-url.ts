@@ -28,6 +28,7 @@ for (const [addr, bits] of [
   ['127.0.0.0', 8],
   ['169.254.0.0', 16],
   ['172.16.0.0', 12],
+  ['192.0.0.0', 24],
   ['192.0.2.0', 24],
   ['192.168.0.0', 16],
   ['198.18.0.0', 15],
@@ -42,6 +43,7 @@ blocked.addAddress('::', 'ipv6');
 blocked.addAddress('::1', 'ipv6');
 blocked.addSubnet('::', 96, 'ipv6');
 blocked.addSubnet('64:ff9b::', 96, 'ipv6');
+blocked.addSubnet('64:ff9b:1::', 48, 'ipv6');
 blocked.addSubnet('2002::', 16, 'ipv6');
 blocked.addSubnet('fc00::', 7, 'ipv6');
 blocked.addSubnet('fe80::', 10, 'ipv6');

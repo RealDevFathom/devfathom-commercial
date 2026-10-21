@@ -3,8 +3,10 @@
  *
  * PostgreSQL skips row level security, including FORCE ROW LEVEL SECURITY, for
  * roles with rolsuper or rolbypassrls. A startup check that only reads
- * current_setting('is_superuser') misses BYPASSRLS. This reads both attributes
- * from pg_roles and fails closed when they cannot be proven unset.
+ * current_setting('is_superuser') misses BYPASSRLS. Membership in such a role
+ * also lets the session SET ROLE to it. This reads both attributes from
+ * pg_roles, rejects membership in any other SUPERUSER or BYPASSRLS role, and
+ * fails closed when they cannot be proven unset.
  */
 
 export class RlsRoleError extends Error {
@@ -16,7 +18,11 @@ export class RlsRoleError extends Error {
 
 type RoleQuery = (sql: string) => Promise<unknown>;
 
-type RoleAttributes = { rolsuper?: unknown; rolbypassrls?: unknown };
+type RoleAttributes = {
+  rolsuper?: unknown;
+  rolbypassrls?: unknown;
+  member_of_bypass?: unknown;
+};
 
 function flag(value: unknown): boolean | null {
   if (value === true || value === 1 || value === 't' || value === 'true') return true;
@@ -33,7 +39,14 @@ export async function assertRlsEnforcingRole(query: RoleQuery): Promise<void> {
   let rows: unknown;
   try {
     rows = await query(
-      `SELECT rolsuper, rolbypassrls FROM pg_roles WHERE rolname = current_user`
+      `SELECT rolsuper, rolbypassrls,
+              EXISTS (
+                SELECT 1 FROM pg_roles r
+                WHERE r.rolname <> current_user
+                  AND (r.rolsuper OR r.rolbypassrls)
+                  AND pg_has_role(current_user, r.oid, 'member')
+              ) AS member_of_bypass
+       FROM pg_roles WHERE rolname = current_user`
     );
   } catch {
     throw new RlsRoleError(
@@ -50,7 +63,8 @@ export async function assertRlsEnforcingRole(query: RoleQuery): Promise<void> {
 
   const rolsuper = flag(role.rolsuper);
   const rolbypassrls = flag(role.rolbypassrls);
-  if (rolsuper === null || rolbypassrls === null) {
+  const memberOfBypass = flag(role.member_of_bypass);
+  if (rolsuper === null || rolbypassrls === null || memberOfBypass === null) {
     throw new RlsRoleError(
       'Refusing to start: the database role attributes needed for row level security were unreadable.'
     );
@@ -63,6 +77,13 @@ export async function assertRlsEnforcingRole(query: RoleQuery): Promise<void> {
     throw new RlsRoleError(
       `Refusing to start: DATABASE_URL connects as a role holding ${bypassing.join(' and ')}. ` +
         'Either attribute bypasses row level security, FORCE included. Use a role without SUPERUSER and without BYPASSRLS.'
+    );
+  }
+  if (memberOfBypass) {
+    throw new RlsRoleError(
+      'Refusing to start: DATABASE_URL connects as a role that is a member of a SUPERUSER or BYPASSRLS role. ' +
+        'Membership lets the session assume that role and bypass row level security. ' +
+        'Use a role that is not a member of either.'
     );
   }
 }

@@ -161,6 +161,96 @@ export async function clearRateLimit(key: string): Promise<void> {
 
 export const RATE_LIMIT_UPSERT_SQL = UPSERT_SQL;
 
+function ipv6Hextets(token: string): number[] | null {
+  const dotted = token.match(/^(.*:)(\d{1,3}(?:\.\d{1,3}){3})$/);
+  let text = token;
+  if (dotted?.[1] && dotted[2]) {
+    const octets = dotted[2].split('.').map((part) => Number(part));
+    if (octets.length !== 4 || octets.some((n) => !Number.isInteger(n) || n > 255)) return null;
+    const hi = ((octets[0] ?? 0) << 8) | (octets[1] ?? 0);
+    const lo = ((octets[2] ?? 0) << 8) | (octets[3] ?? 0);
+    text = `${dotted[1]}${hi.toString(16)}:${lo.toString(16)}`;
+  }
+  const halves = text.split('::');
+  if (halves.length > 2) return null;
+  const read = (side: string): number[] | null => {
+    if (side === '') return [];
+    const values: number[] = [];
+    for (const part of side.split(':')) {
+      if (!/^[0-9a-fA-F]{1,4}$/.test(part)) return null;
+      values.push(Number.parseInt(part, 16));
+    }
+    return values;
+  };
+  const left = read(halves[0] ?? '');
+  if (!left) return null;
+  if (halves.length === 1) return left.length === 8 ? left : null;
+  const right = read(halves[1] ?? '');
+  if (!right) return null;
+  const missing = 8 - left.length - right.length;
+  if (missing < 1) return null;
+  return [...left, ...Array<number>(missing).fill(0), ...right];
+}
+
+/** RFC 5952: lowercase hex, longest leftmost zero run of two or more compressed. */
+function compressIpv6(hextets: number[]): string {
+  let bestStart = -1;
+  let bestLen = 0;
+  let start = -1;
+  for (let i = 0; i <= hextets.length; i += 1) {
+    const zero = i < hextets.length && hextets[i] === 0;
+    if (zero && start < 0) start = i;
+    if (!zero && start >= 0) {
+      const len = i - start;
+      if (len > bestLen) {
+        bestLen = len;
+        bestStart = start;
+      }
+      start = -1;
+    }
+  }
+  const parts = hextets.map((n) => n.toString(16));
+  if (bestLen < 2) return parts.join(':');
+  const left = parts.slice(0, bestStart).join(':');
+  const right = parts.slice(bestStart + bestLen).join(':');
+  if (!left && !right) return '::';
+  if (!left) return `::${right}`;
+  if (!right) return `${left}::`;
+  return `${left}::${right}`;
+}
+
+function canonicalAddress(token: string): string | null {
+  const family = isIP(token);
+  if (family === 4) return token;
+  if (family !== 6) return null;
+  const hextets = ipv6Hextets(token);
+  if (!hextets) return null;
+  const mapped = hextets.slice(0, 5).every((part) => part === 0) && hextets[5] === 0xffff;
+  if (mapped) {
+    const hi = hextets[6] ?? 0;
+    const lo = hextets[7] ?? 0;
+    return `${hi >> 8}.${hi & 0xff}.${lo >> 8}.${lo & 0xff}`;
+  }
+  return compressIpv6(hextets);
+}
+
+/** Rate-limit bucket for one client. IPv6 shares a key across its /64. */
+function rateLimitAddress(address: string): string {
+  if (isIP(address) !== 6) return address;
+  const hextets = ipv6Hextets(address);
+  if (!hextets) return address;
+  return compressIpv6([
+    hextets[0] ?? 0,
+    hextets[1] ?? 0,
+    hextets[2] ?? 0,
+    hextets[3] ?? 0,
+    0,
+    0,
+    0,
+    0,
+  ]);
+}
+
 function normalizeAddress(value: string): string | null {
   let token = value.trim().replace(/^"|"$/g, '');
   if (!token) return null;
@@ -171,8 +261,7 @@ function normalizeAddress(value: string): string | null {
   } else if (/^\d{1,3}(?:\.\d{1,3}){3}:\d+$/.test(token)) {
     token = token.slice(0, token.lastIndexOf(':'));
   }
-  if (isIP(token) === 0) return null;
-  return token;
+  return canonicalAddress(token);
 }
 
 function addresses(header: string | null): string[] {
@@ -222,7 +311,9 @@ function isTrusted(ip: string, list: BlockList): boolean {
  * one of those settings is present, so requests cannot share an `unknown`
  * bucket. Development and test accept one address, which is the socket address
  * Next copies into `X-Forwarded-For` when the client did not send the header.
- * A multi-hop list stays ignored.
+ * A multi-hop list stays ignored. Returned IPv6 keys are the /64 of the
+ * canonical address; trust checks still use the full address. An IPv4-mapped
+ * address (`::ffff:`) is stored as IPv4.
  */
 /**
  * Production must name a proxy. With none of the three settings, every request
@@ -245,7 +336,8 @@ export function clientIp(request: Request, env: RateLimitEnv = runtimeEnv): stri
   const configured = env.CLIENT_IP_HEADER?.trim();
   if (configured) {
     const hops = addresses(request.headers.get(configured));
-    return hops.at(-1) ?? 'unknown';
+    const hop = hops.at(-1);
+    return hop ? rateLimitAddress(hop) : 'unknown';
   }
 
   const forwarded = addresses(request.headers.get('x-forwarded-for'));
@@ -255,13 +347,13 @@ export function clientIp(request: Request, env: RateLimitEnv = runtimeEnv): stri
     let index = forwarded.length - 1;
     if (!isTrusted(forwarded[index]!, list)) return 'unknown';
     while (index >= 0 && isTrusted(forwarded[index]!, list)) index -= 1;
-    return index >= 0 ? forwarded[index]! : 'unknown';
+    return index >= 0 ? rateLimitAddress(forwarded[index]!) : 'unknown';
   }
 
   const hops = Number(env.TRUSTED_PROXY_HOPS);
   if (Number.isInteger(hops) && hops > 0) {
     if (forwarded.length < hops) return 'unknown';
-    return forwarded[forwarded.length - hops]!;
+    return rateLimitAddress(forwarded[forwarded.length - hops]!);
   }
 
   // Next copies socket.remoteAddress into X-Forwarded-For only when the header
@@ -269,7 +361,7 @@ export function clientIp(request: Request, env: RateLimitEnv = runtimeEnv): stri
   // Production still requires an explicit proxy setting, and a multi-hop list
   // without one stays untrusted.
   if (env.NODE_ENV !== 'production' && forwarded.length === 1) {
-    return forwarded[0]!;
+    return rateLimitAddress(forwarded[0]!);
   }
 
   return 'unknown';

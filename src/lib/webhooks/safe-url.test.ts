@@ -23,12 +23,14 @@ describe('webhook URL policy', () => {
     'http://169.254.169.254/latest/meta-data/',
     'http://10.1.2.3/hook',
     'http://100.64.0.1/hook',
+    'http://192.0.0.1/hook',
     'http://192.0.2.1/hook',
     'http://198.18.0.1/hook',
     'http://198.51.100.1/hook',
     'http://203.0.113.1/hook',
     'http://[::1]/hook',
     'http://[64:ff9b::1]/hook',
+    'http://[64:ff9b:1::1]/hook',
     'http://[2002:db8::1]/hook',
     'http://[fd00::1]/hook',
     'http://0177.0.0.1/hook',
@@ -45,6 +47,9 @@ describe('webhook URL policy', () => {
       '169.254.169.254',
       '100.64.0.1',
       '100.127.255.255',
+      '192.0.0.1',
+      '192.0.0.8',
+      '192.0.0.255',
       '192.0.2.1',
       '198.18.0.1',
       '198.19.255.1',
@@ -54,6 +59,8 @@ describe('webhook URL policy', () => {
       '::192.0.2.1',
       '64:ff9b::1',
       '64:ff9b::808:808',
+      '64:ff9b:1::1',
+      '64:ff9b:1:ffff::1',
       '2002:808:808::',
       'fe80::1',
       '::ffff:127.0.0.1',
@@ -65,7 +72,9 @@ describe('webhook URL policy', () => {
     expect(isBlockedAddress('8.8.8.8')).toBe(false);
     expect(isBlockedAddress('100.128.0.1')).toBe(false);
     expect(isBlockedAddress('198.20.0.1')).toBe(false);
+    expect(isBlockedAddress('192.0.1.1')).toBe(false);
     expect(isBlockedAddress('192.0.3.1')).toBe(false);
+    expect(isBlockedAddress('64:ff9b:2::1')).toBe(false);
     expect(isBlockedAddress('2001:4860:4860::8888')).toBe(false);
   });
 
