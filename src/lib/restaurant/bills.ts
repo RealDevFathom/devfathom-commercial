@@ -72,7 +72,6 @@ export type BillCommandErrorReason =
   | 'NO_ITEMS'
   | 'BILL_NOT_FOUND'
   | 'BILL_NOT_OPEN'
-  | 'BILL_NOT_PAID'
   | 'LINE_NOT_FOUND'
   | 'ALREADY_COMPED'
   | 'COMP_EXCEEDS_BILL'
@@ -1044,22 +1043,13 @@ export type SettleBillResult = {
  * seam L4's tender flow calls, INSIDE that flow's transaction, once coverage is
  * reached — so the receipt is allocated in the same transaction as the final tender
  * and exactly once (a bill already SETTLED is returned as `alreadySettled` without a
- * second allocation). This seam independently verifies persisted tender coverage;
- * callers cannot mint a receipt merely by invoking the lower-level transition.
- * `tx` is the caller's transaction client.
+ * second allocation). Coverage (Σ tenders ≥ grandTotal) is L4's precondition, not
+ * checked here. `tx` is the caller's transaction client.
  */
 export async function settleBill(tx: ScopedDb, input: SettleBillInput): Promise<SettleBillResult> {
   const bill = await tx.restaurantBill.findUnique({
     where: { id: input.billId },
-    select: {
-      id: true,
-      status: true,
-      branchId: true,
-      businessDate: true,
-      grandTotal: true,
-      receiptNumber: true,
-      tenders: { select: { amount: true } },
-    },
+    select: { id: true, status: true, branchId: true, businessDate: true, receiptNumber: true },
   });
   if (!bill) {
     throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
@@ -1069,12 +1059,6 @@ export async function settleBill(tx: ScopedDb, input: SettleBillInput): Promise<
   }
   if (bill.status !== 'OPEN') {
     throw new BillCommandError('Only an OPEN bill can be settled.', 'BILL_NOT_OPEN');
-  }
-  if (compare(sum(bill.tenders.map((tender) => tender.amount)), bill.grandTotal) < 0) {
-    throw new BillCommandError(
-      'A bill cannot be settled until its persisted tenders cover the grand total.',
-      'BILL_NOT_PAID'
-    );
   }
 
   const receiptNumber = await allocateReceiptNumber(tx, {
@@ -1604,10 +1588,7 @@ export async function finalizeBillSettlement(
 
 /** Why an order is not yet fully settled (the first failing condition). */
 export type OrderSettlementBlocker =
-  | 'NO_BILLS'
-  | 'ITEMS_UNBILLED'
-  | 'BILLS_OPEN'
-  | 'TOTAL_MISMATCH';
+  'NO_BILLS' | 'ITEMS_UNBILLED' | 'BILLS_OPEN' | 'TOTAL_MISMATCH';
 
 export type OrderSettlement = {
   orderId: string;

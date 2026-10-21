@@ -154,28 +154,14 @@ async function seedPayableOrder(productId: string, customerId: string | null) {
 }
 
 const settle = (billId: string) =>
-  deps.withTenantDb(orgId, async (tx) => {
-    const bill = await tx.restaurantBill.findUniqueOrThrow({
-      where: { id: billId },
-      select: { businessDate: true, grandTotal: true },
-    });
-    await tx.restaurantTender.create({
-      data: {
-        billId,
-        type: 'CARD',
-        amount: bill.grandTotal,
-        businessDate: bill.businessDate,
-        staffProfileId: ids.operator,
-        deviceId: ids.deviceId,
-      },
-    });
-    return deps.bills.settleBill(tx, {
+  deps.withTenantDb(orgId, (tx) =>
+    deps.bills.settleBill(tx, {
       billId,
       staffProfileId: ids.operator,
       deviceId: ids.deviceId,
       at: new Date(),
-    });
-  });
+    })
+  );
 
 async function orderEffects(orderId: string, idempotencyKey: string) {
   return deps.withTenantDb(orgId, async (tx) => ({

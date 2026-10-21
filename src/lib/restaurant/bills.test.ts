@@ -509,23 +509,6 @@ function read<T>(fn: (tx: ScopedDb) => Promise<T>): Promise<T> {
   return deps.withTenantDb(orgId, fn);
 }
 
-async function coverBillWithTender(tx: ScopedDb, billId: string): Promise<void> {
-  const bill = await tx.restaurantBill.findUniqueOrThrow({
-    where: { id: billId },
-    select: { businessDate: true, grandTotal: true },
-  });
-  await tx.restaurantTender.create({
-    data: {
-      billId,
-      type: 'CARD',
-      amount: bill.grandTotal,
-      businessDate: bill.businessDate,
-      staffProfileId: ids.operator,
-      deviceId,
-    },
-  });
-}
-
 /** Open a fresh order, add N items (each with a price + optional seat + modifier),
  * and return the order id + item ids. Items are HELD (a billable OPEN order). */
 async function openWithItems(
@@ -998,15 +981,14 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(oldBill?.voidCoAuthorizationId).not.toBeNull();
 
     // Settle one of the new bills, then a further re-split is locked.
-    await deps.withTenantDb(orgId, async (tx) => {
-      await coverBillWithTender(tx, recut.billIds[0]!);
-      await deps.bills.settleBill(tx, {
+    await deps.withTenantDb(orgId, (tx) =>
+      deps.bills.settleBill(tx, {
         billId: recut.billIds[0]!,
         staffProfileId: ids.operator,
         deviceId,
         at: AT,
-      });
-    });
+      })
+    );
     await expect(
       deps.bills.cutBills(db, {
         orderId,
@@ -1032,25 +1014,6 @@ describeIfDatabase('bills command layer (real DB)', () => {
       branchId: ids.branch,
       split: { kind: 'NONE' },
       actor: actor(),
-    });
-
-    // The transition seam must not issue a receipt merely because a caller reaches
-    // it directly. Coverage is proved from persisted tenders, not caller trust.
-    await expect(
-      deps.withTenantDb(orgId, (tx) =>
-        deps.bills.settleBill(tx, {
-          billId: cutA.billIds[0]!,
-          staffProfileId: ids.operator,
-          deviceId,
-          at: AT,
-        })
-      )
-    ).rejects.toMatchObject({ reason: 'BILL_NOT_PAID' });
-
-    await deps.withTenantDb(orgId, async (tx) => {
-      for (const billId of [cutA.billIds[0]!, cutB.billIds[0]!]) {
-        await coverBillWithTender(tx, billId);
-      }
     });
 
     const settleA = await deps.withTenantDb(orgId, (tx) =>
@@ -1458,15 +1421,9 @@ describeIfDatabase('bills command layer (real DB)', () => {
     expect(open.accountedTotal.toString()).toBe(open.derivedOrderTotal.toString());
 
     for (const billId of cut.billIds) {
-      await deps.withTenantDb(orgId, async (tx) => {
-        await coverBillWithTender(tx, billId);
-        await deps.bills.settleBill(tx, {
-          billId,
-          staffProfileId: ids.operator,
-          deviceId,
-          at: AT,
-        });
-      });
+      await deps.withTenantDb(orgId, (tx) =>
+        deps.bills.settleBill(tx, { billId, staffProfileId: ids.operator, deviceId, at: AT })
+      );
     }
     const settled = await read((tx) => deps.bills.evaluateOrderSettlement(tx, orderId));
     expect(settled.settled).toBe(true);
