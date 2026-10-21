@@ -15,6 +15,17 @@ vi.mock('sonner', () => ({
 }));
 
 describe('PlatformCommandForm', () => {
+  it('renders field hints with the accessible muted text token', () => {
+    render(
+      <PlatformCommandForm
+        action="operator.upsert"
+        fields={[{ name: 'password', label: 'Temporary password', help: 'At least 12 characters.' }]}
+      />
+    );
+
+    expect(screen.getByText('At least 12 characters.')).toHaveClass('text-text-muted');
+  });
+
   it('renders nullable textareas as empty rather than the string null', () => {
     render(
       <PlatformCommandForm

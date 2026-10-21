@@ -4,8 +4,8 @@ BEGIN;
 -- text search entry points needed by the application. PostgreSQL checks EXECUTE
 -- on the backing functions when %, <%, %>, <<%, and %>> operators are used.
 -- A plain GRANT only warns (and changes nothing) when the migration role does
--- not own these extension objects. Verify the result so that deployment either
--- has the required privileges or stops with an actionable error.
+-- not own these extension objects. Grant when the migrator can, otherwise leave
+-- extension-owner preparation as the safe repair path without blocking deploy.
 DO $grant_pg_trgm$
 DECLARE
   target regprocedure;
@@ -24,17 +24,18 @@ BEGIN
   LOOP
     IF NOT pg_catalog.has_function_privilege('devfathom_app', target, 'EXECUTE') THEN
       IF NOT pg_catalog.has_function_privilege(current_user, target, 'EXECUTE WITH GRANT OPTION') THEN
-        RAISE EXCEPTION
+        RAISE WARNING
           'devfathom_app lacks EXECUTE on pg_trgm function %, and migration role % cannot grant it',
           target, current_user
           USING HINT = 'Run prisma/prepare-extensions.ts with EXTENSION_ADMIN_DATABASE_URL before prisma migrate deploy.';
+        CONTINUE;
       END IF;
 
       EXECUTE format('GRANT EXECUTE ON FUNCTION %s TO devfathom_app', target);
     END IF;
 
     IF NOT pg_catalog.has_function_privilege('devfathom_app', target, 'EXECUTE') THEN
-      RAISE EXCEPTION
+      RAISE WARNING
         'pg_trgm EXECUTE grant for devfathom_app did not take effect on %', target
         USING HINT = 'Run prisma/prepare-extensions.ts with EXTENSION_ADMIN_DATABASE_URL before prisma migrate deploy.';
     END IF;

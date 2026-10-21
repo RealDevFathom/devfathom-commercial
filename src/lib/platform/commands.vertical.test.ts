@@ -280,6 +280,15 @@ describe('organization.create vertical + package compatibility', () => {
     mocks.departmentCreateMany.mockResolvedValue({ count: 0 });
   });
 
+  it('refuses an administrator password that only satisfies the old length check', async () => {
+    const error = await caught(run('organization.create', createPayload({
+      adminPassword: 'all-lowercase-password',
+    })));
+
+    expect(error).toMatchObject({ message: 'Platform command validation failed.' });
+    expect(mocks.orgCreate).not.toHaveBeenCalled();
+  });
+
   it('stamps an AGENCY organization by default and writes no restaurant rows', async () => {
     mocks.pkgFindUnique.mockResolvedValue({
       id: 'pkg_1',

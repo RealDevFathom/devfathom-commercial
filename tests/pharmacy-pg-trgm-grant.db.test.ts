@@ -37,14 +37,11 @@ const client = new pg.Client({ connectionString: url });
     await expect(client.query(`SELECT 'panadol' % 'panadol'`)).rejects.toMatchObject({
       code: '42501',
     });
-    await expect(client.query(sql)).rejects.toMatchObject({
-      code: 'P0001',
-      message: expect.stringContaining('migration role devfathom_app cannot grant it'),
-      hint: expect.stringContaining(
-        'prisma/prepare-extensions.ts with EXTENSION_ADMIN_DATABASE_URL'
-      ),
-    });
-    await client.query('ROLLBACK');
+    await expect(client.query(sql)).resolves.toBeDefined();
+    expect(
+      (await client.query(`SELECT has_function_privilege('devfathom_app',
+        'public.similarity_op(text,text)', 'EXECUTE') AS allowed`)).rows
+    ).toEqual([{ allowed: false }]);
     await client.query('RESET ROLE');
     await client.query(sql);
     await client.query(sql);

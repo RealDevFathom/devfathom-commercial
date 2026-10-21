@@ -123,6 +123,13 @@ it.each([
 });
 
 describe('organization people and access — staff onboarding', () => {
+  it('states every temporary-password requirement', () => {
+    render(<OrganizationAdminContent />);
+
+    expect(screen.getAllByText(/including an uppercase letter, a lowercase letter, and a number/))
+      .not.toHaveLength(0);
+  });
+
   it('offers an add-staff form with the organization pharmacy departments', () => {
     render(<OrganizationAdminContent />);
 

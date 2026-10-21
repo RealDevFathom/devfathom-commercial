@@ -42,6 +42,7 @@ import {
 import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
 import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
 import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import { passwordSchema } from '@/lib/password-policy';
 import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
 import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
 import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
@@ -676,7 +677,7 @@ const organizationInput = z
     notes: optionalText.optional(),
     adminName: requiredText,
     adminEmail: email,
-    adminPassword: z.string().min(12).max(256),
+    adminPassword: passwordSchema.max(256),
     opportunityId: optionalId.optional(),
     firstBranchName: z.string().trim().min(2).max(120).optional(),
     firstBranchAddress: z.string().trim().min(1).max(300).optional(),

@@ -37,6 +37,7 @@ function UtilizationBar({
       <div
         className="h-1.5 w-full overflow-hidden rounded-full bg-surface-sunken"
         role="progressbar"
+        aria-label={typeof label === 'string' ? `${label} utilization` : 'Utilization'}
         aria-valuenow={Math.round(pct)}
         aria-valuemin={0}
         aria-valuemax={100}
