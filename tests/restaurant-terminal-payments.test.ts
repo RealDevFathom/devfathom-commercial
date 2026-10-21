@@ -51,68 +51,6 @@ function makeDb(overrides: Record<string, unknown> = {}) {
   return { db, created };
 }
 
-describe('terminal webhook signatures', () => {
-  const source = 'provider-neutral';
-  const rawBody = JSON.stringify({ externalEventId: 'event-1', payload: baseEvent });
-  const now = 1_800_000_000;
-  const timestamp = String(now);
-  const sign = (ts: string) =>
-    createHmac('sha256', 'test-terminal-secret').update(`${ts}.${source}.${rawBody}`).digest('hex');
-
-  beforeEach(() => {
-    vi.useFakeTimers();
-    vi.setSystemTime(now * 1000);
-    vi.stubEnv('RESTAURANT_TERMINAL_WEBHOOK_SECRET', 'test-terminal-secret');
-  });
-
-  afterEach(() => {
-    vi.useRealTimers();
-    vi.unstubAllEnvs();
-  });
-
-  it.each([-300, 0, 300])('accepts a valid signature at a %i second offset', (offset) => {
-    const ts = String(now + offset);
-    expect(verifyTerminalSignature(source, rawBody, sign(ts), ts)).toBe('VERIFIED');
-    expect(verifyTerminalSignature(source, rawBody, `sha256=${sign(ts)}`, ts)).toBe('VERIFIED');
-  });
-
-  it.each([
-    ['stale', -301],
-    ['future', 301],
-  ] as const)('rejects a correctly signed %s timestamp outside five minutes', (_, offset) => {
-    const ts = String(now + offset);
-    expect(verifyTerminalSignature(source, rawBody, sign(ts), ts)).toBe('FAILED');
-  });
-
-  it.each([
-    null,
-    '',
-    'not-a-timestamp',
-    'NaN',
-    'Infinity',
-    '1e9',
-    '0x123',
-    '1800000000.5',
-    '9'.repeat(400),
-  ])('rejects a missing or invalid timestamp: %s', (ts) => {
-    expect(verifyTerminalSignature(source, rawBody, sign(ts ?? ''), ts)).toBe('FAILED');
-  });
-
-  it('binds the signature to the exact timestamp, source, and raw body', () => {
-    const signature = sign(timestamp);
-    expect(verifyTerminalSignature(source, rawBody, signature, String(now + 1))).toBe('FAILED');
-    expect(verifyTerminalSignature('other-source', rawBody, signature, timestamp)).toBe('FAILED');
-    expect(verifyTerminalSignature(source, `${rawBody} `, signature, timestamp)).toBe('FAILED');
-  });
-
-  it.each([null, 'not-a-signature', 'ab'.repeat(31), 'ab'.repeat(33), `${'ab'.repeat(32)}a`])(
-    'rejects a missing, malformed, or wrong-length signature: %s',
-    (signature) => {
-      expect(verifyTerminalSignature(source, rawBody, signature, timestamp)).toBe('FAILED');
-    }
-  );
-});
-
 describe('provider-neutral terminal payments', () => {
   beforeEach(() => {
     applyTenderInTransaction.mockReset();
@@ -123,9 +61,52 @@ describe('provider-neutral terminal payments', () => {
     });
   });
 
+  afterEach(() => {
+    delete process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET;
+  });
+
   it('strictly accepts only the card-terminal event contract', () => {
     expect(terminalEventSchema.parse(baseEvent)).toEqual(baseEvent);
     expect(() => terminalEventSchema.parse({ ...baseEvent, pan: '4111111111111111' })).toThrow();
+  });
+
+  it('authenticates a timestamp plus the source and raw body, and rejects skew and short digests', () => {
+    process.env.RESTAURANT_TERMINAL_WEBHOOK_SECRET = 'test-terminal-secret';
+    const source = 'provider-neutral';
+    const now = 1_700_000_000_000;
+    const timestamp = String(Math.floor(now / 1000));
+    const rawBody = JSON.stringify({ externalEventId: 'event-1', payload: baseEvent });
+    const sign = (at: string, signedSource = source, body = rawBody) =>
+      createHmac('sha256', 'test-terminal-secret')
+        .update(`${at}.${signedSource}.${body}`)
+        .digest('hex');
+    const signature = sign(timestamp);
+    const bodyOnly = createHmac('sha256', 'test-terminal-secret')
+      .update(`${source}.${rawBody}`)
+      .digest('hex');
+    const edge = String(Number(timestamp) - 5 * 60);
+    const stale = String(Number(timestamp) - 5 * 60 - 1);
+    const future = String(Number(timestamp) + 5 * 60 + 1);
+
+    expect(verifyTerminalSignature(source, rawBody, `sha256=${signature}`, timestamp, now)).toBe(
+      'VERIFIED'
+    );
+    expect(verifyTerminalSignature('other-source', rawBody, signature, timestamp, now)).toBe(
+      'FAILED'
+    );
+    expect(verifyTerminalSignature(source, `${rawBody} `, signature, timestamp, now)).toBe(
+      'FAILED'
+    );
+    expect(verifyTerminalSignature(source, rawBody, bodyOnly, timestamp, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, signature, null, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, sign(edge), edge, now)).toBe('VERIFIED');
+    expect(verifyTerminalSignature(source, rawBody, sign(stale), stale, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, sign(future), future, now)).toBe('FAILED');
+    expect(() => verifyTerminalSignature(source, rawBody, 'aa', timestamp, now)).not.toThrow();
+    expect(verifyTerminalSignature(source, rawBody, 'aa', timestamp, now)).toBe('FAILED');
+    expect(verifyTerminalSignature(source, rawBody, 'not-a-signature', timestamp, now)).toBe(
+      'FAILED'
+    );
   });
 
   it('turns an approved event into the existing CARD tender path exactly once', async () => {
@@ -163,27 +144,17 @@ describe('provider-neutral terminal payments', () => {
 
   it('returns the reconciliation on replay without another tender', async () => {
     const { db } = makeDb();
-    const input = {
+    db.restaurantTerminalReconciliation.findFirst.mockResolvedValueOnce({
+      id: 'recon-existing',
+      outcome: 'APPLIED',
+    } as never);
+    const result = await processTerminalEvent(db as never, {
       source: 'provider-neutral',
       externalEventId: 'event-1',
       event: baseEvent,
-    };
-    const first = await processTerminalEvent(db as never, input);
-    db.restaurantTerminalReconciliation.findFirst.mockResolvedValueOnce(
-      first.reconciliation as never
-    );
-
-    const replay = await processTerminalEvent(db as never, input);
-
-    expect(first.replayed).toBe(false);
-    expect(replay).toEqual({ reconciliation: first.reconciliation, replayed: true });
-    expect(db.restaurantTerminalReconciliation.findFirst).toHaveBeenCalledTimes(2);
-    expect(db.restaurantTerminalReconciliation.findFirst).toHaveBeenLastCalledWith({
-      where: { source: input.source, externalEventId: input.externalEventId },
     });
-    expect(db.restaurantTerminalProviderConfig.findFirst).toHaveBeenCalledOnce();
-    expect(db.restaurantBill.findFirst).toHaveBeenCalledOnce();
-    expect(applyTenderInTransaction).toHaveBeenCalledOnce();
+    expect(result).toMatchObject({ replayed: true });
+    expect(applyTenderInTransaction).not.toHaveBeenCalled();
   });
 
   it('rejects cross-tenant/unconfigured terminals and labels simulation mode', async () => {

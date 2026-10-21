@@ -197,6 +197,9 @@ function makeFixture() {
     },
     restaurantMenu: {
       findUnique: vi.fn(async ({ where }: IdArgs) => find(menus, where.id)),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.flatMap((id) => (menus.has(id) ? [{ id }] : []))
+      ),
       create: menuCreate,
       update: vi.fn(async (args: UpdateArgs) => update(menus, args)),
     },
@@ -220,10 +223,16 @@ function makeFixture() {
     },
     restaurantBranch: {
       findUnique: vi.fn(async ({ where }: IdArgs) => find(branches, where.id)),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.flatMap((id) => (branches.has(id) ? [{ id }] : []))
+      ),
     },
     restaurantPriceList: {
       findUnique: vi.fn(async ({ where }: IdArgs) => find(priceLists, where.id)),
       findFirst: vi.fn(async () => null),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.flatMap((id) => (priceLists.has(id) ? [{ id }] : []))
+      ),
     },
     restaurantPriceListVersion: {
       findMany: vi.fn(async () => []),
@@ -298,6 +307,7 @@ function api(fixture: Fixture, enabledModules: string[] = ['restaurant-menu'], b
   return acceptanceRouter.createCaller({
     db: fixture.db,
     entitlements: {
+      organizationId: 'org_m3',
       enabledModules,
       activeSeats: 1,
       seatLimit: 50,
@@ -389,17 +399,17 @@ describe('GOV-1 canonical ownership', () => {
 
     await expect(
       caller.restaurantMenus.createPublication({ branchId: 'foreign_branch', menuId: menu.id })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(
       caller.restaurantMenus.createPublication({ branchId: 'branch_1', menuId: 'foreign_menu' })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     await expect(
       caller.restaurantMenus.createPublication({
         branchId: 'branch_1',
         menuId: menu.id,
         priceListId: 'foreign_price_list',
       })
-    ).rejects.toMatchObject({ code: 'NOT_FOUND' });
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
   });
 
   it('rejects other-organization override references', async () => {

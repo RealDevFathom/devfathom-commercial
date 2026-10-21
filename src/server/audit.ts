@@ -1,3 +1,4 @@
+import { clientIp } from '@/lib/rate-limit';
 import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 /**
@@ -220,9 +221,8 @@ function operationForMethod(method: string): AuditOperationT {
 /** Best-effort client IP from standard proxy headers (Vercel sets these). */
 export function ipFromHeaders(headers: Headers | null | undefined): string | null {
   if (!headers) return null;
-  const fwd = headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]?.trim() ?? null;
-  return headers.get('x-real-ip') ?? headers.get('cf-connecting-ip') ?? null;
+  const ip = clientIp(new Request('http://localhost', { headers }));
+  return ip === 'unknown' ? null : ip;
 }
 
 function extractError(err: unknown): { code: string | null; message: string | null } {

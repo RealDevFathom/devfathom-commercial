@@ -1,21 +1,32 @@
 import { z } from 'zod';
 import { randomBytes } from 'node:crypto';
+import { TRPCError } from '@trpc/server';
 import { router, adminProcedure, entitlementIndependentAdminProcedure } from '../trpc';
 import { annotateAudit } from '../audit';
 import { WEBHOOK_EVENTS } from '@/lib/webhooks';
+import { assertWebhookUrl, assertWebhookUrlAllowed } from '@/lib/webhooks/safe-url';
 
-// Accept only well-formed http(s) URLs — no other schemes can be POSTed to.
+// Syntax only. DNS is checked in the mutation so a licensed request fails
+// closed on a private answer, without a lookup during input parsing.
 const urlSchema = z.string().refine(
-  (u) => {
+  (value) => {
     try {
-      const { protocol } = new URL(u);
-      return protocol === 'http:' || protocol === 'https:';
+      assertWebhookUrl(value);
+      return true;
     } catch {
       return false;
     }
   },
-  { message: 'Must be a valid http(s) URL.' }
+  { message: 'Webhook URL is not allowed.' }
 );
+
+async function assertDeliverableUrl(url: string) {
+  try {
+    await assertWebhookUrlAllowed(url);
+  } catch {
+    throw new TRPCError({ code: 'BAD_REQUEST', message: 'Webhook URL is not allowed.' });
+  }
+}
 
 const eventsSchema = z.array(z.enum(WEBHOOK_EVENTS)).min(1);
 
@@ -81,6 +92,7 @@ export const webhooksRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertDeliverableUrl(input.url);
       // High-entropy signing secret — returned ONCE so the admin can copy it.
       const secret = randomBytes(32).toString('hex');
 
@@ -117,6 +129,7 @@ export const webhooksRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      if (input.url) await assertDeliverableUrl(input.url);
       const { id, ...data } = input;
       return ctx.db.webhook.update({
         where: { id },

@@ -1,6 +1,7 @@
 import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { admitAnonymousRequest } from '@/lib/auth/anonymous-rate-limit';
+import { clientIp } from '@/lib/rate-limit';
 import { admitToMeeting, GENERIC_ADMISSION_ERROR } from '@/lib/meetings/admission';
 import { requestHost } from '@/lib/tenancy/host';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -19,8 +20,8 @@ export async function POST(
 ) {
   const parsed = inputSchema.safeParse(await request.json().catch(() => null));
   if (!parsed.success) return unavailable();
-  const ip = request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() || 'unknown';
-  const rate = admitAnonymousRequest({
+  const ip = clientIp(request);
+  const rate = await admitAnonymousRequest({
     kind: 'token',
     token: parsed.data.accessCode ?? null,
     ip,

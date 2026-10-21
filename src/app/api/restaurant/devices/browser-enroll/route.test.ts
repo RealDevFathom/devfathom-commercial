@@ -209,7 +209,8 @@ describe('POST browser enrollment', () => {
     expect(mocks.resolveCapabilityBranchAuthorization).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ id: 'user_admin' }),
-      'devices:manage'
+      'devices:manage',
+      { organizationId: 'org_1' }
     );
     expect(mocks.branchFindUnique).not.toHaveBeenCalled();
     expect(mocks.enrollDevice).not.toHaveBeenCalled();

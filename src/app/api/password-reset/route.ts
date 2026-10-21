@@ -51,8 +51,8 @@ export async function POST(request: Request) {
   // Throttle per IP (broad) and per address so the endpoint cannot be used to
   // flood inboxes or probe. Both hit and miss paths are throttled identically,
   // and a throttled request returns the same body as a delivered one.
-  const ipGate = rateLimit(`pwreset:ip:${ip}`, 10, 15 * 60_000);
-  const emailGate = rateLimit(`pwreset:email:${email}`, 5, 15 * 60_000);
+  const ipGate = await rateLimit(`pwreset:ip:${ip}`, 10, 15 * 60_000);
+  const emailGate = await rateLimit(`pwreset:email:${email}`, 5, 15 * 60_000);
   if (!ipGate.ok || !emailGate.ok) return Response.json(NEUTRAL);
 
   const host = requestHost(request);

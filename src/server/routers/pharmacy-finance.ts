@@ -21,6 +21,7 @@ import {
 } from '@/lib/pharmacy/bookkeeping';
 import { PharmacyTaxProfileError, publishPharmacyTaxProfile } from '@/lib/pharmacy/tax-profiles';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { assertInOrganization } from '../org-refs';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 const id = z.string().trim().min(1).max(128);
@@ -118,10 +119,11 @@ function txDb(tx: unknown) {
   return tx as ScopedDb;
 }
 
-function scope(ctx: TRPCContext, branchId: string) {
+async function scope(ctx: TRPCContext, branchId: string) {
   const organizationId = ctx.entitlements.organizationId;
   const actorId = ctx.session?.user?.id;
   if (!actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
+  await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branchId], { active: true });
   return { organizationId, branchId, actorId };
 }
 
@@ -146,8 +148,15 @@ export const pharmacyFinanceRouter = router({
   financialStatements: ledgerReportProcedure
     .input(reportPeriod.safeExtend({ page: z.number().int().min(1).max(10000).default(1) }))
     .query(async ({ ctx, input }) => ({
-      ...ledgerMetadata(ctx.reportScope, 'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'),
-      ...await financialStatements(ctx.db, ctx.reportScope, { from: new Date(input.from), to: new Date(input.to), page: input.page }),
+      ...ledgerMetadata(
+        ctx.reportScope,
+        'Branch journal lines posted before the exclusive cutoff. Opening balances precede from; movements use [from,to). Receivables are debit balances; payables are credit balances. CASH and BANK are netted per entry, excluding internal transfers from cash inflow/outflow. Unposted activity and due-date aging remain unknown.'
+      ),
+      ...(await financialStatements(ctx.db, ctx.reportScope, {
+        from: new Date(input.from),
+        to: new Date(input.to),
+        page: input.page,
+      })),
     })),
   perpetualValuation: ledgerReportProcedure
     .input(
@@ -346,8 +355,9 @@ export const pharmacyFinanceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scoped = await scope(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
-          postBookkeepingTransaction(txDb(tx), scope(ctx, input.branchId), input)
+          postBookkeepingTransaction(txDb(tx), scoped, input)
         );
       } catch (error) {
         fail(error);
@@ -366,8 +376,9 @@ export const pharmacyFinanceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scoped = await scope(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
-          reverseBookkeepingTransaction(txDb(tx), scope(ctx, input.branchId), input)
+          reverseBookkeepingTransaction(txDb(tx), scoped, input)
         );
       } catch (error) {
         fail(error);
@@ -378,9 +389,8 @@ export const pharmacyFinanceRouter = router({
     .input(z.object({ branchId: id, startsAt: at, endsAt: at }))
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          closeAccountingPeriod(txDb(tx), scope(ctx, input.branchId), input)
-        );
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) => closeAccountingPeriod(txDb(tx), scoped, input));
       } catch (error) {
         fail(error);
       }
@@ -390,9 +400,8 @@ export const pharmacyFinanceRouter = router({
     .input(z.object({ branchId: id, periodId: id, reason: z.string().trim().min(1).max(500) }))
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          reopenAccountingPeriod(txDb(tx), scope(ctx, input.branchId), input)
-        );
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) => reopenAccountingPeriod(txDb(tx), scoped, input));
       } catch (error) {
         fail(error);
       }
@@ -412,11 +421,12 @@ export const pharmacyFinanceRouter = router({
         description: z.string().trim().min(1).max(300),
       })
     )
-    .mutation(({ ctx, input }) =>
-      ctx.db.pharmacyBankStatementLine.create({
+    .mutation(async ({ ctx, input }) => {
+      await scope(ctx, input.branchId);
+      return ctx.db.pharmacyBankStatementLine.create({
         data: { organizationId: ctx.entitlements.organizationId, ...input },
-      })
-    ),
+      });
+    }),
 
   reconcile: bookkeepingProcedure
     .input(
@@ -424,9 +434,8 @@ export const pharmacyFinanceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          reconcileBankLine(txDb(tx), scope(ctx, input.branchId), input)
-        );
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) => reconcileBankLine(txDb(tx), scoped, input));
       } catch (error) {
         fail(error);
       }
@@ -445,9 +454,8 @@ export const pharmacyFinanceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        return await ctx.db.$transaction((tx) =>
-          createSettlementBatch(txDb(tx), scope(ctx, input.branchId), input)
-        );
+        const scoped = await scope(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) => createSettlementBatch(txDb(tx), scoped, input));
       } catch (error) {
         fail(error);
       }
@@ -485,8 +493,9 @@ export const pharmacyFinanceRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
+        const scoped = await scope(ctx, input.branchId);
         return await ctx.db.$transaction((tx) =>
-          publishPharmacyTaxProfile(txDb(tx), scope(ctx, input.branchId), input)
+          publishPharmacyTaxProfile(txDb(tx), scoped, input)
         );
       } catch (error) {
         fail(error);
