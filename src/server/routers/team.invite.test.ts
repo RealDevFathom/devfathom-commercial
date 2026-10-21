@@ -8,6 +8,8 @@ const mocks = vi.hoisted(() => ({
   findFirst: vi.fn(),
   create: vi.fn(),
   update: vi.fn(),
+  count: vi.fn(),
+  queryRaw: vi.fn(),
   invitationUpsert: vi.fn(),
   departmentFindFirst: vi.fn(),
   sendEmail: vi.fn(),
@@ -48,7 +50,8 @@ const db = {
   invitation: { upsert: mocks.invitationUpsert },
   $transaction: async (run: (tx: unknown) => Promise<unknown>) =>
     run({
-      user: { create: mocks.create, update: mocks.update },
+      $queryRaw: mocks.queryRaw,
+      user: { create: mocks.create, update: mocks.update, count: mocks.count },
       invitation: { upsert: mocks.invitationUpsert },
     }),
 };
@@ -59,7 +62,13 @@ function caller() {
     entitlements: { enabledModules: [], activeSeats: 1, seatLimit: 50 },
     session: {
       expires: 'later',
-      user: { id: 'user_admin', role: 'ADMIN', department: 'LEADERSHIP', status: 'ACTIVE' },
+      user: {
+        id: 'user_admin',
+        role: 'ADMIN',
+        department: 'LEADERSHIP',
+        status: 'ACTIVE',
+        organizationId: 'org_acme',
+      },
     },
     organization: null,
     support: null,
@@ -80,6 +89,9 @@ describe('team.inviteMember duplicate guard', () => {
     vi.clearAllMocks();
     mocks.can.mockResolvedValue(true);
     mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.queryRaw.mockResolvedValue([]);
+    // In-transaction seat recount: default to plenty of headroom.
+    mocks.count.mockResolvedValue(0);
   });
 
   it.each([['ALEX@COMPANY.COM'], ['Alex@Company.com'], ['  alex@company.com  ']])(
@@ -119,6 +131,63 @@ describe('team.inviteMember duplicate guard', () => {
     await expect(
       caller().inviteMember({ ...invite, email: 'new.person@company.com' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+    expect(mocks.create).not.toHaveBeenCalled();
+  });
+});
+
+// SEC (#199): the request-time entitlement snapshot alone can't gate seats —
+// concurrent invites all read the same stale snapshot and would collectively
+// exceed the license. inviteMember must take the organization seat lock
+// (`FOR UPDATE` + recount) inside its transaction before creating a new seat.
+describe('team.inviteMember seat lock', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.can.mockResolvedValue(true);
+    mocks.departmentFindFirst.mockResolvedValue({ id: 'dept_engineering' });
+    mocks.queryRaw.mockResolvedValue([]);
+    mocks.findFirst.mockResolvedValue(null);
+    mocks.create.mockResolvedValue({ id: 'user_new', name: 'Alex Carter' });
+    mocks.invitationUpsert.mockResolvedValue({});
+  });
+
+  it('locks the organization row and recounts seats before creating a new member', async () => {
+    mocks.count.mockResolvedValue(0);
+
+    await caller().inviteMember({ ...invite, email: 'new.person@company.com' });
+
+    // FOR UPDATE row lock taken, then the authoritative in-transaction recount.
+    expect(mocks.queryRaw).toHaveBeenCalledTimes(1);
+    expect(mocks.count).toHaveBeenCalledWith({
+      where: { organizationId: 'org_acme', status: { in: ['ACTIVE', 'ON_LEAVE', 'INVITED'] } },
+    });
+    expect(mocks.create).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses when the in-transaction recount hits the limit despite a stale snapshot', async () => {
+    // Snapshot says one seat used of 50 (the pre-check passes), but by the time
+    // the transaction runs a racing invite filled the org to the 50-seat cap.
+    mocks.count.mockResolvedValue(50);
+
+    await expect(
+      caller().inviteMember({ ...invite, email: 'new.person@company.com' })
+    ).rejects.toMatchObject({
+      code: 'PRECONDITION_FAILED',
+      message: 'Seat limit reached (50/50).',
+    });
+    expect(mocks.create).not.toHaveBeenCalled();
+    expect(mocks.invitationUpsert).not.toHaveBeenCalled();
+  });
+
+  it('does not take the seat lock when re-inviting an existing pending member', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.update.mockResolvedValue({ id: 'user_pending', name: 'Alex Carter' });
+
+    await caller().inviteMember({ ...invite, email: 'pending@company.com' });
+
+    // Re-invite reuses an already-allocated seat, so no lock/recount is needed.
+    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.count).not.toHaveBeenCalled();
+    expect(mocks.update).toHaveBeenCalledTimes(1);
     expect(mocks.create).not.toHaveBeenCalled();
   });
 });
