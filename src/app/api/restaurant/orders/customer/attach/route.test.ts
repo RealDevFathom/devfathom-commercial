@@ -73,7 +73,8 @@ describe('POST customer attach capability', () => {
       expect.anything(),
       'staff_1',
       'customers:manage',
-      expect.any(Date)
+      expect.any(Date),
+      'branch_1'
     );
     expect(mocks.orderFindFirst).not.toHaveBeenCalled();
     expect(mocks.attachCustomerToOrder).not.toHaveBeenCalled();

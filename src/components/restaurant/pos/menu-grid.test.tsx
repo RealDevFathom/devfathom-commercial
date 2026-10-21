@@ -99,4 +99,54 @@ describe('MenuGrid', () => {
     fireEvent.click(screen.getByRole('button', { name: 'Add to order' }));
     expect(onAdd).not.toHaveBeenCalled();
   });
+
+  it('adds on Enter only for the selected item or a single exact match', () => {
+    const onAdd = vi.fn();
+    render(
+      <MenuGrid
+        menu={{
+          ...menu,
+          sections: [
+            {
+              id: 'section-2',
+              name: 'Mains',
+              items: [
+                {
+                  id: 'chicken',
+                  displayName: 'Chicken',
+                  product: { name: 'Chicken' },
+                  price: '18.00',
+                  available: true,
+                },
+                {
+                  id: 'cheese',
+                  displayName: 'Cheese plate',
+                  product: { name: 'Cheese plate' },
+                  price: '12.00',
+                  available: true,
+                  barcode: '50001111',
+                },
+              ],
+            },
+          ],
+        }}
+        pending={false}
+        onAdd={onAdd}
+      />
+    );
+    const search = screen.getByLabelText('Menu search');
+
+    fireEvent.change(search, { target: { value: 'ch' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onAdd).not.toHaveBeenCalled();
+    expect(screen.getByRole('button', { name: /Chicken/ })).toHaveAttribute('aria-pressed', 'true');
+
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ menuItemId: 'chicken' }));
+
+    onAdd.mockClear();
+    fireEvent.change(search, { target: { value: '50001111' } });
+    fireEvent.keyDown(search, { key: 'Enter' });
+    expect(onAdd).toHaveBeenCalledWith(expect.objectContaining({ menuItemId: 'cheese' }));
+  });
 });

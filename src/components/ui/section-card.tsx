@@ -9,10 +9,17 @@ interface SectionCardProps extends Omit<React.ComponentProps<'div'>, 'title'> {
   eyebrowAccent?: boolean;
   /** Optional Oxanium section title. */
   title?: React.ReactNode;
-  /** Semantic heading level for the title; defaults to 3 for nested cards. */
+  /**
+   * Semantic heading level for the title. Defaults to 2: a SectionCard sits
+   * directly under the page `<h1>` (PageHeader), so h2 keeps the outline
+   * contiguous and avoids an axe `heading-order` skip. Pass 3 for a card
+   * genuinely nested below an existing h2.
+   */
   titleLevel?: 2 | 3;
   /** Optional right-aligned actions slot in the header row. */
   actions?: React.ReactNode;
+  /** Tighter padding and a quieter title for dense operational surfaces. */
+  compact?: boolean;
 }
 
 /**
@@ -23,8 +30,9 @@ function SectionCard({
   eyebrow,
   eyebrowAccent = false,
   title,
-  titleLevel = 3,
+  titleLevel = 2,
   actions,
+  compact = false,
   className,
   children,
   ...props
@@ -35,17 +43,23 @@ function SectionCard({
     <div
       data-slot="section-card"
       className={cn(
-        'min-w-0 rounded-lg border border-border-subtle bg-card p-5 text-card-foreground shadow-none',
+        'min-w-0 border border-border-subtle bg-card text-card-foreground shadow-none',
+        compact ? 'rounded-md p-2' : 'rounded-lg p-5',
         className
       )}
       {...props}
     >
       {hasHeader ? (
-        <div className="mb-4 flex items-start justify-between gap-4">
+        <div className={cn('flex items-start justify-between', compact ? 'mb-2 gap-2' : 'mb-4 gap-4')}>
           <div className="min-w-0 space-y-1">
             {eyebrow != null ? <Eyebrow accent={eyebrowAccent}>{eyebrow}</Eyebrow> : null}
             {title != null ? (
-              <Title className="font-display text-lg leading-snug font-semibold tracking-tight text-text-strong">
+              <Title
+                className={cn(
+                  'font-display font-semibold tracking-tight text-text-strong',
+                  compact ? 'text-sm leading-5' : 'text-lg leading-snug'
+                )}
+              >
                 {title}
               </Title>
             ) : null}

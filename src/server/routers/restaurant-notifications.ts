@@ -220,7 +220,20 @@ export const restaurantNotificationsRouter = router({
         targetType: 'RestaurantNotificationWebhook',
         skipInput: true,
       });
-      const endpointUrl = (await assertSafeWebhookUrl(input.endpointUrl)).toString();
+      // `assertSafeWebhookUrl` throws a plain Error with an operator-facing
+      // message (non-HTTPS, credentials, private network, ...). Reaching the
+      // client unwrapped it becomes a 500 INTERNAL_SERVER_ERROR; these are
+      // validation failures the operator can act on, so surface them as 400.
+      let endpointUrl: string;
+      try {
+        endpointUrl = (await assertSafeWebhookUrl(input.endpointUrl)).toString();
+      } catch (error) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: error instanceof Error ? error.message : 'Webhook endpoint is not valid.',
+          cause: error,
+        });
+      }
       const existing = await ctx.db.restaurantNotificationWebhook.findFirst({
         select: { id: true },
       });

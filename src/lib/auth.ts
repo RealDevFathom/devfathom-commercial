@@ -222,7 +222,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         return withTenantDb(organization.id, async (tenantDb) => {
           const user = await tenantDb.user.findFirst({
-            where: { email },
+            where: { email, organizationId: organization.id },
             select: {
               id: true,
               organizationId: true,
@@ -235,6 +235,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               avatar: true,
               status: true,
               tokenVersion: true,
+              mustChangePassword: true,
               twoFactorEnabledAt: true,
               twoFactorSecret: true,
             },
@@ -248,7 +249,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // cases an attacker who doesn't know the password could probe. Crucially,
           // a WRONG password against a deactivated account also lands here, so the
           // "suspended" signal below can never be used to enumerate accounts.
-          if (!user || !isValid) {
+          if (!user || user.organizationId !== organization.id || !isValid) {
             // The client sees a uniform null, but the admin-only audit log records
             // the precise reason (it never leaks back to the would-be attacker).
             const reason = !user ? 'No such account' : 'Incorrect password';
@@ -372,6 +373,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            mustChangePassword: user.mustChangePassword === true,
             // Issued only after this route verifies password and any second factor.
             passwordAuthenticatedAt: Date.now(),
           };
@@ -464,6 +466,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               avatar: true,
               status: true,
               tokenVersion: true,
+              mustChangePassword: true,
               password: true,
               organizationRole: { select: { key: true } },
               twoFactorEnabledAt: true,
@@ -565,6 +568,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            mustChangePassword: user.mustChangePassword === true,
             passwordAuthenticatedAt: passwordIntent?.createdAt.getTime(),
             demoAccessExpiresAt: organization.isDemo ? candidate.demoAccessExpiresAt : undefined,
           };
@@ -650,6 +654,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.status = ((user as Record<string, unknown>).status as string) ?? 'ACTIVE';
         // AUTH-01: snapshot the session-revocation counter at sign-in.
         token.tokenVersion = ((user as Record<string, unknown>).tokenVersion as number) ?? 0;
+        token.mustChangePassword = (user as Record<string, unknown>).mustChangePassword === true;
         token.demoAccessExpiresAt =
           liveDemoAccessExpiry((user as Record<string, unknown>).demoAccessExpiresAt) ?? undefined;
         // #16: session validity is its own claim. `status` now only ever holds a
@@ -698,6 +703,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 department: true,
                 title: true,
                 tokenVersion: true,
+                mustChangePassword: true,
                 organization: { select: { slug: true, status: true, isDemo: true } },
               },
             })
@@ -720,6 +726,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             token.sessionInvalidReason = 'REVOKED';
           } else {
             token.role = fresh.role;
+            token.mustChangePassword = fresh.mustChangePassword === true;
             token.status = fresh.status;
             token.department = fresh.department;
             token.title = fresh.title;
@@ -754,6 +761,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.department = token.department as string;
         session.user.title = token.title as string;
         session.user.status = token.status as string;
+        session.user.mustChangePassword = token.mustChangePassword === true;
         // #16: every consumer of the session must be able to see that the
         // session itself was invalidated, independently of account status.
         session.user.sessionRevoked = Boolean(token.sessionRevoked);

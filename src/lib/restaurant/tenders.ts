@@ -16,7 +16,20 @@ import {
   runMoneyTransaction,
   type MoneyActor,
 } from './drawer-sessions';
-import { add, compare, equals, isNegative, isZero, money, sub, sum, ZERO } from './money';
+import {
+  add,
+  compare,
+  equals,
+  formatMoney,
+  isNegative,
+  isZero,
+  money,
+  multiply,
+  roundMoney,
+  sub,
+  sum,
+  ZERO,
+} from './money';
 import { appendPaymentEvent, getPaymentProvider } from './payment-adapter';
 import {
   quoteTaxSettlement,
@@ -457,6 +470,61 @@ export async function applyTenderInTransaction(
   return result;
 }
 
+/**
+ * Compute the live, tax-inclusive settlement quote for an OPEN bill exactly as a
+ * CASH tender would — WITHOUT applying anything (QA-143). The stored open-bill
+ * `grandTotal` is pre-tax and its `taxTotal` is 0 until settlement (tax is only
+ * frozen once a tender's payment category is known), so the register summary read
+ * must recompute here to disclose tax and a `remainingDue` that actually settles
+ * the bill rather than the pre-tax total.
+ *
+ * CASH is used as the proposed category because that is the TenderPad default; any
+ * PRIOR tenders keep their own category weighting, so a summary taken after a
+ * partial tender reports the true remaining tax rather than 0.00. Returns null when
+ * the bill is missing, not OPEN, or its tax cannot be quoted (e.g. no effective
+ * profile) — the caller then falls back to the stored totals.
+ */
+export async function quoteOpenBillSettlement(
+  tx: ScopedDb,
+  billId: string,
+  at: Date
+): Promise<TaxQuoteResult | null> {
+  const bill = await tx.restaurantBill.findUnique({
+    where: { id: billId },
+    select: {
+      id: true,
+      organizationId: true,
+      orderId: true,
+      status: true,
+      grandTotal: true,
+      subtotal: true,
+      compTotal: true,
+      discountTotal: true,
+      serviceChargeTotal: true,
+      deliveryFeeTotal: true,
+      roundingAdjustment: true,
+      branchId: true,
+      businessDate: true,
+      splitKind: true,
+      fractionNumerator: true,
+      fractionDenominator: true,
+    },
+  });
+  if (!bill || bill.status !== 'OPEN') return null;
+  const existing = (await tx.restaurantTender.findMany({
+    where: { billId: bill.id },
+    select: { id: true, type: true, amount: true, createdAt: true },
+    orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+  })) as TenderRow[];
+  try {
+    const settlement = await loadSettlementContext(tx, bill, existing, 'CASH', at);
+    return settlement.quote;
+  } catch (err) {
+    if (err instanceof TenderError) return null;
+    throw err;
+  }
+}
+
 async function loadSettlementContext(
   tx: ScopedDb,
   bill: BillForTender,
@@ -464,8 +532,12 @@ async function loadSettlementContext(
   proposedTenderType: TenderType,
   at: Date
 ): Promise<SettlementContext> {
+  const effectiveWindow = {
+    effectiveFrom: { lte: at },
+    OR: [{ effectiveTo: null }, { effectiveTo: { gt: at } }],
+  };
   const profiles = await tx.restaurantTaxProfileVersion.findMany({
-    where: { branchId: bill.branchId },
+    where: { branchId: bill.branchId, status: 'PUBLISHED', ...effectiveWindow },
     select: {
       id: true,
       effectiveFrom: true,
@@ -474,6 +546,7 @@ async function loadSettlementContext(
       approvalReference: true,
       approvedAt: true,
       rules: {
+        where: { status: 'PUBLISHED', ...effectiveWindow },
         select: {
           id: true,
           profileVersionId: true,
@@ -617,14 +690,27 @@ async function loadSettlementContext(
       };
     });
   });
-  const taxablePriorTenders = allocateTaxableTenderPrincipals(
-    priorTenders,
-    sum(
-      quoteLines.map((line) =>
-        line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
-      )
+  const merchandiseBasis = sum(
+    quoteLines.map((line) =>
+      line.unitPrice.plus(line.modifierTotal).minus(line.comp).minus(line.beforeTaxDiscount)
     )
   );
+  const order = await tx.restaurantOrder.findFirst({
+    where: { id: bill.orderId },
+    select: { channel: true },
+  });
+  const servicePolicy =
+    order?.channel === 'DINE_IN'
+      ? await tx.restaurantServiceChargePolicyVersion.findFirst({
+          where: { branchId: bill.branchId, ...effectiveWindow },
+          orderBy: [{ effectiveFrom: 'desc' }, { id: 'asc' }],
+          select: { rate: true },
+        })
+      : null;
+  const serviceAmount = servicePolicy
+    ? formatMoney(roundMoney(multiply(merchandiseBasis, servicePolicy.rate.toString())))
+    : '0.00';
+  const taxablePriorTenders = allocateTaxableTenderPrincipals(priorTenders, merchandiseBasis);
   const taxableQuote = quoteTaxSettlement({
     lines: quoteLines,
     profiles: profiles.map((profile) => ({
@@ -643,7 +729,7 @@ async function loadSettlementContext(
     priorTenderWeights: taxablePriorTenders,
     acceptedPrincipal: sum(priorTenders.map((tender) => tender.amount)),
     afterTaxDiscount,
-    serviceCharge: { amount: bill.serviceChargeTotal, taxable: false },
+    serviceCharge: { amount: serviceAmount, taxable: false },
     roundingAdjustment: bill.roundingAdjustment,
   });
   const acceptedPrincipal = taxableQuote.acceptedPrincipal;
