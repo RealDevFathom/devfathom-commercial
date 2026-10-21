@@ -222,7 +222,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         return withTenantDb(organization.id, async (tenantDb) => {
           const user = await tenantDb.user.findFirst({
-            where: { email },
+            where: { email, organizationId: organization.id },
             select: {
               id: true,
               organizationId: true,
@@ -249,7 +249,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // cases an attacker who doesn't know the password could probe. Crucially,
           // a WRONG password against a deactivated account also lands here, so the
           // "suspended" signal below can never be used to enumerate accounts.
-          if (!user || !isValid) {
+          if (!user || user.organizationId !== organization.id || !isValid) {
             // The client sees a uniform null, but the admin-only audit log records
             // the precise reason (it never leaks back to the would-be attacker).
             const reason = !user ? 'No such account' : 'Incorrect password';
@@ -804,7 +804,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // Shorter lifetime bounds how long a stolen token is useful; combined with
     // the per-request revalidation above, effective revocation is ~1 minute.
     maxAge: 60 * 60 * 8, // 8 hours
-    updateAge: 60 * 60, // rotate the session cookie at most hourly
+    updateAge: 60 * 60, // Database sessions only; Auth.js refreshes JWT cookies on every read.
   },
   secret: process.env.AUTH_SECRET,
 });
