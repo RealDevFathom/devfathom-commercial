@@ -2,8 +2,13 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 import vercel from '../../../../../vercel.json';
 
-const mocks = vi.hoisted(() => ({ withPlatformDb: vi.fn(), isGrowthEnabled: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  withPlatformDb: vi.fn(),
+  isGrowthEnabled: vi.fn(),
+  runCustomerMetrics: vi.fn(),
+}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withPlatformDb: mocks.withPlatformDb }));
+vi.mock('@/lib/growth/metrics', () => ({ runCustomerMetrics: mocks.runCustomerMetrics }));
 vi.mock('@/lib/growth', () => ({ isGrowthEnabled: mocks.isGrowthEnabled }));
 
 import { GET, POST } from './route';
@@ -71,6 +76,7 @@ describe.each([
       select: { id: true },
     });
     expect(mocks.isGrowthEnabled.mock.calls).toEqual([['org_enabled'], ['org_disabled']]);
+    expect(mocks.runCustomerMetrics).toHaveBeenCalledExactlyOnceWith('org_enabled');
     expect(console.info).toHaveBeenCalledExactlyOnceWith(
       '[growth] tick organizationId=org_enabled'
     );
