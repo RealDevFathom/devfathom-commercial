@@ -7,6 +7,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
 import {
   isLockedOut,
@@ -152,6 +153,115 @@ async function khataScope(ctx: TRPCContext, branch: string) {
   if (!available)
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   return scope;
+}
+
+const RECEIPT_READ_CAPABILITIES = [
+  'pharmacy:dispense',
+  'pharmacy.dispense',
+  'pharmacy:receipt',
+  'pharmacy.receipt',
+] as const;
+
+function capabilityCovers(rule: string, action: string): boolean {
+  if (rule === '*' || rule === action) return true;
+  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
+  return false;
+}
+
+function capabilityDecision(
+  rules: { capability: string; effect: string }[],
+  action: string
+): 'ALLOW' | 'DENY' | null {
+  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
+  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
+  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
+  return null;
+}
+
+/**
+ * Dispense or receipt capability, then an active pharmacy branch assignment in
+ * the session organization. Restaurant staff profiles are not consulted. An
+ * empty assignment denies. A session `ADMIN` of this organization may read a
+ * branch they are not assigned to; that exception is recorded on the audit.
+ */
+async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = scopeFor(ctx, branch);
+  const user = ctx.session!.user;
+  if (!user.organizationId || user.organizationId !== scope.organizationId) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  const member = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: {
+      status: true,
+      organizationId: true,
+      organizationRole: {
+        select: { permissions: { select: { capability: true, effect: true } } },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (
+    !member ||
+    member.organizationId !== scope.organizationId ||
+    !member.status ||
+    !ACTIVE_STATUSES.has(member.status)
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  const overrides = member.permissionOverrides;
+  const roleRules = member.organizationRole?.permissions ?? [];
+  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
+    const override = capabilityDecision(overrides, action);
+    if (override === 'DENY') return false;
+    if (override === 'ALLOW') return true;
+    return capabilityDecision(roleRules, action) === 'ALLOW';
+  });
+  if (!capable) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+
+  const available = await ctx.db.pharmacyBranch.findFirst({
+    where: { id: branch, organizationId: scope.organizationId, active: true },
+    select: { id: true },
+  });
+  if (!available) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  const assigned = new Set(rows.map((row) => row.branchId));
+  if (assigned.has(branch)) return scope;
+
+  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  if (assigned.size === 0 && orgAdmin) {
+    annotateAudit(ctx, {
+      targetType: 'PharmacyBranch',
+      targetId: branch,
+      metadata: {
+        branchId: branch,
+        reason: 'org-admin-receipt-access-without-branch-assignment',
+      },
+    });
+    return scope;
+  }
+  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
@@ -1058,13 +1168,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        const scope = scopeFor(ctx, input.branchId);
-        const branch = await ctx.db.pharmacyBranch.findFirst({
-          where: { id: input.branchId, organizationId: scope.organizationId, active: true },
-          select: { id: true },
-        });
-        if (!branch)
-          throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
         return await findSubstituteProposals(ctx.db, scope, {
           medicineId: input.medicineId,
           presentationId: input.presentationId,

@@ -34,16 +34,38 @@ const input = {
   quantityCanonicalUnits: 10,
 };
 
-function caller(branch: { id: string } | null) {
+function caller(
+  branch: { id: string } | null,
+  options?: { role?: 'EMPLOYEE' | 'ADMIN'; assignedBranchIds?: string[] }
+) {
+  const assignedBranchIds = options?.assignedBranchIds ?? (branch ? [branch.id] : []);
   const db = {
+    user: {
+      findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      })),
+    },
     pharmacyBranch: { findFirst: vi.fn(async () => branch) },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn(async () => assignedBranchIds.map((branchId) => ({ branchId }))),
+    },
   };
   return pharmacySalesRouter.createCaller({
     db,
     entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
     session: {
       expires: 'later',
-      user: { id: 'actor-1', role: 'EMPLOYEE', status: 'ACTIVE', organizationId: 'org-1' },
+      user: {
+        id: 'actor-1',
+        role: options?.role ?? 'EMPLOYEE',
+        status: 'ACTIVE',
+        organizationId: 'org-1',
+      },
     },
     organization: { id: 'org-1' },
     support: null,
@@ -88,6 +110,16 @@ describe('substitute proposals', () => {
       expect.anything(),
       expect.not.objectContaining({ referencePriceMinor: expect.anything() })
     );
+  });
+
+  it('refuses a cashier assigned to a different branch', async () => {
+    await expect(
+      caller({ id: 'branch-1' }, { assignedBranchIds: ['branch-2'] }).substituteProposals(input)
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Branch is outside your scope.',
+    });
+    expect(findSubstituteProposals).not.toHaveBeenCalled();
   });
 
   it('rejects a client requireLowerPrice flag', async () => {
