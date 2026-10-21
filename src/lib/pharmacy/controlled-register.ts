@@ -268,6 +268,97 @@ export async function appendControlledPurchaseEntries(
   }
 }
 
+/**
+ * Append the register half of a goods-receipt reversal. The stock movements
+ * have already been reversed by the caller, so each purchase row is cancelled
+ * by an immutable correction whose balance must agree with sellable stock.
+ */
+export async function appendControlledPurchaseReversals(
+  db: ScopedDb,
+  input: {
+    organizationId: string;
+    branchId: string;
+    movements: readonly { sourceMovementId: string; reversalMovementId: string }[];
+    recordedByUserId: string;
+    reason: string;
+  }
+) {
+  if (input.movements.length === 0) return;
+  await lockRegister(db, input.organizationId, input.branchId);
+  const purchases = await db.pharmacyControlledRegisterEntry.findMany({
+    where: {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      entryKind: 'PURCHASE',
+      stockMovementId: { in: input.movements.map((movement) => movement.sourceMovementId) },
+    },
+    orderBy: { serial: 'asc' },
+  });
+  let serial = (await nextSerial(db, input.organizationId, input.branchId)) - 1;
+  for (const original of purchases) {
+    if (!original.medicineId) continue;
+    const reversalMovementId = input.movements.find(
+      (movement) => movement.sourceMovementId === original.stockMovementId
+    )?.reversalMovementId;
+    if (!reversalMovementId) throw new Error('NOT_FOUND');
+    const existing = await db.pharmacyControlledRegisterEntry.findFirst({
+      where: { organizationId: input.organizationId, correctsEntryId: original.id },
+      select: { id: true },
+    });
+    if (existing) throw new Error('ALREADY_CORRECTED');
+    const balanceDelta = -original.quantityCanonicalUnits;
+    const previous = await db.pharmacyControlledRegisterEntry.findFirst({
+      where: {
+        organizationId: input.organizationId,
+        branchId: input.branchId,
+        medicineId: original.medicineId,
+        inventoryLotId: original.inventoryLotId,
+      },
+      orderBy: { serial: 'desc' },
+      select: { runningBalance: true },
+    });
+    const runningBalance = registerBalanceAfter(previous?.runningBalance ?? 0, balanceDelta);
+    if (runningBalance === null) throw new Error('BALANCE');
+    const sellable = await sellableOnHand(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      inventoryLotId: original.inventoryLotId,
+    });
+    if (runningBalance !== sellable) throw new Error('STOCK');
+    await createRegisterRow(db, {
+      organizationId: input.organizationId,
+      branchId: input.branchId,
+      serial: ++serial,
+      entryKind: 'CORRECTION',
+      prescriptionId: original.prescriptionId,
+      prescriptionLineId: original.prescriptionLineId,
+      patientId: original.patientId,
+      prescriberId: original.prescriberId,
+      prescriberName: original.prescriberName,
+      prescriberRegNo: original.prescriberRegNo,
+      patientAddress: original.patientAddress,
+      medicineId: original.medicineId,
+      manufacturer: original.manufacturer,
+      inventoryLotId: original.inventoryLotId,
+      stockMovementId: null,
+      batchNumber: original.batchNumber,
+      quantityCanonicalUnits: original.quantityCanonicalUnits,
+      balanceDelta,
+      runningBalance,
+      recordedByUserId: input.recordedByUserId,
+      witnessedByUserId: original.witnessedByUserId,
+      signatureRef: original.signatureRef,
+      rxSerialWritten: original.rxSerialWritten,
+      emergency: original.emergency,
+      counterpartyName: original.counterpartyName,
+      correctionReason: input.reason,
+      correctsEntryId: original.id,
+      restorationMovementId: reversalMovementId,
+      refEntryId: original.refEntryId,
+    });
+  }
+}
+
 export async function earlierRegisterEntry(
   db: ScopedDb,
   scope: { organizationId: string; branchId: string },

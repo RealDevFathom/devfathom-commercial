@@ -1046,6 +1046,62 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
     });
   });
 
+  it('adds a controlled-register correction when reversing a controlled purchase', async () => {
+    const f = await fixture(ORG_A, BRANCH_A, 'reverse-controlled');
+    const result = await inOrg(ORG_A, async (db) => {
+      const drafted = await draftReceipt(db, f, 'reverse-controlled', {
+        line: { receivedPacks: 2, bonusPacks: 0 },
+      });
+      const posted = await deps.receipts.postGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        at: RECEIVED_AT,
+      });
+      const line = posted.lines[0]!;
+      await db.pharmacyControlledRegisterEntry.create({
+        data: {
+          organizationId: ORG_A,
+          branchId: BRANCH_A,
+          serial: 1,
+          entryKind: 'PURCHASE',
+          medicineId: f.medicineId,
+          inventoryLotId: line.inventoryLotId,
+          stockMovementId: line.acceptedMovementId!,
+          batchNumber: drafted.lines[0]!.batchNumber,
+          quantityCanonicalUnits: 20,
+          balanceDelta: 20,
+          runningBalance: 20,
+          recordedByUserId: RECEIVER,
+          witnessedByUserId: APPROVER,
+          signatureRef: `pin:${APPROVER}`,
+          counterpartyName: 'Test distributor',
+        },
+      });
+
+      await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
+        goodsReceiptId: drafted.id,
+        reason: 'Controlled delivery was entered against the wrong invoice.',
+        at: RECEIVED_AT,
+      });
+      return db.pharmacyControlledRegisterEntry.findMany({
+        where: { inventoryLotId: line.inventoryLotId },
+        orderBy: { serial: 'asc' },
+      });
+    });
+
+    expect(result).toHaveLength(2);
+    expect(result[1]).toMatchObject({
+      entryKind: 'CORRECTION',
+      correctsEntryId: result[0]!.id,
+      quantityCanonicalUnits: 20,
+      balanceDelta: -20,
+      runningBalance: 0,
+      correctionReason: 'Controlled delivery was entered against the wrong invoice.',
+      recordedByUserId: RECEIVER,
+      witnessedByUserId: APPROVER,
+    });
+    expect(result[0]).toMatchObject({ entryKind: 'PURCHASE', runningBalance: 20 });
+  });
+
   it('refuses to reverse the same receipt twice', async () => {
     const f = await fixture(ORG_A, BRANCH_A, 'twice');
     const message = await expectRejection(ORG_A, async (db) => {
