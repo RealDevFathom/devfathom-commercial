@@ -145,6 +145,7 @@ const platformDb = {
   organizationLifecycleEvent: { create: record() },
   platformAuditLog: { create: mocks.auditCreate },
   auditLog: { create: mocks.tenantAuditCreate },
+  jurisdictionRuleSet: { findFirst: vi.fn(async () => VALID_PROFILE.jurisdictionRuleSet) },
   branchRegulatoryProfile: { findFirst: mocks.regulatoryProfileFindFirst },
   restaurantBranch: {
     create: mocks.branchCreate,
