@@ -159,6 +159,7 @@ function cart(overrides: Partial<CounterCart> = {}): CounterCart {
         highAlert: false,
         lasa: false,
         coldChain: false,
+        emergencySupply: false,
         allocations: [],
       },
     ],

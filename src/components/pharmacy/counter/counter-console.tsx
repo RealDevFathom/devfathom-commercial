@@ -614,6 +614,7 @@ function ScopedPharmacyCounterConsole({
           coldChain: line.coldChain,
         },
         blocked: [],
+        emergencySupply: line.emergencySupply ?? false,
         prescription: prescriptionLine
           ? {
               id: prescriptionLine.entry.prescriptionLineId,
