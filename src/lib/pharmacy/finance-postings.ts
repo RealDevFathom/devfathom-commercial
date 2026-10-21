@@ -305,7 +305,12 @@ export async function postSaleReturnEntry(
     where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
     _sum: { canonicalUnits: true },
   });
-  const through = cumulative._sum.canonicalUnits ?? 0;
+  const unidentified = await db.pharmacyUnidentifiedReturnHold.aggregate({
+    where: { organizationId: scope.organizationId, saleLineId: saleLine.id },
+    _sum: { canonicalUnits: true },
+  });
+  const through =
+    (cumulative._sum.canonicalUnits ?? 0) + (unidentified._sum.canonicalUnits ?? 0);
   const before = through - returned;
   if (before < 0 || through > sold) throw new PharmacyFinanceError('INVALID_STATE');
   const delta = (amount: number) =>
@@ -346,6 +351,73 @@ export async function postSaleReturnEntry(
           side: 'CREDIT',
           amountMinor: cost,
         },
+      ]),
+    }
+  );
+}
+
+/** Reverse sale revenue when the returned pack cannot yet be tied to a lot.
+ * Inventory and COGS remain untouched until that physical identity is known. */
+export async function postUnidentifiedSaleReturnEntry(
+  db: ScopedDb,
+  scope: PostingScope,
+  input: { holdingId: string; at: Date }
+) {
+  const holding = await db.pharmacyUnidentifiedReturnHold.findFirst({
+    where: { id: input.holdingId, organizationId: scope.organizationId },
+    include: {
+      saleLine: { include: { returnLines: true, unidentifiedReturnHolds: true } },
+    },
+  });
+  if (!holding) throw new PharmacyFinanceError('NOT_FOUND');
+  if (holding.branchId !== scope.branchId)
+    throw new PharmacyFinanceError('CROSS_BRANCH_REFERENCE');
+
+  const sourceKind: FinanceSourceKind = 'PHARMACY_UNIDENTIFIED_RETURN_HOLD';
+  const existing = await db.financeJournalEntry.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      idempotencyKey: postingKey(sourceKind, holding.id),
+    },
+    include: { lines: true },
+  });
+  if (existing) return existing;
+
+  const saleLine = holding.saleLine;
+  const through =
+    saleLine.returnLines.reduce((sum, row) => sum + row.canonicalUnits, 0) +
+    saleLine.unidentifiedReturnHolds.reduce((sum, row) => sum + row.canonicalUnits, 0);
+  const before = through - holding.canonicalUnits;
+  if (before < 0 || through > saleLine.canonicalUnits)
+    throw new PharmacyFinanceError('INVALID_STATE');
+  const delta = (amount: number) =>
+    Math.floor((amount * through) / saleLine.canonicalUnits) -
+    Math.floor((amount * before) / saleLine.canonicalUnits);
+  const discount = delta(saleLine.discountMinor);
+  const gross =
+    delta(saleLine.unitPriceMinor * saleLine.quantity - saleLine.discountMinor) + discount;
+  const dimensions = {
+    branchId: holding.branchId,
+    productId: saleLine.medicineId,
+    locationId: holding.quarantineLocationId,
+    sourceLineId: saleLine.id,
+  };
+
+  return postJournalEntry(
+    db,
+    { organizationId: scope.organizationId, actorId: scope.actorId },
+    {
+      sourceKind,
+      sourceId: holding.id,
+      description: `Unidentified return of sale line ${saleLine.id}`,
+      occurredAt: input.at,
+      idempotencyKey: postingKey(sourceKind, holding.id),
+      branchId: holding.branchId,
+      lines: nonZero([
+        { ...dimensions, accountCode: 'SALES_REVENUE', side: 'DEBIT', amountMinor: gross },
+        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'CREDIT', amountMinor: gross },
+        { ...dimensions, accountCode: 'SALES_CLEARING', side: 'DEBIT', amountMinor: discount },
+        { ...dimensions, accountCode: 'SALES_DISCOUNT', side: 'CREDIT', amountMinor: discount },
       ]),
     }
   );
