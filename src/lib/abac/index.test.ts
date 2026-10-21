@@ -80,11 +80,11 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
-  it('leaves existing owners without new clinical or report grants', async () => {
+  it('honors existing owner pharmacy wildcard without granting reports', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        action === 'pharmacy:orders'
+        action.startsWith('pharmacy:')
       );
     }
   });
@@ -278,5 +278,33 @@ it.each(['pharmacy:procurement', 'pharmacy.procurement', 'pharmacy.*'])(
         }),
       })
     ).resolves.toBe(false);
+  }
+);
+
+it.each(['pharmacy.dispense', 'pharmacy.*'])(
+  'normalizes legacy dispensing grant %s and preserves DENY precedence',
+  async (capability) => {
+    for (const denied of [false, true]) {
+      await expect(
+        can(employee, 'pharmacy:dispense', undefined, {
+          db: authorizationDb({
+            rolePermissions: [
+              { capability, effect: 'ALLOW' },
+              ...(denied ? [{ capability: 'pharmacy.dispense', effect: 'DENY' as const }] : []),
+            ],
+          }),
+        })
+      ).resolves.toBe(!denied);
+      await expect(
+        can(employee, 'pharmacy:dispense', undefined, {
+          db: authorizationDb({
+            overrides: [
+              { capability, effect: 'ALLOW' },
+              ...(denied ? [{ capability: 'pharmacy.*', effect: 'DENY' as const }] : []),
+            ],
+          }),
+        })
+      ).resolves.toBe(!denied);
+    }
   }
 );
