@@ -7,6 +7,7 @@ import {
 import { paymentSandboxAdmitted } from '@/lib/pharmacy/payment-sandbox-admission';
 import { readCounterEvidence, readDailyCloseEvidence } from '@/lib/pharmacy/counter-evidence';
 import { can, subjectFromSession } from '@/lib/abac';
+import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
 import {
   isLockedOut,
@@ -247,6 +248,134 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
     name: branch.name,
     currency: organization?.currency ?? 'PKR',
   });
+}
+
+const RECEIPT_READ_CAPABILITIES = [
+  'pharmacy:dispense',
+  'pharmacy.dispense',
+  'pharmacy:receipt',
+  'pharmacy.receipt',
+  'pharmacy.counter',
+] as const;
+
+function capabilityCovers(rule: string, action: string): boolean {
+  if (rule === '*' || rule === action) return true;
+  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
+  return false;
+}
+
+function capabilityDecision(
+  rules: { capability: string; effect: string }[],
+  action: string
+): 'ALLOW' | 'DENY' | null {
+  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
+  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
+  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
+  return null;
+}
+
+/**
+ * Dispense, receipt, or counter capability, then an active pharmacy branch
+ * assignment in the session organization. Restaurant staff profiles are not
+ * consulted. An empty assignment denies a non-admin. A session `ADMIN` of this
+ * organization may use every active branch, including when they also have an
+ * explicit assignment elsewhere. That exception is recorded on the audit.
+ */
+/** A branch outside the session organization is a scope denial, not a bad request. */
+async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  try {
+    return await scopeFor(ctx, branch);
+  } catch (error) {
+    if (error instanceof TRPCError && error.code === 'BAD_REQUEST') {
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    }
+    throw error;
+  }
+}
+
+async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  const user = ctx.session!.user;
+  if (!user.organizationId || user.organizationId !== scope.organizationId) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  const member = await ctx.db.user.findUnique({
+    where: { id: user.id },
+    select: {
+      status: true,
+      organizationId: true,
+      organizationRole: {
+        select: { permissions: { select: { capability: true, effect: true } } },
+      },
+      permissionOverrides: {
+        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: new Date() } }] },
+        select: { capability: true, effect: true },
+      },
+    },
+  });
+  if (
+    !member ||
+    member.organizationId !== scope.organizationId ||
+    !member.status ||
+    !ACTIVE_STATUSES.has(member.status)
+  ) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  const overrides = member.permissionOverrides;
+  const roleRules = member.organizationRole?.permissions ?? [];
+  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
+    const override = capabilityDecision(overrides, action);
+    if (override === 'DENY') return false;
+    if (override === 'ALLOW') return true;
+    return capabilityDecision(roleRules, action) === 'ALLOW';
+  });
+  if (!capable) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+
+  const available = await ctx.db.pharmacyBranch.findFirst({
+    where: { id: branch, organizationId: scope.organizationId, active: true },
+    select: { id: true },
+  });
+  if (!available) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+
+  const rows = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: {
+      organizationId: scope.organizationId,
+      userId: user.id,
+      active: true,
+      branch: { organizationId: scope.organizationId, active: true },
+    },
+    select: { branchId: true },
+  });
+  const assigned = new Set(rows.map((row) => row.branchId));
+  if (assigned.has(branch)) return scope;
+
+  // Session role only. An organization-role key is not an administrator grant.
+  // An assigned admin still reaches every other active branch of this organization.
+  const orgAdmin = user.role === 'ADMIN' && user.organizationId === scope.organizationId;
+  if (orgAdmin) {
+    annotateAudit(ctx, {
+      targetType: 'PharmacyBranch',
+      targetId: branch,
+      metadata: {
+        branchId: branch,
+        reason:
+          assigned.size === 0
+            ? 'org-admin-receipt-access-without-branch-assignment'
+            : 'org-admin-receipt-access',
+      },
+    });
+    return scope;
+  }
+  throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
 const closeDate = z
@@ -549,8 +678,9 @@ export const pharmacySalesRouter = router({
             code: 'BAD_REQUEST',
             message: 'Khata fields require Khata tender.',
           });
-        return await ctx.db.$transaction(async (tx) =>
-          applyPharmacyTender(txDb(tx), await scopeFor(ctx, input.branchId), ledgerTender(input))
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await ctx.db.$transaction((tx) =>
+          applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
       }
       const scope = await khataScope(ctx, input.branchId);
@@ -964,10 +1094,10 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  lookupReceiptByNumber: protectedProcedure
+  lookupReceiptByNumber: auditedProtectedProcedure
     .input(z.object({ branchId, receiptNumber: z.number().int().positive() }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       // Receipt sequences are per device/date: never pick an arbitrary matching sale.
       return ctx.db.pharmacySale.findMany({
         where: {
@@ -985,7 +1115,8 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        return await readReturnHistory(ctx.db, await scopeFor(ctx, input.branchId), input.saleId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await readReturnHistory(ctx.db, scope, input.saleId);
       } catch (error) {
         fail(error);
       }
@@ -1299,7 +1430,8 @@ export const pharmacySalesRouter = router({
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
       try {
-        return await readCounterCart(ctx.db, await scopeFor(ctx, input.branchId), input.saleId);
+        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        return await readCounterCart(ctx.db, scope, input.saleId);
       } catch (error) {
         fail(error);
       }
@@ -1311,10 +1443,10 @@ export const pharmacySalesRouter = router({
    * A query, deliberately. Reprinting re-reads the same sale and therefore the
    * same receipt number; only `tender` can ever issue one.
    */
-  counterReceipt: protectedProcedure
+  counterReceipt: auditedProtectedProcedure
     .input(z.object({ branchId, saleId: z.string().min(1) }).strict())
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         // F8: sourced Rx label payloads come only from this authorized receipt read.
@@ -1333,7 +1465,7 @@ export const pharmacySalesRouter = router({
    * re-read the same sale, so neither can issue or change a receipt number.
    * Text the raw baseline cannot print returns the browser/OS fallback.
    */
-  counterReceiptPrintJob: protectedProcedure
+  counterReceiptPrintJob: auditedProtectedProcedure
     .input(
       z
         .object({
@@ -1345,7 +1477,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const scope = await scopeFor(ctx, input.branchId);
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
       try {
         const receipt = await loadCounterReceipt(ctx, scope, input.saleId);
         if (receipt.receiptNumber === null || !receipt.completedAt) {
@@ -1383,18 +1515,20 @@ export const pharmacySalesRouter = router({
     }),
 
   /** PH-A7: this branch's saved receipt format (shared layout), for the counter. */
-  counterReceiptFormat: protectedProcedure
+  counterReceiptFormat: auditedProtectedProcedure
     .input(z.object({ branchId }).strict())
     .query(async ({ ctx, input }) =>
-      readPharmacyReceiptFormat(ctx.db, await scopeFor(ctx, input.branchId))
+      readPharmacyReceiptFormat(ctx.db, await requireCounterReceiptAccess(ctx, input.branchId))
     ),
 
   /** PH-A7: save the branch receipt format. Optimistic revision; admins only. */
   counterSaveReceiptFormat: adminProcedure
     .input(SaveReceiptLayoutSchema)
-    .mutation(async ({ ctx, input }) =>
-      savePharmacyReceiptFormat(ctx.db, (await scopeFor(ctx, input.branchId)).organizationId, input)
-    ),
+    .mutation(async ({ ctx, input }) => {
+      // Active, in-organization branch or FORBIDDEN (scopeFor checks it).
+      const scope = await branchScopeOrForbidden(ctx, input.branchId);
+      return savePharmacyReceiptFormat(ctx.db, scope.organizationId, input);
+    }),
 
   // ── POS-01 configurable shortcuts ─────────────────────────────────────────
 

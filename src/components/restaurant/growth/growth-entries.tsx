@@ -2,6 +2,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
+import { browserUuid } from '@/lib/browser-uuid';
 import { SectionCard } from '@/components/ui/section-card';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -66,7 +67,7 @@ export function GrowthEntries({
                 branchId,
                 from: String(fields.get('from')),
                 to: String(fields.get('to')),
-                requestId: crypto.randomUUID(),
+                requestId: browserUuid(),
               };
               setPending(input);
               setBusy(true);

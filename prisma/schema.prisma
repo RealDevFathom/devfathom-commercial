@@ -242,6 +242,8 @@ model PharmacyBranch {
   @@map("pharmacy_branches")
 }
 
+/// Active assignment of a tenant user to one pharmacy branch. Receipt reads use
+/// this table, never restaurant staff profiles. An empty set is not a grant.
 model PharmacyBranchAssignment {
   id             String   @id @default(cuid())
   organizationId String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
