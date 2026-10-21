@@ -755,20 +755,28 @@ export function demoRestaurantApproverUserId(seatNumber: number): string {
 }
 
 const ORGANIZATION_SLUG_TAKEN = 'That organization slug is already taken.';
-const ORGANIZATION_SLUG_CONSTRAINTS = new Set(['slug', 'organizations_slug_key']);
+const ORGANIZATION_SLUG_CONSTRAINT = 'organizations_slug_key';
+const ORGANIZATION_SLUG_CONSTRAINTS = new Set(['slug', ORGANIZATION_SLUG_CONSTRAINT]);
+const ORGANIZATION_SLUG_CONSTRAINT_IN_MESSAGE = new RegExp(
+  `(?:^|[^A-Za-z0-9_])${ORGANIZATION_SLUG_CONSTRAINT}(?:$|[^A-Za-z0-9_])`
+);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
 
 function pushConstraintName(names: string[], value: unknown) {
   if (typeof value === 'string' && value.length > 0) names.push(value);
 }
 
 /**
- * Names Prisma puts on a unique violation: meta.target, a top-level constraint,
- * or the driver adapter's constraint index / fields. The message text is not a
- * source — it can mention a constraint the structured target does not name.
+ * Structured names Prisma puts on a unique violation: meta.target, a top-level
+ * constraint, or the driver adapter's constraint index / fields. An absent
+ * constraint is not a name — the pg adapter omits it when Postgres sends no DETAIL.
  */
 function constraintNames(meta: unknown): string[] {
-  if (!meta || typeof meta !== 'object') return [];
-  const record = meta as Record<string, unknown>;
+  const record = asRecord(meta);
+  if (!record) return [];
   const names: string[] = [];
   const target = record.target;
   if (Array.isArray(target)) {
@@ -787,11 +795,24 @@ function constraintNames(meta: unknown): string[] {
   } else {
     pushConstraintName(names, constraint);
   }
-  const adapter = record.driverAdapterError;
-  if (adapter && typeof adapter === 'object') {
-    names.push(...constraintNames((adapter as Record<string, unknown>).cause));
-  }
+  const adapter = asRecord(record.driverAdapterError);
+  if (adapter) names.push(...constraintNames(adapter.cause));
   return names;
+}
+
+/**
+ * pg adapter 7.9 leaves `constraint` undefined when `detail` is empty, so the
+ * only slug signal is cause.originalCode 23505 plus the constraint name in
+ * cause.originalMessage. A structured name for a different constraint still wins:
+ * organizations_pkey and every other index are rethrown.
+ */
+function unspecifiedUniqueViolationNamesSlug(meta: unknown): boolean {
+  const cause = asRecord(asRecord(asRecord(meta)?.driverAdapterError)?.cause);
+  if (!cause || String(cause.originalCode) !== '23505') return false;
+  return (
+    typeof cause.originalMessage === 'string' &&
+    ORGANIZATION_SLUG_CONSTRAINT_IN_MESSAGE.test(cause.originalMessage)
+  );
 }
 
 /** Prisma names the organizations.slug unique index either as the column or the index. */
@@ -799,7 +820,14 @@ function isOrganizationSlugConflict(error: unknown): boolean {
   if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
     return false;
   }
-  return constraintNames(error.meta).some((name) => ORGANIZATION_SLUG_CONSTRAINTS.has(name));
+  const names = constraintNames(error.meta);
+  if (names.some((name) => ORGANIZATION_SLUG_CONSTRAINTS.has(name))) return true;
+  if (names.length > 0) return false;
+  return unspecifiedUniqueViolationNamesSlug(error.meta);
+}
+
+function canonicalOrganizationSlug(slug: string): string {
+  return slug.trim().toLowerCase();
 }
 
 /**
@@ -812,8 +840,9 @@ async function createOrganizationRecord(
   db: PrismaClient,
   data: Parameters<PrismaClient['organization']['create']>[0]['data']
 ) {
+  const slug = typeof data.slug === 'string' ? canonicalOrganizationSlug(data.slug) : data.slug;
   try {
-    return await db.organization.create({ data });
+    return await db.organization.create({ data: { ...data, slug } });
   } catch (error) {
     if (isOrganizationSlugConflict(error)) {
       throw new PlatformSecurityError(ORGANIZATION_SLUG_TAKEN, 409);

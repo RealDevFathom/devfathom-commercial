@@ -238,6 +238,75 @@ describe('organization.create duplicate slug', () => {
     expect(mocks.userCreate).not.toHaveBeenCalled();
   });
 
+  it('maps a pg adapter unique violation that omitted the constraint', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError(
+        'Unique constraint failed on the (not available)',
+        {
+          code: 'P2002',
+          clientVersion: '7.9.1',
+          meta: {
+            modelName: 'Organization',
+            driverAdapterError: {
+              name: 'DriverAdapterError',
+              cause: {
+                originalCode: '23505',
+                originalMessage:
+                  'duplicate key value violates unique constraint "organizations_slug_key"',
+                kind: 'UniqueConstraintViolation',
+              },
+            },
+          },
+        }
+      )
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'That organization slug is already taken.',
+    });
+    expect(platformDb.organizationRole.create).not.toHaveBeenCalled();
+    expect(mocks.userCreate).not.toHaveBeenCalled();
+  });
+
+  it('rethrows a unique violation for a different constraint named only in the cause', async () => {
+    platformDb.organization.create.mockRejectedValueOnce(
+      new Prisma.PrismaClientKnownRequestError('Unique constraint failed on the (not available)', {
+        code: 'P2002',
+        clientVersion: '7.9.1',
+        meta: {
+          modelName: 'Organization',
+          driverAdapterError: {
+            cause: {
+              originalCode: '23505',
+              originalMessage: 'duplicate key value violates unique constraint "organizations_pkey"',
+              kind: 'UniqueConstraintViolation',
+            },
+          },
+        },
+      })
+    );
+
+    const error = await executePlatformCommand(
+      actor,
+      'organization.create',
+      payload('admin@acme.com'),
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(Prisma.PrismaClientKnownRequestError);
+    expect(error).toMatchObject({ code: 'P2002' });
+    expect(error).not.toBeInstanceOf(PlatformSecurityError);
+  });
+
   it('does not treat a slug mentioned only in the error message as a slug conflict', async () => {
     platformDb.organization.create.mockRejectedValueOnce(
       new Prisma.PrismaClientKnownRequestError(
