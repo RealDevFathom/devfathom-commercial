@@ -13,6 +13,7 @@ vi.mock('@/server/audit', () => ({
 
 import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 import { pharmacyMedicineRouter } from './pharmacy-medicine';
+import { pharmacyPurchasingRouter } from './pharmacy-purchasing';
 import type { TRPCContext } from '../trpc';
 
 // Real ABAC decision (not mocked): the cashier template's grants come from the role.
@@ -30,6 +31,8 @@ function caller(templateKey: string, grants?: string[]) {
         permissionOverrides: [],
       })),
     },
+    pharmacyRequisition: { findFirst: vi.fn() },
+    pharmacyPurchaseOrder: { findFirst: vi.fn() },
     medicine: { create: vi.fn(), findFirst: vi.fn() },
     ingredient: { create: vi.fn() },
     presentation: { findFirst: vi.fn() },
@@ -41,7 +44,12 @@ function caller(templateKey: string, grants?: string[]) {
   };
   return {
     db,
-    api: pharmacyMedicineRouter.createCaller({
+    api: pharmacyMedicineRouter.createCaller(context()),
+    purchasing: pharmacyPurchasingRouter.createCaller(context()),
+  };
+
+  function context() {
+    return {
       db,
       entitlements: { organizationId: 'org_a', enabledModules: ['pharmacy-core'], modules: [] },
       session: {
@@ -57,8 +65,8 @@ function caller(templateKey: string, grants?: string[]) {
       support: null,
       requestMeta: { ip: null, userAgent: null },
       audit: { detail: {} },
-    } as unknown as TRPCContext),
-  };
+    } as unknown as TRPCContext;
+  }
 }
 
 describe('createMedicine requires pharmacy:procurement on the server (#132)', () => {
@@ -258,4 +266,47 @@ describe('revisePackLevel locks, closes under the lock and carries children forw
     ).rejects.toMatchObject({ code: 'CONFLICT' });
     expect(tx.packLevel.create.mock.calls.length).toBe(creates);
   });
+});
+
+describe('purchasing lifecycle requires pharmacy:procurement', () => {
+  const calls: Array<[string, (api: ReturnType<typeof caller>['purchasing']) => Promise<unknown>]> =
+    [
+      ['submitRequisition', (api) => api.submitRequisition({ requisitionId: 'r1' })],
+      ['submitPurchaseOrder', (api) => api.submitPurchaseOrder({ purchaseOrderId: 'po1' })],
+      [
+        'approvePurchaseOrder',
+        (api) => api.approvePurchaseOrder({ purchaseOrderId: 'po1', decision: 'APPROVED' }),
+      ],
+      ['sendPurchaseOrder', (api) => api.sendPurchaseOrder({ purchaseOrderId: 'po1' })],
+      [
+        'postGoodsReceipt',
+        (api) => api.postGoodsReceipt({ branchId: 'b1', goodsReceiptId: 'gr1' }),
+      ],
+    ];
+
+  it.each(calls)(
+    'refuses a cashier on %s before accessing purchasing data',
+    async (_name, call) => {
+      const { purchasing, db } = caller('cashier');
+      await expect(call(purchasing)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.pharmacyRequisition.findFirst).not.toHaveBeenCalled();
+      expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(calls.filter(([name]) => name !== 'postGoodsReceipt'))(
+    'allows a procurement grant past the gate on %s',
+    async (_name, call) => {
+      const { purchasing, db } = caller('procurement', ['pharmacy:procurement']);
+      await call(purchasing).catch((error: { code: string }) => {
+        expect(error.code).not.toBe('FORBIDDEN');
+      });
+      expect(
+        db.pharmacyRequisition.findFirst.mock.calls.length +
+          db.pharmacyPurchaseOrder.findFirst.mock.calls.length +
+          db.$transaction.mock.calls.length
+      ).toBeGreaterThan(0);
+    }
+  );
 });

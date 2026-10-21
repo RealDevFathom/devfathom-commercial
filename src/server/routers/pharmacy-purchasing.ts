@@ -399,7 +399,7 @@ const purchasingRouter = router({
       }
     }),
 
-  submitRequisition: protectedProcedure
+  submitRequisition: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ requisitionId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -640,7 +640,7 @@ const purchasingRouter = router({
       }
     }),
 
-  submitPurchaseOrder: protectedProcedure
+  submitPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -663,7 +663,7 @@ const purchasingRouter = router({
    * it is refused for whoever raised the order or the underlying requisition.
    * A rejection is recorded too, and returns the order to DRAFT.
    */
-  approvePurchaseOrder: protectedProcedure
+  approvePurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -728,7 +728,7 @@ const purchasingRouter = router({
       }
     }),
 
-  sendPurchaseOrder: protectedProcedure
+  sendPurchaseOrder: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ purchaseOrderId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       try {
@@ -1007,7 +1007,7 @@ const purchasingRouter = router({
    * One transaction: the lot, both dispositions, every exception, the receipt
    * status and the order's move to RECEIVING commit together or not at all.
    */
-  postGoodsReceipt: protectedProcedure
+  postGoodsReceipt: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ branchId, goodsReceiptId: z.string().min(1) }).strict())
     .mutation(async ({ ctx, input }) => {
       const scope = receivingScope(ctx, input.branchId);
