@@ -12,6 +12,7 @@ import { demoPersonaForUser } from '@/lib/demo/personas';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { BillCommandError, evaluateOrderSettlement, type MoneyCommandActor } from './bills';
+import { getLoyaltySummary } from './loyalty';
 import { CoAuthorizationError } from './co-authorization';
 import {
   DailyCloseError,
@@ -636,7 +637,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       receiptNumber: true,
       settledAt: true,
       branch: { select: { name: true, timezone: true } },
-      order: { select: { orderNumber: true, channel: true } },
+      order: { select: { orderNumber: true, channel: true, customerId: true } },
       lines: {
         orderBy: { createdAt: 'asc' },
         select: {
@@ -663,6 +664,10 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
     },
   });
   if (!bill) return null;
+
+  const loyalty = bill.order.customerId
+    ? await receiptLoyalty(db, bill.order.customerId, bill.id)
+    : null;
 
   return {
     billId: bill.id,
@@ -702,6 +707,25 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       roundingAdjustment: money(bill.roundingAdjustment),
       grandTotal: money(bill.grandTotal),
     },
+    loyalty,
+  };
+}
+
+/** Wallet balance for the guest on this settled bill. Null when the customer id does not resolve. */
+async function receiptLoyalty(db: ScopedDb, customerId: string, billId: string) {
+  const summary = await getLoyaltySummary(db, customerId);
+  if (!summary) return null;
+  const earned = summary.accountId
+    ? await db.loyaltyPointsEntry.aggregate({
+        where: { accountId: summary.accountId, billId, kind: 'EARN' },
+        _sum: { points: true },
+      })
+    : { _sum: { points: 0 } };
+  return {
+    pointsBalance: summary.pointsBalance,
+    pointsEarned: earned._sum.points ?? 0,
+    pointsPerPkr: summary.pointsPerPkr,
+    balancePkr: summary.balancePkr,
   };
 }
 
