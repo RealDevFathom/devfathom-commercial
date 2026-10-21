@@ -142,6 +142,20 @@ describe('NewOrganizationPage package step', () => {
   // from. Asked here because `pharmacy_branches` requires all four, and the
   // province decides which jurisdiction's published rules the branch licence is
   // later recorded against.
+  it('defaults a PHARMACY organization to the Pakistan market timezone and currency', async () => {
+    const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
+
+    expect(container.querySelector('input[name="currency"]')).toHaveValue('PKR');
+    expect(container.querySelector('input[name="timezone"]')).toHaveValue('Asia/Karachi');
+  });
+
+  it('keeps the commercial USD default for an AGENCY organization', async () => {
+    const { container } = render(await renderPage({ vertical: 'AGENCY' }));
+
+    expect(container.querySelector('input[name="currency"]')).toHaveValue('USD');
+    expect(container.querySelector('input[name="timezone"]')).toHaveValue('UTC');
+  });
+
   it('asks a PHARMACY organization for its first branch premises, province by name', async () => {
     const { container } = render(await renderPage({ vertical: 'PHARMACY' }));
 
