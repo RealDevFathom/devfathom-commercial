@@ -54,6 +54,12 @@ function fixture() {
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
     pharmacyFamilyAccount: {
+      findFirst: vi.fn().mockResolvedValue({
+        id: 'family-a',
+        displayName: 'Family',
+        creditLimitMinor: 100,
+        active: true,
+      }),
       findMany: vi.fn().mockResolvedValue([
         {
           id: 'family-a',
