@@ -19,6 +19,15 @@ import { router, type TRPCContext } from '@/server/trpc';
 import { purchasingWorkspace } from '@/lib/pharmacy/purchasing-console';
 
 function caller(db: object) {
+  // The pack procedures require pharmacy:procurement (real ABAC); grant it to this actor.
+  const withGrant = db as { user?: object };
+  withGrant.user = {
+    ...(withGrant.user ?? {}),
+    findUnique: vi.fn(async () => ({
+      organizationRole: { permissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }] },
+      permissionOverrides: [],
+    })),
+  };
   return router({ pharmacyMedicine: pharmacyMedicineRouter }).createCaller({
     db,
     entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-core'], modules: [] },
@@ -101,9 +110,9 @@ describe('existing pack procedure to receiving options (in-memory delegates, no 
       { organizationId: 'org-a' },
       { at: new Date('2026-08-01') }
     );
-    expect(earlier.medicines[0].packs.map((p: { packLevelId: string }) => p.packLevelId)).not.toContain(
-      'new-pack'
-    );
+    expect(
+      earlier.medicines[0].packs.map((p: { packLevelId: string }) => p.packLevelId)
+    ).not.toContain('new-pack');
   });
 
   it.each([0, -1, 1.5])('rejects invalid units %s before persistence', async (unitsPerParent) => {

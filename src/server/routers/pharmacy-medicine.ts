@@ -26,7 +26,6 @@ import {
   adminProcedure,
   auditedProtectedProcedure,
   capabilityProcedure,
-  protectedProcedure,
   router,
 } from '../trpc';
 
@@ -504,7 +503,7 @@ export const pharmacyMedicineRouter = router({
     })
   ),
 
-  createIngredient: protectedProcedure
+  createIngredient: capabilityProcedure('pharmacy:procurement')
     .input(z.object({ name: z.string().trim().min(1).max(200) }).strict())
     .mutation(({ ctx, input }) => ctx.db.ingredient.create({ data: input })),
 
@@ -604,7 +603,7 @@ export const pharmacyMedicineRouter = router({
       return medicine;
     }),
 
-  createPackLevel: protectedProcedure
+  createPackLevel: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -618,7 +617,12 @@ export const pharmacyMedicineRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (!(await ctx.db.presentation.findFirst({ where: { id: input.presentationId } })))
+      const organizationId = ctx.entitlements.organizationId;
+      if (
+        !(await ctx.db.presentation.findFirst({
+          where: { id: input.presentationId, organizationId },
+        }))
+      )
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Presentation is outside this workspace.',
@@ -626,7 +630,12 @@ export const pharmacyMedicineRouter = router({
       if (
         input.parentPackLevelId &&
         !(await ctx.db.packLevel.findFirst({
-          where: { id: input.parentPackLevelId, presentationId: input.presentationId },
+          where: {
+            id: input.parentPackLevelId,
+            organizationId,
+            presentationId: input.presentationId,
+            effectiveTo: null,
+          },
         }))
       )
         throw new TRPCError({
@@ -636,7 +645,7 @@ export const pharmacyMedicineRouter = router({
       return ctx.db.packLevel.create({ data: { ...input, version: 1 } });
     }),
 
-  revisePackLevel: protectedProcedure
+  revisePackLevel: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -646,30 +655,70 @@ export const pharmacyMedicineRouter = router({
         })
         .strict()
     )
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) => {
-        const current = await tx.packLevel.findFirst({ where: { id: input.id } });
-        if (!current) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
-        await tx.packLevel.update({
-          where: { id: current.id },
-          data: { effectiveTo: input.effectiveFrom },
-        });
-        return tx.packLevel.create({
-          data: {
-            presentationId: current.presentationId,
-            parentPackLevelId: current.parentPackLevelId,
-            versionGroupId: current.versionGroupId,
-            version: current.version + 1,
-            level: current.level,
-            unitsPerParent: input.unitsPerParent,
-            effectiveFrom: input.effectiveFrom,
-            supersedesPackLevelId: current.id,
-          },
-        });
-      })
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const organizationId = ctx.entitlements.organizationId;
+      return ctx.db.$transaction(async (tx) => {
+        /**
+         * Supersede one level under a row lock: close effectiveTo only if it is
+         * still open, then write the next version pointing at `parentId`.
+         */
+        const supersede = async (
+          id: string,
+          parentId: string | null,
+          unitsPerParent: number | null
+        ) => {
+          await tx.$queryRaw`SELECT id FROM pharmacy_pack_levels WHERE id=${id} AND "organizationId"=${organizationId} FOR UPDATE`;
+          const current = await tx.packLevel.findFirst({ where: { id, organizationId } });
+          if (!current)
+            throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
+          if (current.effectiveTo !== null || current.effectiveFrom >= input.effectiveFrom)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This pack level was already revised. Reload and try again.',
+            });
+          const closed = await tx.packLevel.updateMany({
+            where: { id: current.id, organizationId, effectiveTo: null },
+            data: { effectiveTo: input.effectiveFrom },
+          });
+          if (closed.count !== 1)
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'This pack level was already revised. Reload and try again.',
+            });
+          const next = await tx.packLevel.create({
+            data: {
+              presentationId: current.presentationId,
+              parentPackLevelId: parentId,
+              versionGroupId: current.versionGroupId,
+              version: current.version + 1,
+              level: current.level,
+              unitsPerParent: unitsPerParent ?? current.unitsPerParent,
+              effectiveFrom: input.effectiveFrom,
+              supersedesPackLevelId: current.id,
+            },
+          });
+          return { current, next };
+        };
+        /** Carry every open child forward onto the new parent version, recursively. */
+        const carryChildren = async (oldParentId: string, newParentId: string) => {
+          const children = await tx.packLevel.findMany({
+            where: { organizationId, parentPackLevelId: oldParentId, effectiveTo: null },
+            orderBy: { id: 'asc' },
+          });
+          for (const child of children) {
+            const { next } = await supersede(child.id, newParentId, null);
+            await carryChildren(child.id, next.id);
+          }
+        };
+        const head = await tx.packLevel.findFirst({ where: { id: input.id, organizationId } });
+        if (!head) throw new TRPCError({ code: 'NOT_FOUND', message: 'Pack level not found.' });
+        const { next } = await supersede(head.id, head.parentPackLevelId, input.unitsPerParent);
+        await carryChildren(head.id, next.id);
+        return next;
+      });
+    }),
 
-  recordPrintedMrp: protectedProcedure
+  recordPrintedMrp: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -681,7 +730,11 @@ export const pharmacyMedicineRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      if (!(await ctx.db.packLevel.findFirst({ where: { id: input.packLevelId } })))
+      if (
+        !(await ctx.db.packLevel.findFirst({
+          where: { id: input.packLevelId, organizationId: ctx.entitlements.organizationId },
+        }))
+      )
         throw new TRPCError({
           code: 'FORBIDDEN',
           message: 'Pack level is outside this workspace.',
@@ -705,7 +758,7 @@ export const pharmacyMedicineRouter = router({
       });
     }),
 
-  addBarcode: protectedProcedure
+  addBarcode: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
@@ -722,7 +775,7 @@ export const pharmacyMedicineRouter = router({
       })
     ),
 
-  addAlias: protectedProcedure
+  addAlias: capabilityProcedure('pharmacy:procurement')
     .input(
       z
         .object({
