@@ -12,6 +12,7 @@ import {
   assertTaskAccess,
 } from '../authz';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { completionTimeAfterMove, DONE_COLUMN_RE } from '@/lib/task-completion';
 
 // Format a task due date for emails, e.g. "Fri, Jun 20 · 5:00 PM".
 function formatDue(date: Date): string {
@@ -529,6 +530,11 @@ export const projectsRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       await assertColumnAccess(ctx, input.columnId);
+      const column = await ctx.db.column.findUnique({
+        where: { id: input.columnId },
+        select: { name: true, board: { select: { projectId: true } } },
+      });
+      if (!column) throw new TRPCError({ code: 'NOT_FOUND' });
       // Verify user exists (handles stale sessions after DB reset)
       const user = await ctx.db.user.findUnique({
         where: { id: ctx.session.user.id },
@@ -545,14 +551,10 @@ export const projectsRouter = router({
       // updateTaskAssignees did not, so an arbitrary or non-member id could be
       // assigned (and emailed) or trigger a raw FK 500.
       if (input.assigneeIds.length > 0) {
-        const col = await ctx.db.column.findUnique({
-          where: { id: input.columnId },
-          select: { board: { select: { projectId: true } } },
-        });
         const uniqueAssignees = [...new Set(input.assigneeIds)];
         await assertInOrganization(ctx.db.user, workspaceId(ctx), uniqueAssignees);
         const memberCount = await ctx.db.projectMember.count({
-          where: { projectId: col!.board.projectId, userId: { in: uniqueAssignees } },
+          where: { projectId: column.board.projectId, userId: { in: uniqueAssignees } },
         });
         if (memberCount !== uniqueAssignees.length) {
           throw new TRPCError({
@@ -584,6 +586,7 @@ export const projectsRouter = router({
           order: (maxOrder._max.order ?? -1) + 1,
           priority: input.priority,
           dueDate: input.dueDate,
+          completedAt: DONE_COLUMN_RE.test(column.name) ? new Date() : undefined,
           createdById: user.id,
           assignees:
             mergedAssignees.length > 0
@@ -696,6 +699,16 @@ export const projectsRouter = router({
 
       const sourceColumnId = task.columnId;
       const isSameColumn = sourceColumnId === input.targetColumnId;
+      const targetColumn = await ctx.db.column.findUnique({
+        where: { id: input.targetColumnId },
+        select: {
+          name: true,
+          board: { select: { project: { select: { id: true, name: true } } } },
+        },
+      });
+      if (!targetColumn) throw new TRPCError({ code: 'NOT_FOUND' });
+      const movedAt = new Date();
+      const completedAt = completionTimeAfterMove(task.column.name, targetColumn.name, movedAt);
 
       await ctx.db.$transaction(async (tx) => {
         // PROJ-02: rebuild a contiguous 0..n order from the actual ordered list
@@ -732,7 +745,7 @@ export const projectsRouter = router({
           targetIds.splice(index, 0, input.taskId);
           await tx.task.update({
             where: { id: input.taskId },
-            data: { columnId: input.targetColumnId },
+            data: { columnId: input.targetColumnId, completedAt },
           });
           for (let i = 0; i < targetIds.length; i++) {
             await tx.task.update({ where: { id: targetIds[i] }, data: { order: i } });
@@ -755,15 +768,7 @@ export const projectsRouter = router({
       // Log completion when a task enters a "done" column (and wasn't already in
       // one). PROJ-07: match the same heuristic the board preview uses, not just a
       // column named exactly "Done" (covers Shipped/Complete/Closed/imported).
-      const DONE_RE = /^(done|complete|completed|shipped|closed)$/i;
-      const targetColumn = await ctx.db.column.findUnique({
-        where: { id: input.targetColumnId },
-        select: {
-          name: true,
-          board: { select: { project: { select: { id: true, name: true } } } },
-        },
-      });
-      if (targetColumn && DONE_RE.test(targetColumn.name) && !DONE_RE.test(task.column.name)) {
+      if (DONE_COLUMN_RE.test(targetColumn.name) && !DONE_COLUMN_RE.test(task.column.name)) {
         logActivity(ctx.db, ctx.session.user.id, {
           type: 'task_completed',
           message: `completed task "${task.title}" in ${targetColumn.board.project.name}`,
@@ -793,6 +798,22 @@ export const projectsRouter = router({
         await assertTaskAccess(ctx, taskId);
       }
 
+      const [targetColumn, movingTasks] = await Promise.all([
+        ctx.db.column.findUnique({
+          where: { id: input.targetColumnId },
+          select: { name: true },
+        }),
+        ctx.db.task.findMany({
+          where: { id: { in: input.taskIds } },
+          select: { id: true, column: { select: { name: true } } },
+        }),
+      ]);
+      if (!targetColumn || movingTasks.length !== input.taskIds.length) {
+        throw new TRPCError({ code: 'NOT_FOUND' });
+      }
+      const sourceColumnByTask = new Map(movingTasks.map((task) => [task.id, task.column.name]));
+      const movedAt = new Date();
+
       await ctx.db.$transaction(async (tx) => {
         const moving = new Set(input.taskIds);
         const targetList = await tx.task.findMany({
@@ -808,9 +829,14 @@ export const projectsRouter = router({
         ];
 
         for (const taskId of input.taskIds) {
+          const completedAt = completionTimeAfterMove(
+            sourceColumnByTask.get(taskId)!,
+            targetColumn.name,
+            movedAt
+          );
           await tx.task.update({
             where: { id: taskId },
-            data: { columnId: input.targetColumnId },
+            data: { columnId: input.targetColumnId, completedAt },
           });
         }
         for (let i = 0; i < finalIds.length; i++) {

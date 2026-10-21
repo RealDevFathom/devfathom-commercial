@@ -3209,6 +3209,7 @@ model Task {
   order          Int
   priority       Priority  @default(MEDIUM)
   dueDate        DateTime?
+  completedAt    DateTime?
   createdById    String
   // IMP-PROJ-06: optional parent for subtasks (self-relation).
   parentId       String?
@@ -3232,6 +3233,7 @@ model Task {
 
   @@index([columnId, order])
   @@index([createdById])
+  @@index([completedAt])
   @@index([parentId])
   @@index([organizationId])
   @@map("tasks")
