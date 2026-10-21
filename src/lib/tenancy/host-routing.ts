@@ -23,6 +23,7 @@ export const RESERVED_HOST_LABELS = Object.freeze([
   'meet-staging',
   'turn',
   'turn-staging',
+  'wallet',
 ]);
 
 export function isReservedHostLabel(value: string): boolean {

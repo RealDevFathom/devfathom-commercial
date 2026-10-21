@@ -1,0 +1,1347 @@
+{
+  "numTotalTestSuites": 31,
+  "numPassedTestSuites": 29,
+  "numFailedTestSuites": 2,
+  "numPendingTestSuites": 0,
+  "numTotalTests": 119,
+  "numPassedTests": 116,
+  "numFailedTests": 3,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "snapshot": {
+    "added": 0,
+    "failure": false,
+    "filesAdded": 0,
+    "filesRemoved": 0,
+    "filesRemovedList": [],
+    "filesUnmatched": 0,
+    "filesUpdated": 0,
+    "matched": 0,
+    "total": 0,
+    "unchecked": 0,
+    "uncheckedKeysByFile": [],
+    "unmatched": 0,
+    "updated": 0,
+    "didUpdate": false
+  },
+  "startTime": 1788708802543,
+  "success": false,
+  "testResults": [
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["FirstRunChecklist"],
+          "fullName": "FirstRunChecklist shows every data-derived row with a status, reason, and exact action link",
+          "status": "passed",
+          "title": "shows every data-derived row with a status, reason, and exact action link",
+          "duration": 124.99800000000005,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["FirstRunChecklist"],
+          "fullName": "FirstRunChecklist does not render after all required evidence is complete",
+          "status": "passed",
+          "title": "does not render after all required evidence is complete",
+          "duration": 0.9030000000002474,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["FirstRunChecklist"],
+          "fullName": "FirstRunChecklist links pharmacy first sale to the keyboard-first counter",
+          "status": "passed",
+          "title": "links pharmacy first sale to the keyboard-first counter",
+          "duration": 24.74145899999985,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804945,
+      "endTime": 1788708805095.7415,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/components/onboarding/first-run-checklist.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [
+            "existing pack procedure to receiving options (in-memory delegates, no DB)"
+          ],
+          "fullName": "existing pack procedure to receiving options (in-memory delegates, no DB) makes the created effective pack selectable with the derived unit count",
+          "status": "passed",
+          "title": "makes the created effective pack selectable with the derived unit count",
+          "duration": 3.0353329999998095,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "existing pack procedure to receiving options (in-memory delegates, no DB)"
+          ],
+          "fullName": "existing pack procedure to receiving options (in-memory delegates, no DB) rejects invalid units 0 before persistence",
+          "status": "passed",
+          "title": "rejects invalid units 0 before persistence",
+          "duration": 1.0378330000000915,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "existing pack procedure to receiving options (in-memory delegates, no DB)"
+          ],
+          "fullName": "existing pack procedure to receiving options (in-memory delegates, no DB) rejects invalid units -1 before persistence",
+          "status": "passed",
+          "title": "rejects invalid units -1 before persistence",
+          "duration": 0.3813749999999345,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "existing pack procedure to receiving options (in-memory delegates, no DB)"
+          ],
+          "fullName": "existing pack procedure to receiving options (in-memory delegates, no DB) rejects invalid units 1.5 before persistence",
+          "status": "passed",
+          "title": "rejects invalid units 1.5 before persistence",
+          "duration": 0.7545420000001286,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "existing pack procedure to receiving options (in-memory delegates, no DB)"
+          ],
+          "fullName": "existing pack procedure to receiving options (in-memory delegates, no DB) keeps the existing scoped-presentation denial",
+          "status": "passed",
+          "title": "keeps the existing scoped-presentation denial",
+          "duration": 0.5288339999999607,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [
+            "existing pack procedure to receiving options (in-memory delegates, no DB)"
+          ],
+          "fullName": "existing pack procedure to receiving options (in-memory delegates, no DB) keeps the existing module denial on the namespaced procedure",
+          "status": "passed",
+          "title": "keeps the existing module denial on the namespaced procedure",
+          "duration": 0.2895410000000993,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804620,
+      "endTime": 1788708804626.2896,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/components/pharmacy/medicine-pack-setup.procedure.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup repeats the same search after publication instead of keeping an empty result",
+          "status": "passed",
+          "title": "repeats the same search after publication instead of keeping an empty result",
+          "duration": 92.83054200000015,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup selects readable medicine/presentation labels and invokes the existing pack procedure",
+          "status": "passed",
+          "title": "selects readable medicine/presentation labels and invokes the existing pack procedure",
+          "duration": 76.06575000000021,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup keeps values and describes validation errors without submitting an invalid unit conversion",
+          "status": "passed",
+          "title": "keeps values and describes validation errors without submitting an invalid unit conversion",
+          "duration": 24.194749999999885,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup preserves entries after BAD_REQUEST from the server",
+          "status": "passed",
+          "title": "preserves entries after BAD_REQUEST from the server",
+          "duration": 17.787958000000117,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup preserves entries after FORBIDDEN from the server",
+          "status": "passed",
+          "title": "preserves entries after FORBIDDEN from the server",
+          "duration": 19.547166999999945,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup preserves entries after UNAUTHORIZED from the server",
+          "status": "passed",
+          "title": "preserves entries after UNAUTHORIZED from the server",
+          "duration": 27.007957999999917,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup disables repeat submission while pending and refreshes receiving options after success",
+          "status": "passed",
+          "title": "disables repeat submission while pending and refreshes receiving options after success",
+          "duration": 24.816790999999967,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup provides loading, no-result and retry states",
+          "status": "passed",
+          "title": "provides loading, no-result and retry states",
+          "duration": 12.239208999999846,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["medicine pack setup"],
+          "fullName": "medicine pack setup shows only effective packs using the same conversion function as receiving",
+          "status": "passed",
+          "title": "shows only effective packs using the same conversion function as receiving",
+          "duration": 18.511208000000124,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804221,
+      "endTime": 1788708804533.5112,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/components/pharmacy/medicine-pack-setup.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "uniquely matches all six journey links with their real accessible suffix",
+          "status": "passed",
+          "title": "uniquely matches all six journey links with their real accessible suffix",
+          "duration": 116.65866699999992,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708805701,
+      "endTime": 1788708805817.6587,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/tests/e2e/fixtures/pharmacy-first-sale.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["invite picker department read contract"],
+          "fullName": "invite picker department read contract uses only the active session tenant and the existing admin capability",
+          "status": "passed",
+          "title": "uses only the active session tenant and the existing admin capability",
+          "duration": 2.234542000000147,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["invite picker department read contract"],
+          "fullName": "invite picker department read contract does not read when the existing invite capability denies access",
+          "status": "passed",
+          "title": "does not read when the existing invite capability denies access",
+          "duration": 1.8087090000001353,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["invite picker department read contract"],
+          "fullName": "invite picker department read contract does not read for an anonymous session",
+          "status": "passed",
+          "title": "does not read for an anonymous session",
+          "duration": 0.5818340000000717,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["invite picker department read contract"],
+          "fullName": "invite picker department read contract does not guess a tenant when the session has none",
+          "status": "passed",
+          "title": "does not guess a tenant when the session has none",
+          "duration": 0.5361249999998563,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804589,
+      "endTime": 1788708804593.5818,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/team/team-content.departments.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation submits an explicit active COUNTER choice with its readable label",
+          "status": "passed",
+          "title": "submits an explicit active COUNTER choice with its readable label",
+          "duration": 119.03833299999997,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation submits an explicit active KITCHEN choice with its readable label",
+          "status": "passed",
+          "title": "submits an explicit active KITCHEN choice with its readable label",
+          "duration": 29.788708000000042,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation submits an explicit active ENGINEERING choice with its readable label",
+          "status": "passed",
+          "title": "submits an explicit active ENGINEERING choice with its readable label",
+          "duration": 25.652875000000222,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation blocks loading department data and preserves the form",
+          "status": "passed",
+          "title": "blocks loading department data and preserves the form",
+          "duration": 16.92712500000016,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation blocks error department data and preserves the form",
+          "status": "passed",
+          "title": "blocks error department data and preserves the form",
+          "duration": 21.25045799999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation blocks empty department data and preserves the form",
+          "status": "passed",
+          "title": "blocks empty department data and preserves the form",
+          "duration": 16.778457999999773,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation blocks stale department data and preserves the form",
+          "status": "passed",
+          "title": "blocks stale department data and preserves the form",
+          "duration": 16.962375000000065,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenant department invitation"],
+          "fullName": "tenant department invitation omits inactive departments and preserves entries when server authorization refuses the invite",
+          "status": "passed",
+          "title": "omits inactive departments and preserves entries when server authorization refuses the invite",
+          "duration": 19.580583999999817,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708805216,
+      "endTime": 1788708805481.5806,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/team/team-content.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["pharmacy onboarding checklist"],
+          "fullName": "pharmacy onboarding checklist renders one row per PRD §6.1 step, in walk order, with no gate identifier on show",
+          "status": "passed",
+          "title": "renders one row per PRD §6.1 step, in walk order, with no gate identifier on show",
+          "duration": 1.8802089999999225,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pharmacy onboarding checklist"],
+          "fullName": "pharmacy onboarding checklist states Needs you with the action, and Done with the evidence, for the same gate",
+          "status": "passed",
+          "title": "states Needs you with the action, and Done with the evidence, for the same gate",
+          "duration": 0.1536670000000413,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pharmacy onboarding checklist"],
+          "fullName": "pharmacy onboarding checklist tells the operator their own claim did not stand, rather than repeating the to-do",
+          "status": "passed",
+          "title": "tells the operator their own claim did not stand, rather than repeating the to-do",
+          "duration": 0.1477909999998701,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pharmacy onboarding checklist"],
+          "fullName": "pharmacy onboarding checklist offers the attestation control only where a claim is what the gate takes",
+          "status": "passed",
+          "title": "offers the attestation control only where a claim is what the gate takes",
+          "duration": 0.1670830000002752,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pharmacy onboarding checklist"],
+          "fullName": "pharmacy onboarding checklist links only to pages that exist in this build, and never to a bare identifier",
+          "status": "passed",
+          "title": "links only to pages that exist in this build, and never to a bare identifier",
+          "duration": 0.19366700000000492,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pharmacy onboarding checklist"],
+          "fullName": "pharmacy onboarding checklist counts and blocks from the evaluator, not from a second derivation",
+          "status": "passed",
+          "title": "counts and blocks from the evaluator, not from a second derivation",
+          "duration": 0.12370800000007875,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pharmacy onboarding checklist"],
+          "fullName": "pharmacy onboarding checklist names the blocking steps in the activation sentence, singular and plural",
+          "status": "passed",
+          "title": "names the blocking steps in the activation sentence, singular and plural",
+          "duration": 0.14529099999981554,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["fresh Pharmacy setup destinations"],
+          "fullName": "fresh Pharmacy setup destinations links stock-location creation without changing branch attestation or readiness",
+          "status": "passed",
+          "title": "links stock-location creation without changing branch attestation or readiness",
+          "duration": 0.3419579999999769,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["fresh Pharmacy setup destinations"],
+          "fullName": "fresh Pharmacy setup destinations connects derived catalog, stock and supplier gates without turning them into attestations",
+          "status": "passed",
+          "title": "connects derived catalog, stock and supplier gates without turning them into attestations",
+          "duration": 0.367207999999664,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["fresh Pharmacy setup destinations"],
+          "fullName": "fresh Pharmacy setup destinations offers the existing counter without replacing parallel-run evidence with a click",
+          "status": "passed",
+          "title": "offers the existing counter without replacing parallel-run evidence with a click",
+          "duration": 0.09104200000001583,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["fresh Pharmacy setup destinations"],
+          "fullName": "fresh Pharmacy setup destinations offers catalog, receiving and canonical setup links from empty inventory",
+          "status": "passed",
+          "title": "offers catalog, receiving and canonical setup links from empty inventory",
+          "duration": 0.3680420000000595,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804862,
+      "endTime": 1788708804866.3682,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/lib/pharmacy/onboarding-checklist.test.ts"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["tenancy and licensing (UX rule 7)"],
+          "fullName": "tenancy and licensing (UX rule 7) never asks the context factory to re-resolve tenancy",
+          "status": "passed",
+          "title": "never asks the context factory to re-resolve tenancy",
+          "duration": 2.7872919999999795,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenancy and licensing (UX rule 7)"],
+          "fullName": "tenancy and licensing (UX rule 7) says \"not licensed\" and never calls the router when the module is absent",
+          "status": "passed",
+          "title": "says \"not licensed\" and never calls the router when the module is absent",
+          "duration": 90.59754199999998,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenancy and licensing (UX rule 7)"],
+          "fullName": "tenancy and licensing (UX rule 7) says \"no purchasing access\" — a different sentence — when the session has no user",
+          "status": "passed",
+          "title": "says \"no purchasing access\" — a different sentence — when the session has no user",
+          "duration": 7.697458999999981,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["tenancy and licensing (UX rule 7)"],
+          "fullName": "tenancy and licensing (UX rule 7) renders the access state rather than throwing when tenancy does not resolve",
+          "status": "passed",
+          "title": "renders the access state rather than throwing when tenancy does not resolve",
+          "duration": 10.27645799999982,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["selection (UX rules 3, 4, 5, 6)"],
+          "fullName": "selection (UX rules 3, 4, 5, 6) shows the empty state instead of auto-selecting the first supplier",
+          "status": "passed",
+          "title": "shows the empty state instead of auto-selecting the first supplier",
+          "duration": 63.632334000000355,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["selection (UX rules 3, 4, 5, 6)"],
+          "fullName": "selection (UX rules 3, 4, 5, 6) shows the empty state when the requested supplier is not this organization’s",
+          "status": "passed",
+          "title": "shows the empty state when the requested supplier is not this organization’s",
+          "duration": 14.981208000000152,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["selection (UX rules 3, 4, 5, 6)"],
+          "fullName": "selection (UX rules 3, 4, 5, 6) opens the detail beside the list and keeps the selected row a focusable control",
+          "status": "passed",
+          "title": "opens the detail beside the list and keeps the selected row a focusable control",
+          "duration": 34.494958000000224,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["selection (UX rules 3, 4, 5, 6)"],
+          "fullName": "selection (UX rules 3, 4, 5, 6) carries the requisition selection through an order link (rule 6)",
+          "status": "passed",
+          "title": "carries the requisition selection through an order link (rule 6)",
+          "duration": 39.92283299999963,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pickers (UX rules 1, 12, 16)"],
+          "fullName": "pickers (UX rules 1, 12, 16) offers a lapsed supplier as a disabled, explained option rather than hiding or allowing it",
+          "status": "passed",
+          "title": "offers a lapsed supplier as a disabled, explained option rather than hiding or allowing it",
+          "duration": 73.28841699999975,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pickers (UX rules 1, 12, 16)"],
+          "fullName": "pickers (UX rules 1, 12, 16) states the pack conversion in the picker so no multiplier is ever typed",
+          "status": "passed",
+          "title": "states the pack conversion in the picker so no multiplier is ever typed",
+          "duration": 67.26016600000003,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["pickers (UX rules 1, 12, 16)"],
+          "fullName": "pickers (UX rules 1, 12, 16) replaces an empty required picker with what is missing and where to fix it",
+          "status": "passed",
+          "title": "replaces an empty required picker with what is missing and where to fix it",
+          "duration": 23.546167000000423,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["validation errors (UX rule 11)"],
+          "fullName": "validation errors (UX rule 11) renders the message at the named field and focuses it, not only in a banner",
+          "status": "passed",
+          "title": "renders the message at the named field and focuses it, not only in a banner",
+          "duration": 10.86258399999997,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["validation errors (UX rule 11)"],
+          "fullName": "validation errors (UX rule 11) announces the failure to a screen reader as an alert",
+          "status": "passed",
+          "title": "announces the failure to a screen reader as an alert",
+          "duration": 4.9757079999999405,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["preconditions (UX rule 13)"],
+          "fullName": "preconditions (UX rule 13) lists every unmet gate with a link to the page that clears it",
+          "status": "passed",
+          "title": "lists every unmet gate with a link to the page that clears it",
+          "duration": 38.8549579999999,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["preconditions (UX rule 13)"],
+          "fullName": "preconditions (UX rule 13) says nothing about setup once every gate is met",
+          "status": "passed",
+          "title": "says nothing about setup once every gate is met",
+          "duration": 4.821707999999944,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["branch scope (UX rules 1, 5, 12)"],
+          "fullName": "branch scope (UX rules 1, 5, 12) adopts the only branch and says so rather than asking for an id",
+          "status": "passed",
+          "title": "adopts the only branch and says so rather than asking for an id",
+          "duration": 29.315582999999606,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["branch scope (UX rules 1, 5, 12)"],
+          "fullName": "branch scope (UX rules 1, 5, 12) prompts for a branch — a distinct state from \"no results\" — when there are several",
+          "status": "passed",
+          "title": "prompts for a branch — a distinct state from \"no results\" — when there are several",
+          "duration": 6.015875000000051,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["branch scope (UX rules 1, 5, 12)"],
+          "fullName": "branch scope (UX rules 1, 5, 12) falls through to the prompt when the requested branch is not this organization’s",
+          "status": "passed",
+          "title": "falls through to the prompt when the requested branch is not this organization’s",
+          "duration": 5.577249999999822,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["branch scope (UX rules 1, 5, 12)"],
+          "fullName": "branch scope (UX rules 1, 5, 12) names the branch that has no active location instead of a bare empty page",
+          "status": "passed",
+          "title": "names the branch that has no active location instead of a bare empty page",
+          "duration": 5.637624999999844,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["error states (UX rule 9)"],
+          "fullName": "error states (UX rule 9) says what failed and what to do when a read throws, and does not crash",
+          "status": "passed",
+          "title": "says what failed and what to do when a read throws, and does not crash",
+          "duration": 12.154791999999816,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["goods-in bench (PUR-02/04/05)"],
+          "fullName": "goods-in bench (PUR-02/04/05) reports an unresolvable scan rather than silently matching nothing",
+          "status": "passed",
+          "title": "reports an unresolvable scan rather than silently matching nothing",
+          "duration": 17.51070800000025,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["goods-in bench (PUR-02/04/05)"],
+          "fullName": "goods-in bench (PUR-02/04/05) does not offer a draft order for receiving",
+          "status": "passed",
+          "title": "does not offer a draft order for receiving",
+          "duration": 60.91245800000024,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["segregation of duties (PUR-02)"],
+          "fullName": "segregation of duties (PUR-02) explains why the raiser cannot approve instead of offering a button that refuses",
+          "status": "passed",
+          "title": "explains why the raiser cannot approve instead of offering a button that refuses",
+          "duration": 27.975542000000132,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["explicit purchasing action outcomes"],
+          "fullName": "explicit purchasing action outcomes returns a success destination after one authenticated supplier write",
+          "status": "passed",
+          "title": "returns a success destination after one authenticated supplier write",
+          "duration": 2.323207999999795,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["explicit purchasing action outcomes"],
+          "fullName": "explicit purchasing action outcomes returns field validation feedback without writing",
+          "status": "passed",
+          "title": "returns field validation feedback without writing",
+          "duration": 1.6067080000002534,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["explicit purchasing action outcomes"],
+          "fullName": "explicit purchasing action outcomes re-resolves the session at submission and returns session-loss feedback",
+          "status": "passed",
+          "title": "re-resolves the session at submission and returns session-loss feedback",
+          "duration": 0.5637499999997999,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["explicit purchasing action outcomes"],
+          "fullName": "explicit purchasing action outcomes delivers domain rejection feedback without changing its meaning",
+          "status": "passed",
+          "title": "delivers domain rejection feedback without changing its meaning",
+          "duration": 0.9135420000002341,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["WHA-1349 action-boundary retry safety"],
+          "fullName": "WHA-1349 action-boundary retry safety post-write revalidation failure cannot repeat the supplier mutation",
+          "status": "passed",
+          "title": "post-write revalidation failure cannot repeat the supplier mutation",
+          "duration": 14.575332999999773,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["WHA-1349 action-boundary retry safety"],
+          "fullName": "WHA-1349 action-boundary retry safety post-write revalidation failure cannot repeat the supplier credit mutation",
+          "status": "passed",
+          "title": "post-write revalidation failure cannot repeat the supplier credit mutation",
+          "duration": 10.803916999999728,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["WHA-1349 action-boundary retry safety"],
+          "fullName": "WHA-1349 action-boundary retry safety definitive local validation rejection permits correction before the first write",
+          "status": "passed",
+          "title": "definitive local validation rejection permits correction before the first write",
+          "duration": 16.275708000000122,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["WHA-1349 action-boundary retry safety"],
+          "fullName": "WHA-1349 action-boundary retry safety unknown server mutation failure remains locked even with a familiar domain message",
+          "status": "passed",
+          "title": "unknown server mutation failure remains locked even with a familiar domain message",
+          "duration": 9.856208000000152,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["WHA-1349 action-boundary retry safety"],
+          "fullName": "WHA-1349 action-boundary retry safety generic server setup error is not mislabeled as safe local validation",
+          "status": "passed",
+          "title": "generic server setup error is not mislabeled as safe local validation",
+          "duration": 0.9958329999999478,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804737,
+      "endTime": 1788708805448.9958,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "review: submitted order success remains visible after refreshed status removes the submitting form",
+          "status": "passed",
+          "title": "review: submitted order success remains visible after refreshed status removes the submitting form",
+          "duration": 231.31191699999977,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "review: refreshed authorization offers the distinct withdrawal action",
+          "status": "passed",
+          "title": "review: refreshed authorization offers the distinct withdrawal action",
+          "duration": 48.4955829999999,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps a sibling supplier draft, caret, focus and selected record through authorization refresh",
+          "status": "passed",
+          "title": "keeps a sibling supplier draft, caret, focus and selected record through authorization refresh",
+          "duration": 64.49358299999994,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "offers the validated new supplier destination without selecting it automatically",
+          "status": "passed",
+          "title": "offers the validated new supplier destination without selecting it automatically",
+          "duration": 65.05429099999992,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "does not unlock pending or uncertain supplier writes through operation changes or remounts",
+          "status": "passed",
+          "title": "does not unlock pending or uncertain supplier writes through operation changes or remounts",
+          "duration": 73.82899999999972,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "retains a completed operation lock when refreshed props or selection remount its form",
+          "status": "passed",
+          "title": "retains a completed operation lock when refreshed props or selection remount its form",
+          "duration": 39.39295799999991,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "delivers the order outcome even when revalidation removes its form before the action resolves",
+          "status": "passed",
+          "title": "delivers the order outcome even when revalidation removes its form before the action resolves",
+          "duration": 76.04379199999994,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "makes Receiving Reverse a distinct operation after a confirmed Post",
+          "status": "passed",
+          "title": "makes Receiving Reverse a distinct operation after a confirmed Post",
+          "duration": 126.62174999999979,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps Returns success and sibling credit draft when Submit becomes Dispatch",
+          "status": "failed",
+          "title": "keeps Returns success and sibling credit draft when Submit becomes Dispatch",
+          "duration": 34.67208399999981,
+          "failureMessages": [
+            "TestingLibraryElementError: Found multiple elements with the role \"status\"\n\nHere are the matching elements:\n\nIgnored nodes: comments, script, style\n\u001b[36m<p\u001b[39m\n  \u001b[33mclass\u001b[39m=\u001b[32m\"text-sm text-success\"\u001b[39m\n  \u001b[33mrole\u001b[39m=\u001b[32m\"status\"\u001b[39m\n\u001b[36m>\u001b[39m\n  \u001b[0mReturn submitted. The quantity is reserved and can no longer be sold.\u001b[0m\n  \u001b[0m Check the updated record before starting another change.\u001b[0m\n\u001b[36m</p>\u001b[39m\n\nIgnored nodes: comments, script, style\n\u001b[36m<p\u001b[39m\n  \u001b[33mclass\u001b[39m=\u001b[32m\"mt-3 text-sm text-warning\"\u001b[39m\n  \u001b[33mrole\u001b[39m=\u001b[32m\"status\"\u001b[39m\n\u001b[36m>\u001b[39m\n  \u001b[0m1\u001b[0m\n  \u001b[0m records excluded because scope or financial data could not be validated. Review source records before reconciliation.\u001b[0m\n\u001b[36m</p>\u001b[39m\n\n(If this is intentional, then use the `*AllBy*` variant of the query (like `queryAllByText`, `getAllByText`, or `findAllByText`)).\n\nIgnored nodes: comments, script, style\n\u001b[36m<body>\u001b[39m\n  \u001b[36m<div>\u001b[39m\n    \u001b[36m<main\u001b[39m\n      \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 space-y-6\"\u001b[39m\n    \u001b[36m>\u001b[39m\n      \u001b[36m<div\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"fieldbook-page-header mb-10 flex flex-col gap-5 border-b border-border-default pb-7 sm:flex-row sm:items-start sm:justify-between\"\u001b[39m\n        \u001b[33mdata-slot\u001b[39m=\u001b[32m\"page-header\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<div\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-w-0 items-stretch gap-4 sm:gap-5\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[36m<span\u001b[39m\n            \u001b[33maria-hidden\u001b[39m=\u001b[32m\"true\"\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"fieldbook-page-marker mt-1 shrink-0\"\u001b[39m\n          \u001b[36m/>\u001b[39m\n          \u001b[36m<div\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 space-y-2\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[36m<span\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"eyebrow eyebrow-accent\"\u001b[39m\n              \u001b[33mdata-slot\u001b[39m=\u001b[32m\"eyebrow\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mPharmacy procurement\u001b[0m\n            \u001b[36m</span>\u001b[39m\n            \u001b[36m<h1\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"font-display text-[clamp(2.1rem,4vw,3.15rem)] leading-[0.98] font-semibold tracking-[-0.045em] text-text-strong\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mReturns & claims\u001b[0m\n            \u001b[36m</h1>\u001b[39m\n            \u001b[36m<p\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"max-w-2xl text-[0.9375rem] leading-relaxed text-text-muted\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mPurchase returns and expiry claims, the supplier return window each one is racing, the debit notes they raise and the credit that has actually arrived against them.\u001b[0m\n            \u001b[36m</p>\u001b[39m\n          \u001b[36m</div>\u001b[39m\n        \u001b[36m</div>\u001b[39m\n      \u001b[36m</div>\u001b[39m\n      \u001b[36m<nav\u001b[39m\n        \u001b[33maria-label\u001b[39m=\u001b[32m\"Purchasing surfaces\"\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"-mx-1 overflow-x-auto\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<ul\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-w-max items-center gap-1 px-1\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mOverview\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-01..06\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/suppliers\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mSuppliers\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-01\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/orders\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mRequisitions & orders\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-02/03\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/receiving\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mGoods in\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-02/04/05\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33maria-current\u001b[39m=\u001b[32m\"page\"\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 bg-primary text-primary-foreground\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/returns\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mReturns & claims\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-06\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n        \u001b[36m</ul>\u001b[39m\n      \u001b[36m</nav>\u001b[39m\n      \u001b[36m<div\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"flex flex-wrap items-end justify-between gap-3\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<p\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"text-sm text-text-muted\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[0mReturning from\u001b[0m\n          \u001b[0m \u001b[0m\n          \u001b[36m<span\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"font-medium text-text-strong\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[0mMain branch\u001b[0m\n          \u001b[36m</span>\u001b[39m\n          \u001b[0m — the only active branch in this workspace.\u001b[0m\n        \u001b[36m</p>\u001b[39m\n      \u001b[36m</div>\u001b[39m\n      \u001b[36m<div\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"space-y-2\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<p\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"text-sm text-success\"\u001b[39m\n          \u001b[33mrole\u001b[39m=\u001b[32m\"status\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[0mReturn submitted. The quantity is reserved and can no longer be sold.\u001b[0m\n          \u001b[0m Check the updated record before starting another change.\u001b[0m\n        \u001b[36m</p>\u001b[39m\n        \u001b[36m<a\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"inline-flex min-h-11 items-center rounded-[var(--radius-sm)] text-sm font-medium text-primary underline underline-offset-4 focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2\"\u001b[39m\n          \u001b[33mhref\u001b[39m=\u001b[32m\"https://workspace.test/...\n    at Object.getElementError (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/config.js:37:19)\n    at getElementError (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/query-helpers.js:20:35)\n    at getMultipleElementsFoundError (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/query-helpers.js:23:10)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/query-helpers.js:55:13\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/query-helpers.js:95:19\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx:455:17\n    at file:///Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+          ],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "review: same allocation cannot repeat through the credit and debit-note forms after uncertain outcome",
+          "status": "passed",
+          "title": "review: same allocation cannot repeat through the credit and debit-note forms after uncertain outcome",
+          "duration": 26.696500000000015,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "review: supplier outcome and same-operation lock survive refreshed read failure and recovery",
+          "status": "passed",
+          "title": "review: supplier outcome and same-operation lock survive refreshed read failure and recovery",
+          "duration": 36.06145800000013,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks the opposite allocation presentation after credit dispatch is pending",
+          "status": "passed",
+          "title": "blocks the opposite allocation presentation after credit dispatch is pending",
+          "duration": 55.3464170000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks the opposite allocation presentation after debit dispatch is pending",
+          "status": "passed",
+          "title": "blocks the opposite allocation presentation after debit dispatch is pending",
+          "duration": 52.837125000000015,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks the opposite allocation presentation after credit dispatch is uncertain",
+          "status": "passed",
+          "title": "blocks the opposite allocation presentation after credit dispatch is uncertain",
+          "duration": 49.888790999999856,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks the opposite allocation presentation after debit dispatch is uncertain",
+          "status": "passed",
+          "title": "blocks the opposite allocation presentation after debit dispatch is uncertain",
+          "duration": 48.285541000000194,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks the opposite allocation presentation after credit dispatch is committed",
+          "status": "passed",
+          "title": "blocks the opposite allocation presentation after credit dispatch is committed",
+          "duration": 48.226958000000195,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks the opposite allocation presentation after debit dispatch is committed",
+          "status": "passed",
+          "title": "blocks the opposite allocation presentation after debit dispatch is committed",
+          "duration": 49.678499999999985,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks overlapping selections but permits unrelated pairs during an pending allocation",
+          "status": "passed",
+          "title": "blocks overlapping selections but permits unrelated pairs during an pending allocation",
+          "duration": 76.43370800000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "blocks overlapping selections but permits unrelated pairs during an uncertain allocation",
+          "status": "passed",
+          "title": "blocks overlapping selections but permits unrelated pairs during an uncertain allocation",
+          "duration": 71.61741699999993,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804680,
+      "endTime": 1788708805954.6174,
+      "status": "failed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery shows success and refreshes the current selection without document navigation",
+          "status": "passed",
+          "title": "shows success and refreshes the current selection without document navigation",
+          "duration": 96.56533300000001,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery retains edited values and focuses the invalid field on server validation failure",
+          "status": "passed",
+          "title": "retains edited values and focuses the invalid field on server validation failure",
+          "duration": 36.737082999999984,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery focuses the error message when the server supplies no visible field",
+          "status": "passed",
+          "title": "focuses the error message when the server supplies no visible field",
+          "duration": 9.595000000000027,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery keeps space-y-4 on a real parent of the original controls",
+          "status": "passed",
+          "title": "keeps space-y-4 on a real parent of the original controls",
+          "duration": 1.6607500000000073,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery keeps grid gap-4 on a real parent of the original controls",
+          "status": "passed",
+          "title": "keeps grid gap-4 on a real parent of the original controls",
+          "duration": 2.9268749999998818,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery keeps flex flex-wrap gap-3 on a real parent of the original controls",
+          "status": "passed",
+          "title": "keeps flex flex-wrap gap-3 on a real parent of the original controls",
+          "duration": 2.2581250000000637,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery renders disabled pre-hydration controls with no-JS and stalled-hydration guidance",
+          "status": "passed",
+          "title": "renders disabled pre-hydration controls with no-JS and stalled-hydration guidance",
+          "duration": 7.151207999999997,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery blocks duplicate submissions while awaiting the outcome and navigation",
+          "status": "passed",
+          "title": "blocks duplicate submissions while awaiting the outcome and navigation",
+          "duration": 11.722417000000178,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery keeps entered values and reports an uncertain outcome without retrying",
+          "status": "passed",
+          "title": "keeps entered values and reports an uncertain outcome without retrying",
+          "duration": 9.435500000000047,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery rejects an invalid outcome destination: https://outside.test/pharmacy/purchasing/orders",
+          "status": "passed",
+          "title": "rejects an invalid outcome destination: https://outside.test/pharmacy/purchasing/orders",
+          "duration": 5.422124999999824,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery rejects an invalid outcome destination: /admin",
+          "status": "passed",
+          "title": "rejects an invalid outcome destination: /admin",
+          "duration": 5.787374999999884,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": ["purchasing outcome delivery"],
+          "fullName": "purchasing outcome delivery rejects an invalid outcome destination: javascript:alert(1)",
+          "status": "passed",
+          "title": "rejects an invalid outcome destination: javascript:alert(1)",
+          "duration": 4.700791999999865,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "unclassified or contradictory outcome stays locked: kind=error",
+          "status": "passed",
+          "title": "unclassified or contradictory outcome stays locked: kind=error",
+          "duration": 11.98983300000009,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "unclassified or contradictory outcome stays locked: kind=error&outcome=unknown",
+          "status": "passed",
+          "title": "unclassified or contradictory outcome stays locked: kind=error&outcome=unknown",
+          "duration": 8.744374999999991,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "unclassified or contradictory outcome stays locked: kind=success",
+          "status": "passed",
+          "title": "unclassified or contradictory outcome stays locked: kind=success",
+          "duration": 8.304833000000144,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "unclassified or contradictory outcome stays locked: kind=error&outcome=committed",
+          "status": "passed",
+          "title": "unclassified or contradictory outcome stays locked: kind=error&outcome=committed",
+          "duration": 7.805000000000064,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "preserves sibling drafts, selection and focus while refreshing committed data",
+          "status": "passed",
+          "title": "preserves sibling drafts, selection and focus while refreshing committed data",
+          "duration": 17.21829200000002,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "keeps confirmed writes locked when requesting the refresh throws",
+          "status": "passed",
+          "title": "keeps confirmed writes locked when requesting the refresh throws",
+          "duration": 11.19095799999991,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804184,
+      "endTime": 1788708804444.191,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/_components/action-form.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "explains empty state without claiming branch debt or recovery",
+          "status": "passed",
+          "title": "explains empty state without claiming branch debt or recovery",
+          "duration": 75.16770800000018,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "warns on capped data and excludes invalid records visibly",
+          "status": "passed",
+          "title": "warns on capped data and excludes invalid records visibly",
+          "duration": 4.591249999999945,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "bounds the queue and links the existing return and credit detail",
+          "status": "passed",
+          "title": "bounds the queue and links the existing return and credit detail",
+          "duration": 69.00300000000016,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "does not suggest dispatch for expired or unknown deadlines",
+          "status": "passed",
+          "title": "does not suggest dispatch for expired or unknown deadlines",
+          "duration": 6.765875000000051,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804201,
+      "endTime": 1788708804356.7659,
+      "status": "passed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.test.tsx"
+    },
+    {
+      "assertionResults": [
+        {
+          "ancestorTitles": [],
+          "fullName": "does not read or render priorities without module access",
+          "status": "passed",
+          "title": "does not read or render priorities without module access",
+          "duration": 86.34470800000008,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "does not render priorities after branch read denial",
+          "status": "failed",
+          "title": "does not render priorities after branch read denial",
+          "duration": 18.331249999999727,
+          "failureMessages": [
+            "TestingLibraryElementError: Unable to find an element with the text: Returns for this branch could not be read. Nothing was written.. This could be because the text is broken up by multiple elements. In this case, you can provide a function for your text matcher to make your matcher more flexible.\n\nIgnored nodes: comments, script, style\n\u001b[36m<body>\u001b[39m\n  \u001b[36m<div>\u001b[39m\n    \u001b[36m<main\u001b[39m\n      \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 space-y-6\"\u001b[39m\n    \u001b[36m>\u001b[39m\n      \u001b[36m<div\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"fieldbook-page-header mb-10 flex flex-col gap-5 border-b border-border-default pb-7 sm:flex-row sm:items-start sm:justify-between\"\u001b[39m\n        \u001b[33mdata-slot\u001b[39m=\u001b[32m\"page-header\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<div\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-w-0 items-stretch gap-4 sm:gap-5\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[36m<span\u001b[39m\n            \u001b[33maria-hidden\u001b[39m=\u001b[32m\"true\"\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"fieldbook-page-marker mt-1 shrink-0\"\u001b[39m\n          \u001b[36m/>\u001b[39m\n          \u001b[36m<div\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 space-y-2\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[36m<span\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"eyebrow eyebrow-accent\"\u001b[39m\n              \u001b[33mdata-slot\u001b[39m=\u001b[32m\"eyebrow\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mPharmacy procurement\u001b[0m\n            \u001b[36m</span>\u001b[39m\n            \u001b[36m<h1\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"font-display text-[clamp(2.1rem,4vw,3.15rem)] leading-[0.98] font-semibold tracking-[-0.045em] text-text-strong\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mReturns & claims\u001b[0m\n            \u001b[36m</h1>\u001b[39m\n            \u001b[36m<p\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"max-w-2xl text-[0.9375rem] leading-relaxed text-text-muted\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mPurchase returns and expiry claims, the supplier return window each one is racing, the debit notes they raise and the credit that has actually arrived against them.\u001b[0m\n            \u001b[36m</p>\u001b[39m\n          \u001b[36m</div>\u001b[39m\n        \u001b[36m</div>\u001b[39m\n      \u001b[36m</div>\u001b[39m\n      \u001b[36m<nav\u001b[39m\n        \u001b[33maria-label\u001b[39m=\u001b[32m\"Purchasing surfaces\"\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"-mx-1 overflow-x-auto\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<ul\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-w-max items-center gap-1 px-1\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mOverview\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-01..06\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/suppliers\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mSuppliers\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-01\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/orders\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mRequisitions & orders\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-02/03\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 text-text-muted hover:bg-muted hover:text-text-strong\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/receiving\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mGoods in\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-02/04/05\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n          \u001b[36m<li>\u001b[39m\n            \u001b[36m<a\u001b[39m\n              \u001b[33maria-current\u001b[39m=\u001b[32m\"page\"\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"flex min-h-11 items-center gap-2 rounded-[var(--radius-sm)] px-3 text-sm font-medium whitespace-nowrap transition-colors focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2 bg-primary text-primary-foreground\"\u001b[39m\n              \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/returns\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mReturns & claims\u001b[0m\n              \u001b[36m<span\u001b[39m\n                \u001b[33mclass\u001b[39m=\u001b[32m\"font-mono text-[0.625rem] opacity-70\"\u001b[39m\n              \u001b[36m>\u001b[39m\n                \u001b[0mPUR-06\u001b[0m\n              \u001b[36m</span>\u001b[39m\n            \u001b[36m</a>\u001b[39m\n          \u001b[36m</li>\u001b[39m\n        \u001b[36m</ul>\u001b[39m\n      \u001b[36m</nav>\u001b[39m\n      \u001b[36m<div\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"flex flex-wrap items-end justify-between gap-3\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<p\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"text-sm text-text-muted\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[0mReturning from\u001b[0m\n          \u001b[0m \u001b[0m\n          \u001b[36m<span\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"font-medium text-text-strong\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[0mBranch\u001b[0m\n          \u001b[36m</span>\u001b[39m\n          \u001b[0m.\u001b[0m\n        \u001b[36m</p>\u001b[39m\n      \u001b[36m</div>\u001b[39m\n      \u001b[36m<div\u001b[39m\n        \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 rounded-lg border border-border-subtle bg-card p-5 text-card-foreground shadow-none\"\u001b[39m\n        \u001b[33mdata-slot\u001b[39m=\u001b[32m\"section-card\"\u001b[39m\n      \u001b[36m>\u001b[39m\n        \u001b[36m<div\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"mb-4 flex items-start justify-between gap-4\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[36m<div\u001b[39m\n            \u001b[33mclass\u001b[39m=\u001b[32m\"min-w-0 space-y-1\"\u001b[39m\n          \u001b[36m>\u001b[39m\n            \u001b[36m<h2\u001b[39m\n              \u001b[33mclass\u001b[39m=\u001b[32m\"font-display text-lg leading-snug font-semibold tracking-tight text-text-strong\"\u001b[39m\n            \u001b[36m>\u001b[39m\n              \u001b[0mThis surface could not load\u001b[0m\n            \u001b[36m</h2>\u001b[39m\n          \u001b[36m</div>\u001b[39m\n        \u001b[36m</div>\u001b[39m\n        \u001b[36m<p\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"text-sm text-text-muted\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[0mReturns for this branch could not be read. This read failure does not confirm or undo earlier changes. Check their outcomes before retrying.\u001b[0m\n        \u001b[36m</p>\u001b[39m\n        \u001b[36m<p\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"mt-2 text-sm text-text-muted\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[0mNo data was changed.\u001b[0m\n        \u001b[36m</p>\u001b[39m\n        \u001b[36m<a\u001b[39m\n          \u001b[33mclass\u001b[39m=\u001b[32m\"mt-4 inline-flex min-h-11 items-center rounded-[var(--radius-sm)] border border-border-default px-4 text-sm font-medium text-text-strong hover:bg-muted focus-visible:ring-ring focus-visible:outline-none focus-visible:ring-2\"\u001b[39m\n          \u001b[33mhref\u001b[39m=\u001b[32m\"/pharmacy/purchasing/returns?branch=branch\"\u001b[39m\n        \u001b[36m>\u001b[39m\n          \u001b[0mTry again\u001b[0m\n        \u001b[36m</a>\u001b[39m\n      \u001b[36m</div>\u001b[39m\n    \u001b[36m</main>\u001b[39m\n  \u001b[36m</div>\u001b[39m\n\u001b[36m</body>\u001b[39m\n    at Object.getElementError (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/config.js:37:19)\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/query-helpers.js:76:38\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/query-helpers.js:52:17\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@testing-library/dom/dist/query-helpers.js:95:19\n    at /Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/returns/page.test.tsx:61:12\n    at processTicksAndRejections (node:internal/process/task_queues:103:5)\n    at file:///Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/@vitest/runner/dist/chunk-artifact.js:1903:20"
+          ],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "loads the queue from the existing authorized branch reads",
+          "status": "failed",
+          "title": "loads the queue from the existing authorized branch reads",
+          "duration": 16.815292000000227,
+          "failureMessages": [
+            "Error: [vitest] No \"useRouter\" export is defined on the \"next/navigation\" mock. Did you forget to return it from \"vi.mock\"?\nIf you need to partially mock a module, you can use \"importOriginal\" helper inside:\n\n    at VitestMocker.createError (file:///Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/vitest/dist/chunks/startVitestModuleRunner.DB-7oCpn.js:62:17)\n    at Object.get (file:///Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/vitest/dist/chunks/startVitestModuleRunner.DB-7oCpn.js:327:16)\n    at ActionAttempt (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/_components/action-form.tsx:56:18)\n    at Object.react_stack_bottom_frame (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/react-dom/cjs/react-dom-client.development.js:25904:20)\n    at renderWithHooks (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/react-dom/cjs/react-dom-client.development.js:7662:22)\n    at updateFunctionComponent (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/react-dom/cjs/react-dom-client.development.js:10166:19)\n    at beginWork (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/react-dom/cjs/react-dom-client.development.js:11778:18)\n    at runWithFiberInDEV (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/react-dom/cjs/react-dom-client.development.js:874:13)\n    at performUnitOfWork (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/react-dom/cjs/react-dom-client.development.js:17641:22)\n    at workLoopSync (/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/node_modules/react-dom/cjs/react-dom-client.development.js:17469:41)"
+          ],
+          "meta": {},
+          "tags": []
+        },
+        {
+          "ancestorTitles": [],
+          "fullName": "retains the descriptive route loading state",
+          "status": "passed",
+          "title": "retains the descriptive route loading state",
+          "duration": 5.096208999999817,
+          "failureMessages": [],
+          "meta": {},
+          "tags": []
+        }
+      ],
+      "startTime": 1788708804630,
+      "endTime": 1788708804757.0962,
+      "status": "failed",
+      "message": "",
+      "name": "/Users/Saad/Developer/paperclip-worktrees/devfathom/codex/WHA-1370-pharmacy-compatibility-8ba9-7e02/src/app/(app)/pharmacy/purchasing/returns/page.test.tsx"
+    }
+  ]
+}

@@ -1,9 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useId, useMemo, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { LoaderCircle, Play, Save } from 'lucide-react';
+import { ChevronDown, LoaderCircle, Play, Save } from 'lucide-react';
 import { toast } from 'sonner';
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from '@/components/ui/command';
+import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover';
 import { cn } from '@/lib/utils';
 
 export type CommandField = {
@@ -20,6 +29,7 @@ export type CommandField = {
     | 'color'
     | 'textarea'
     | 'select'
+    | 'searchable-select'
     | 'checkbox'
     | 'json'
     | 'hidden';
@@ -27,11 +37,108 @@ export type CommandField = {
   defaultValue?: string | number | boolean | null | Record<string, unknown> | unknown[];
   placeholder?: string;
   help?: string;
+  checkboxText?: string;
+  minLength?: number;
   min?: number;
   max?: number;
   step?: number;
-  options?: Array<{ label: string; value: string }>;
+  disabled?: boolean;
+  filterBy?: string;
+  defaultFrom?: { field: string; values: Record<string, number> };
+  format?: 'time24';
+  options?: Array<{ label: string; value: string; filterValue?: string }>;
 };
+
+function SearchableSelectField({
+  field,
+  id,
+  value,
+  onChange,
+  fieldError,
+  errorId,
+}: {
+  field: CommandField;
+  id: string;
+  value: string;
+  onChange: (value: string) => void;
+  fieldError?: string;
+  errorId: string;
+}) {
+  const [open, setOpen] = useState(false);
+  const options = field.options ?? [];
+  const groups = Map.groupBy(options, (option) => option.value.split('/')[0] ?? 'Other');
+  const selected = options.find((option) => option.value === value);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <input type="hidden" name={field.name} value={value} />
+      <PopoverTrigger
+        render={
+          <button
+            id={id}
+            type="button"
+            disabled={field.disabled}
+            data-field-name={field.name}
+            aria-label={field.label}
+            aria-invalid={Boolean(fieldError)}
+            aria-describedby={fieldError ? errorId : undefined}
+            className="flex h-11 w-full items-center justify-between gap-2 rounded-lg border border-border-default bg-card px-3 text-left text-sm outline-none transition hover:bg-surface-sunken focus-visible:border-accent-brand focus-visible:ring-2 focus-visible:ring-accent-brand/15 disabled:cursor-not-allowed disabled:opacity-50"
+          />
+        }
+      >
+        <span className={cn('truncate', !selected && 'text-text-muted')}>
+          {selected?.label ?? 'Choose a timezone'}
+        </span>
+        <ChevronDown aria-hidden="true" className="size-4 shrink-0 text-text-muted" />
+      </PopoverTrigger>
+      <PopoverContent align="start" className="w-(--anchor-width) min-w-72 p-0">
+        <Command value={value}>
+          <CommandInput placeholder="Search city or IANA timezone…" autoFocus />
+          <CommandList>
+            <CommandEmpty>No matching timezone.</CommandEmpty>
+            {[...groups.entries()].map(([region, regionOptions]) => (
+              <CommandGroup key={region} heading={region === 'UTC' ? 'Universal' : region}>
+                {regionOptions.map((option) => (
+                  <CommandItem
+                    key={option.value}
+                    value={`${option.label} ${option.value.replaceAll('_', ' ')}`}
+                    data-checked={option.value === value}
+                    onSelect={() => {
+                      onChange(option.value);
+                      setOpen(false);
+                    }}
+                  >
+                    {option.label}
+                  </CommandItem>
+                ))}
+              </CommandGroup>
+            ))}
+          </CommandList>
+        </Command>
+      </PopoverContent>
+    </Popover>
+  );
+}
+
+function optionsFor(field: CommandField, values: Record<string, string>) {
+  return field.filterBy
+    ? field.options?.filter((option) => option.filterValue === values[field.filterBy!])
+    : field.options;
+}
+
+function initialSelectValues(fields: CommandField[]) {
+  const values: Record<string, string> = {};
+  for (const field of fields) {
+    if (field.type !== 'select' && field.type !== 'searchable-select') continue;
+    const options = optionsFor(field, values);
+    const fallback = field.required ? (options?.[0]?.value ?? '') : '';
+    const preferred = String(field.defaultValue ?? fallback);
+    values[field.name] = options?.some((option) => option.value === preferred)
+      ? preferred
+      : fallback;
+  }
+  return values;
+}
 
 function payloadFromForm(form: HTMLFormElement, fields: CommandField[]) {
   const formData = new FormData(form);
@@ -69,13 +176,14 @@ function payloadFromForm(form: HTMLFormElement, fields: CommandField[]) {
 
 export function PlatformCommandForm({
   action,
-  fields,
+  fields: configuredFields,
   submitLabel = 'Save changes',
   title,
   description,
   compact = false,
   onSuccessPath,
   revealResultKey,
+  confirm,
 }: {
   action: string;
   fields: CommandField[];
@@ -85,19 +193,95 @@ export function PlatformCommandForm({
   compact?: boolean;
   onSuccessPath?: string;
   revealResultKey?: string;
+  confirm?: string;
 }) {
+  // Keep every sensitive form aligned with the server's mandatory reason contract.
+  const fields = useMemo(() => {
+    const requiresReason =
+      [
+        'organization.user.password',
+        'organization.scim.token',
+        'organization.scim.revoke',
+        'organization.transition',
+        'organization.identity',
+      ].includes(action) ||
+      action.startsWith('organization.identity.') ||
+      (action === 'organization.update' &&
+        configuredFields.some((field) => field.name === 'vertical'));
+    if (!requiresReason) return configuredFields;
+    const reason: CommandField = {
+      name: 'reason',
+      label: 'Reason (required)',
+      type: 'textarea',
+      required: true,
+      minLength: 10,
+      help: 'Explain why this change is needed (at least 10 characters).',
+    };
+    return configuredFields.some((field) => field.name === 'reason')
+      ? configuredFields.map((field) => (field.name === 'reason' ? { ...field, ...reason } : field))
+      : [...configuredFields, reason];
+  }, [action, configuredFields]);
   const router = useRouter();
   const [pending, setPending] = useState(false);
   const [error, setError] = useState('');
+  const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({});
   const [revealed, setRevealed] = useState('');
+  const fieldIdPrefix = useId();
+  const [selectState, setSelectState] = useState(() => ({
+    fields,
+    values: initialSelectValues(fields),
+  }));
+  if (selectState.fields !== fields) {
+    setSelectState({ fields, values: initialSelectValues(fields) });
+  }
+  const selectValues = selectState.values;
+
+  function updateSelect(name: string, value: string) {
+    setSelectState((current) => {
+      const next = { ...current.values, [name]: value };
+      for (const field of fields) {
+        if (field.filterBy !== name) continue;
+        const options = optionsFor(field, next);
+        if (!options?.some((option) => option.value === next[field.name])) {
+          next[field.name] = options?.[0]?.value ?? '';
+        }
+      }
+      return { fields, values: next };
+    });
+  }
 
   async function submit(event: React.FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const form = event.currentTarget;
     setError('');
+    setFieldErrors({});
     setRevealed('');
+    const clientFieldErrors: Record<string, string> = {};
+    for (const field of fields) {
+      if (field.minLength) {
+        const value = String(new FormData(form).get(field.name) ?? '').trim();
+        if (value.length < field.minLength) {
+          clientFieldErrors[field.name] = `Enter at least ${field.minLength} characters.`;
+        }
+      }
+      if (field.format !== 'time24') continue;
+      const value = String(new FormData(form).get(field.name) ?? '');
+      if (value && !/^(?:[01]\d|2[0-3]):[0-5]\d$/.test(value)) {
+        clientFieldErrors[field.name] = 'Use 24-hour time, e.g. 09:30';
+      }
+    }
+    if (Object.keys(clientFieldErrors).length) {
+      setFieldErrors(clientFieldErrors);
+      setError(`${Object.keys(clientFieldErrors).length} field needs attention`);
+      const firstInvalid = Object.keys(clientFieldErrors)[0]!;
+      (form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null)?.focus() ??
+        (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
+      return;
+    }
+    if (confirm && !window.confirm(confirm)) return;
     setPending(true);
     try {
-      const payload = payloadFromForm(event.currentTarget, fields);
+      const payload = payloadFromForm(form, fields);
       const response = await fetch('/api/platform/control', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -106,11 +290,31 @@ export function PlatformCommandForm({
       const body = (await response.json()) as {
         error?: string;
         data?: { id?: string; [key: string]: unknown };
-        details?: Array<{ message?: string }>;
+        details?: Array<{ message?: string; path?: Array<PropertyKey> }>;
+        fieldErrors?: Record<string, string>;
       };
       if (!response.ok) {
-        const message = body.error ?? body.details?.[0]?.message ?? 'The command failed.';
-        setError(message);
+        const mapped = Object.fromEntries(
+          Object.entries(body.fieldErrors ?? {}).map(([path, message]) => [
+            fields.find((field) => path === field.name || path.endsWith(`.${field.name}`))?.name ??
+              path,
+            message,
+          ])
+        );
+        const visibleErrors = Object.fromEntries(
+          Object.entries(mapped).filter(([name]) => fields.some((field) => field.name === name))
+        );
+        if (Object.keys(visibleErrors).length) {
+          setFieldErrors(visibleErrors);
+          const count = Object.keys(visibleErrors).length;
+          setError(`${count} ${count === 1 ? 'field needs' : 'fields need'} attention`);
+          const firstInvalid = Object.keys(visibleErrors)[0]!;
+          (
+            form.querySelector(`[data-field-name="${firstInvalid}"]`) as HTMLElement | null
+          )?.focus() ?? (form.elements.namedItem(firstInvalid) as HTMLElement | null)?.focus();
+        } else {
+          setError(body.error ?? body.details?.[0]?.message ?? 'The command failed.');
+        }
         return;
       }
       toast.success(submitLabel.replace(/^Save /, '').replace(/^Create /, '') + ' saved');
@@ -157,33 +361,58 @@ export function PlatformCommandForm({
             );
           }
           const wide = field.type === 'textarea' || field.type === 'json';
+          const fieldError = fieldErrors[field.name];
+          const errorId = `${field.name}-error`;
+          const fieldId = `${fieldIdPrefix}-${field.name}`;
           return (
-            <label key={field.name} className={cn('block', wide && 'sm:col-span-2')}>
-              <span className="mb-1.5 block text-xs font-semibold text-text-strong">
+            <div key={field.name} className={cn('block', wide && 'sm:col-span-2')}>
+              <label
+                htmlFor={fieldId}
+                className="mb-1.5 block text-xs font-semibold text-text-strong"
+              >
                 {field.label}
-              </span>
+              </label>
               {field.type === 'textarea' || field.type === 'json' ? (
                 <textarea
+                  id={fieldId}
                   name={field.name}
                   required={field.required}
+                  minLength={field.minLength}
+                  disabled={field.disabled}
                   defaultValue={
                     field.defaultValue !== null && typeof field.defaultValue === 'object'
                       ? JSON.stringify(field.defaultValue, null, 2)
-                      : String(field.defaultValue ?? '')
+                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
                   }
                   placeholder={field.placeholder}
                   rows={field.type === 'json' ? 6 : 3}
+                  aria-invalid={Boolean(fieldError)}
+                  aria-describedby={fieldError ? errorId : undefined}
                   className="w-full rounded-lg border border-border-default bg-card px-3 py-2.5 font-sans text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
+                />
+              ) : field.type === 'searchable-select' ? (
+                <SearchableSelectField
+                  field={{ ...field, options: optionsFor(field, selectValues) }}
+                  id={fieldId}
+                  value={selectValues[field.name] ?? ''}
+                  onChange={(value) => updateSelect(field.name, value)}
+                  fieldError={fieldError}
+                  errorId={errorId}
                 />
               ) : field.type === 'select' ? (
                 <select
+                  id={fieldId}
                   name={field.name}
                   required={field.required}
-                  defaultValue={String(field.defaultValue ?? '')}
+                  disabled={field.disabled}
+                  value={selectValues[field.name] ?? ''}
+                  onChange={(event) => updateSelect(field.name, event.target.value)}
+                  aria-invalid={Boolean(fieldError)}
+                  aria-describedby={fieldError ? errorId : undefined}
                   className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 >
                   {!field.required ? <option value="">Not set</option> : null}
-                  {field.options?.map((option) => (
+                  {optionsFor(field, selectValues)?.map((option) => (
                     <option key={option.value} value={option.value}>
                       {option.label}
                     </option>
@@ -192,27 +421,51 @@ export function PlatformCommandForm({
               ) : field.type === 'checkbox' ? (
                 <span className="flex h-11 items-center gap-2 rounded-lg border border-border-default bg-card px-3 text-xs">
                   <input
+                    id={fieldId}
                     name={field.name}
                     type="checkbox"
+                    required={field.required}
+                    disabled={field.disabled}
                     defaultChecked={Boolean(field.defaultValue)}
+                    aria-invalid={Boolean(fieldError)}
+                    aria-describedby={fieldError ? errorId : undefined}
                     className="h-4 w-4 accent-[var(--accent-brand)]"
                   />
-                  Enabled
+                  {field.checkboxText ?? 'Enabled'}
                 </span>
               ) : (
                 <input
+                  key={field.defaultFrom ? selectValues[field.defaultFrom.field] : field.name}
+                  id={fieldId}
                   name={field.name}
                   type={field.type ?? 'text'}
                   required={field.required}
+                  minLength={field.minLength}
+                  disabled={field.disabled}
                   defaultValue={
                     typeof field.defaultValue === 'boolean'
                       ? undefined
-                      : String(field.defaultValue ?? '')
+                      : String(field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.defaultValue ?? '')
                   }
-                  placeholder={field.placeholder}
+                  placeholder={field.format === 'time24' ? 'HH:MM' : field.placeholder}
                   min={field.min}
-                  max={field.max}
+                  max={field.defaultFrom?.values[selectValues[field.defaultFrom.field] ?? ''] ?? field.max}
                   step={field.step}
+                  inputMode={field.format === 'time24' ? 'numeric' : undefined}
+                  maxLength={field.format === 'time24' ? 5 : undefined}
+                  pattern={field.format === 'time24' ? '[0-2][0-9]:[0-5][0-9]' : undefined}
+                  aria-invalid={Boolean(fieldError)}
+                  aria-describedby={fieldError ? errorId : undefined}
+                  onInput={
+                    field.format === 'time24'
+                      ? (event) => {
+                          const input = event.currentTarget;
+                          const digits = input.value.replace(/\D/g, '').slice(0, 4);
+                          input.value =
+                            digits.length > 2 ? `${digits.slice(0, 2)}:${digits.slice(2)}` : digits;
+                        }
+                      : undefined
+                  }
                   className="h-11 w-full rounded-lg border border-border-default bg-card px-3 text-sm outline-none transition focus:border-accent-brand focus:ring-2 focus:ring-accent-brand/15"
                 />
               )}
@@ -221,7 +474,16 @@ export function PlatformCommandForm({
                   {field.help}
                 </span>
               ) : null}
-            </label>
+              {fieldError ? (
+                <span
+                  id={errorId}
+                  data-testid={`platform-field-error-${field.name}`}
+                  className="mt-1.5 block text-xs text-destructive"
+                >
+                  {fieldError}
+                </span>
+              ) : null}
+            </div>
           );
         })}
       </div>

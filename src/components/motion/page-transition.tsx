@@ -1,8 +1,11 @@
 'use client';
 
-import { m } from 'motion/react';
+import { m, useReducedMotion } from 'motion/react';
 import { usePathname } from 'next/navigation';
+import { useSyncExternalStore } from 'react';
 import { easeOutExpo } from '@/lib/motion';
+
+const subscribeToHydration = () => () => {};
 
 /**
  * PageTransition — re-animates the main content on every route change.
@@ -11,20 +14,30 @@ import { easeOutExpo } from '@/lib/motion';
 export function PageTransition({
   children,
   className,
+  travel = true,
 }: {
   children: React.ReactNode;
   className?: string;
+  /** When false, the route does not fade or travel. POS surfaces opt out. */
+  travel?: boolean;
 }) {
   const pathname = usePathname();
+  const reduceMotion = useReducedMotion();
+  const mounted = useSyncExternalStore(
+    subscribeToHydration,
+    () => true,
+    () => false
+  );
+  const still = !travel || reduceMotion;
 
   return (
     <m.div
       data-slot="page-transition"
       key={pathname}
       className={className}
-      initial={{ opacity: 0, y: 10 }}
+      initial={mounted && !still ? { opacity: 0, y: 10 } : false}
       animate={{ opacity: 1, y: 0 }}
-      transition={{ duration: 0.42, ease: easeOutExpo }}
+      transition={{ duration: still ? 0 : 0.42, ease: easeOutExpo }}
     >
       {children}
     </m.div>

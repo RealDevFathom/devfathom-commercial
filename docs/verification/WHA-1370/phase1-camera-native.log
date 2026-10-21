@@ -1,0 +1,27 @@
+bun test v1.3.14 (0d9b296a)
+
+src/lib/restaurant/cameras/mediamtx-runtime.test.mts:
+(pass) configured production runtime exposes no addresses or secrets [1.19ms]
+(pass) production cannot simulate and incomplete real configuration fails closed [0.61ms]
+
+src/lib/restaurant/cameras/mediamtx-route.test.mts:
+(pass) authorized route rewrites every playlist request through viewer grant [3.12ms]
+(pass) route rejects missing actor, entitlement, runtime and grant without upstream reads [0.31ms]
+(pass) route freshly rejects expired, revoked, wrong-viewer and cross-tenant grants [0.13ms]
+(pass) route rejects cross-camera, tenant, branch, disabled camera and revoked gateway [0.14ms]
+(pass) recording requests never substitute live media or read upstream [0.11ms]
+(pass) revocation takes effect on the next segment request [0.08ms]
+
+src/lib/restaurant/cameras/mediamtx.protocol.test.mts:
+(pass) real HTTP fixture carries master, fMP4 playlist, init and segment through confined reads [14.26ms]
+(pass) scope mismatches never open a socket [3.08ms]
+(pass) credentials missing distinguished before any request [3.35ms]
+(pass) authentication, missing stream, and redirect have safe distinct outcomes [16.64ms]
+(pass) streaming body limits reject oversized chunked manifest [5.50ms]
+(pass) concurrent reads bounded and capacity released after completion [4.93ms]
+(pass) resource URL confinement rejects traversal, encoded paths, external URLs and unsupported tags [0.32ms]
+(pass) configuration rejects ambiguous mappings, public/metadata/loopback IPs and URL credentials [0.21ms]
+
+ 16 pass
+ 0 fail
+Ran 16 tests across 3 files. [158.00ms]

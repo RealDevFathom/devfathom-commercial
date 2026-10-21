@@ -1,68 +1,18 @@
 'use client';
 
-import { useState } from 'react';
+import { useCallback, useEffect, useRef, useState } from 'react';
 import Link from 'next/link';
 import { usePathname, useRouter } from 'next/navigation';
 import { m } from 'motion/react';
-import {
-  Activity,
-  Boxes,
-  Building2,
-  CircleDollarSign,
-  ContactRound,
-  FileClock,
-  LogOut,
-  Menu,
-  Moon,
-  Network,
-  ScrollText,
-  Settings2,
-  Sun,
-  UsersRound,
-  X,
-} from 'lucide-react';
+import { LogOut, Menu, Moon, Sun, X } from 'lucide-react';
 import type { PlatformIdentity } from '@/lib/platform/auth';
+import { platformNavigationFor, type PlatformNavGroup } from '@/lib/platform/read-policy';
 import { cn } from '@/lib/utils';
 import { FathomMark } from '@/components/brand/logo';
 import { PageTransition } from '@/components/motion/page-transition';
 import { useTheme } from '@/components/theme-provider';
 
-type NavGroup = 'Operations' | 'Revenue' | 'Governance';
-
-const nav = [
-  { label: 'Control room', href: '/platform', icon: Activity, group: 'Operations' },
-  {
-    label: 'Organizations',
-    href: '/platform/organizations',
-    icon: Building2,
-    group: 'Operations',
-  },
-  { label: 'Deployments', href: '/platform/deployments', icon: Network, group: 'Operations' },
-  { label: 'Jobs', href: '/platform/jobs', icon: FileClock, group: 'Operations' },
-  { label: 'Sales CRM', href: '/platform/crm', icon: ContactRound, group: 'Revenue' },
-  {
-    label: 'Commercial',
-    href: '/platform/commercial',
-    icon: CircleDollarSign,
-    group: 'Revenue',
-  },
-  { label: 'Modules & plans', href: '/platform/catalog', icon: Boxes, group: 'Revenue' },
-  { label: 'Operators', href: '/platform/operators', icon: UsersRound, group: 'Governance' },
-  { label: 'Audit ledger', href: '/platform/audit', icon: ScrollText, group: 'Governance' },
-  {
-    label: 'Platform settings',
-    href: '/platform/settings',
-    icon: Settings2,
-    group: 'Governance',
-  },
-] satisfies Array<{
-  label: string;
-  href: string;
-  icon: React.ComponentType<{ className?: string }>;
-  group: NavGroup;
-}>;
-
-const groupOrder: NavGroup[] = ['Operations', 'Revenue', 'Governance'];
+const groupOrder: PlatformNavGroup[] = ['Operations', 'Revenue', 'Governance'];
 
 function isActivePath(pathname: string, href: string) {
   return href === '/platform'
@@ -81,12 +31,16 @@ function initials(name: string) {
 
 function PlatformDrawer({
   identity,
+  nav,
   pathname,
+  onClose,
   onNavigate,
   onSignOut,
 }: {
   identity: PlatformIdentity;
+  nav: ReturnType<typeof platformNavigationFor>;
   pathname: string;
+  onClose: (event: React.MouseEvent<HTMLElement>) => void;
   onNavigate: () => void;
   onSignOut: () => void;
 }) {
@@ -107,7 +61,7 @@ function PlatformDrawer({
         </div>
         <button
           type="button"
-          onClick={onNavigate}
+          onClick={onClose}
           className="ml-auto grid size-11 place-items-center rounded-full border border-sidebar-border transition hover:bg-sidebar-accent"
           aria-label="Close menu"
         >
@@ -192,10 +146,45 @@ export function PlatformShell({
   children: React.ReactNode;
 }) {
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
+  const menuTriggerRef = useRef<HTMLButtonElement>(null);
+  const restoreMenuFocus = useRef(false);
   const pathname = usePathname();
   const router = useRouter();
   const { theme, setTheme } = useTheme();
+  const nav = platformNavigationFor(identity.role);
   const currentPage = nav.find((item) => isActivePath(pathname, item.href)) ?? nav[0];
+
+  const closeMobileMenu = useCallback((options: { restoreFocus: boolean }) => {
+    restoreMenuFocus.current = options.restoreFocus;
+    setMobileMenuOpen(false);
+  }, []);
+
+  // Closing the drawer unmounts whatever the keyboard was on, which drops focus
+  // to the body and strands a keyboard user at the top of the document. Hand it
+  // back to the trigger that opened the drawer once the close has committed.
+  useEffect(() => {
+    if (mobileMenuOpen || !restoreMenuFocus.current) return;
+    restoreMenuFocus.current = false;
+    menuTriggerRef.current?.focus();
+  }, [mobileMenuOpen]);
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+    function handleKeyDown(event: KeyboardEvent) {
+      if (event.key !== 'Escape') return;
+      event.preventDefault();
+      closeMobileMenu({ restoreFocus: true });
+    }
+    document.addEventListener('keydown', handleKeyDown);
+    return () => document.removeEventListener('keydown', handleKeyDown);
+  }, [mobileMenuOpen, closeMobileMenu]);
+
+  // Enter/Space on a button dispatches a click with `detail === 0`; a pointer
+  // click reports 1 or more. Only the keyboard path pulls focus back, so a tap
+  // still leaves focus where the pointer put it.
+  function handleCloseClick(event: React.MouseEvent<HTMLElement>) {
+    closeMobileMenu({ restoreFocus: event.detail === 0 });
+  }
 
   async function signOut() {
     await fetch('/api/platform/session', {
@@ -220,14 +209,18 @@ export function PlatformShell({
           <button
             type="button"
             className="fixed inset-0 z-40 bg-black/45 backdrop-blur-sm lg:hidden"
-            onClick={() => setMobileMenuOpen(false)}
+            onClick={handleCloseClick}
             aria-label="Close platform navigation"
           />
           <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
             <PlatformDrawer
               identity={identity}
+              nav={nav}
               pathname={pathname}
-              onNavigate={() => setMobileMenuOpen(false)}
+              onClose={handleCloseClick}
+              // A navigation link is leaving this view, so the trigger it would
+              // restore to is about to be re-rendered for the next route.
+              onNavigate={() => closeMobileMenu({ restoreFocus: false })}
               onSignOut={() => void signOut()}
             />
           </div>
@@ -238,6 +231,7 @@ export function PlatformShell({
         <header className="studio-topbar sticky top-0 z-30 flex min-h-[76px] items-center gap-3 border-b border-border-subtle bg-card/94 px-4 backdrop-blur-xl sm:px-6 xl:px-8">
           <button
             type="button"
+            ref={menuTriggerRef}
             onClick={() => setMobileMenuOpen(true)}
             className="studio-icon-button lg:hidden"
             aria-label="Open platform navigation"
@@ -266,7 +260,7 @@ export function PlatformShell({
               Platform nominal
             </span>
             <span className="mt-0.5 block max-w-44 truncate text-[11px] text-muted-foreground">
-              {currentPage.label}
+              {currentPage?.label ?? 'Access restricted'}
             </span>
           </div>
 
@@ -321,14 +315,14 @@ export function PlatformShell({
                   href={item.href}
                   aria-current={active ? 'page' : undefined}
                   className={cn(
-                    'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-xs font-medium text-text-muted transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                    'group relative isolate flex h-9 shrink-0 items-center gap-2 rounded-full px-3.5 text-xs font-medium text-text-body transition-colors hover:bg-muted hover:text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
                     active && 'text-primary-foreground hover:text-primary-foreground',
                     beginsGroup && 'ml-3'
                   )}
                 >
                   <span
                     className={cn(
-                      'font-mono text-[10px] tabular-nums text-text-faint',
+                      'font-mono text-[10px] tabular-nums text-text-body',
                       active && 'text-accent-brand'
                     )}
                   >

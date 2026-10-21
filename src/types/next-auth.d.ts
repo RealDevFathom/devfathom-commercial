@@ -22,11 +22,16 @@ declare module 'next-auth' {
       // deactivation propagates to stateless JWT sessions. Only ever a real
       // UserStatus (ACTIVE | INACTIVE | ON_LEAVE | INVITED). See #16.
       status?: string;
+      /** Administrator-issued password that must be replaced before other calls. */
+      mustChangePassword?: boolean;
       // Session validity, independent of account status. `true` means the token
       // itself is no longer usable (revoked, deleted, suspended organization, or
       // unverifiable). See src/lib/auth/session-state.ts.
       sessionRevoked?: boolean;
       sessionInvalidReason?: SessionInvalidReason | null;
+      /** Server-issued epoch ms of verified password entry; never a refresh timestamp. */
+      passwordAuthenticatedAt?: number;
+      demoAccessExpiresAt?: number;
     };
   }
 
@@ -42,6 +47,9 @@ declare module 'next-auth' {
     supportSessionId?: string;
     platformUserId?: string;
     supportReason?: string;
+    passwordAuthenticatedAt?: number;
+    demoAccessExpiresAt?: number;
+    mustChangePassword?: boolean;
   }
 }
 
@@ -57,9 +65,12 @@ declare module 'next-auth/jwt' {
     // Account status + last DB revalidation timestamp (epoch ms) for session
     // revocation. Populated/refreshed in the jwt() callback.
     status?: string;
+    mustChangePassword?: boolean;
     lastValidatedAt?: number;
     // #16: session revocation as its own claim, never folded into `status`.
     sessionRevoked?: boolean;
     sessionInvalidReason?: SessionInvalidReason | null;
+    passwordAuthenticatedAt?: number;
+    demoAccessExpiresAt?: number;
   }
 }

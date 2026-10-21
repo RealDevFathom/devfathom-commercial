@@ -1,0 +1,47 @@
+# Tax PRD
+
+Operator workflow: [Restaurant administrator guide](restaurant-administrator-guide.md#6-configure-pakistan-tax).
+
+## Problem
+
+Restaurants need a jurisdiction-neutral tax core that selects effective-dated rules and freezes the applied calculation for audit, while allowing a Pakistan configuration without hard-coding Pakistan into the engine. Core contracts are `src/lib/restaurant/tax-contracts.ts`; schema is in `prisma/schema.prisma`.
+
+## Users and roles
+
+- Restaurant-admins configure branch tax profiles/rules with approval/source evidence; checkout operators consume the effective result without editing it. Tax core records and lifecycle constraints are defined in `prisma/schema.prisma`.
+- Platform-admins govern organization/module availability but do not edit tenant transaction snapshots; platform authorization is `src/lib/platform/auth.ts`, while tenant isolation is verified by `tax core real-PostgreSQL RLS and immutability` in `tests/restaurant-tax-core-rls.test.ts`.
+
+## Current behaviour
+
+- The engine is jurisdiction-neutral: rules carry official source, payment category, price mode, rate, status, and effective interval rather than a country-specific calculation branch. See `src/lib/restaurant/tax-contracts.ts` and tax models in `prisma/schema.prisma`.
+- Published profile/rule versions are effective-dated and protected from overlap/mutation; concurrent overlap protection is verified by `uses a database exclusion constraint across two concurrent connections` in `tests/restaurant-tax-core-rls.test.ts`.
+- Checkout calculations produce immutable transaction and per-rate-bucket snapshots, including reversal linkage. See `RestaurantTaxTransactionSnapshot`/`RestaurantTaxRateBucketSnapshot` in `prisma/schema.prisma` and `accepts one exact full reversal and rejects positive, over-value, duplicate, and cross-tenant reversals` in `tests/restaurant-tax-core-rls.test.ts`.
+- Exact tax arithmetic is implemented in `src/lib/restaurant/tax-calculator.ts` and covered by `src/lib/restaurant/tax-calculator.test.ts`.
+
+## Data model
+
+Official source, tax profile/version, rule/version, transaction snapshot, and rate-bucket snapshot records are in the tax section of `prisma/schema.prisma`. Tenant RLS and published/source immutability are tested by `rejects cross-tenant writes and published/source mutation` and `has forced RLS on every tax table` in `tests/restaurant-tax-core-rls.test.ts`.
+
+## API surface
+
+Tax calculation contracts and effective interval input validation are in `src/lib/restaurant/tax-contracts.ts`; calculation is in `src/lib/restaurant/tax-calculator.ts`. The operator surface is `/restaurant/tax`, backed by the registered `restaurantTax` router. It lists branch/profile choices and activates an effective-dated profile only after approval-reference, eligibility, and accountant confirmations.
+
+The same surface publishes customer-supplied custom Pakistan profiles. The administrator selects a
+branch and jurisdiction, inclusive or exclusive price mode, effective start/end dates, and distinct
+Cash, Card, and Other rates supplied or reviewed by an accountant. A live sample preview shows net,
+tax, and total before publication. An approval reference and accountant confirmation are mandatory;
+DevFathom does not supply or verify the legal rates. When explicitly selected, replacement closes
+the current open profile at the new profile's start in the same transaction. Checkout settlement
+freezes the applied profile/rate buckets, and refunds/reversals refer to those historical snapshots
+rather than recalculating against the current profile.
+
+## Edge cases and failure modes
+
+- Overlapping effective profiles/rules are rejected at the database boundary; see `uses a database exclusion constraint across two concurrent connections` in `tests/restaurant-tax-core-rls.test.ts`.
+- Cross-tenant profile/rule/snapshot relations and invalid reversal shapes are rejected under the restricted runtime role; see `rejects every crafted cross-tenant tax relation under the restricted role` and the exact reversal test in `tests/restaurant-tax-core-rls.test.ts`.
+- Terminal-checkout API acceptance proves Pakistan inclusive odd-cent tax settlement for TAKEAWAY with Cash and DELIVERY with Card, including receipt totals and frozen settlement tax snapshots. Settlement also freezes per-tender tax evidence, and refunds allocate tax from that frozen evidence rather than current rates. This is application and database integration evidence, not physical terminal or live payment-provider integration.
+
+## Gaps
+
+- Pakistan activation profiles are exposed with official-source evidence and fail-closed availability. Activation is branch-specific and requires explicit accountant confirmation. This is configuration support, not tax/legal advice or proof that a profile applies to a particular restaurant.
+- Tax filing, invoice/fiscal-device certification, authority e-invoicing, and automated legal-rate updates: **NOT IMPLEMENTED**.

@@ -36,6 +36,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
 import type { Prisma } from '@/generated/prisma/client';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 // The router reaches `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: the context here
@@ -187,6 +188,7 @@ describeIfDatabase('audit list cursor pagination, against PostgreSQL', () => {
             status: 'ACTIVE',
           },
         });
+        await seedDepartments(db, [organizationId], ['ENGINEERING']);
       }
     });
 

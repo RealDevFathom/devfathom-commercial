@@ -24,7 +24,11 @@ import { withPlatformDb } from '@/lib/tenancy/scoped-db';
 export const LOGIN_INTENT_COOKIE = 'df_login_intent';
 export const LOGIN_INTENT_TTL_MS = 5 * 60_000;
 
-export type LoginIntentCandidate = { organizationId: string; userId: string };
+export type LoginIntentCandidate = {
+  organizationId: string;
+  userId: string;
+  demoAccessExpiresAt?: number;
+};
 
 export type ConsumedLoginIntent = {
   id: string;
@@ -171,6 +175,15 @@ function readCandidates(value: unknown): LoginIntentCandidate[] {
     const organizationId = record.organizationId;
     const userId = record.userId;
     if (typeof organizationId !== 'string' || typeof userId !== 'string') return [];
-    return [{ organizationId, userId }];
+    const demoAccessExpiresAt = record.demoAccessExpiresAt;
+    return [
+      {
+        organizationId,
+        userId,
+        ...(typeof demoAccessExpiresAt === 'number' && Number.isFinite(demoAccessExpiresAt)
+          ? { demoAccessExpiresAt }
+          : {}),
+      },
+    ];
   });
 }

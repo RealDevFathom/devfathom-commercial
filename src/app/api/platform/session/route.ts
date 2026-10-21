@@ -62,7 +62,8 @@ export async function POST(request: Request) {
       request
     );
     const response = NextResponse.json({
-      authenticated: true,
+      authenticated: !session.identity.enrollmentOnly,
+      enrollmentRequired: Boolean(session.identity.enrollmentOnly),
       user: {
         id: session.identity.id,
         name: session.identity.name,

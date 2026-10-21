@@ -1,0 +1,16 @@
+export const AGENCY_E2E = {
+  organizationId: 'org_agency_e2e_owned',
+  alternateOrganizationId: 'org_agency_e2e_alternate_owned',
+  adminId: 'user_agency_e2e_admin_owned',
+  alternateAdminId: 'user_agency_e2e_alternate_admin_owned',
+  roleId: 'role_agency_e2e_admin_owned',
+  customRoleId: 'role_agency_e2e_delivery_owned',
+  clientId: 'client_agency_e2e_owned',
+  projectId: 'project_agency_e2e_owned',
+  boardId: 'board_agency_e2e_owned',
+  columnId: 'column_agency_e2e_owned',
+  taskId: 'task_agency_e2e_owned',
+  meetingId: 'meeting_agency_e2e_owned',
+  invoiceId: 'invoice_agency_e2e_owned',
+  transactionId: 'transaction_agency_e2e_owned',
+} as const;

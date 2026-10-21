@@ -1,5 +1,5 @@
 import type { Session } from 'next-auth';
-import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   auth: vi.fn(),
@@ -39,8 +39,11 @@ vi.mock('@/lib/tenancy/support-session', () => ({
   getSupportSession: mocks.getSupportSession,
 }));
 
+import { headers } from 'next/headers';
+import { resolveOrganizationByHost } from '@/lib/tenancy/host';
 import { TenantHostError } from '@/lib/tenancy/host';
-import { resolveTenantActor } from './tenant-actor';
+import { resolveTenantActor, resolveTenantMismatchLoginPath } from './tenant-actor';
+import { proxy } from '@/proxy';
 
 function sessionFor(user: Record<string, unknown>): Session {
   return {
@@ -57,10 +60,12 @@ const request = () => new Request('http://devfathom.localhost:3000/dashboard');
 
 describe('resolveTenantActor', () => {
   beforeEach(() => {
+    vi.stubEnv('DEMO_ACCESS_CODE', 'test-only-code');
     vi.clearAllMocks();
     mocks.getSupportSession.mockResolvedValue(null);
     mocks.isSharedHost.mockReturnValue(false);
   });
+  afterEach(() => vi.unstubAllEnvs());
 
   it('treats a session for another workspace as unauthenticated', async () => {
     mocks.requireOrganizationForRequest.mockRejectedValue(
@@ -95,6 +100,42 @@ describe('resolveTenantActor', () => {
     expect(mocks.requireOrganizationForRequest).not.toHaveBeenCalled();
   });
 
+  it('rejects an API call while a temporary password is outstanding', async () => {
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
+    const blocked = sessionFor({ status: 'ACTIVE', mustChangePassword: true });
+
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://devfathom.localhost:3000/api/upload'),
+        session: blocked,
+      })
+    ).rejects.toMatchObject({ code: 'PASSWORD_CHANGE_REQUIRED', status: 403 });
+    expect(mocks.requireOrganizationForRequest).not.toHaveBeenCalled();
+
+    await expect(
+      resolveTenantActor({
+        request: new Request(
+          'http://devfathom.localhost:3000/api/trpc/team.changePassword?batch=1'
+        ),
+        session: blocked,
+      })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://devfathom.localhost:3000/api/auth/signout', {
+          method: 'POST',
+        }),
+        session: blocked,
+      })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+    await expect(
+      resolveTenantActor({
+        request: new Request('http://devfathom.localhost:3000/dashboard'),
+        session: blocked,
+      })
+    ).resolves.toMatchObject({ organization: { id: 'org_other' } });
+  });
+
   it('still builds an actor for an ON_LEAVE session', async () => {
     mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other' });
 
@@ -103,6 +144,51 @@ describe('resolveTenantActor', () => {
       session: sessionFor({ status: 'ON_LEAVE' }),
     });
     expect(actor?.organization).toEqual({ id: 'org_other' });
+  });
+
+  it('requires a live absolute grant expiry for a demo organization', async () => {
+    mocks.requireOrganizationForRequest.mockResolvedValue({ id: 'org_other', isDemo: true });
+
+    await expect(
+      resolveTenantActor({
+        request: request(),
+        session: sessionFor({ status: 'ACTIVE' }),
+      })
+    ).resolves.toBeNull();
+    await expect(
+      resolveTenantActor({
+        request: request(),
+        session: sessionFor({ status: 'ACTIVE', demoAccessExpiresAt: Date.now() - 1 }),
+      })
+    ).resolves.toBeNull();
+    const user = {
+      status: 'ACTIVE',
+      id: 'user_demo_restaurant_seat_1_waiter',
+      email: 'waiter.seat1@demo.devfathom.invalid',
+      organizationId: 'org_demo_restaurant_seat_1',
+      demoAccessExpiresAt: Date.now() + 60_000,
+    };
+    await expect(
+      resolveTenantActor({ request: request(), session: sessionFor(user) })
+    ).resolves.toBeNull();
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: user.organizationId,
+      slug: 'demo-restaurant-seat-1',
+      isDemo: true,
+      status: 'ACTIVE',
+      vertical: 'RESTAURANT',
+      deploymentMode: 'SHARED',
+    });
+    await expect(
+      resolveTenantActor({ request: request(), session: sessionFor(user) })
+    ).resolves.toMatchObject({ organization: { id: user.organizationId, isDemo: true } });
+    mocks.requireOrganizationForRequest.mockResolvedValue({
+      id: user.organizationId,
+      isDemo: false,
+    });
+    await expect(
+      resolveTenantActor({ request: request(), session: sessionFor(user) })
+    ).resolves.toBeNull();
   });
 
   // D14: `df_support_session` is domain-wide and outranks the tenant JWT, so an
@@ -132,5 +218,61 @@ describe('resolveTenantActor', () => {
 
       expect(actor?.organization).toEqual({ id: 'org_other' });
     });
+  });
+});
+
+describe('wrong-host session login destination', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.isSharedHost.mockReturnValue(false);
+    vi.mocked(headers).mockResolvedValue(
+      new Headers({ host: 'devfathom.localhost:3000' }) as never
+    );
+    mocks.auth.mockResolvedValue(session);
+    vi.mocked(resolveOrganizationByHost).mockResolvedValue({ id: 'org_agency' } as never);
+    mocks.resolveOrganizationById.mockResolvedValue({
+      id: 'org_other',
+      slug: 'karahi-house',
+      status: 'ACTIVE',
+    });
+  });
+  it('redirects to the session organization database slug before rendering a shell', async () => {
+    await expect(resolveTenantMismatchLoginPath()).resolves.toBe(
+      'http://karahi-house.localhost:3000/login'
+    );
+    expect(mocks.resolveOrganizationById).toHaveBeenCalledWith('org_other');
+  });
+  it('does not redirect a matching host', async () => {
+    vi.mocked(resolveOrganizationByHost).mockResolvedValue({ id: 'org_other' } as never);
+    await expect(resolveTenantMismatchLoginPath()).resolves.toBeNull();
+  });
+  it.each(['host', 'x-forwarded-host'])(
+    'preserves the %s port through the proxy into the wrong-host login redirect',
+    async (hostHeader) => {
+      const response = await proxy(
+        new Request('http://devfathom.localhost:3000/dashboard', {
+          headers: {
+            host: 'internal.localhost:8080',
+            [hostHeader]: 'devfathom.localhost:3000',
+            cookie: 'authjs.session-token=test-session',
+          },
+        })
+      );
+      const forwardedHost = response.headers.get('x-middleware-request-x-devfathom-host');
+      expect(forwardedHost).toBe('devfathom.localhost:3000');
+      vi.mocked(headers).mockResolvedValue(
+        new Headers({ 'x-devfathom-host': forwardedHost! }) as never
+      );
+
+      await expect(resolveTenantMismatchLoginPath()).resolves.toBe(
+        'http://karahi-house.localhost:3000/login'
+      );
+      expect(resolveOrganizationByHost).toHaveBeenCalledWith('devfathom.localhost:3000');
+    }
+  );
+  it('does not use revoked sessions to select a tenant host', async () => {
+    mocks.auth.mockResolvedValue(sessionFor({ status: 'ACTIVE', sessionRevoked: true }));
+    await expect(resolveTenantMismatchLoginPath()).resolves.toBeNull();
+    expect(mocks.resolveOrganizationById).not.toHaveBeenCalled();
   });
 });

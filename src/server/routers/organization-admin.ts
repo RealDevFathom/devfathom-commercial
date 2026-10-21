@@ -3,11 +3,13 @@ import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
 import { z } from 'zod';
 import { Prisma } from '@/generated/prisma/client';
-import { assertSeatAvailable } from '@/lib/entitlements';
+import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
+import { passwordSchema } from '@/lib/password-policy';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { ianaTimezone } from '@/lib/timezone';
 import { annotateAudit } from '@/server/audit';
-import { adminProcedure, router } from '@/server/trpc';
+import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
 
 const optionalUrl = z
   .union([z.url().max(2_000), z.literal('')])
@@ -22,6 +24,43 @@ const hostname = z
   .toLowerCase()
   .max(253)
   .regex(/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/);
+const departmentKey = z
+  .string()
+  .trim()
+  .min(2)
+  .max(80)
+  .regex(/^[A-Z0-9_]+$/, 'Use uppercase letters, numbers, and underscores only.');
+const OCCUPIED_SEAT_STATUSES = ['ACTIVE', 'ON_LEAVE', 'INVITED'] as const;
+
+function occupiesSeat(status: string): boolean {
+  return (OCCUPIED_SEAT_STATUSES as readonly string[]).includes(status);
+}
+
+function duplicateMember(error: unknown): boolean {
+  return (
+    typeof error === 'object' &&
+    error !== null &&
+    'code' in error &&
+    (error as { code?: unknown }).code === 'P2002'
+  );
+}
+
+async function lockOrganizationSeat(
+  tx: Prisma.TransactionClient,
+  organizationId: string,
+  seatLimit: number
+): Promise<void> {
+  await tx.$queryRaw`SELECT "id" FROM "organizations" WHERE "id" = ${organizationId} FOR UPDATE`;
+  const activeSeats = await tx.user.count({
+    where: { organizationId, status: { in: [...OCCUPIED_SEAT_STATUSES] } },
+  });
+  if (activeSeats >= seatLimit) {
+    throw new TRPCError({
+      code: 'PRECONDITION_FAILED',
+      message: `Seat limit reached (${activeSeats}/${seatLimit}).`,
+    });
+  }
+}
 
 function inputJson(value: unknown): Prisma.InputJsonValue {
   return JSON.parse(JSON.stringify(value)) as Prisma.InputJsonValue;
@@ -34,6 +73,104 @@ function organizationId(ctx: { session: { user: { organizationId?: string } } })
 }
 
 export const organizationAdminRouter = router({
+  askFathomSettings: protectedProcedure.input(z.void()).query(async ({ ctx }) => {
+    const settings = await readAskFathomSettings(ctx.db, organizationId(ctx));
+    if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+    return settings;
+  }),
+
+  setAskFathomEnabled: adminProcedure
+    .input(z.strictObject({ askFathomEnabled: z.boolean() }))
+    .mutation(async ({ ctx, input }) => {
+      // A custom capability grant must not broaden this company control beyond ADMIN.
+      if (ctx.session.user.role !== 'ADMIN') {
+        throw new TRPCError({ code: 'FORBIDDEN', message: 'Administrator access is required.' });
+      }
+      const id = organizationId(ctx);
+      const settings = await readAskFathomSettings(ctx.db, id);
+      if (!settings) throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
+      const saved = await ctx.db.organization.update({
+        where: { id },
+        data: { askFathomEnabled: input.askFathomEnabled },
+        select: { id: true, askFathomEnabled: true },
+      });
+      annotateAudit(ctx, {
+        targetType: 'Organization',
+        targetId: id,
+        operation: 'UPDATE',
+        description: `${saved.askFathomEnabled ? 'Enabled' : 'Disabled'} company Ask Fathom chat`,
+      });
+      return { organizationId: saved.id, askFathomEnabled: saved.askFathomEnabled };
+    }),
+
+  departments: adminProcedure.query(async ({ ctx }) => {
+    const id = organizationId(ctx);
+    return ctx.db.organizationDepartment.findMany({
+      where: { organizationId: id },
+      orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+    });
+  }),
+
+  upsertDepartment: adminProcedure
+    .input(
+      z.object({
+        id: z.string().optional(),
+        key: departmentKey,
+        name: z.string().trim().min(2).max(100),
+        active: z.boolean().default(true),
+        sortOrder: z.number().int().min(0).max(10_000).default(0),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const tenantId = organizationId(ctx);
+      const { id, ...values } = input;
+      const existing = id
+        ? await ctx.db.organizationDepartment.findFirst({ where: { id, organizationId: tenantId } })
+        : null;
+      if (id && !existing)
+        throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
+      if (existing && existing.key !== values.key) {
+        throw new TRPCError({ code: 'BAD_REQUEST', message: 'Department keys cannot be changed.' });
+      }
+      const saved = existing
+        ? await ctx.db.organizationDepartment.update({ where: { id: existing.id }, data: values })
+        : await ctx.db.organizationDepartment.create({
+            data: { organizationId: tenantId, ...values },
+          });
+      annotateAudit(ctx, {
+        targetType: 'OrganizationDepartment',
+        targetId: saved.id,
+        targetLabel: saved.name,
+        description: `${existing ? 'Updated' : 'Created'} organization department`,
+      });
+      return saved;
+    }),
+
+  removeDepartment: adminProcedure
+    .input(z.object({ id: z.string() }))
+    .mutation(async ({ ctx, input }) => {
+      const tenantId = organizationId(ctx);
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { id: input.id, organizationId: tenantId },
+        include: { _count: { select: { users: true } } },
+      });
+      if (!department) throw new TRPCError({ code: 'NOT_FOUND', message: 'Department not found.' });
+      if (department._count.users > 0) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: `Reassign ${department._count.users} member(s) before removing this department.`,
+        });
+      }
+      await ctx.db.organizationDepartment.delete({ where: { id: department.id } });
+      annotateAudit(ctx, {
+        targetType: 'OrganizationDepartment',
+        targetId: department.id,
+        targetLabel: department.name,
+        description: 'Removed organization department',
+      });
+      return { success: true };
+    }),
+
   overview: adminProcedure.query(async ({ ctx }) => {
     const id = organizationId(ctx);
     const organization = await ctx.db.organization.findUnique({
@@ -44,6 +181,7 @@ export const organizationAdminRouter = router({
         legalName: true,
         displayName: true,
         status: true,
+        vertical: true,
         deploymentMode: true,
         timezone: true,
         locale: true,
@@ -51,7 +189,7 @@ export const organizationAdminRouter = router({
         primaryContactName: true,
         primaryContactEmail: true,
         activatedAt: true,
-        package: { select: { name: true } },
+        packageId: true,
         brand: true,
         emailSettings: {
           select: {
@@ -92,6 +230,11 @@ export const organizationAdminRouter = router({
             createdAt: true,
           },
         },
+        departments: {
+          where: { active: true },
+          orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+          select: { id: true, key: true, name: true },
+        },
         roles: {
           orderBy: { name: 'asc' },
           include: {
@@ -117,9 +260,26 @@ export const organizationAdminRouter = router({
       },
     });
     if (!organization) throw new TRPCError({ code: 'NOT_FOUND' });
+    // Package catalog rows are control-plane-only under RLS. Use only the
+    // package assigned to this session's organization, and expose its name.
+    const assignedPackage = organization.packageId
+      ? await withPlatformDb((db) =>
+          db.platformPackage.findUnique({
+            where: { id: organization.packageId! },
+            select: { name: true },
+          })
+        )
+      : null;
+    const pharmacyBranches = await ctx.db.pharmacyBranch.findMany({
+      where: { organizationId: id, active: true },
+      select: { id: true, name: true, code: true },
+      orderBy: { name: 'asc' },
+    });
     return {
+      pharmacyBranches,
       organization: {
         ...organization,
+        package: assignedPackage,
         emailSettings: organization.emailSettings
           ? {
               ...organization.emailSettings,
@@ -135,7 +295,9 @@ export const organizationAdminRouter = router({
     .input(
       z.object({
         displayName: z.string().trim().min(1).max(150),
-        timezone: z.string().trim().min(1).max(100),
+        // Every screen that shows a workspace time formats in this zone, and
+        // Intl throws on one it does not know: the platform's IANA check.
+        timezone: ianaTimezone,
         locale: z.string().trim().min(2).max(20),
         primaryContactName: z.string().trim().max(150).nullable(),
         primaryContactEmail: optionalEmail,
@@ -314,14 +476,7 @@ export const organizationAdminRouter = router({
         status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED']),
         organizationRoleId: z.string().nullable(),
         title: z.string().trim().min(1).max(150),
-        department: z.enum([
-          'LEADERSHIP',
-          'ENGINEERING',
-          'PRODUCT',
-          'QUALITY',
-          'MARKETING',
-          'DESIGN',
-        ]),
+        department: departmentKey,
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -331,19 +486,12 @@ export const organizationAdminRouter = router({
         select: { id: true, status: true, role: true, email: true },
       });
       if (!before) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
-      const activating =
-        !['ACTIVE', 'ON_LEAVE', 'INVITED'].includes(before.status) &&
-        ['ACTIVE', 'ON_LEAVE', 'INVITED'].includes(input.status);
-      if (activating) {
-        try {
-          assertSeatAvailable(ctx.entitlements);
-        } catch (error) {
-          throw new TRPCError({
-            code: 'PRECONDITION_FAILED',
-            message: error instanceof Error ? error.message : 'No license seat is available.',
-          });
-        }
-      }
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { organizationId: id, key: input.department, active: true },
+        select: { id: true },
+      });
+      if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+      const activating = !occupiesSeat(before.status) && occupiesSeat(input.status);
       if (input.organizationRoleId) {
         const role = await ctx.db.organizationRole.findFirst({
           where: { id: input.organizationRoleId, organizationId: id },
@@ -354,19 +502,22 @@ export const organizationAdminRouter = router({
       if (before.id === ctx.session.user.id && input.status === 'INACTIVE') {
         throw new TRPCError({ code: 'BAD_REQUEST', message: 'You cannot deactivate yourself.' });
       }
-      const saved = await ctx.db.user.update({
-        where: { id: input.id },
-        data: {
-          role: input.role,
-          status: input.status,
-          organizationRoleId: input.organizationRoleId,
-          title: input.title,
-          department: input.department,
-          tokenVersion:
-            before.role !== input.role || before.status !== input.status
-              ? { increment: 1 }
-              : undefined,
-        },
+      const saved = await ctx.db.$transaction(async (tx) => {
+        if (activating) await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
+        return tx.user.update({
+          where: { id: input.id },
+          data: {
+            role: input.role,
+            status: input.status,
+            organizationRoleId: input.organizationRoleId,
+            title: input.title,
+            department: input.department,
+            tokenVersion:
+              before.role !== input.role || before.status !== input.status
+                ? { increment: 1 }
+                : undefined,
+          },
+        });
       });
       annotateAudit(ctx, {
         targetType: 'User',
@@ -378,8 +529,112 @@ export const organizationAdminRouter = router({
       return saved;
     }),
 
+  createMember: adminProcedure
+    .input(
+      z.object({
+        name: z.string().trim().min(1).max(150),
+        email: z
+          .email()
+          .max(254)
+          .transform((value) => value.trim().toLowerCase()),
+        password: passwordSchema.min(12).max(256),
+        title: z.string().trim().min(1).max(150),
+        role: z.enum(['ADMIN', 'HR', 'EMPLOYEE']),
+        department: departmentKey,
+        organizationRoleId: z.string().nullable().default(null),
+        branchIds: z.array(z.string().trim().min(1).max(64)).max(32).default([]),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const department = await ctx.db.organizationDepartment.findFirst({
+        where: { organizationId: id, key: input.department, active: true },
+        select: { id: true },
+      });
+      if (!department) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid department.' });
+      if (input.organizationRoleId) {
+        const role = await ctx.db.organizationRole.findFirst({
+          where: { id: input.organizationRoleId, organizationId: id },
+          select: { id: true },
+        });
+        if (!role) throw new TRPCError({ code: 'BAD_REQUEST', message: 'Invalid custom role.' });
+      }
+      const existing = await ctx.db.user.findFirst({
+        where: { organizationId: id, email: input.email },
+        select: { id: true },
+      });
+      if (existing)
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message: 'A member with this email already exists in this workspace.',
+        });
+      const branchIds = [...new Set(input.branchIds)];
+      const created = await ctx.db.$transaction(async (tx) => {
+        await lockOrganizationSeat(tx, id, ctx.entitlements.seatLimit);
+        if (branchIds.length > 0) {
+          const branches = await tx.pharmacyBranch.findMany({
+            where: { organizationId: id, id: { in: branchIds }, active: true },
+            select: { id: true },
+          });
+          if (branches.length !== branchIds.length) {
+            throw new TRPCError({
+              code: 'BAD_REQUEST',
+              message: 'Choose an active pharmacy branch.',
+            });
+          }
+        }
+        let member;
+        try {
+          member = await tx.user.create({
+            data: {
+              organizationId: id,
+              name: input.name,
+              email: input.email,
+              password: await hash(input.password, 12),
+              passwordChangedAt: null,
+              mustChangePassword: true,
+              role: input.role,
+              department: input.department,
+              title: input.title,
+              organizationRoleId: input.organizationRoleId,
+              status: 'ACTIVE',
+            },
+            select: { id: true, email: true, name: true },
+          });
+        } catch (error) {
+          if (duplicateMember(error)) {
+            throw new TRPCError({
+              code: 'CONFLICT',
+              message: 'A member with this email already exists in this workspace.',
+            });
+          }
+          throw error;
+        }
+        if (branchIds.length > 0) {
+          await tx.pharmacyBranchAssignment.createMany({
+            data: branchIds.map((branchId) => ({
+              organizationId: id,
+              branchId,
+              userId: member.id,
+              active: true,
+            })),
+          });
+        }
+        return member;
+      });
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: created.id,
+        targetLabel: created.email,
+        operation: 'CREATE',
+        description: 'Added a workspace member',
+        metadata: { role: input.role, department: input.department },
+      });
+      return created;
+    }),
+
   resetMemberPassword: adminProcedure
-    .input(z.object({ id: z.string(), password: z.string().min(12).max(256) }))
+    .input(z.object({ id: z.string(), password: passwordSchema.min(12).max(256) }))
     .mutation(async ({ ctx, input }) => {
       const id = organizationId(ctx);
       const user = await ctx.db.user.findFirst({
@@ -391,7 +646,8 @@ export const organizationAdminRouter = router({
         where: { id: user.id },
         data: {
           password: await hash(input.password, 12),
-          passwordChangedAt: new Date(),
+          passwordChangedAt: null,
+          mustChangePassword: true,
           tokenVersion: { increment: 1 },
         },
       });

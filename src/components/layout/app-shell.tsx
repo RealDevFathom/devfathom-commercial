@@ -1,19 +1,22 @@
 'use client';
 
-import { useState, type CSSProperties } from 'react';
+import { useEffect, useState, type CSSProperties } from 'react';
 import dynamic from 'next/dynamic';
 import { usePathname } from 'next/navigation';
 import { Sidebar, TopNavigation } from './sidebar';
 import { Topbar } from './topbar';
 import { PageTransition } from '@/components/motion/page-transition';
-import { useAssistant } from '@/lib/assistant-store';
+import { isAssistantAvailable, useAssistant } from '@/lib/assistant-store';
+import { trpc } from '@/lib/trpc';
 import { cn } from '@/lib/utils';
 import { useEntitlements } from '@/components/entitlements-provider';
-import { moduleForPath } from '@/lib/module-catalog';
+import { isModuleGranted, moduleForPath } from '@/lib/module-catalog';
+import type { EntitlementView } from '@/lib/module-catalog';
 import { Box, Loader2, ShieldAlert } from 'lucide-react';
 import { useSession } from 'next-auth/react';
 import Link from 'next/link';
-import type { TenantBrand } from '@/lib/tenant-brand';
+import { isTenantIdentityMismatch, tenantBrandTokens, type TenantBrand } from '@/lib/tenant-brand';
+import { AdministratorStaffProfileCallout } from '@/components/restaurant/administrator-staff-profile-callout';
 import { toast } from 'sonner';
 
 // Lazy-load the assistant panel so @ai-sdk/react + ai stay out of the global
@@ -23,12 +26,58 @@ const AssistantPanel = dynamic(
   { ssr: false }
 );
 
-function contrastColor(hex: string): string {
-  const value = hex.replace('#', '');
-  const [red, green, blue] = [0, 2, 4].map((offset) =>
-    Number.parseInt(value.slice(offset, offset + 2), 16)
-  );
-  return (red * 299 + green * 587 + blue * 114) / 1000 > 145 ? '#111110' : '#FFFCF6';
+function AskFathomChat({ organizationId }: { organizationId: string }) {
+  const utils = trpc.useUtils();
+  const settings = trpc.organizationAdmin.askFathomSettings.useQuery(undefined, {
+    staleTime: 0,
+    refetchOnMount: 'always',
+    refetchOnWindowFocus: 'always',
+    trpc: { abortOnUnmount: true },
+  });
+  const available = useAssistant((state) => isAssistantAvailable(state, organizationId));
+  const hasOpened = useAssistant((state) => state.hasOpened);
+  const panelEpoch = useAssistant((state) => state.panelEpoch);
+
+  useEffect(() => {
+    if (settings.isFetchedAfterMount) return;
+    // A stalled transport must finish in a closed, actionable state too.
+    const timeout = window.setTimeout(() => {
+      useAssistant.getState().markUnavailable(organizationId, Date.now());
+    }, 15_000);
+    return () => window.clearTimeout(timeout);
+  }, [organizationId, settings.isFetchedAfterMount]);
+
+  useEffect(() => {
+    useAssistant.getState().setOrganization(organizationId);
+    return () => {
+      useAssistant.getState().setOrganization(null);
+      void utils.organizationAdmin.askFathomSettings.cancel();
+    };
+  }, [organizationId, utils]);
+
+  useEffect(() => {
+    // The no-input endpoint shares a cache key across sessions. Never accept a
+    // previous mount's cached permissions, or another organization's response.
+    if (!settings.isFetchedAfterMount) return;
+    if (settings.isError || settings.data?.organizationId !== organizationId) {
+      useAssistant
+        .getState()
+        .markUnavailable(organizationId, Math.max(settings.errorUpdatedAt, settings.dataUpdatedAt));
+    } else if (settings.data) {
+      useAssistant.getState().confirmSettings(settings.data, settings.dataUpdatedAt);
+    }
+  }, [
+    organizationId,
+    settings.data,
+    settings.dataUpdatedAt,
+    settings.errorUpdatedAt,
+    settings.isError,
+    settings.isFetchedAfterMount,
+  ]);
+
+  // Unmount discards local chat history. It does not abort an active stream;
+  // the server gate remains authoritative for new turns and approval continuations.
+  return available && hasOpened ? <AssistantPanel key={`${organizationId}:${panelEpoch}`} /> : null;
 }
 
 function EndSupportAccessButton() {
@@ -65,31 +114,90 @@ function EndSupportAccessButton() {
   );
 }
 
+/**
+ * WHA-276 — shown instead of the application when the signed-in organization is
+ * no longer the organization this shell was rendered for.
+ *
+ * Deliberately renders none of the tenant chrome: no brand name, no logo, no
+ * brand palette, and no `children`. Displaying organization A's identity while
+ * every request underneath resolves organization B is the exact failure this
+ * lane exists to make impossible, so the safe state is to show nothing tenant-
+ * specific at all. Reloading re-runs the `/(app)` layout against the current
+ * cookie, which resolves the correct organization and self-heals.
+ */
+function WorkspaceIdentityMismatch() {
+  return (
+    <div className="studio-viewport flex h-dvh items-center justify-center overflow-y-auto p-4">
+      <section
+        data-slot="workspace-identity-mismatch"
+        className="mx-auto max-w-2xl border border-border-default bg-surface-card p-8"
+      >
+        <ShieldAlert className="h-8 w-8 text-accent-brand" />
+        <p className="mt-6 font-mono text-[10px] uppercase tracking-[0.18em] text-text-muted">
+          Workspace control
+        </p>
+        <h1 className="mt-2 font-display text-3xl font-semibold text-text-strong">
+          You are signed in to a different workspace
+        </h1>
+        <p className="mt-3 max-w-xl text-sm leading-6 text-text-muted">
+          This tab was opened for another organization, and your session has since moved. To keep
+          workspace identity honest, DevFathom will not show one organization&rsquo;s name or
+          branding over another organization&rsquo;s data. Reload to continue in the workspace you
+          are currently signed in to.
+        </p>
+        <button
+          type="button"
+          onClick={() => window.location.reload()}
+          className="mt-6 inline-flex h-10 items-center bg-abyss-900 px-4 text-xs font-semibold text-paper-white"
+        >
+          Reload this workspace
+        </button>
+      </section>
+    </div>
+  );
+}
+
+export function isPathModuleEnabled(
+  pathname: string,
+  entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>
+) {
+  const moduleKey = moduleForPath(pathname, entitlements.vertical);
+  return !moduleKey || isModuleGranted(moduleKey, entitlements.enabledModules);
+}
+
 export function AppShell({ children, brand }: { children: React.ReactNode; brand: TenantBrand }) {
+  // The server-side invariant lives in the `/(app)` layout, which fails closed
+  // before this renders. Here the live session is the moving part, so the check
+  // below (after every hook) degrades to a notice rather than throwing.
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const pathname = usePathname();
-  const { data: session } = useSession();
+  const { data: session, status: sessionStatus } = useSession();
   const entitlements = useEntitlements();
-  const currentModule = moduleForPath(pathname);
-  const moduleEnabled = !currentModule || entitlements.enabledModules.includes(currentModule);
-  const immersive = pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
-  const assistantOpen = useAssistant((s) => s.open);
-  // Mount the panel once it has been opened, then keep it mounted so chat
-  // state survives close/reopen.
-  const [assistantMounted, setAssistantMounted] = useState(false);
-  if (assistantOpen && !assistantMounted) setAssistantMounted(true);
-  const brandStyle = {
-    '--primary': brand.primaryColor,
-    '--primary-hover': brand.primaryColor,
-    '--primary-foreground': contrastColor(brand.primaryColor),
-    '--sidebar': brand.primaryColor,
-    '--sidebar-primary': brand.accentColor,
-    '--sidebar-foreground': contrastColor(brand.primaryColor),
-    '--sidebar-accent-foreground': contrastColor(brand.primaryColor),
-    '--accent-brand': brand.accentColor,
-    '--accent-brand-hover': brand.accentColor,
-    '--ring': brand.accentColor,
-  } as CSSProperties;
+  const currentModule = moduleForPath(pathname, entitlements.vertical);
+  const moduleEnabled =
+    !currentModule || isModuleGranted(currentModule, entitlements.enabledModules);
+  const counterPos = pathname === '/pharmacy/counter';
+  const immersive =
+    counterPos || pathname === '/chat' || /^\/meetings\/[^/]+\/call$/.test(pathname);
+  const brandStyle = tenantBrandTokens(brand) as CSSProperties;
+
+  useEffect(() => {
+    if (!mobileMenuOpen) return;
+
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMobileMenuOpen(false);
+    };
+
+    document.addEventListener('keydown', closeOnEscape);
+    return () => document.removeEventListener('keydown', closeOnEscape);
+  }, [mobileMenuOpen]);
+
+  // WHA-276: enforce the invariant that displayed workspace identity can never
+  // diverge from session.user.organizationId. Every hook above has already run,
+  // so this early return is safe under the Rules of Hooks.
+  if (isTenantIdentityMismatch(brand, session?.user?.organizationId)) {
+    return <WorkspaceIdentityMismatch />;
+  }
 
   return (
     <div className="studio-viewport h-dvh overflow-hidden" style={brandStyle}>
@@ -97,10 +205,16 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
       {mobileMenuOpen && (
         <>
           <div
+            aria-hidden="true"
             className="fixed inset-0 z-40 bg-black/50 backdrop-blur-sm lg:hidden"
             onClick={() => setMobileMenuOpen(false)}
           />
-          <div className="fixed inset-y-0 left-0 z-50 lg:hidden">
+          <div
+            role="dialog"
+            aria-modal="true"
+            aria-label="Mobile navigation"
+            className="fixed inset-y-0 left-0 z-50 lg:hidden"
+          >
             <Sidebar
               brand={brand}
               onNavigate={() => setMobileMenuOpen(false)}
@@ -122,12 +236,20 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
           </div>
         ) : null}
         <Topbar brand={brand} onMenuClick={() => setMobileMenuOpen(true)} />
+        {/* WHA-1181 — a one-time setup step for a restaurant administrator whose
+            organization activated before staff profiles were provisioned. Self-
+            hiding, so it costs a healthy workspace nothing. */}
+        <AdministratorStaffProfileCallout />
         <TopNavigation />
         <main
           data-slot="app-canvas"
-          className="studio-canvas relative min-h-0 flex-1 overflow-y-auto scroll-pt-24"
+          className={cn(
+            'studio-canvas relative min-h-0 flex-1 scroll-pt-24',
+            counterPos ? 'overflow-hidden' : 'overflow-y-auto'
+          )}
         >
           <PageTransition
+            travel={!counterPos}
             className={cn(
               'studio-stage mx-auto w-full',
               immersive
@@ -163,7 +285,12 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
         </main>
       </div>
 
-      {assistantMounted && <AssistantPanel />}
+      {sessionStatus === 'authenticated' && session?.user.organizationId && (
+        <AskFathomChat
+          key={session.user.organizationId}
+          organizationId={session.user.organizationId}
+        />
+      )}
     </div>
   );
 }

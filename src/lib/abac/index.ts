@@ -10,6 +10,7 @@
  *   if (!(await can(subject, 'resignation:review', { type: 'Resignation', ... })))
  *     throw new TRPCError({ code: 'FORBIDDEN' });
  */
+import { capabilityMatches } from './capabilities';
 import type { AuthzDb } from '@/lib/authz';
 import { POLICIES, type Action } from './policies';
 import type { Environment, ResourceAttributes, Subject } from './types';
@@ -24,12 +25,6 @@ export type CanOptions = {
   ip?: string | null;
   db?: AuthzDb;
 };
-
-function capabilityMatches(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (!rule.endsWith(':*')) return false;
-  return action.startsWith(rule.slice(0, -1));
-}
 
 async function customDecision(
   db: AuthzDb,
@@ -51,12 +46,12 @@ async function customDecision(
   });
   if (!user) return false;
   const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action)
+    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
   if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action)
+    capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
   if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
   if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;

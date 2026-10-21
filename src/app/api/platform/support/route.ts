@@ -2,7 +2,12 @@ import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { requirePlatformSession } from '@/lib/platform/auth';
 import { assertPlatformMutationOrigin, PlatformSecurityError } from '@/lib/platform/security';
-import { createSupportSession, endSupportSession } from '@/lib/tenancy/support-session';
+import {
+  createSupportSession,
+  endSupportSession,
+  forceEndSupportSession,
+  listActiveSupportSessions,
+} from '@/lib/tenancy/support-session';
 
 const createSchema = z.object({
   organizationId: z.string().min(3).max(128),
@@ -57,6 +62,40 @@ export async function DELETE(request: Request) {
     await endSupportSession(request);
     return NextResponse.json({ success: true });
   } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function GET(request: Request) {
+  try {
+    const actor = await requirePlatformSession(request, 'support:write');
+    return NextResponse.json(
+      { sessions: await listActiveSupportSessions(actor) },
+      {
+        headers: { 'Cache-Control': 'private, no-store' },
+      }
+    );
+  } catch (error) {
+    return failure(error);
+  }
+}
+
+export async function PATCH(request: Request) {
+  try {
+    assertPlatformMutationOrigin(request);
+    const actor = await requirePlatformSession(request, 'support:write');
+    const input = z
+      .object({
+        supportSessionId: z.string().min(3).max(128),
+        reason: z.string().trim().min(10).max(500),
+      })
+      .parse(await request.json());
+    await forceEndSupportSession({ actor, ...input });
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    if (error instanceof z.ZodError || error instanceof SyntaxError) {
+      return NextResponse.json({ error: 'Review the session and end reason.' }, { status: 400 });
+    }
     return failure(error);
   }
 }

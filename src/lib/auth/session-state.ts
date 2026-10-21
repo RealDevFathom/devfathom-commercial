@@ -28,7 +28,7 @@ export const ACTIVE_STATUSES = new Set(['ACTIVE', 'ON_LEAVE']);
 
 /** Why a session is no longer usable. Never a `UserStatus` value. */
 export type SessionInvalidReason =
-  'REVOKED' | 'DELETED' | 'ORGANIZATION_SUSPENDED' | 'REVALIDATION_FAILED';
+  'REVOKED' | 'DELETED' | 'ORGANIZATION_SUSPENDED' | 'REVALIDATION_FAILED' | 'DEMO_ACCESS_EXPIRED';
 
 export const SESSION_ENDED_MESSAGE = 'Your session has ended. Please sign in again.';
 export const ACCOUNT_INACTIVE_MESSAGE =
@@ -50,6 +50,10 @@ export type SessionDenialKind = 'session-ended' | 'account-inactive' | 'workspac
 
 export type SessionVerdict =
   { ok: true } | { ok: false; kind: SessionDenialKind; message: string; reason: string };
+
+export function liveDemoAccessExpiry(value: unknown, now = Date.now()): number | null {
+  return typeof value === 'number' && Number.isFinite(value) && value > now ? value : null;
+}
 
 const DENIAL_MESSAGES: Record<SessionDenialKind, string> = {
   'session-ended': SESSION_ENDED_MESSAGE,
@@ -108,6 +112,57 @@ export function evaluateSessionUser(user: SessionUserState | null | undefined): 
 
 export function isSessionUsable(user: SessionUserState | null | undefined): boolean {
   return evaluateSessionUser(user).ok;
+}
+
+export const TEMPORARY_PASSWORD_MESSAGE = 'Change your temporary password before continuing.';
+
+/** Authenticated calls a temporary password may still make. */
+const TEMPORARY_PASSWORD_ALLOWED_PATHS = new Set(['team.changePassword', 'team.signOutEverywhere']);
+
+export const CHANGE_PASSWORD_PATH = '/change-password';
+
+export class PasswordChangeRequiredError extends Error {
+  readonly status = 403 as const;
+  readonly code = 'PASSWORD_CHANGE_REQUIRED' as const;
+
+  constructor() {
+    super('PASSWORD_CHANGE_REQUIRED');
+    this.name = 'PasswordChangeRequiredError';
+  }
+}
+
+const PASSWORD_CHANGE_API_PROCEDURES = new Set(['team.changePassword', 'team.signOutEverywhere']);
+
+/** Change-password and sign-out requests stay available while the flag is set. */
+export function isPasswordChangeApiExempt(request: Request): boolean {
+  const url = new URL(request.url);
+  const path = url.pathname.replace(/\/+$/, '') || '/';
+  if (path === '/api/auth/signout') return true;
+  if (path === '/api/login' && request.method === 'DELETE') return true;
+  if (!path.startsWith('/api/trpc/')) return false;
+  const procedures = decodeURIComponent(path.slice('/api/trpc/'.length)).split(',').filter(Boolean);
+  return (
+    procedures.length > 0 && procedures.every((name) => PASSWORD_CHANGE_API_PROCEDURES.has(name))
+  );
+}
+
+export function responseForPasswordChange(error: unknown): Response | null {
+  if (!(error instanceof PasswordChangeRequiredError)) return null;
+  return Response.json({ code: error.code, error: error.message }, { status: error.status });
+}
+
+/** Signed-in app pages send a temporary password to the change-password screen. */
+export function workspaceRedirectForPasswordChange(
+  mustChangePassword: boolean | null | undefined
+): string | null {
+  return mustChangePassword === true ? CHANGE_PASSWORD_PATH : null;
+}
+
+export function temporaryPasswordBlocks(
+  user: { mustChangePassword?: boolean | null } | null | undefined,
+  path: string
+): boolean {
+  return user?.mustChangePassword === true && !TEMPORARY_PASSWORD_ALLOWED_PATHS.has(path);
 }
 
 /** Query string the login page reads to explain why the session ended. */

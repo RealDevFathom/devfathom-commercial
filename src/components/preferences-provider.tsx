@@ -1,6 +1,6 @@
 'use client';
 
-import { createContext, useContext, useMemo, useSyncExternalStore } from 'react';
+import { createContext, useContext, useEffect, useMemo, useSyncExternalStore } from 'react';
 
 /* ============================================================
    PreferencesProvider — the five configurable surface toggles
@@ -52,7 +52,7 @@ export interface PreferencesContextValue extends Preferences {
   setPreferences: (partial: Partial<Preferences>) => void;
 }
 
-const PreferencesContext = createContext<PreferencesContextValue | null>(null);
+const PreferencesContext = createContext(false);
 
 // Allow-list so a tampered/legacy/forward-compat localStorage blob can never
 // push a bogus value onto an <html> attribute.
@@ -91,7 +91,16 @@ function applyAttribute<K extends keyof Preferences>(key: K, value: Preferences[
 function readFromStorage(): Preferences {
   try {
     const raw = window.localStorage.getItem(PREFERENCES_STORAGE_KEY);
-    return { ...DEFAULT_PREFERENCES, ...sanitize(raw ? JSON.parse(raw) : null) };
+    const stored = { ...DEFAULT_PREFERENCES, ...sanitize(raw ? JSON.parse(raw) : null) };
+    // Stored defaults must resolve to the server snapshot itself. An equal but
+    // new object still reads as a change, so React re-renders this provider right
+    // after hydration and every consumer sees a new context value. A Suspense
+    // boundary still waiting on streamed content is then client-rendered instead
+    // of hydrated, leaving the streamed copy of the page (and its forms) hidden in
+    // the document beside the live one.
+    return PREFERENCE_KEYS.every((key) => stored[key] === DEFAULT_PREFERENCES[key])
+      ? DEFAULT_PREFERENCES
+      : stored;
   } catch {
     return DEFAULT_PREFERENCES;
   }
@@ -161,20 +170,23 @@ function setPreferencesImpl(partial: Partial<Preferences>) {
 /* --- provider + hook ----------------------------------------- */
 
 export function PreferencesProvider({ children }: { children: React.ReactNode }) {
-  const prefs = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
+  // Keep cross-tab attributes current even before the first consumer hydrates.
+  // This subscription never changes the provider's context value.
+  useEffect(() => subscribe(() => {}), []);
+  // Keep context stable while descendants are still streaming. Each consumer
+  // subscribes at its own hydration boundary and starts from getServerSnapshot.
+  return <PreferencesContext.Provider value={true}>{children}</PreferencesContext.Provider>;
+}
 
+export function usePreferences(): PreferencesContextValue {
+  const provided = useContext(PreferencesContext);
+  const prefs = useSyncExternalStore(subscribe, getSnapshot, getServerSnapshot);
   const value = useMemo<PreferencesContextValue>(
     () => ({ ...prefs, setPreference: setPreferenceImpl, setPreferences: setPreferencesImpl }),
     [prefs]
   );
-
-  return <PreferencesContext.Provider value={value}>{children}</PreferencesContext.Provider>;
-}
-
-export function usePreferences(): PreferencesContextValue {
-  const ctx = useContext(PreferencesContext);
-  if (!ctx) {
+  if (!provided) {
     throw new Error('usePreferences must be used within a <PreferencesProvider>');
   }
-  return ctx;
+  return value;
 }

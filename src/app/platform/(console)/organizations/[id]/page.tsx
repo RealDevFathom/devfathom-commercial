@@ -1,11 +1,25 @@
+import Link from 'next/link';
 import { notFound } from 'next/navigation';
+import { CircleDashed } from 'lucide-react';
 import {
   PlatformCommandButton,
   PlatformCommandForm,
 } from '@/components/platform/platform-command-form';
+import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { SupportAccessForm } from '@/components/platform/support-access-form';
+import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import { verticalForModuleKey } from '@/lib/module-catalog';
+import { resolveEntitlementLimit, SOP_TEMPLATES_LIMIT } from '@/lib/entitlement-limits';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
+import { ianaTimezoneOptions } from '@/lib/platform/timezones';
+import {
+  ALL_VERTICALS,
+  VERTICALS,
+  mandatoryModulesForVertical,
+  type OrganizationVertical,
+} from '@/lib/vertical-catalog';
 
 const transitionTargets: Record<string, string[]> = {
   PROSPECT: ['ONBOARDING', 'TERMINATED'],
@@ -23,13 +37,41 @@ export default async function OrganizationDetailPage({
 }: {
   params: Promise<{ id: string }>;
 }) {
+  await requirePlatformRead('/platform/organizations');
+  const timezoneOptions = ianaTimezoneOptions();
   const { id } = await params;
+  const now = new Date();
   const data = await withPlatformDb(async (db) => {
-    const [organization, modules, packages] = await Promise.all([
+    const [
+      organization,
+      modules,
+      packages,
+      liveContracts,
+      branchCount,
+      restaurantBranches,
+      failedProvisioningJob,
+    ] = await Promise.all([
       db.organization.findUnique({
         where: { id },
         include: {
-          package: { select: { id: true, name: true, key: true } },
+          package: {
+            select: {
+              id: true,
+              name: true,
+              key: true,
+              vertical: true,
+              // Package defaults are the entitlement baseline; only enabled links
+              // to still-active catalog modules count.
+              moduleLinks: {
+                where: { enabled: true },
+                select: {
+                  moduleId: true,
+                  limits: true,
+                  module: { select: { active: true, key: true } },
+                },
+              },
+            },
+          },
           modules: {
             include: { module: true },
             orderBy: { module: { sortOrder: 'asc' } },
@@ -42,6 +84,10 @@ export default async function OrganizationDetailPage({
           identityConnections: { orderBy: { createdAt: 'desc' } },
           scimTokens: { orderBy: { createdAt: 'desc' } },
           scimEvents: { orderBy: { createdAt: 'desc' }, take: 20 },
+          departments: {
+            where: { active: true },
+            orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }],
+          },
           roles: {
             orderBy: { name: 'asc' },
             include: {
@@ -57,6 +103,9 @@ export default async function OrganizationDetailPage({
           contracts: { orderBy: { endDate: 'desc' }, take: 5 },
           invoices: { orderBy: { dueAt: 'desc' }, take: 5 },
           lifecycleEvents: { orderBy: { createdAt: 'desc' }, take: 12 },
+          restaurantActivationAcknowledgements: {
+            orderBy: { kind: 'asc' },
+          },
           users: {
             orderBy: [{ role: 'asc' }, { name: 'asc' }],
             select: {
@@ -70,27 +119,226 @@ export default async function OrganizationDetailPage({
               organizationRoleId: true,
             },
           },
-          _count: { select: { users: true, supportSessions: true } },
+          _count: { select: { users: true } },
         },
       }),
       db.platformModule.findMany({ where: { active: true }, orderBy: { sortOrder: 'asc' } }),
+      // Every active package is loaded once and partitioned by vertical below:
+      // the profile form may offer only same-vertical packages (§2.3), while a
+      // pre-activation correction may offer only the target vertical's packages.
       db.platformPackage.findMany({ where: { active: true }, orderBy: { name: 'asc' } }),
+      // Mirrors the live-contract predicate in `resolveOrganizationEntitlements`
+      // so the console reports the same effective source the runtime resolves.
+      db.platformContract.findMany({
+        where: {
+          organizationId: id,
+          status: { in: ['ACTIVE', 'GRACE', 'RENEWAL_DUE'] },
+          startDate: { lte: now },
+          OR: [{ endDate: { gte: now } }, { graceUntil: { gte: now } }],
+        },
+        select: {
+          modules: { select: { moduleId: true, module: { select: { active: true } } } },
+        },
+      }),
+      // §2.2 — the command refuses a vertical correction once vertical-owned rows
+      // exist, so the affordance must not be offered once they do.
+      db.restaurantBranch.count({ where: { organizationId: id } }),
+      db.restaurantBranch.findMany({
+        where: { organizationId: id, isDefault: true, active: true },
+        select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
+      }),
+      db.platformJob.findFirst({
+        where: {
+          organizationId: id,
+          type: { in: ['PROVISION_SHARED', 'PROVISION_DEDICATED'] },
+          status: 'FAILED',
+        },
+        orderBy: { finishedAt: 'desc' },
+        select: {
+          id: true,
+          type: true,
+          attempts: true,
+          maxAttempts: true,
+          finishedAt: true,
+        },
+      }),
     ]);
-    return { organization, modules, packages };
+    const pharmacyReadiness =
+      organization?.vertical === 'PHARMACY' ? await evaluatePharmacyReadiness(db, id, now) : null;
+    return {
+      pharmacyReadiness,
+      organization,
+      modules,
+      packages,
+      liveContracts,
+      branchCount,
+      restaurantBranches,
+      failedProvisioningJob,
+    };
   });
   if (!data.organization) notFound();
   const organization = data.organization;
+  const vertical: OrganizationVertical = organization.vertical;
+  const verticalDefinition = VERTICALS[vertical];
   const assigned = new Map(organization.modules.map((item) => [item.moduleId, item]));
   const targets = transitionTargets[organization.status] ?? [];
+  // WHA-1180 — the same base preflight conditions `assertActivationReady`
+  // enforces, evaluated against the rows this page already loaded. The
+  // predicates below mirror that command's `include` filters exactly; the
+  // page's own includes are unfiltered because other panels need every row.
+  const activationGates = unmetActivationGates({
+    organizationId: organization.id,
+    hasPackage: Boolean(organization.packageId),
+    enabledModuleCount:
+      organization.modules.filter((item) => item.status === 'ENABLED' || item.status === 'TRIAL')
+        .length + (organization.package?.moduleLinks.length ?? 0),
+    administratorCount: organization.users.filter(
+      (user) => user.role === 'ADMIN' && (user.status === 'ACTIVE' || user.status === 'ON_LEAVE')
+    ).length,
+    readyProductionDeploymentCount: organization.deployments.filter(
+      (deployment) => deployment.environment === 'production' && deployment.status === 'READY'
+    ).length,
+  });
+  const sharedDeployment = sharedDeploymentUrl(organization);
+  const packageLimits: Record<string, number> = {};
+  for (const link of organization.package?.moduleLinks ?? []) {
+    if (!link.limits || typeof link.limits !== 'object' || Array.isArray(link.limits)) continue;
+    for (const [key, value] of Object.entries(link.limits)) {
+      if (typeof value === 'number') packageLimits[`${link.module.key}.${key}`] = value;
+    }
+  }
+  const sopLimitDiagnostic = resolveEntitlementLimit(
+    {
+      ...packageLimits,
+      ...Object.fromEntries(organization.limits.map((limit) => [limit.key, limit.value])),
+    },
+    SOP_TEMPLATES_LIMIT
+  );
+
+  // §2.3 — a package may only be assigned when its vertical matches; the command
+  // rejects a mismatch, so the console never offers one.
+  const assignablePackages = data.packages.filter((item) => item.vertical === vertical);
+
+  // §6 — the enablement guard rejects any module whose owning vertical differs
+  // from the organization's, so only grantable modules are listed.
+  const catalogModules = data.modules.filter((module) => {
+    const moduleVertical = verticalForModuleKey(module.key);
+    return !moduleVertical || moduleVertical === vertical;
+  });
+  const mandatoryKeys = new Set([
+    ...mandatoryModulesForVertical(vertical).map((module) => module.key),
+    ...data.modules.filter((module) => module.band === 'BASELINE').map((module) => module.key),
+  ]);
+
+  const packageModuleIds = new Set(
+    (organization.package?.moduleLinks ?? [])
+      .filter((link) => link.module.active)
+      .map((link) => link.moduleId)
+  );
+  const contractModuleIds = new Set(
+    data.liveContracts.flatMap((contract) =>
+      contract.modules.filter((link) => link.module.active).map((link) => link.moduleId)
+    )
+  );
+
+  /**
+   * The same precedence `resolveOrganizationEntitlements` applies at runtime:
+   * package defaults are the baseline, a live contract can add a module, and an
+   * organization override is final — including an explicit disable and its
+   * start/expiry window. Reported so an operator acts on the effective state
+   * rather than on the override row alone.
+   */
+  function effectiveEntitlement(moduleId: string) {
+    const override = assigned.get(moduleId);
+    if (override) {
+      const inWindow =
+        override.startsAt <= now && (!override.expiresAt || override.expiresAt > now);
+      return {
+        source: 'OVERRIDE' as const,
+        enabled: inWindow && (override.status === 'ENABLED' || override.status === 'TRIAL'),
+        override,
+      };
+    }
+    if (contractModuleIds.has(moduleId)) return { source: 'CONTRACT' as const, enabled: true };
+    if (packageModuleIds.has(moduleId)) return { source: 'PACKAGE' as const, enabled: true };
+    return { source: 'NONE' as const, enabled: false };
+  }
+
+  // §2.2 — a vertical correction is an early-onboarding-only repair. Lane B
+  // requires all four conditions server-side; the affordance mirrors them exactly
+  // so the console never shows an action the command would reject.
+  const correctionTarget = ALL_VERTICALS.find((option) => option !== vertical);
+  const correctionPackages = correctionTarget
+    ? data.packages.filter((item) => item.vertical === correctionTarget)
+    : [];
+  const correctionAllowed =
+    organization.status === 'ONBOARDING' &&
+    organization.activatedAt === null &&
+    data.branchCount === 0 &&
+    organization.modules.length === 0;
 
   return (
     <div className="mx-auto max-w-[1480px]">
       <PlatformPageHeading
         eyebrow={`Organizations / ${organization.slug}`}
         title={organization.displayName}
-        description={`${organization.legalName} · ${organization.deploymentMode.toLowerCase()} deployment · ${organization._count.users}/${organization.seatLimit} seats`}
+        description={`${organization.legalName} · ${verticalDefinition.label} · ${organization.deploymentMode.toLowerCase()} deployment · ${organization._count.users}/${organization.seatLimit} seats`}
         action={<PlatformStatus value={organization.status} />}
       />
+
+      {data.failedProvisioningJob ? (
+        <section
+          aria-labelledby="provisioning-recovery-title"
+          className="mt-5 border border-destructive/30 bg-destructive/10 px-5 py-4"
+        >
+          <div className="flex flex-wrap items-start justify-between gap-4">
+            <div className="max-w-3xl">
+              <div className="flex flex-wrap items-center gap-2">
+                <PlatformStatus value="FAILED" />
+                <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-text-muted">
+                  Failed step ·{' '}
+                  {data.failedProvisioningJob.type === 'PROVISION_DEDICATED'
+                    ? 'Dedicated environment provisioning'
+                    : 'Shared environment provisioning'}
+                </p>
+              </div>
+              <h2
+                id="provisioning-recovery-title"
+                className="mt-3 font-display text-lg font-semibold text-text-strong"
+              >
+                Provisioning needs operator recovery
+              </h2>
+              <p className="mt-1 text-sm text-text-body">
+                The provisioning worker exhausted {data.failedProvisioningJob.attempts} of{' '}
+                {data.failedProvisioningJob.maxAttempts} attempts. Review the deployment inputs and
+                provider configuration, then retry the same job. Retrying resets this job safely; it
+                does not create a second deployment.
+              </p>
+              <p className="mt-2 text-xs text-text-muted">
+                Owner: Platform Operations
+                {data.failedProvisioningJob.finishedAt
+                  ? ` · Failed ${data.failedProvisioningJob.finishedAt.toLocaleString()}`
+                  : ''}
+                . If the retry fails, escalate with the job ID from Job control; do not paste
+                credentials or provider secrets into notes.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <PlatformCommandButton
+                action="job.retry"
+                label="Retry provisioning"
+                payload={{ id: data.failedProvisioningJob.id }}
+              />
+              <Link
+                href="/platform/jobs"
+                className="inline-flex min-h-9 items-center border border-border-default bg-surface-card px-3 text-xs font-semibold text-text-body transition-colors hover:bg-surface-sunken focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Open Job control
+              </Link>
+            </div>
+          </div>
+        </section>
+      ) : null}
 
       <nav
         aria-label="Organization sections"
@@ -123,6 +371,149 @@ export default async function OrganizationDetailPage({
 
       <div className="mt-7 grid gap-7 xl:grid-cols-[minmax(0,1fr)_360px]">
         <div className="min-w-0 space-y-7">
+          {vertical !== 'RESTAURANT' &&
+          !['TERMINATED', 'PURGING', 'PURGED'].includes(organization.status) ? (
+            <section
+              className="rounded-2xl border border-border-default bg-surface-card p-5"
+              aria-labelledby="vertical-readiness"
+            >
+              <h2 id="vertical-readiness" className="font-display text-xl font-semibold">
+                {verticalDefinition.label} readiness
+              </h2>
+              <p className="mt-2 text-sm text-text-muted">
+                Activation requires the lifecycle checks below
+                {vertical === 'PHARMACY' ? ' and all pharmacy onboarding gates.' : '.'}
+              </p>
+              <Link
+                href="#lifecycle"
+                className="mt-3 inline-flex min-h-11 items-center text-sm underline focus-visible:ring-2 focus-visible:ring-ring"
+              >
+                Review lifecycle requirements
+              </Link>
+              {data.pharmacyReadiness ? (
+                <ul className="mt-4 divide-y divide-border-subtle">
+                  {data.pharmacyReadiness.gates.map((gate) => (
+                    <li
+                      key={gate.gate}
+                      className="flex flex-wrap items-center justify-between gap-3 py-3"
+                    >
+                      <span className="text-sm text-text-body">
+                        {gate.step}. {gate.label}
+                      </span>
+                      <PlatformStatus value={gate.status} />
+                      {gate.downgradeReason ? (
+                        <p className="w-full text-xs text-text-muted">
+                          {gate.downgradeReason === 'EVIDENCE_ABSENT'
+                            ? 'Required evidence is missing.'
+                            : 'Recorded attestation needs evidence and an accountable operator.'}
+                        </p>
+                      ) : null}
+                    </li>
+                  ))}
+                </ul>
+              ) : (
+                <p className="mt-3 text-sm text-text-body">
+                  {activationGates.length === 0
+                    ? 'All agency activation requirements are met.'
+                    : `${activationGates.length} agency activation requirements remain.`}
+                </p>
+              )}
+            </section>
+          ) : null}
+          {vertical === 'RESTAURANT' &&
+          !['TERMINATED', 'PURGING', 'PURGED'].includes(organization.status) ? (
+            <section
+              className="border border-border-default bg-surface-card"
+              aria-labelledby="restaurant-readiness"
+            >
+              <div className="border-b border-border-subtle px-5 py-4">
+                <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent-brand">
+                  Restaurant readiness
+                </p>
+                <h2 id="restaurant-readiness" className="mt-1 font-display text-xl font-semibold">
+                  Branch setup and policy acknowledgements
+                </h2>
+                <p className="mt-1 text-xs text-text-muted">
+                  Complete branch operating fields and explicitly acknowledge each policy before
+                  activation.
+                </p>
+              </div>
+              {data.restaurantBranches.length === 1 ? (
+                <div className="p-5">
+                  <PlatformCommandForm
+                    compact
+                    action="organization.restaurant.setup"
+                    submitLabel="Save Restaurant readiness"
+                    fields={[
+                      {
+                        name: 'organizationId',
+                        label: 'Organization',
+                        type: 'hidden',
+                        defaultValue: organization.id,
+                      },
+                      {
+                        name: 'branchName',
+                        label: 'Default branch name',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.name,
+                      },
+                      {
+                        name: 'address',
+                        label: 'Branch address',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.address,
+                      },
+                      {
+                        name: 'timezone',
+                        label: 'IANA timezone',
+                        type: 'select',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.timezone,
+                        help: 'Type while the list is open to search IANA timezones.',
+                        options: timezoneOptions,
+                      },
+                      {
+                        name: 'businessDayCutoff',
+                        label: 'Business-day cutoff',
+                        required: true,
+                        defaultValue: data.restaurantBranches[0]!.businessDayCutoff,
+                        format: 'time24',
+                        help: 'Use 24-hour time in the organization timezone, e.g. 09:30.',
+                      },
+                      ...(['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const).flatMap((kind) => {
+                        const existing = organization.restaurantActivationAcknowledgements.find(
+                          (row) => row.kind === kind
+                        );
+                        const title = kind.charAt(0) + kind.slice(1).toLowerCase();
+                        return [
+                          {
+                            name: `${kind.toLowerCase()}PolicyReference`,
+                            label: `${title} policy reference`,
+                            required: true,
+                            defaultValue: existing?.policyReference,
+                            help: 'Operator-supplied versioned reference; no provider or device is created.',
+                          },
+                          {
+                            name: `${kind.toLowerCase()}Acknowledged`,
+                            label: `${title} acknowledgement`,
+                            type: 'checkbox' as const,
+                            required: true,
+                            defaultValue: Boolean(existing),
+                            checkboxText: `I acknowledge the ${title.toLowerCase()} policy reference above.`,
+                          },
+                        ];
+                      }),
+                    ]}
+                  />
+                </div>
+              ) : (
+                <p className="p-5 text-sm text-destructive">
+                  Setup requires exactly one active default branch. Repair branch state before
+                  activation.
+                </p>
+              )}
+            </section>
+          ) : null}
           <section
             id="lifecycle"
             className="scroll-mt-24 border border-border-default bg-surface-card"
@@ -136,6 +527,53 @@ export default async function OrganizationDetailPage({
                 Activation validates package, modules, administrator, and production deployment.
               </p>
             </div>
+            {/*
+              WHA-1180 — the unmet activation gates, each with the surface that
+              satisfies it. Rendered before the operator submits, so a failed
+              activation is no longer the only way to learn what is missing.
+            */}
+            {targets.includes('ACTIVE') && activationGates.length ? (
+              <div className="border-b border-border-subtle">
+                <p className="px-5 pt-4 font-mono text-[9px] uppercase tracking-[0.16em] text-text-muted">
+                  Unmet activation gates
+                </p>
+                <ul className="mt-2 divide-y divide-border-subtle">
+                  {activationGates.map((gate) => (
+                    <li
+                      key={gate.gate}
+                      className="flex flex-wrap items-center justify-between gap-3 px-5 py-3"
+                    >
+                      <span className="flex items-center gap-2 text-xs text-text-body">
+                        <CircleDashed
+                          className="h-3.5 w-3.5 shrink-0 text-destructive"
+                          aria-hidden="true"
+                        />
+                        {gate.message}
+                      </span>
+                      <span className="flex flex-wrap items-center gap-2">
+                        {gate.gate === 'production_deployment' && sharedDeployment ? (
+                          <PlatformCommandButton
+                            action="organization.deployment.shared"
+                            tone="quiet"
+                            label="Use shared deployment"
+                            payload={{
+                              organizationId: organization.id,
+                              reason: 'Shared platform host default applied for activation.',
+                            }}
+                          />
+                        ) : null}
+                        <Link
+                          href={gate.action.href}
+                          className="text-xs font-semibold text-accent-brand hover:underline"
+                        >
+                          {gate.action.label}
+                        </Link>
+                      </span>
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
             {targets.length ? (
               <div className="p-5">
                 <PlatformCommandForm
@@ -174,7 +612,86 @@ export default async function OrganizationDetailPage({
             )}
           </section>
 
-          <section id="profile" className="scroll-mt-24">
+          <section id="profile" className="scroll-mt-24 space-y-7">
+            <div className="border border-border-default bg-surface-card">
+              <div className="border-b border-border-subtle px-5 py-4">
+                <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent-brand">
+                  Immutable
+                </p>
+                <h2 className="mt-1 font-display text-xl font-semibold">Organization type</h2>
+                <p className="mt-1 text-xs text-text-muted">
+                  The type is chosen once at onboarding. It governs which packages, modules, and
+                  workspace surfaces exist, and it cannot be changed after activation.
+                </p>
+              </div>
+              <div className="grid gap-4 p-5 sm:grid-cols-[1fr_auto] sm:items-start">
+                <div>
+                  <p className="text-sm font-semibold text-text-strong">
+                    {verticalDefinition.label}
+                  </p>
+                  <p className="mt-1 font-mono text-[9px] uppercase tracking-[0.14em] text-text-muted">
+                    {vertical}
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-text-muted">
+                    {verticalDefinition.description}
+                  </p>
+                </div>
+                <PlatformStatus value="LOCKED" />
+              </div>
+              {correctionAllowed && correctionTarget ? (
+                <div className="border-t border-border-subtle p-5">
+                  <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-warning">
+                    Early onboarding correction
+                  </p>
+                  <p className="mt-2 text-xs leading-5 text-text-muted">
+                    This organization is still in onboarding, has never been activated, and owns no
+                    branches or module overrides, so the type may still be corrected to{' '}
+                    {VERTICALS[correctionTarget].label}. The replacement package is required in the
+                    same command; the correction disappears as soon as setup starts.
+                  </p>
+                  {correctionPackages.length ? (
+                    <div className="mt-4">
+                      <PlatformCommandForm
+                        compact
+                        action="organization.update"
+                        submitLabel={`Correct type to ${VERTICALS[correctionTarget].label}`}
+                        fields={[
+                          {
+                            name: 'id',
+                            label: 'Organization',
+                            type: 'hidden',
+                            defaultValue: organization.id,
+                          },
+                          {
+                            name: 'vertical',
+                            label: 'Corrected type',
+                            type: 'hidden',
+                            defaultValue: correctionTarget,
+                          },
+                          {
+                            name: 'packageId',
+                            label: `${VERTICALS[correctionTarget].label} package`,
+                            type: 'select',
+                            required: true,
+                            help: 'A correction must move the organization and its package together.',
+                            options: correctionPackages.map((item) => ({
+                              label: item.name,
+                              value: item.id,
+                            })),
+                          },
+                        ]}
+                      />
+                    </div>
+                  ) : (
+                    <p className="mt-4 text-xs text-text-muted">
+                      No active {VERTICALS[correctionTarget].label} package is published, so the
+                      type cannot be corrected until one exists.
+                    </p>
+                  )}
+                </div>
+              ) : null}
+            </div>
+
             <PlatformCommandForm
               action="organization.update"
               title="Workspace profile"
@@ -202,7 +719,11 @@ export default async function OrganizationDetailPage({
                   name: 'packageId',
                   label: 'Commercial package',
                   type: 'select',
-                  options: data.packages.map((item) => ({ label: item.name, value: item.id })),
+                  help: `Only active ${verticalDefinition.label} packages can be assigned.`,
+                  options: assignablePackages.map((item) => ({
+                    label: item.name,
+                    value: item.id,
+                  })),
                   defaultValue: organization.packageId,
                 },
                 {
@@ -232,7 +753,14 @@ export default async function OrganizationDetailPage({
                   min: 0,
                   max: 365,
                 },
-                { name: 'timezone', label: 'Timezone', defaultValue: organization.timezone },
+                {
+                  name: 'timezone',
+                  label: 'Timezone',
+                  type: 'select',
+                  defaultValue: organization.timezone,
+                  help: 'Type while the list is open to search IANA timezones.',
+                  options: timezoneOptions,
+                },
                 { name: 'locale', label: 'Locale', defaultValue: organization.locale },
                 { name: 'currency', label: 'Currency', defaultValue: organization.currency },
                 {
@@ -271,13 +799,25 @@ export default async function OrganizationDetailPage({
               </p>
               <h2 className="mt-1 font-display text-xl font-semibold">Modules</h2>
               <p className="mt-1 text-xs text-text-muted">
-                Organization overrides take precedence over package defaults.
+                Only {verticalDefinition.label} modules are listed. Each row shows where the
+                effective entitlement comes from: a package default, a live contract, an
+                organization override, or nothing at all.
               </p>
             </div>
             <div className="divide-y divide-border-subtle">
-              {data.modules.map((module) => {
-                const link = assigned.get(module.id);
-                const enabled = link?.status === 'ENABLED' || link?.status === 'TRIAL';
+              {catalogModules.map((module) => {
+                const entitlement = effectiveEntitlement(module.id);
+                const isMandatory = mandatoryKeys.has(module.key);
+                // An inherited-enabled module needs no "Enable": writing an ENABLED
+                // override would duplicate the package/contract grant and then mask
+                // any later change to it. Disable stays available because it writes
+                // a genuine override — except on a mandatory module, which the
+                // command refuses to disable.
+                const canDisable = entitlement.enabled && !isMandatory;
+                const canEnable = !entitlement.enabled;
+                // Resetting a mandatory module could drop it below the vertical's
+                // floor, so inherited-only is not offered there.
+                const canReset = entitlement.source === 'OVERRIDE' && !isMandatory;
                 return (
                   <div
                     key={module.id}
@@ -288,23 +828,44 @@ export default async function OrganizationDetailPage({
                       <p className="mt-1 text-xs text-text-muted">
                         {module.category} · {module.key}
                       </p>
+                      <p className="mt-1.5 font-mono text-[9px] uppercase tracking-[0.14em] text-text-faint">
+                        Source: {entitlement.source}
+                        {isMandatory ? ' · mandatory' : ''}
+                      </p>
                     </div>
-                    <PlatformStatus value={link?.status ?? 'PACKAGE_DEFAULT'} />
+                    <PlatformStatus value={entitlement.enabled ? 'ACTIVE' : 'INACTIVE'} />
                     <div className="flex flex-wrap justify-end gap-2">
-                      <PlatformCommandButton
-                        action="organization.module"
-                        label={enabled ? 'Disable' : 'Enable'}
-                        tone={enabled ? 'quiet' : 'default'}
-                        payload={{
-                          organizationId: organization.id,
-                          moduleId: module.id,
-                          status: enabled ? 'DISABLED' : 'ENABLED',
-                          seatLimit: null,
-                          expiresAt: null,
-                          reason: `Operator ${enabled ? 'disabled' : 'enabled'} module entitlement`,
-                        }}
-                      />
-                      {link ? (
+                      {canEnable ? (
+                        <PlatformCommandButton
+                          action="organization.module"
+                          label="Enable"
+                          tone="default"
+                          payload={{
+                            organizationId: organization.id,
+                            moduleId: module.id,
+                            status: 'ENABLED',
+                            seatLimit: null,
+                            expiresAt: null,
+                            reason: 'Operator enabled module entitlement',
+                          }}
+                        />
+                      ) : null}
+                      {canDisable ? (
+                        <PlatformCommandButton
+                          action="organization.module"
+                          label="Disable"
+                          tone="quiet"
+                          payload={{
+                            organizationId: organization.id,
+                            moduleId: module.id,
+                            status: 'DISABLED',
+                            seatLimit: null,
+                            expiresAt: null,
+                            reason: 'Operator disabled module entitlement',
+                          }}
+                        />
+                      ) : null}
+                      {canReset ? (
                         <PlatformCommandButton
                           action="organization.module.reset"
                           label="Use inherited"
@@ -315,10 +876,21 @@ export default async function OrganizationDetailPage({
                           }}
                         />
                       ) : null}
+                      {!canEnable && !canDisable && !canReset ? (
+                        <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-text-faint">
+                          Always enabled
+                        </p>
+                      ) : null}
                     </div>
                   </div>
                 );
               })}
+              {!catalogModules.length ? (
+                <p className="px-5 py-4 text-xs text-text-muted">
+                  No active module is published for the {verticalDefinition.label} vertical yet.
+                  Publish one under Modules and plans before granting entitlements.
+                </p>
+              ) : null}
             </div>
           </section>
 
@@ -328,6 +900,25 @@ export default async function OrganizationDetailPage({
           >
             <div className="border-b border-border-subtle px-5 py-4">
               <h2 className="font-display text-xl font-semibold">Limits and usage</h2>
+            </div>
+            <div
+              role={sopLimitDiagnostic.status === 'missing' ? 'alert' : 'status'}
+              className={`mx-5 mt-5 border px-4 py-3 text-xs ${
+                sopLimitDiagnostic.status === 'missing'
+                  ? 'border-destructive/40 bg-destructive/10 text-destructive'
+                  : sopLimitDiagnostic.source === 'bootstrapped'
+                    ? 'border-warning/40 bg-warning/10 text-warning-foreground'
+                    : 'border-border-default bg-surface-sunken text-text-body'
+              }`}
+            >
+              <p className="font-mono text-[9px] uppercase tracking-[0.14em]">
+                SOP entitlement configuration
+              </p>
+              <p className="mt-1">
+                {sopLimitDiagnostic.status === 'missing'
+                  ? `Configuration fault: neither ${sopLimitDiagnostic.explicitKey} nor ${sopLimitDiagnostic.bootstrappedKey} is set. Set an explicit non-negative value; zero deliberately disables new templates.`
+                  : `${sopLimitDiagnostic.source === 'explicit' ? 'Explicit' : 'Bootstrapped compatibility'} key ${sopLimitDiagnostic.key} resolves to ${sopLimitDiagnostic.value}. ${sopLimitDiagnostic.value === 0 ? 'Zero is a deliberate disable.' : 'SOP template creation is limited to this value.'}`}
+              </p>
             </div>
             <div className="grid gap-6 p-5 lg:grid-cols-2">
               <div>
@@ -451,14 +1042,10 @@ export default async function OrganizationDetailPage({
                           label: 'Department',
                           type: 'select',
                           defaultValue: user.department,
-                          options: [
-                            'LEADERSHIP',
-                            'ENGINEERING',
-                            'PRODUCT',
-                            'QUALITY',
-                            'MARKETING',
-                            'DESIGN',
-                          ].map((value) => ({ label: value, value })),
+                          options: organization.departments.map((department) => ({
+                            label: department.name,
+                            value: department.key,
+                          })),
                         },
                       ]}
                     />
@@ -1002,21 +1589,34 @@ export default async function OrganizationDetailPage({
                         },
                       ]}
                     />
-                    <div className="flex gap-2 border-t border-border-subtle py-4">
-                      <PlatformCommandButton
+                    <div className="grid gap-4 border-t border-border-subtle py-4 sm:grid-cols-2">
+                      <PlatformCommandForm
+                        compact
                         action="organization.identity.test"
-                        label="Queue test"
-                        payload={{ id: connection.id }}
+                        submitLabel="Queue test"
+                        fields={[
+                          {
+                            name: 'id',
+                            label: 'Connection',
+                            type: 'hidden',
+                            defaultValue: connection.id,
+                          },
+                        ]}
                       />
-                      <PlatformCommandButton
+                      <PlatformCommandForm
+                        compact
                         action="organization.identity.remove"
-                        label="Remove"
-                        tone="danger"
+                        submitLabel="Remove connection"
                         confirm={`Remove ${connection.name}?`}
-                        payload={{
-                          id: connection.id,
-                          reason: 'Removed by platform operator',
-                        }}
+                        description={`Remove ${connection.name}? This disconnects the identity provider.`}
+                        fields={[
+                          {
+                            name: 'id',
+                            label: 'Connection',
+                            type: 'hidden',
+                            defaultValue: connection.id,
+                          },
+                        ]}
                       />
                     </div>
                   </div>
@@ -1124,7 +1724,10 @@ export default async function OrganizationDetailPage({
                 </p>
                 <div className="mt-3 divide-y divide-border-subtle border border-border-subtle">
                   {organization.scimTokens.map((token) => (
-                    <div key={token.id} className="flex items-center justify-between gap-3 p-3">
+                    <div
+                      key={token.id}
+                      className="flex flex-col items-stretch justify-between gap-3 p-3 sm:flex-row sm:items-center"
+                    >
                       <div>
                         <p className="text-xs font-semibold">{token.name}</p>
                         <p className="mt-1 font-mono text-[9px] text-text-muted">
@@ -1142,12 +1745,15 @@ export default async function OrganizationDetailPage({
                       {token.revokedAt ? (
                         <PlatformStatus value="REVOKED" />
                       ) : (
-                        <PlatformCommandButton
+                        <PlatformCommandForm
+                          compact
                           action="organization.scim.revoke"
-                          label="Revoke"
-                          tone="danger"
+                          submitLabel="Revoke token"
                           confirm={`Revoke ${token.name}? Connected directories will stop syncing immediately.`}
-                          payload={{ id: token.id }}
+                          description={`Revoke ${token.name}? Connected directories will stop syncing immediately.`}
+                          fields={[
+                            { name: 'id', label: 'Token', type: 'hidden', defaultValue: token.id },
+                          ]}
                         />
                       )}
                     </div>
@@ -1349,7 +1955,7 @@ export default async function OrganizationDetailPage({
 
         <aside className="space-y-7">
           <section className="border border-border-default bg-abyss-900 p-5 text-paper-50">
-            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-brass-300">
+            <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-primary-foreground">
               Audited support
             </p>
             <h2 className="mt-2 font-display text-xl font-semibold">Enter workspace</h2>
@@ -1391,6 +1997,13 @@ export default async function OrganizationDetailPage({
                 <dd className="mt-1 break-all font-mono text-[10px]">{organization.id}</dd>
               </div>
               <div>
+                <dt className="text-text-muted">Organization type</dt>
+                <dd className="mt-1">
+                  {verticalDefinition.label}{' '}
+                  <span className="font-mono text-[9px] text-text-faint">immutable</span>
+                </dd>
+              </div>
+              <div>
                 <dt className="text-text-muted">Package</dt>
                 <dd className="mt-1">{organization.package?.name ?? 'Unassigned'}</dd>
               </div>
@@ -1408,16 +2021,15 @@ export default async function OrganizationDetailPage({
                 Scheduling purge starts the retention window and queues data destruction.
               </p>
               <div className="mt-4">
-                <PlatformCommandButton
+                <PlatformCommandForm
+                  compact
                   action="organization.transition"
-                  label="Schedule purge"
-                  tone="danger"
+                  submitLabel="Schedule purge"
                   confirm="Schedule this organization for purge? This begins the retention countdown."
-                  payload={{
-                    id: organization.id,
-                    status: 'PURGING',
-                    reason: 'Purge scheduled after contract termination and retention review',
-                  }}
+                  fields={[
+                    { name: 'id', label: 'Organization', type: 'hidden', defaultValue: organization.id },
+                    { name: 'status', label: 'Status', type: 'hidden', defaultValue: 'PURGING' },
+                  ]}
                 />
               </div>
             </section>

@@ -19,6 +19,8 @@ import { Card, CardContent } from '@/components/ui/card';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { PageHeader } from '@/components/ui/page-header';
 import { Skeleton } from '@/components/ui/skeleton';
+import { useEntitlements } from '@/components/entitlements-provider';
+import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { trpc } from '@/lib/trpc';
 import type { inferRouterOutputs } from '@trpc/server';
 import type { AppRouter } from '@/server/routers/_app';
@@ -45,11 +47,17 @@ const statusDot: Record<string, string> = {
 
 export function TeamContent() {
   const { data: session } = useSession();
-  const isAdmin = session?.user?.role === 'ADMIN';
+  const entitlements = useEntitlements();
+  const canReadDirectory = isModuleGranted('hr', entitlements.enabledModules);
+  const isAdmin =
+    session?.user?.role === 'ADMIN' &&
+    isModuleGranted(moduleForProcedure('team.inviteMember')!, entitlements.enabledModules);
   const [search, setSearch] = useState('');
   const [deptFilter, setDeptFilter] = useState('ALL');
   const [showAddMember, setShowAddMember] = useState(false);
-  const { data: team, isLoading } = trpc.team.getAll.useQuery();
+  const { data: team, isLoading } = trpc.team.getAll.useQuery(undefined, {
+    enabled: canReadDirectory,
+  });
 
   const departments = useMemo(() => {
     if (!team) return [];
@@ -127,7 +135,11 @@ export function TeamContent() {
       </div>
 
       {/* Team grid */}
-      {isLoading ? (
+      {!canReadDirectory ? (
+        <p className="text-sm text-text-muted">
+          Invite workspace members here. The team directory requires the HR module.
+        </p>
+      ) : isLoading ? (
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-3">
           {Array.from({ length: 8 }).map((_, i) => (
             <Card key={i} className="border-border/60">
@@ -238,23 +250,16 @@ const TeamMemberCard = memo(function TeamMemberCard({ member }: { member: TeamMe
   );
 });
 
-const departmentOptions = [
-  'LEADERSHIP',
-  'ENGINEERING',
-  'PRODUCT',
-  'QUALITY',
-  'MARKETING',
-  'DESIGN',
-] as const;
-
-function AddMemberModal({ onClose }: { onClose: () => void }) {
+export function AddMemberModal({ onClose }: { onClose: () => void }) {
   const utils = trpc.useUtils();
   const inviteMember = trpc.team.inviteMember.useMutation();
+  const departmentQuery = trpc.organizationAdmin.departments.useQuery(undefined, { retry: false });
+  const departmentOptions = (departmentQuery.data ?? []).filter((item) => item.active);
 
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [role, setRole] = useState<'ADMIN' | 'HR' | 'EMPLOYEE'>('EMPLOYEE');
-  const [department, setDepartment] = useState<(typeof departmentOptions)[number]>('ENGINEERING');
+  const [department, setDepartment] = useState('');
   const [title, setTitle] = useState('');
   const [phone, setPhone] = useState('');
   const [bio, setBio] = useState('');
@@ -264,9 +269,20 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
   const [sent, setSent] = useState<{ email: string; inviteUrl: string } | null>(null);
   const [copied, setCopied] = useState(false);
 
+  const selectedDepartment = departmentOptions.find((item) => item.key === department);
+  const departmentReady =
+    !departmentQuery.isFetching && !departmentQuery.isError && Boolean(selectedDepartment);
+
   const handleSubmit = () => {
     setError('');
-    if (!name.trim() || !email.trim() || !title.trim()) return;
+    if (
+      !name.trim() ||
+      !email.trim() ||
+      !title.trim() ||
+      !departmentReady ||
+      inviteMember.isPending
+    )
+      return;
     const submittedEmail = email.trim().toLowerCase();
     inviteMember.mutate(
       {
@@ -351,178 +367,221 @@ function AddMemberModal({ onClose }: { onClose: () => void }) {
             </div>
           ) : (
             <>
-          <div className="p-6 space-y-5">
-            {error && (
-              <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-                {error}
-              </div>
-            )}
+              <div className="p-6 space-y-5">
+                {error && (
+                  <div className="rounded-xl border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
+                    {error}
+                  </div>
+                )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">
-                  Full Name *
-                </label>
-                <input
-                  autoFocus
-                  value={name}
-                  onChange={(e) => setName(e.target.value)}
-                  placeholder="John Doe"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Email *</label>
-                <input
-                  type="email"
-                  value={email}
-                  onChange={(e) => setEmail(e.target.value)}
-                  placeholder="john@company.com"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">
-                  Job Title *
-                </label>
-                <input
-                  value={title}
-                  onChange={(e) => setTitle(e.target.value)}
-                  placeholder="Full Stack Developer"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Phone</label>
-                <input
-                  value={phone}
-                  onChange={(e) => setPhone(e.target.value)}
-                  placeholder="+1 (786) 555-0100"
-                  className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                />
-              </div>
-            </div>
-
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">
-                  Department
-                </label>
-                <select
-                  value={department}
-                  onChange={(e) => setDepartment(e.target.value as typeof department)}
-                  className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-                >
-                  {departmentOptions.map((d) => (
-                    <option key={d} value={d}>
-                      {d.charAt(0) + d.slice(1).toLowerCase()}
-                    </option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
-                <div className="flex rounded-xl border border-border overflow-hidden">
-                  {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
-                    <button
-                      key={r}
-                      onClick={() => setRole(r)}
-                      className={cn(
-                        'flex-1 py-2.5 text-xs font-medium transition-colors',
-                        role === r
-                          ? 'bg-foreground text-background'
-                          : 'bg-card text-muted-foreground hover:text-foreground'
-                      )}
-                    >
-                      {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
-                    </button>
-                  ))}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">
+                      Full Name *
+                    </label>
+                    <input
+                      autoFocus
+                      value={name}
+                      onChange={(e) => setName(e.target.value)}
+                      placeholder="John Doe"
+                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">
+                      Email *
+                    </label>
+                    <input
+                      type="email"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                      placeholder="john@company.com"
+                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
                 </div>
-              </div>
-            </div>
 
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Bio</label>
-              <textarea
-                value={bio}
-                onChange={(e) => setBio(e.target.value)}
-                rows={2}
-                placeholder="Brief bio..."
-                className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
-              />
-            </div>
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">
+                      Job Title *
+                    </label>
+                    <input
+                      value={title}
+                      onChange={(e) => setTitle(e.target.value)}
+                      placeholder="Full Stack Developer"
+                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">
+                      Phone
+                    </label>
+                    <input
+                      value={phone}
+                      onChange={(e) => setPhone(e.target.value)}
+                      placeholder="+1 (786) 555-0100"
+                      className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                    />
+                  </div>
+                </div>
 
-            <div>
-              <label className="block text-sm font-medium text-foreground mb-1.5">Skills</label>
-              <div className="flex gap-2">
-                <input
-                  value={skillInput}
-                  onChange={(e) => setSkillInput(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === 'Enter') {
-                      e.preventDefault();
-                      const v = skillInput.trim();
-                      if (v && !skills.includes(v)) {
-                        setSkills([...skills, v]);
-                        setSkillInput('');
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                  <div>
+                    <label
+                      htmlFor="invite-department"
+                      className="block text-sm font-medium text-foreground mb-1.5"
+                    >
+                      Department
+                    </label>
+                    <select
+                      id="invite-department"
+                      value={selectedDepartment ? department : ''}
+                      disabled={
+                        departmentQuery.isFetching ||
+                        departmentQuery.isError ||
+                        !departmentOptions.length ||
+                        inviteMember.isPending
                       }
-                    }
-                  }}
-                  placeholder="Add skill, press Enter..."
-                  className="flex-1 rounded-xl border border-border bg-card px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
-                />
-              </div>
-              {skills.length > 0 && (
-                <div className="flex flex-wrap gap-1.5 mt-2">
-                  {skills.map((s) => (
-                    <span
-                      key={s}
-                      className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
+                      aria-describedby="invite-department-status"
+                      aria-invalid={Boolean(department && !selectedDepartment)}
+                      onChange={(e) => setDepartment(e.target.value)}
+                      className="w-full rounded-xl border border-border bg-card px-3 py-2.5 text-sm text-foreground focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
                     >
-                      {s}
-                      <button
-                        onClick={() => setSkills(skills.filter((sk) => sk !== s))}
-                        className="text-muted-foreground hover:text-foreground"
-                      >
-                        <X className="h-3 w-3" />
-                      </button>
-                    </span>
-                  ))}
+                      <option value="">Choose a department</option>
+                      {departmentOptions.map((item) => (
+                        <option key={item.key} value={item.key}>
+                          {item.name}
+                        </option>
+                      ))}
+                    </select>
+                    <div
+                      id="invite-department-status"
+                      className="mt-2 text-sm text-text-muted"
+                      role={departmentQuery.isError ? 'alert' : 'status'}
+                    >
+                      {departmentQuery.isFetching
+                        ? 'Loading departments…'
+                        : departmentQuery.isError
+                          ? 'Departments could not be loaded. Retry or ask your administrator to check access.'
+                          : !departmentOptions.length
+                            ? 'No active departments are available. Ask your administrator to review the organization department catalog.'
+                            : department && !selectedDepartment
+                              ? 'That department is no longer available. Choose an active department.'
+                              : 'Choose from this workspace’s active departments.'}
+                      {departmentQuery.isError ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          className="mt-2"
+                          onClick={() => void departmentQuery.refetch()}
+                        >
+                          Retry departments
+                        </Button>
+                      ) : null}
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-foreground mb-1.5">Role</label>
+                    <div className="flex rounded-xl border border-border overflow-hidden">
+                      {(['EMPLOYEE', 'HR', 'ADMIN'] as const).map((r) => (
+                        <button
+                          key={r}
+                          onClick={() => setRole(r)}
+                          className={cn(
+                            'flex-1 py-2.5 text-xs font-medium transition-colors',
+                            role === r
+                              ? 'bg-foreground text-background'
+                              : 'bg-card text-muted-foreground hover:text-foreground'
+                          )}
+                        >
+                          {r === 'EMPLOYEE' ? 'Employee' : r === 'HR' ? 'HR' : 'Admin'}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
                 </div>
-              )}
-            </div>
-          </div>
 
-          <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border/60 bg-background px-6 py-4">
-            <button
-              onClick={onClose}
-              className="rounded-xl px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
-            >
-              Cancel
-            </button>
-            <button
-              onClick={handleSubmit}
-              disabled={
-                !name.trim() ||
-                !email.trim() ||
-                !title.trim() ||
-                inviteMember.isPending
-              }
-              className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
-            >
-              {inviteMember.isPending ? (
-                <>
-                  <Loader2 className="h-4 w-4 animate-spin" />
-                  Sending…
-                </>
-              ) : (
-                'Send Invite'
-              )}
-            </button>
-          </div>
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Bio</label>
+                  <textarea
+                    value={bio}
+                    onChange={(e) => setBio(e.target.value)}
+                    rows={2}
+                    placeholder="Brief bio..."
+                    className="w-full rounded-xl border border-border bg-card px-4 py-2.5 text-sm text-foreground placeholder:text-muted-foreground resize-none focus:border-primary focus:outline-none focus:ring-2 focus:ring-primary/20"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-foreground mb-1.5">Skills</label>
+                  <div className="flex gap-2">
+                    <input
+                      value={skillInput}
+                      onChange={(e) => setSkillInput(e.target.value)}
+                      onKeyDown={(e) => {
+                        if (e.key === 'Enter') {
+                          e.preventDefault();
+                          const v = skillInput.trim();
+                          if (v && !skills.includes(v)) {
+                            setSkills([...skills, v]);
+                            setSkillInput('');
+                          }
+                        }
+                      }}
+                      placeholder="Add skill, press Enter..."
+                      className="flex-1 rounded-xl border border-border bg-card px-4 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+                    />
+                  </div>
+                  {skills.length > 0 && (
+                    <div className="flex flex-wrap gap-1.5 mt-2">
+                      {skills.map((s) => (
+                        <span
+                          key={s}
+                          className="inline-flex items-center gap-1 rounded-lg bg-secondary px-2.5 py-1 text-xs font-medium text-foreground"
+                        >
+                          {s}
+                          <button
+                            onClick={() => setSkills(skills.filter((sk) => sk !== s))}
+                            className="text-muted-foreground hover:text-foreground"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </span>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
+              <div className="sticky bottom-0 flex items-center justify-end gap-2 border-t border-border/60 bg-background px-6 py-4">
+                <button
+                  onClick={onClose}
+                  className="rounded-xl px-4 py-2.5 text-sm font-medium text-muted-foreground hover:text-foreground transition-colors"
+                >
+                  Cancel
+                </button>
+                <button
+                  onClick={handleSubmit}
+                  disabled={
+                    !name.trim() ||
+                    !email.trim() ||
+                    !title.trim() ||
+                    !departmentReady ||
+                    inviteMember.isPending
+                  }
+                  className="flex items-center gap-2 rounded-xl bg-primary px-5 py-2.5 text-sm font-semibold text-white transition-all hover:bg-[#0C2E2C] active:scale-[0.98] disabled:opacity-40 disabled:pointer-events-none"
+                >
+                  {inviteMember.isPending ? (
+                    <>
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                      Sending…
+                    </>
+                  ) : (
+                    'Send Invite'
+                  )}
+                </button>
+              </div>
             </>
           )}
         </div>

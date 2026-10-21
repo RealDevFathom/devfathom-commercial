@@ -30,12 +30,41 @@ param emailDeliveryMode string
 @maxValue(1)
 param minReplicas int = 0
 
+@description('Hostname binding served by an existing managed certificate.')
+type customDomainBinding = {
+  @description('Hostname to bind, for example staging.devfathom.com.')
+  name: string
+
+  @description('Resource id of the managed certificate that serves the hostname.')
+  certificateId: string
+}
+
+@description('''
+Custom domain bindings for the app ingress. A deployment replaces the whole ingress configuration,
+so a hostname bound out of band is dropped unless it is declared here. Leave empty for an
+environment that is only served on its default Container Apps hostname.
+''')
+param customDomains customDomainBinding[] = []
+
+@description('''
+Comma-separated allow-list for the azure.extensions server parameter. Azure Database for PostgreSQL
+refuses CREATE EXTENSION for anything absent from it, so this must cover every extension the
+migrations and prisma/prepare-extensions.ts create, or the migration job fails before applying any
+migration. The current required set is btree_gist,pg_trgm.
+''')
+param postgresExtensions string
+
 @secure()
 param postgresAdminPassword string
+@secure()
+@description('Password for the restricted PostgreSQL login used only by the web application.')
+param appDatabasePassword string
 @secure()
 param authSecret string
 @secure()
 param platformEncryptionKey string
+@secure()
+param cameraCredentialKey string
 @secure()
 param cronSecret string
 @secure()
@@ -44,6 +73,8 @@ param seedPassword string = ''
 param adminPassword string = ''
 @secure()
 param platformAdminPassword string = ''
+@description('Allow guarded bootstrap scripts to create missing initialization secrets. Keep false for direct deployments.')
+param createInitializationSecrets bool = false
 
 param adminEmail string = 'admin@staging.devfathom.com'
 param platformAdminEmail string = 'platform-admin@staging.devfathom.com'
@@ -63,21 +94,21 @@ var appEnvironmentName = 'df-${shortEnvironment}-${suffix}-cae'
 var appName = 'devfathom-${shortEnvironment}'
 var migrationJobName = 'devfathom-${shortEnvironment}-migrate'
 var databaseUrl = 'postgresql://devfathomadmin:${uriComponent(postgresAdminPassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
+var appDatabaseUrl = 'postgresql://devfathom_app:${uriComponent(appDatabasePassword)}@${postgres.properties.fullyQualifiedDomainName}:5432/devfathom?sslmode=verify-full'
+var migrateDatabaseCommand = 'bun prisma/prepare-extensions.ts && bunx prisma migrate deploy && bun prisma/prepare-runtime-role.ts && bun prisma/sync-catalog.ts'
 var migrationCommand = seedDatabase && bootstrapDatabase
   ? fail('seedDatabase and bootstrapDatabase cannot both be enabled.')
   : seedDatabase
     ? environmentName != 'staging'
       ? fail('Database seeding is only supported in staging.')
-      : empty(seedPassword) || empty(adminPassword) || empty(platformAdminPassword)
-        ? fail('Staging database seeding requires seed, administrator, and platform administrator passwords.')
-        : 'bunx prisma migrate deploy && bun prisma/seed.ts'
+      : '${migrateDatabaseCommand} && bun prisma/seed.ts'
     : bootstrapDatabase
       ? environmentName != 'production'
         ? fail('Production bootstrap is only supported in production.')
-        : length(trim(adminPassword)) < 12 || length(trim(platformAdminPassword)) < 12
-          ? fail('Production bootstrap requires administrator passwords of at least 12 characters.')
-          : 'bunx prisma migrate deploy && bun prisma/bootstrap.ts'
-      : 'bunx prisma migrate deploy'
+        : (!empty(adminPassword) && length(trim(adminPassword)) < 12) || (!empty(platformAdminPassword) && length(trim(platformAdminPassword)) < 12)
+          ? fail('Explicitly supplied production administrator passwords must be at least 12 characters.')
+          : '${migrateDatabaseCommand} && bun prisma/bootstrap.ts'
+      : migrateDatabaseCommand
 
 resource registry 'Microsoft.ContainerRegistry/registries@2023-07-01' existing = {
   name: registryName
@@ -190,6 +221,16 @@ resource database 'Microsoft.DBforPostgreSQL/flexibleServers/databases@2024-08-0
   }
 }
 
+resource postgresExtensionAllowList 'Microsoft.DBforPostgreSQL/flexibleServers/configurations@2024-08-01' = {
+  parent: postgres
+  name: 'azure.extensions'
+  properties: {
+    value: postgresExtensions
+    source: 'user-override'
+  }
+  dependsOn: [database]
+}
+
 resource vault 'Microsoft.KeyVault/vaults@2023-07-01' = {
   name: vaultName
   location: location
@@ -208,6 +249,11 @@ resource databaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   name: 'database-url'
   properties: { value: databaseUrl }
 }
+resource appDatabaseUrlSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'app-database-url'
+  properties: { value: appDatabaseUrl }
+}
 resource authSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'auth-secret'
@@ -218,10 +264,30 @@ resource platformEncryptionSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01'
   name: 'platform-encryption-key'
   properties: { value: platformEncryptionKey }
 }
+resource cameraCredentialSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
+  parent: vault
+  name: 'camera-credential-key'
+  properties: { value: cameraCredentialKey }
+}
 resource cronSecretResource 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = {
   parent: vault
   name: 'cron-secret'
   properties: { value: cronSecret }
+}
+resource seedPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createInitializationSecrets && !empty(seedPassword)) {
+  parent: vault
+  name: 'seed-password'
+  properties: { value: seedPassword }
+}
+resource adminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createInitializationSecrets && !empty(adminPassword)) {
+  parent: vault
+  name: 'admin-password'
+  properties: { value: adminPassword }
+}
+resource platformAdminPasswordSecret 'Microsoft.KeyVault/vaults/secrets@2023-07-01' = if (createInitializationSecrets && !empty(platformAdminPassword)) {
+  parent: vault
+  name: 'platform-admin-password'
+  properties: { value: platformAdminPassword }
 }
 resource storage 'Microsoft.Storage/storageAccounts@2023-05-01' = {
   name: storageName
@@ -367,26 +433,32 @@ resource vaultSecretsUser 'Microsoft.Authorization/roleAssignments@2022-04-01' =
 
 var vaultBaseUrl = 'https://${vault.name}${environment().suffixes.keyvaultDns}/secrets'
 var runtimeKeyVaultSecrets = [
-  { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
+  { name: 'app-database-url', keyVaultUrl: '${vaultBaseUrl}/app-database-url', identity: identity.id }
   { name: 'auth-secret', keyVaultUrl: '${vaultBaseUrl}/auth-secret', identity: identity.id }
   { name: 'platform-encryption-key', keyVaultUrl: '${vaultBaseUrl}/platform-encryption-key', identity: identity.id }
+  { name: 'camera-credential-key', keyVaultUrl: '${vaultBaseUrl}/camera-credential-key', identity: identity.id }
   { name: 'cron-secret', keyVaultUrl: '${vaultBaseUrl}/cron-secret', identity: identity.id }
 ]
 
 var migrationSecrets = concat(
-  [{ name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }],
-  seedDatabase ? [{ name: 'seed-password', value: seedPassword }] : [],
+  [
+    { name: 'database-url', keyVaultUrl: '${vaultBaseUrl}/database-url', identity: identity.id }
+    { name: 'app-database-url', keyVaultUrl: '${vaultBaseUrl}/app-database-url', identity: identity.id }
+  ],
+  seedDatabase
+    ? [{ name: 'seed-password', keyVaultUrl: '${vaultBaseUrl}/seed-password', identity: identity.id }]
+    : [],
   seedDatabase || bootstrapDatabase
     ? [
-        { name: 'admin-password', value: adminPassword }
-        { name: 'platform-admin-password', value: platformAdminPassword }
+        { name: 'admin-password', keyVaultUrl: '${vaultBaseUrl}/admin-password', identity: identity.id }
+        { name: 'platform-admin-password', keyVaultUrl: '${vaultBaseUrl}/platform-admin-password', identity: identity.id }
       ]
     : []
 )
 
 var webEnvironment = [
   { name: 'NODE_ENV', value: 'production' }
-  { name: 'DATABASE_URL', secretRef: 'database-url' }
+  { name: 'DATABASE_URL', secretRef: 'app-database-url' }
   { name: 'AUTH_SECRET', secretRef: 'auth-secret' }
   { name: 'AUTH_URL', value: 'https://${tenantHost}' }
   { name: 'AUTH_TRUST_HOST', value: 'true' }
@@ -394,6 +466,7 @@ var webEnvironment = [
   // Base domain, not the app URL. See the baseDomain parameter for why these differ.
   { name: 'PLATFORM_BASE_DOMAIN', value: baseDomain }
   { name: 'PLATFORM_ENCRYPTION_KEY', secretRef: 'platform-encryption-key' }
+  { name: 'CAMERA_CREDENTIAL_KEY', secretRef: 'camera-credential-key' }
   { name: 'CRON_SECRET', secretRef: 'cron-secret' }
   { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
   { name: 'EMAIL_DELIVERY_MODE', value: emailDeliveryMode }
@@ -409,6 +482,8 @@ var migrationEnvironment = concat(
   [
     { name: 'NODE_ENV', value: 'production' }
     { name: 'DATABASE_URL', secretRef: 'database-url' }
+    { name: 'EXTENSION_ADMIN_DATABASE_URL', secretRef: 'database-url' }
+    { name: 'APP_DATABASE_URL', secretRef: 'app-database-url' }
     { name: 'AUTH_URL', value: 'https://${tenantHost}' }
     { name: 'DEFAULT_ORGANIZATION_ID', value: 'org_devfathom' }
   ],
@@ -451,6 +526,13 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
         allowInsecure: false
         targetPort: 3000
         transport: 'auto'
+        customDomains: [
+          for domain in customDomains: {
+            name: domain.name
+            certificateId: domain.certificateId
+            bindingType: 'SniEnabled'
+          }
+        ]
       }
       registries: [
         { server: registry.properties.loginServer, identity: identity.id }
@@ -483,7 +565,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
             }
             {
               type: 'Readiness'
-              httpGet: { path: '/api/health', port: 3000, scheme: 'HTTP' }
+              httpGet: { path: '/api/ready', port: 3000, scheme: 'HTTP' }
               initialDelaySeconds: 10
               periodSeconds: 10
               failureThreshold: 12
@@ -495,7 +577,7 @@ resource app 'Microsoft.App/containerApps@2024-03-01' = {
       scale: { minReplicas: minReplicas, maxReplicas: 1 }
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, databaseUrlSecret, authSecretResource, platformEncryptionSecret, cronSecretResource]
+  dependsOn: [acrPull, vaultSecretsUser, openAIUser, blobContributor, appDatabaseUrlSecret, authSecretResource, platformEncryptionSecret, cameraCredentialSecret, cronSecretResource]
 }
 
 resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
@@ -530,7 +612,7 @@ resource migrationJob 'Microsoft.App/jobs@2024-03-01' = {
       ]
     }
   }
-  dependsOn: [acrPull, vaultSecretsUser, database, databaseUrlSecret]
+  dependsOn: [acrPull, vaultSecretsUser, database, databaseUrlSecret, appDatabaseUrlSecret, seedPasswordSecret, adminPasswordSecret, platformAdminPasswordSecret]
 }
 
 output appName string = app.name

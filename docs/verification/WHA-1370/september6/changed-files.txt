@@ -1,0 +1,9 @@
+src/app/(app)/pharmacy/purchasing/_components/action-form.test.tsx
+src/app/(app)/pharmacy/purchasing/_components/action-form.tsx
+src/app/(app)/pharmacy/purchasing/_components/action-outcomes.tsx
+src/app/(app)/pharmacy/purchasing/orders/page.tsx
+src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx
+src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx
+src/app/(app)/pharmacy/purchasing/receiving/page.tsx
+src/app/(app)/pharmacy/purchasing/returns/page.tsx
+src/app/(app)/pharmacy/purchasing/suppliers/page.tsx

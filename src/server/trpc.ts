@@ -3,7 +3,12 @@ import type { Session } from 'next-auth';
 import type { Prisma } from '@/generated/prisma/client';
 import superjson from 'superjson';
 import { can, subjectFromSession, type Action } from '@/lib/abac';
-import { evaluateSessionUser, type SessionUserState } from '@/lib/auth/session-state';
+import {
+  evaluateSessionUser,
+  TEMPORARY_PASSWORD_MESSAGE,
+  temporaryPasswordBlocks,
+  type SessionUserState,
+} from '@/lib/auth/session-state';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import type { TenantOrganization } from '@/lib/tenancy/host';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
@@ -17,6 +22,7 @@ import {
   isAuditExcludedPath,
   recordTrpcAudit,
 } from '@/server/audit';
+import { DEMO_UNAVAILABLE_MESSAGE, isDemoProcedureBlocked } from '@/lib/tenancy/demo-isolation';
 
 /**
  * The fetch adapter passes `{ req }` to createContext; the RSC SSR helper calls
@@ -27,6 +33,8 @@ export const createTRPCContext = async (opts?: {
   req?: Request;
   session?: Session | null;
   db?: ScopedDb;
+  /** Bind seed audit rows to the transaction that creates their actor. */
+  auditDb?: ScopedDb;
   organization?: TenantOrganization;
   support?: SupportIdentity | null;
 }) => {
@@ -37,7 +45,11 @@ export const createTRPCContext = async (opts?: {
   const actor =
     explicitSession !== undefined && opts?.organization
       ? null
-      : await resolveTenantActor({ request: opts?.req, session: explicitSession });
+      : await resolveTenantActor(
+          explicitSession === undefined
+            ? { request: opts?.req }
+            : { request: opts?.req, session: explicitSession }
+        );
   const session = explicitSession !== undefined ? explicitSession : (actor?.session ?? null);
   const organization = opts?.organization ?? actor?.organization ?? null;
   const headers = opts?.req?.headers ?? null;
@@ -45,7 +57,10 @@ export const createTRPCContext = async (opts?: {
   if (!organizationId) {
     throw new TRPCError({ code: 'NOT_FOUND', message: 'Workspace not found.' });
   }
-  const scopedDb = opts?.db ?? createTenantDb(organizationId);
+  const scopedDb = opts?.db ?? createTenantDb(organizationId, session?.user?.id);
+  if (opts?.auditDb && opts.auditDb !== scopedDb) {
+    throw new Error('Audit transaction must match the context transaction.');
+  }
   const entitlements = await resolveOrganizationEntitlements(organizationId, scopedDb);
 
   return {
@@ -61,11 +76,31 @@ export const createTRPCContext = async (opts?: {
     // Mutable per-request holder. A mutation can enrich its own audit entry via
     // `annotateAudit(ctx, {...})`; the audit middleware reads this after the
     // resolver runs. Stays a stable reference across middleware `ctx` spreads.
-    audit: { detail: {} as AuditDetail },
+    audit: { detail: {} as AuditDetail, ...(opts?.auditDb ? { db: opts.auditDb } : {}) },
   };
 };
 
 export type TRPCContext = Awaited<ReturnType<typeof createTRPCContext>>;
+
+/** What a production client is told instead of an unexpected failure's own message. */
+const INTERNAL_ERROR_MESSAGE = 'Something went wrong on our side. Please try again.';
+
+/**
+ * An INTERNAL_SERVER_ERROR that tRPC made out of something a procedure threw
+ * that was not a TRPCError (an unmapped Prisma or driver error, a raw
+ * `schema.parse()`): tRPC gives that wrapper the thrown error's own message,
+ * which can name SQL, constraints and tables. A TRPCError thrown on purpose
+ * carries words of its own, so it never matches, internal or not.
+ */
+function isUnexpectedInternalError(error: TRPCError): boolean {
+  const cause = error.cause;
+  return (
+    error.code === 'INTERNAL_SERVER_ERROR' &&
+    cause !== undefined &&
+    !(cause instanceof TRPCError) &&
+    error.message === cause.message
+  );
+}
 
 const t = initTRPC.context<TRPCContext>().create({
   transformer: superjson,
@@ -78,19 +113,26 @@ const t = initTRPC.context<TRPCContext>().create({
     //
     // The first half is narrower than it reads: tRPC has already placed the raw
     // serialized ZodError into `shape.message` before this formatter runs, and
-    // with `validation` null we pass `shape.message` through unchanged — so the
-    // field name still reaches the client, in raw serialized form (the
-    // errorFormatter test pins exactly that string, `"path": ["internalOnlyField"]`
-    // and all). The gate governs `data.validation` and the FORMATTED message, not
-    // the pass-through. Pre-existing behaviour, out of scope for this change.
+    // with `validation` null we pass `shape.message` through unchanged — so,
+    // outside production, the field name still reaches the client, in raw
+    // serialized form (the errorFormatter test pins exactly that string,
+    // `"path": ["internalOnlyField"]` and all). The gate governs `data.validation`
+    // and the FORMATTED message, not the pass-through.
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+    // In production an unexpected failure (that ZodError included) keeps its own
+    // message on the server, where the tRPC route's `onError` logs it, and the
+    // client is told only that something went wrong. Deliberate errors and every
+    // other code are untouched; outside production the pass-through is unchanged.
+    const withheld = process.env.NODE_ENV === 'production' && isUnexpectedInternalError(error);
+    // Never publish the server stack. tRPC attaches `data.stack` outside
+    // production, which leaks file paths and bundle chunk names onto ordinary
+    // client errors (e.g. an intentional 403). Drop it for every error code.
+    const data = { ...shape.data, validation: validation?.fields ?? null };
+    delete data.stack;
     return {
       ...shape,
-      message: validation?.message ?? shape.message,
-      data: {
-        ...shape.data,
-        validation: validation?.fields ?? null,
-      },
+      message: withheld ? INTERNAL_ERROR_MESSAGE : (validation?.message ?? shape.message),
+      data,
     };
   },
 });
@@ -119,6 +161,14 @@ function assertSessionUsable(user: SessionUserState) {
     code: verdict.kind === 'session-ended' ? 'UNAUTHORIZED' : 'FORBIDDEN',
     message: verdict.message,
   });
+}
+
+function assertTemporaryPasswordChanged(
+  user: { mustChangePassword?: boolean | null },
+  path: string
+) {
+  if (!temporaryPasswordBlocks(user, path)) return;
+  throw new TRPCError({ code: 'FORBIDDEN', message: TEMPORARY_PASSWORD_MESSAGE });
 }
 
 /**
@@ -150,7 +200,7 @@ function auditMiddleware(opts: { auditReads: boolean }) {
     // discriminated by `ok`. We record either way, then pass the result through.
     const result = await next();
 
-    recordTrpcAudit({
+    await recordTrpcAudit({
       ctx,
       path,
       type,
@@ -168,7 +218,17 @@ const auditMutations = auditMiddleware({ auditReads: false });
 const auditAll = auditMiddleware({ auditReads: true });
 
 // Auth guard for any logged-in, active account.
-const requireActiveUser = t.middleware(async ({ ctx, next }) => {
+function assertDemoProcedureAllowed(
+  ctx: TRPCContext,
+  path: string,
+  type: 'query' | 'mutation' | 'subscription'
+) {
+  if (ctx.organization?.isDemo && type !== 'subscription' && isDemoProcedureBlocked(path, type)) {
+    throw new TRPCError({ code: 'FORBIDDEN', message: DEMO_UNAVAILABLE_MESSAGE });
+  }
+}
+
+const requireActiveUser = t.middleware(async ({ ctx, next, path, type }) => {
   if (!ctx.session?.user) {
     throw new TRPCError({
       code: 'UNAUTHORIZED',
@@ -176,18 +236,32 @@ const requireActiveUser = t.middleware(async ({ ctx, next }) => {
     });
   }
   assertSessionUsable(ctx.session.user);
+  assertTemporaryPasswordChanged(ctx.session.user, path);
+  assertDemoProcedureAllowed(ctx, path, type);
   return next({ ctx: { ...ctx, session: ctx.session } });
 });
 
+/**
+ * The entitlement refusal for `moduleKey`, worded with the catalog name. Used by
+ * the procedure-level gate below and by resolvers whose licence depends on the
+ * input (e.g. `team.getById`: reading your own profile is account self-service,
+ * reading another member is the licensed team directory).
+ */
+export function assertModuleLicensed(
+  ctx: Pick<TRPCContext, 'entitlements'>,
+  moduleKey: string
+): void {
+  if (hasModule(ctx.entitlements, moduleKey)) return;
+  const moduleName = ctx.entitlements.modules.find((module) => module.key === moduleKey)?.name;
+  throw new TRPCError({
+    code: 'FORBIDDEN',
+    message: `The ${moduleName ?? moduleKey} module is not enabled for this organization.`,
+  });
+}
+
 const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
   const moduleKey = moduleForProcedure(path);
-  if (moduleKey && !hasModule(ctx.entitlements, moduleKey)) {
-    const moduleName = ctx.entitlements.modules.find((module) => module.key === moduleKey)?.name;
-    throw new TRPCError({
-      code: 'FORBIDDEN',
-      message: `The ${moduleName ?? moduleKey} module is not enabled for this organization.`,
-    });
-  }
+  if (moduleKey) assertModuleLicensed(ctx, moduleKey);
   return next();
 });
 
@@ -197,7 +271,7 @@ const requireLicensedModule = t.middleware(async ({ ctx, next, path }) => {
 // resignation is PENDING and not your own") are checked INSIDE the resolver via
 // a second `can(...)` call with the loaded resource's attributes.
 function requireCapability(action: Action) {
-  return t.middleware(async ({ ctx, next }) => {
+  return t.middleware(async ({ ctx, next, path, type }) => {
     if (!ctx.session?.user) {
       throw new TRPCError({
         code: 'UNAUTHORIZED',
@@ -205,6 +279,8 @@ function requireCapability(action: Action) {
       });
     }
     assertSessionUsable(ctx.session.user);
+    assertTemporaryPasswordChanged(ctx.session.user, path);
+    assertDemoProcedureAllowed(ctx, path, type);
     const subject = subjectFromSession(ctx.session.user);
     const allowed = await can(subject, action, undefined, {
       db: ctx.db as Prisma.TransactionClient,
@@ -226,6 +302,17 @@ export const protectedProcedure = t.procedure
   .use(auditMutations)
   .use(requireActiveUser)
   .use(requireLicensedModule);
+
+/** Authenticated, module-aware procedure for sensitive tenant reads. */
+export const auditedProtectedProcedure = t.procedure
+  .use(auditAll)
+  .use(requireActiveUser)
+  .use(requireLicensedModule);
+
+/** Authenticated, audited tenant access to retained history after entitlement removal. */
+export const entitlementIndependentHistoryProcedure = t.procedure
+  .use(auditAll)
+  .use(requireActiveUser);
 
 // Admin-only procedure — now backed by the ABAC engine (policy: 'admin:access' =
 // role ADMIN). Identical behaviour to the previous literal check, but the

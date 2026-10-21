@@ -1,25 +1,31 @@
+import {
+  demoSeatFromOrganizationId,
+  isCanonicalDemoOrganization,
+} from '@/lib/tenancy/demo-identity';
 import NextAuth, { CredentialsSignin } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import { compare } from 'bcryptjs';
 import { createHash } from 'node:crypto';
 import { z } from 'zod';
 import { ipFromHeaders, recordAuthAudit } from '@/server/audit';
-import { rateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, rateLimit } from '@/lib/rate-limit';
 import { verifyTotp, hashRecoveryCode } from '@/lib/totp';
 import {
   isTenantLifecycleAccessible,
   resolveOrganizationById,
   resolveOrganizationForRequest,
 } from '@/lib/tenancy/host';
-import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { withTenantDb, withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { parseCookie } from '@/lib/platform/security';
 import { SSO_TICKET_COOKIE } from '@/lib/sso';
-import type { SessionInvalidReason } from '@/lib/auth/session-state';
+import { liveDemoAccessExpiry, type SessionInvalidReason } from '@/lib/auth/session-state';
 import { DUMMY_PASSWORD_HASH, SIGNIN_ALLOWED_STATUSES } from '@/lib/auth/constants';
 import { consumeLoginIntent, LOGIN_INTENT_COOKIE, peekLoginIntent } from '@/lib/auth/login-intent';
 import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
+import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
+import { DEMO_PERSONAS, demoPersonaForUser, demoPersonaUserRole } from '@/lib/demo/personas';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -174,8 +180,10 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // REST-04: throttle login attempts BEFORE the bcrypt compare — per IP
         // (broad) and per account — so an unthrottled flood can neither brute-
         // force a password nor burn CPU on prefix-matching bcrypt compares.
-        const ipGate = rateLimit(`login:ip:${ip ?? 'unknown'}`, 30, 5 * 60_000);
-        const acctGate = rateLimit(`login:acct:${email}`, 10, 5 * 60_000);
+        const ipRateLimitKey = `login:ip:${ip ?? 'unknown'}`;
+        const accountRateLimitKey = `login:acct:${email}`;
+        const ipGate = await rateLimit(ipRateLimitKey, 30, 5 * 60_000);
+        const acctGate = await rateLimit(accountRateLimitKey, 10, 5 * 60_000);
         if (!ipGate.ok || !acctGate.ok) {
           recordAuthAudit({
             type: 'LOGIN_FAILED',
@@ -199,10 +207,22 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           });
           return null;
         }
+        if (organization.isDemo) {
+          await compare(password, DUMMY_PASSWORD_HASH);
+          recordAuthAudit({
+            type: 'LOGIN_FAILED',
+            organizationId: organization.id,
+            email,
+            ip,
+            userAgent,
+            reason: 'Demo workspace requires demo access',
+          });
+          return null;
+        }
 
         return withTenantDb(organization.id, async (tenantDb) => {
           const user = await tenantDb.user.findFirst({
-            where: { email },
+            where: { email, organizationId: organization.id },
             select: {
               id: true,
               organizationId: true,
@@ -215,6 +235,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               avatar: true,
               status: true,
               tokenVersion: true,
+              mustChangePassword: true,
               twoFactorEnabledAt: true,
               twoFactorSecret: true,
             },
@@ -228,7 +249,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // cases an attacker who doesn't know the password could probe. Crucially,
           // a WRONG password against a deactivated account also lands here, so the
           // "suspended" signal below can never be used to enumerate accounts.
-          if (!user || !isValid) {
+          if (!user || user.organizationId !== organization.id || !isValid) {
             // The client sees a uniform null, but the admin-only audit log records
             // the precise reason (it never leaks back to the would-be attacker).
             const reason = !user ? 'No such account' : 'Incorrect password';
@@ -308,6 +329,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             userAgent,
           });
 
+          // Successful authentication must not consume the failure budget.
+          // Otherwise normal serial workflows lock out the same authorized user
+          // — the same reasoning, and the same remedy, as the control-plane
+          // transport in src/lib/platform/auth.ts.
+          //
+          // Cleared only HERE, once both the password and the second factor are
+          // proven. Clearing on a correct password alone would hand an attacker
+          // who already holds that password an unlimited budget for grinding
+          // TOTP codes. Every failing path above returns or throws before this
+          // line, so a failure still consumes its unit, the limits are unchanged
+          // and a throttled response stays byte-identical to a wrong password.
+          await clearRateLimit(ipRateLimitKey);
+          await clearRateLimit(accountRateLimitKey);
+
           // Update last active
           await tenantDb.user.update({
             where: { id: user.id },
@@ -338,6 +373,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            mustChangePassword: user.mustChangePassword === true,
+            // Issued only after this route verifies password and any second factor.
+            passwordAuthenticatedAt: Date.now(),
           };
         });
       },
@@ -373,7 +411,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         // D18: selection is rate limited independently of the credential check,
         // so a valid intent cannot be used to grind organization ids.
-        const selectionGate = rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
+        const selectionGate = await rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
         if (!selectionGate.ok) return null;
 
         const rawIntent = parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE);
@@ -396,6 +434,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const organization = await resolveOrganizationById(organizationId);
         if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
+        const demoSeat = organization.isDemo
+          ? demoSeatFromOrganizationId(organization.id, getDemoSeatCount())
+          : null;
+        const demoPersona = demoSeat
+          ? demoPersonaForUser(demoSeat, { id: candidate.userId, email: intent.email })
+          : null;
+        // A demo intent must never become an ordinary tenant login after a state change.
+        if (candidate.demoAccessExpiresAt !== undefined && !organization.isDemo) return null;
+        if (
+          organization.isDemo &&
+          (!isDemoEnabled() ||
+            !isCanonicalDemoOrganization(organization, getDemoSeatCount()) ||
+            !demoPersona ||
+            !liveDemoAccessExpiry(candidate.demoAccessExpiresAt))
+        ) {
+          return null;
+        }
 
         return withTenantDb(organization.id, async (tenantDb) => {
           const user = await tenantDb.user.findUnique({
@@ -411,6 +466,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
               avatar: true,
               status: true,
               tokenVersion: true,
+              mustChangePassword: true,
+              password: true,
+              organizationRole: { select: { key: true } },
               twoFactorEnabledAt: true,
               twoFactorSecret: true,
             },
@@ -419,6 +477,23 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // decision, not a substitute for the state it was based on: the account
           // may have been deactivated, or SSO enforced, in the five minutes since.
           if (!user || user.email !== intent.email) return null;
+          if (organization.isDemo) {
+            if (
+              !demoPersona ||
+              user.organizationId !== organization.id ||
+              user.password !== null ||
+              user.status !== 'ACTIVE' ||
+              user.role !== demoPersonaUserRole(demoPersona) ||
+              user.organizationRole?.key !== DEMO_PERSONAS[demoPersona].roleKey
+            )
+              return null;
+            const profiles = await tenantDb.restaurantStaffProfile.findMany({
+              where: { userId: user.id, status: 'ACTIVE', primaryBranch: { active: true } },
+              select: { id: true },
+              take: 2,
+            });
+            if (profiles.length !== 1) return null;
+          }
           if (!SIGNIN_ALLOWED_STATUSES.has(user.status)) throw new SuspendedError();
 
           const enforcedConnection = await tenantDb.organizationIdentityConnection.findFirst({
@@ -442,6 +517,26 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
           const consumed = await consumeLoginIntent(rawIntent, host, organization.id);
           if (!consumed) return null;
+          // The shared-host password route created this server-owned intent.
+          // Preserve password-entry time; selecting a workspace cannot refresh it.
+          const passwordIntent = organization.isDemo
+            ? null
+            : await withPlatformDb((db) =>
+                db.pendingLoginIntent.findUnique({
+                  where: { id: consumed.id },
+                  select: { createdAt: true },
+                })
+              );
+
+          // WHA-1570: the shared-host credential check (/api/login) spends the
+          // same `login:ip` / `login:acct` budgets as the per-host provider above,
+          // so a fully verified shared-host sign-in clears them the same way.
+          // Cleared HERE and not in /api/login: that route proves only the
+          // password, and refunding it there would let whoever holds the password
+          // mint intents without limit and grind second-factor codes through them.
+          // `intent.email` is the same normalized address /api/login keyed on.
+          await clearRateLimit(`login:ip:${ip ?? 'unknown'}`);
+          await clearRateLimit(`login:acct:${intent.email}`);
 
           await tenantDb.user.update({
             where: { id: user.id },
@@ -473,6 +568,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             image: user.avatar,
             status: user.status,
             tokenVersion: user.tokenVersion,
+            mustChangePassword: user.mustChangePassword === true,
+            passwordAuthenticatedAt: passwordIntent?.createdAt.getTime(),
+            demoAccessExpiresAt: organization.isDemo ? candidate.demoAccessExpiresAt : undefined,
           };
         });
       },
@@ -485,7 +583,13 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         const rawTicket = parseCookie(request.headers.get('cookie'), SSO_TICKET_COOKIE);
         if (!rawTicket || rawTicket.length < 32 || rawTicket.length > 128) return null;
         const organization = await resolveOrganizationForRequest(request);
-        if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
+        if (
+          !organization ||
+          organization.isDemo ||
+          !isTenantLifecycleAccessible(organization.status)
+        ) {
+          return null;
+        }
         return withTenantDb(organization.id, async (tenantDb) => {
           const ticket = await tenantDb.tenantSsoTicket.findFirst({
             where: {
@@ -550,11 +654,16 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         token.status = ((user as Record<string, unknown>).status as string) ?? 'ACTIVE';
         // AUTH-01: snapshot the session-revocation counter at sign-in.
         token.tokenVersion = ((user as Record<string, unknown>).tokenVersion as number) ?? 0;
+        token.mustChangePassword = (user as Record<string, unknown>).mustChangePassword === true;
+        token.demoAccessExpiresAt =
+          liveDemoAccessExpiry((user as Record<string, unknown>).demoAccessExpiresAt) ?? undefined;
         // #16: session validity is its own claim. `status` now only ever holds a
         // real UserStatus, so a revoked session can never be misreported as a
         // deactivated account (and vice versa).
         token.sessionRevoked = false;
         token.sessionInvalidReason = null;
+        // Never infer password entry from session refresh or non-password sign-in.
+        token.passwordAuthenticatedAt = user.passwordAuthenticatedAt;
         token.lastValidatedAt = Date.now();
         return token;
       }
@@ -572,6 +681,15 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
       // so failing open buys no availability — only an unrevocable window.
       // Recovery is a fresh sign-in, or the next successful revalidation once
       // REVALIDATE_AFTER_MS has elapsed.
+      if (
+        token.demoAccessExpiresAt !== undefined &&
+        !liveDemoAccessExpiry(token.demoAccessExpiresAt)
+      ) {
+        token.sessionRevoked = true;
+        token.sessionInvalidReason = 'DEMO_ACCESS_EXPIRED';
+        return token;
+      }
+
       const lastValidated = typeof token.lastValidatedAt === 'number' ? token.lastValidatedAt : 0;
       const stale = Date.now() - lastValidated > REVALIDATE_AFTER_MS;
       if (token.id && token.organizationId && stale) {
@@ -585,13 +703,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
                 department: true,
                 title: true,
                 tokenVersion: true,
-                organization: { select: { slug: true, status: true } },
+                mustChangePassword: true,
+                organization: { select: { slug: true, status: true, isDemo: true } },
               },
             })
           );
           if (!fresh) {
             token.sessionRevoked = true;
             token.sessionInvalidReason = 'DELETED';
+          } else if (
+            fresh.organization.isDemo &&
+            !liveDemoAccessExpiry(token.demoAccessExpiresAt)
+          ) {
+            token.sessionRevoked = true;
+            token.sessionInvalidReason = 'DEMO_ACCESS_EXPIRED';
           } else if (fresh.tokenVersion !== ((token.tokenVersion as number) ?? 0)) {
             // AUTH-01 / IMP-AUTH-03: the counter was bumped (password change,
             // admin reset, lay-off, or "sign out everywhere"), so every token
@@ -601,6 +726,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
             token.sessionInvalidReason = 'REVOKED';
           } else {
             token.role = fresh.role;
+            token.mustChangePassword = fresh.mustChangePassword === true;
             token.status = fresh.status;
             token.department = fresh.department;
             token.title = fresh.title;
@@ -635,11 +761,20 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         session.user.department = token.department as string;
         session.user.title = token.title as string;
         session.user.status = token.status as string;
+        session.user.mustChangePassword = token.mustChangePassword === true;
         // #16: every consumer of the session must be able to see that the
         // session itself was invalidated, independently of account status.
         session.user.sessionRevoked = Boolean(token.sessionRevoked);
+        session.user.passwordAuthenticatedAt =
+          !token.sessionRevoked &&
+          typeof token.passwordAuthenticatedAt === 'number' &&
+          Number.isFinite(token.passwordAuthenticatedAt)
+            ? token.passwordAuthenticatedAt
+            : undefined;
         session.user.sessionInvalidReason =
           (token.sessionInvalidReason as SessionInvalidReason | null) ?? null;
+        session.user.demoAccessExpiresAt =
+          liveDemoAccessExpiry(token.demoAccessExpiresAt) ?? undefined;
       }
       return session;
     },
@@ -669,7 +804,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
     // Shorter lifetime bounds how long a stolen token is useful; combined with
     // the per-request revalidation above, effective revocation is ~1 minute.
     maxAge: 60 * 60 * 8, // 8 hours
-    updateAge: 60 * 60, // rotate the session cookie at most hourly
+    updateAge: 60 * 60, // Database sessions only; Auth.js refreshes JWT cookies on every read.
   },
   secret: process.env.AUTH_SECRET,
 });

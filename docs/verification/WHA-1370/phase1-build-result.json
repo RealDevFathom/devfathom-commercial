@@ -1,0 +1,5 @@
+{
+  "command": "bun run build",
+  "returncode": 1,
+  "head": "9070a91cc3782f6838c6b60d7bd4b2cd15283232"
+}

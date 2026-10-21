@@ -8,6 +8,32 @@ import type { LanguageModel } from 'ai';
 type Env = Record<string, string | undefined>;
 export type AIProviderName = 'azure' | 'groq' | 'google' | 'vertex';
 
+export type AIAvailability =
+  | { available: true; provider: AIProviderName }
+  | { available: false; reason: 'DISABLED' | 'INVALID_PROVIDER' };
+
+/** Pure selector gate; available does not assert credentials or provider health. */
+export function readAIAvailability(env: Env = process.env): AIAvailability {
+  const provider = env.AI_PROVIDER?.trim().toLowerCase();
+  if (!provider || provider === 'disabled') return { available: false, reason: 'DISABLED' };
+  switch (provider) {
+    case 'azure':
+    case 'groq':
+    case 'google':
+    case 'vertex':
+      return { available: true, provider };
+    default:
+      return { available: false, reason: 'INVALID_PROVIDER' };
+  }
+}
+
+export class AIUnavailableError extends Error {
+  constructor(readonly reason: 'DISABLED' | 'INVALID_PROVIDER') {
+    super('AI is currently unavailable.');
+    this.name = 'AIUnavailableError';
+  }
+}
+
 export type AIConfig =
   | { provider: 'azure'; model: string; resourceName: string }
   | { provider: 'groq'; model: string; apiKey: string }
@@ -34,13 +60,9 @@ function required(env: Env, name: string, provider: AIProviderName): string {
 }
 
 export function readAIConfig(env: Env = process.env): AIConfig {
-  const rawProvider = required(env, 'AI_PROVIDER', 'azure').toLowerCase();
-  if (!['azure', 'groq', 'google', 'vertex'].includes(rawProvider)) {
-    throw new Error(
-      `[ai] Unsupported AI_PROVIDER "${rawProvider}". Use azure, groq, google, or vertex.`
-    );
-  }
-  const provider = rawProvider as AIProviderName;
+  const availability = readAIAvailability(env);
+  if (!availability.available) throw new AIUnavailableError(availability.reason);
+  const provider = availability.provider;
   const model = required(env, 'AI_MODEL', provider);
 
   switch (provider) {

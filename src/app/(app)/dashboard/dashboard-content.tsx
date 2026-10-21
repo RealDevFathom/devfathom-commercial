@@ -34,7 +34,11 @@ import { cn } from '@/lib/utils';
 import { formatDistanceToNow, format } from 'date-fns';
 import { RevenueChart } from './revenue-chart';
 import { moneyListLabel, diffByCurrency } from '@/lib/finance/currency';
-import { useAssistant } from '@/lib/assistant-store';
+import {
+  assistantAvailabilityMessage,
+  isAssistantAvailable,
+  useAssistant,
+} from '@/lib/assistant-store';
 
 /* ============================================
    Next Meeting Countdown — real data
@@ -447,7 +451,7 @@ function TimeUnit({
       >
         {pad(value)}
       </span>
-      <span className="text-[10px] text-muted-foreground/60 uppercase tracking-wider mt-1">
+      <span className="text-[10px] text-muted-foreground uppercase tracking-wider mt-1">
         {label}
       </span>
     </div>
@@ -828,6 +832,12 @@ const DASHBOARD_WIDGETS = [
 export function DashboardContent() {
   const { data: session } = useSession();
   const openAssistant = useAssistant((state) => state.setOpen);
+  const assistantAvailable = useAssistant((state) =>
+    isAssistantAvailable(state, session?.user.organizationId)
+  );
+  const assistantMessage = useAssistant((state) =>
+    assistantAvailabilityMessage(state, session?.user.organizationId)
+  );
   const utils = trpc.useUtils();
   const stats = trpc.dashboard.getStats.useQuery();
   const activity = trpc.dashboard.getRecentActivity.useQuery();
@@ -884,7 +894,7 @@ export function DashboardContent() {
 
         <div className="studio-greeting-panel">
           <div className="min-w-0">
-            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-accent-brand">
+            <p className="text-xs font-semibold uppercase tracking-[0.14em] text-text-muted">
               Your operating view
             </p>
             <h1
@@ -900,13 +910,17 @@ export function DashboardContent() {
           <button
             type="button"
             onClick={() => openAssistant(true)}
-            className="studio-prompt-button"
+            disabled={!assistantAvailable}
+            title={assistantAvailable ? 'Open Ask Fathom chat' : assistantMessage}
+            className="studio-prompt-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
           >
             <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-accent-brand text-white">
               <Sparkles className="h-4 w-4" aria-hidden />
             </span>
             <span className="min-w-0 flex-1 text-left">
-              <span className="block text-xs text-muted-foreground">Need a hand?</span>
+              <span className="block text-xs text-muted-foreground">
+                {assistantAvailable ? 'Need a hand?' : assistantMessage}
+              </span>
               <span className="block truncate text-sm font-semibold text-foreground">
                 Ask Fathom anything
               </span>
@@ -961,22 +975,21 @@ export function DashboardContent() {
           isAdmin ? 'sm:grid-cols-2 lg:grid-cols-4' : 'sm:grid-cols-3'
         )}
       >
+        {/* No month-over-month or quarter deltas are computed by `dashboard.getStats`;
+            these cards show the figure alone rather than a placeholder trend. */}
         {isAdmin && (
           <KPICard
             title="Revenue This Month"
             value={moneyListLabel(stats.data?.revenue ?? [])}
-            change="+12%"
-            changeLabel="vs last month"
+            changeLabel="income recorded this month"
             icon={DollarSign}
-            trend="up"
           />
         )}
         <KPICard
           title="Active Projects"
           value={String(stats.data?.activeProjects ?? 0)}
-          change="2 new this quarter"
+          changeLabel="in progress"
           icon={FolderKanban}
-          trend="up"
         />
         <KPICard
           title="Tasks Completed"

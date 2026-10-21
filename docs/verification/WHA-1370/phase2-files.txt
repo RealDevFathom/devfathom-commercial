@@ -1,0 +1,16 @@
+src/components/pharmacy/counter/counter-console.tsx
+src/components/pharmacy/counter/counter-receipt-view.test.tsx
+src/components/pharmacy/counter/counter-receipt-view.tsx
+src/lib/pharmacy/COUNTER-PRINTING.md
+src/lib/pharmacy/counter-browser-print.test.ts
+src/lib/pharmacy/counter-browser-print.ts
+src/lib/pharmacy/counter-query-refresh.test.ts
+src/lib/pharmacy/counter-query-refresh.ts
+src/lib/pharmacy/counter-receipt-presentation.ts
+src/lib/pharmacy/counter-receipt.ts
+src/lib/pharmacy/counter.ts
+src/lib/pharmacy/receipt-identity.db.test.ts
+src/lib/pharmacy/receipt-identity.test.ts
+src/lib/pharmacy/receipt-identity.ts
+src/lib/pharmacy/settlement.test.ts
+src/lib/pharmacy/settlement.ts

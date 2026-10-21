@@ -1,12 +1,9 @@
-// DEV STORAGE ONLY — local FS.
-// PROD: swap for Vercel Blob (`import { put } from '@vercel/blob'`, needs BLOB_READ_WRITE_TOKEN);
-// Vercel serverless FS is read-only so local FS won't work in prod.
-
 import crypto from 'node:crypto';
 import { NextResponse } from 'next/server';
 import { MAX_ATTACHMENT_BYTES } from '@/lib/chat/contract';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { putUpload } from '@/lib/storage';
+import { putUpload, StorageUnavailableError } from '@/lib/storage';
 
 export async function POST(request: Request) {
   try {
@@ -92,7 +89,12 @@ export async function POST(request: Request) {
       type: file.type,
     });
   } catch (error) {
-    console.error('[upload] error:', error);
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
+    if (error instanceof StorageUnavailableError) {
+      return NextResponse.json({ error: 'Uploads are unavailable.' }, { status: 503 });
+    }
+    console.error('[upload] failed');
     return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

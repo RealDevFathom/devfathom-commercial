@@ -2,9 +2,11 @@ import { Plus } from 'lucide-react';
 import { PlatformCommandForm } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 import { PlatformMfaCard } from '@/components/platform/platform-mfa-card';
 
 export default async function PlatformSettingsPage() {
+  await requirePlatformRead('/platform/settings');
   const settings = await withPlatformDb((db) =>
     db.platformSetting.findMany({ orderBy: [{ category: 'asc' }, { key: 'asc' }] })
   );

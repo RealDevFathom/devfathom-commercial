@@ -13,11 +13,49 @@ import {
 } from '@/generated/prisma/client';
 import type { PlatformIdentity } from '@/lib/platform/auth';
 import { assertPlatformCapability } from '@/lib/platform/auth';
-import { PlatformSecurityError } from '@/lib/platform/security';
-import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { ActivationPreflightError, PlatformSecurityError } from '@/lib/platform/security';
+import { sharedDeploymentUrl, unmetActivationGates } from '@/lib/platform/activation-gates';
+import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
+import type { DemoSeatIdentity } from '@/lib/platform/command-types';
+import { demoApproverEmail } from '@/lib/demo/approval';
+import { demoSharedDeploymentOrigin } from '@/lib/platform/activation-gates';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { emailSchema } from '@/lib/email-address';
+import { ianaTimezone } from '@/lib/timezone';
 import { isReservedHostLabel, RESERVED_HOST_LABELS } from '@/lib/tenancy/host-routing';
+import { OrganizationVertical } from '@/generated/prisma/enums';
+import {
+  adminDepartmentKeyForVertical,
+  defaultDepartmentRowsForVertical,
+  isPackageCompatibleWithVertical,
+  mandatoryModulesForVertical,
+  modulesForVertical,
+  RESTAURANT_CAPABILITIES,
+  RESTAURANT_MODULES,
+  roleTemplatesForVertical,
+  VERTICALS,
+} from '@/lib/vertical-catalog';
+import { moduleDefinitionForKey, verticalForModuleKey } from '@/lib/module-catalog';
+import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
+import { PAKISTAN_PROVINCES } from '@/lib/pharmacy/regulatory-profile-form';
+import { isDedicatedProvisioningConfigured } from '@/lib/platform/provisioning-config';
+import { evaluatePharmacyReadiness } from '@/lib/pharmacy/onboarding';
+import { evaluateHotelReadiness } from '@/lib/hotel/onboarding-checklist';
+import { defaultJourneyTemplateSeeds } from '@/lib/hotel/journey-templates';
+import { DEFAULT_HOTEL_MEAL_PLANS } from '@/lib/hotel/meal-plans';
+import { defaultBookingEngineSlug } from '@/lib/hotel/property';
+import {
+  deactivateHotelProperty,
+  reactivateHotelProperty,
+  recoverHotelPropertyManager,
+} from '@/lib/platform/hotel-property-maintenance';
+import {
+  provisionRestaurantOrganization,
+  type RestaurantProvisioningResult,
+} from '@/lib/restaurant/organization-provisioning';
 
 const id = z
   .string()
@@ -66,6 +104,13 @@ const hostname = z
   .max(253)
   .regex(/^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z]{2,63}$/);
 const hexColor = z.string().regex(/^#[0-9a-fA-F]{6}$/);
+// §2 — the organization operating model. The literal values come from the
+// generated Prisma enum, so the vertical list is never re-typed here.
+const vertical = z.enum(OrganizationVertical);
+const businessDayCutoff = z
+  .string()
+  .trim()
+  .regex(/^(?:[01]\d|2[0-3]):[0-5]\d$/, 'Use 24-hour time, e.g. 09:30');
 
 const COMMAND_CAPABILITY: Record<string, string> = {
   organization: 'organizations:write',
@@ -181,11 +226,135 @@ export function auditProjection(result: Pick<CommandResult, 'audit' | 'auditBefo
   };
 }
 
+function sensitiveCommand(action: string): boolean {
+  return (
+    [
+      'organization.user.password',
+      'organization.scim.token',
+      'organization.scim.revoke',
+      'organization.transition',
+    ].includes(action) ||
+    action === 'organization.identity' ||
+    action.startsWith('organization.identity.') ||
+    action.startsWith('organization.hotelproperty.')
+  );
+}
+const sensitiveReason = z.string().trim().min(10).max(500);
+
 function capabilityFor(action: string): string {
+  if (sensitiveCommand(action)) return 'organizations:security:write';
   const domain = action.split('.')[0] ?? '';
   const capability = COMMAND_CAPABILITY[domain];
   if (!capability) throw new PlatformSecurityError('Unknown platform command.', 400);
   return capability;
+}
+
+const auditId = z
+  .string()
+  .min(3)
+  .max(128)
+  .regex(/^[a-zA-Z0-9_-]+$/);
+const requestId = z
+  .string()
+  .min(1)
+  .max(128)
+  .regex(/^[a-zA-Z0-9._:-]+$/);
+
+type FailureCategory = 'capability_denied' | 'validation_failed' | 'command_failed';
+
+const FAILURE_REASON: Record<FailureCategory, string> = {
+  capability_denied: 'Platform command capability denied.',
+  validation_failed: 'Platform command validation failed.',
+  command_failed: 'Platform command transaction failed.',
+};
+
+function failureCategory(error: unknown): FailureCategory {
+  if (error instanceof PlatformSecurityError && error.status === 403) return 'capability_denied';
+  if (
+    error instanceof z.ZodError ||
+    (error instanceof PlatformSecurityError && error.status === 400)
+  ) {
+    return 'validation_failed';
+  }
+  return 'command_failed';
+}
+
+function safeFailureTarget(action: string, payload: unknown) {
+  if (!payload || typeof payload !== 'object' || Array.isArray(payload)) return {};
+  const candidate = payload as Record<string, unknown>;
+  const organizationId = auditId.safeParse(candidate.organizationId);
+  return {
+    organizationId: organizationId.success ? organizationId.data : undefined,
+    targetType: action === 'platform.command.invalid' ? undefined : action.split('.')[0],
+  };
+}
+
+async function persistCommandFailure(
+  actor: PlatformIdentity,
+  action: string,
+  payload: unknown,
+  request: Request,
+  error: unknown
+) {
+  const category = failureCategory(error);
+  const correlation = requestId.safeParse(request.headers.get('x-devfathom-request-id'));
+  const correlationId = correlation.success
+    ? `pcorr_${createHash('sha256').update(correlation.data).digest('hex').slice(0, 32)}`
+    : undefined;
+  const deterministicId = correlationId
+    ? `pcfail_${createHash('sha256')
+        .update(`${actor.id}\0${action}\0${category}\0${correlationId}`)
+        .digest('hex')
+        .slice(0, 32)}`
+    : undefined;
+
+  try {
+    await withPlatformDb(async (db) => {
+      const target = safeFailureTarget(action, payload);
+      if (target.organizationId) {
+        const organization = await db.$queryRawUnsafe<Array<{ id: string }>>(
+          'SELECT id FROM organizations WHERE id = $1 FOR KEY SHARE',
+          target.organizationId
+        );
+        if (organization.length === 0) target.organizationId = undefined;
+      }
+
+      try {
+        await db.platformAuditLog.create({
+          data: {
+            ...(deterministicId ? { id: deterministicId } : {}),
+            ...target,
+            actorPlatformUserId: actor.id,
+            action,
+            metadata: { outcomeCategory: category },
+            requestId: correlationId,
+            reason: FAILURE_REASON[category],
+            success: false,
+            error: FAILURE_REASON[category],
+          },
+        });
+      } catch (auditError) {
+        if (
+          deterministicId &&
+          typeof auditError === 'object' &&
+          auditError !== null &&
+          'code' in auditError &&
+          auditError.code === 'P2002'
+        ) {
+          return;
+        }
+        throw auditError;
+      }
+    });
+  } catch {
+    // Operational signal is deliberately constant: neither the command error nor
+    // attacker-controlled input is safe to emit when the audit sink is unhealthy.
+    console.error('[platform-audit] failed to persist command failure');
+    throw new PlatformSecurityError(
+      'The platform command failed and its audit record could not be persisted.',
+      500
+    );
+  }
 }
 
 function lifecycleAction(from: OrganizationStatus, to: OrganizationStatus): LifecycleAction {
@@ -196,6 +365,49 @@ function lifecycleAction(from: OrganizationStatus, to: OrganizationStatus): Life
   if (to === 'PURGING') return 'PURGE_SCHEDULED';
   if (to === 'PURGED') return 'PURGED';
   return 'CREATED';
+}
+
+async function recordSharedDeploymentReady(
+  db: PrismaClient,
+  organization: { id: string; slug: string; deploymentMode: string },
+  now = new Date(),
+  healthSource = 'shared-platform-default',
+  fallbackUrl?: string | null
+) {
+  const url = sharedDeploymentUrl(organization) ?? fallbackUrl;
+  if (!url) {
+    throw new PlatformSecurityError(
+      organization.deploymentMode === 'SHARED'
+        ? 'No shared platform host is configured for this environment. Register the production deployment at /platform/deployments.'
+        : 'This organization runs on a dedicated deployment and custom domain. Register its production deployment at /platform/deployments.',
+      400
+    );
+  }
+  return db.organizationDeployment.upsert({
+    where: {
+      organizationId_environment: {
+        organizationId: organization.id,
+        environment: 'production',
+      },
+    },
+    update: {
+      mode: 'SHARED',
+      status: 'READY',
+      url,
+      lastHealthyAt: now,
+      health: { source: healthSource },
+    },
+    create: {
+      organizationId: organization.id,
+      environment: 'production',
+      mode: 'SHARED',
+      provider: 'VERCEL',
+      status: 'READY',
+      url,
+      lastHealthyAt: now,
+      health: { source: healthSource },
+    },
+  });
 }
 
 async function assertActivationReady(db: PrismaClient, organizationId: string) {
@@ -209,16 +421,174 @@ async function assertActivationReady(db: PrismaClient, organizationId: string) {
     },
   });
   if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
-  const missing = [
-    !organization.packageId ? 'commercial package' : null,
-    organization.modules.length + (organization.package?.moduleLinks.length ?? 0) === 0
-      ? 'enabled module'
-      : null,
-    organization.users.length === 0 ? 'active organization administrator' : null,
-    organization.deployments.length === 0 ? 'ready production deployment' : null,
-  ].filter(Boolean);
-  if (missing.length) {
-    throw new PlatformSecurityError(`Activation preflight failed: add ${missing.join(', ')}.`, 400);
+  // WHA-1180 — the same unmet conditions the console renders as a checklist.
+  // The thrown message is rebuilt from these gates and is byte-identical to the
+  // sentence this preflight has always produced.
+  const gates = unmetActivationGates({
+    organizationId,
+    hasPackage: Boolean(organization.packageId),
+    enabledModuleCount:
+      organization.modules.length + (organization.package?.moduleLinks.length ?? 0),
+    administratorCount: organization.users.length,
+    readyProductionDeploymentCount: organization.deployments.length,
+  });
+  if (gates.length) throw new ActivationPreflightError(gates);
+
+  if (organization.vertical === 'PHARMACY') {
+    const now = new Date();
+    const profile = await db.branchRegulatoryProfile.findFirst({
+      where: {
+        organizationId,
+        effectiveFrom: { lte: now },
+        OR: [{ effectiveTo: null }, { effectiveTo: { gt: now } }],
+      },
+      select: { branchId: true },
+      orderBy: { effectiveFrom: 'desc' },
+    });
+    try {
+      await assertStoredBranchMayOperate(
+        db,
+        organizationId,
+        profile?.branchId ?? 'activation-preflight',
+        { name: 'ACTIVATE', at: now, requiresQualifiedPerson: true }
+      );
+    } catch (error) {
+      if (error instanceof BranchOperationDeniedError) {
+        throw new PlatformSecurityError(
+          `Activation preflight failed: pharmacy regulatory profile denied operation (${error.reason}).`,
+          400
+        );
+      }
+      throw error;
+    }
+
+    // PLAT-03 — every P0 onboarding gate must be PASSED, and readiness is
+    // recomputed here rather than read off the stored gate rows. A seeded or
+    // bootstrapped PASSED with no evidence behind it is downgraded by
+    // `evaluatePharmacyReadiness` before it is counted, so activation cannot be
+    // reached by writing rows.
+    const readiness = await evaluatePharmacyReadiness(db, organizationId, now);
+    if (!readiness.ready) {
+      throw new PlatformSecurityError(
+        `Activation preflight failed: pharmacy onboarding gates not passed (${readiness.blocking.join(', ')}).`,
+        400
+      );
+    }
+    return;
+  }
+
+  // H1-01 / PROP-01 — hospitality runs through the same gate as pharmacy: the
+  // onboarding checklist is recomputed here from the property record and the
+  // organization's roles, never read off a stored claim, so activation cannot be
+  // reached by writing rows. "No go-live without tax profile, mode and business
+  // date" is the acceptance criterion this enforces.
+  if (organization.vertical === 'HOSPITALITY') {
+    const readiness = await evaluateHotelReadiness(db, organizationId);
+    if (!readiness.ready) {
+      throw new PlatformSecurityError(
+        `Activation preflight failed: hotel onboarding steps not done (${readiness.blocking
+          .map((item) => item.key)
+          .join(', ')}).`,
+        400
+      );
+    }
+    return;
+  }
+
+  // §9 Step 7 — restaurant activation preflight (the implementable subset). The
+  // agency path is complete above and returns here with byte-identical behavior;
+  // the checks below only run for restaurant organizations. Operator credential
+  // and device-policy checks are deferred with D11.
+  if (organization.vertical !== 'RESTAURANT') return;
+
+  const restaurantMissing: string[] = [];
+
+  // §2.3 — the assigned package must belong to the restaurant vertical.
+  if (
+    !organization.package ||
+    !isPackageCompatibleWithVertical(
+      organization.package.vertical ?? 'AGENCY',
+      organization.vertical
+    )
+  ) {
+    restaurantMissing.push('a restaurant-compatible commercial package');
+  }
+
+  // Resolve the effective set of enabled restaurant module keys: the package
+  // baseline (inherited live) with organization overrides layered on top, in the
+  // resolver's package → override order. Only restaurant modules are relevant, so
+  // ids are mapped to keys through the catalog's restaurant module set.
+  const restaurantModuleKeys = modulesForVertical('RESTAURANT').map((module) => module.key);
+  const restaurantCatalogModules = await db.platformModule.findMany({
+    where: { key: { in: restaurantModuleKeys } },
+    select: { id: true, key: true },
+  });
+  const keyByModuleId = new Map(
+    restaurantCatalogModules.map((module) => [module.id, module.key] as const)
+  );
+  const enabledKeys = new Set<string>();
+  for (const link of organization.package?.moduleLinks ?? []) {
+    const key = keyByModuleId.get(link.moduleId);
+    if (key) enabledKeys.add(key);
+  }
+  const moduleOverrides = await db.organizationModule.findMany({
+    where: { organizationId },
+    select: { moduleId: true, status: true },
+  });
+  for (const override of moduleOverrides) {
+    const key = keyByModuleId.get(override.moduleId);
+    if (!key) continue;
+    if (override.status === 'ENABLED' || override.status === 'TRIAL') enabledKeys.add(key);
+    else enabledKeys.delete(key);
+  }
+
+  // §6.1 — Restaurant Core is mandatory; §9 Step 7 additionally requires at least
+  // one operational module enabled beyond it.
+  const coreKeys = mandatoryModulesForVertical('RESTAURANT').map((module) => module.key);
+  if (!coreKeys.every((key) => enabledKeys.has(key))) {
+    restaurantMissing.push('the mandatory Restaurant Core module');
+  }
+  const additionalOperational = [...enabledKeys].filter((key) => !coreKeys.includes(key));
+  if (additionalOperational.length === 0) {
+    restaurantMissing.push('at least one additional restaurant operational module');
+  }
+
+  // §4 / §9 Steps 3/5 — exactly one active default branch.
+  const defaultBranches = await db.restaurantBranch.findMany({
+    where: { organizationId, isDefault: true, active: true },
+    select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
+  });
+  if (defaultBranches.length !== 1) {
+    restaurantMissing.push('exactly one active default restaurant branch');
+  } else {
+    const branch = defaultBranches[0]!;
+    if (!branch.name?.trim()) restaurantMissing.push('a nonblank default branch name');
+    if (!branch.address?.trim()) restaurantMissing.push('a default branch address');
+    if (!ianaTimezone.safeParse(branch.timezone ?? '').success)
+      restaurantMissing.push('a valid default branch IANA timezone');
+    if (!businessDayCutoff.safeParse(branch.businessDayCutoff ?? '').success)
+      restaurantMissing.push('a valid default branch business-day cutoff');
+  }
+
+  if (!organization.isDemo) {
+    const acknowledgements = await db.restaurantActivationAcknowledgement.findMany({
+      where: { organizationId },
+      select: { kind: true, policyReference: true },
+    });
+    const acknowledgedKinds = new Set(
+      acknowledgements.filter((row) => row.policyReference.trim()).map((row) => row.kind)
+    );
+    for (const kind of ['TAX', 'PAYMENT', 'DEVICE', 'OPERATOR'] as const) {
+      if (!acknowledgedKinds.has(kind))
+        restaurantMissing.push(`${kind.toLowerCase()} policy acknowledgement`);
+    }
+  }
+
+  if (restaurantMissing.length) {
+    throw new PlatformSecurityError(
+      `Activation preflight failed: add ${restaurantMissing.join(', ')}.`,
+      400
+    );
   }
 }
 
@@ -273,32 +643,214 @@ async function syncContractEntitlements(
   });
 }
 
-const organizationInput = z.object({
-  slug,
-  legalName: requiredText,
-  displayName: requiredText,
-  deploymentMode: z.enum(['SHARED', 'DEDICATED']).default('SHARED'),
-  packageId: id,
-  timezone: z.string().trim().min(1).max(100).default('UTC'),
-  locale: z.string().trim().min(2).max(20).default('en'),
-  currency: currency.default('USD'),
-  seatLimit: z.coerce.number().int().min(1).max(100_000),
-  gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
-  dataResidency: optionalText.optional(),
-  primaryContactName: requiredText,
-  primaryContactEmail: email,
-  notes: optionalText.optional(),
-  adminName: requiredText,
-  adminEmail: email,
-  adminPassword: z.string().min(12).max(256),
-  opportunityId: optionalId.optional(),
-});
+const organizationInput = z
+  .object({
+    // §2 — default AGENCY keeps every existing onboarding payload valid.
+    vertical: vertical.default('AGENCY'),
+    slug,
+    legalName: requiredText,
+    displayName: requiredText,
+    deploymentMode: z.enum(['SHARED', 'DEDICATED']).default('SHARED'),
+    packageId: id,
+    timezone: z.string().trim().min(1).max(100).default('UTC'),
+    locale: z.string().trim().min(2).max(20).default('en'),
+    currency: currency.default('USD'),
+    // Only a platform super admin may use this untrusted override.
+    seatLimit: z.unknown().optional(),
+    gracePeriodDays: z.coerce.number().int().min(0).max(365).default(0),
+    dataResidency: optionalText.optional(),
+    primaryContactName: requiredText,
+    primaryContactEmail: email,
+    notes: optionalText.optional(),
+    adminName: requiredText,
+    adminEmail: email,
+    adminPassword: z.string().min(12).max(256),
+    opportunityId: optionalId.optional(),
+    firstBranchName: z.string().trim().min(2).max(120).optional(),
+    firstBranchAddress: z.string().trim().min(1).max(300).optional(),
+    businessDayCutoff: businessDayCutoff.optional(),
+    // WHA-1206 — `pharmacy_branches` splits the premises into an address line, a
+    // city and a province, and all three are NOT NULL. The province is not
+    // cosmetic: it is the jurisdiction whose published rule set PLAT-02
+    // validates the branch's licence against, so it is asked for rather than
+    // guessed.
+    firstBranchCity: z.string().trim().min(1).max(120).optional(),
+    firstBranchProvinceCode: z.string().trim().min(2).max(16).optional(),
+  })
+  .superRefine((input, ctx) => {
+    // WHA-1206 — a vertical that is provisioned with a first branch has to be
+    // given that branch's own required columns at creation. Which columns those
+    // are differs by vertical, so the requirement is stated per vertical rather
+    // than as one shared set. AGENCY provisions no branch and asks for nothing.
+    const branchFields: Record<OrganizationVertical, readonly (keyof typeof input)[]> = {
+      AGENCY: [],
+      RESTAURANT: ['firstBranchName', 'firstBranchAddress', 'businessDayCutoff'],
+      HOSPITALITY: ['firstBranchName', 'firstBranchAddress', 'firstBranchCity'],
+      PHARMACY: [
+        'firstBranchName',
+        'firstBranchAddress',
+        'firstBranchCity',
+        'firstBranchProvinceCode',
+      ],
+    };
+    const required = branchFields[input.vertical];
+    if (required.length === 0) return;
+    for (const field of required) {
+      if (!input[field])
+        ctx.addIssue({
+          code: 'custom',
+          path: [field],
+          message: `Required for ${VERTICALS[input.vertical].label} organizations.`,
+        });
+    }
+    // The closed set every pharmacy surface can name (UX rule 1: no surface
+    // prints a bare code). A province outside it would render as its own code on
+    // the regulatory profile page and match no published rule set.
+    if (
+      input.vertical === 'PHARMACY' &&
+      input.firstBranchProvinceCode &&
+      !(input.firstBranchProvinceCode in PAKISTAN_PROVINCES)
+    )
+      ctx.addIssue({
+        code: 'custom',
+        path: ['firstBranchProvinceCode'],
+        message: 'Choose one of the provinces the regulatory profile recognises.',
+      });
+    // Reached for RESTAURANT and PHARMACY, not for AGENCY (returned above). A
+    // branch-first vertical dates its own records — business days, licence and
+    // expiry windows — in the organization timezone, so an unusable zone has to
+    // be refused before the branch is written rather than surface later as a
+    // wrong date.
+    const timezone = ianaTimezone.safeParse(input.timezone);
+    if (!timezone.success)
+      ctx.addIssue({
+        code: 'custom',
+        path: ['timezone'],
+        message: 'Choose a valid IANA timezone.',
+      });
+  });
+
+type DemoOrganizationBootstrap = {
+  identity: DemoSeatIdentity;
+  now: Date;
+};
+
+export const DEMO_APPROVER_ORGANIZATION_ROLE_KEY = 'demo-approver';
+
+export function demoRestaurantApproverUserId(seatNumber: number): string {
+  demoApproverEmail(seatNumber);
+  return `user_demo_restaurant_seat_${seatNumber}_approver`;
+}
+
+const ORGANIZATION_SLUG_TAKEN = 'That organization slug is already taken.';
+const ORGANIZATION_SLUG_CONSTRAINT = 'organizations_slug_key';
+const ORGANIZATION_SLUG_CONSTRAINTS = new Set(['slug', ORGANIZATION_SLUG_CONSTRAINT]);
+const ORGANIZATION_SLUG_CONSTRAINT_IN_MESSAGE = new RegExp(
+  `(?:^|[^A-Za-z0-9_])${ORGANIZATION_SLUG_CONSTRAINT}(?:$|[^A-Za-z0-9_])`
+);
+
+function asRecord(value: unknown): Record<string, unknown> | null {
+  return value !== null && typeof value === 'object' ? (value as Record<string, unknown>) : null;
+}
+
+function pushConstraintName(names: string[], value: unknown) {
+  if (typeof value === 'string' && value.length > 0) names.push(value);
+}
+
+/**
+ * Structured names Prisma puts on a unique violation: meta.target, a top-level
+ * constraint, or the driver adapter's constraint index / fields. An absent
+ * constraint is not a name — the pg adapter omits it when Postgres sends no DETAIL.
+ */
+function constraintNames(meta: unknown): string[] {
+  const record = asRecord(meta);
+  if (!record) return [];
+  const names: string[] = [];
+  const target = record.target;
+  if (Array.isArray(target)) {
+    for (const field of target) pushConstraintName(names, field);
+  } else {
+    pushConstraintName(names, target);
+  }
+  const constraint = record.constraint;
+  if (constraint && typeof constraint === 'object') {
+    const structured = constraint as Record<string, unknown>;
+    pushConstraintName(names, structured.index);
+    pushConstraintName(names, structured.name);
+    if (Array.isArray(structured.fields)) {
+      for (const field of structured.fields) pushConstraintName(names, field);
+    }
+  } else {
+    pushConstraintName(names, constraint);
+  }
+  const adapter = asRecord(record.driverAdapterError);
+  if (adapter) names.push(...constraintNames(adapter.cause));
+  return names;
+}
+
+/**
+ * pg adapter 7.9 leaves `constraint` undefined when `detail` is empty, so the
+ * only slug signal is cause.originalCode 23505 plus the constraint name in
+ * cause.originalMessage. A structured name for a different constraint still wins:
+ * organizations_pkey and every other index are rethrown.
+ */
+function unspecifiedUniqueViolationNamesSlug(meta: unknown): boolean {
+  const cause = asRecord(asRecord(asRecord(meta)?.driverAdapterError)?.cause);
+  if (!cause || String(cause.originalCode) !== '23505') return false;
+  return (
+    typeof cause.originalMessage === 'string' &&
+    ORGANIZATION_SLUG_CONSTRAINT_IN_MESSAGE.test(cause.originalMessage)
+  );
+}
+
+/** Prisma names the organizations.slug unique index either as the column or the index. */
+function isOrganizationSlugConflict(error: unknown): boolean {
+  if (!(error instanceof Prisma.PrismaClientKnownRequestError) || error.code !== 'P2002') {
+    return false;
+  }
+  const names = constraintNames(error.meta);
+  if (names.some((name) => ORGANIZATION_SLUG_CONSTRAINTS.has(name))) return true;
+  if (names.length > 0) return false;
+  return unspecifiedUniqueViolationNamesSlug(error.meta);
+}
+
+function canonicalOrganizationSlug(slug: string): string {
+  return slug.trim().toLowerCase();
+}
+
+/**
+ * Insert the organization row. A duplicate slug is a client conflict (HTTP 409),
+ * the same status the control route already uses for a taken admin email. The
+ * unique index is the authority: a pre-check would still lose the race, and any
+ * other unique violation must keep failing as an internal error.
+ */
+async function createOrganizationRecord(
+  db: PrismaClient,
+  data: Parameters<PrismaClient['organization']['create']>[0]['data']
+) {
+  const slug = typeof data.slug === 'string' ? canonicalOrganizationSlug(data.slug) : data.slug;
+  try {
+    return await db.organization.create({ data: { ...data, slug } });
+  } catch (error) {
+    if (isOrganizationSlugConflict(error)) {
+      throw new PlatformSecurityError(ORGANIZATION_SLUG_TAKEN, 409);
+    }
+    throw error;
+  }
+}
 
 async function bootstrapOrganization(
   db: PrismaClient,
-  actor: PlatformIdentity,
-  input: z.infer<typeof organizationInput>
+  actor: PlatformIdentity | null,
+  input: z.infer<typeof organizationInput>,
+  demo?: DemoOrganizationBootstrap
 ) {
+  if (input.deploymentMode === 'DEDICATED' && !isDedicatedProvisioningConfigured()) {
+    throw new PlatformSecurityError(
+      'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose Shared platform or ask a platform administrator to configure Vercel.',
+      400
+    );
+  }
   const packageRecord = await db.platformPackage.findUnique({
     where: { id: input.packageId },
     include: { moduleLinks: { where: { enabled: true } } },
@@ -306,37 +858,85 @@ async function bootstrapOrganization(
   if (!packageRecord?.active) {
     throw new PlatformSecurityError('Choose an active commercial package.', 400);
   }
-  const password = await hash(input.adminPassword, 12);
-  const organization = await db.organization.create({
-    data: {
-      slug: input.slug,
-      legalName: input.legalName,
-      displayName: input.displayName,
-      status: 'ONBOARDING',
-      deploymentMode: input.deploymentMode,
-      packageId: input.packageId,
-      timezone: input.timezone,
-      locale: input.locale,
-      currency: input.currency,
-      seatLimit: input.seatLimit,
-      gracePeriodDays: input.gracePeriodDays,
-      dataResidency: input.dataResidency,
-      primaryContactName: input.primaryContactName,
-      primaryContactEmail: input.primaryContactEmail,
-      notes: input.notes,
-    },
+  // §2.3 — the package must belong to the chosen vertical. Onboarding filters the
+  // choices, but the server rejects a mismatch even from a crafted request. The
+  // vertical column is NOT NULL DEFAULT 'AGENCY', so a nullish value is read as
+  // AGENCY (faithful to the schema default).
+  if (!isPackageCompatibleWithVertical(packageRecord.vertical ?? 'AGENCY', input.vertical)) {
+    throw new PlatformSecurityError(
+      `The selected package is not available for the ${input.vertical} vertical.`,
+      400
+    );
+  }
+  const seatLimit =
+    actor?.role === 'SUPER_ADMIN' && input.seatLimit !== undefined
+      ? z.coerce.number().int().min(1).max(packageRecord.defaultSeats).parse(input.seatLimit)
+      : packageRecord.defaultSeats;
+  const password = demo ? null : await hash(input.adminPassword, 12);
+  const organization = await createOrganizationRecord(db, {
+    ...(demo ? { id: demo.identity.organizationId, isDemo: true } : {}),
+    slug: input.slug,
+    legalName: input.legalName,
+    displayName: input.displayName,
+    vertical: input.vertical,
+    status: 'ONBOARDING',
+    deploymentMode: input.deploymentMode,
+    packageId: input.packageId,
+    timezone: input.timezone,
+    locale: input.locale,
+    currency: input.currency,
+    seatLimit,
+    gracePeriodDays: input.gracePeriodDays,
+    dataResidency: input.dataResidency,
+    primaryContactName: input.primaryContactName,
+    primaryContactEmail: input.primaryContactEmail,
+    notes: input.notes,
   });
   const adminRole = await db.organizationRole.create({
     data: {
       organizationId: organization.id,
-      key: 'admin',
-      name: 'Organization administrator',
+      key: demo ? 'owner' : 'admin',
+      name: demo ? 'Owner / Administrator' : 'Organization administrator',
       description: 'Full organization administration',
       isSystem: true,
       permissions: {
-        create: [{ organizationId: organization.id, capability: '*', effect: 'ALLOW' }],
+        create: (demo ? RESTAURANT_CAPABILITIES : ['*']).map((capability) => ({
+          organizationId: organization.id,
+          capability,
+          effect: 'ALLOW' as const,
+        })),
       },
     },
+  });
+  const approverRole = demo
+    ? await db.organizationRole.create({
+        data: {
+          organizationId: organization.id,
+          key: DEMO_APPROVER_ORGANIZATION_ROLE_KEY,
+          name: 'Demo approving manager',
+          description: 'Bounded demo co-authorization authority',
+          isSystem: true,
+          permissions: {
+            create: [
+              {
+                organizationId: organization.id,
+                capability: 'coauth:approve',
+                effect: 'ALLOW',
+              },
+            ],
+          },
+        },
+      })
+    : null;
+  // WHA-278 — seed the tenant's department catalog from the vertical catalog
+  // before any user exists. `User.department` is a composite foreign key onto
+  // `organization_departments`, so the administrator below cannot be created
+  // until its vertical's departments are present.
+  await db.organizationDepartment.createMany({
+    data: defaultDepartmentRowsForVertical(input.vertical).map((department) => ({
+      organizationId: organization.id,
+      ...department,
+    })),
   });
   // D20: the operator onboarding form had no duplicate guard at all — a repeat
   // submission would have surfaced a raw Prisma unique-constraint error in the
@@ -349,59 +949,239 @@ async function bootstrapOrganization(
   if (existingAdmin) {
     throw new PlatformSecurityError('A user with this email already exists.', 409);
   }
-  await db.user.create({
+  const admin = await db.user.create({
     data: {
+      ...(demo ? { id: demo.identity.managerUserId } : {}),
       organizationId: organization.id,
       organizationRoleId: adminRole.id,
       name: input.adminName,
       email: input.adminEmail,
       password,
+      mustChangePassword: !demo,
       role: 'ADMIN',
-      department: 'LEADERSHIP',
+      department: adminDepartmentKeyForVertical(input.vertical),
       title: 'Organization administrator',
       status: 'ACTIVE',
     },
   });
-  if (packageRecord.moduleLinks.length) {
-    await db.organizationModule.createMany({
-      data: packageRecord.moduleLinks.map((link) => ({
+  if (demo) {
+    await db.user.create({
+      data: {
+        id: demoRestaurantApproverUserId(demo.identity.seatNumber),
         organizationId: organization.id,
-        moduleId: link.moduleId,
-        status: 'ENABLED' as const,
-        changedById: actor.id,
-        reason: `Included with ${packageRecord.name}`,
+        organizationRoleId: approverRole!.id,
+        name: 'Demo approving manager',
+        email: demoApproverEmail(demo.identity.seatNumber),
+        password: null,
+        role: 'EMPLOYEE',
+        department: adminDepartmentKeyForVertical(input.vertical),
+        title: 'Demo approving manager',
+        status: 'ACTIVE',
+      },
+    });
+  }
+  // §9 Steps 3/5/6 — restaurant onboarding is branch-first. Create the single
+  // default branch (organization timezone, conservative name) and assign the
+  // bootstrap administrator to it. Guarded so the AGENCY path is byte-identical.
+  if (input.vertical === 'RESTAURANT' && !demo) {
+    const defaultBranch = await db.restaurantBranch.create({
+      data: {
+        organizationId: organization.id,
+        name: input.firstBranchName!,
+        code: 'MAIN',
+        timezone: input.timezone,
+        address: input.firstBranchAddress!,
+        businessDayCutoff: input.businessDayCutoff!,
+        isDefault: true,
+      },
+    });
+    await db.restaurantBranchAssignment.create({
+      data: {
+        organizationId: organization.id,
+        branchId: defaultBranch.id,
+        userId: admin.id,
+      },
+    });
+    // WHA-1181 — the branch assignment alone left the administrator without the
+    // `RestaurantStaffProfile` every restaurant procedure resolves them to, so
+    // the workspace nav rendered while notifications answered 403. Created here,
+    // beside the branch it points at.
+    await provisionRestaurantOrganization(db, {
+      organizationId: organization.id,
+      administrators: [{ id: admin.id, name: admin.name, email: admin.email }],
+    });
+  }
+  // WHA-1206 — a pharmacy is branch-first too, and nothing else creates its
+  // first branch: PLAT-02's regulatory profile hangs off a `PharmacyBranch`, and
+  // PLAT-03's PREMISES_AND_LICENCES gate is answered per branch. Without this a
+  // new pharmacy opens on an empty state that no tenant surface can clear.
+  //
+  // Created without a regulatory profile on purpose. The licences gate stays
+  // outstanding until an operator fills PLAT-02 in the workspace — that is the
+  // gate working, and pre-seeding a profile here would be exactly the "seed data
+  // fakes readiness" move PLAT-03 exists to refuse.
+  if (input.vertical === 'PHARMACY') {
+    await db.pharmacyBranch.create({
+      data: {
+        organizationId: organization.id,
+        // The same stable code the restaurant path uses; the operator-facing
+        // name is the one they supplied.
+        code: 'MAIN',
+        name: input.firstBranchName!,
+        addressLine: input.firstBranchAddress!,
+        city: input.firstBranchCity!,
+        provinceCode: input.firstBranchProvinceCode!,
+      },
+    });
+  }
+  // §9 Step 6 — instantiate the vertical's role templates from the catalog.
+  //
+  // WHA-1206: this ran inside the restaurant block, so a pharmacy was created
+  // holding only the bootstrap `admin` role while its own OWNER_AND_ROLE_TEMPLATES
+  // gate requires every key in `roleTemplatesForVertical('PHARMACY')` — an
+  // organization that could never be activated without a manual database write.
+  //
+  // AGENCY is deliberately still excluded rather than folded in. Its template set
+  // repeats the `admin` role created above (which would collide on the
+  // (organizationId, key) unique index) and adds `member`, which no agency gate
+  // requires. Seeding it would change every agency onboarding to close a gap
+  // agencies do not have; that is a product decision about a shipped vertical,
+  // not part of this fix.
+  const hospitalityRoleIds = new Map<string, string>();
+  if (input.vertical !== 'AGENCY') {
+    for (const template of roleTemplatesForVertical(input.vertical)) {
+      if (demo && template.key === 'owner') continue;
+      const role = await db.organizationRole.create({
+        data: {
+          organizationId: organization.id,
+          key: template.key,
+          name: template.name,
+          isSystem: template.isSystem,
+          permissions: {
+            create: template.capabilities.map((capability) => ({
+              organizationId: organization.id,
+              capability,
+              effect: 'ALLOW',
+            })),
+          },
+        },
+      });
+      if (input.vertical === 'HOSPITALITY') hospitalityRoleIds.set(template.key, role.id);
+    }
+  }
+  // The named administrator gets one explicit assignment to this new property.
+  // Preserve the existing role loop and Restaurant demo owner exclusion above.
+  if (input.vertical === 'HOSPITALITY') {
+    const ownerRoleId = hospitalityRoleIds.get('owner');
+    if (!ownerRoleId) {
+      throw new PlatformSecurityError(
+        'The hospitality Owner role was not provisioned for this organization.',
+        500
+      );
+    }
+    const property = await db.hotelProperty.create({
+      data: {
+        organizationId: organization.id,
+        name: input.firstBranchName!,
+        addressLine: input.firstBranchAddress!,
+        city: input.firstBranchCity!,
+        timezone: input.timezone,
+        bookingEngineSlug: defaultBookingEngineSlug(input.slug, input.firstBranchName!),
+      },
+    });
+    await db.hotelPropertyAssignment.create({
+      data: {
+        organizationId: organization.id,
+        branchId: property.branchId,
+        userId: admin.id,
+        organizationRoleId: ownerRoleId,
+        active: true,
+      },
+    });
+    // H1-07 / MEAL-01 — the property's meal plans (H-D15). Unlike the tax
+    // profile, these are not a readiness claim: EP and CP are the industry's
+    // own meaning of "room only" and "bed & breakfast", and MAP and AP are
+    // created inactive so a property that starts selling half board enables a
+    // plan rather than inventing one. What they cover — outlets, cut-off times —
+    // is left empty for the operator, so nothing here fakes configuration.
+    await db.hotelMealPlan.createMany({
+      data: DEFAULT_HOTEL_MEAL_PLANS.map((plan) => ({
+        organizationId: organization.id,
+        branchId: property.branchId,
+        code: plan.code,
+        name: plan.name,
+        nameUr: plan.nameUr,
+        meals: plan.meals,
+        active: plan.active,
+      })),
+    });
+    // H1-14 / UPS-04 — the English and Urdu guest-message drafts, so a new
+    // property opens on real wording to edit rather than empty boxes. Every
+    // seed is a DRAFT: UPS-04's acceptance is "template approval before use",
+    // so seeding APPROVED copy would hand a guest words nobody at the property
+    // had read — the same "seed data fakes readiness" move the checklist
+    // refuses. Seeded whatever the package: the table is Hotel Core's, and the
+    // page that edits them is gated on the Guest Journey and Upsell module.
+    await db.hotelJourneyTemplate.createMany({
+      data: defaultJourneyTemplateSeeds().map((seed) => ({
+        ...seed,
+        organizationId: organization.id,
+        branchId: property.branchId,
+        createdByUserId: admin.id,
       })),
     });
   }
+  // §2.3: onboarding no longer copies the package's enabled modules into
+  // OrganizationModule. Those rows behave as permanent OVERRIDEs in the resolver
+  // (src/lib/entitlements.ts) and stranded when the package later changed. The
+  // package baseline is inherited live from platform_package_modules instead;
+  // only operator/contract deviations write OrganizationModule rows.
   await db.organizationBrand.create({ data: { organizationId: organization.id } });
   await db.organizationEmailSettings.create({ data: { organizationId: organization.id } });
-  await db.organizationDeployment.create({
-    data: {
-      organizationId: organization.id,
-      environment: 'production',
-      mode: input.deploymentMode,
-      status: 'PENDING',
-    },
-  });
-  await db.platformJob.create({
-    data: {
-      organizationId: organization.id,
-      type: input.deploymentMode === 'DEDICATED' ? 'PROVISION_DEDICATED' : 'PROVISION_SHARED',
-      requestedById: actor.id,
-      payload: { environment: 'production' },
-      idempotencyKey: `provision:${organization.id}:production`,
-    },
-  });
+  if (!demo) {
+    await db.organizationDeployment.create({
+      data: {
+        organizationId: organization.id,
+        environment: 'production',
+        mode: input.deploymentMode,
+        status: 'PENDING',
+      },
+    });
+    await db.platformJob.create({
+      data: {
+        organizationId: organization.id,
+        type: input.deploymentMode === 'DEDICATED' ? 'PROVISION_DEDICATED' : 'PROVISION_SHARED',
+        requestedById: actor!.id,
+        payload: { environment: 'production' },
+        idempotencyKey: `provision:${organization.id}:production`,
+      },
+    });
+  } else {
+    await recordSharedDeploymentReady(
+      db,
+      organization,
+      demo.now,
+      'shared-platform-demo',
+      demoSharedDeploymentOrigin(
+        organization,
+        process.env.AUTH_URL || process.env.NEXTAUTH_URL,
+        process.env.SHARED_APP_HOSTS
+      )
+    );
+  }
   await db.organizationLifecycleEvent.create({
     data: {
       organizationId: organization.id,
       action: 'CREATED',
       toStatus: 'ONBOARDING',
-      reason: 'Organization created by platform operator',
-      actorId: actor.id,
+      reason: demo
+        ? 'Bounded restaurant demo seat created by system bootstrap'
+        : 'Organization created by platform operator',
+      actorId: actor?.id ?? null,
+      ...(demo ? { createdAt: demo.now } : {}),
     },
   });
-  if (input.opportunityId) {
+  if (input.opportunityId && actor) {
     const opportunity = await db.platformOpportunity.findUnique({
       where: { id: input.opportunityId },
       select: { id: true, accountId: true, stage: true },
@@ -433,6 +1213,290 @@ async function bootstrapOrganization(
   return organization;
 }
 
+const DEMO_RESTAURANT_PACKAGE_KEY = 'restaurant-enterprise';
+
+export async function bootstrapDemoRestaurantOrganizationInTransaction(
+  db: ScopedDb,
+  identity: DemoSeatIdentity,
+  now: Date
+): Promise<void> {
+  const packageRecord = await db.platformPackage.findUnique({
+    where: { key: DEMO_RESTAURANT_PACKAGE_KEY },
+    include: {
+      moduleLinks: {
+        where: { enabled: true },
+        include: { module: { select: { key: true, active: true } } },
+      },
+    },
+  });
+  if (
+    !packageRecord?.active ||
+    !isPackageCompatibleWithVertical(packageRecord.vertical ?? 'AGENCY', 'RESTAURANT')
+  ) {
+    throw new PlatformSecurityError('An active Restaurant Enterprise package is required.', 400);
+  }
+  const enabledModuleKeys = new Set(
+    packageRecord.moduleLinks.filter((link) => link.module.active).map((link) => link.module.key)
+  );
+  const missingModule = RESTAURANT_MODULES.find((module) => !enabledModuleKeys.has(module.key));
+  if (missingModule) {
+    throw new PlatformSecurityError(
+      `Restaurant Enterprise is missing the active ${missingModule.key} module.`,
+      400
+    );
+  }
+
+  const approverUserId = demoRestaurantApproverUserId(identity.seatNumber);
+  const approverEmail = demoApproverEmail(identity.seatNumber);
+
+  const [organization, slugOwner, manager, emailOwner, approver, approverEmailOwner] =
+    await Promise.all([
+      db.organization.findUnique({
+        where: { id: identity.organizationId },
+        select: {
+          id: true,
+          slug: true,
+          legalName: true,
+          displayName: true,
+          vertical: true,
+          status: true,
+          deploymentMode: true,
+          packageId: true,
+          isDemo: true,
+        },
+      }),
+      db.organization.findUnique({
+        where: { slug: identity.slug },
+        select: { id: true, isDemo: true },
+      }),
+      db.user.findUnique({
+        where: { id: identity.managerUserId },
+        select: {
+          id: true,
+          organizationId: true,
+          organizationRoleId: true,
+          email: true,
+          password: true,
+          role: true,
+          status: true,
+        },
+      }),
+      db.user.findFirst({
+        where: { email: identity.managerEmail },
+        select: { id: true, organizationId: true },
+      }),
+      db.user.findUnique({
+        where: { id: approverUserId },
+        select: {
+          id: true,
+          organizationId: true,
+          organizationRoleId: true,
+          name: true,
+          email: true,
+          password: true,
+          role: true,
+          status: true,
+        },
+      }),
+      db.user.findFirst({
+        where: { email: approverEmail },
+        select: { id: true, organizationId: true },
+      }),
+    ]);
+
+  if (slugOwner && slugOwner.id !== identity.organizationId) {
+    throw new PlatformSecurityError('The canonical demo seat slug is already in use.', 409);
+  }
+  if (manager && manager.organizationId !== identity.organizationId) {
+    throw new PlatformSecurityError('The canonical demo manager ID belongs to another seat.', 409);
+  }
+  if (emailOwner && emailOwner.id !== identity.managerUserId) {
+    throw new PlatformSecurityError('The canonical demo manager email is already in use.', 409);
+  }
+  if (approver && approver.organizationId !== identity.organizationId) {
+    throw new PlatformSecurityError('The canonical demo approver ID belongs to another seat.', 409);
+  }
+  if (approverEmailOwner && approverEmailOwner.id !== approverUserId) {
+    throw new PlatformSecurityError('The canonical demo approver email is already in use.', 409);
+  }
+
+  if (!organization) {
+    if (manager || emailOwner || approver || approverEmailOwner) {
+      throw new PlatformSecurityError('Demo user identity exists without its demo seat.', 409);
+    }
+    await bootstrapOrganization(
+      db,
+      null,
+      {
+        vertical: 'RESTAURANT',
+        slug: identity.slug,
+        legalName: identity.displayName,
+        displayName: identity.displayName,
+        deploymentMode: 'SHARED',
+        packageId: packageRecord.id,
+        timezone: 'Asia/Karachi',
+        locale: 'en-PK',
+        currency: 'PKR',
+        gracePeriodDays: 0,
+        dataResidency: null,
+        primaryContactName: identity.displayName,
+        primaryContactEmail: identity.managerEmail,
+        notes: 'Bounded restaurant sales demo seat.',
+        adminName: 'Demo Restaurant Manager',
+        adminEmail: identity.managerEmail,
+        adminPassword: 'unused-demo-bootstrap-password',
+        opportunityId: null,
+      },
+      { identity, now }
+    );
+    return;
+  }
+
+  if (
+    !organization.isDemo ||
+    organization.slug !== identity.slug ||
+    organization.legalName !== identity.displayName ||
+    organization.displayName !== identity.displayName ||
+    organization.vertical !== 'RESTAURANT' ||
+    organization.deploymentMode !== 'SHARED' ||
+    organization.packageId !== packageRecord.id ||
+    !['ONBOARDING', 'ACTIVE', 'GRACE'].includes(organization.status)
+  ) {
+    throw new PlatformSecurityError('The canonical demo seat identity is occupied.', 409);
+  }
+  if (
+    !manager ||
+    manager.organizationId !== identity.organizationId ||
+    manager.email !== identity.managerEmail ||
+    manager.password !== null ||
+    manager.role !== 'ADMIN' ||
+    manager.status !== 'ACTIVE'
+  ) {
+    throw new PlatformSecurityError('The canonical demo manager identity is invalid.', 409);
+  }
+  if (
+    !approver ||
+    approver.organizationId !== identity.organizationId ||
+    approver.name !== 'Demo approving manager' ||
+    approver.email !== approverEmail ||
+    approver.password !== null ||
+    approver.role !== 'EMPLOYEE' ||
+    approver.status !== 'ACTIVE'
+  ) {
+    throw new PlatformSecurityError('The canonical demo approver identity is invalid.', 409);
+  }
+
+  const roles = await db.organizationRole.findMany({
+    where: { organizationId: identity.organizationId },
+    select: {
+      id: true,
+      key: true,
+      permissions: { select: { capability: true, effect: true } },
+    },
+  });
+  const requiredRoleKeys = roleTemplatesForVertical('RESTAURANT').map((role) => role.key);
+  if (requiredRoleKeys.some((key) => !roles.some((role) => role.key === key))) {
+    throw new PlatformSecurityError('The demo seat is missing a required restaurant role.', 409);
+  }
+  const ownerRole = roles.find((role) => role.key === 'owner');
+  const approverRole = roles.find((role) => role.key === DEMO_APPROVER_ORGANIZATION_ROLE_KEY);
+  const allowed = new Set(
+    ownerRole?.permissions
+      .filter((permission) => permission.effect === 'ALLOW')
+      .map((permission) => permission.capability)
+  );
+  if (
+    !ownerRole ||
+    manager.organizationRoleId !== ownerRole.id ||
+    allowed.size !== RESTAURANT_CAPABILITIES.length ||
+    RESTAURANT_CAPABILITIES.some((capability) => !allowed.has(capability))
+  ) {
+    throw new PlatformSecurityError('The demo manager restaurant authority is invalid.', 409);
+  }
+  if (
+    !approverRole ||
+    approver.organizationRoleId !== approverRole.id ||
+    approverRole.permissions.length !== 1 ||
+    approverRole.permissions[0]?.capability !== 'coauth:approve' ||
+    approverRole.permissions[0]?.effect !== 'ALLOW'
+  ) {
+    throw new PlatformSecurityError('The demo approver authority is invalid.', 409);
+  }
+}
+
+export async function activateDemoRestaurantOrganizationInTransaction(
+  db: ScopedDb,
+  identity: DemoSeatIdentity,
+  now: Date
+): Promise<void> {
+  if (!(now instanceof Date) || Number.isNaN(now.valueOf())) {
+    throw new PlatformSecurityError('A valid demo activation timestamp is required.', 400);
+  }
+  const organization = await db.organization.findUnique({
+    where: { id: identity.organizationId },
+    select: {
+      id: true,
+      slug: true,
+      displayName: true,
+      legalName: true,
+      vertical: true,
+      status: true,
+      deploymentMode: true,
+      isDemo: true,
+      activatedAt: true,
+    },
+  });
+  if (
+    !organization?.isDemo ||
+    organization.slug !== identity.slug ||
+    organization.displayName !== identity.displayName ||
+    organization.legalName !== identity.displayName ||
+    organization.vertical !== 'RESTAURANT' ||
+    organization.deploymentMode !== 'SHARED'
+  ) {
+    throw new PlatformSecurityError('Canonical demo restaurant organization not found.', 409);
+  }
+
+  await recordSharedDeploymentReady(
+    db,
+    organization,
+    now,
+    'shared-platform-demo',
+    demoSharedDeploymentOrigin(
+      organization,
+      process.env.AUTH_URL || process.env.NEXTAUTH_URL,
+      process.env.SHARED_APP_HOSTS
+    )
+  );
+  await assertActivationReady(db, identity.organizationId);
+  if (organization.status === 'ACTIVE') return;
+  if (!TRANSITIONS[organization.status].includes('ACTIVE')) {
+    throw new PlatformSecurityError(
+      `A ${organization.status} demo organization cannot move directly to ACTIVE.`,
+      400
+    );
+  }
+  await db.organization.update({
+    where: { id: identity.organizationId },
+    data: {
+      status: 'ACTIVE',
+      activatedAt: organization.activatedAt ?? now,
+      suspendedAt: null,
+    },
+  });
+  await db.organizationLifecycleEvent.create({
+    data: {
+      organizationId: identity.organizationId,
+      action: lifecycleAction(organization.status, 'ACTIVE'),
+      fromStatus: organization.status,
+      toStatus: 'ACTIVE',
+      reason: 'Bounded restaurant demo seed completed activation preflight',
+      actorId: null,
+      createdAt: now,
+    },
+  });
+}
+
 async function runCommand(
   db: PrismaClient,
   actor: PlatformIdentity,
@@ -451,15 +1515,111 @@ async function runCommand(
         audit: organization,
       };
     }
+    case 'organization.restaurant.setup': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchName: z.string().trim().min(2).max(120),
+          address: z.string().trim().min(1).max(300),
+          timezone: ianaTimezone,
+          businessDayCutoff,
+          taxAcknowledged: z.literal(true),
+          taxPolicyReference: z.string().trim().min(1).max(300),
+          paymentAcknowledged: z.literal(true),
+          paymentPolicyReference: z.string().trim().min(1).max(300),
+          deviceAcknowledged: z.literal(true),
+          devicePolicyReference: z.string().trim().min(1).max(300),
+          operatorAcknowledged: z.literal(true),
+          operatorPolicyReference: z.string().trim().min(1).max(300),
+        })
+        .parse(payload);
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+        select: { vertical: true, status: true },
+      });
+      if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+      if (organization.vertical !== 'RESTAURANT')
+        throw new PlatformSecurityError(
+          'Restaurant setup is only available to Restaurant organizations.',
+          400
+        );
+      if (['TERMINATED', 'PURGING', 'PURGED'].includes(organization.status))
+        throw new PlatformSecurityError(
+          'Restaurant setup is unavailable for a terminal organization.',
+          400
+        );
+      const branches = await db.restaurantBranch.findMany({
+        where: { organizationId: input.organizationId, isDefault: true, active: true },
+        select: { id: true, name: true, address: true, timezone: true, businessDayCutoff: true },
+      });
+      if (branches.length !== 1)
+        throw new PlatformSecurityError(
+          'Restaurant setup requires exactly one active default branch.',
+          400
+        );
+      const branch = branches[0]!;
+      const beforeAcknowledgements = await db.restaurantActivationAcknowledgement.findMany({
+        where: { organizationId: input.organizationId },
+        select: { kind: true, policyReference: true, acknowledgedById: true, acknowledgedAt: true },
+      });
+      const savedBranch = await db.restaurantBranch.update({
+        where: { id: branch.id },
+        data: {
+          name: input.branchName,
+          address: input.address,
+          timezone: input.timezone,
+          businessDayCutoff: input.businessDayCutoff,
+        },
+      });
+      const references = {
+        TAX: input.taxPolicyReference,
+        PAYMENT: input.paymentPolicyReference,
+        DEVICE: input.devicePolicyReference,
+        OPERATOR: input.operatorPolicyReference,
+      } as const;
+      const savedAcknowledgements = [];
+      for (const [kind, policyReference] of Object.entries(references)) {
+        savedAcknowledgements.push(
+          await db.restaurantActivationAcknowledgement.upsert({
+            where: {
+              organizationId_kind: {
+                organizationId: input.organizationId,
+                kind: kind as keyof typeof references,
+              },
+            },
+            update: { policyReference, acknowledgedById: actor.id, acknowledgedAt: new Date() },
+            create: {
+              organizationId: input.organizationId,
+              kind: kind as keyof typeof references,
+              policyReference,
+              acknowledgedById: actor.id,
+            },
+          })
+        );
+      }
+      const beforeProjection = { branch, acknowledgements: beforeAcknowledgements };
+      const afterProjection = { branch: savedBranch, acknowledgements: savedAcknowledgements };
+      return {
+        targetType: 'RestaurantActivationSetup',
+        targetId: input.organizationId,
+        organizationId: input.organizationId,
+        auditBefore: beforeProjection,
+        data: afterProjection,
+        audit: afterProjection,
+      };
+    }
     case 'organization.update': {
       const input = z
         .object({
           id,
           displayName: requiredText.optional(),
           legalName: requiredText.optional(),
+          vertical: vertical.optional(),
           packageId: optionalId.optional(),
           deploymentMode: z.enum(['SHARED', 'DEDICATED']).optional(),
-          timezone: z.string().min(1).max(100).optional(),
+          // The zone every workspace screen formats in; Intl throws on one it
+          // does not know, so an update is held to the create path's check.
+          timezone: ianaTimezone.optional(),
           locale: z.string().min(2).max(20).optional(),
           currency: currency.optional(),
           seatLimit: z.coerce.number().int().min(1).max(100_000).optional(),
@@ -471,8 +1631,61 @@ async function runCommand(
         })
         .parse(payload);
       const { id: organizationId, ...data } = input;
+      let correctionReason: string | undefined;
       const before = await db.organization.findUnique({ where: { id: organizationId } });
       if (!before) throw new PlatformSecurityError('Organization not found.', 400);
+      const changesVertical = data.vertical !== undefined && data.vertical !== before.vertical;
+      // A vertical correction is deliberately narrower than ordinary onboarding
+      // edits: it is an early correction only, before activation or any
+      // vertical-owned branch/entitlement rows exist. The replacement package is
+      // required in the same command so the organization can never commit a
+      // vertical/package mismatch between requests.
+      if (changesVertical) {
+        assertPlatformCapability(actor, 'organizations:security:write');
+        correctionReason = z.object({ reason: sensitiveReason }).parse(payload).reason;
+        if (before.status !== 'ONBOARDING' || before.activatedAt !== null) {
+          throw new PlatformSecurityError(
+            'The organization vertical can only be corrected during early onboarding.',
+            400
+          );
+        }
+        if (data.packageId === undefined || data.packageId === null) {
+          throw new PlatformSecurityError(
+            'Correct the organization vertical and commercial package together.',
+            400
+          );
+        }
+        const [branchCount, moduleOverrideCount] = await Promise.all([
+          db.restaurantBranch.count({ where: { organizationId } }),
+          db.organizationModule.count({ where: { organizationId } }),
+        ]);
+        if (branchCount > 0 || moduleOverrideCount > 0) {
+          throw new PlatformSecurityError(
+            'The organization vertical cannot be corrected after vertical setup has started.',
+            400
+          );
+        }
+      }
+      // §2.3 — a package (being changed now or already assigned) must match the
+      // organization's resulting vertical. Rejected server-side even when a
+      // crafted request bypasses the operator UI's filtered choices.
+      const nextVertical = data.vertical ?? before.vertical;
+      const nextPackageId = data.packageId !== undefined ? data.packageId : before.packageId;
+      if (nextPackageId && (data.packageId !== undefined || data.vertical !== undefined)) {
+        const nextPackage = await db.platformPackage.findUnique({
+          where: { id: nextPackageId },
+          select: { active: true, vertical: true },
+        });
+        if (!nextPackage?.active) {
+          throw new PlatformSecurityError('Choose an active commercial package.', 400);
+        }
+        if (!isPackageCompatibleWithVertical(nextPackage.vertical ?? 'AGENCY', nextVertical)) {
+          throw new PlatformSecurityError(
+            `The selected package is not available for the ${nextVertical} vertical.`,
+            400
+          );
+        }
+      }
       const organization = await db.organization.update({
         where: { id: organizationId },
         data: {
@@ -512,7 +1725,7 @@ async function runCommand(
         organizationId: organization.id,
         auditBefore: before,
         data: organization,
-        audit: organization,
+        audit: { ...organization, ...(correctionReason ? { reason: correctionReason } : {}) },
       };
     }
     case 'organization.transition': {
@@ -566,6 +1779,29 @@ async function runCommand(
           actorId: actor.id,
         },
       });
+      // WHA-1181 — activation is the moment a RESTAURANT organization's people
+      // start using the workspace, so everything those surfaces read must exist:
+      // every administrator's staff profile (without which the procedures answer
+      // 403), the floor role profiles their capabilities are inherited from, and
+      // each branch's default kitchen station. The path is idempotent, so this
+      // both covers an administrator added after onboarding and repairs an
+      // organization created before the onboarding fix above.
+      let restaurantProvisioning: RestaurantProvisioningResult | null = null;
+      if (input.status === 'ACTIVE' && before.vertical === 'RESTAURANT') {
+        const administrators = await db.user.findMany({
+          where: {
+            organizationId: input.id,
+            role: 'ADMIN',
+            status: { in: ['ACTIVE', 'ON_LEAVE'] },
+          },
+          select: { id: true, name: true, email: true },
+          orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
+        });
+        restaurantProvisioning = await provisionRestaurantOrganization(db, {
+          organizationId: input.id,
+          administrators,
+        });
+      }
       if (
         input.status === 'SUSPENDED' ||
         (before.status === 'SUSPENDED' && input.status === 'ACTIVE')
@@ -598,8 +1834,22 @@ async function runCommand(
         targetId: input.id,
         organizationId: input.id,
         auditBefore: { status: before.status },
+        // Preserve the response and legacy profile projection alongside provisioning audit.
         data: organization,
-        audit: organization,
+        audit: restaurantProvisioning
+          ? {
+              ...organization,
+              restaurantProvisioning,
+              restaurantAdministratorStaffProfiles: restaurantProvisioning.administrators.map(
+                ({ created, staffProfileId, primaryBranchId, userId }) => ({
+                  created,
+                  staffProfileId,
+                  primaryBranchId,
+                  userId,
+                })
+              ),
+            }
+          : organization,
       };
     }
     case 'organization.module': {
@@ -613,6 +1863,45 @@ async function runCommand(
           reason: z.string().trim().min(5).max(500),
         })
         .parse(payload);
+      // §6 — enablement guard: a module may only be attached to an organization
+      // whose vertical owns it. The key → vertical mapping is delegated to the
+      // catalog (verticalForModuleKey), so no vertical is branched on inline.
+      const [targetOrg, targetModule] = await Promise.all([
+        db.organization.findUnique({
+          where: { id: input.organizationId },
+          select: { vertical: true },
+        }),
+        db.platformModule.findUnique({
+          where: { id: input.moduleId },
+          select: { key: true, band: true, vertical: true },
+        }),
+      ]);
+      if (!targetOrg) throw new PlatformSecurityError('Organization not found.', 400);
+      if (!targetModule) throw new PlatformSecurityError('Module not found.', 400);
+      const targetVertical = targetModule.vertical ?? verticalForModuleKey(targetModule.key);
+      if (targetVertical && targetVertical !== targetOrg.vertical) {
+        throw new PlatformSecurityError(
+          `The ${targetModule.key} module does not belong to the ${targetOrg.vertical} vertical.`,
+          400
+        );
+      }
+      const mandatoryKeys = [
+        ...mandatoryModulesForVertical(targetOrg.vertical).map((module) => module.key),
+        ...(targetModule.band === 'BASELINE' ||
+        moduleDefinitionForKey(targetModule.key)?.band === 'BASELINE'
+          ? [targetModule.key]
+          : []),
+      ];
+      if (
+        mandatoryKeys.includes(targetModule.key) &&
+        input.status !== 'ENABLED' &&
+        input.status !== 'TRIAL'
+      ) {
+        throw new PlatformSecurityError(
+          `The mandatory ${targetModule.key} module cannot be disabled.`,
+          400
+        );
+      }
       const saved = await db.organizationModule.upsert({
         where: {
           organizationId_moduleId: {
@@ -1182,14 +2471,25 @@ async function runCommand(
           role: z.enum(['ADMIN', 'EMPLOYEE', 'HR']).optional(),
           status: z.enum(['ACTIVE', 'INACTIVE', 'ON_LEAVE', 'INVITED']).optional(),
           title: requiredText.optional(),
-          department: z
-            .enum(['LEADERSHIP', 'ENGINEERING', 'PRODUCT', 'QUALITY', 'MARKETING', 'DESIGN'])
-            .optional(),
+          department: z.string().trim().min(1).max(100).optional(),
         })
         .parse(payload);
       const { id: userId, ...data } = input;
       const before = await db.user.findUnique({ where: { id: userId } });
       if (!before) throw new PlatformSecurityError('Organization user not found.', 400);
+      if (data.department !== undefined) {
+        const department = await db.organizationDepartment.findFirst({
+          where: {
+            organizationId: before.organizationId,
+            key: data.department,
+            active: true,
+          },
+          select: { id: true },
+        });
+        if (!department) {
+          throw new PlatformSecurityError('Invalid organization department.', 400);
+        }
+      }
       const auditableBefore = omit(before, 'password', 'twoFactorSecret');
       const saved = await db.user.update({
         where: { id: userId },
@@ -1227,6 +2527,105 @@ async function runCommand(
         organizationId: saved.organizationId,
         data: { id: saved.id, passwordReset: true },
         audit: { id: saved.id, passwordReset: true },
+      };
+    }
+    // PROP-04 G2 — break-glass property recovery. The tenant write policy on
+    // `hotel_property_assignments` requires the actor to already hold an
+    // assignment at that branch, which is correct for ordinary delegation and
+    // leaves exactly one hole: when the only assigned manager leaves, nobody
+    // inside the tenant can restore access to the property. This is the native,
+    // audited way out of that hole, and it deliberately does not read an existing
+    // manager — it cannot depend on the thing that is missing.
+    //
+    // It is not impersonation: no tenant session exists here, the work runs in
+    // the platform transaction under `organizations:security:write`, and the ledger
+    // records the operator who did it. It is not a blanket grant: one property,
+    // one named person, one role the organization already has.
+    case 'organization.hotelproperty.recover': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          userId: id,
+          organizationRoleId: id,
+          // Break-glass access is recorded with a reason an auditor can read.
+          // Longer than the ordinary override reason on purpose: this command's
+          // whole justification is the circumstance, so 'fix' is not an answer.
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const { reason, ...tuple } = input;
+      const recovered = await recoverHotelPropertyManager(db, tuple);
+      return {
+        targetType: 'HotelPropertyAssignment',
+        targetId: `${input.branchId}:${input.userId}`,
+        organizationId: input.organizationId,
+        // `reason` rides in the projection because the audit row's own `reason`
+        // column is written only by the failure path; the ledger's `after` is
+        // where a successful command states why it ran.
+        auditBefore: recovered.auditBefore ?? undefined,
+        data: {
+          ...recovered.audit,
+          propertyName: recovered.propertyName,
+          userName: recovered.userName,
+          roleName: recovered.roleName,
+        },
+        audit: { ...recovered.audit, reason, roleName: recovered.roleName },
+      };
+    }
+    // PROP-04 G3 — take one named property out of service. The restrictive policy
+    // denies an inactive property to every tenant connection, so this is a real
+    // access decision and not a display flag, and it is one-way from the tenant's
+    // side: once down, no tenant can see the row to raise it again.
+    case 'organization.hotelproperty.deactivate': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const property = await deactivateHotelProperty(db, input.organizationId, input.branchId);
+      return {
+        targetType: 'HotelProperty',
+        targetId: property.branchId,
+        organizationId: input.organizationId,
+        auditBefore: { branchId: property.branchId, active: true },
+        data: property,
+        audit: {
+          branchId: property.branchId,
+          name: property.name,
+          active: false,
+          reason: input.reason,
+        },
+      };
+    }
+    // PROP-04 G3 — return one named property to service, through the same audited
+    // path. Refused unless the organization may operate, the property's own
+    // onboarding evidence still stands, and an eligible explicit manager holds it;
+    // see `reactivateHotelProperty` for why each condition is checked rather than
+    // assumed.
+    case 'organization.hotelproperty.reactivate': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const property = await reactivateHotelProperty(db, input.organizationId, input.branchId);
+      return {
+        targetType: 'HotelProperty',
+        targetId: property.branchId,
+        organizationId: input.organizationId,
+        auditBefore: { branchId: property.branchId, active: false },
+        data: property,
+        audit: {
+          branchId: property.branchId,
+          name: property.name,
+          active: true,
+          reason: input.reason,
+        },
       };
     }
     case 'organization.usage': {
@@ -1796,10 +3195,22 @@ async function runCommand(
           name: requiredText,
           description: optionalText.optional(),
           category: z.string().trim().min(2).max(80),
+          band: z.enum(['BASELINE', 'PLATFORM', 'VERTICAL_CORE', 'VERTICAL_OPTIONAL']),
+          vertical: vertical.nullish(),
           routePrefix: z.string().trim().max(200).nullish(),
           icon: z.string().trim().max(80).nullish(),
           active: z.boolean().default(true),
           sortOrder: z.coerce.number().int().min(0).max(10_000).default(0),
+        })
+        .superRefine((value, ctx) => {
+          const verticalBand = value.band === 'VERTICAL_CORE' || value.band === 'VERTICAL_OPTIONAL';
+          if (verticalBand !== Boolean(value.vertical)) {
+            ctx.addIssue({
+              code: 'custom',
+              message: 'Vertical bands require a vertical; baseline and platform bands forbid one.',
+              path: ['vertical'],
+            });
+          }
         })
         .parse(payload);
       const { id: moduleId, ...data } = input;
@@ -1807,6 +3218,171 @@ async function runCommand(
         ? await db.platformModule.update({ where: { id: moduleId }, data })
         : await db.platformModule.create({ data });
       return { targetType: 'PlatformModule', targetId: saved.id, data: saved, audit: saved };
+    }
+    // CAM-L1 — one contiguous block. Platform RLS is privileged here, so every
+    // tenant write verifies branch ownership and writes organizationId itself.
+    case 'organization.camera.register': {
+      const input = z
+        .object({
+          organizationId: id,
+          branchId: id,
+          gatewayId: id,
+          name: requiredText,
+          sourceRef: requiredText,
+          credentialCiphertext: z.string().min(16).max(20_000),
+          assembledRtspUrl: z.string().url().max(2_000),
+        })
+        .strict()
+        .parse(payload);
+      const branch = await db.restaurantBranch.findFirst({
+        where: { id: input.branchId, organizationId: input.organizationId },
+        select: { id: true },
+      });
+      if (!branch) throw new PlatformSecurityError('Branch does not belong to organization.', 400);
+      const gateway = await db.restaurantCameraGateway.findFirst({
+        where: {
+          id: input.gatewayId,
+          branchId: input.branchId,
+          organizationId: input.organizationId,
+          status: 'ACTIVE',
+          revokedAt: null,
+        },
+        select: { id: true },
+      });
+      if (!gateway) throw new PlatformSecurityError('Active camera gateway not found.', 400);
+      const credential = await db.restaurantCameraCredential.create({
+        data: { organizationId: input.organizationId, sealedValue: input.credentialCiphertext },
+      });
+      const saved = await db.restaurantCamera.create({
+        data: {
+          organizationId: input.organizationId,
+          branchId: input.branchId,
+          gatewayId: gateway.id,
+          credentialId: credential.id,
+          name: input.name,
+          sourceRef: input.sourceRef,
+        },
+      });
+      return {
+        targetType: 'RestaurantCamera',
+        targetId: saved.id,
+        organizationId: input.organizationId,
+        data: saved,
+        audit: omit(input, 'credentialCiphertext', 'assembledRtspUrl'),
+      };
+    }
+    case 'organization.camera.update': {
+      const input = z
+        .object({
+          id,
+          organizationId: id,
+          branchId: id,
+          name: requiredText.optional(),
+          sourceRef: requiredText.optional(),
+          enabled: z.boolean().optional(),
+          credentialCiphertext: z.string().min(16).max(20_000).optional(),
+          assembledRtspUrl: z.string().url().max(2_000).optional(),
+        })
+        .strict()
+        .parse(payload);
+      const branch = await db.restaurantBranch.findFirst({
+        where: { id: input.branchId, organizationId: input.organizationId },
+        select: { id: true },
+      });
+      if (!branch) throw new PlatformSecurityError('Branch does not belong to organization.', 400);
+      const before = await db.restaurantCamera.findFirst({
+        where: { id: input.id, branchId: input.branchId, organizationId: input.organizationId },
+      });
+      if (!before) throw new PlatformSecurityError('Camera not found.', 400);
+      if (input.credentialCiphertext) {
+        await db.restaurantCameraCredential.update({
+          where: { id: before.credentialId },
+          data: {
+            sealedValue: input.credentialCiphertext,
+            version: { increment: 1 },
+            rotatedAt: new Date(),
+          },
+        });
+      }
+      const saved = await db.restaurantCamera.update({
+        where: { id: before.id },
+        data: { name: input.name, sourceRef: input.sourceRef, enabled: input.enabled },
+      });
+      const safeAudit = omit(input, 'credentialCiphertext', 'assembledRtspUrl');
+      return {
+        targetType: 'RestaurantCamera',
+        targetId: saved.id,
+        organizationId: input.organizationId,
+        auditBefore: before,
+        data: saved,
+        audit: safeAudit,
+      };
+    }
+    case 'organization.camera.remove': {
+      const input = z.object({ id, organizationId: id }).strict().parse(payload);
+      const before = await db.restaurantCamera.findFirst({
+        where: { id: input.id, organizationId: input.organizationId },
+      });
+      if (!before) throw new PlatformSecurityError('Camera not found.', 400);
+      await db.restaurantCamera.delete({ where: { id: before.id } });
+      return {
+        targetType: 'RestaurantCamera',
+        targetId: before.id,
+        organizationId: input.organizationId,
+        auditBefore: before,
+        data: { removed: true },
+        audit: { removed: true },
+      };
+    }
+    case 'catalog.camerapreset': {
+      const input = z
+        .object({
+          id: optionalId.optional(),
+          key: z
+            .string()
+            .trim()
+            .min(2)
+            .max(80)
+            .regex(/^[a-z0-9-]+$/),
+          familyName: requiredText,
+          aliases: z.array(requiredText).max(20),
+          iconKey: requiredText,
+          rtspPort: z.coerce.number().int().min(1).max(65_535),
+          onvifPort: z.coerce.number().int().min(1).max(65_535),
+          mainStreamPathTemplate: requiredText,
+          subStreamPathTemplate: requiredText,
+          authSchemeHint: requiredText,
+          defaultUsernameHint: optionalText.optional(),
+          credentialNote: requiredText,
+          setupNote: requiredText,
+          active: z.boolean(),
+          sortOrder: z.coerce.number().int().min(0).max(10_000),
+        })
+        .strict()
+        .parse(payload);
+      const { id: presetId, ...data } = input;
+      const saved = presetId
+        ? await db.platformCameraBrandPreset.update({ where: { id: presetId }, data })
+        : await db.platformCameraBrandPreset.create({ data });
+      return {
+        targetType: 'PlatformCameraBrandPreset',
+        targetId: saved.id,
+        data: saved,
+        audit: saved,
+      };
+    }
+    case 'catalog.camerapreset.remove': {
+      const input = z.object({ id }).strict().parse(payload);
+      const before = await db.platformCameraBrandPreset.findUnique({ where: { id: input.id } });
+      if (!before) throw new PlatformSecurityError('Camera preset not found.', 400);
+      await db.platformCameraBrandPreset.delete({ where: { id: before.id } });
+      return {
+        targetType: 'PlatformCameraBrandPreset',
+        targetId: before.id,
+        auditBefore: before,
+        data: { removed: true },
+        audit: { removed: true },
+      };
     }
     case 'catalog.package.upsert': {
       const input = z
@@ -1821,6 +3397,10 @@ async function runCommand(
           name: requiredText,
           description: optionalText.optional(),
           active: z.boolean().default(true),
+          // §2.3 — package vertical metadata. Left optional (no default) so an
+          // omitted value keeps the column's existing value on update and falls
+          // back to the schema default (AGENCY) on create.
+          vertical: vertical.optional(),
           defaultSeats: z.coerce.number().int().min(1).max(100_000),
         })
         .parse(payload);
@@ -1842,6 +3422,28 @@ async function runCommand(
           limits: z.record(z.string(), z.number().int().min(0)).nullish(),
         })
         .parse(payload);
+      const [targetPackage, targetModule] = await Promise.all([
+        db.platformPackage.findUnique({
+          where: { id: input.packageId },
+          select: { vertical: true },
+        }),
+        db.platformModule.findUnique({
+          where: { id: input.moduleId },
+          select: { key: true, band: true, vertical: true },
+        }),
+      ]);
+      if (!targetPackage || !targetModule) {
+        throw new PlatformSecurityError('Package or module not found.', 400);
+      }
+      if (targetModule.band === 'BASELINE') {
+        throw new PlatformSecurityError('Baseline modules are not sellable package entries.', 400);
+      }
+      if (targetModule.vertical && targetModule.vertical !== targetPackage.vertical) {
+        throw new PlatformSecurityError(
+          `The ${targetModule.key} module does not belong to the ${targetPackage.vertical} vertical.`,
+          400
+        );
+      }
       const saved = await db.platformPackageModule.upsert({
         where: {
           packageId_moduleId: { packageId: input.packageId, moduleId: input.moduleId },
@@ -1855,6 +3457,38 @@ async function runCommand(
         },
       });
       return { targetType: 'PlatformPackageModule', targetId: saved.id, data: saved, audit: saved };
+    }
+    // WHA-1180 — the one-click activation remedy for an organization the shared
+    // platform hosts already serve. An operator had to hand-register a
+    // deployment record whose every field is derivable from the slug and the
+    // environment's base domain; this writes exactly that record and marks it
+    // READY, which is what the production_deployment gate asks for.
+    case 'organization.deployment.shared': {
+      const input = z
+        .object({
+          organizationId: id,
+          // Same operator-reason contract as organization.transition: the
+          // console reuses the activation reason, and it reaches the ledger
+          // through this command's audit projection.
+          reason: z.string().trim().min(10).max(500),
+        })
+        .parse(payload);
+      const organization = await db.organization.findUnique({
+        where: { id: input.organizationId },
+        select: { id: true, slug: true, deploymentMode: true },
+      });
+      if (!organization) throw new PlatformSecurityError('Organization not found.', 400);
+      // Idempotent on the (organizationId, environment) unique key: a second
+      // click re-asserts the same shared position instead of failing or
+      // creating a duplicate. Mirrors the `sharedProvision` worker upsert.
+      const saved = await recordSharedDeploymentReady(db, organization);
+      return {
+        targetType: 'OrganizationDeployment',
+        targetId: saved.id,
+        organizationId: saved.organizationId,
+        data: saved,
+        audit: { ...saved, reason: input.reason },
+      };
     }
     case 'deployment.create': {
       const input = z
@@ -2064,17 +3698,33 @@ async function runCommand(
       if (!input.id && !input.password) {
         throw new PlatformSecurityError('A password is required for a new operator.', 400);
       }
+      // One transaction-scoped lock serializes count-and-demote across all
+      // operator commands; row locks alone cannot protect the last-admin count.
+      await db.$queryRawUnsafe('SELECT pg_advisory_xact_lock(1597, 1)');
       const existingOperator = input.id
-        ? await db.platformUser.findUnique({
-            where: { id: input.id },
-            select: { mfaEnabledAt: true },
-          })
+        ? await db.platformUser.findUnique({ where: { id: input.id } })
         : null;
-      if (input.mfaRequired && !existingOperator?.mfaEnabledAt) {
+      if (input.id && !existingOperator)
+        throw new PlatformSecurityError('Operator not found.', 400);
+      if (input.id === actor.id && (!input.active || input.role !== actor.role)) {
         throw new PlatformSecurityError(
-          'The operator must enroll an authenticator before MFA can be required.',
-          400
+          'You cannot demote or deactivate your own operator account.',
+          403
         );
+      }
+      if (
+        existingOperator?.active &&
+        existingOperator.role === 'SUPER_ADMIN' &&
+        (!input.active || input.role !== 'SUPER_ADMIN')
+      ) {
+        const remaining = await db.platformUser.count({
+          where: { active: true, role: 'SUPER_ADMIN', id: { not: existingOperator.id } },
+        });
+        if (remaining === 0)
+          throw new PlatformSecurityError(
+            'The last active super administrator cannot be demoted or deactivated.',
+            403
+          );
       }
       const passwordHash = input.password ? await hash(input.password, 12) : undefined;
       const saved = input.id
@@ -2099,7 +3749,10 @@ async function runCommand(
               passwordHash: passwordHash!,
             },
           });
-      if (!input.active) {
+      if (
+        !input.active ||
+        (existingOperator && (input.role !== existingOperator.role || input.password))
+      ) {
         await db.platformSession.updateMany({
           where: { platformUserId: saved.id, revokedAt: null },
           data: { revokedAt: new Date() },
@@ -2110,6 +3763,7 @@ async function runCommand(
     }
     case 'operator.mfa.reset': {
       const input = z.object({ id, reason: z.string().trim().min(10).max(500) }).parse(payload);
+      await db.$queryRawUnsafe('SELECT id FROM platform_users WHERE id = $1 FOR UPDATE', input.id);
       const before = await db.platformUser.findUnique({
         where: { id: input.id },
         select: { id: true, email: true, mfaRequired: true, mfaEnabledAt: true },
@@ -2204,36 +3858,46 @@ export async function executePlatformCommand(
   payload: unknown,
   request: Request
 ) {
-  const action = z
-    .string()
-    .trim()
-    .min(3)
-    .max(100)
-    .regex(/^[a-z]+(?:\.[a-z]+)+$/)
-    .parse(actionInput);
-  assertPlatformCapability(actor, capabilityFor(action));
+  let action = 'platform.command.invalid';
+  try {
+    action = z
+      .string()
+      .trim()
+      .min(3)
+      .max(100)
+      .regex(/^[a-z]+(?:\.[a-z]+)+$/)
+      .parse(actionInput);
+    assertPlatformCapability(actor, capabilityFor(action));
 
-  return withPlatformDb(async (db) => {
-    const result = await runCommand(db, actor, action, payload);
-    // The audit row is built from the command's declared projection only.
-    // `result.data` is the reveal channel and never reaches this table.
-    const { before, after } = auditProjection(result);
-    await db.platformAuditLog.create({
-      data: {
-        organizationId: result.organizationId,
-        actorPlatformUserId: actor.id,
-        action,
-        targetType: result.targetType,
-        targetId: result.targetId,
-        before,
-        after,
-        requestId: request.headers.get('x-devfathom-request-id'),
-        ip:
-          request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
-          request.headers.get('x-real-ip'),
-        userAgent: request.headers.get('user-agent')?.slice(0, 500),
-      },
+    return await withPlatformDb(async (db) => {
+      const reason = sensitiveCommand(action)
+        ? z.object({ reason: sensitiveReason }).parse(payload).reason
+        : undefined;
+      const result = await runCommand(db, actor, action, payload);
+      if (reason) result.audit = { ...(result.audit as Record<string, unknown>), reason };
+      // The audit row is built from the command's declared projection only.
+      // `result.data` is the reveal channel and never reaches this table.
+      const { before, after } = auditProjection(result);
+      await db.platformAuditLog.create({
+        data: {
+          organizationId: result.organizationId,
+          actorPlatformUserId: actor.id,
+          action,
+          targetType: result.targetType,
+          targetId: result.targetId,
+          before,
+          after,
+          requestId: request.headers.get('x-devfathom-request-id'),
+          ip:
+            request.headers.get('x-forwarded-for')?.split(',')[0]?.trim() ??
+            request.headers.get('x-real-ip'),
+          userAgent: request.headers.get('user-agent')?.slice(0, 500),
+        },
+      });
+      return result.data;
     });
-    return result.data;
-  });
+  } catch (error) {
+    await persistCommandFailure(actor, action, payload, request, error);
+    throw error;
+  }
 }

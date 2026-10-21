@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import Link from 'next/link';
 import Image from 'next/image';
 import { usePathname } from 'next/navigation';
@@ -23,6 +23,33 @@ import {
   ScrollText,
   ClipboardList,
   Building2,
+  Monitor,
+  BookOpen,
+  UtensilsCrossed,
+  FileUp,
+  LayoutGrid,
+  ReceiptText,
+  CookingPot,
+  PackageSearch,
+  ShoppingCart,
+  ListChecks,
+  ShieldCheck,
+  Bell,
+  Camera,
+  CalendarClock,
+  Landmark,
+  MapPin,
+  Bike,
+  FileText,
+  ClipboardCheck,
+  ConciergeBell,
+  Replace,
+  BookLock,
+  Pill,
+  Tags,
+  BedDouble,
+  DoorOpen,
+  MessageSquareText,
 } from 'lucide-react';
 import { cn } from '@/lib/utils';
 import { easeOutExpo } from '@/lib/motion';
@@ -31,51 +58,65 @@ import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip
 import { FathomMark } from '@/components/brand/logo';
 import { usePreferences } from '@/components/preferences-provider';
 import { useEntitlements } from '@/components/entitlements-provider';
+import { trpc } from '@/lib/trpc';
+import { evaluateSessionUser } from '@/lib/auth/session-state';
 import type { TenantBrand } from '@/lib/tenant-brand';
+import { isModuleGranted, moduleForPath, verticalForModuleKey } from '@/lib/module-catalog';
+import type { EntitlementView } from '@/lib/module-catalog';
+import type { Action } from '@/lib/abac/policies';
 
-type NavGroup = 'Workspace' | 'Firm';
+type NavGroup = 'Workspace' | 'Restaurant' | 'Pharmacy' | 'Hospitality' | 'Firm';
+
+/** A hospitality property capability, as the property scope check names it. */
+export type HotelCapability = Extract<Action, `hotel:${string}`>;
 
 interface NavItem {
   label: string;
   href: string;
   icon: React.ComponentType<{ className?: string }>;
   group: NavGroup;
-  module?: string;
   adminOnly?: boolean;
   // Visible to ADMIN and HR (people-ops surfaces). Takes precedence over adminOnly.
   hrAccess?: boolean;
+  module?: string;
+  /**
+   * Hospitality entries only: the property capabilities that open this entry's
+   * page, exactly as the page checks them. The entry shows when the signed-in
+   * member holds any of them at some assigned property, so a member whose role
+   * grants rates or marketing alone sees those pages and nothing else. A
+   * Hospitality entry that names none never shows.
+   */
+  hotelCapabilities?: readonly HotelCapability[];
+  /** Shown only when the signed-in user holds one of these capabilities. */
+  pharmacyCapabilities?: readonly string[];
 }
 
-// Grouped to match the prototype's WORKSPACE / FIRM rail. Order defines the
+// Grouped to match the Studio WORKSPACE / RESTAURANT / FIRM rail. Order defines the
 // numbered index (recomputed after RBAC filtering so numbers stay contiguous).
-const navigation: NavItem[] = [
+export const navigation: NavItem[] = [
   {
     label: 'Dashboard',
     href: '/dashboard',
     icon: LayoutDashboard,
     group: 'Workspace',
-    module: 'dashboard',
   },
   {
     label: 'Projects',
     href: '/projects',
     icon: FolderKanban,
     group: 'Workspace',
-    module: 'projects',
   },
   {
     label: 'Clients',
     href: '/clients',
     icon: Briefcase,
     group: 'Workspace',
-    module: 'clients',
   },
   {
     label: 'Notes',
     href: '/notes',
     icon: StickyNote,
     group: 'Workspace',
-    module: 'notes',
   },
   // Email stays disabled until its OAuth credentials and mailbox schema are deployed.
   {
@@ -83,14 +124,12 @@ const navigation: NavItem[] = [
     href: '/meetings',
     icon: Video,
     group: 'Workspace',
-    module: 'meetings',
   },
   {
     label: 'Chat',
     href: '/chat',
     icon: MessageSquare,
     group: 'Workspace',
-    module: 'chat',
   },
   {
     label: 'Finance',
@@ -98,15 +137,356 @@ const navigation: NavItem[] = [
     icon: DollarSign,
     adminOnly: true,
     group: 'Firm',
-    module: 'finance',
   },
-  { label: 'Team', href: '/team', icon: Users, group: 'Firm', module: 'hr' },
+  { label: 'Team', href: '/team', icon: Users, group: 'Firm' },
+  { label: 'Point of sale', href: '/pos', icon: Monitor, group: 'Restaurant' },
+  { label: 'Kitchen display', href: '/kds', icon: CookingPot, group: 'Restaurant' },
+  { label: 'Floor', href: '/restaurant/floor', icon: LayoutGrid, group: 'Restaurant' },
+  { label: 'Orders', href: '/restaurant/orders', icon: ReceiptText, group: 'Restaurant' },
+  {
+    label: 'Catering',
+    href: '/restaurant/catering',
+    icon: ConciergeBell,
+    group: 'Restaurant',
+    module: 'restaurant-core',
+  },
+  {
+    label: 'Finance & reconciliation',
+    href: '/restaurant/money',
+    icon: DollarSign,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Inventory',
+    href: '/restaurant/inventory',
+    icon: PackageSearch,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Purchasing',
+    href: '/restaurant/purchasing',
+    icon: ShoppingCart,
+    group: 'Restaurant',
+  },
+  { label: 'SOP board', href: '/restaurant/sop', icon: ListChecks, group: 'Restaurant' },
+  { label: 'SOP reports', href: '/restaurant/sop/reports', icon: BarChart3, group: 'Restaurant' },
+  {
+    label: 'SOP admin',
+    href: '/restaurant/sop/admin',
+    icon: Settings,
+    group: 'Restaurant',
+    adminOnly: true,
+  },
+  {
+    label: 'SOP oversight',
+    href: '/restaurant/sop/oversight',
+    icon: ShieldCheck,
+    group: 'Restaurant',
+    adminOnly: true,
+  },
+  {
+    label: 'Restaurant staff',
+    href: '/restaurant/staff',
+    icon: Users,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Roster',
+    href: '/restaurant/staff/roster',
+    icon: CalendarClock,
+    group: 'Restaurant',
+    module: 'restaurant-core',
+  },
+  {
+    label: 'Tax',
+    href: '/restaurant/tax',
+    icon: Landmark,
+    adminOnly: true,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Branches',
+    href: '/restaurant/settings/branches',
+    icon: MapPin,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-core',
+  },
+  {
+    label: 'Delivery',
+    href: '/restaurant/delivery',
+    icon: Bike,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-core',
+  },
+  {
+    label: 'Restaurant devices',
+    href: '/restaurant/devices',
+    icon: Monitor,
+    adminOnly: true,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Cameras',
+    href: '/restaurant/integrations/cameras',
+    icon: Camera,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-integrations',
+  },
+  {
+    label: 'Catalog',
+    href: '/restaurant/catalog',
+    icon: BookOpen,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Menus',
+    href: '/restaurant/menus',
+    icon: UtensilsCrossed,
+    group: 'Restaurant',
+  },
+  {
+    // R-lane (WHA-210): the OCR menu-import console. Gated to admins because
+    // `menu:import` is held only by templates carrying `*` (the restaurant
+    // Owner), which is the same set the page itself admits.
+    label: 'Menu import',
+    href: '/restaurant/menu-import',
+    icon: FileUp,
+    adminOnly: true,
+    group: 'Restaurant',
+    module: 'restaurant-menu',
+  },
+  {
+    label: 'Offers',
+    href: '/restaurant/promotions',
+    icon: Tags,
+    group: 'Restaurant',
+    module: 'restaurant-menu',
+  },
+  {
+    label: 'Notifications',
+    href: '/restaurant/notifications',
+    icon: Bell,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Customers & Loyalty',
+    href: '/restaurant/loyalty',
+    icon: Users,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Reports',
+    href: '/restaurant/reports',
+    icon: BarChart3,
+    group: 'Restaurant',
+  },
+  {
+    label: 'Advanced Insights',
+    href: '/restaurant/insights',
+    icon: BarChart3,
+    group: 'Restaurant',
+  },
+  // PLAT-02/03 — the pharmacy workspace's front door. Both gate on mandatory
+  // Pharmacy Core through explicit module ownership, so vertical and entitlement
+  // checks remain fail-closed without a broad `/pharmacy` route mapping.
+  {
+    label: 'Onboarding',
+    href: '/pharmacy',
+    icon: ListChecks,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  {
+    label: 'Medicine catalog',
+    href: '/pharmacy/medicines',
+    icon: Pill,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  // PH-POS / POS-01: the counter is the pharmacy's primary operating surface, so
+  // it is a first-class rail entry gated by its explicit module ownership.
+  {
+    label: 'Day close',
+    href: '/pharmacy/counter/close',
+    icon: Monitor,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
+  },
+  {
+    label: 'Counter',
+    href: '/pharmacy/counter',
+    icon: Monitor,
+    group: 'Pharmacy',
+    module: 'pharmacy-counter',
+  },
+  {
+    label: 'Inventory',
+    href: '/pharmacy/inventory',
+    icon: PackageSearch,
+    group: 'Pharmacy',
+  },
+  {
+    label: 'Purchasing',
+    href: '/pharmacy/purchasing',
+    icon: ShoppingCart,
+    group: 'Pharmacy',
+  },
+  {
+    label: 'Finance',
+    href: '/pharmacy/finance',
+    icon: DollarSign,
+    adminOnly: true,
+    group: 'Pharmacy',
+  },
+  {
+    label: 'Reports & Insights',
+    href: '/pharmacy/reports',
+    icon: BarChart3,
+    group: 'Pharmacy',
+  },
+  {
+    label: 'Cameras',
+    href: '/pharmacy/cameras',
+    icon: Camera,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-core',
+  },
+  {
+    label: 'Loyalty points',
+    href: '/pharmacy/loyalty',
+    icon: Users,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-crm',
+  },
+  {
+    label: 'Marketing & growth',
+    href: '/pharmacy/marketing',
+    icon: BarChart3,
+    group: 'Pharmacy',
+    adminOnly: true,
+    module: 'pharmacy-crm',
+  },
+  {
+    label: 'Prescriptions',
+    href: '/pharmacy/prescriptions',
+    icon: FileText,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Pharmacist queue',
+    href: '/pharmacy/pharmacist-queue',
+    icon: ClipboardCheck,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Substitution',
+    href: '/pharmacy/substitution',
+    icon: Replace,
+    group: 'Pharmacy',
+    module: 'pharmacy-dispensing',
+  },
+  {
+    label: 'Controlled register',
+    href: '/pharmacy/controlled-register',
+    icon: BookLock,
+    group: 'Pharmacy',
+    module: 'pharmacy-safety',
+    pharmacyCapabilities: ['pharmacy:safety'],
+  },
+  {
+    label: 'Regulatory profile',
+    href: '/pharmacy/regulatory',
+    icon: ShieldCheck,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  {
+    label: 'Branch assignments',
+    href: '/pharmacy/settings/branches',
+    icon: MapPin,
+    adminOnly: true,
+    group: 'Pharmacy',
+    module: 'pharmacy-core',
+  },
+  // H1-01 — the hospitality rail. Only configuration surfaces are here so far:
+  // every operating surface arrives with its own lane, and a nav entry pointing
+  // at a route that does not exist is a dead end (UX rule 12). Gated through
+  // explicit module ownership, so the vertical filter hides it from restaurant
+  // and pharmacy workspaces without a `/hotel` catch-all, and per entry on the
+  // capability its page checks (`hotelCapabilities`), so each entry shows to
+  // whoever holds that capability at some property and to no one else.
+  // Labelled by what it configures: the workspace "Settings" entry sits in the
+  // same rail, and two entries reading "Settings" named nothing. In the order a
+  // property is set up: the property, what it sells, then what it adds.
+  {
+    label: 'Property',
+    href: '/hotel/settings/property',
+    icon: BedDouble,
+    group: 'Hospitality',
+    module: 'hotel-core',
+    hotelCapabilities: ['hotel:property-admin'],
+  },
+  // PROP-02 / PROP-03 — room types, rooms, beds and units, their status and blocks.
+  {
+    label: 'Rooms',
+    href: '/hotel/settings/rooms',
+    icon: DoorOpen,
+    group: 'Hospitality',
+    module: 'hotel-core',
+    hotelCapabilities: ['hotel:property-admin'],
+  },
+  // MEAL-01 — the board bases a property sells: rates work, not property administration.
+  {
+    label: 'Meal plans',
+    href: '/hotel/settings/meal-plans',
+    icon: UtensilsCrossed,
+    group: 'Hospitality',
+    module: 'hotel-core',
+    hotelCapabilities: ['hotel:rates'],
+  },
+  // PROP-07 — halls, lawns and boardrooms; licensed by Banquets.
+  {
+    label: 'Function spaces',
+    href: '/hotel/settings/spaces',
+    icon: LayoutGrid,
+    group: 'Hospitality',
+    module: 'hotel-banquets',
+    hotelCapabilities: ['hotel:property-admin'],
+  },
+  // H1-06 (PROP-05) — the extras catalog every folio charge will name.
+  {
+    label: 'Extras',
+    href: '/hotel/settings/extras',
+    icon: Tags,
+    group: 'Hospitality',
+    module: 'hotel-core',
+    hotelCapabilities: ['hotel:property-admin'],
+  },
+  // UPS-04 — what a property sends a guest at each step of a stay; licensed by
+  // Guest Journey and Upsell. Marketing drafts; property administration approves.
+  {
+    label: 'Guest messages',
+    href: '/hotel/settings/journey',
+    icon: MessageSquareText,
+    group: 'Hospitality',
+    module: 'hotel-upsell',
+    hotelCapabilities: ['hotel:property-admin', 'hotel:marketing'],
+  },
   {
     label: 'Reviews',
     href: '/reviews',
     icon: ClipboardList,
     group: 'Firm',
-    module: 'reviews',
   },
   {
     label: 'Insights',
@@ -114,7 +494,6 @@ const navigation: NavItem[] = [
     icon: BarChart3,
     adminOnly: true,
     group: 'Firm',
-    module: 'hr',
   },
   {
     label: 'HR',
@@ -122,7 +501,6 @@ const navigation: NavItem[] = [
     icon: UserCog,
     hrAccess: true,
     group: 'Firm',
-    module: 'hr',
   },
   {
     label: 'Audit Log',
@@ -130,7 +508,6 @@ const navigation: NavItem[] = [
     icon: ScrollText,
     adminOnly: true,
     group: 'Firm',
-    module: 'audit',
   },
   {
     label: 'Organization',
@@ -142,21 +519,108 @@ const navigation: NavItem[] = [
   { label: 'Settings', href: '/settings', icon: Settings, group: 'Firm' },
 ];
 
-const GROUP_ORDER: NavGroup[] = ['Workspace', 'Firm'];
+const GROUP_ORDER: NavGroup[] = ['Workspace', 'Restaurant', 'Pharmacy', 'Hospitality', 'Firm'];
+
+/** Every capability a hospitality entry names, asked about in one rail query. */
+const HOTEL_RAIL_CAPABILITIES: HotelCapability[] = [
+  ...new Set(navigation.flatMap((item) => item.hotelCapabilities ?? [])),
+];
+const NO_HOTEL_CAPABILITIES: readonly HotelCapability[] = [];
+
+/**
+ * `hotelCapabilities` are the property capabilities the member holds at one or
+ * more of their assigned properties (none by default). A Hospitality entry
+ * shows when it names one of them; every other entry ignores them.
+ */
+export function visibleNavigation(
+  entitlements: Pick<EntitlementView, 'enabledModules' | 'vertical'>,
+  role?: string,
+  hotelCapabilities: readonly HotelCapability[] = NO_HOTEL_CAPABILITIES,
+  pharmacyCapabilities: readonly string[] = []
+) {
+  const isAdmin = role === 'ADMIN';
+  const isHr = role === 'HR';
+  return navigation
+    .filter((item) => {
+      const moduleKey = item.module ?? moduleForPath(item.href, entitlements.vertical);
+      // WHA-8: a module belonging to the other vertical never appears, even if a
+      // mis-provisioned organization has it enabled. Items that resolve to no
+      // module at all (the shared Firm entries) are never vertical-gated.
+      const moduleVertical = moduleKey ? verticalForModuleKey(moduleKey) : null;
+      if (moduleVertical && entitlements.vertical && moduleVertical !== entitlements.vertical)
+        return false;
+      if (moduleKey && !isModuleGranted(moduleKey, entitlements.enabledModules)) return false;
+      if (item.group === 'Hospitality')
+        return (item.hotelCapabilities ?? []).some((capability) =>
+          hotelCapabilities.includes(capability)
+        );
+      if (
+        item.pharmacyCapabilities?.length &&
+        !item.pharmacyCapabilities.some((capability) => pharmacyCapabilities.includes(capability))
+      )
+        return false;
+      if (item.hrAccess) return isAdmin || isHr;
+      if (item.adminOnly) return isAdmin;
+      return true;
+    })
+    .sort((left, right) => GROUP_ORDER.indexOf(left.group) - GROUP_ORDER.indexOf(right.group));
+}
 
 function useVisibleNavigation() {
   const pathname = usePathname();
   const { data: session } = useSession();
   const entitlements = useEntitlements();
-  const isAdmin = session?.user?.role === 'ADMIN';
-  const isHr = session?.user?.role === 'HR';
-
-  const filteredNav = navigation.filter((item) => {
-    if (item.module && !entitlements.enabledModules.includes(item.module)) return false;
-    if (item.hrAccess) return isAdmin || isHr;
-    if (item.adminOnly) return isAdmin;
-    return true;
+  const propertiesEnabled = Boolean(
+    session?.user.id &&
+    session.user.organizationId === entitlements.organizationId &&
+    evaluateSessionUser(session.user).ok &&
+    entitlements.vertical === 'HOSPITALITY' &&
+    isModuleGranted('hotel-core', entitlements.enabledModules)
+  );
+  // One read for the whole rail: the member's assigned properties, each with
+  // the capabilities this member holds there, every one resolved through the
+  // same scope check the pages repeat — so the rail never shows an entry its
+  // page would refuse.
+  const properties = trpc.hotelProperty.access.propertiesByCapability.useQuery(
+    { capabilities: HOTEL_RAIL_CAPABILITIES },
+    {
+      enabled: propertiesEnabled,
+      retry: false,
+      staleTime: 0,
+      refetchOnMount: 'always',
+    }
+  );
+  const refetchProperties = properties.refetch;
+  useEffect(() => {
+    if (propertiesEnabled) void refetchProperties();
+  }, [propertiesEnabled, session?.user.id, session?.user.organizationId, refetchProperties]);
+  // A cached response for another signed-in identity cannot expose an entry.
+  const current = Boolean(
+    propertiesEnabled &&
+    !properties.isError &&
+    !properties.isFetching &&
+    properties.data?.userId === session?.user.id &&
+    properties.data?.organizationId === session?.user.organizationId
+  );
+  const hotelCapabilities =
+    current && properties.data
+      ? [...new Set(properties.data.properties.flatMap((property) => property.capabilities))]
+      : NO_HOTEL_CAPABILITIES;
+  const safetyModule =
+    entitlements.vertical === 'PHARMACY' &&
+    isModuleGranted('pharmacy-safety', entitlements.enabledModules);
+  const safetyAccess = trpc.pharmacySafety.access.useQuery(undefined, {
+    enabled: safetyModule,
+    retry: false,
+    staleTime: 30_000,
   });
+  const pharmacyCapabilities = safetyAccess.data?.allowed ? ['pharmacy:safety'] : [];
+  const filteredNav = visibleNavigation(
+    entitlements,
+    session?.user?.role,
+    hotelCapabilities,
+    pharmacyCapabilities
+  );
 
   const indexByHref = new Map(filteredNav.map((item, i) => [item.href, i + 1]));
   const matchingHrefs = filteredNav
@@ -420,7 +884,7 @@ export function TopNavigation() {
               {numbered ? (
                 <span
                   className={cn(
-                    'font-mono text-[10px] tabular-nums text-text-faint',
+                    'font-mono text-[10px] tabular-nums text-text-body',
                     isActive && 'text-accent-brand'
                   )}
                 >
@@ -438,7 +902,7 @@ export function TopNavigation() {
               {isActive && (
                 <m.span
                   layoutId="topnav-active"
-                  className="absolute inset-0 -z-10 rounded-full bg-foreground"
+                  className="absolute inset-0 -z-10 rounded-full bg-primary"
                   transition={{ type: 'spring', stiffness: 420, damping: 34 }}
                 />
               )}

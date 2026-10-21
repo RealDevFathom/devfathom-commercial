@@ -1,0 +1,27 @@
+// Composition fragment only. SQL fragment owns composite FKs, CHECKs and forced RLS.
+// Coordinator adds inverse relation fields when composing into the shared Prisma schema.
+model CateringMoneyEvidence {
+  id                        String   @id @default(uuid())
+  organizationId            String   @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId                  String
+  cateringOrderId           String
+  quoteRevisionId           String
+  kind                      String
+  amount                    Decimal  @db.Decimal(12, 2)
+  currency                  String
+  source                    String
+  originalEvidenceId        String?
+  externalEvidenceSource    String?
+  externalEvidenceReference String?
+  drawerMovementId          String?
+  actorStaffProfileId       String
+  deviceId                  String
+  businessDate              DateTime @db.Date
+  createdAt                 DateTime @default(now()) @db.Timestamptz
+
+  @@unique([organizationId, branchId, cateringOrderId, currency, source, id])
+  @@unique([organizationId, drawerMovementId])
+  @@unique([organizationId, externalEvidenceSource, externalEvidenceReference])
+  @@index([organizationId, cateringOrderId])
+  @@map("restaurant_catering_money_evidence")
+}

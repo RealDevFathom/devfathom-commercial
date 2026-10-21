@@ -18,8 +18,12 @@ import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
  * router has one) — this keeps dehydration consistent with the client's
  * `httpBatchLink({ transformer: superjson })`.
  *
- * `createTRPCContext()` is arg-less and RSC-safe — it resolves the session via
- * `auth()` (which reads cookies, allowed in a Server Component).
+ * Resolve the actor here and pass it in. `createTRPCContext()` is NOT safe to
+ * call arg-less: it forwards `{ request: undefined, session: undefined }` to
+ * `resolveTenantActor`, whose `'session' in options` check reads that
+ * explicitly-undefined key as "the caller already resolved the session", so
+ * `auth()` is never consulted and the factory always throws `Workspace not
+ * found.`
  */
 export async function createSSRHelpers() {
   // App Router can render a child page while its parent layout is resolving the
@@ -35,5 +39,12 @@ export async function createSSRHelpers() {
     support: actor.support,
   });
   const helpers = createServerSideHelpers({ router: appRouter, ctx, transformer: superjson });
-  return { helpers, session: ctx.session };
+  return {
+    helpers,
+    /** The same context, for pages that read through a router caller instead of prefetching. */
+    ctx,
+    session: ctx.session,
+    organization: ctx.organization,
+    entitlements: ctx.entitlements,
+  };
 }

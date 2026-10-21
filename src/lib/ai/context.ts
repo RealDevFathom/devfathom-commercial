@@ -19,6 +19,8 @@
  * omitted optionals and reject a bare `.optional()` schema with a 400.
  */
 import type { Tool } from 'ai';
+import { ALL_VERTICALS, type OrganizationVertical } from '@/lib/vertical-catalog';
+import { isModuleGranted, moduleDefinitionForKey } from '@/lib/module-catalog';
 import { Prisma } from '@/generated/prisma/client';
 import { createTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import * as authz from '@/lib/authz';
@@ -37,11 +39,25 @@ export type AssistantContext = {
   organizationId: string;
   userId: string;
   role: string;
+  /** Server-derived; omitted legacy scope never defaults to Agency. */
+  vertical?: OrganizationVertical | null;
+  enabledModules?: string[];
   name?: string | null;
   email?: string | null;
   department?: string | null;
   status?: string | null;
 };
+
+/** Validate even typed callers: runtime input may not match the TypeScript union. */
+export function assistantVertical(value: unknown): OrganizationVertical | undefined {
+  return ALL_VERTICALS.find((vertical) => vertical === value);
+}
+
+export function assistantModuleGranted(ctx: AssistantContext, key: string): boolean {
+  const definition = moduleDefinitionForKey(key);
+  if (!definition || !isModuleGranted(key, ctx.enabledModules ?? [])) return false;
+  return definition.vertical === null || definition.vertical === assistantVertical(ctx.vertical);
+}
 
 /** A bag of tools, keyed by tool name. */
 export type ToolSet = Record<string, Tool>;

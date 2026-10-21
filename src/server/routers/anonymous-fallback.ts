@@ -1,7 +1,11 @@
 import { initTRPC, TRPCError } from '@trpc/server';
 import superjson from 'superjson';
 
-import { INVITATION_GENERIC_MESSAGE, RESET_GENERIC_MESSAGE } from '@/lib/auth/anonymous-access';
+import {
+  INVITATION_GENERIC_MESSAGE,
+  RESET_GENERIC_MESSAGE,
+  SUPPLIER_LINK_GENERIC_MESSAGE,
+} from '@/lib/auth/anonymous-access';
 import { formatValidationError } from '@/lib/validation-error';
 
 /**
@@ -26,16 +30,18 @@ import { formatValidationError } from '@/lib/validation-error';
  * been established.
  */
 /**
- * The same `errorFormatter` `@/server/trpc` installs, repeated rather than
- * imported: this router is deliberately standalone — no context, no database
- * handle — and importing the tenant-bound instance would give it both. It is
- * repeated because the error SHAPE is part of "indistinguishable"; a response
- * carrying `data.validation` and one omitting it tell an anonymous caller which
- * of the two paths served them. `anonymous-fallback.test.ts` pins exactly that
- * much and no more: it raises the same refusal through each tRPC INSTANCE — the
- * real one against a stand-in router that, like this one, declares no `.input()`
- * schemas — and compares the served bodies, so a formatter that stopped matching
- * is caught here. It proves nothing about the production `invitations` and
+ * The same `errorFormatter` `@/server/trpc` installs, less its production
+ * withholding of an unexpected failure's message (this router throws only
+ * deliberate refusals), repeated rather than imported: this router is
+ * deliberately standalone — no context, no database handle — and importing the
+ * tenant-bound instance would give it both. It is repeated because the error
+ * SHAPE is part of "indistinguishable"; a response carrying `data.validation`
+ * and one omitting it tell an anonymous caller which of the two paths served
+ * them. `anonymous-fallback.test.ts` pins exactly that much and no more: it
+ * raises the same refusal through each tRPC INSTANCE — the real one against a
+ * stand-in router that, like this one, declares no `.input()` schemas — and
+ * compares the served bodies, so a formatter that stopped matching is caught
+ * here. It proves nothing about the production `invitations` and
  * `passwordReset` routers, which do declare `.input()` schemas this router omits;
  * those router-level differences are not covered by that test.
  */
@@ -43,13 +49,14 @@ const t = initTRPC.create({
   transformer: superjson,
   errorFormatter({ shape, error }) {
     const validation = error.code === 'BAD_REQUEST' ? formatValidationError(error.cause) : null;
+    // As in `@/server/trpc`: never publish the server stack, which tRPC attaches
+    // outside production, so both instances serve the same shape.
+    const data = { ...shape.data, validation: validation?.fields ?? null };
+    delete data.stack;
     return {
       ...shape,
       message: validation?.message ?? shape.message,
-      data: {
-        ...shape.data,
-        validation: validation?.fields ?? null,
-      },
+      data,
     };
   },
 });
@@ -60,6 +67,9 @@ const unroutableInvitation = () => {
 
 const unroutableReset = () => {
   throw new TRPCError({ code: 'BAD_REQUEST', message: RESET_GENERIC_MESSAGE });
+};
+const unroutableSupplierLink = () => {
+  throw new TRPCError({ code: 'NOT_FOUND', message: SUPPLIER_LINK_GENERIC_MESSAGE });
 };
 
 export const anonymousFallbackRouter = t.router({
@@ -73,5 +83,10 @@ export const anonymousFallbackRouter = t.router({
     request: t.procedure.mutation(() => ({ success: true as const })),
     validate: t.procedure.query(() => ({ valid: false as const })),
     reset: t.procedure.mutation(unroutableReset),
+  }),
+  pharmacySupplierLinks: t.router({
+    get: t.procedure.query(unroutableSupplierLink),
+    submit: t.procedure.mutation(unroutableSupplierLink),
+    uploadDocument: t.procedure.mutation(unroutableSupplierLink),
   }),
 });

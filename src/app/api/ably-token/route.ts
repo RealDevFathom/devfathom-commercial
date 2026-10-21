@@ -1,6 +1,7 @@
 import * as Ably from 'ably';
 import { channelRoom, userRoom, typingRoom, PRESENCE_CHANNEL } from '@/lib/chat/contract';
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
 
 /**
@@ -29,7 +30,14 @@ const ABLY_API_KEY = process.env.ABLY_API_KEY;
 export const dynamic = 'force-dynamic';
 
 export const GET = async (request: Request) => {
-  const actor = await resolveTenantActor({ request });
+  let actor;
+  try {
+    actor = await resolveTenantActor({ request });
+  } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
+    throw error;
+  }
   if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }

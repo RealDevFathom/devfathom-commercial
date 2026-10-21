@@ -1,0 +1,31 @@
+[
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/orders/page.tsx",
+    "unchangedServerActions": [
+      "createRequisition",
+      "submitRequisition",
+      "recordQuote",
+      "orderFromQuote",
+      "createDirectOrder",
+      "advanceOrder"
+    ]
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/receiving/page.tsx",
+    "unchangedServerActions": [
+      "receiveAgainstOrder",
+      "receiveDirect",
+      "postReceipt",
+      "reverseReceipt",
+      "resolveException"
+    ]
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/returns/page.tsx",
+    "unchangedServerActions": ["createReturn", "advanceReturn", "recordCredit", "allocateCredit"]
+  },
+  {
+    "file": "src/app/(app)/pharmacy/purchasing/suppliers/page.tsx",
+    "unchangedServerActions": ["createSupplier", "recordLicence", "setAuthorization"]
+  }
+]

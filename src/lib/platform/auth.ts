@@ -4,54 +4,24 @@ import { createHash, randomBytes } from 'node:crypto';
 import { compare } from 'bcryptjs';
 import { cookies } from 'next/headers';
 import type { PlatformRole } from '@/generated/prisma/client';
-import { clientIp, rateLimit } from '@/lib/rate-limit';
+import { clearRateLimit, clientIp, rateLimit } from '@/lib/rate-limit';
 import { parseCookie, PlatformSecurityError } from '@/lib/platform/security';
-import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { type ScopedDb, withPlatformDb } from '@/lib/tenancy/scoped-db';
 import { decryptSecret } from '@/lib/secret-crypto';
 import { hashRecoveryCode, verifyTotp } from '@/lib/totp';
+import { canPlatformRole } from '@/lib/platform/capabilities';
 
 export const PLATFORM_SESSION_COOKIE = 'df_platform_session';
 const PLATFORM_SESSION_HOURS = 8;
-const DUMMY_PASSWORD_HASH = '$2b$10$7QJYoH3B/paYYQ5XzE5H0.u6cN6S6dJ0o.W3Xf/ObKZxrZTpTI46S';
+const ENROLLMENT_PREFIX = 'enroll_';
 
-const ROLE_CAPABILITIES: Record<PlatformRole, readonly string[]> = {
-  SUPER_ADMIN: ['*'],
-  OPERATIONS: [
-    'organizations:read',
-    'organizations:write',
-    'deployments:read',
-    'deployments:write',
-    'jobs:read',
-    'jobs:write',
-    'support:write',
-    'catalog:read',
-  ],
-  SALES: [
-    'organizations:read',
-    'crm:read',
-    'crm:write',
-    'commercial:read',
-    'commercial:write',
-    'catalog:read',
-  ],
-  FINANCE: [
-    'organizations:read',
-    'commercial:read',
-    'commercial:write',
-    'crm:read',
-    'catalog:read',
-  ],
-  SUPPORT: ['organizations:read', 'deployments:read', 'jobs:read', 'support:write', 'catalog:read'],
-  AUDITOR: [
-    'organizations:read',
-    'crm:read',
-    'commercial:read',
-    'deployments:read',
-    'jobs:read',
-    'catalog:read',
-    'audit:read',
-  ],
-};
+export function platformRoleRequiresMfa(role: PlatformRole): boolean {
+  return (
+    process.env.PLATFORM_MFA_ENFORCE !== 'false' &&
+    ['SUPER_ADMIN', 'OPERATIONS', 'SUPPORT'].includes(role)
+  );
+}
+const DUMMY_PASSWORD_HASH = '$2b$10$7QJYoH3B/paYYQ5XzE5H0.u6cN6S6dJ0o.W3Xf/ObKZxrZTpTI46S';
 
 export type PlatformIdentity = {
   sessionId: string;
@@ -61,6 +31,7 @@ export type PlatformIdentity = {
   role: PlatformRole;
   expiresAt: Date;
   mfaEnabled: boolean;
+  enrollmentOnly?: boolean;
 };
 
 export type PlatformSessionToken = {
@@ -88,13 +59,15 @@ export function platformCookieOptions(expiresAt: Date) {
   };
 }
 
-export function canPlatform(identity: Pick<PlatformIdentity, 'role'>, capability: string): boolean {
-  const capabilities = ROLE_CAPABILITIES[identity.role];
-  return capabilities.includes('*') || capabilities.includes(capability);
+export function canPlatform(
+  identity: Pick<PlatformIdentity, 'role' | 'enrollmentOnly'>,
+  capability: string
+): boolean {
+  return !identity.enrollmentOnly && canPlatformRole(identity.role, capability);
 }
 
 export function assertPlatformCapability(
-  identity: Pick<PlatformIdentity, 'role'>,
+  identity: Pick<PlatformIdentity, 'role' | 'enrollmentOnly'>,
   capability: string
 ) {
   if (!canPlatform(identity, capability)) {
@@ -110,7 +83,8 @@ export async function createPlatformSession(
 ): Promise<PlatformSessionToken> {
   const email = emailInput.trim().toLowerCase();
   const ip = clientIp(request);
-  const gate = rateLimit(`platform-login:${ip}:${email}`, 8, 15 * 60_000);
+  const rateLimitKey = `platform-login:${ip}:${email}`;
+  const gate = await rateLimit(rateLimitKey, 8, 15 * 60_000);
   if (!gate.ok) {
     throw new PlatformSecurityError('Too many sign-in attempts. Try again later.', 429);
   }
@@ -137,7 +111,8 @@ export async function createPlatformSession(
   }
 
   const mfaEnabled = Boolean(user.mfaEnabledAt && user.encryptedTotpSecret);
-  if (user.mfaRequired || mfaEnabled) {
+  const enrollmentOnly = !mfaEnabled && (user.mfaRequired || platformRoleRequiresMfa(user.role));
+  if (mfaEnabled) {
     const code = authenticationCode?.trim() ?? '';
     let valid = false;
     if (mfaEnabled && /^\d{6}$/.test(code)) {
@@ -172,9 +147,32 @@ export async function createPlatformSession(
     }
   }
 
-  const token = randomBytes(32).toString('base64url');
-  const expiresAt = new Date(Date.now() + PLATFORM_SESSION_HOURS * 60 * 60 * 1000);
+  // Successful authentication must not consume the failure budget. Otherwise
+  // normal serial control-plane workflows lock out the same authorized user.
+  await clearRateLimit(rateLimitKey);
+
+  const token = (enrollmentOnly ? ENROLLMENT_PREFIX : '') + randomBytes(32).toString('base64url');
+  const expiresAt = new Date(
+    Date.now() + (enrollmentOnly ? 10 * 60_000 : PLATFORM_SESSION_HOURS * 60 * 60 * 1000)
+  );
   const session = await withPlatformDb(async (platformDb) => {
+    // Serialize session issuance with enrollment/reset and recheck the snapshot
+    // whose password and second factor were verified above.
+    await platformDb.$queryRawUnsafe(
+      'SELECT id FROM platform_users WHERE id = $1 FOR UPDATE',
+      user.id
+    );
+    const current = await platformDb.platformUser.findUnique({ where: { id: user.id } });
+    if (
+      !current?.active ||
+      current.passwordHash !== user.passwordHash ||
+      current.role !== user.role ||
+      current.mfaRequired !== user.mfaRequired ||
+      current.encryptedTotpSecret !== user.encryptedTotpSecret ||
+      Boolean(current.mfaEnabledAt) !== Boolean(user.mfaEnabledAt)
+    ) {
+      throw new PlatformSecurityError('Your account changed. Sign in again.', 401);
+    }
     const created = await platformDb.platformSession.create({
       data: {
         platformUserId: user.id,
@@ -191,7 +189,7 @@ export async function createPlatformSession(
     await platformDb.platformAuditLog.create({
       data: {
         actorPlatformUserId: user.id,
-        action: 'platform.session.created',
+        action: enrollmentOnly ? 'platform.session.enrollment.created' : 'platform.session.created',
         targetType: 'PlatformSession',
         targetId: created.id,
         ip,
@@ -212,11 +210,15 @@ export async function createPlatformSession(
       role: user.role,
       expiresAt,
       mfaEnabled,
+      enrollmentOnly,
     },
   };
 }
 
-export async function getPlatformSession(request?: Request): Promise<PlatformIdentity | null> {
+async function readPlatformSession(
+  request?: Request,
+  allowEnrollment = false
+): Promise<PlatformIdentity | null> {
   const token = await tokenFromRequest(request);
   if (!token || token.length < 32 || token.length > 128) return null;
 
@@ -232,6 +234,8 @@ export async function getPlatformSession(request?: Request): Promise<PlatformIde
             role: true,
             active: true,
             mfaEnabledAt: true,
+            encryptedTotpSecret: true,
+            mfaRequired: true,
           },
         },
       },
@@ -246,6 +250,17 @@ export async function getPlatformSession(request?: Request): Promise<PlatformIde
     return null;
   }
 
+  const enrollmentOnly = token.startsWith(ENROLLMENT_PREFIX);
+  const mfaEnabled = Boolean(
+    session.platformUser.mfaEnabledAt && session.platformUser.encryptedTotpSecret
+  );
+  if (enrollmentOnly && !allowEnrollment) return null;
+  if (
+    !enrollmentOnly &&
+    !mfaEnabled &&
+    (session.platformUser.mfaRequired || platformRoleRequiresMfa(session.platformUser.role))
+  )
+    return null;
   return {
     sessionId: session.id,
     id: session.platformUser.id,
@@ -253,8 +268,52 @@ export async function getPlatformSession(request?: Request): Promise<PlatformIde
     email: session.platformUser.email,
     role: session.platformUser.role,
     expiresAt: session.expiresAt,
-    mfaEnabled: Boolean(session.platformUser.mfaEnabledAt),
+    mfaEnabled,
+    enrollmentOnly,
   };
+}
+
+export async function getPlatformSession(request?: Request): Promise<PlatformIdentity | null> {
+  return readPlatformSession(request);
+}
+
+// Only the MFA endpoint may use this accessor. Enrollment tokens never pass
+// getPlatformSession/requirePlatformSession, including after another enrollment.
+export async function requirePlatformMfaSession(request: Request): Promise<PlatformIdentity> {
+  const identity = await readPlatformSession(request, true);
+  if (!identity) throw new PlatformSecurityError('Platform authentication is required.', 401);
+  return identity;
+}
+
+export async function promotePlatformEnrollment(
+  db: ScopedDb,
+  actor: PlatformIdentity,
+  request: Request
+) {
+  const token = randomBytes(32).toString('base64url');
+  const expiresAt = new Date(Date.now() + PLATFORM_SESSION_HOURS * 60 * 60 * 1000);
+  await db.platformSession.updateMany({
+    where: { platformUserId: actor.id, revokedAt: null },
+    data: { revokedAt: new Date() },
+  });
+  const session = await db.platformSession.create({
+    data: {
+      platformUserId: actor.id,
+      tokenHash: hashToken(token),
+      expiresAt,
+      ip: clientIp(request),
+      userAgent: request.headers.get('user-agent')?.slice(0, 500) ?? null,
+    },
+  });
+  await db.platformAuditLog.create({
+    data: {
+      actorPlatformUserId: actor.id,
+      action: 'platform.session.created',
+      targetType: 'PlatformSession',
+      targetId: session.id,
+    },
+  });
+  return { token, expiresAt };
 }
 
 export async function requirePlatformSession(

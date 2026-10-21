@@ -1,0 +1,8 @@
+// Insert inside RestaurantCateringOrder during central composition.
+bookingStartsAt DateTime? @db.Timestamptz(6)
+bookingEndsAt DateTime? @db.Timestamptz(6)
+fulfillmentMode String?
+stockLocationId String?
+revision Int @default(0)
+approvedQuoteRevisionId String?
+confirmedQuoteRevisionId String?

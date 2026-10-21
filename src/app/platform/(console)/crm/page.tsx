@@ -6,6 +6,7 @@ import {
 } from '@/components/platform/platform-command-form';
 import { PlatformPageHeading, PlatformStatus } from '@/components/platform/platform-ui';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { requirePlatformRead } from '@/lib/platform/page-access';
 
 const stages = ['DISCOVERY', 'QUALIFIED', 'PROPOSAL', 'NEGOTIATION', 'WON', 'LOST'] as const;
 
@@ -19,6 +20,7 @@ function money(value: number | null, currency: string) {
 }
 
 export default async function CrmPage() {
+  await requirePlatformRead('/platform/crm');
   const data = await withPlatformDb(async (db) => {
     const [accounts, leads, opportunities, proposals, followUps] = await Promise.all([
       db.platformAccount.findMany({
@@ -87,13 +89,20 @@ export default async function CrmPage() {
             <p className="font-mono text-[9px] uppercase tracking-[0.16em] text-accent-brand">
               Pipeline
             </p>
-            <h2 className="mt-1 font-display text-xl font-semibold">Opportunity board</h2>
+            <h2 id="opportunity-board-title" className="mt-1 font-display text-xl font-semibold">
+              Opportunity board
+            </h2>
           </div>
           <span className="font-mono text-[9px] text-text-muted">
             {data.opportunities.length} records
           </span>
         </div>
-        <div className="grid auto-cols-[260px] grid-flow-col gap-3 overflow-x-auto pb-3">
+        <div
+          role="region"
+          aria-labelledby="opportunity-board-title"
+          tabIndex={0}
+          className="grid auto-cols-[260px] grid-flow-col gap-3 overflow-x-auto pb-3 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        >
           {stages.map((stage, stageIndex) => {
             const items = data.opportunities.filter((item) => item.stage === stage);
             return (
@@ -168,9 +177,16 @@ export default async function CrmPage() {
               <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-accent-brand">
                 Prospect intake
               </p>
-              <h2 className="mt-1 font-display text-xl font-semibold">Leads</h2>
+              <h2 id="leads-title" className="mt-1 font-display text-xl font-semibold">
+                Leads
+              </h2>
             </div>
-            <div className="overflow-x-auto">
+            <div
+              role="region"
+              aria-labelledby="leads-title"
+              tabIndex={0}
+              className="overflow-x-auto focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            >
               <table className="w-full min-w-[700px] text-left">
                 <thead className="bg-surface-sunken/60 font-mono text-[9px] uppercase tracking-[0.12em] text-text-muted">
                   <tr>
@@ -317,7 +333,7 @@ export default async function CrmPage() {
 
         <aside className="space-y-7">
           <section className="border border-border-default bg-abyss-900 p-5 text-paper-50">
-            <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-brass-300">
+            <p className="font-mono text-[9px] uppercase tracking-[0.14em] text-primary-foreground">
               Follow-up queue
             </p>
             <h2 className="mt-1 font-display text-xl font-semibold">Next touches</h2>
@@ -325,8 +341,10 @@ export default async function CrmPage() {
               {data.followUps.map((followUp) => (
                 <div key={followUp.id} className="py-3">
                   <div className="flex justify-between gap-3">
-                    <p className="text-xs font-semibold">{followUp.title}</p>
-                    <span className="font-mono text-[9px] text-brass-300">
+                    <p className="text-xs font-semibold text-primary-foreground">
+                      {followUp.title}
+                    </p>
+                    <span className="font-mono text-[9px] text-primary-foreground">
                       {followUp.dueAt.toLocaleDateString()}
                     </span>
                   </div>

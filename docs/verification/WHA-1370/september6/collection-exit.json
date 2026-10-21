@@ -1,0 +1,12 @@
+{
+  "command": [
+    "bun",
+    "run",
+    "test:e2e",
+    "--config",
+    "tests/e2e/time-to-first-sale.config.ts",
+    "--list"
+  ],
+  "returncode": 0,
+  "executed": 0
+}

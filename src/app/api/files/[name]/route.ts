@@ -9,8 +9,9 @@
 // delivery against object storage remains the linked production enhancement.
 
 import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
-import { getUpload } from '@/lib/storage';
+import { getUpload, StorageUnavailableError } from '@/lib/storage';
 
 // Mirrors the upload allowlist — non-executable types served inline same-origin.
 const MIME: Record<string, string> = {
@@ -30,7 +31,14 @@ const MIME: Record<string, string> = {
 };
 
 export async function GET(request: Request, ctx: { params: Promise<{ name: string }> }) {
-  const actor = await resolveTenantActor({ request });
+  let actor;
+  try {
+    actor = await resolveTenantActor({ request });
+  } catch (error) {
+    const passwordChange = responseForPasswordChange(error);
+    if (passwordChange) return passwordChange;
+    throw error;
+  }
   if (!actor?.session.user?.id) {
     return new Response('Unauthorized', { status: 401 });
   }
@@ -41,7 +49,32 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
   if (!name || name.includes('/') || name.includes('\\') || name.includes('..')) {
     return new Response('Bad request', { status: 400 });
   }
+  // Camera stills require their evidence reader's grant and retention checks.
+  if (/^camera-snapshot-/iu.test(name)) {
+    return new Response('Not found', { status: 404 });
+  }
   const organization = actor.organization;
+
+  const sopEvidence = await withTenantDb(organization.id, (db) =>
+    db.restaurantSopEvidence.findFirst({
+      where: { storageRef: '/api/files/' + name },
+      select: { occurrence: { select: { branchId: true } } },
+    })
+  );
+  if (sopEvidence && session.user.role !== 'ADMIN') {
+    const branchAccess = await withTenantDb(organization.id, (db) =>
+      db.restaurantBranchAssignment.findUnique({
+        where: {
+          branchId_userId: {
+            branchId: sopEvidence.occurrence.branchId,
+            userId: session.user.id,
+          },
+        },
+        select: { id: true },
+      })
+    );
+    if (!branchAccess) return new Response('Not found', { status: 404 });
+  }
 
   // IMP-RT-05: per-channel membership enforcement. If this file is a chat
   // attachment, only members of its channel may fetch it — a stale URL no longer
@@ -85,7 +118,10 @@ export async function GET(request: Request, ctx: { params: Promise<{ name: strin
         'Cache-Control': 'private, max-age=3600',
       },
     });
-  } catch {
+  } catch (error) {
+    if (error instanceof StorageUnavailableError) {
+      return new Response('Files are unavailable.', { status: 503 });
+    }
     return new Response('Not found', { status: 404 });
   }
 }

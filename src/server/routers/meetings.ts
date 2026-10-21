@@ -1,12 +1,24 @@
 import { z } from 'zod';
 import { TRPCError } from '@trpc/server';
-import jwt from 'jsonwebtoken';
 import type { Prisma, PrismaClient } from '@/generated/prisma/client';
-import { router, protectedProcedure } from '../trpc';
+import { entitlementIndependentHistoryProcedure, protectedProcedure, router } from '../trpc';
 import { assertMeetingManage, assertMeetingAccess } from '../authz';
 import { isAdmin } from '@/lib/authz';
 import { logActivity } from '../activity';
-import { computePunctuality, findRelevantOccurrence } from '@/lib/meeting-occurrence';
+import { computePunctuality } from '@/lib/meeting-occurrence';
+import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { materializeMeetingOccurrences } from '@/lib/meetings/materialize';
+import {
+  cancelOccurrence,
+  occurrenceJoinPath,
+  rescheduleOccurrence,
+  resolveDisplayTimes,
+  resolveNextTimes,
+  resolveRelevantOccurrence,
+  type SeriesRow,
+} from '@/lib/meetings/occurrences';
+import { guestSecretExpiryFor, mintGuestSecret } from '@/lib/meetings/guest-access';
+import { assertInOrganization, workspaceId } from '../org-refs';
 
 /** Page size `getAll` falls back to when the caller sends no `limit` (#38). */
 const MEETINGS_PAGE_SIZE = 50;
@@ -16,6 +28,39 @@ const MEETINGS_PAGE_SIZE_MAX = 200;
 const UPCOMING_LIMIT = 50;
 /** Recurring series `getUpcoming` evaluates per call — see the query below. */
 const UPCOMING_SERIES_LIMIT = 200;
+/** Occurrences one `getOccurrences` page may return. */
+const OCCURRENCE_PAGE_SIZE_MAX = 200;
+
+/**
+ * The `Meeting` columns the occurrence resolvers need. Selected explicitly so
+ * that adding a column to the model does not silently widen these payloads.
+ */
+const SERIES_FIELDS = {
+  id: true,
+  startTime: true,
+  endTime: true,
+  timezone: true,
+  recurrenceRule: true,
+} as const;
+
+/**
+ * The attendee columns the list surfaces return.
+ *
+ * A `select`, not an `include`, for one reason: an `include` returns EVERY
+ * scalar on `MeetingAttendee`, and that set contains `joinedAt`, which the
+ * schema marks DEPRECATED in favour of the per-occurrence
+ * `MeetingAttendanceLog`. Reading it was always pointless here —
+ * `attachPerOccurrenceJoinedAt` overwrites it on the way out — but "pointless"
+ * is how a deprecated column keeps a live reader and never gets dropped. The
+ * `joinedAt` on the returned payload is now sourced ONLY from the attendance
+ * log, and this select is what proves it.
+ */
+const ATTENDEE_SELECT = {
+  id: true,
+  meetingId: true,
+  userId: true,
+  user: { select: { id: true, name: true, avatar: true } },
+} satisfies Prisma.MeetingAttendeeSelect;
 
 export const meetingsRouter = router({
   getUpcoming: protectedProcedure.query(async ({ ctx }) => {
@@ -32,7 +77,7 @@ export const meetingsRouter = router({
           endTime: { gte: now },
         },
         include: {
-          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          attendees: { select: ATTENDEE_SELECT },
         },
         // `startTime` alone leaves ties in an arbitrary order, so which rows
         // survive `take` is arbitrary too. `id` is unique — (startTime, id) is
@@ -65,42 +110,40 @@ export const meetingsRouter = router({
       // the unbounded tenant-wide query fixed by issue #38.
       //
       // The take is a real ceiling, not a lossless bound, because which series
-      // matter is decided by getNextOccurrence AFTER the fetch: every live
-      // series recurs at most monthly, so every one of them has a next
-      // occurrence within ~31 days and no column on this row orders them by it.
-      // MeetingOccurrence (MEET-01) would order them by `scheduledStart`, but
-      // nothing in `src/` writes that table — it has a one-shot backfill
-      // (scripts/backfill-meeting-occurrences.ts) and no materialiser, so
-      // `meetings.create` produces no occurrence rows and reading it here would
-      // silently drop every series created since the backfill. That is a worse
-      // failure than the ceiling. Combined with the attendee scope above, the
-      // ceiling means "the 200 most recently started recurring series you
-      // personally attend", which no real calendar reaches.
-      // ponytail: raise this to a MeetingOccurrence window query the moment a
-      // materialiser writes that table on create/update.
+      // matter is decided AFTER the fetch: every live series recurs at most
+      // monthly, so every one of them has a next occurrence within ~31 days and
+      // no column on this row orders them by it. Combined with the attendee
+      // scope above, the ceiling means "the 200 most recently started recurring
+      // series you personally attend", which no real calendar reaches.
+      //
+      // WHA-235: the predicate is `recurrenceRule`, not the deprecated
+      // `recurrence` column. Both describe the same series — the MEET-01
+      // migration backfilled the rule from the legacy value and `create`/
+      // `update` below now write the two together — but the rule is what the
+      // materialiser and every occurrence path expand, so selecting on it keeps
+      // this query and the occurrence table describing the same set.
       ctx.db.meeting.findMany({
         where: {
           ...scope,
-          recurrence: { not: null },
+          recurrenceRule: { not: null },
           endTime: { lt: now },
         },
         include: {
-          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          attendees: { select: ATTENDEE_SELECT },
         },
         orderBy: [{ startTime: 'desc' }, { id: 'desc' }],
         take: UPCOMING_SERIES_LIMIT,
       }),
     ]);
 
-    // Compute next occurrences for recurring meetings
+    // Next occurrence per series, preferring a materialised MeetingOccurrence
+    // row so a rescheduled or cancelled instance is reflected here, and falling
+    // back to expanding the rule for a series not yet materialised. Batched:
+    // one query for the whole page, not one per series.
+    const nextTimes = await resolveNextTimes(ctx.db, recurringMeetings, now);
     const computed = recurringMeetings
       .map((m) => {
-        const next = getNextOccurrence(
-          new Date(m.startTime),
-          new Date(m.endTime),
-          m.recurrence!,
-          now
-        );
+        const next = nextTimes.get(m.id);
         if (!next) return null;
         return { ...m, startTime: next.start, endTime: next.end };
       })
@@ -152,7 +195,7 @@ export const meetingsRouter = router({
       const meetings = await ctx.db.meeting.findMany({
         where: meetingListScope(ctx.session.user),
         include: {
-          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          attendees: { select: ATTENDEE_SELECT },
         },
         // `startTime` alone is NOT a total order: two meetings can start at the
         // same instant, and a cursor over a non-unique ordering skips or
@@ -177,9 +220,15 @@ export const meetingsRouter = router({
       // the meeting's own start/end. Recurring: the occurrence closest to now.
       // Note this rewrites the DISPLAY times only; the cursor above walks the
       // stored `startTime`, which is what keeps paging stable.
+      //
+      // WHA-235: resolved from materialised occurrence rows where they exist,
+      // so an instance that was rescheduled shows the time it was moved TO
+      // rather than the time the rule would have produced. One batched query
+      // for the page.
+      const displayTimes = await resolveDisplayTimes(ctx.db, meetings, now);
       const withResolvedStart = meetings.map((m) => {
-        const occ = findRelevantOccurrence(m.startTime, m.endTime, m.recurrence, now);
-        return { ...m, startTime: occ.start, endTime: occ.end };
+        const times = displayTimes.get(m.id);
+        return times ? { ...m, startTime: times.start, endTime: times.end } : m;
       });
 
       return {
@@ -216,7 +265,7 @@ export const meetingsRouter = router({
    * its own, so exhausting Past cannot disturb the upcoming surfaces or
    * `getAll`.
    */
-  getPast: protectedProcedure
+  getPast: entitlementIndependentHistoryProcedure
     .input(
       z
         .object({
@@ -236,11 +285,15 @@ export const meetingsRouter = router({
           // The predicate the Past section applied client-side, moved to the
           // database unchanged: `isPast(startTime) && !recurrence`. A recurring
           // series is never past — its next occurrence belongs to Upcoming.
-          recurrence: null,
+          //
+          // WHA-235: expressed against `recurrenceRule` for the same reason
+          // `getUpcoming` is. The two columns describe one series, and the rule
+          // is the one the occurrence table is built from.
+          recurrenceRule: null,
           startTime: { lt: now },
         },
         include: {
-          attendees: { include: { user: { select: { id: true, name: true, avatar: true } } } },
+          attendees: { select: ATTENDEE_SELECT },
         },
         // Most recent past first. `startTime` alone is NOT a total order — two
         // meetings can start at the same instant — and a cursor over a
@@ -297,14 +350,29 @@ export const meetingsRouter = router({
 
       const { attendeeIds, ...meetingData } = input;
       const allAttendees = [...new Set([user.id, ...attendeeIds])];
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), allAttendees);
 
-      return ctx.db.meeting.create({
+      const meeting = await ctx.db.meeting.create({
         data: {
           ...meetingData,
+          // WHA-235: the legacy value and its RRULE are written TOGETHER, and
+          // this is the cutover seam. `recurrence` stays populated so a
+          // rollback to pre-MEET-01 application code keeps working (the column
+          // doc's stated reason for keeping it), while `recurrenceRule` is what
+          // every read path added by this lane expands. Deriving one from the
+          // other at the single point of write is what stops them drifting.
+          recurrenceRule: legacyRecurrenceToRule(meetingData.recurrence),
           createdById: user.id,
           attendees: { create: allAttendees.map((userId) => ({ userId })) },
         },
       });
+
+      // Materialise immediately rather than lazily on first read, so the join
+      // link and its `publicId` exist the moment the meeting does — an invite
+      // sent before the first read would otherwise have nothing to point at.
+      await materializeMeetingOccurrences(ctx.db, meeting.id);
+
+      return meeting;
     }),
 
   update: protectedProcedure
@@ -325,14 +393,35 @@ export const meetingsRouter = router({
       const { id, attendeeIds, ...data } = input;
 
       if (attendeeIds) {
-        await ctx.db.meetingAttendee.deleteMany({ where: { meetingId: id } });
         const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];
+        await assertInOrganization(ctx.db.user, workspaceId(ctx), allAttendees);
+        await ctx.db.meetingAttendee.deleteMany({ where: { meetingId: id } });
         await ctx.db.meetingAttendee.createMany({
           data: allAttendees.map((userId) => ({ meetingId: id, userId })),
         });
       }
 
-      return ctx.db.meeting.update({ where: { id }, data });
+      const updated = await ctx.db.meeting.update({
+        where: { id },
+        data: {
+          ...data,
+          // Keep the pair in step on every edit, exactly as `create` does. The
+          // guard matters: `recurrence` is OPTIONAL on this input, and an
+          // absent key means "leave the cadence alone", which must not be
+          // confused with an explicit `null` meaning "make it one-time".
+          ...(data.recurrence !== undefined
+            ? { recurrenceRule: legacyRecurrenceToRule(data.recurrence) }
+            : {}),
+        },
+      });
+
+      // Reconcile after the edit. Moving the series or changing its cadence
+      // adds the slots the new rule produces and CANCELS the future slots that
+      // left it — past occurrences are untouched, because changing a rule does
+      // not un-happen the meetings already held.
+      await materializeMeetingOccurrences(ctx.db, id);
+
+      return updated;
     }),
 
   delete: protectedProcedure
@@ -354,7 +443,14 @@ export const meetingsRouter = router({
       where: { id: input.id },
       include: {
         attendees: {
-          include: {
+          // `select`, not `include`, for the reason given on ATTENDEE_SELECT:
+          // an include drags the deprecated `joinedAt` along. Detail-page
+          // attendance comes from `getAttendanceReport`, which reads the
+          // per-occurrence log.
+          select: {
+            id: true,
+            meetingId: true,
+            userId: true,
             user: { select: { id: true, name: true, avatar: true, title: true } },
           },
         },
@@ -396,13 +492,7 @@ export const meetingsRouter = router({
         where: { meetingId_userId: { meetingId: input.meetingId, userId } },
         include: {
           meeting: {
-            select: {
-              id: true,
-              title: true,
-              startTime: true,
-              endTime: true,
-              recurrence: true,
-            },
+            select: { ...SERIES_FIELDS, title: true },
           },
         },
       });
@@ -415,12 +505,7 @@ export const meetingsRouter = router({
       }
 
       const now = new Date();
-      const occurrence = findRelevantOccurrence(
-        attendee.meeting.startTime,
-        attendee.meeting.endTime,
-        attendee.meeting.recurrence,
-        now
-      );
+      const occurrence = await occurrenceWindow(ctx.db, attendee.meeting, now);
 
       // Attendance window: attendance counts only if you clicked Join while
       // the meeting is actually live (or about to start within 5 minutes).
@@ -489,79 +574,9 @@ export const meetingsRouter = router({
     }),
 
   /**
-   * Mint a short-lived JaaS (8x8-hosted Jitsi) JWT so the caller can join this
-   * meeting's embedded video room.
-   *
-   * SECURITY: the RSA private key (JAAS_PRIVATE_KEY) never leaves the server —
-   * signing happens only here. The token is scoped to `meeting-${id}` (not '*'),
-   * lives 2 hours, and only the meeting creator or an admin is granted the
-   * moderator flag. Access is gated identically to the rest of this router via
-   * assertMeetingAccess (creator, attendee, or admin only).
-   */
-  getCallToken: protectedProcedure
-    .input(z.object({ meetingId: z.string() }))
-    .mutation(async ({ ctx, input }) => {
-      await assertMeetingAccess(ctx, input.meetingId);
-
-      const appId = process.env.NEXT_PUBLIC_JAAS_APP_ID;
-      const kid = process.env.JAAS_KID;
-      // Tolerate PEMs stored single-line with escaped newlines (Vercel dashboard,
-      // .env) as well as real multiline values.
-      const privateKey = process.env.JAAS_PRIVATE_KEY?.replace(/\\n/g, '\n');
-      if (!appId || !kid || !privateKey) {
-        throw new TRPCError({
-          code: 'PRECONDITION_FAILED',
-          message: 'Video calling is not configured.',
-        });
-      }
-
-      const meeting = await ctx.db.meeting.findUnique({
-        where: { id: input.meetingId },
-        select: { createdById: true },
-      });
-      if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
-
-      const { id, name, email, image, role } = ctx.session.user;
-      const isModerator = role === 'ADMIN' || meeting.createdById === id;
-
-      const iat = Math.floor(Date.now() / 1000);
-      const token = jwt.sign(
-        {
-          aud: 'jitsi',
-          iss: 'chat',
-          sub: appId,
-          room: `meeting-${input.meetingId}`,
-          iat,
-          nbf: iat - 5,
-          exp: iat + 7200, // 2-hour token
-          context: {
-            user: {
-              id,
-              name,
-              email,
-              avatar: image ?? undefined,
-              moderator: isModerator,
-            },
-            // MVP: premium features stay off until the JaaS plan supports them.
-            features: {
-              recording: false,
-              transcription: false,
-              livestreaming: false,
-              'outbound-call': false,
-            },
-          },
-        },
-        privateKey,
-        { algorithm: 'RS256', header: { alg: 'RS256', kid, typ: 'JWT' } }
-      );
-
-      return { jwt: token, roomName: `${appId}/meeting-${input.meetingId}` };
-    }),
-
-  /**
    * Record that the current user joined the embedded video call. Upserts the
    * per-occurrence MeetingAttendanceLog row (idempotent per occurrence). Gated
-   * identically to getCallToken via assertMeetingAccess.
+   * identically to the rest of this router via assertMeetingAccess.
    */
   logJoin: protectedProcedure
     .input(z.object({ meetingId: z.string() }))
@@ -571,17 +586,12 @@ export const meetingsRouter = router({
 
       const meeting = await ctx.db.meeting.findUnique({
         where: { id: input.meetingId },
-        select: { id: true, title: true, startTime: true, endTime: true, recurrence: true },
+        select: { ...SERIES_FIELDS, title: true },
       });
       if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
 
       const now = new Date();
-      const occurrence = findRelevantOccurrence(
-        meeting.startTime,
-        meeting.endTime,
-        meeting.recurrence,
-        now
-      );
+      const occurrence = await occurrenceWindow(ctx.db, meeting, now);
 
       // RT-01: logJoin is the PRIMARY, auto-fired attendance signal, so it MUST
       // honour the same anti-backfill window markJoined enforces — otherwise a
@@ -642,7 +652,7 @@ export const meetingsRouter = router({
    * Stamp leftAt on the user's open attendance record for the current
    * occurrence when they leave the call. updateMany so leaving without a
    * recorded join (or after it's already stamped) is a harmless no-op. Gated
-   * identically to getCallToken.
+   * identically to the rest of this router via assertMeetingAccess.
    */
   logLeave: protectedProcedure
     .input(z.object({ meetingId: z.string() }))
@@ -652,17 +662,12 @@ export const meetingsRouter = router({
 
       const meeting = await ctx.db.meeting.findUnique({
         where: { id: input.meetingId },
-        select: { startTime: true, endTime: true, recurrence: true },
+        select: SERIES_FIELDS,
       });
       if (!meeting) throw new TRPCError({ code: 'NOT_FOUND' });
 
       const now = new Date();
-      const occurrence = findRelevantOccurrence(
-        meeting.startTime,
-        meeting.endTime,
-        meeting.recurrence,
-        now
-      );
+      const occurrence = await occurrenceWindow(ctx.db, meeting, now);
 
       const res = await ctx.db.meetingAttendanceLog.updateMany({
         where: {
@@ -675,6 +680,320 @@ export const meetingsRouter = router({
       });
 
       return { left: res.count > 0 };
+    }),
+
+  /**
+   * One page of a series' materialised occurrences, newest slot first.
+   *
+   * Materialises before reading, so a series created before this lane shipped
+   * answers with its window rather than with an empty list. Bounded in the
+   * shape #38/#40 established: schema default, schema ceiling, `prefault({})`.
+   */
+  getOccurrences: protectedProcedure
+    .input(
+      z
+        .object({
+          meetingId: z.string(),
+          limit: z
+            .number()
+            .int()
+            .min(1)
+            .max(OCCURRENCE_PAGE_SIZE_MAX)
+            .default(OCCURRENCE_PAGE_SIZE_MAX),
+          includeCancelled: z.boolean().default(true),
+        })
+        .strict()
+    )
+    .query(async ({ ctx, input }) => {
+      await assertMeetingAccess(ctx, input.meetingId);
+      await materializeMeetingOccurrences(ctx.db, input.meetingId);
+
+      const occurrences = await ctx.db.meetingOccurrence.findMany({
+        where: {
+          meetingId: input.meetingId,
+          ...(input.includeCancelled ? {} : { status: { not: 'CANCELLED' } }),
+        },
+        select: {
+          id: true,
+          publicId: true,
+          seriesSlotStart: true,
+          scheduledStart: true,
+          scheduledEnd: true,
+          joinOpensAt: true,
+          joinClosesAt: true,
+          status: true,
+          titleOverride: true,
+          cancelledAt: true,
+          cancelledById: true,
+          cancellationReason: true,
+          // `providerRoomName` is deliberately NOT selected. It is the media
+          // room address, held apart from `publicId` precisely so a link-holder
+          // cannot address the room directly and bypass the lobby; putting it
+          // in a list payload would hand it to every attendee's browser.
+        },
+        // `scheduledStart` is not a total order across a rescheduled series,
+        // so `id` makes the page deterministic — the same reason the list
+        // procedures above carry an id tiebreaker.
+        orderBy: [{ scheduledStart: 'desc' }, { id: 'desc' }],
+        take: input.limit,
+      });
+
+      return occurrences.map((occurrence) => ({
+        ...occurrence,
+        joinPath: occurrenceJoinPath(occurrence.publicId),
+      }));
+    }),
+
+  /**
+   * Move ONE occurrence, leaving the series and every other instance alone.
+   *
+   * The exception is recorded on the occurrence — `seriesSlotStart` keeps the
+   * instant the rule produced, so the materialiser still recognises this row as
+   * that slot and does not re-create it on its next pass.
+   */
+  rescheduleOccurrence: protectedProcedure
+    .input(
+      z
+        .object({
+          occurrenceId: z.string(),
+          scheduledStart: z.date(),
+          scheduledEnd: z.date(),
+        })
+        .strict()
+        // The `meeting_occurrences_time_order_check` CHECK enforces this in the
+        // database; rejecting it here turns a 500 into a 400 with a reason.
+        .refine((input) => input.scheduledEnd.getTime() >= input.scheduledStart.getTime(), {
+          message: 'scheduledEnd must not precede scheduledStart.',
+          path: ['scheduledEnd'],
+        })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const occurrence = await ctx.db.meetingOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { id: true, meetingId: true, status: true },
+      });
+      // RLS makes another tenant's occurrence indistinguishable from a missing
+      // one, so this single branch covers both.
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      // Authorization is the SERIES' — rescheduling an instance is a manage
+      // action on the meeting it belongs to, not a separate permission.
+      await assertMeetingManage(ctx, occurrence.meetingId);
+
+      if (occurrence.status === 'CANCELLED') {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'This occurrence is cancelled and cannot be rescheduled.',
+        });
+      }
+
+      const moved = await rescheduleOccurrence(ctx.db, input.occurrenceId, {
+        scheduledStart: input.scheduledStart,
+        scheduledEnd: input.scheduledEnd,
+      });
+
+      // NO ACTIVITY ENTRY. `ActivityType` in `src/server/activity.ts` has no
+      // member for an occurrence-level change, and that file is outside this
+      // lane. Recorded as a follow-up rather than widened here.
+      return moved;
+    }),
+
+  /**
+   * Call off ONE occurrence. Never deletes the row: it stays as the record that
+   * this instance existed and was cancelled, and keeps any evidence already
+   * hanging off it reachable.
+   */
+  cancelOccurrence: protectedProcedure
+    .input(
+      z
+        .object({
+          occurrenceId: z.string(),
+          reason: z.string().max(500).nullable().default(null),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const occurrence = await ctx.db.meetingOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { id: true, meetingId: true, status: true },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await assertMeetingManage(ctx, occurrence.meetingId);
+
+      // Idempotent rather than an error: two operators cancelling the same
+      // occurrence is a race, not a conflict, and the second must not see a
+      // failure for an outcome that already holds.
+      if (occurrence.status === 'CANCELLED') {
+        const existing = await ctx.db.meetingOccurrence.findUniqueOrThrow({
+          where: { id: input.occurrenceId },
+          select: {
+            id: true,
+            publicId: true,
+            seriesSlotStart: true,
+            scheduledStart: true,
+            scheduledEnd: true,
+            status: true,
+            titleOverride: true,
+            cancelledAt: true,
+          },
+        });
+        return {
+          id: existing.id,
+          publicId: existing.publicId,
+          seriesSlotStart: existing.seriesSlotStart,
+          start: existing.scheduledStart,
+          end: existing.scheduledEnd,
+          status: existing.status,
+          titleOverride: existing.titleOverride,
+          cancelledAt: existing.cancelledAt,
+        };
+      }
+
+      const cancelled = await cancelOccurrence(ctx.db, input.occurrenceId, {
+        cancelledById: ctx.session.user.id,
+        reason: input.reason,
+      });
+
+      // Every outstanding guest credential for a cancelled occurrence is
+      // withdrawn in the same breath. Leaving them live would keep a working
+      // credential pointing at a meeting that is not happening.
+      await ctx.db.meetingOccurrenceParticipant.updateMany({
+        where: {
+          occurrenceId: input.occurrenceId,
+          guestTokenHash: { not: null },
+          guestTokenRevokedAt: null,
+        },
+        data: { guestTokenRevokedAt: new Date() },
+      });
+
+      // No activity entry — see the note on `rescheduleOccurrence`.
+      return cancelled;
+    }),
+
+  /**
+   * Mint a guest credential for ONE occurrence.
+   *
+   * THE ONLY TIME THE SECRET EXISTS OUTSIDE THE CALLER'S RESPONSE. It is
+   * returned once, stored only as a SHA-256 hash, and never logged — the
+   * activity entry below deliberately records that a guest was invited and not
+   * what they were given. The join link carries `publicId` only; the secret is
+   * delivered out of band and typed. See `@/lib/meetings/guest-access`.
+   *
+   * Re-inviting the same guest MINTS A NEW SECRET and overwrites the old hash,
+   * which is what makes a lost credential recoverable without a delete path and
+   * invalidates the previous one in the same statement.
+   */
+  createGuestInvitation: protectedProcedure
+    .input(
+      z
+        .object({
+          occurrenceId: z.string(),
+          displayName: z.string().min(1).max(200),
+          /**
+           * Optional cap on the credential's life. Absent means "expires with
+           * the occurrence", which is the `MeetingOccurrenceParticipant`
+           * contract — everything on that row expires with the occurrence it
+           * belongs to. A shorter cap is honoured; a longer one is not, because
+           * a credential outliving its occurrence is the thing that must not
+           * exist.
+           */
+          maxTtlMinutes: z
+            .number()
+            .int()
+            .min(1)
+            .max(60 * 24 * 30)
+            .optional(),
+        })
+        .strict()
+    )
+    .mutation(async ({ ctx, input }) => {
+      const occurrence = await ctx.db.meetingOccurrence.findUnique({
+        where: { id: input.occurrenceId },
+        select: { id: true, meetingId: true, publicId: true, status: true, joinClosesAt: true },
+      });
+      if (!occurrence) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await assertMeetingManage(ctx, occurrence.meetingId);
+
+      if (occurrence.status === 'CANCELLED') {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message: 'This occurrence is cancelled.',
+        });
+      }
+
+      const now = new Date();
+      const expiresAt = guestSecretExpiryFor(occurrence, {
+        now,
+        maxTtlMs: input.maxTtlMinutes === undefined ? undefined : input.maxTtlMinutes * 60_000,
+      });
+
+      if (expiresAt.getTime() <= now.getTime()) {
+        throw new TRPCError({
+          code: 'PRECONDITION_FAILED',
+          message:
+            'This occurrence is no longer joinable, so a guest link would already be expired.',
+        });
+      }
+
+      const { secret, secretHash } = mintGuestSecret();
+
+      const participant = await ctx.db.meetingOccurrenceParticipant.create({
+        data: {
+          occurrenceId: input.occurrenceId,
+          displayName: input.displayName,
+          // A guest waits in the lobby. The credential proves who sent them,
+          // not that a host is expecting them right now.
+          lobbyStatus: 'WAITING',
+          guestTokenHash: secretHash,
+          // The CHECK constraint refuses a hash without an expiry, so these two
+          // are written together or not at all.
+          guestTokenExpiresAt: expiresAt,
+        },
+        select: { id: true },
+      });
+
+      // No activity entry — see the note on `rescheduleOccurrence`. When one is
+      // added it must name the GUEST and never the credential.
+      return {
+        occurrenceParticipantId: participant.id,
+        displayName: input.displayName,
+        joinPath: occurrenceJoinPath(occurrence.publicId),
+        expiresAt,
+        /**
+         * SHOW ONCE. Not persisted in this form and not retrievable again —
+         * a second call mints a different secret.
+         */
+        secret,
+      };
+    }),
+
+  /**
+   * Withdraw a guest credential immediately.
+   *
+   * Sets `guestTokenRevokedAt` rather than clearing the hash: the row remains
+   * the record that this person was invited and cut off, and
+   * `evaluateGuestCredential` checks revocation before expiry so the reason
+   * stays visible in the server's own logs after the clock passes the expiry.
+   */
+  revokeGuestInvitation: protectedProcedure
+    .input(z.object({ occurrenceParticipantId: z.string() }).strict())
+    .mutation(async ({ ctx, input }) => {
+      const participant = await ctx.db.meetingOccurrenceParticipant.findUnique({
+        where: { id: input.occurrenceParticipantId },
+        select: { id: true, occurrence: { select: { meetingId: true } } },
+      });
+      if (!participant) throw new TRPCError({ code: 'NOT_FOUND' });
+
+      await assertMeetingManage(ctx, participant.occurrence.meetingId);
+
+      const result = await ctx.db.meetingOccurrenceParticipant.updateMany({
+        where: { id: input.occurrenceParticipantId, guestTokenRevokedAt: null },
+        data: { guestTokenRevokedAt: new Date() },
+      });
+
+      return { revoked: result.count > 0 };
     }),
 
   // IMP-RT-01: attendance reporting — per-person attendance across all recorded
@@ -777,7 +1096,6 @@ type MeetingWithAttendees = {
   id: string;
   startTime: Date;
   attendees: Array<{
-    joinedAt: Date | null;
     user: { id: string; name: string; avatar: string | null };
   }>;
   [key: string]: unknown;
@@ -819,41 +1137,26 @@ async function attachPerOccurrenceJoinedAt<M extends MeetingWithAttendees>(
   }));
 }
 
-function getNextOccurrence(
-  originalStart: Date,
-  originalEnd: Date,
-  recurrence: string,
-  after: Date
-): { start: Date; end: Date } | null {
-  const duration = originalEnd.getTime() - originalStart.getTime();
-  const current = new Date(originalStart);
-
-  // Return the first occurrence whose END is still in the future.
-  // This means if an occurrence is currently running (start ≤ now < end),
-  // we return that one — it's the "current" meeting, not the next one.
-  for (let i = 0; i < 365; i++) {
-    const currentEnd = new Date(current.getTime() + duration);
-    if (currentEnd > after) {
-      return { start: new Date(current), end: currentEnd };
-    }
-
-    switch (recurrence) {
-      case 'daily':
-        current.setDate(current.getDate() + 1);
-        break;
-      case 'weekly':
-        current.setDate(current.getDate() + 7);
-        break;
-      case 'biweekly':
-        current.setDate(current.getDate() + 14);
-        break;
-      case 'monthly':
-        current.setMonth(current.getMonth() + 1);
-        break;
-      default:
-        return null;
-    }
-  }
-
-  return null;
+/**
+ * The occurrence an attendance write belongs to, as a `{ start, end }` window.
+ *
+ * The single replacement for `findRelevantOccurrence` on the write paths. It
+ * MATERIALISES first (unlike the batched list resolvers, which must not turn a
+ * page render into a write storm) because these three procedures are the ones
+ * that must be exact: `occurrenceStart` is part of the attendance log's unique
+ * key, so resolving it differently from one call to the next would split one
+ * occurrence's attendance across two rows.
+ *
+ * Falls back to the meeting's own stored times when a series has no occurrence
+ * row at all — byte-for-byte what the non-recurring branch of the old walker
+ * returned, and the only case that can reach it.
+ */
+async function occurrenceWindow(
+  db: PrismaClient,
+  meeting: SeriesRow,
+  now: Date
+): Promise<{ start: Date; end: Date }> {
+  const resolved = await resolveRelevantOccurrence(db, meeting.id, now);
+  if (resolved) return { start: resolved.start, end: resolved.end };
+  return { start: meeting.startTime, end: meeting.endTime };
 }

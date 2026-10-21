@@ -123,6 +123,32 @@ describe('login intent', () => {
     expect(rows[0]!.usedAt).toBeNull();
   });
 
+  it('preserves server-owned demo expiry metadata for the Auth.js exchange', async () => {
+    const expiresAt = Date.now() + 60_000;
+    const { token } = await createLoginIntent({
+      email: 'manager.seat1@demo.devfathom.invalid',
+      host: HOST,
+      candidates: [
+        {
+          organizationId: 'org_demo_restaurant_seat_1',
+          userId: 'user_demo_restaurant_seat_1_manager',
+          demoAccessExpiresAt: expiresAt,
+        },
+      ],
+    });
+
+    await expect(peekLoginIntent(token, HOST)).resolves.toEqual({
+      email: 'manager.seat1@demo.devfathom.invalid',
+      candidates: [
+        {
+          organizationId: 'org_demo_restaurant_seat_1',
+          userId: 'user_demo_restaurant_seat_1_manager',
+          demoAccessExpiresAt: expiresAt,
+        },
+      ],
+    });
+  });
+
   it('consumes exactly once and rejects the replay', async () => {
     const { token } = await mint();
 
@@ -196,11 +222,15 @@ describe('login intent', () => {
       { userId: 'user_b' }, // no organizationId
       'org_c',
       null,
+      { organizationId: 'org_e', userId: 'user_e', demoAccessExpiresAt: 'tomorrow' },
       { organizationId: 'org_d', userId: 'user_d' },
     ];
 
     const peeked = await peekLoginIntent(token, HOST);
-    expect(peeked?.candidates).toEqual([{ organizationId: 'org_d', userId: 'user_d' }]);
+    expect(peeked?.candidates).toEqual([
+      { organizationId: 'org_e', userId: 'user_e' },
+      { organizationId: 'org_d', userId: 'user_d' },
+    ]);
     // A half-formed entry is not selectable.
     await expect(consumeLoginIntent(token, HOST, 'org_a')).resolves.toBeNull();
     await expect(consumeLoginIntent(token, HOST, 'org_d')).resolves.toMatchObject({

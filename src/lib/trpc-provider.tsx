@@ -28,6 +28,26 @@ function redirectOnEndedSession(error: unknown) {
   window.location.assign(target);
 }
 
+/**
+ * WHA-1181: React Query's default retries treated an authorization answer as a
+ * transient fault. A restaurant administrator with no staff profile saw the
+ * notification poll fail FORBIDDEN, then be retried twice more — three
+ * identical 403s in one page load, and the same on every poll after it.
+ *
+ * A 4xx authorization verdict is settled server state: retrying cannot change
+ * it, so surface it once and let the caller render a quiet state. UNAUTHORIZED
+ * is included because `redirectOnEndedSession` above already navigates away, so
+ * retrying it only races the redirect. Everything else keeps the default three
+ * attempts, which is what covers a genuinely flaky network.
+ */
+export function retryQuery(failureCount: number, error: unknown) {
+  if (error instanceof TRPCClientError) {
+    const code = error.data?.code;
+    if (code === 'FORBIDDEN' || code === 'UNAUTHORIZED') return false;
+  }
+  return failureCount < 3;
+}
+
 export function TRPCProvider({ children }: { children: React.ReactNode }) {
   const [queryClient] = useState(
     () =>
@@ -39,6 +59,7 @@ export function TRPCProvider({ children }: { children: React.ReactNode }) {
             staleTime: 60 * 1000,
             gcTime: 10 * 60 * 1000,
             refetchOnWindowFocus: false,
+            retry: retryQuery,
           },
         },
       })

@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 const mocks = vi.hoisted(() => ({
   invitationFindUnique: vi.fn(),
   resetFindUnique: vi.fn(),
+  occurrenceFindUnique: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -17,11 +18,12 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
     run({
       invitation: { findUnique: mocks.invitationFindUnique },
       passwordResetToken: { findUnique: mocks.resetFindUnique },
+      meetingOccurrence: { findUnique: mocks.occurrenceFindUnique },
     })
   ),
 }));
 
-import { organizationForAnonymousToken } from './anonymous-tenant';
+import { organizationForAnonymousToken, organizationForMeetingPublicId } from './anonymous-tenant';
 
 const TOKEN = 'a'.repeat(43);
 const TOKEN_HASH = createHash('sha256').update(TOKEN).digest('hex');
@@ -74,4 +76,62 @@ describe('organizationForAnonymousToken', () => {
       expect(mocks.resetFindUnique).not.toHaveBeenCalled();
     }
   );
+});
+
+/**
+ * D2/D4 — `MeetingOccurrence.publicId` is the third anonymous tenant-resolution
+ * key, and must reproduce the properties that made the token resolver above
+ * acceptable: bounded input, one predicate the caller must hold, and only an
+ * organization id returned.
+ */
+describe('organizationForMeetingPublicId', () => {
+  const PUBLIC_ID = '7e3c19c6-79a4-4db1-a436-68efbf00f309';
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.occurrenceFindUnique.mockResolvedValue(null);
+  });
+
+  it('resolves a public id to its organization', async () => {
+    mocks.occurrenceFindUnique.mockResolvedValue({ organizationId: 'org_1' });
+
+    await expect(organizationForMeetingPublicId(PUBLIC_ID)).resolves.toBe('org_1');
+    expect(mocks.occurrenceFindUnique).toHaveBeenCalledWith({
+      where: { publicId: PUBLIC_ID },
+      select: { organizationId: true },
+    });
+  });
+
+  it('returns only an organization id, never occurrence data', async () => {
+    mocks.occurrenceFindUnique.mockResolvedValue({ organizationId: 'org_1' });
+
+    await organizationForMeetingPublicId(PUBLIC_ID);
+
+    const [args] = mocks.occurrenceFindUnique.mock.calls[0] as [
+      { where: Record<string, unknown>; select: Record<string, unknown> },
+    ];
+    expect(Object.keys(args.where)).toEqual(['publicId']);
+    expect(args.select).toEqual({ organizationId: true });
+  });
+
+  it('resolves nothing for an unknown public id', async () => {
+    await expect(organizationForMeetingPublicId(PUBLIC_ID)).resolves.toBeNull();
+  });
+
+  it.each([
+    [null],
+    [undefined],
+    [''],
+    ['short'],
+    ['not-a-uuid-at-all'],
+    // A v1 UUID: the column is defaulted to gen_random_uuid(), which is v4.
+    ['7e3c19c6-79a4-1db1-a436-68efbf00f309'],
+    // SQL-ish and wildcard payloads must not reach the query.
+    ["' OR 1=1 --"],
+    ['%'],
+    ['x'.repeat(600)],
+  ])('refuses the malformed public id %j without querying', async (value) => {
+    await expect(organizationForMeetingPublicId(value)).resolves.toBeNull();
+    expect(mocks.occurrenceFindUnique).not.toHaveBeenCalled();
+  });
 });

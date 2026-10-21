@@ -2,6 +2,25 @@
 @import 'tw-animate-css';
 @import 'shadcn/tailwind.css';
 
+/* Preserve the accepted Google-loader Arial fallback metrics. */
+@font-face {
+  font-family: Instrument Sans Fallback;
+  src: local(Arial);
+  ascent-override: 94.42%;
+  descent-override: 24.33%;
+  line-gap-override: 0%;
+  size-adjust: 102.74%;
+}
+
+@font-face {
+  font-family: IBM Plex Mono Fallback;
+  src: local(Arial);
+  ascent-override: 76.16%;
+  descent-override: 20.43%;
+  line-gap-override: 0%;
+  size-adjust: 134.59%;
+}
+
 /* Dark theme is driven by `data-theme="dark"` on <html>. The `dark:` utility
    variant follows it. */
 @custom-variant dark (&:is([data-theme='dark'] *));
@@ -18,10 +37,20 @@
      They resolve to the canonical aliases defined in :root below. */
   --color-background: var(--background);
   --color-foreground: var(--foreground);
-  --font-sans: var(--font-sans);
-  --font-mono: var(--font-mono);
-  --font-display: var(--font-display);
-  --font-heading: var(--font-display);
+  /* Typography — the one definition of the semantic font tokens.
+     next/font/local (src/app/layout.tsx) pins every subset face to the family
+     names written here, so the stacks name those families directly. They must
+     not be mapped from the variables next/font generates
+     (`--font-instrument-sans`, `--font-ibm-plex-mono`): Turbopack fills those
+     with the JavaScript identifier of each call (`instrumentSans`), which
+     matches no @font-face, and a token that points at itself
+     (`--font-sans: var(--font-sans)`) is a cycle. The metric-matched
+     fallbacks are the @font-face rules at the top of this file. */
+  --font-sans:
+    'Instrument Sans', 'Instrument Sans Fallback', system-ui, -apple-system, 'Segoe UI', sans-serif;
+  --font-mono: 'IBM Plex Mono', 'IBM Plex Mono Fallback', ui-monospace, 'SF Mono', Menlo, monospace;
+  --font-display: var(--font-sans);
+  --font-heading: var(--font-sans);
   --color-sidebar-ring: var(--sidebar-ring);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
@@ -131,6 +160,29 @@
   --ease-out: var(--ease-out);
 }
 
+@media print {
+  body:has(.medication-card-print-target) * {
+    visibility: hidden;
+  }
+
+  .medication-card-print-target,
+  .medication-card-print-target * {
+    visibility: visible;
+  }
+
+  .medication-card-print-target {
+    position: absolute;
+    inset: 0;
+    width: 100%;
+    border: 0;
+    box-shadow: none;
+  }
+
+  .medication-card-print-target .medication-card-actions {
+    display: none;
+  }
+}
+
 /* ============================================================
    LIGHT THEME (default) — linen canvas, evergreen navigation
    ============================================================ */
@@ -166,11 +218,11 @@
   --slate-400: #a6a598;
   --slate-300: #d8d5cc;
 
-  --green-600: #476a50;
+  --green-600: #42624a;
   --green-100: #cfe0cd;
-  --amber-600: #9a6a1e;
+  --amber-600: #785217;
   --amber-100: #f1dfb6;
-  --red-600: #aa4b43;
+  --red-600: #904039;
   --red-100: #f2d8d4;
 
   /* Canonical semantic aliases */
@@ -257,7 +309,6 @@
   --font-display: var(--font-sans);
   --font-logo: var(--font-sans);
   --font-body: 'IBM Plex Sans', system-ui, -apple-system, 'Segoe UI', sans-serif;
-  --font-mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', Menlo, monospace;
 
   /* Editorial display scale for page titles and big operational numbers. */
   --type-display-xs: 1.375rem; /* 22 */
@@ -339,8 +390,8 @@
   --accent: #2a382d;
   --accent-foreground: #f7f1e5;
 
-  --destructive: #ec9e94;
-  --success: #9bc39e;
+  --destructive: #f0a89f;
+  --success: #a3c8a6;
   --success-foreground: #18211b;
   --warning: #e1bc72;
   --warning-foreground: #2f2107;
@@ -878,7 +929,7 @@
 
   --text-strong: #111110;
   --text-body: #333330;
-  --text-muted: #767672;
+  --text-muted: #6c6c68;
   --text-faint: #a3a39e;
   --text-inverse: #ffffff;
   --text-on-accent: #ffffff;
@@ -888,8 +939,8 @@
   --border-default: #deded9;
   --border-strong: #c7c7c1;
 
-  --accent-brand: #ff684f;
-  --accent-brand-hover: #ed553d;
+  --accent-brand: #bd3f2a;
+  --accent-brand-hover: #a5361f;
   --accent-quiet: #fff0ec;
 
   --background: var(--surface-page);
@@ -905,7 +956,7 @@
   --secondary: #f1f1ee;
   --secondary-foreground: #333330;
   --muted: #f1f1ee;
-  --muted-foreground: #767672;
+  --muted-foreground: #6c6c68;
   --accent: #f1f1ee;
   --accent-foreground: #111110;
   --border: var(--border-subtle);
@@ -952,7 +1003,7 @@
   --text-strong: #f7f7f4;
   --text-body: #dfdfda;
   --text-muted: #aaa9a3;
-  --text-faint: #77766f;
+  --text-faint: #9a9993;
   --text-inverse: #111110;
   --text-on-accent: #ffffff;
   --border-subtle: #343431;
@@ -1249,6 +1300,33 @@
 
   .studio-revenue-card {
     min-height: 360px;
+  }
+}
+
+/* Unlayered so these beat Tailwind hover/active transforms on POS controls. */
+.pos-calm [data-slot='button'],
+.pos-calm button {
+  box-shadow: none;
+  transform: none;
+  transition-property: background-color, border-color, color, opacity;
+  transition-duration: 120ms;
+}
+
+.pos-calm [data-slot='button']:hover,
+.pos-calm [data-slot='button']:active,
+.pos-calm [data-slot='button']:focus-visible,
+.pos-calm button:hover,
+.pos-calm button:active,
+.pos-calm button:focus-visible {
+  transform: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .pos-calm,
+  .pos-calm * {
+    animation: none !important;
+    transition: none !important;
+    scroll-behavior: auto !important;
   }
 }
 

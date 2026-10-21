@@ -9,7 +9,14 @@ export function Providers({ children }: { children: React.ReactNode }) {
   // The login page only needs Auth.js' signIn helper. Keeping app-wide
   // providers out of this route avoids hydrating realtime, TRPC, tooltips,
   // theming, and Motion before the user can interact with the form.
-  if (pathname === '/login') return <>{children}</>;
+  if (
+    pathname === '/login' ||
+    pathname === '/terminal' ||
+    pathname === '/pos' ||
+    pathname === '/kds'
+  ) {
+    return <>{children}</>;
+  }
 
   return <AppProviders>{children}</AppProviders>;
 }

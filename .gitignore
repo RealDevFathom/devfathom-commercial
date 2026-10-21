@@ -23,6 +23,8 @@
 # misc
 .DS_Store
 *.pem
+# Amazon RDS public CA bundle (certificates only), pinned in infra/aws.
+!infra/aws/rds-global-bundle.pem
 
 # debug
 npm-debug.log*
@@ -62,4 +64,5 @@ docker/livekit/livekit.dev.keys.yaml
 
 # Playwright output
 /test-results/
+/playwright-artifacts/
 /playwright-report/

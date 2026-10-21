@@ -4,7 +4,7 @@ import { useState, useEffect, useCallback, useSyncExternalStore } from 'react';
 import dynamic from 'next/dynamic';
 import Link from 'next/link';
 import Image from 'next/image';
-import { usePathname, useRouter } from 'next/navigation';
+import { useRouter } from 'next/navigation';
 import { useSession } from 'next-auth/react';
 import { signOutEverything } from '@/lib/auth/sign-out';
 import {
@@ -14,7 +14,6 @@ import {
   Sun,
   LogOut,
   User,
-  ChevronRight,
   CheckCheck,
   Menu,
   FolderKanban,
@@ -25,16 +24,23 @@ import {
   Loader2,
   Sparkles,
   Plus,
+  Repeat2,
 } from 'lucide-react';
 import { useTheme } from '@/components/theme-provider';
+import { useEntitlements } from '@/components/entitlements-provider';
+import { isModuleGranted, moduleForProcedure } from '@/lib/module-catalog';
 import { cn } from '@/lib/utils';
-import { useAssistant } from '@/lib/assistant-store';
-import { useBreadcrumbStore } from '@/lib/breadcrumb-store';
+import {
+  assistantAvailabilityMessage,
+  isAssistantAvailable,
+  useAssistant,
+} from '@/lib/assistant-store';
 import { trpc } from '@/lib/trpc';
 import { formatDistanceToNow } from 'date-fns';
 import { Avatar, AvatarFallback, AvatarImage } from '@/components/ui/avatar';
 import { FathomMark } from '@/components/brand/logo';
 import type { TenantBrand } from '@/lib/tenant-brand';
+import { routeLabels, TopbarBreadcrumbs } from './topbar-breadcrumbs';
 // Badge unused after notification refactor
 import {
   DropdownMenu,
@@ -60,31 +66,6 @@ const CommandList = dynamic(() => import('@/components/ui/command').then((m) => 
 // rendered, but opening it no longer has to wait on a cold network request.
 const preloadCommandPalette = () => import('@/components/ui/command');
 
-const routeLabels: Record<string, string> = {
-  '/dashboard': 'Dashboard',
-  '/projects': 'Projects',
-  '/projects/import': 'Import',
-  '/clients': 'Clients',
-  '/notes': 'Notes',
-  '/email': 'Email',
-  '/finance': 'Finance',
-  '/meetings': 'Meetings',
-  '/chat': 'Chat',
-  '/team': 'Team',
-  '/team/stats': 'Insights',
-  '/hr': 'HR & Leave',
-  '/reviews': 'Reviews',
-  '/audit-logs': 'Audit Log',
-  '/api-docs': 'API Access',
-  '/settings': 'Settings',
-};
-
-const linkableDetailRoute = /^\/(projects|clients|notes|team|meetings)\/[^/]+$/;
-
-function isLinkableBreadcrumb(href: string) {
-  return href in routeLabels || linkableDetailRoute.test(href);
-}
-
 const subscribeToHydration = () => () => {};
 
 export function Topbar({
@@ -100,14 +81,16 @@ export function Topbar({
   const [commandLoaded, setCommandLoaded] = useState(false);
   const [searchInput, setSearchInput] = useState('');
   const [debouncedSearch, setDebouncedSearch] = useState('');
-  const pathname = usePathname();
   const router = useRouter();
   const { data: session } = useSession();
   const { theme, setTheme } = useTheme();
   const openAssistant = useAssistant((s) => s.setOpen);
-  // Detail pages register their loaded entity name here (id segment -> name),
-  // so e.g. /team/<id> shows "Saad Ajmal" instead of the raw id.
-  const breadcrumbLabels = useBreadcrumbStore((s) => s.labels);
+  const assistantAvailable = useAssistant((state) =>
+    isAssistantAvailable(state, session?.user.organizationId)
+  );
+  const assistantMessage = useAssistant((state) =>
+    assistantAvailabilityMessage(state, session?.user.organizationId)
+  );
   const mounted = useSyncExternalStore(
     subscribeToHydration,
     () => true,
@@ -163,25 +146,6 @@ export function Topbar({
     return () => document.removeEventListener('keydown', down);
   }, [commandOpen, handleCommandOpenChange]);
 
-  const getBreadcrumbs = useCallback(() => {
-    const segments = pathname.split('/').filter(Boolean);
-    const crumbs: { label: string; href: string; linkable: boolean }[] = [];
-
-    let path = '';
-    for (const segment of segments) {
-      path += `/${segment}`;
-      const label =
-        routeLabels[path] ||
-        breadcrumbLabels[segment] ||
-        segment.charAt(0).toUpperCase() + segment.slice(1);
-      crumbs.push({ label, href: path, linkable: isLinkableBreadcrumb(path) });
-    }
-
-    return crumbs;
-  }, [pathname, breadcrumbLabels]);
-
-  const breadcrumbs = getBreadcrumbs();
-
   const getInitials = (name: string) =>
     name
       .split(' ')
@@ -206,6 +170,7 @@ export function Topbar({
 
         <Link
           href="/dashboard"
+          aria-label="Open dashboard"
           className="flex shrink-0 items-center gap-3 rounded-xl focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
         >
           {brand?.markUrl || brand?.logoUrl ? (
@@ -252,31 +217,7 @@ export function Topbar({
           aria-label="Breadcrumb"
           className="ml-2 hidden min-w-0 items-center gap-1 overflow-hidden border-l border-border-subtle pl-4 text-xs xl:flex"
         >
-          {breadcrumbs.map((crumb, i) => (
-            <div key={crumb.href} className="flex min-w-0 items-center gap-1">
-              {i > 0 && <ChevronRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground/50" />}
-              {i === breadcrumbs.length - 1 || !crumb.linkable ? (
-                <span
-                  className={cn(
-                    'truncate',
-                    i === breadcrumbs.length - 1
-                      ? 'font-medium text-foreground'
-                      : 'text-muted-foreground'
-                  )}
-                  aria-current={i === breadcrumbs.length - 1 ? 'page' : undefined}
-                >
-                  {crumb.label}
-                </span>
-              ) : (
-                <Link
-                  href={crumb.href}
-                  className="truncate text-muted-foreground transition-colors hover:text-foreground"
-                >
-                  {crumb.label}
-                </Link>
-              )}
-            </div>
-          ))}
+          <TopbarBreadcrumbs />
         </nav>
 
         <div className="ml-auto flex shrink-0 items-center gap-1.5">
@@ -292,20 +233,29 @@ export function Topbar({
             <span className="hidden min-w-0 flex-1 truncate whitespace-nowrap text-left lg:block">
               Search workspace
             </span>
-            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-muted-foreground/70 xl:inline-flex">
+            <kbd className="pointer-events-none hidden shrink-0 select-none font-mono text-[10px] text-text-body xl:inline-flex">
               ⌘K
             </kbd>
           </button>
 
           {/* AI assistant */}
           <button
+            type="button"
             onClick={() => openAssistant(true)}
-            className="studio-assistant-button"
+            disabled={!assistantAvailable}
+            title={assistantAvailable ? 'Open Ask Fathom chat' : assistantMessage}
+            aria-describedby={!assistantAvailable ? 'topbar-chat-availability' : undefined}
+            className="studio-assistant-button disabled:cursor-not-allowed disabled:opacity-50 disabled:transform-none motion-reduce:transform-none motion-reduce:transition-none"
             aria-label="Open AI assistant"
           >
             <Sparkles className="h-[18px] w-[18px] text-accent-brand" />
             <span className="hidden text-xs font-semibold lg:inline">Ask Fathom</span>
           </button>
+          {!assistantAvailable && (
+            <span id="topbar-chat-availability" className="sr-only">
+              {assistantMessage}
+            </span>
+          )}
 
           {/* Dark mode toggle */}
           {mounted && (
@@ -331,7 +281,7 @@ export function Topbar({
               <DropdownMenuTrigger aria-label="Open account menu" className="studio-avatar-button">
                 <Avatar className="h-8 w-8">
                   <AvatarImage src={session.user.image ?? undefined} alt={session.user.name} />
-                  <AvatarFallback className="bg-primary/10 text-primary text-xs font-medium">
+                  <AvatarFallback className="bg-muted text-foreground text-xs font-medium">
                     {getInitials(session.user.name)}
                   </AvatarFallback>
                 </Avatar>
@@ -345,6 +295,10 @@ export function Topbar({
                 <DropdownMenuItem onClick={() => router.push('/settings')}>
                   <User className="mr-2 h-4 w-4" />
                   Profile
+                </DropdownMenuItem>
+                <DropdownMenuItem onClick={() => void signOutEverything('/login')}>
+                  <Repeat2 className="mr-2 h-4 w-4" />
+                  Switch organization
                 </DropdownMenuItem>
                 <DropdownMenuSeparator />
                 <DropdownMenuItem
@@ -505,10 +459,43 @@ export function Topbar({
   );
 }
 
-function NotificationBell() {
-  const [open, setOpen] = useState(false);
+type BellNotification = {
+  id: string;
+  title: string;
+  message: string | null;
+  createdAt: Date | string;
+  isRead: boolean;
+};
+
+export function NotificationBell() {
+  const { vertical } = useEntitlements();
+
+  return vertical === 'RESTAURANT' ? <RestaurantNotificationBell /> : <AgencyNotificationBell />;
+}
+
+/**
+ * WHA-1207 — `team.getNotifications` lives under the `hr` module (see
+ * PROCEDURE_MODULES), so a package that does not license `hr` — every pharmacy
+ * package — answers FORBIDDEN. Derive the key from the same catalog the server
+ * gates on rather than repeating the string, so the two cannot drift.
+ */
+const TEAM_NOTIFICATIONS_MODULE = moduleForProcedure('team.getNotifications');
+
+function AgencyNotificationBell() {
   const utils = trpc.useUtils();
-  const { data: notifications } = trpc.team.getNotifications.useQuery();
+  const { enabledModules } = useEntitlements();
+  // The 403 is definitive (UX rule 17): don't turn it into a poll. Gate the
+  // query on the licence the server checks, so an unlicensed workspace never
+  // issues the call at all — not even the one request `retryQuery` would allow.
+  const licensed =
+    !TEAM_NOTIFICATIONS_MODULE || isModuleGranted(TEAM_NOTIFICATIONS_MODULE, enabledModules);
+  const { data: notifications, error } = trpc.team.getNotifications.useQuery(undefined, {
+    enabled: licensed,
+  });
+  // Belt and braces: if the resolved entitlements ever disagree with the
+  // server's verdict, honour the server's denial rather than showing a bare
+  // empty bell over an error.
+  const denied = !licensed || error?.data?.code === 'FORBIDDEN';
   const markRead = trpc.team.markNotificationRead.useMutation({
     // Optimistically flip the single notification to read instead of
     // invalidating (and refetching) the whole notifications list.
@@ -528,7 +515,68 @@ function NotificationBell() {
     onSuccess: () => utils.team.getNotifications.invalidate(),
   });
 
-  const unreadCount = notifications?.filter((n) => !n.isRead).length ?? 0;
+  return (
+    <NotificationBellView
+      notifications={denied ? [] : (notifications ?? [])}
+      emptyMessage={denied ? 'Notifications are not part of this workspace’s plan' : undefined}
+      emptyDetail={denied ? 'Ask your platform administrator to enable the HR module.' : undefined}
+      onMarkRead={(id) => markRead.mutate({ id })}
+      onMarkAllRead={() => markAllRead.mutate()}
+    />
+  );
+}
+
+const restaurantNotificationInput = { limit: 50, unreadOnly: false } as const;
+
+function RestaurantNotificationBell() {
+  const utils = trpc.useUtils();
+  const { data, error } = trpc.restaurantNotifications.list.useQuery(restaurantNotificationInput);
+  // WHA-1181: the poll is denied outright until the signed-in user is linked to
+  // a restaurant staff profile. `retryQuery` already stops the retry storm, so
+  // all that is left is to say so once instead of showing a bare empty bell.
+  const denied = error?.data?.code === 'FORBIDDEN';
+  const markRead = trpc.restaurantNotifications.markRead.useMutation({
+    onSuccess: () => utils.restaurantNotifications.list.invalidate(restaurantNotificationInput),
+  });
+  const markAllRead = trpc.restaurantNotifications.markAllRead.useMutation({
+    onSuccess: () => utils.restaurantNotifications.list.invalidate(restaurantNotificationInput),
+  });
+  const notifications =
+    data?.items.map((notification) => ({
+      id: notification.id,
+      title: notification.title,
+      message: notification.body,
+      createdAt: notification.createdAt,
+      isRead: notification.isRead,
+    })) ?? [];
+
+  return (
+    <NotificationBellView
+      notifications={denied ? [] : notifications}
+      emptyMessage={denied ? 'Notifications need a restaurant staff profile' : undefined}
+      emptyDetail={denied ? 'Ask an administrator to link your account to staff.' : undefined}
+      onMarkRead={(id) => markRead.mutate({ id })}
+      onMarkAllRead={() => markAllRead.mutate({})}
+    />
+  );
+}
+
+function NotificationBellView({
+  notifications,
+  emptyMessage = 'No notifications',
+  emptyDetail,
+  onMarkRead,
+  onMarkAllRead,
+}: {
+  notifications: BellNotification[];
+  emptyMessage?: string;
+  /** The next step to offer when the empty state is a denial, not an empty inbox. */
+  emptyDetail?: string;
+  onMarkRead: (id: string) => void;
+  onMarkAllRead: () => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const unreadCount = notifications.filter((notification) => !notification.isRead).length;
 
   return (
     <div className="relative">
@@ -554,7 +602,7 @@ function NotificationBell() {
               <h3 className="text-sm font-semibold text-foreground">Notifications</h3>
               {unreadCount > 0 && (
                 <button
-                  onClick={() => markAllRead.mutate()}
+                  onClick={onMarkAllRead}
                   className="flex items-center gap-1 text-[11px] font-medium text-primary hover:underline"
                 >
                   <CheckCheck className="h-3 w-3" />
@@ -566,14 +614,19 @@ function NotificationBell() {
               {!notifications?.length ? (
                 <div className="py-10 text-center">
                   <Bell className="mx-auto h-8 w-8 text-muted-foreground/20" />
-                  <p className="mt-2 text-xs text-muted-foreground">No notifications</p>
+                  <p className="mt-2 text-xs text-muted-foreground">{emptyMessage}</p>
+                  {emptyDetail && (
+                    <p className="mx-auto mt-1 max-w-[15rem] text-[11px] text-muted-foreground/70">
+                      {emptyDetail}
+                    </p>
+                  )}
                 </div>
               ) : (
                 notifications.slice(0, 10).map((n) => (
                   <button
                     key={n.id}
                     onClick={() => {
-                      if (!n.isRead) markRead.mutate({ id: n.id });
+                      if (!n.isRead) onMarkRead(n.id);
                     }}
                     className={cn(
                       'flex w-full items-start gap-3 px-4 py-3 text-left transition-colors hover:bg-secondary/50 border-b border-border/40 last:border-0',

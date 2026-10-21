@@ -1,0 +1,2355 @@
+{
+  "numTotalTests": 402,
+  "numPassedTests": 342,
+  "numFailedTests": 60,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "success": false,
+  "testResults": [
+    {
+      "file": "tests/print-bridge.test.ts",
+      "assertions": [
+        {
+          "name": "explicit transport configuration resolves default TCP9100 and IPv6",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target /dev/usb/lp0",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target usb:///dev/usb/lp0",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target serial:///dev/ttyUSB0",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target file:///dev/cu.usbserial",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration decodes installed Windows queue names without treating punctuation as code",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target ",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://user:secret@host",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host:0",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host:65536",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host/path",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host?x=1",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue://remote/name",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///%5C%5Cserver%5Cqueue",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///%0a",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///%ZZ",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target /etc/passwd",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target file:///home/operator/receipt",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target serial:///dev/%2e%2e/etc/passwd",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects unsupported OS queue and direct Windows serial",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 0",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 1",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 2",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 3",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 4",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "explicit transport configuration dry-run returns a synthetic diagnostic without any device/network/command I/O",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch pipes exact bytes to local CUPS with fixed arguments and no inherited secrets",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch Windows command keeps queue data out of PowerShell code/arguments and preserves policy",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch Windows submission pipes binary-safe base64 only to the fixed helper",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch nonzero native exit 1 fails once without retry",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch nonzero native exit 2 fails once without retry",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch missing command/permission errors are useful and redact native secret text",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch times out and terminates one native submission",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch handles a disconnected stdin without an unhandled error or retry",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "native queue dispatch fails closed before spawn for denied targets and oversized receipts",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "TCP and POSIX device writes sends exact receipt bytes to an isolated fake TCP printer",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "TCP and POSIX device writes handles TCP refusal without replay",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "TCP and POSIX device writes fails promptly on TCP close before the write callback",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "TCP and POSIX device writes bounds stalled TCP connections and never resends",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "TCP and POSIX device writes retains serial byte writes and handles partial writes without resending a prefix",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "TCP and POSIX device writes rejects ordinary files before writing",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "TCP and POSIX device writes does not retry a serial disconnect/permission failure",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract persists before dispatch, acknowledges existing status, and sends no receipt data in ack",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract lost acknowledgement stops; restart with same journal never prints again",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract ambiguous transport failure retains marker and never reports OFFLINE/retries",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract simultaneous reservations allow one dispatch candidate",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract journal permission failure prevents dispatch",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 0 before dispatch",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 1 before dispatch",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 2 before dispatch",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 3 before dispatch",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 0 without dispatch or leaking it",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 1 without dispatch or leaking it",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 2 without dispatch or leaking it",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 3 without dispatch or leaking it",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 4 without dispatch or leaking it",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects unsafe bridge URL http://print.example before sending bearer",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects unsafe bridge URL https://user:password@print.example before sending bearer",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        },
+        {
+          "name": "durable duplicate prevention and server contract empty poll preserves cancellation and makes no transport call",
+          "status": "failed",
+          "failureFirstLines": [
+            "Error: Set PAPERCLIP_RUN_SCRATCH_DIR to an isolated test scratch directory.",
+            "TypeError: The \"path\" argument must be of type string or an instance of Buffer or URL. Received undefined"
+          ]
+        }
+      ]
+    },
+    {
+      "file": "src/server/trpc.test.ts",
+      "assertions": [
+        {
+          "name": "createTRPCContext request actor resolution does not mark an unresolved route session as explicitly resolved",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "createTRPCContext request actor resolution keeps the workspace guard and its internal error classification",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects protected read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects protected write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects entitlement-independent admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects entitlement-independent admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects entitlement-independent history read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects hr read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects hr write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects capability read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session revoked session rejects capability write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects protected read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects protected write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects entitlement-independent admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects entitlement-independent admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects entitlement-independent history read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects hr read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects hr write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects capability read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deleted account rejects capability write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects protected read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects protected write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects entitlement-independent admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects entitlement-independent admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects entitlement-independent history read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects hr read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects hr write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects capability read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session failed revalidation rejects capability write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects protected read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects protected write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects entitlement-independent admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects entitlement-independent admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects entitlement-independent history read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects hr read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects hr write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects capability read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session suspended organization rejects capability write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects protected read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects protected write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects entitlement-independent admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects entitlement-independent admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects entitlement-independent history read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects hr read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects hr write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects capability read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session legacy REVOKED sentinel in status rejects capability write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects protected read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects protected write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects entitlement-independent admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects entitlement-independent admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects entitlement-independent history read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects hr read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects hr write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects capability read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session session with no status at all rejects capability write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects protected read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects protected write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects entitlement-independent admin read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects entitlement-independent admin write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects entitlement-independent history read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects hr read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects hr write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects capability read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session deactivated account rejects capability write",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects protected read with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects protected write with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects admin read with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects admin write with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects entitlement-independent admin read with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects entitlement-independent admin write with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects entitlement-independent history read with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects hr read with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects hr write with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects capability read with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards reject an unusable session rejects capability write with no session at all",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows protected read for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows protected write for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows admin read for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows admin write for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows entitlement-independent admin read for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows entitlement-independent admin write for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows entitlement-independent history read for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows hr read for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows hr write for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows capability read for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows capability write for an ACTIVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows protected read for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows protected write for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows admin read for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows admin write for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows entitlement-independent admin read for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows entitlement-independent admin write for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows entitlement-independent history read for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows hr read for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows hr write for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows capability read for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session allows capability write for an ON_LEAVE session",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session rejects a non-admin from the entitlement-independent admin procedure",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "procedure guards admit a healthy session keeps authenticated history readable and audited when its module is disabled",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera renewal audit redaction before resolver suppression (F3-R1) keeps entitlement denial audited while removing the prior grant identifier",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera renewal audit redaction before resolver suppression (F3-R1) keeps capability denial audited while removing the prior grant identifier",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera renewal audit redaction before resolver suppression (F3-R1) keeps license denial audited while removing the prior grant identifier",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera renewal audit redaction before resolver suppression (F3-R1) keeps invalid-input denial audited while removing the prior grant identifier",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera renewal audit redaction before resolver suppression (F3-R1) redacts exact nested identifier keys without changing unrelated grant metadata",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/receipts/receipt-designer.test.tsx",
+      "assertions": [
+        {
+          "name": "receipt designer renders Unicode layout text losslessly in the existing browser preview",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt designer preserves draft after failed save and makes reset an explicit save",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt designer shows permission denial without an editable form",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt designer marks invalid text and disables saving while retaining input",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/restaurant/restaurant-camera-player.test.tsx",
+      "assertions": [
+        {
+          "name": "native HLS avoids the MSE adapter and clears media on unmount",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "MSE loads authorized URL, disables network retries, renews, and destroys old adapter",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "unsupported browser stops grant renewal",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "revocation even on a nonfatal media request stops and destroys without recovery",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "codec failure and loading timeout show explicit stopped states",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/restaurant/restaurant-camera-wizard.test.tsx",
+      "assertions": [
+        {
+          "name": "RestaurantCameraWizard owner-provisioned registration preserves inputs without a simulated check or unused port",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCameraWizard registration failure preserves values and displays a safe error",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCameraWizard legacy connection rejection is handled locally",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCameraWizard renders database-provided brands and the equally reachable manual choice",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCameraWizard opens the manual details form when the catalog is empty",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCameraWizard enables the gateway choice when one branch arrives asynchronously",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/restaurant/restaurant-cameras-console.test.tsx",
+      "assertions": [
+        {
+          "name": "RestaurantCamerasConsole gateway availability renders an accessible not-configured state without feeds or recordings",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCamerasConsole gateway availability renders a status while availability is loading",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCamerasConsole gateway availability preserves the existing camera controls behind the availability gate",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "RestaurantCamerasConsole gateway availability real-mode diagnostics are explicit, manual and never load recordings",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/restaurant/restaurant-devices-console.test.tsx",
+      "assertions": [
+        {
+          "name": "Restaurant device security UI gates queries, clears submitted co-auth secrets, and forgets closed enrollment secrets",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant device security UI shows loading instead of a false zero device count",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant device security UI confirms a friendly device and exposes the rotated secret in an accessible one-time state",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant device security UI keeps device actions available without staff-directory access and preserves approver failures",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/server/routers/restaurant-cameras.test.ts",
+      "assertions": [
+        {
+          "name": "restaurant cameras router security contract uses strict tenant inputs without accepting organizationId",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "restaurant cameras router security contract keeps approver proof additive to the acting identity",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "restaurant cameras router security contract fails closed when persistent camera credential encryption is not configured",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "restaurant cameras router security contract does not return gateway URLs and gates simulated operations behind runtime availability",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "restaurant cameras router security contract authorizes camera enrollment against an active gateway in the selected branch",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/receipts/configuration.test.ts",
+      "assertions": [
+        {
+          "name": "shared receipt design input defaults only absent storage and rejects corrupt or future settings",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input wraps every preview line for 58mm",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input wraps every preview line for 80mm",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"\\u001b@\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"\\u001dV\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"\\u0000\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"\\r\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"<script>alert(1)</script>\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"\u202e\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"\u0085\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects unsafe text \"\\ud800\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input preserves Unicode layout and facts for 58mm browser output",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input preserves Unicode layout and facts for 80mm browser output",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input rejects money-hiding fields, arbitrary widths and excessive input",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input keeps every mandatory fact unchanged with optional fields off",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shared receipt design input preserves blank lines, wraps long words, rejects printer commands in facts",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/receipts/restaurant-settings.test.ts",
+      "assertions": [
+        {
+          "name": "receipt layout persistence boundary (mocked, not RLS proof) denies unavailable branch reads instead of returning defaults",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt layout persistence boundary (mocked, not RLS proof) scopes reads to active branches in the authenticated organization",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt layout persistence boundary (mocked, not RLS proof) atomically scopes writes by organization, branch, active state and revision",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt layout persistence boundary (mocked, not RLS proof) rejects stale, foreign or inactive branches without revealing existence",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt layout persistence boundary (mocked, not RLS proof) propagates database errors and rejects invalid input before writing",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/pharmacy/counter-browser-print.test.ts",
+      "assertions": [
+        {
+          "name": "isolated Pharmacy browser receipt uses THERMAL_58 physical width",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt uses THERMAL physical width",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt uses A4 physical width",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt preserves supplied amounts and source on reprint, without repricing",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt escapes markup, excludes patient, prescription, return and fiscal extras",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt supports Urdu direction without a lossy thermal byte encoding",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt renders every issued allocation with one amount in THERMAL_58",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt renders every issued allocation with one amount in THERMAL",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt renders every issued allocation with one amount in A4",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt localizes unavailable identity without catalog fallback in en",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt localizes unavailable identity without catalog fallback in ur",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt treats missing legacy identity status honestly and rejects shared-schema control input",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt refuses unsettled, empty, invalid amounts and unsupported input before opening a window",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt reports blocked popups without printing the POS page",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt prints the isolated document, disconnects opener and leaves receipt available",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "isolated Pharmacy browser receipt closes the isolated window on print failure and exposes retry guidance",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/pharmacy/counter-query-refresh.test.ts",
+      "assertions": [
+        {
+          "name": "counter post-mutation refresh keeps committed lines when initial empty read resolves before the fresh read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "counter post-mutation refresh keeps committed lines when initial empty read resolves after the fresh read",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "counter post-mutation refresh refreshes an already settled cart",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/pharmacy/receipt-identity.test.ts",
+      "assertions": [
+        {
+          "name": "issued receipt identity correspondence preserves both actual quantities independently of allocation ID order",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence marks missing historic evidence unavailable, ignoring status-only completion",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence refuses multiple numbered issuance snapshots",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for unknown version",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong sale",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong device",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong receipt",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong date",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong issued time",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for missing line",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for duplicate line",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong medicine",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong presentation",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for missing allocation",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for duplicate allocation",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong lot",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for wrong quantity",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence fails closed for missing name",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issued receipt identity correspondence refuses allocation totals inconsistent with the persisted line",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/pharmacy/settlement.test.ts",
+      "assertions": [
+        {
+          "name": "pharmacy settlement invariants uses exact integer minor units for split coverage",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "pharmacy settlement invariants caps cumulative refunds at the original tender",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "pharmacy settlement invariants makes a mock adapter impossible in a release build",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "pharmacy settlement invariants rejects uncertified providers in every environment",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "pharmacy settlement invariants reproduces a close from immutable sources regardless of read order",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "pharmacy settlement invariants folds float, cash sales, refunds, paid-in and paid-out exactly",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "pharmacy settlement invariants replays one idempotency result without duplicating tender or receipt",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/camera-credentials.test.ts",
+      "assertions": [
+        {
+          "name": "camera credential sealing round-trips under authenticated encryption",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera credential sealing sealed material is absent from serialized read shapes",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/camera-gateway-runtime.test.ts",
+      "assertions": [
+        {
+          "name": "camera gateway runtime boundary allows an explicitly configured simulator in development",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera gateway runtime boundary allows an explicitly configured simulator in test",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera gateway runtime boundary rejects the simulator in production",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera gateway runtime boundary rejects the simulator when the runtime environment is absent or unknown",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera gateway runtime boundary fails closed without configuration and exposes no environment value or URL",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera gateway runtime boundary rejects unknown configuration without reflecting its value",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/camera-gateway.test.ts",
+      "assertions": [
+        {
+          "name": "camera gateway contract is HLS-only and the simulator requires no network",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera gateway contract returns exactly three coarse connection outcomes without secrets or URLs",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/cameras.test.ts",
+      "assertions": [
+        {
+          "name": "camera gateway trust primitives mints a 256-bit rcg secret and deterministic SHA-256 hash",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera gateway trust primitives revoked gateways are unusable and always report revoked",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/checkout-routes.test.ts",
+      "assertions": [
+        {
+          "name": "checkout money serialization preserves two decimals for 0 across summary and receipt shapes",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "checkout money serialization preserves two decimals for 3 across summary and receipt shapes",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "checkout money serialization preserves two decimals for 3.5 across summary and receipt shapes",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/(app)/settings/settings-entitlements.test.tsx",
+      "assertions": [
+        {
+          "name": "Settings entitlement presentation renders disabled API state without a New Token action",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Settings entitlement presentation renders disabled Webhooks state without a New Webhook action",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Settings entitlement presentation renders normal creation actions when modules are enabled",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Settings entitlement presentation keeps existing tokens visible and revocable while API access is disabled",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Settings entitlement presentation keeps existing webhooks visible and deletable but prevents activation while disabled",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Settings entitlement presentation keeps a stale create form open and renders the readable FORBIDDEN message",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Settings entitlement presentation uses plan-oriented copy for source NONE",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Settings entitlement presentation renders a safe query fallback instead of a raw server error",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Print routing settings preserves sibling station routes when editing and saving the first route",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Print routing settings dispatches a synthetic receipt test with stable retry identity and honest delivery status",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Print routing settings renders the KOT/KDS explanation and empty state",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Print routing settings exposes labelled branch, station, printer, enable, and save controls",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/pharmacy/counter/counter-receipt-view.test.tsx",
+      "assertions": [
+        {
+          "name": "offers labeled paper selection and routes printing through the provided handler",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "disables controls while refreshing the receipt",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "labels reprints and disables unissued receipts",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shows retry on failed or permission-denied receipt reads",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "does not expose print actions while idle",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "does not expose print actions while loading",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "shows both allocation subrows, Unicode and one unchanged financial line",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "localizes UNAVAILABLE identity and hides unverified catalog labels",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "localizes undefined identity and hides unverified catalog labels",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "disables printing when shared semantic validation rejects the receipt",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/restaurant/pos/receipt-print-controls.test.tsx",
+      "assertions": [
+        {
+          "name": "Receipt print controls names branch/register/printer, prevents duplicate clicks and reports queued honestly",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Receipt print controls disables dispatch without a printer while keeping browser fallback available",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Receipt print controls requires a reprint reason and preserves its request ID after uncertain failure",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Receipt print controls refreshes actual offline status without resubmitting",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Receipt print controls requires duplicate acknowledgement for browser copies and never treats afterprint as success",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback prints the identical captured shared preview at its captured width after settings change",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback keeps shared Unicode browser output available while disabling unsupported raw dispatch",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback disables all printing for invalid previews, without a plain-text bypass",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback handles a server INVALID_PRINT_DOCUMENT refusal without claiming uncertain delivery",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback handles a server UNSUPPORTED_PRINT_TEXT refusal without claiming uncertain delivery",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback requests 58 mm paper with canonical facts and inert Unicode text",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback requests 80 mm paper with canonical facts and inert Unicode text",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback reports blocked popups without claiming a dialog",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Browser receipt fallback refuses missing validated text before opening a popup",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/components/restaurant/pos/receipt-view.test.tsx",
+      "assertions": [
+        {
+          "name": "ReceiptView renders settled receipt items, totals, tender, tip, and change",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/cameras/live-session.test.ts",
+      "assertions": [
+        {
+          "name": "renews with prior grant before 60 seconds and continues beyond original expiry",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "failed or revoked renewal stops without retry",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "close ignores pending results and cancels renewal",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "hung authorization has a deadline and ignores late success",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "bounds even successful sessions to thirty grants",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "expired or malformed grants never load media",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/cameras/stream-grants.test.ts",
+      "assertions": [
+        {
+          "name": "initial and renewed grants retain 60 second expiry and current viewer",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "renewal denies revoked, expired, missing, cross-user, cross-camera and cross-tenant grants",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "issuance denies disabled camera and revoked, missing or cross-branch gateway",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "recording RPC reports unsupported explicitly",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/printing/printing.test.ts",
+      "assertions": [
+        {
+          "name": "ESC/POS printing matches the golden byte fixture",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "ESC/POS printing prefers station routing and never duplicates a completed replay",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "ESC/POS printing replays across service restarts from durable persistence",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "ESC/POS printing reports offline, permits retry, and completes once without duplication",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "ESC/POS printing fails closed for missing routes and branch-mismatched configuration",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "ESC/POS printing scopes idempotency by organization",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/lib/restaurant/printing/receipt-snapshot.test.ts",
+      "assertions": [
+        {
+          "name": "queued receipt snapshot prints the exact shared 58 mm preview and mandatory facts",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot prints the exact shared 80 mm preview and mandatory facts",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot captures layout and facts independently of subsequent mutations",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot keeps legacy ASCII documents supported",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects snapshots on kitchen tickets",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects raw Unicode in legacy title with a usable fallback",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects raw Unicode in legacy reference with a usable fallback",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects raw Unicode in legacy footer with a usable fallback",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects raw Unicode in legacy label with a usable fallback",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects commands/invalid text before trimming or rendering: \"\\u001b@\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects commands/invalid text before trimming or rendering: \"\\n\\u001dV\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects commands/invalid text before trimming or rendering: \"\\rtitle\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects commands/invalid text before trimming or rendering: \"\\titem\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects commands/invalid text before trimming or rendering: \"\u0085\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects commands/invalid text before trimming or rendering: \"\\ud800\"",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot shares complete Unicode facts with inert 58mm browser output, never raw printing",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot shares complete Unicode facts with inert 80mm browser output, never raw printing",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot accepts complete ASCII snapshots through the explicit raw boundary",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "queued receipt snapshot rejects missing monetary facts and injected commands in snapshots",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/restaurant/receipt-layout/route.test.ts",
+      "assertions": [
+        {
+          "name": "receipt settings authorization loads settings and saves using server organization identity",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization rejects missing/foreign origin null before context",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization rejects missing/foreign origin https://attacker.example before context",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization denies capability and module failures on reads and writes",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization denies unusable or cross-tenant session null",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization denies unusable or cross-tenant session {\"status\":\"ACTIVE\",\"sessionRevoked\":true}",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization denies unusable or cross-tenant session {\"status\":\"INACTIVE\"}",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization denies unusable or cross-tenant session {\"status\":\"ACTIVE\",\"organizationId\":\"other\"}",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "receipt settings authorization rejects invalid payloads and hides internal errors",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/restaurant/print-bridge/route.test.ts",
+      "assertions": [
+        {
+          "name": "print bridge authorization boundary rejects sibling branch submission before branch lookup or queue writes",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "print bridge authorization boundary allows primary branch submission",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "print bridge authorization boundary allows assignment branch submission",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "print bridge authorization boundary allows organization configurator routing and rejects unauthorized routing",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "print bridge authorization boundary returns actionable raw Unicode fallback without persisting through the real enqueue service",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "print bridge authorization boundary passes authenticated device identity when claiming",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "print bridge authorization boundary requires a claim token and never accepts client-supplied device identity",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "print bridge authorization boundary forwards valid token with authenticated identity and rejects invalid claim",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/restaurant/checkout/receipt/route.test.ts",
+      "assertions": [
+        {
+          "name": "Restaurant receipt dispatch queues canonical saved totals/tenders, branch routing, and actor attribution",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch captures new saved settings but preserves prior queued layout and exact browser preview",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch carries fractional split and every saved line/tender amount without recalculation",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch preserves saved tax currency, rate buckets and discount allocations",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch preserves shared Urdu layout and logical Unicode text but refuses raw queue acceptance",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch deduplicates first prints across transport keys and preserves offline status after routing removal",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch requires an explicit reason, deduplicates reprint request IDs, and rejects changed retry reasons",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch compares the entire captured reprint reason even when it contains a second reason label",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch fails closed on corrupt saved layouts without creating a job",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch refuses another copy when existing delivery is PENDING",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch refuses another copy when existing delivery is OFFLINE",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch refuses another copy when existing delivery is NO_PRINTER",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch does not enqueue when no receipt route exists",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch rejects cross-branch and missing/unsettled bills before queue access",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch requires an unlocked operator, payment capability, and POS register",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch rejects missing idempotency headers and client money/routing fields",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch rejects an unsupported label instead of corrupting receipt facts",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch rejects an unsupported label instead of corrupting receipt facts",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch rejects an unsupported label instead of corrupting receipt facts",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch invalid facts receive no browser fallback: bad\u001bname",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch invalid facts receive no browser fallback: xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "Restaurant receipt dispatch returns scoped receipt preview/status with no-store and no raw job document exposure",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    },
+    {
+      "file": "src/app/api/restaurant/cameras/[cameraId]/stream/route.test.ts",
+      "assertions": [
+        {
+          "name": "camera stream proxy threat controls freshly validates grant, camera, tenant, branch and gateway on every request",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera stream proxy threat controls never accepts an upstream URL and refuses redirects and oversized bodies",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "camera stream proxy threat controls fails closed before reading grants or gateway URLs when runtime support is unavailable",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    }
+  ]
+}

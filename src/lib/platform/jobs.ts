@@ -9,6 +9,13 @@ import {
   type PrismaClient,
 } from '@/generated/prisma/client';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
+import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, cameraEvidenceDueSql } from '@/lib/cameras/evidence';
+import {
+  PHARMACY_CAMERA_SNAPSHOT_JOB,
+  runCameraEvidenceRetentionJob,
+  runCounterEvidenceSnapshotJob,
+} from '@/lib/pharmacy/counter-evidence';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -25,6 +32,7 @@ const CONTROL_PLANE_TABLES = new Set([
   'organization_brands',
   'platform_jobs',
   'platform_audit_logs',
+  'platform_support_sessions',
   'platform_contracts',
   'platform_contract_modules',
   'platform_invoices',
@@ -145,14 +153,13 @@ async function sharedProvision(
 }
 
 function vercelConfiguration() {
-  const bearerToken = process.env.VERCEL_ACCESS_TOKEN;
-  const teamId = process.env.VERCEL_TEAM_ID ?? process.env.VERCEL_ORG_ID;
-  if (!bearerToken || !teamId) {
+  const configuration = vercelProvisioningConfiguration();
+  if (!configuration) {
     throw new Error(
-      'Dedicated provisioning requires VERCEL_ACCESS_TOKEN and VERCEL_TEAM_ID (or VERCEL_ORG_ID).'
+      'Dedicated provisioning is unavailable because Vercel provisioning is not configured for this environment. Choose shared provisioning or ask a platform administrator to configure Vercel.'
     );
   }
-  return { bearerToken, teamId };
+  return configuration;
 }
 
 async function dedicatedProvision(
@@ -541,33 +548,83 @@ async function exportData(
   };
 }
 
-type TableDependency = { tableName: string; parentTable: string | null };
+type TableDependency = {
+  tableName: string;
+  parentTable: string | null;
+  /**
+   * The referencing columns that may be set to NULL, for a foreign key that has
+   * any. Under MATCH SIMPLE a composite key with one NULL member is not
+   * enforced, so clearing these detaches the reference without touching the row
+   * it points at. `null` marks a key that cannot be detached this way.
+   */
+  nullableColumns: string[] | null;
+};
 
-function deletionOrder(rows: TableDependency[]): string[] {
+/** A reference cleared before the deletes, to break a cycle. See {@link deletionPlan}. */
+type Detachment = { tableName: string; columns: string[] };
+
+type DeletionPlan = { detach: Detachment[]; order: string[] };
+
+/**
+ * Order the tenant's tables so that every row is deleted before the rows it
+ * refers to, and name the references that have to be cleared first.
+ *
+ * Mutual references are legitimate — a pharmacy branch names its default stock
+ * location while every stock location belongs to a branch — but both sides are
+ * ON DELETE RESTRICT, and RESTRICT fires immediately rather than at the end of
+ * the statement, so neither table can be emptied while the other still points at
+ * it. Where a cycle's edge is optional, clearing it is the resolution the schema
+ * already allows: the pointer is nullable precisely because a branch need not
+ * name a default location.
+ *
+ * A cycle with no optional edge is a schema defect rather than a purge-time
+ * decision, and still throws.
+ */
+function deletionPlan(rows: TableDependency[]): DeletionPlan {
   const tables = new Set(
     rows.map((row) => row.tableName).filter((table) => !CONTROL_PLANE_TABLES.has(table))
   );
+  const edges = rows.filter(
+    (row) => row.parentTable && tables.has(row.tableName) && tables.has(row.parentTable)
+  );
   const parents = new Map<string, Set<string>>();
   for (const table of tables) parents.set(table, new Set());
-  for (const row of rows) {
-    if (!row.parentTable || !tables.has(row.tableName) || !tables.has(row.parentTable)) continue;
-    parents.get(row.tableName)!.add(row.parentTable);
-  }
-  const result: string[] = [];
+  for (const row of edges) parents.get(row.tableName)!.add(row.parentTable!);
+
+  const detach: Detachment[] = [];
+  const order: string[] = [];
   while (tables.size) {
     const children = [...tables].filter(
       (candidate) =>
         ![...tables].some((other) => other !== candidate && parents.get(other)?.has(candidate))
     );
     if (!children.length) {
-      throw new Error(`Tenant data contains a cyclic delete dependency: ${[...tables].join(', ')}`);
+      const optional = edges.find(
+        (row) =>
+          row.nullableColumns?.length && tables.has(row.tableName) && tables.has(row.parentTable!)
+      );
+      if (!optional) {
+        throw new Error(
+          `Tenant data contains a cyclic delete dependency with no optional reference to clear: ${[...tables].join(', ')}`
+        );
+      }
+      detach.push({ tableName: optional.tableName, columns: optional.nullableColumns! });
+      // Drop only this edge; the same pair may be joined by more than one key.
+      edges.splice(edges.indexOf(optional), 1);
+      parents.set(
+        optional.tableName,
+        new Set(
+          edges.filter((row) => row.tableName === optional.tableName).map((row) => row.parentTable!)
+        )
+      );
+      continue;
     }
     for (const child of children) {
-      result.push(child);
+      order.push(child);
       tables.delete(child);
     }
   }
-  return result;
+  return { detach, order };
 }
 
 function quoteIdentifier(value: string): string {
@@ -593,15 +650,41 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
       FROM information_schema.columns
       WHERE table_schema = 'public' AND column_name = 'organizationId'
     )
-    SELECT child.relname AS "tableName", parent.relname AS "parentTable"
+    SELECT child.relname AS "tableName",
+           parent.relname AS "parentTable",
+           (
+             -- ::text because "attname" is the "name" type, which the driver
+             -- adapter cannot deserialize as an array.
+             SELECT array_agg(attribute.attname::text)
+             FROM unnest(constraint_row.conkey) AS key(attnum)
+             JOIN pg_attribute attribute
+               ON attribute.attrelid = child.oid AND attribute.attnum = key.attnum
+             WHERE NOT attribute.attnotnull
+           ) AS "nullableColumns"
     FROM tenant_tables tt
-    JOIN pg_class child ON child.relname = tt.table_name
+    JOIN pg_class child
+      ON child.relname = tt.table_name AND child.relnamespace = 'public'::regnamespace
     LEFT JOIN pg_constraint constraint_row
       ON constraint_row.conrelid = child.oid AND constraint_row.contype = 'f'
     LEFT JOIN pg_class parent ON parent.oid = constraint_row.confrelid
   `);
+  const plan = deletionPlan(dependencies);
+  // Authorise the destruction of this one tenant's append-only history. The
+  // retention worker empties tenant tables individually rather than through a
+  // cascade, so tables that refuse a bare DELETE — pharmacy onboarding events —
+  // have no vanished parent row to recognise it by. Transaction-local, and
+  // scoped to the organization this job names.
+  await db.$queryRaw`SELECT set_config('app.purging_organization_id', ${organizationId}, true)`;
+  for (const { tableName, columns } of plan.detach) {
+    await db.$executeRawUnsafe(
+      `UPDATE ${quoteIdentifier(tableName)} SET ${columns
+        .map((column) => `${quoteIdentifier(column)} = NULL`)
+        .join(', ')} WHERE "organizationId" = $1`,
+      organizationId
+    );
+  }
   const counts: Record<string, number> = {};
-  for (const table of deletionOrder(dependencies)) {
+  for (const table of plan.order) {
     const count = await db.$executeRawUnsafe(
       `DELETE FROM ${quoteIdentifier(table)} WHERE "organizationId" = $1`,
       organizationId
@@ -670,10 +753,20 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PURGE_DATA: (database, item) => purgeData(database, item),
         SUSPEND: (database, item) => setDeploymentAvailability(database, item, true),
         RESUME: (database, item) => setDeploymentAvailability(database, item, false),
+        PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
+        CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
+          runCameraEvidenceRetentionJob(database, item),
       };
       return handlers[job.type](db, job, payload);
     },
-    { timeout: job.type === 'EXPORT_DATA' || job.type === 'PURGE_DATA' ? 120_000 : 30_000 }
+    {
+      timeout:
+        job.type === 'EXPORT_DATA' ||
+        job.type === 'PURGE_DATA' ||
+        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+          ? 120_000
+          : 30_000,
+    }
   );
 }
 
@@ -726,6 +819,55 @@ async function failJob(job: PlatformJob, error: unknown): Promise<'retried' | 'f
   return retry ? 'retried' : 'failed';
 }
 
+const CAMERA_EVIDENCE_RELAY_LIMIT = 50;
+const CAMERA_EVIDENCE_RETENTION_JOB = 'camera.evidence.retention.v1';
+
+/**
+ * CAM-2: turn pending counter evidence into snapshot jobs, and give every
+ * organization with due retention work (a still past its gateway period, or a
+ * capture past its window) at most one retention pass per UTC hour. Both are
+ * keyed, so each worker run can repeat them without queueing anything twice.
+ */
+async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
+  await withPlatformDb(async (db) => {
+    const windowStart = new Date(now.getTime() - CAMERA_EVIDENCE_CAPTURE_WINDOW_MS);
+    const pending = await db.$queryRaw<Array<{ id: string; organizationId: string }>>(Prisma.sql`
+      SELECT e."id", e."organizationId"
+      FROM "camera_evidence" e
+      LEFT JOIN "platform_jobs" j
+        ON j."idempotencyKey" = ${`${PHARMACY_CAMERA_SNAPSHOT_JOB}:`} || e."id"
+      WHERE e."status" = 'PENDING' AND e."requestedAt" >= ${windowStart} AND j."id" IS NULL
+      ORDER BY e."requestedAt" ASC, e."id" ASC
+      LIMIT ${CAMERA_EVIDENCE_RELAY_LIMIT}
+    `);
+    const holders = await db.$queryRaw<Array<{ organizationId: string }>>(Prisma.sql`
+      SELECT DISTINCT e."organizationId"
+      FROM "camera_evidence" e
+      JOIN "cameras" c ON c."organizationId" = e."organizationId" AND c."id" = e."cameraId"
+      JOIN "camera_gateways" g ON g."organizationId" = c."organizationId" AND g."id" = c."gatewayId"
+      WHERE (${cameraEvidenceDueSql(now)})
+         OR (e."status" = 'PENDING' AND e."requestedAt" < ${windowStart})
+    `);
+    const hour = now.toISOString().slice(0, 13);
+    await db.platformJob.createMany({
+      data: [
+        ...pending.map((evidence) => ({
+          organizationId: evidence.organizationId,
+          type: 'PHARMACY_CAMERA_SNAPSHOT_V1' as const,
+          payload: { evidenceId: evidence.id },
+          idempotencyKey: `${PHARMACY_CAMERA_SNAPSHOT_JOB}:${evidence.id}`,
+        })),
+        ...holders.map(({ organizationId }) => ({
+          organizationId,
+          type: 'CAMERA_EVIDENCE_RETENTION_V1' as const,
+          idempotencyKey: `${CAMERA_EVIDENCE_RETENTION_JOB}:${organizationId}:${hour}`,
+        })),
+      ],
+      skipDuplicates: true,
+    });
+  });
+}
+
 export type ProcessJobsResult = {
   recovered: number;
   claimed: number;
@@ -736,6 +878,7 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
+  await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,

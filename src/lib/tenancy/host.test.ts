@@ -215,6 +215,7 @@ describe('reserved host labels', () => {
       'staging',
       'turn',
       'turn-staging',
+      'wallet',
       'www',
     ]);
   });

@@ -1,8 +1,11 @@
 name: Deploy staging
 
+# Disabled automatic deploys (release/wp05-07, 22 Oct 2026): this workflow
+# deployed to the retired Azure staging on every push to main. Staging now runs
+# on AWS (ap-southeast-1) per docs AWS runbook, so merging the WP05-07 release
+# into main must not trigger an Azure deploy. Manual dispatch only until the
+# workflow is retired or pointed at AWS.
 on:
-  push:
-    branches: [main]
   workflow_dispatch:
 
 permissions:
@@ -25,7 +28,7 @@ jobs:
         image: postgres:17
         env:
           POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: devfathom_ci
+          POSTGRES_DB: devfathom_ci_admin
         ports: ['5432:5432']
         options: >-
           --health-cmd "pg_isready -U postgres"
@@ -33,11 +36,24 @@ jobs:
           --health-timeout 5s
           --health-retries 20
     env:
-      # A throwaway database created fresh for this run — never a database with
-      # data anyone needs. `test:rls` is destructive by design.
-      DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci
-      SHADOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_shadow
-      TEST_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci
+      # Explicitly disposable databases and CI-only credentials. The app, including
+      # production-mode `next start`, uses the NOSUPERUSER/NOBYPASSRLS runtime role.
+      # Migrations, extensions, and seed use MIGRATION_DATABASE_URL.
+      DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
+      MIGRATION_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      SHADOW_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_shadow_test
+      EXTENSION_ADMIN_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      OWNER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      TEST_DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
+      M8_TEST_OWNER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      M8_TEST_RUNTIME_DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
+      WHA910_TEST_OWNER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      WHA910_TEST_RUNTIME_DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
+      WHA874_TEST_OWNER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      WHA434_TEST_OWNER_DATABASE_URL: postgresql://postgres:postgres@127.0.0.1:5432/devfathom_ci_test
+      WHA434_TEST_RUNTIME_DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
+      CAMERA_TEST_DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
+      MENU_IMPORT_TEST_DATABASE_URL: postgresql://devfathom_ci_runtime:ci-runtime-only@127.0.0.1:5432/devfathom_ci_test
       AUTH_SECRET: ci-only-secret-value-not-used-anywhere-else
       # The end-to-end step serves the production build, and Auth.js refuses an
       # untrusted host in production mode. Staging sets both of these on the
@@ -88,20 +104,73 @@ jobs:
           fi
           printf '%s\n' "${changed[@]}"
           bunx prettier --check "${changed[@]}"
-      - run: bun run test
-      - name: Prepare a disposable database
+      - name: Prepare migrated disposable databases
         run: |
           set -euo pipefail
-          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -c 'CREATE DATABASE devfathom_ci_shadow;'
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d devfathom_ci_admin <<'SQL'
+          CREATE DATABASE devfathom_ci_test;
+          CREATE DATABASE devfathom_ci_shadow_test;
+          SQL
+          bunx tsx prisma/prepare-extensions.ts
           bunx prisma migrate deploy
-          bunx prisma db seed
+          DATABASE_URL="$MIGRATION_DATABASE_URL" bunx prisma db seed
+      - name: Create restricted database test role
+        run: |
+          set -euo pipefail
+          PGPASSWORD=postgres psql -h 127.0.0.1 -U postgres -d devfathom_ci_test <<'SQL'
+          CREATE ROLE devfathom_ci_runtime
+            LOGIN PASSWORD 'ci-runtime-only'
+            NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+          GRANT CONNECT ON DATABASE devfathom_ci_test TO devfathom_ci_runtime;
+          GRANT USAGE ON SCHEMA public TO devfathom_ci_runtime;
+          GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO devfathom_ci_runtime;
+          GRANT USAGE, SELECT, UPDATE ON ALL SEQUENCES IN SCHEMA public TO devfathom_ci_runtime;
+          SQL
+          role_attributes=$(PGPASSWORD=ci-runtime-only psql \
+            -h 127.0.0.1 -U devfathom_ci_runtime -d devfathom_ci_test \
+            -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text FROM pg_roles WHERE rolname = current_user")
+          if [ "$role_attributes" != 'false:false' ]; then
+            echo "Runtime database role is not restricted: $role_attributes" >&2
+            exit 1
+          fi
+      - name: Required database tests (zero skipped or pending)
+        run: |
+          set -euo pipefail
+          report="$RUNNER_TEMP/required-db-vitest.json"
+          bunx vitest run \
+            src/lib/department-provisioning.db.test.ts \
+            src/server/restaurant-branch-scope.db.test.ts \
+            tests/restaurant-m3-rls.test.ts \
+            tests/restaurant-m8-rls.test.ts \
+            src/lib/restaurant/sop-execution.test.ts \
+            src/lib/restaurant/camera-schema.test.ts \
+            tests/restaurant-menu-import-acceptance.db.test.ts \
+            --reporter=json --outputFile="$report"
+          # shellcheck disable=SC2016
+          bun -e '
+            const report = await Bun.file(process.argv[1]).json();
+            const pending = report.numPendingTests ?? report.testResults
+              ?.flatMap((suite) => suite.assertionResults ?? [])
+              .filter((test) => test.status === "pending" || test.status === "todo").length ?? 0;
+            if (pending !== 0) {
+              console.error(`Required database tests contained ${pending} skipped/pending tests.`);
+              process.exit(1);
+            }
+          ' "$report"
+      - run: bun run test
       - name: Report any email case collisions
         # Read-only. The normalization migration aborts on a collision rather
         # than guessing, so this prints what an operator would need to resolve.
         run: bun run report:email-collisions
       - run: bun run test:rls
+        env:
+          TEST_DATABASE_URL: ${{ env.OWNER_DATABASE_URL }}
       - run: bun run build
       - name: Playwright end-to-end
+        env:
+          # No edge proxy in CI. One hop is the socket address Next places in
+          # X-Forwarded-For, which production startup now requires.
+          TRUSTED_PROXY_HOPS: '1'
         run: |
           set -euo pipefail
           bunx playwright install --with-deps chromium
@@ -112,6 +181,7 @@ jobs:
           name: playwright-report
           path: |
             playwright-report
+            playwright-artifacts
             test-results
           retention-days: 7
 

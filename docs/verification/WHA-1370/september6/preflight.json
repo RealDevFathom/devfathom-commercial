@@ -1,0 +1,56 @@
+{
+  "base": "8ba9dc87ca7906ba915ec66780df52619b552f6d",
+  "tree": "c6f8f5ddefd96f00474e43b97653c5b9acd3cb9e",
+  "sources": [
+    {
+      "source": "ddcf92844f334d476204000a3f8a8d8fa6c1ec51",
+      "parent": "8958012bdf0fea5c3a427d16652e944a05ba0343",
+      "paths": [
+        "src/app/(app)/pharmacy/purchasing/_components/action-form.test.tsx",
+        "src/app/(app)/pharmacy/purchasing/_components/action-form.tsx",
+        "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx"
+      ],
+      "patchId": "a0662ce038305aee058a39223412e1e0a55ca659"
+    },
+    {
+      "source": "d5f82ed682af9fdeedb1f1b804efc232e0730bb4",
+      "parent": "ddcf92844f334d476204000a3f8a8d8fa6c1ec51",
+      "paths": [
+        "src/app/(app)/pharmacy/purchasing/_components/action-form.tsx",
+        "src/app/(app)/pharmacy/purchasing/_components/action-outcomes.tsx",
+        "src/app/(app)/pharmacy/purchasing/orders/page.tsx",
+        "src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+        "src/app/(app)/pharmacy/purchasing/receiving/page.tsx",
+        "src/app/(app)/pharmacy/purchasing/returns/page.tsx",
+        "src/app/(app)/pharmacy/purchasing/suppliers/page.tsx"
+      ],
+      "patchId": "3f52344565b28e13f429f208273058e3ba4a07ac"
+    },
+    {
+      "source": "7e02c9d314d18aa6e3232e15aef2041042299857",
+      "parent": "d5f82ed682af9fdeedb1f1b804efc232e0730bb4",
+      "paths": [
+        "src/app/(app)/pharmacy/purchasing/_components/action-form.tsx",
+        "src/app/(app)/pharmacy/purchasing/_components/action-outcomes.tsx",
+        "src/app/(app)/pharmacy/purchasing/orders/page.tsx",
+        "src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+        "src/app/(app)/pharmacy/purchasing/receiving/page.tsx",
+        "src/app/(app)/pharmacy/purchasing/returns/page.tsx",
+        "src/app/(app)/pharmacy/purchasing/suppliers/page.tsx"
+      ],
+      "patchId": "596886ad97d6e9f9c84bebe0f0408ee501d3314c"
+    }
+  ],
+  "expectedFiles": [
+    "src/app/(app)/pharmacy/purchasing/_components/action-form.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/_components/action-form.tsx",
+    "src/app/(app)/pharmacy/purchasing/_components/action-outcomes.tsx",
+    "src/app/(app)/pharmacy/purchasing/orders/page.tsx",
+    "src/app/(app)/pharmacy/purchasing/purchasing-console.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/purchasing-lifecycle.test.tsx",
+    "src/app/(app)/pharmacy/purchasing/receiving/page.tsx",
+    "src/app/(app)/pharmacy/purchasing/returns/page.tsx",
+    "src/app/(app)/pharmacy/purchasing/suppliers/page.tsx"
+  ],
+  "sourceIssueId": "1e3b79aa-323a-464f-85e8-6761fc931c02"
+}

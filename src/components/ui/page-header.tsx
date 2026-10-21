@@ -37,12 +37,12 @@ function PageHeader({
     <div
       data-slot="page-header"
       className={cn(
-        'fieldbook-page-header mb-10 flex flex-col gap-5 border-b border-border-default pb-7 sm:flex-row sm:items-start sm:justify-between',
+        'fieldbook-page-header mb-10 flex flex-col gap-5 border-b border-border-default pb-7 2xl:flex-row 2xl:items-start 2xl:justify-between',
         className
       )}
       {...props}
     >
-      <div className="flex min-w-0 items-stretch gap-4 sm:gap-5">
+      <div className="flex w-full min-w-0 items-stretch gap-4 sm:gap-5 2xl:flex-1">
         <span aria-hidden className="fieldbook-page-marker mt-1 shrink-0" />
         {media != null ? <div className="shrink-0 self-start">{media}</div> : null}
         <div className="min-w-0 space-y-2">
@@ -58,7 +58,9 @@ function PageHeader({
         </div>
       </div>
       {actions != null ? (
-        <div className="flex shrink-0 flex-wrap items-center gap-2 sm:justify-end">{actions}</div>
+        <div className="flex w-full min-w-0 flex-wrap items-center gap-2 2xl:w-auto 2xl:justify-end">
+          {actions}
+        </div>
       ) : null}
     </div>
   );

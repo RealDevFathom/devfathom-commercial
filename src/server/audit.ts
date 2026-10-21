@@ -1,4 +1,6 @@
-import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
+import { afterTenantTransaction } from '@/lib/side-effects/scope';
+import { clientIp } from '@/lib/rate-limit';
+import { type ScopedDb, withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 /**
  * ============================================================================
@@ -20,7 +22,7 @@ import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 
 // ---- String-literal mirrors of the Prisma enums (avoids importing generated
 // enums before `prisma generate` has run). Prisma accepts these strings. ----
-export type AuditActorTypeT = 'USER' | 'API_TOKEN' | 'ANONYMOUS' | 'SYSTEM';
+export type AuditActorTypeT = 'USER' | 'API_TOKEN' | 'ANONYMOUS' | 'SYSTEM' | 'RESTAURANT_OPERATOR'; // a restaurant staff operator acting at a terminal (M2) — not a User
 export type AuditSourceT = 'TRPC' | 'REST_API' | 'AUTH' | 'SYSTEM';
 export type AuditOperationT =
   | 'CREATE'
@@ -68,7 +70,7 @@ export interface AuditContext {
     } | null;
   } | null;
   requestMeta?: { ip?: string | null; userAgent?: string | null } | null;
-  audit?: { detail: AuditDetail };
+  audit?: { detail: AuditDetail; db?: ScopedDb };
 }
 
 // ---------------------------------------------------------------------------
@@ -95,7 +97,9 @@ const SENSITIVE_SUBSTRINGS = [
 
 function isSensitiveKey(key: string): boolean {
   const k = key.toLowerCase();
-  return SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
+  // Camera renewal input can be audited before its resolver runs (including
+  // denied or invalid requests). Match the identifier exactly, not all grants.
+  return k === 'previousgrantid' || SENSITIVE_SUBSTRINGS.some((s) => k.includes(s));
 }
 
 const MAX_STRING = 20_000;
@@ -218,9 +222,8 @@ function operationForMethod(method: string): AuditOperationT {
 /** Best-effort client IP from standard proxy headers (Vercel sets these). */
 export function ipFromHeaders(headers: Headers | null | undefined): string | null {
   if (!headers) return null;
-  const fwd = headers.get('x-forwarded-for');
-  if (fwd) return fwd.split(',')[0]?.trim() ?? null;
-  return headers.get('x-real-ip') ?? headers.get('cf-connecting-ip') ?? null;
+  const ip = clientIp(new Request('http://localhost', { headers }));
+  return ip === 'unknown' ? null : ip;
 }
 
 function extractError(err: unknown): { code: string | null; message: string | null } {
@@ -300,6 +303,13 @@ export interface AuditRowInput {
   organizationId?: string | null;
   actorType?: AuditActorTypeT;
   actorId?: string | null;
+  /**
+   * The acting RestaurantStaffProfile id, set INSTEAD of `actorId` when the actor
+   * is a terminal operator (`actorType = 'RESTAURANT_OPERATOR'`). An operator is
+   * not a User, so it must not go through the `actorId` -> users FK. Mutually
+   * exclusive with `actorId` (a DB CHECK enforces this).
+   */
+  actorStaffProfileId?: string | null;
   actorName?: string | null;
   actorEmail?: string | null;
   actorRole?: string | null;
@@ -329,73 +339,117 @@ export interface AuditRowInput {
 }
 
 /**
+ * In production/development an audit write is fire-and-forget: a failure is
+ * logged and swallowed so it can never roll back or fail the user's action.
+ * In tests that swallow is a footgun — a broken write (e.g. an actor foreign-key
+ * violation) would let a mutation "pass" while leaving ZERO durable audit rows.
+ * Under Vitest we therefore DO NOT swallow: each write promise is tracked so a
+ * test can `await flushAuditWritesForTest()` and see any rejection, and an
+ * un-flushed failure surfaces as an unhandled rejection rather than vanishing.
+ */
+const AUDIT_FAIL_LOUD = process.env.NODE_ENV === 'test' || !!process.env.VITEST;
+
+const pendingAuditWrites: Promise<unknown>[] = [];
+
+/**
+ * Test-only: await every audit write recorded since the last flush. Rejects with
+ * the underlying error if any write failed (e.g. a P2003 FK violation), so a
+ * DB-backed test can prove the row was actually persisted. No-op in production.
+ */
+export async function flushAuditWritesForTest(): Promise<void> {
+  const inflight = pendingAuditWrites.splice(0);
+  await Promise.all(inflight);
+}
+
+/**
  * Append one row to the audit log. Fire-and-forget — never blocks or rejects
  * the caller. The `as never` casts let us pass plain JSON into Prisma's `Json`
  * columns (same pattern as logActivity).
  */
-export function recordAudit(row: AuditRowInput): void {
-  const write = row.organizationId
-    ? withTenantDb(row.organizationId, (tenantDb) =>
-        tenantDb.auditLog.create({
-          data: {
-            organizationId: row.organizationId!,
-            actorType: row.actorType ?? 'USER',
-            actorId: row.actorId ?? null,
-            actorName: row.actorName ?? null,
-            actorEmail: row.actorEmail ?? null,
-            actorRole: row.actorRole ?? null,
-            tokenId: row.tokenId ?? null,
-            tokenName: row.tokenName ?? null,
-            source: row.source,
-            category: row.category,
-            operation: row.operation ?? 'OTHER',
-            action: row.action,
-            description: row.description ?? null,
-            targetType: row.targetType ?? null,
-            targetId: row.targetId ?? null,
-            targetLabel: row.targetLabel ?? null,
-            input: (row.input ?? undefined) as never,
-            changes: (row.changes ?? undefined) as never,
-            result: (row.result ?? undefined) as never,
-            metadata: (row.metadata ?? undefined) as never,
-            ip: row.ip ?? null,
-            userAgent: row.userAgent ?? null,
-            httpMethod: row.httpMethod ?? null,
-            path: row.path ?? null,
-            statusCode: row.statusCode ?? null,
-            outcome: row.outcome ?? 'SUCCESS',
-            errorCode: row.errorCode ?? null,
-            errorMessage: row.errorMessage ?? null,
-            durationMs: row.durationMs ?? null,
-          },
+export function recordAudit(row: AuditRowInput, db?: ScopedDb): void | Promise<void> {
+  // Seed actors are uncommitted: their audit rows must share the transaction.
+  // An explicit transaction is awaited and fails closed; normal writes keep
+  // their existing independent, fire-and-forget behavior.
+  if (db && !row.organizationId) {
+    throw new Error('Transactional audit writes require a tenant organization.');
+  }
+  const writeTenant = (tenantDb: ScopedDb) =>
+    tenantDb.auditLog.create({
+      data: {
+        organizationId: row.organizationId!,
+        actorType: row.actorType ?? 'USER',
+        actorId: row.actorId ?? null,
+        actorStaffProfileId: row.actorStaffProfileId ?? null,
+        actorName: row.actorName ?? null,
+        actorEmail: row.actorEmail ?? null,
+        actorRole: row.actorRole ?? null,
+        tokenId: row.tokenId ?? null,
+        tokenName: row.tokenName ?? null,
+        source: row.source,
+        category: row.category,
+        operation: row.operation ?? 'OTHER',
+        action: row.action,
+        description: row.description ?? null,
+        targetType: row.targetType ?? null,
+        targetId: row.targetId ?? null,
+        targetLabel: row.targetLabel ?? null,
+        input: (row.input ?? undefined) as never,
+        changes: (row.changes ?? undefined) as never,
+        result: (row.result ?? undefined) as never,
+        metadata: (row.metadata ?? undefined) as never,
+        ip: row.ip ?? null,
+        userAgent: row.userAgent ?? null,
+        httpMethod: row.httpMethod ?? null,
+        path: row.path ?? null,
+        statusCode: row.statusCode ?? null,
+        outcome: row.outcome ?? 'SUCCESS',
+        errorCode: row.errorCode ?? null,
+        errorMessage: row.errorMessage ?? null,
+        durationMs: row.durationMs ?? null,
+      },
+    });
+  if (db) return writeTenant(db).then(() => undefined);
+  afterTenantTransaction(() => {
+    const write = row.organizationId
+      ? withTenantDb(row.organizationId, writeTenant, {
+          maxWait: 1_000,
+          timeout: 5_000,
+          skipDrain: true,
         })
-      )
-    : withPlatformDb((platformDb) =>
-        platformDb.platformAuditLog.create({
-          data: {
-            actorTenantUserId: row.actorId ?? null,
-            action: row.action,
-            targetType: row.targetType ?? null,
-            targetId: row.targetId ?? null,
-            metadata: {
-              source: row.source,
-              category: row.category,
-              operation: row.operation ?? 'OTHER',
-              description: row.description ?? null,
-              input: toAuditJson(row.input),
-              outcome: row.outcome ?? 'SUCCESS',
-            } as never,
-            requestId: null,
-            success: (row.outcome ?? 'SUCCESS') === 'SUCCESS',
-            error: row.errorMessage ?? null,
-            ip: row.ip ?? null,
-            userAgent: row.userAgent ?? null,
-          },
-        })
-      );
+      : withPlatformDb((platformDb) =>
+          platformDb.platformAuditLog.create({
+            data: {
+              actorTenantUserId: row.actorId ?? null,
+              action: row.action,
+              targetType: row.targetType ?? null,
+              targetId: row.targetId ?? null,
+              metadata: {
+                source: row.source,
+                category: row.category,
+                operation: row.operation ?? 'OTHER',
+                description: row.description ?? null,
+                input: toAuditJson(row.input),
+                outcome: row.outcome ?? 'SUCCESS',
+              } as never,
+              requestId: null,
+              success: (row.outcome ?? 'SUCCESS') === 'SUCCESS',
+              error: row.errorMessage ?? null,
+              ip: row.ip ?? null,
+              userAgent: row.userAgent ?? null,
+            },
+          })
+        );
 
-  void write.catch((err) => {
-    console.error('[audit] failed to record', row.action, err);
+    if (AUDIT_FAIL_LOUD) {
+      // Tests: do not swallow. Track so `flushAuditWritesForTest()` can await and
+      // surface a rejection; an un-flushed failure still raises as unhandled.
+      pendingAuditWrites.push(write);
+      return;
+    }
+
+    void write.catch((err) => {
+      console.error('[audit] failed to record', row.action, err);
+    });
   });
 }
 
@@ -412,47 +466,50 @@ export function recordTrpcAudit(args: {
   outcome: AuditOutcomeT;
   error?: unknown;
   durationMs?: number;
-}): void {
+}): void | Promise<void> {
   const user = args.ctx.session?.user ?? null;
   const detail = args.ctx.audit?.detail ?? {};
   const { code, message } = extractError(args.error);
 
-  recordAudit({
-    organizationId: user?.organizationId ?? null,
-    actorType: user?.id ? 'USER' : 'ANONYMOUS',
-    actorId: user?.id ?? null,
-    actorName: user?.name ?? null,
-    actorEmail: user?.email ?? null,
-    actorRole: user?.role ?? null,
-    source: 'TRPC',
-    category: detail.category ?? categoryForPath(args.path),
-    operation: detail.operation ?? operationForPath(args.path, args.type),
-    action: detail.action ?? args.path,
-    description: detail.description ?? null,
-    targetType: detail.targetType ?? null,
-    targetId: detail.targetId ?? null,
-    targetLabel: detail.targetLabel ?? null,
-    input: detail.skipInput ? '[skipped]' : toAuditJson(args.input),
-    changes: detail.changes ? toAuditJson(detail.changes) : undefined,
-    result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
-    metadata: toAuditJson({
-      ...(detail.metadata ?? {}),
-      ...(user?.isSupportSession
-        ? {
-            supportSessionId: user.supportSessionId,
-            platformUserId: user.platformUserId,
-            actingAsTenantUserId: user.id,
-          }
-        : {}),
-    }),
-    ip: args.ctx.requestMeta?.ip ?? null,
-    userAgent: args.ctx.requestMeta?.userAgent ?? null,
-    path: args.path,
-    outcome: args.outcome,
-    errorCode: code,
-    errorMessage: message,
-    durationMs: args.durationMs ?? null,
-  });
+  return recordAudit(
+    {
+      organizationId: user?.organizationId ?? null,
+      actorType: user?.id ? 'USER' : 'ANONYMOUS',
+      actorId: user?.id ?? null,
+      actorName: user?.name ?? null,
+      actorEmail: user?.email ?? null,
+      actorRole: user?.role ?? null,
+      source: 'TRPC',
+      category: detail.category ?? categoryForPath(args.path),
+      operation: detail.operation ?? operationForPath(args.path, args.type),
+      action: detail.action ?? args.path,
+      description: detail.description ?? null,
+      targetType: detail.targetType ?? null,
+      targetId: detail.targetId ?? null,
+      targetLabel: detail.targetLabel ?? null,
+      input: detail.skipInput ? '[skipped]' : toAuditJson(args.input),
+      changes: detail.changes ? toAuditJson(detail.changes) : undefined,
+      result: detail.result !== undefined ? toAuditJson(detail.result) : undefined,
+      metadata: toAuditJson({
+        ...(detail.metadata ?? {}),
+        ...(user?.isSupportSession
+          ? {
+              supportSessionId: user.supportSessionId,
+              platformUserId: user.platformUserId,
+              actingAsTenantUserId: user.id,
+            }
+          : {}),
+      }),
+      ip: args.ctx.requestMeta?.ip ?? null,
+      userAgent: args.ctx.requestMeta?.userAgent ?? null,
+      path: args.path,
+      outcome: args.outcome,
+      errorCode: code,
+      errorMessage: message,
+      durationMs: args.durationMs ?? null,
+    },
+    args.ctx.audit?.db
+  );
 }
 
 /**

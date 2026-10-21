@@ -2,11 +2,21 @@ import { Prisma, PrismaClient } from '../src/generated/prisma/client.js';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 import { hash } from 'bcryptjs';
-import 'dotenv/config';
+import { config } from 'dotenv';
 
-import { PLATFORM_MODULES } from './production-bootstrap.js';
+config({ path: '.env' });
+config({ path: '.env.local', override: true });
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+import { defaultDepartmentRowsForVertical } from '../src/lib/vertical-catalog.js';
+import { AGENCY_SUITE_MODULES, syncPlatformCatalog } from './catalog-sync.js';
+import { upsertPlatformAdmin } from './platform-admin.js';
+import { upsertStagingAdmin } from './staging-admin.js';
+
+// Seed writes through row-level security as a platform admin. Use the migration
+// role when it is set so the application role can stay NOSUPERUSER NOBYPASSRLS.
+const pool = new pg.Pool({
+  connectionString: process.env.MIGRATION_DATABASE_URL?.trim() || process.env.DATABASE_URL,
+});
 const adapter = new PrismaPg(pool);
 const prisma = new PrismaClient({ adapter });
 
@@ -1494,7 +1504,7 @@ async function main() {
 
       const suite = await tx.platformPackage.upsert({
         where: { key: 'agency-suite' },
-        update: { active: true, version: { increment: 1 } },
+        update: { active: true },
         create: {
           key: 'agency-suite',
           name: 'Agency Suite',
@@ -1503,7 +1513,7 @@ async function main() {
         },
       });
 
-      await tx.organization.upsert({
+      const organization = await tx.organization.upsert({
         where: { id: 'org_devfathom' },
         update: { packageId: suite.id },
         create: {
@@ -1520,31 +1530,34 @@ async function main() {
         },
       });
 
-      for (const [key, name, category, routePrefix] of PLATFORM_MODULES) {
-        const module = await tx.platformModule.upsert({
-          where: { key },
-          update: { name, category, routePrefix, active: true },
-          create: { key, name, category, routePrefix },
-        });
+      // WHA-290: `User.department` is a composite foreign key onto
+      // `organization_departments`, so the demo team seeded below cannot exist
+      // until this organization's catalog does. Taken from the vertical catalog
+      // rather than restated here, exactly as bootstrapOrganization does.
+      await tx.organizationDepartment.createMany({
+        data: defaultDepartmentRowsForVertical(organization.vertical).map((department) => ({
+          organizationId: organization.id,
+          ...department,
+        })),
+        skipDuplicates: true,
+      });
+
+      // Reconciles the whole module and package registry — agency AND restaurant —
+      // so a database that predates a shipped module still receives it. Runs
+      // ahead of seedTenantData's early return, which is the path an existing
+      // staging database takes on every redeploy.
+      const { moduleIds } = await syncPlatformCatalog(tx);
+
+      for (const [key] of AGENCY_SUITE_MODULES) {
+        const moduleId = moduleIds.get(key);
+        if (!moduleId) throw new Error(`Unknown platform module: ${key}`);
         await tx.platformPackageModule.upsert({
-          where: { packageId_moduleId: { packageId: suite.id, moduleId: module.id } },
+          where: { packageId_moduleId: { packageId: suite.id, moduleId } },
           update: { enabled: true },
-          create: { packageId: suite.id, moduleId: module.id },
+          create: { packageId: suite.id, moduleId },
         });
-        await tx.organizationModule.upsert({
-          where: {
-            organizationId_moduleId: {
-              organizationId: 'org_devfathom',
-              moduleId: module.id,
-            },
-          },
-          update: { status: 'ENABLED', expiresAt: null },
-          create: {
-            organizationId: 'org_devfathom',
-            moduleId: module.id,
-            status: 'ENABLED',
-          },
-        });
+        // §2.3: org_devfathom inherits its modules live from the Agency Suite
+        // package (platform_package_modules); no OrganizationModule copy.
       }
 
       const adminRole = await tx.organizationRole.upsert({
@@ -1611,25 +1624,18 @@ async function main() {
         },
       });
 
-      const platformAdminEmail = process.env.PLATFORM_ADMIN_EMAIL;
-      const platformAdminPassword = process.env.PLATFORM_ADMIN_PASSWORD;
-      if (platformAdminEmail || platformAdminPassword) {
-        if (!platformAdminEmail || !platformAdminPassword) {
-          throw new Error(
-            'Set both PLATFORM_ADMIN_EMAIL and PLATFORM_ADMIN_PASSWORD to seed a platform administrator.'
-          );
-        }
-        await tx.platformUser.upsert({
-          where: { email: platformAdminEmail.toLowerCase() },
-          update: { active: true, role: 'SUPER_ADMIN' },
-          create: {
-            name: 'Platform Administrator',
-            email: platformAdminEmail.toLowerCase(),
-            passwordHash: await hash(platformAdminPassword, 12),
-            role: 'SUPER_ADMIN',
-          },
-        });
-      }
+      // Runs ahead of seedTenantData because that function returns early once
+      // seed data is present, refreshing the eight @company.com tenant users and
+      // nothing else. A rotated PLATFORM_ADMIN_PASSWORD has to land on every
+      // deployment, not only the one that creates the administrator.
+      await upsertPlatformAdmin(tx);
+      // The staging workspace administrator (ADMIN_EMAIL / ADMIN_PASSWORD) is
+      // not one of the demo @company.com users. Create it on every deploy,
+      // including the early return inside seedTenantData.
+      await upsertStagingAdmin(tx, {
+        organizationId: organization.id,
+        organizationRoleId: adminRole.id,
+      });
 
       await seedTenantData(tx);
       await tx.user.updateMany({

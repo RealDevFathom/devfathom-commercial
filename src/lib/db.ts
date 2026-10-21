@@ -2,7 +2,31 @@ import { PrismaClient } from '@/generated/prisma/client';
 import { PrismaPg } from '@prisma/adapter-pg';
 import pg from 'pg';
 
-const connectionString = process.env.DATABASE_URL ?? '';
+/** Validate at the pool boundary; never substitute ambient/admin configuration. */
+function runtimeDatabaseUrl(): string {
+  const value = process.env.DATABASE_URL;
+  if (!value?.trim()) throw new Error('runtime_database_url_missing');
+
+  try {
+    const url = new URL(value);
+    if (
+      !/^postgres(?:ql)?:\/\//i.test(value) ||
+      !['postgres:', 'postgresql:'].includes(url.protocol) ||
+      /\s/.test(value) ||
+      url.hash ||
+      !(url.hostname || url.searchParams.get('host'))
+    ) {
+      throw new Error();
+    }
+    // WHATWG URL accepts malformed percent escapes that the driver cannot decode.
+    decodeURI(value);
+  } catch {
+    // Do not retain the parser error/cause: it can contain the full URL.
+    throw new Error('runtime_database_url_invalid');
+  }
+
+  return value;
+}
 
 const globalForPrisma = globalThis as unknown as {
   prisma: PrismaClient | undefined;
@@ -24,6 +48,23 @@ const TRANSACTION_METHODS = new Set<PropertyKey>([
   'commit',
   'rollback',
 ]);
+
+type PgRawQuery = Parameters<PgAdapterTransaction['queryRaw']>[0];
+type PgRawResult = Awaited<ReturnType<PgAdapterTransaction['queryRaw']>>;
+
+function isVoidAdvisoryLock(query: PgRawQuery): boolean {
+  return /^\s*SELECT\s+(?:pg_catalog\.)?pg_advisory_(?:xact_)?lock\s*\(/i.test(query.sql);
+}
+
+async function queryRawWithoutVoidDecoding(
+  transaction: PgAdapterTransaction,
+  query: PgRawQuery
+): Promise<PgRawResult> {
+  if (!isVoidAdvisoryLock(query)) return transaction.queryRaw(query);
+
+  await transaction.executeRaw(query);
+  return { columnNames: [], columnTypes: [], rows: [] };
+}
 
 /**
  * Prisma can fan a single relation query out into multiple driver-adapter
@@ -51,8 +92,15 @@ function serializeTransaction(transaction: PgAdapterTransaction): PgAdapterTrans
       if (typeof value !== 'function') return value;
 
       if (TRANSACTION_METHODS.has(key)) {
-        return (...args: unknown[]) =>
-          schedule(() => Reflect.apply(value as (...values: unknown[]) => unknown, target, args));
+        return (...args: unknown[]) => {
+          if (key === 'queryRaw') {
+            return schedule(() => queryRawWithoutVoidDecoding(target, args[0] as PgRawQuery));
+          }
+
+          return schedule(() =>
+            Reflect.apply(value as (...values: unknown[]) => unknown, target, args)
+          );
+        };
       }
 
       return (...args: unknown[]) =>
@@ -96,12 +144,14 @@ function serializeInteractiveTransactions(factory: PrismaPg): PrismaPg {
 }
 
 function createPrismaClient() {
-  const pool = new pg.Pool({ connectionString, max: 10 });
+  const pool = new pg.Pool({ connectionString: runtimeDatabaseUrl(), max: 10 });
   const adapter = serializeInteractiveTransactions(new PrismaPg(pool));
 
   return new PrismaClient({
     adapter,
-    log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : ['error'],
+    // Prisma stdout errors can include SQL and connection details before a probe catches them.
+    // Production probes report only their own stable reason codes.
+    log: process.env.NODE_ENV === 'development' ? ['warn', 'error'] : [],
   });
 }
 
@@ -111,8 +161,24 @@ if (globalForPrisma.prismaVersion !== PRISMA_VERSION) {
   globalForPrisma.prismaVersion = PRISMA_VERSION;
 }
 
-export const db = globalForPrisma.prisma ?? createPrismaClient();
+let client: PrismaClient | undefined;
 
-if (process.env.NODE_ENV !== 'production') {
-  globalForPrisma.prisma = db;
+function getPrismaClient(): PrismaClient {
+  if (!client) {
+    client = globalForPrisma.prisma ?? createPrismaClient();
+    if (process.env.NODE_ENV !== 'production') globalForPrisma.prisma = client;
+  }
+  return client;
 }
+
+// Route imports/build inspection must not require runtime credentials or create a pool.
+// Resolve the client on first use; Prisma methods must receive the real client as `this`.
+export const db = new Proxy({} as PrismaClient, {
+  get(_target, key) {
+    // Promise/await inspection must not turn this ordinary export into a DB operation.
+    if (key === 'then') return undefined;
+    const target = getPrismaClient();
+    const value = Reflect.get(target, key, target) as unknown;
+    return typeof value === 'function' ? value.bind(target) : value;
+  },
+});

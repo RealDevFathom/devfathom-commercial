@@ -2,12 +2,29 @@ import { z } from 'zod';
 import { NextResponse } from 'next/server';
 import { requirePlatformSession } from '@/lib/platform/auth';
 import { executePlatformCommand } from '@/lib/platform/commands';
-import { assertPlatformMutationOrigin, PlatformSecurityError } from '@/lib/platform/security';
+import {
+  ActivationPreflightError,
+  assertPlatformMutationOrigin,
+  PlatformSecurityError,
+} from '@/lib/platform/security';
 
 const envelope = z.object({
   action: z.string(),
   payload: z.unknown(),
 });
+
+function validationEnvelope(error: z.ZodError) {
+  const details = error.issues.map((issue) => ({
+    ...issue,
+    path: issue.path,
+    message: issue.message || 'This field is invalid.',
+  }));
+  const fieldErrors = Object.fromEntries(
+    details.map((issue) => [issue.path.join('.') || '_root', issue.message])
+  );
+
+  return { error: 'The command payload is invalid.', details, fieldErrors };
+}
 
 export async function POST(request: Request) {
   try {
@@ -18,9 +35,15 @@ export async function POST(request: Request) {
     return NextResponse.json({ data });
   } catch (error) {
     if (error instanceof z.ZodError) {
+      return NextResponse.json(validationEnvelope(error), { status: 400 });
+    }
+    // WHA-1180 — a failed activation preflight also reports which gates are
+    // unmet and where to satisfy each one. The message is unchanged, so a
+    // client that only reads `error` sees exactly what it saw before.
+    if (error instanceof ActivationPreflightError) {
       return NextResponse.json(
-        { error: 'The command payload is invalid.', details: error.issues },
-        { status: 400 }
+        { error: error.message, gates: error.gates },
+        { status: error.status }
       );
     }
     if (error instanceof PlatformSecurityError) {

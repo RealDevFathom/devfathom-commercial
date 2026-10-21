@@ -1,0 +1,868 @@
+{
+  "provenance": {
+    "path": "/tmp/restaurant-composed-migrations-20261011/continuation-2/evidence/schema-catalog.json",
+    "sha256": "f2a72d4a0a5b129a70018343f841f44533e642c6e44f959e0b797fc43f532832",
+    "note": "Saved 125 catalog subset, not live evidence. select=true is a test precondition, not a grant observation."
+  },
+  "tables": [
+    {
+      "name": "organizations",
+      "rls": true,
+      "force": true,
+      "owner": "wha1635_migration_owner",
+      "select": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "slug",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "legalName",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "displayName",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "\"OrganizationStatus\"",
+          "nullable": false
+        },
+        {
+          "name": "deploymentMode",
+          "type": "\"OrganizationDeploymentMode\"",
+          "nullable": false
+        },
+        {
+          "name": "packageId",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "timezone",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "locale",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "currency",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "seatLimit",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "gracePeriodDays",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "activatedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "suspendedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "terminatedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "purgeScheduledAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "dataResidency",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "primaryContactName",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "primaryContactEmail",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "notes",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "vertical",
+          "type": "\"OrganizationVertical\"",
+          "nullable": false
+        },
+        {
+          "name": "isDemo",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "lastDemoResetAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "askFathomEnabled",
+          "type": "boolean",
+          "nullable": false
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "columns": [
+            "packageId"
+          ],
+          "table": "platform_packages",
+          "references": [
+            "id"
+          ],
+          "validated": true
+        }
+      ],
+      "policies": [
+        {
+          "name": "organization_isolation",
+          "command": "*",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (id = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))",
+          "check": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (id = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))"
+        }
+      ]
+    },
+    {
+      "name": "pharmacy_jurisdiction_rule_sets",
+      "rls": true,
+      "force": true,
+      "owner": "wha1635_migration_owner",
+      "select": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "code",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "version",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "effectiveFrom",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "effectiveTo",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "licenceCategories",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "permittedSchedules",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "prescriptionOnlyClasses",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "prescriptionRetentionDays",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "controlledRegisterFlags",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "pharmacistCoverageRule",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "recordRetentionByClass",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [],
+      "policies": [
+        {
+          "name": "jurisdiction_rules_platform_insert",
+          "command": "a",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": null,
+          "check": "(current_setting('app.is_platform_admin'::text, true) = 'true'::text)"
+        },
+        {
+          "name": "jurisdiction_rules_platform_update",
+          "command": "w",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "(current_setting('app.is_platform_admin'::text, true) = 'true'::text)",
+          "check": "(current_setting('app.is_platform_admin'::text, true) = 'true'::text)"
+        },
+        {
+          "name": "jurisdiction_rules_read",
+          "command": "r",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "true",
+          "check": null
+        }
+      ]
+    },
+    {
+      "name": "pharmacy_migration_batches",
+      "rls": true,
+      "force": true,
+      "owner": "wha1635_migration_owner",
+      "select": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "sourceId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "label",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "\"PharmacyMigrationBatchStatus\"",
+          "nullable": false
+        },
+        {
+          "name": "rowCount",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "exceptionCount",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "profilerVersion",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "profiledAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "columns": [
+            "organizationId",
+            "sourceId"
+          ],
+          "table": "pharmacy_migration_sources",
+          "references": [
+            "organizationId",
+            "id"
+          ],
+          "validated": true
+        }
+      ],
+      "policies": [
+        {
+          "name": "pharmacy_migration_batches_tenant_insert",
+          "command": "a",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": null,
+          "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
+        },
+        {
+          "name": "pharmacy_migration_batches_tenant_select",
+          "command": "r",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
+          "check": null
+        },
+        {
+          "name": "pharmacy_migration_batches_tenant_update",
+          "command": "w",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
+          "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
+        }
+      ]
+    },
+    {
+      "name": "pharmacy_migration_exceptions",
+      "rls": true,
+      "force": true,
+      "owner": "wha1635_migration_owner",
+      "select": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "batchId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rowId",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "bucket",
+          "type": "\"PharmacyMigrationExceptionBucket\"",
+          "nullable": false
+        },
+        {
+          "name": "severity",
+          "type": "\"PharmacyMigrationExceptionSeverity\"",
+          "nullable": false
+        },
+        {
+          "name": "status",
+          "type": "\"PharmacyMigrationExceptionStatus\"",
+          "nullable": false
+        },
+        {
+          "name": "detail",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "signedOffByUserId",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "signedOffAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": true
+        },
+        {
+          "name": "signOffNote",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "columns": [
+            "organizationId",
+            "batchId"
+          ],
+          "table": "pharmacy_migration_batches",
+          "references": [
+            "organizationId",
+            "id"
+          ],
+          "validated": true
+        },
+        {
+          "columns": [
+            "organizationId",
+            "rowId"
+          ],
+          "table": "pharmacy_migration_rows",
+          "references": [
+            "organizationId",
+            "id"
+          ],
+          "validated": true
+        },
+        {
+          "columns": [
+            "organizationId",
+            "signedOffByUserId"
+          ],
+          "table": "users",
+          "references": [
+            "organizationId",
+            "id"
+          ],
+          "validated": true
+        }
+      ],
+      "policies": [
+        {
+          "name": "pharmacy_migration_exceptions_tenant_insert",
+          "command": "a",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": null,
+          "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
+        },
+        {
+          "name": "pharmacy_migration_exceptions_tenant_select",
+          "command": "r",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
+          "check": null
+        },
+        {
+          "name": "pharmacy_migration_exceptions_tenant_update",
+          "command": "w",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
+          "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
+        }
+      ]
+    },
+    {
+      "name": "pharmacy_migration_rows",
+      "rls": true,
+      "force": true,
+      "owner": "wha1635_migration_owner",
+      "select": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "batchId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "sourceKey",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "rowNumber",
+          "type": "integer",
+          "nullable": false
+        },
+        {
+          "name": "rawPayload",
+          "type": "jsonb",
+          "nullable": false
+        },
+        {
+          "name": "targetModelKey",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "targetNaturalKey",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "productName",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "packLabel",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "packFactor",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "barcode",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "batchNumber",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "expiryDate",
+          "type": "date",
+          "nullable": true
+        },
+        {
+          "name": "mrpMinor",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "costMinor",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "quantityCanonical",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "supplierName",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "customerName",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "balanceMinor",
+          "type": "bigint",
+          "nullable": true
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [
+        {
+          "columns": [
+            "organizationId",
+            "batchId"
+          ],
+          "table": "pharmacy_migration_batches",
+          "references": [
+            "organizationId",
+            "id"
+          ],
+          "validated": true
+        }
+      ],
+      "policies": [
+        {
+          "name": "pharmacy_migration_rows_tenant_insert",
+          "command": "a",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": null,
+          "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
+        },
+        {
+          "name": "pharmacy_migration_rows_tenant_select",
+          "command": "r",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
+          "check": null
+        }
+      ]
+    },
+    {
+      "name": "pharmacy_migration_sources",
+      "rls": true,
+      "force": true,
+      "owner": "wha1635_migration_owner",
+      "select": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "kind",
+          "type": "\"PharmacyMigrationSourceKind\"",
+          "nullable": false
+        },
+        {
+          "name": "fileName",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "byteSize",
+          "type": "bigint",
+          "nullable": false
+        },
+        {
+          "name": "contentHash",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "capturedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [],
+      "policies": [
+        {
+          "name": "pharmacy_migration_sources_tenant_insert",
+          "command": "a",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": null,
+          "check": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))"
+        },
+        {
+          "name": "pharmacy_migration_sources_tenant_select",
+          "command": "r",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "(\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text))",
+          "check": null
+        }
+      ]
+    },
+    {
+      "name": "restaurant_branches",
+      "rls": true,
+      "force": true,
+      "owner": "wha1635_migration_owner",
+      "select": true,
+      "columns": [
+        {
+          "name": "id",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "organizationId",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "name",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "timezone",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "address",
+          "type": "text",
+          "nullable": true
+        },
+        {
+          "name": "active",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "isDefault",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "createdAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "updatedAt",
+          "type": "timestamp(3) without time zone",
+          "nullable": false
+        },
+        {
+          "name": "businessDayCutoff",
+          "type": "text",
+          "nullable": false
+        },
+        {
+          "name": "shiftSignInEnforced",
+          "type": "boolean",
+          "nullable": false
+        },
+        {
+          "name": "code",
+          "type": "character varying(24)",
+          "nullable": false
+        },
+        {
+          "name": "receiptLayout",
+          "type": "jsonb",
+          "nullable": true
+        },
+        {
+          "name": "receiptLayoutRevision",
+          "type": "integer",
+          "nullable": false
+        }
+      ],
+      "primaryKey": [
+        "id"
+      ],
+      "foreignKeys": [],
+      "policies": [
+        {
+          "name": "tenant_isolation",
+          "command": "*",
+          "permissive": true,
+          "roles": [
+            "public"
+          ],
+          "using": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))",
+          "check": "((current_setting('app.is_platform_admin'::text, true) = 'true'::text) OR (\"organizationId\" = NULLIF(current_setting('app.current_organization_id'::text, true), ''::text)))"
+        }
+      ]
+    }
+  ]
+}

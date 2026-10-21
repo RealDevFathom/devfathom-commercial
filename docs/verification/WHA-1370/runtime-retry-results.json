@@ -1,0 +1,315 @@
+{
+  "numTotalTests": 60,
+  "numPassedTests": 60,
+  "numFailedTests": 0,
+  "numPendingTests": 0,
+  "numTodoTests": 0,
+  "success": true,
+  "testResults": [
+    {
+      "file": "tests/print-bridge.test.ts",
+      "assertions": [
+        {
+          "name": "explicit transport configuration resolves default TCP9100 and IPv6",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target /dev/usb/lp0",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target usb:///dev/usb/lp0",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target serial:///dev/ttyUSB0",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration retains POSIX target file:///dev/cu.usbserial",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration decodes installed Windows queue names without treating punctuation as code",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target ",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://user:secret@host",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host:0",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host:65536",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host/path",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target tcp://host?x=1",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue://remote/name",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///%5C%5Cserver%5Cqueue",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///%0a",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target queue:///%ZZ",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target /etc/passwd",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target file:///home/operator/receipt",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsafe or ambiguous target serial:///dev/%2e%2e/etc/passwd",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects unsupported OS queue and direct Windows serial",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 0",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 1",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 2",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 3",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration rejects invalid allowlist 4",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "explicit transport configuration dry-run returns a synthetic diagnostic without any device/network/command I/O",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch pipes exact bytes to local CUPS with fixed arguments and no inherited secrets",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch Windows command keeps queue data out of PowerShell code/arguments and preserves policy",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch Windows submission pipes binary-safe base64 only to the fixed helper",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch nonzero native exit 1 fails once without retry",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch nonzero native exit 2 fails once without retry",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch missing command/permission errors are useful and redact native secret text",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch times out and terminates one native submission",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch handles a disconnected stdin without an unhandled error or retry",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "native queue dispatch fails closed before spawn for denied targets and oversized receipts",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "TCP and POSIX device writes sends exact receipt bytes to an isolated fake TCP printer",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "TCP and POSIX device writes handles TCP refusal without replay",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "TCP and POSIX device writes fails promptly on TCP close before the write callback",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "TCP and POSIX device writes bounds stalled TCP connections and never resends",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "TCP and POSIX device writes retains serial byte writes and handles partial writes without resending a prefix",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "TCP and POSIX device writes rejects ordinary files before writing",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "TCP and POSIX device writes does not retry a serial disconnect/permission failure",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract persists before dispatch, acknowledges existing status, and sends no receipt data in ack",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract lost acknowledgement stops; restart with same journal never prints again",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract ambiguous transport failure retains marker and never reports OFFLINE/retries",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract simultaneous reservations allow one dispatch candidate",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract journal permission failure prevents dispatch",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 0 before dispatch",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 1 before dispatch",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 2 before dispatch",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects invalid/unapproved claimed job 3 before dispatch",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 0 without dispatch or leaking it",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 1 without dispatch or leaking it",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 2 without dispatch or leaking it",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 3 without dispatch or leaking it",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects missing/malformed claim token 4 without dispatch or leaking it",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects unsafe bridge URL http://print.example before sending bearer",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract rejects unsafe bridge URL https://user:password@print.example before sending bearer",
+          "status": "passed",
+          "failureFirstLines": []
+        },
+        {
+          "name": "durable duplicate prevention and server contract empty poll preserves cancellation and makes no transport call",
+          "status": "passed",
+          "failureFirstLines": []
+        }
+      ]
+    }
+  ]
+}

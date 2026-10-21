@@ -1,0 +1,212 @@
+'use client';
+
+import { StatusPill } from '@/components/ui/status-pill';
+import type { CounterSearchRow } from '@/lib/pharmacy/counter';
+import { formatMinor, formatReceiptDate } from '@/lib/pharmacy/counter-receipt';
+
+export type CounterSearchResultsProps = {
+  rows: readonly CounterSearchRow[];
+  state: 'idle' | 'loading' | 'ready' | 'error';
+  query: string;
+  activeMedicineId: string | null;
+  error?: string | null;
+  disabled?: boolean;
+  onSelect: (row: CounterSearchRow) => void;
+  onCaptureDemand: () => void;
+  onRetry: () => void;
+};
+
+const LOCATION_LABEL: Record<string, string> = {
+  STORE: 'Store',
+  RACK_BIN: 'Rack',
+  FRIDGE: 'Fridge',
+  SAFE: 'Safe',
+  QUARANTINE: 'Quarantine',
+  TRANSIT: 'Transit',
+  RETURNS: 'Returns',
+};
+
+const MATCH_LABEL: Record<CounterSearchRow['matchedOn'], string> = {
+  BARCODE: 'Barcode',
+  ALIAS: 'Alias',
+  NAME: 'Name',
+  INGREDIENT: 'Ingredient',
+  PRESENTATION: 'Form',
+};
+
+/**
+ * POS-02 result rows.
+ *
+ * Every field the requirement names is on the row itself — presentation,
+ * saleable units, nearest safe expiry, stock, MRP, price, restriction and
+ * storage marker — because a counter that has to open a detail view to learn
+ * whether a medicine is prescription-only is a counter that stops checking.
+ *
+ * Rendered as a list of buttons rather than a table: each row is one keyboard
+ * stop that stages the medicine, which is what makes the whole search
+ * mouse-free (POS-01).
+ */
+export function CounterSearchResults({
+  rows,
+  state,
+  query,
+  activeMedicineId,
+  error,
+  disabled = false,
+  onSelect,
+  onCaptureDemand,
+  onRetry,
+}: CounterSearchResultsProps) {
+  if (state === 'idle') {
+    return (
+      <p className="text-sm text-text-muted">
+        Scan a barcode, or type at least two characters of a brand, generic, ingredient, strength,
+        form, alias or legacy code.
+      </p>
+    );
+  }
+
+  if (state === 'loading') {
+    return (
+      <p className="text-sm text-text-muted" role="status">
+        Searching the catalog…
+      </p>
+    );
+  }
+
+  if (state === 'error') {
+    return (
+      <div className="space-y-3" role="alert">
+        <p className="text-sm text-destructive">{error ?? 'Search failed.'}</p>
+        <div className="flex flex-wrap gap-2">
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onRetry}
+            className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            Retry search
+          </button>
+          <button
+            type="button"
+            disabled={disabled}
+            onClick={onCaptureDemand}
+            className="inline-flex h-11 items-center rounded-md border border-border-subtle bg-surface-card px-4 text-sm font-semibold text-text-strong focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+          >
+            Capture as unfulfilled demand
+          </button>
+        </div>
+      </div>
+    );
+  }
+
+  if (rows.length === 0) {
+    return (
+      <div className="space-y-3">
+        <p className="text-sm text-text-muted">Nothing in this catalog matches “{query}”.</p>
+        <button
+          type="button"
+          disabled={disabled}
+          onClick={onCaptureDemand}
+          className="inline-flex h-11 items-center rounded-md bg-primary px-4 text-sm font-semibold text-primary-foreground focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50"
+        >
+          Capture as unfulfilled demand
+        </button>
+      </div>
+    );
+  }
+
+  return (
+    <ul className="divide-y divide-border-subtle" aria-label="Search results">
+      {rows.map((row) => {
+        const sellable = row.onHandUnits > 0 && row.saleableUnits.length > 0;
+        const active = row.medicineId === activeMedicineId;
+        const location = row.storage.locationKind
+          ? `${LOCATION_LABEL[row.storage.locationKind] ?? row.storage.locationKind}${
+              row.storage.locationCode ? ` ${row.storage.locationCode}` : ''
+            }`
+          : null;
+        const safety = [
+          row.restriction.controlled
+            ? { status: 'controlled', tone: 'danger' as const, label: 'Controlled' }
+            : null,
+          row.restriction.rx
+            ? { status: 'prescription', tone: 'warning' as const, label: 'Prescription only' }
+            : null,
+          row.restriction.restricted
+            ? { status: 'restricted', tone: 'warning' as const, label: 'Restricted' }
+            : null,
+          row.restriction.highAlert
+            ? { status: 'high-alert', tone: 'danger' as const, label: 'High alert' }
+            : null,
+          row.restriction.lasa
+            ? { status: 'look-alike', tone: 'warning' as const, label: 'Look-alike' }
+            : null,
+          row.storage.coldChain
+            ? { status: 'cold-chain', tone: 'info' as const, label: 'Cold chain' }
+            : null,
+        ].filter((flag) => flag !== null);
+        const notes = [
+          row.restriction.otc &&
+          !row.restriction.rx &&
+          !row.restriction.restricted &&
+          !row.restriction.controlled
+            ? 'Over the counter'
+            : null,
+          location,
+          !sellable ? 'Not sellable' : null,
+        ].filter(Boolean);
+        return (
+          <li key={row.medicineId}>
+            <button
+              type="button"
+              disabled={disabled}
+              aria-pressed={active}
+              onClick={() => onSelect(row)}
+              className={`grid w-full min-w-0 grid-cols-[minmax(0,1fr)_5.5rem] gap-x-2 px-2 py-1.5 text-left focus-visible:outline-none focus-visible:ring-3 focus-visible:ring-ring/50 ${
+                active ? 'bg-surface-sunken' : 'hover:bg-surface-sunken'
+              }`}
+            >
+              <span className="min-w-0 truncate text-sm font-semibold text-text-strong">
+                {row.displayName}
+                {row.strength ? (
+                  <span className="ml-1 font-normal text-text-body">{row.strength}</span>
+                ) : null}
+              </span>
+              <span className="w-full text-right font-mono text-sm tabular-nums text-text-strong">
+                {row.printedMrpMinor === null ? '—' : formatMinor(row.printedMrpMinor)}
+              </span>
+              <span className="col-span-2 truncate text-xs text-text-muted">
+                {row.presentation}
+                {row.dosageForm ? ` · ${row.dosageForm}` : ''}
+                {` · Batch ${row.batchNumber ?? '—'}`}
+                {` · Exp ${row.nearestSafeExpiry ? formatReceiptDate(row.nearestSafeExpiry) : '—'}`}
+                {` · ${row.onHandUnits} units`}
+                {notes.length ? ` · ${notes.join(' · ')}` : ''}
+                {` · ${MATCH_LABEL[row.matchedOn]}`}
+              </span>
+              {safety.length > 0 ? (
+                <span className="col-span-2 flex flex-wrap gap-1">
+                  {safety.map((flag) => (
+                    <StatusPill
+                      key={flag.status}
+                      status={flag.status}
+                      tone={flag.tone}
+                      label={flag.label}
+                      className="shrink-0"
+                    />
+                  ))}
+                </span>
+              ) : null}
+              {row.blocked.length > 0 ? (
+                <span className="col-span-2 text-xs text-warning">
+                  Blocked stock present: {row.blocked.join(', ').toLowerCase()}.
+                </span>
+              ) : null}
+            </button>
+          </li>
+        );
+      })}
+    </ul>
+  );
+}

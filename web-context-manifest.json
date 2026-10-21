@@ -1,0 +1,5297 @@
+[
+  {
+    "path": "bun.lock",
+    "sha256": "a879bb6bb776a37e36c1e28bb4b36fea79ce3aec700847c2073007069553d38b",
+    "bytes": 363694
+  },
+  {
+    "path": "next.config.ts",
+    "sha256": "3f32f4ceb4ec9756cc60cd021b0f2dd65c33cf07a73010b477b449ff398482af",
+    "bytes": 5380
+  },
+  {
+    "path": "package.json",
+    "sha256": "f8d45a6e31167d76ee47dbbacc0754fb4a29b47fb890e992f4f4ea2302b6d9e7",
+    "bytes": 5104
+  },
+  {
+    "path": "postcss.config.mjs",
+    "sha256": "dfac7ac2d86d326a0e5adb024e7943c181393ed17a5fcb8f0315b24c7da6ddde",
+    "bytes": 94
+  },
+  {
+    "path": "prisma.config.ts",
+    "sha256": "1a3320a9913d9161d35b37415b3bc6e99b70714d195a035546bd443c854c4285",
+    "bytes": 461
+  },
+  {
+    "path": "prisma/schema.prisma",
+    "sha256": "a89e29ead28f7efcdefc9135758ddcfaf888dc2860bcd98b2e38ac5e232d05bd",
+    "bytes": 611871
+  },
+  {
+    "path": "public/apple-touch-icon.png",
+    "sha256": "ce52728a03f1ab3b84f020abbab1d95a3a8c09e200dc5df6bbe3c52d2ae764e7",
+    "bytes": 2816
+  },
+  {
+    "path": "public/favicon-16x16.png",
+    "sha256": "b803a31f1c92975b0880c19ec819e3ddc5070c448ce77c3b7199891a2d96c9ef",
+    "bytes": 404
+  },
+  {
+    "path": "public/favicon-192x192.png",
+    "sha256": "1703c5d9a83dc20ad2a88778d218688e9fd19836b3b76807006e1a0a6a6237de",
+    "bytes": 4836
+  },
+  {
+    "path": "public/favicon-32x32.png",
+    "sha256": "d5d978f6edb665c55981fc9dd64652173ec87322a0cc6e8f0cb0bfa431bc996e",
+    "bytes": 740
+  },
+  {
+    "path": "public/favicon.ico",
+    "sha256": "01f372567ea3eaa48684d2b287dde50b2b64edf16f7fc638251fc775085776a8",
+    "bytes": 762
+  },
+  {
+    "path": "public/favicon.png",
+    "sha256": "2f93abbda97d01d99884379f9ce47bdf3e27df5aaca2b9bf9f8e1304db4ce6df",
+    "bytes": 16979
+  },
+  {
+    "path": "public/favicon.svg",
+    "sha256": "c2264eeec7f2dc21e36bf26bbc58f1b6eebcb7c24697f8a0a37d08a5591ccde5",
+    "bytes": 867
+  },
+  {
+    "path": "public/images/icon-dark.png",
+    "sha256": "451a466dab4fa39faf7a3f622aa4771a563f6e57c583c8489dfd1358fad9e2f0",
+    "bytes": 12058
+  },
+  {
+    "path": "public/images/icon-orange.png",
+    "sha256": "2f93abbda97d01d99884379f9ce47bdf3e27df5aaca2b9bf9f8e1304db4ce6df",
+    "bytes": 16979
+  },
+  {
+    "path": "public/images/icon.svg",
+    "sha256": "c2264eeec7f2dc21e36bf26bbc58f1b6eebcb7c24697f8a0a37d08a5591ccde5",
+    "bytes": 867
+  },
+  {
+    "path": "public/images/logo-dark.svg",
+    "sha256": "d890ed56f8e8804ce4c76e6964119735feef27e7ef82754d757db95c253208e9",
+    "bytes": 601
+  },
+  {
+    "path": "public/images/logo-mark.svg",
+    "sha256": "c2264eeec7f2dc21e36bf26bbc58f1b6eebcb7c24697f8a0a37d08a5591ccde5",
+    "bytes": 867
+  },
+  {
+    "path": "public/images/logo-orange.svg",
+    "sha256": "c2264eeec7f2dc21e36bf26bbc58f1b6eebcb7c24697f8a0a37d08a5591ccde5",
+    "bytes": 867
+  },
+  {
+    "path": "public/images/logo-white.svg",
+    "sha256": "7715242b9604814f1066477eba776c60b4525cb8ab175fd9728778d0d234f670",
+    "bytes": 601
+  },
+  {
+    "path": "public/licenses/ibm-plex-mono-OFL.txt",
+    "sha256": "7e6b2818edbd8f6a01ae80641cc8f16a51080d08fb4e532be3a0b6f74adb07da",
+    "bytes": 4456
+  },
+  {
+    "path": "public/licenses/instrument-sans-OFL.txt",
+    "sha256": "9e27a72ed30eb49a08678f6a5d6ed98ec7ba5368f541637ee0683ec9134ef966",
+    "bytes": 4403
+  },
+  {
+    "path": "public/manifest.json",
+    "sha256": "8f8124d97ab4e2809e46fc4e0cfbf20f8190e418312f1e41ea50e8e889acb41d",
+    "bytes": 701
+  },
+  {
+    "path": "src/app/(app)/api-docs/api-docs-content.tsx",
+    "sha256": "348f98fd0f5f10e04dfcf7d67505117266b6c14ba438cfb71b0707ca4a6482f2",
+    "bytes": 6793
+  },
+  {
+    "path": "src/app/(app)/api-docs/page.tsx",
+    "sha256": "069524ddb4355dbaef5cc13f67fa1e41bc61250948eaadd7a3b251e38e36956c",
+    "bytes": 230
+  },
+  {
+    "path": "src/app/(app)/audit-logs/audit-content.tsx",
+    "sha256": "1eaf217073e36fb5b7576e49c74ef4b434cfee06bae7615ea6d8ea1c27071d3a",
+    "bytes": 25190
+  },
+  {
+    "path": "src/app/(app)/audit-logs/page.tsx",
+    "sha256": "ca0aeb9466c12c10cd8620325f6aaff5f76def102d9e3ad0a50df215ecc26cfb",
+    "bytes": 464
+  },
+  {
+    "path": "src/app/(app)/chat/chat-content.tsx",
+    "sha256": "2b1320c0ace517be54719e977b3faf5a193ade94d74de1b7336c04e791f7aae5",
+    "bytes": 9091
+  },
+  {
+    "path": "src/app/(app)/chat/page.tsx",
+    "sha256": "6536b1ec3a81609cf00a3c0d40747d17739ac9342f4c89d623ed59a298b7d812",
+    "bytes": 204
+  },
+  {
+    "path": "src/app/(app)/clients/[id]/client-detail-content.tsx",
+    "sha256": "8bcd5ec4744dd956afe7ba5ae06b01179d0e6cdc3d3b7be45231909c4db9715f",
+    "bytes": 74643
+  },
+  {
+    "path": "src/app/(app)/clients/[id]/page.tsx",
+    "sha256": "d62dfb77c157ab8be8fff5b4ac61718babbe9a8de30b5d0f9057b7396bf82c97",
+    "bytes": 341
+  },
+  {
+    "path": "src/app/(app)/clients/clients-content.tsx",
+    "sha256": "5bb2ba55e54356c91337aa8b640e7f358deff0770b574c05e1a77a0f29cb6f19",
+    "bytes": 13991
+  },
+  {
+    "path": "src/app/(app)/clients/page.tsx",
+    "sha256": "2704662ee716eb5e87715b0a35fc52324b30da717530dd6691d9d766ac892d8f",
+    "bytes": 222
+  },
+  {
+    "path": "src/app/(app)/dashboard/dashboard-content.tsx",
+    "sha256": "b3c3c51acea653eb09a5d487838d6f0787e3bf75fa06c03a399afe2a3e6f0e09",
+    "bytes": 47179
+  },
+  {
+    "path": "src/app/(app)/dashboard/page.tsx",
+    "sha256": "d9f691e705b2f3e80343a51943ffc0b774182a2cfc368c299f74f3d130f83433",
+    "bytes": 3125
+  },
+  {
+    "path": "src/app/(app)/dashboard/pharmacy-dashboard-content.tsx",
+    "sha256": "73d00aa52f572d99cf8fd5897a0cab20b4b435f6a6e59c10286d00bff6117910",
+    "bytes": 12905
+  },
+  {
+    "path": "src/app/(app)/dashboard/restaurant-dashboard-content.tsx",
+    "sha256": "4c21c3e96113354ab2840548dcdee90eba6bb7c94266a2d4352892a9314b9128",
+    "bytes": 5110
+  },
+  {
+    "path": "src/app/(app)/dashboard/restaurant-management-overview.tsx",
+    "sha256": "f8ab5ed1e2a6c1e3c1017bd612599022765301a4f8833a7a1349df3f8ff89b03",
+    "bytes": 28896
+  },
+  {
+    "path": "src/app/(app)/dashboard/revenue-chart.tsx",
+    "sha256": "93872dca4aadd9ad1ba6e46a73dae73eec82d51a00ffc1854ae3b032e5595c91",
+    "bytes": 7547
+  },
+  {
+    "path": "src/app/(app)/email/email-content.tsx",
+    "sha256": "be0d456388af83b1e07f48086cfd1283adead72f2b4d548481ca3e15182b94a8",
+    "bytes": 22975
+  },
+  {
+    "path": "src/app/(app)/email/oauth/callback/page.tsx",
+    "sha256": "1424010bde0300577dcb9971babe0c210cc638d40ae968be9f2a5cf88a3bd2a2",
+    "bytes": 4257
+  },
+  {
+    "path": "src/app/(app)/email/page.tsx",
+    "sha256": "2eca85b3173efc89386350e96addf4b91d0dd2ca25f3199cb4dccbc290ee1555",
+    "bytes": 292
+  },
+  {
+    "path": "src/app/(app)/error.tsx",
+    "sha256": "3f3a5d45aebbd026668c194da2c951716b924247926f500b8e5d19d8e1ecd49b",
+    "bytes": 1029
+  },
+  {
+    "path": "src/app/(app)/finance/finance-content.tsx",
+    "sha256": "028238eceda1c3c14ff59247f9f29d8eb2932c691c7e5a02ff1dc721ba5e72f1",
+    "bytes": 51527
+  },
+  {
+    "path": "src/app/(app)/finance/invoices-tab.tsx",
+    "sha256": "c68e120af1dda29dba0e42db51002df288547619d6f7e68c8ca1c329c06fb49a",
+    "bytes": 19054
+  },
+  {
+    "path": "src/app/(app)/finance/invoices/[id]/print/page.tsx",
+    "sha256": "0db5626d618faa2174ea5ff1e3977a7365f74788cdf89a5a52a8012fa4105bd7",
+    "bytes": 561
+  },
+  {
+    "path": "src/app/(app)/finance/invoices/[id]/print/print-invoice.tsx",
+    "sha256": "50ab4142f337d2d4b40a3c43676bdaa45811d300ae46134224df534246df839a",
+    "bytes": 9391
+  },
+  {
+    "path": "src/app/(app)/finance/page.tsx",
+    "sha256": "c5e12bddb9bcbdcd9e6b0bacb910576a01d425a39b51fdccac6e7d4024f829dd",
+    "bytes": 467
+  },
+  {
+    "path": "src/app/(app)/finance/pnl-report.tsx",
+    "sha256": "8cc7df7a5d418e82382c21e5f3d73ba75c45a13ce9afe2f165b66a2f7b6290c6",
+    "bytes": 10039
+  },
+  {
+    "path": "src/app/(app)/hr/hr-content.tsx",
+    "sha256": "94b3819c55d048e000d6897bbbbca81ddde43dd0a698cefa55e0a7909c1a7ac8",
+    "bytes": 51528
+  },
+  {
+    "path": "src/app/(app)/hr/page.tsx",
+    "sha256": "ac6b8292ed58777c9ce7686716f7874709310e2b8725ec1fbd13a78410bbec4c",
+    "bytes": 548
+  },
+  {
+    "path": "src/app/(app)/layout.tsx",
+    "sha256": "75662fa9b4d63c717bdff95451ff21214f23f8877156e7ca321fb4eed2d7e902",
+    "bytes": 4067
+  },
+  {
+    "path": "src/app/(app)/loading.tsx",
+    "sha256": "5e8858984239ef85a4dfc0b81054cf823c2e2d1fd2f9e340ea1fd21bfae24426",
+    "bytes": 859
+  },
+  {
+    "path": "src/app/(app)/meetings/[id]/call/page.tsx",
+    "sha256": "b676897807a6026c91a098b90c4af7c012afa675ce7f25eb32a7694790e87fa7",
+    "bytes": 319
+  },
+  {
+    "path": "src/app/(app)/meetings/[id]/page.tsx",
+    "sha256": "c0ef70bad4a4584468729feddb8935c380dffb9c89d18e6462172dc1010ba84d",
+    "bytes": 543
+  },
+  {
+    "path": "src/app/(app)/meetings/meetings-content.tsx",
+    "sha256": "44d60c0a6f32dff8bea3670f36ff314a408716f7bf451abc2116e996d2dee56c",
+    "bytes": 32390
+  },
+  {
+    "path": "src/app/(app)/meetings/page.tsx",
+    "sha256": "1b66dc67a8b345c3c14d4d6eeb557d927b784e420bbb0188fdb4e228117a8cb6",
+    "bytes": 224
+  },
+  {
+    "path": "src/app/(app)/notes/[id]/page.tsx",
+    "sha256": "73b8bb7f16cd486981ec43d3854fb2d45d1ce1b810ff6020ec5608b6f81d5aa3",
+    "bytes": 318
+  },
+  {
+    "path": "src/app/(app)/notes/notes-content.tsx",
+    "sha256": "58163ee53b7445b299110673ed66334da71626382305a372b6ef1b17f7b26d29",
+    "bytes": 42920
+  },
+  {
+    "path": "src/app/(app)/notes/page.tsx",
+    "sha256": "42b16067bfec75f61150646f4b8e897b03bdc269a7cd0b9ecc7ae923d4f4b094",
+    "bytes": 212
+  },
+  {
+    "path": "src/app/(app)/organization/organization-admin-content.tsx",
+    "sha256": "f5efca73b1f436d76bba18381074b7aaedc5d1878de2b12c4d4839695fc6e808",
+    "bytes": 37732
+  },
+  {
+    "path": "src/app/(app)/organization/page.tsx",
+    "sha256": "2612524cba8aca3fc8026e230c92e121e5d88b6286ec2e88d5129408353138eb",
+    "bytes": 280
+  },
+  {
+    "path": "src/app/(app)/pharmacy/cameras/page.tsx",
+    "sha256": "d8dcf88def165b908c3b70e6402b822be0ceb6464ae5b36e27b93c105bb709d2",
+    "bytes": 289
+  },
+  {
+    "path": "src/app/(app)/pharmacy/controlled-register/page.tsx",
+    "sha256": "8bedd558ebd7aea26d9f9d9cd4a85e09e26c03b1b38af6e4fd20074571cb5e5b",
+    "bytes": 305
+  },
+  {
+    "path": "src/app/(app)/pharmacy/counter/loading.tsx",
+    "sha256": "02d5c5931061e06b4bdfdd91699629fefb997b399897666c259983f6513bc64e",
+    "bytes": 556
+  },
+  {
+    "path": "src/app/(app)/pharmacy/counter/page.tsx",
+    "sha256": "234a8fcfc424e7b64cba4ee90cdd4fe604dfaef5a3f90410f634b7ae1419aa37",
+    "bytes": 492
+  },
+  {
+    "path": "src/app/(app)/pharmacy/finance/error.tsx",
+    "sha256": "ee1368b79c1bd3b6c71065b39fe3ddcf80000ecabbc9f26c04efe700883b6815",
+    "bytes": 842
+  },
+  {
+    "path": "src/app/(app)/pharmacy/finance/financial-statements.tsx",
+    "sha256": "705330b021e458f9bd926619722edeaa136728e1f4eb2ef742aec16d2bb42237",
+    "bytes": 8308
+  },
+  {
+    "path": "src/app/(app)/pharmacy/finance/ledger-reports.tsx",
+    "sha256": "aa22fbf9bd706915def1cd073ec63ef1a6dc7e80a87794513a9bda20fdbe25bf",
+    "bytes": 16503
+  },
+  {
+    "path": "src/app/(app)/pharmacy/finance/loading.tsx",
+    "sha256": "88b90b79db3f9ade026c422060d9c89c2f3ba7d20955aef3c36ee9f93a844c2b",
+    "bytes": 571
+  },
+  {
+    "path": "src/app/(app)/pharmacy/finance/margin-comparison.tsx",
+    "sha256": "8b9d270ce0af6b42d3055fc5d2de99324da19cfa59a2c639fc3e7f0913704bcd",
+    "bytes": 6942
+  },
+  {
+    "path": "src/app/(app)/pharmacy/finance/page.tsx",
+    "sha256": "67067a0d7923d8913e61978f7ae41de4b5324b12f4e823d8546570c373a57605",
+    "bytes": 32737
+  },
+  {
+    "path": "src/app/(app)/pharmacy/inventory/break-pack-form.tsx",
+    "sha256": "864bce7cc97d3b277aacf0554ac8f05ff03ff22355dbd1c682894f16b0730172",
+    "bytes": 10586
+  },
+  {
+    "path": "src/app/(app)/pharmacy/inventory/error.tsx",
+    "sha256": "8044be129b21d675cab1c7803b0aa4cfbcd4e9d222ed1e5f6d6824ff6fbbff9a",
+    "bytes": 835
+  },
+  {
+    "path": "src/app/(app)/pharmacy/inventory/expiry/page.tsx",
+    "sha256": "09535f4c48c8dd71ce5efcf5a223770bfc8a81464dcd772cfbc073ed08933f3f",
+    "bytes": 10274
+  },
+  {
+    "path": "src/app/(app)/pharmacy/inventory/imports/page.tsx",
+    "sha256": "7d41523d48b886c219992de81231a361fe93f5984f22bcc83a251e1e44cf650d",
+    "bytes": 8396
+  },
+  {
+    "path": "src/app/(app)/pharmacy/inventory/loading.tsx",
+    "sha256": "a6bb1063106320cc32fb9f9706881e0c8ea72251a641a539d91617e0b2b7fdb0",
+    "bytes": 703
+  },
+  {
+    "path": "src/app/(app)/pharmacy/inventory/page.tsx",
+    "sha256": "3422246e2699584bd71e9b2f838099d4ff3e5d736dff1a23a468cc6aaab1b190",
+    "bytes": 48817
+  },
+  {
+    "path": "src/app/(app)/pharmacy/inventory/transfers/page.tsx",
+    "sha256": "bb820c0e382cb66b71a561d8b4cf48b2ee7ffe5de993e7dcc5c1aacf1c55161d",
+    "bytes": 11745
+  },
+  {
+    "path": "src/app/(app)/pharmacy/loading.tsx",
+    "sha256": "739c3ccdd694c11587cf4efbdf65487c04827b5ca9ce01cec2780d124c2365dc",
+    "bytes": 506
+  },
+  {
+    "path": "src/app/(app)/pharmacy/loyalty/loading.tsx",
+    "sha256": "0f0c5fe7b933f98bd74a87e720066c0f36d9d54c72015af6744186fecc050fc2",
+    "bytes": 608
+  },
+  {
+    "path": "src/app/(app)/pharmacy/loyalty/loyalty-router.ts",
+    "sha256": "541827b9f60302271bae4eb7c79df2c73c4ae9422c9d3000b6dbd9dd134c91e4",
+    "bytes": 2375
+  },
+  {
+    "path": "src/app/(app)/pharmacy/loyalty/page.tsx",
+    "sha256": "5269fde6aa8cf657aa847c455176f8ad7fa2de3204f3b9f10f5d3fe21954feb0",
+    "bytes": 11144
+  },
+  {
+    "path": "src/app/(app)/pharmacy/marketing/action-form.tsx",
+    "sha256": "ddf046694456b63e2477d3751853199e19a0764d6acdab43e5028a5f3ee52cbb",
+    "bytes": 2601
+  },
+  {
+    "path": "src/app/(app)/pharmacy/marketing/actions.ts",
+    "sha256": "681b0f53e651d8ea6fdd5834ab8ecb563338ac282e89922518f22af263c2e474",
+    "bytes": 7512
+  },
+  {
+    "path": "src/app/(app)/pharmacy/marketing/growth-panel.tsx",
+    "sha256": "392c88bb301fabf04c4d80b0d06f766afe516b0d292c5772f15907906f7f980d",
+    "bytes": 12164
+  },
+  {
+    "path": "src/app/(app)/pharmacy/marketing/loading.tsx",
+    "sha256": "ac1670deeecc6479a80e77664a86cdd9c7542cc54adec05d60abd2bec03019dc",
+    "bytes": 696
+  },
+  {
+    "path": "src/app/(app)/pharmacy/marketing/page.tsx",
+    "sha256": "1645b8a2df50c71a1e5c1da4e1e687cd5edd1ae864f14bd562a33b2c9ae33926",
+    "bytes": 21951
+  },
+  {
+    "path": "src/app/(app)/pharmacy/medicines/loading.tsx",
+    "sha256": "9441159905854bbb570666a54de332987bc1af6c03518eaff29651bb122450ec",
+    "bytes": 594
+  },
+  {
+    "path": "src/app/(app)/pharmacy/medicines/page.tsx",
+    "sha256": "57cbf113e3e34af0641a04b1d8e5b6295d97c889c05a7f13cdfef62e7e7ce557",
+    "bytes": 1943
+  },
+  {
+    "path": "src/app/(app)/pharmacy/medicines/staged/error.tsx",
+    "sha256": "f6c757619e54d6b0d9e25b89f1ecd3ff3408aacbdd97683e00fb0d7287e1624c",
+    "bytes": 606
+  },
+  {
+    "path": "src/app/(app)/pharmacy/medicines/staged/loading.tsx",
+    "sha256": "fe3fe61decc26b282e4beb1e9d35722836cc1e2c760de3c132d864b0c7a1a81d",
+    "bytes": 521
+  },
+  {
+    "path": "src/app/(app)/pharmacy/medicines/staged/page.tsx",
+    "sha256": "3067769194d92966082852e9c507090cded8ee05c0ed76d69849aa9ae199d165",
+    "bytes": 461
+  },
+  {
+    "path": "src/app/(app)/pharmacy/orders/error.tsx",
+    "sha256": "39f652f58f70d8daedef6982e50053423e22c81afc33b98dc62ed9bc7fbe9ce2",
+    "bytes": 836
+  },
+  {
+    "path": "src/app/(app)/pharmacy/orders/loading.tsx",
+    "sha256": "4fafab98e39b80d0e4d7b44b995757f2c031f415fa44d09a541f55c4f746eec0",
+    "bytes": 810
+  },
+  {
+    "path": "src/app/(app)/pharmacy/orders/page.tsx",
+    "sha256": "dab60ec45e3e9ec14ad54e9d32ee6991dc4ac061e335950d39ab75994efa6105",
+    "bytes": 670
+  },
+  {
+    "path": "src/app/(app)/pharmacy/page.tsx",
+    "sha256": "d39fe4ba09ccb3c8de3f362825598b6b1b2a74c6f534cdfbd4f7dbe32eefef7f",
+    "bytes": 2077
+  },
+  {
+    "path": "src/app/(app)/pharmacy/pharmacist-queue/page.tsx",
+    "sha256": "439a7b42559583b22d37c9e67d613260e1126b3b154962616524a11e2938f5a1",
+    "bytes": 290
+  },
+  {
+    "path": "src/app/(app)/pharmacy/prescriptions/page.tsx",
+    "sha256": "80c2a4e0042d28dd3944d63731f5fb24785596e769d755ec62ed0543bbf625c0",
+    "bytes": 287
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/_components/action-form.tsx",
+    "sha256": "d013518707663ca89f8606ddcb5c94e27b83925d170d8dd9547fca478131df5b",
+    "bytes": 6845
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/_components/action-outcomes.tsx",
+    "sha256": "cc9a7745ed16293b2dbfce6c5b48d08fd0a3500c760ea3eef76c2fcad36b8d31",
+    "bytes": 6145
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/_components/branch-scope.tsx",
+    "sha256": "b8a8fc4f782b4a0ac33cc3157e4a47e7a050162129331c64fe4034ead4bf9411",
+    "bytes": 5283
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/_components/console-chrome.tsx",
+    "sha256": "2b84af5c30a47f9cb9b056e87612bef66b37608e368fd4cb14ff0b97b6cb643a",
+    "bytes": 6408
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/_components/form-controls.tsx",
+    "sha256": "614aae0fc368366592d7a82ae396cbfb1418f21ecd4a8db3f922fd27d283502b",
+    "bytes": 8301
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/_lib/console.ts",
+    "sha256": "3a4eea3f4702e948fd88a5b0a1747357b9cc32816ef5b464eb621df5f4890e8e",
+    "bytes": 15111
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/_lib/types.ts",
+    "sha256": "dd4d7abaa5970ecc1b80ac95cda4754e6b727a4d55b20bde9cd22bc3cf2857d9",
+    "bytes": 548
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/loading.tsx",
+    "sha256": "280215629fa55fbd3bc3eb9840918895c7ead0c5e84e0cde35dc81f31fc2c4b3",
+    "bytes": 990
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/orders/loading.tsx",
+    "sha256": "50435a3dd49693a0dc02480f654ce343ec7abd92218f339c98790643977d1657",
+    "bytes": 984
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/orders/page.tsx",
+    "sha256": "c7c81c0585333be446dcf9bc58b2c647e94f9399eb883e91ef3d435d46172a64",
+    "bytes": 53346
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/page.tsx",
+    "sha256": "bee19f809972315f1cb8ab3a439fc5bf82f313e5793b0f8833bfef7895fc7543",
+    "bytes": 14951
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/receiving/loading.tsx",
+    "sha256": "824ad4f711867ceefbaf15e4135e75466fb37e007917f301c65525a9f0e4ecdf",
+    "bytes": 961
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/receiving/page.tsx",
+    "sha256": "33bc61715e6ac092ae604b16735a24762654f61aa96d7de750a40d20c97965d8",
+    "bytes": 50325
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/returns/follow-up-queue.tsx",
+    "sha256": "3590dad002bf89689f7077c9d1e3af2d22a76e0b0fbe2c3767365116a2581865",
+    "bytes": 6627
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/returns/loading.tsx",
+    "sha256": "8d359a8680530638238309c78a9529d71f7dbc0941cef3b1045cbbc43e0388ec",
+    "bytes": 975
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/returns/page.tsx",
+    "sha256": "bc4baf11875c491d1e3b8e181a4f01266ea9a612f12cd20f8e3efdb0eaf53ef2",
+    "bytes": 37509
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/suppliers/loading.tsx",
+    "sha256": "828f92a1e83027cb86386603f8fff4a8d8e7f2ba3e52428b4a67336b15dba525",
+    "bytes": 963
+  },
+  {
+    "path": "src/app/(app)/pharmacy/purchasing/suppliers/page.tsx",
+    "sha256": "da87069c395ac4496c833c4107cb69fd77c2aa40116276206ea66f4402b60c43",
+    "bytes": 21890
+  },
+  {
+    "path": "src/app/(app)/pharmacy/regulatory/loading.tsx",
+    "sha256": "509e5b05a1d2dfc56f252dbd9adc792c9c67b282e2e452917275019204950070",
+    "bytes": 997
+  },
+  {
+    "path": "src/app/(app)/pharmacy/regulatory/page.tsx",
+    "sha256": "25a0df976beb31450382a050840b8085ae5a189e95d198ef5d680da8c1130bae",
+    "bytes": 2492
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/daily-work-pack.tsx",
+    "sha256": "dfea3a172b04e15db8a16c9f4ac365cd46678e03020467796e5994769651ae96",
+    "bytes": 11407
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/error.tsx",
+    "sha256": "def774c8e0462c36353bfb343dbf4e430d29b92cbd903c5ebd66d2b5c762226d",
+    "bytes": 813
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/loading.tsx",
+    "sha256": "e9de5b0929022ce17d64057fb7d2d57fa5e37dec0e85386a31743d5301818eca",
+    "bytes": 840
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/marketing-summary.tsx",
+    "sha256": "e40b534ea7b607bf4cf4775d5e2102bcdb5b366948c76fa7d358b38434efedb0",
+    "bytes": 4039
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/observed-demand.tsx",
+    "sha256": "76521ee911683113ba20edf4e9c330b3624138d51dc34b511a8259ba848972e4",
+    "bytes": 3404
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/page.tsx",
+    "sha256": "088da2c9b7106f1f1262665af13c3fa41d2e04457e5d4d3066adc395fe6567bf",
+    "bytes": 47649
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/repeat-purchasing/loading.tsx",
+    "sha256": "fe5bdeb4b8664211cce9c46105d974c419caba3c6177207b82a6dfac4751735b",
+    "bytes": 692
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/repeat-purchasing/page.tsx",
+    "sha256": "0ab2d1ee9db3c75c9fb7193ab1425a89d87475ca5826f1e9c20f00ed9d44a88e",
+    "bytes": 8166
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/replenishment/page.tsx",
+    "sha256": "a6a9195cb5c44a09ca080daa9113825fa33e12f64cb5a2141ffa3e8e95a2b4b3",
+    "bytes": 3053
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/replenishment/scenario-console.tsx",
+    "sha256": "399fb7b1330046182e4a1ad6482779e384fb087f05778641d486a17e63412a44",
+    "bytes": 33804
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/supplier-credit-follow-up/packet.tsx",
+    "sha256": "14612bc8cdf738eae42d9d76a537f5843110065f9d6a0988334d9df62395cf4b",
+    "bytes": 14399
+  },
+  {
+    "path": "src/app/(app)/pharmacy/reports/supplier-credit-follow-up/page.tsx",
+    "sha256": "2390ab6ef67212c9a21de3b6484200e18c20bca3175a42c34bb52dfd9f1bf28e",
+    "bytes": 16080
+  },
+  {
+    "path": "src/app/(app)/pharmacy/settings/cameras/privacy/page.tsx",
+    "sha256": "7b46b44870b9be9190bd52ffc9f9e0290f6306b78c56ae86cabe8c7cbad468d3",
+    "bytes": 447
+  },
+  {
+    "path": "src/app/(app)/pharmacy/substitution/page.tsx",
+    "sha256": "a6b405a39393ebeabc52bcc917dbce489a3cc8337ceb733e86e2492b2e371ad8",
+    "bytes": 282
+  },
+  {
+    "path": "src/app/(app)/projects/[id]/board/[boardId]/kanban-board.tsx",
+    "sha256": "5e1f58a1047928741898569f0a1a9e286f9f0a203a7754585af8ca2cc1061c96",
+    "bytes": 68739
+  },
+  {
+    "path": "src/app/(app)/projects/[id]/board/[boardId]/page.tsx",
+    "sha256": "643140d1afc23bfe565e3c21988e0ed3773147bc12f49a05acb569543e53026e",
+    "bytes": 1381
+  },
+  {
+    "path": "src/app/(app)/projects/[id]/board/[boardId]/task-detail-sheet.tsx",
+    "sha256": "24d2d6e8d2903eecb66865e4248c340bbf7b43e02cd9d0df5e19be90934c4d5d",
+    "bytes": 76920
+  },
+  {
+    "path": "src/app/(app)/projects/[id]/page.tsx",
+    "sha256": "306b8b5ca9a319558d1bb74de001c09dcc953db835b205a8d45beb0e1dda1f96",
+    "bytes": 347
+  },
+  {
+    "path": "src/app/(app)/projects/[id]/project-detail-content.tsx",
+    "sha256": "0a494de63b202d112e07312e635f9bf885133f715f0d716a5213d405aaeb7201",
+    "bytes": 76500
+  },
+  {
+    "path": "src/app/(app)/projects/import/page.tsx",
+    "sha256": "dd4c9862ec300f785474c39204adc2bcc618d6c03ee9fbcb5a89b1d1b96f62ee",
+    "bytes": 254
+  },
+  {
+    "path": "src/app/(app)/projects/import/trello-import-content.tsx",
+    "sha256": "d879ecd68e81200d37fb5ba395888d54f21ced8cb3cb3db28149bcc253e50403",
+    "bytes": 18230
+  },
+  {
+    "path": "src/app/(app)/projects/page.tsx",
+    "sha256": "b9b27a2dcc33591942cb2d76292008279b8e6357a298eda7b64d957109a23702",
+    "bytes": 227
+  },
+  {
+    "path": "src/app/(app)/projects/projects-content.tsx",
+    "sha256": "30de9e66dd759ec474efa548a59a62851af0fca034a58a2e0705eb945e36420f",
+    "bytes": 37635
+  },
+  {
+    "path": "src/app/(app)/restaurant/catalog/loading.tsx",
+    "sha256": "0dc2216e2899596c43a0eeed043abdc3aebaae1aa34fc40ac7e663aae410d3b9",
+    "bytes": 728
+  },
+  {
+    "path": "src/app/(app)/restaurant/catalog/page.tsx",
+    "sha256": "b92828039559a220258f1be389f3ada4d4d8d2d51ea78c8220f36e824922f19f",
+    "bytes": 5204
+  },
+  {
+    "path": "src/app/(app)/restaurant/catering/loading.tsx",
+    "sha256": "af31ed99a9367cda3fce5f4c248569f571717348e9d147ff11d36e4e488ab757",
+    "bytes": 527
+  },
+  {
+    "path": "src/app/(app)/restaurant/catering/page.tsx",
+    "sha256": "3b6054b479471f78f1ee5bfb9b017c3bcaafe95d27ad1302b578cc4d07d2f0b9",
+    "bytes": 440
+  },
+  {
+    "path": "src/app/(app)/restaurant/delivery/loading.tsx",
+    "sha256": "198b4f1c85e62606e9e800b7cab0700abe5af3033eda5d6cf2c71160f17b0067",
+    "bytes": 817
+  },
+  {
+    "path": "src/app/(app)/restaurant/delivery/page.tsx",
+    "sha256": "99eeb74109612884b691bc443fe626da692c72691e69f3b439b5363a826d1432",
+    "bytes": 277
+  },
+  {
+    "path": "src/app/(app)/restaurant/devices/page.tsx",
+    "sha256": "c1ea9f240a5ca92ae59eb1a3247ea44ebf411016078d03e064dc1de83053833f",
+    "bytes": 294
+  },
+  {
+    "path": "src/app/(app)/restaurant/floor/loading.tsx",
+    "sha256": "0a64befe5789013042ed5bd6c74f44a240aa72c6668aaa6141e8c1abdbada574",
+    "bytes": 555
+  },
+  {
+    "path": "src/app/(app)/restaurant/floor/page.tsx",
+    "sha256": "a1e90e170f6d21d77ff5160ea3108febb244b80c38768bf52d5c594c1c884d20",
+    "bytes": 259
+  },
+  {
+    "path": "src/app/(app)/restaurant/growth/actions.ts",
+    "sha256": "b7e61b42254e2bf19a82883b5277303b02ba29f7907d80e08a5a8bd4ca6fb6ae",
+    "bytes": 1598
+  },
+  {
+    "path": "src/app/(app)/restaurant/growth/page.tsx",
+    "sha256": "014d9e35fbe6e5f8dc63c7cec4e9d7721899c913e35905c88755a633cd519a65",
+    "bytes": 1031
+  },
+  {
+    "path": "src/app/(app)/restaurant/insights/loading.tsx",
+    "sha256": "60a6833ed2665d444e770d8d6a3bd626b0976fa47018feb03eb79bb0043f4c23",
+    "bytes": 1034
+  },
+  {
+    "path": "src/app/(app)/restaurant/insights/page.tsx",
+    "sha256": "fc93f22172ec4f3d4738d3560571772bbe59c1197456123dae58de2ebedfaae7",
+    "bytes": 277
+  },
+  {
+    "path": "src/app/(app)/restaurant/integrations/cameras/page.tsx",
+    "sha256": "3e865d703e0ff73862bfa49a95e98c9dac162c40267f484040d736bb4ba85474",
+    "bytes": 291
+  },
+  {
+    "path": "src/app/(app)/restaurant/inventory/loading.tsx",
+    "sha256": "e39589ca9c4284cda21111c756ea5a67a344f1a8a4d4ccb08a6e1c24d7fdc99e",
+    "bytes": 1426
+  },
+  {
+    "path": "src/app/(app)/restaurant/inventory/page.tsx",
+    "sha256": "49ffb5f9d3a3c36905bcdb69dbfd8ce39726e643ac1bf319e15fc1267b123e5b",
+    "bytes": 31896
+  },
+  {
+    "path": "src/app/(app)/restaurant/loyalty/loading.tsx",
+    "sha256": "c83a5bdaf3dc988576bf6ccea03caef2039ee27b7fe4b6d491564a9e5b1a531c",
+    "bytes": 1145
+  },
+  {
+    "path": "src/app/(app)/restaurant/loyalty/page.tsx",
+    "sha256": "13b2dc61addeacab06bcb8b5f8415cb9e8ae8ae3d71925baa8f8bed1be28fb81",
+    "bytes": 397
+  },
+  {
+    "path": "src/app/(app)/restaurant/menu-import/loading.tsx",
+    "sha256": "428a91aff8bf85cd6e4e07a34004f41ebde85040f5038dcb5f92fff3304f6e04",
+    "bytes": 870
+  },
+  {
+    "path": "src/app/(app)/restaurant/menu-import/page.tsx",
+    "sha256": "974aac0f25c4204920ee30fc5d1a8f1e5afc8379dd4eeae2465ae271dc819061",
+    "bytes": 2472
+  },
+  {
+    "path": "src/app/(app)/restaurant/menus/loading.tsx",
+    "sha256": "f7545eddcebbcc0cb05ae68c978263c5024d370f1f3d0a70ce096df80985ea80",
+    "bytes": 917
+  },
+  {
+    "path": "src/app/(app)/restaurant/menus/page.tsx",
+    "sha256": "fce7b6b76c1d8f760585f008d0337ba5e214d3386b6286969e965c4d2a04c601",
+    "bytes": 6790
+  },
+  {
+    "path": "src/app/(app)/restaurant/money/loading.tsx",
+    "sha256": "2d3920c8f1bbec060b84ad8c9c1fd5b2fc25c21527ef12b4f503a4accbc4aafa",
+    "bytes": 1036
+  },
+  {
+    "path": "src/app/(app)/restaurant/money/page.tsx",
+    "sha256": "d3a641f9bf42005eb921c799aee30cf9abd15eb762e0ec16119462182135daff",
+    "bytes": 1123
+  },
+  {
+    "path": "src/app/(app)/restaurant/notifications/loading.tsx",
+    "sha256": "cd018ed2e97fecb54a0dc25d3b160f8d63f6fea208b6c9a9cf5ec0222a608571",
+    "bytes": 1461
+  },
+  {
+    "path": "src/app/(app)/restaurant/notifications/page.tsx",
+    "sha256": "77d84404bdfa366ae842aaa6084f86d6e6ceb9b4a822f051067a7c37df4c5e1f",
+    "bytes": 40294
+  },
+  {
+    "path": "src/app/(app)/restaurant/notifications/retry-webhook-notice.ts",
+    "sha256": "77e5b7cc8b6a8ccea70c0f83294645c6860ece5e49c26b43e43c007fc78374ef",
+    "bytes": 697
+  },
+  {
+    "path": "src/app/(app)/restaurant/orders/loading.tsx",
+    "sha256": "1941a404db4dcdb7c0e1a43fec82152a136c032ef222dae1302beb91432db7bb",
+    "bytes": 560
+  },
+  {
+    "path": "src/app/(app)/restaurant/orders/page.tsx",
+    "sha256": "3b3feb63a7e85584a23b3c4099211020c25c5a71f2b3842bb9a9e89b0bf8e34d",
+    "bytes": 265
+  },
+  {
+    "path": "src/app/(app)/restaurant/page.tsx",
+    "sha256": "586528e420ef44508f57c869d8e7016a325faee58380df812047c1f8f3867e40",
+    "bytes": 2338
+  },
+  {
+    "path": "src/app/(app)/restaurant/purchasing/loading.tsx",
+    "sha256": "a40027c9a9809f021fc1b8e08b1e3e2aa00e5b803398439dd8c66549c91c3762",
+    "bytes": 1366
+  },
+  {
+    "path": "src/app/(app)/restaurant/purchasing/page.tsx",
+    "sha256": "58732ff8feab2512aabcce63843975090b1c0072b351358658728395437fb7e6",
+    "bytes": 40255
+  },
+  {
+    "path": "src/app/(app)/restaurant/purchasing/receiving-form.tsx",
+    "sha256": "61ad6d0245799e2b13cb0d42ecf7c8a719329d52a0dd371e75a040714e3f9097",
+    "bytes": 10324
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/export-link.tsx",
+    "sha256": "703462683d5605a143ecab9d52818b1ca852587f615536fb7fe2fa27c724a66f",
+    "bytes": 684
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/financial-comparison-export.ts",
+    "sha256": "6bb1c45616d58179b901f8fe885918098c3413d323885352a9833de49b4bfd06",
+    "bytes": 3200
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/financial-comparison.tsx",
+    "sha256": "94b53ef31c49702d8e3222942f49803168f4c696dbd46716d9364892e615dd5b",
+    "bytes": 16429
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/loading.tsx",
+    "sha256": "584493bbca6ab1d1d4ab9009ec7b605fc9a2c8ea4b55c16b4c3814caefa5423c",
+    "bytes": 797
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/page.tsx",
+    "sha256": "9960d81d1622680dff00a3ef696cf9aa21f46034749f338e80aff2524ccaf6ee",
+    "bytes": 73626
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/profitability-diagnostics.ts",
+    "sha256": "3f152139043dc5118982499f70478bbf9c0b33227ab7c0ea4350133d35691105",
+    "bytes": 3952
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/profitability-report-tabs.tsx",
+    "sha256": "bb43bd3bf7077107552f1ee386560395dac453d9c629f6f3fc356bb76da4a818",
+    "bytes": 9477
+  },
+  {
+    "path": "src/app/(app)/restaurant/reports/stock-report-tabs.tsx",
+    "sha256": "9a24ab3e54fa606ff6264f87595f2dd1e21098d3dd669b4ffb883907b150af5d",
+    "bytes": 627
+  },
+  {
+    "path": "src/app/(app)/restaurant/settings/branches/loading.tsx",
+    "sha256": "193a13a7d97a422e3b51087566c5b9f820586f890bc02593b69ffca74bc27ee8",
+    "bytes": 307
+  },
+  {
+    "path": "src/app/(app)/restaurant/settings/branches/page.tsx",
+    "sha256": "7f5cf30c9de227fc047575107245dd43451cd4f801996175b4bbb2aae8e1e53d",
+    "bytes": 299
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/admin/loading.tsx",
+    "sha256": "385f872e6fc6b2de605706909e1d2ad0776e0a5b663afaca282b964f27b71fc5",
+    "bytes": 2653
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/admin/page.tsx",
+    "sha256": "c00da553243659ca491615033c312ceaff00dfbb2e9d2ba99fc04b6247c95208",
+    "bytes": 54
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/admin/sop-admin.tsx",
+    "sha256": "216ca5efe3fb71e4bd92fdfb44ed93b0dd6138e7a4c4eeb2f1d42c786f4eec61",
+    "bytes": 74150
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/evidence-capture.tsx",
+    "sha256": "dbd93df5a5fcc3e2f4b29108f66f791899318295a5d96654eb1d922b821e9e7b",
+    "bytes": 5702
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/loading.tsx",
+    "sha256": "13163dc31008a67ab8eaca4974b98f261c6df7f9826acc5fbd78b712941a8628",
+    "bytes": 3342
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/oversight/loading.tsx",
+    "sha256": "f9a5d3645a038e8e709ccbf64f9699cfe362e536a394b90dd12242ae48e03f08",
+    "bytes": 1846
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/oversight/page.tsx",
+    "sha256": "28a38b002e4a6c528b042e21344ac07079041ba9cad4c74d04a42fca4fc4eadf",
+    "bytes": 43313
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/page.tsx",
+    "sha256": "cfb36c88884d802e2378df9fae46d7655fcb47c58a27f529a53bb254ab6b7180",
+    "bytes": 50917
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/reports/loading.tsx",
+    "sha256": "88e0e2be90b9eccc0f437c5d80fcecbedb2ffd6d68cc9345e3ce6ef28c26d9bc",
+    "bytes": 623
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/reports/page.tsx",
+    "sha256": "2ac1480c5943bc43bb1a2e3885c36c4cd544873ff2b41bf2d15931224c35c212",
+    "bytes": 9449
+  },
+  {
+    "path": "src/app/(app)/restaurant/sop/sop-load-recovery.tsx",
+    "sha256": "c00d3075879f6f8ef46472e1beacc91a19730b419c08c4c99ed975695c13e0ba",
+    "bytes": 1226
+  },
+  {
+    "path": "src/app/(app)/restaurant/staff/page.tsx",
+    "sha256": "b02f63836c6bdd28f7b5ed9fd3cbb065ab25794be6cc044551626faff9124432",
+    "bytes": 284
+  },
+  {
+    "path": "src/app/(app)/restaurant/staff/roster/loading.tsx",
+    "sha256": "691080c019d456802128adf04ddcf7a4f70e01e3a6bc0abdb4e5f94ee8c8eae0",
+    "bytes": 1486
+  },
+  {
+    "path": "src/app/(app)/restaurant/staff/roster/page.tsx",
+    "sha256": "50d85368e443a22f9cae81aa9e7a59def9bdad4e8111f745177beddf48f89a9b",
+    "bytes": 289
+  },
+  {
+    "path": "src/app/(app)/restaurant/tax/page.tsx",
+    "sha256": "87919c979f8fffb953710f1890d9bdfaa5d3a749bb14e709b7aef7eef26e7c2e",
+    "bytes": 288
+  },
+  {
+    "path": "src/app/(app)/reviews/page.tsx",
+    "sha256": "69385cec831ea87afa3a270da3ef4360e1be78284834c5955a20374dcf64e83c",
+    "bytes": 680
+  },
+  {
+    "path": "src/app/(app)/reviews/reviews-content.tsx",
+    "sha256": "159f09ee473ddeffd39b3f97c0cb095ea5ac9cd8767cad3c892091484aca7b73",
+    "bytes": 26598
+  },
+  {
+    "path": "src/app/(app)/settings/page.tsx",
+    "sha256": "c102954b640eff45f2b41e62d04eeef4b244287a85221dc575b26d02a0bb56e1",
+    "bytes": 224
+  },
+  {
+    "path": "src/app/(app)/settings/receipts/page.tsx",
+    "sha256": "b8320065d2f2ea106c807cd6ace9270c6f896ad857faba080701d4914d4b82a8",
+    "bytes": 259
+  },
+  {
+    "path": "src/app/(app)/settings/settings-content.tsx",
+    "sha256": "4b85fe84e1d2c475a9c46bce41829de3da3f984cd4896a380f61a2e6749ee42c",
+    "bytes": 100617
+  },
+  {
+    "path": "src/app/(app)/team/[id]/member-detail-content.tsx",
+    "sha256": "8a058c39a10b17d47a71fef704ad15d3d882528ea0df4ff1b7d7013a05c1da0e",
+    "bytes": 48662
+  },
+  {
+    "path": "src/app/(app)/team/[id]/page.tsx",
+    "sha256": "271c4a7b2901eb003437008565a454e11885166923e3f04650f1c38cd74f003a",
+    "bytes": 343
+  },
+  {
+    "path": "src/app/(app)/team/page.tsx",
+    "sha256": "5bd756976e3c2a0db0d56aa3c5adc4a3573887bee7285f35694978deb8612570",
+    "bytes": 207
+  },
+  {
+    "path": "src/app/(app)/team/stats/page.tsx",
+    "sha256": "d30d282bd87750962c5788bb9efa00ec1eabad37f7e913ea7ca407ad5f3159c7",
+    "bytes": 477
+  },
+  {
+    "path": "src/app/(app)/team/stats/stats-content.tsx",
+    "sha256": "351e1e601ab1a86adb77af98cc4273b816ac2789e03ae6c3105c89434824b106",
+    "bytes": 29167
+  },
+  {
+    "path": "src/app/(app)/team/team-content.tsx",
+    "sha256": "a4a0ee23e10f497ce399bbb3aed7b03587f6a66d0adc05651a23b932faf6c3d9",
+    "bytes": 24826
+  },
+  {
+    "path": "src/app/(terminal)/kds/page.tsx",
+    "sha256": "018e44cd7cd874a48fd5f51b222a1593dc98870fa73fd487799fc8a9c53d1cef",
+    "bytes": 865
+  },
+  {
+    "path": "src/app/(terminal)/pos/page.tsx",
+    "sha256": "4a178fe57fabaaeca4cdcfbfaba8bb3166e53d759f8ddfe3fef2466482daf280",
+    "bytes": 880
+  },
+  {
+    "path": "src/app/api/ably-token/route.ts",
+    "sha256": "7a89b5f2ae8dbd465a9f90eb430b46871286803002c13acf57f9b71289023b05",
+    "bytes": 2845
+  },
+  {
+    "path": "src/app/api/assistant/route.ts",
+    "sha256": "6525fbc9b2cf2cea49ce62269f10dc3ede139acbed3542ff0f58c407030aa10f",
+    "bytes": 6835
+  },
+  {
+    "path": "src/app/api/auth/[...nextauth]/route.ts",
+    "sha256": "f8e7087d134bc2a07fc98aeba38af50a5eec925664f17e780fb65355cc0aa780",
+    "bytes": 79
+  },
+  {
+    "path": "src/app/api/files/[name]/route.ts",
+    "sha256": "589b8047366c134d3a8f688e82d445541511092e3029d06165c1f4954934d64f",
+    "bytes": 4443
+  },
+  {
+    "path": "src/app/api/health/route.ts",
+    "sha256": "953b655e3f2cc62f44e296a569661d8e9ada92e622c2d5fb8dc9b19d1e808412",
+    "bytes": 365
+  },
+  {
+    "path": "src/app/api/login/route.ts",
+    "sha256": "934695e387b4363e90a3acd697afd1fe1cda4322479774b44a929af082142c5d",
+    "bytes": 8539
+  },
+  {
+    "path": "src/app/api/meetings/webhooks/livekit/route.ts",
+    "sha256": "379d3d2004a240bb9a86d9ddd01466c30c21a92895a25d5e1db057665d0e2a7d",
+    "bytes": 1571
+  },
+  {
+    "path": "src/app/api/password-reset/route.ts",
+    "sha256": "d68387192363bf46c432c8f645f2a5887af5f2e8ad8c11a807b129f19df1089a",
+    "bytes": 4644
+  },
+  {
+    "path": "src/app/api/pharmacy/prescription-files/route.ts",
+    "sha256": "262c57a6e68358097fcbe0db758ba357efbbd3bf9e44f6dd8bf03773fce21ca6",
+    "bytes": 1744
+  },
+  {
+    "path": "src/app/api/pharmacy/print/route.ts",
+    "sha256": "69b80e7c207a27b3ddfb6829503a59755b490df5808cc973ad7ba8be93118e55",
+    "bytes": 2274
+  },
+  {
+    "path": "src/app/api/pharmacy/whatsapp/reminders/route.ts",
+    "sha256": "f1a263bfbbdd180957a8d1f6715acf84674aeae88148a2a361c9a7b826f95e52",
+    "bytes": 1309
+  },
+  {
+    "path": "src/app/api/pharmacy/whatsapp/webhook/route.ts",
+    "sha256": "9b80ffaafaa7f27c6998f590563d85c9f469a06f8bf3f2a32600aaec45db0b1e",
+    "bytes": 5782
+  },
+  {
+    "path": "src/app/api/platform/control/route.ts",
+    "sha256": "9e6dba4adf62e294e9583bd0ec0ad37555758c0e59f11101d137a5fd84e52408",
+    "bytes": 2041
+  },
+  {
+    "path": "src/app/api/platform/jobs/process/route.ts",
+    "sha256": "8ad6103cd7601e67bf7c22d85d50039cc469024d47f266589b0538680e56d356",
+    "bytes": 1225
+  },
+  {
+    "path": "src/app/api/platform/mfa/route.ts",
+    "sha256": "4db74211235f8e7ae801d42619c087bc4ce32b5768016980da6392600c32da0b",
+    "bytes": 6501
+  },
+  {
+    "path": "src/app/api/platform/session/route.ts",
+    "sha256": "33903aff62c8d23e57dde090e3d6303c9ac53a66728ca534875488435eb567e6",
+    "bytes": 2901
+  },
+  {
+    "path": "src/app/api/platform/support/route.ts",
+    "sha256": "6920b9bc0dc4b3d4df9505c93932f008bd2990403ed450c2019bfe8da3dcf164",
+    "bytes": 3500
+  },
+  {
+    "path": "src/app/api/ready/route.ts",
+    "sha256": "e9dbca326bab9a139f9d6e0c1a75466bc236ef1393479c2667a57a37f6a324c3",
+    "bytes": 6358
+  },
+  {
+    "path": "src/app/api/restaurant/cameras/[cameraId]/stream/route.ts",
+    "sha256": "7246ab88673609272293986f385f946a08f6c4f82196df4703e991ea06ef4dc2",
+    "bytes": 3910
+  },
+  {
+    "path": "src/app/api/restaurant/cash/day/close/route.ts",
+    "sha256": "87ed2af9405989c54267d03b7f341b595d86eeda7702a6630f8f9eb60b7dc0b2",
+    "bytes": 906
+  },
+  {
+    "path": "src/app/api/restaurant/cash/day/correct/route.ts",
+    "sha256": "8bfa855ca92aec55715fc5c71f072751e93d77d19b6b5207aaed642fc4fdf36d",
+    "bytes": 1800
+  },
+  {
+    "path": "src/app/api/restaurant/cash/day/current/route.ts",
+    "sha256": "0d5863f5dacb721d40c1a4f9873e2aaff95f575a4abadc5229d315af137915f5",
+    "bytes": 1825
+  },
+  {
+    "path": "src/app/api/restaurant/cash/day/preview/route.ts",
+    "sha256": "03f833056d7fc50de5f0f86403860ed6acd1b28171b61e259c5f60b873e2a6f2",
+    "bytes": 1396
+  },
+  {
+    "path": "src/app/api/restaurant/cash/drawer/close/route.ts",
+    "sha256": "dfcba0a54caccee7db7409f11505a08ab33fe40d6f969611ea6efb959deefa47",
+    "bytes": 906
+  },
+  {
+    "path": "src/app/api/restaurant/cash/drawer/current/route.ts",
+    "sha256": "e1bc410367e37818e3b6f3ba481d540ef7f7087352d03607c092840dc60165f0",
+    "bytes": 806
+  },
+  {
+    "path": "src/app/api/restaurant/cash/drawer/movement/route.ts",
+    "sha256": "f0937117862f71c8b5dda74ff3ca91bea10e911fc513df487e982eccf9bcd9d0",
+    "bytes": 785
+  },
+  {
+    "path": "src/app/api/restaurant/cash/drawer/open/route.ts",
+    "sha256": "cfc966f1e215414c450cad2fbb848059e094bc6994e9682e9564d7dd8bb5360f",
+    "bytes": 1213
+  },
+  {
+    "path": "src/app/api/restaurant/catering/money/route.ts",
+    "sha256": "657bb62f3a1e5e8d8657883147f391f523a50fdd88d45f7fe0b2a7841bf168ba",
+    "bytes": 207
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/bill/route.ts",
+    "sha256": "78150b13f5ea24e603017613c737dea8d7ca302fbf995359afcf833b1eba7766",
+    "bytes": 1467
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/comp/route.ts",
+    "sha256": "6b762fcf81eab6ca3d2fbeeb29a5f5625233f21b67592f40e41f75f8b1702743",
+    "bytes": 1170
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/loyalty/route.ts",
+    "sha256": "2caf0b875e34bdb71cd828697c773ce048fb9a961e1ef2b8de47b310ffae7fb4",
+    "bytes": 3179
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/receipt/receipt-dispatch.ts",
+    "sha256": "b55b184ae5ea2f688e0bb79252dfea55530d610aa242688f974f298983cb7c43",
+    "bytes": 12873
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/receipt/route.ts",
+    "sha256": "7ad4fbe99ffe6d44d5380f6da04e599dbcf6707310f1f9bf1c378ec4d7e0680e",
+    "bytes": 1747
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/refund/route.ts",
+    "sha256": "df7bd9ff45645966526a2ad753d65dd4c888a6338f079f42a0d72e531c386ae1",
+    "bytes": 3494
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/summary/route.ts",
+    "sha256": "f551b04c28cda3fd84360eaf4e01f9870870b20c094f48d511942d599660b7b7",
+    "bytes": 1295
+  },
+  {
+    "path": "src/app/api/restaurant/checkout/tender/route.ts",
+    "sha256": "ca335db04d025051a68cf2f1f0867a01467923ac025324243a4658a4d1581714",
+    "bytes": 1056
+  },
+  {
+    "path": "src/app/api/restaurant/devices/browser-enroll/route.ts",
+    "sha256": "1ca1ebcaec377d5cc8fb267f9fa6db8ba0811d7e7564171844d4e0a8645f35bb",
+    "bytes": 5541
+  },
+  {
+    "path": "src/app/api/restaurant/kds/ack/route.ts",
+    "sha256": "36acf10bf5a637e723493670dd9b5c20d95f03460a15f9047e44dcc0cc364510",
+    "bytes": 316
+  },
+  {
+    "path": "src/app/api/restaurant/kds/bump/route.ts",
+    "sha256": "9332737b08e000db5b6c28a7a1a46fb0c3754961706d3b9260025a763c3e412b",
+    "bytes": 370
+  },
+  {
+    "path": "src/app/api/restaurant/kds/delivery/queue/route.ts",
+    "sha256": "be84803c73f0ad1539bb7737a6d9199a4884ef251771b64b7f7ee400ac4a84e9",
+    "bytes": 122
+  },
+  {
+    "path": "src/app/api/restaurant/kds/delivery/transition/route.ts",
+    "sha256": "df9c0393a80681fa78e0e562a9a345fdcba26ba74775ac8cc7aa2e760a6d8c39",
+    "bytes": 133
+  },
+  {
+    "path": "src/app/api/restaurant/kds/operators/route.ts",
+    "sha256": "20936e85003f3a51db7827d6b16d9469677f82c0054385bd635a9100fd42ec95",
+    "bytes": 825
+  },
+  {
+    "path": "src/app/api/restaurant/kds/queue/route.ts",
+    "sha256": "efc5670b4083412445d8a1557aeaba1e3661ececf507570e916b7f6021a19272",
+    "bytes": 2610
+  },
+  {
+    "path": "src/app/api/restaurant/kds/recall/route.ts",
+    "sha256": "211db42508c0688470d4925d4b0cb3a319e80108893e6f3e9bb3dcf1c0aeb2d3",
+    "bytes": 315
+  },
+  {
+    "path": "src/app/api/restaurant/orders/add-item/route.ts",
+    "sha256": "f55c894d3d982ceafab30a389100e38568b53bb13d9013e67727e9eacad34dab",
+    "bytes": 692
+  },
+  {
+    "path": "src/app/api/restaurant/orders/cancel/route.ts",
+    "sha256": "f352801cfd93a8ed96d24404aeb760593b9c299cef7b88f2b8a61a97a02bb907",
+    "bytes": 3176
+  },
+  {
+    "path": "src/app/api/restaurant/orders/close/route.ts",
+    "sha256": "45c83a7a11691211718d4fbd07cd2c385ea32598932c66490a286b1f05b29470",
+    "bytes": 484
+  },
+  {
+    "path": "src/app/api/restaurant/orders/customer/attach/route.ts",
+    "sha256": "34d5151e17056473a138a4c5142d246325f2c31ba429ccd6081fb0387a57d8e8",
+    "bytes": 1378
+  },
+  {
+    "path": "src/app/api/restaurant/orders/customer/search/route.ts",
+    "sha256": "3508db0a5cc40c1ec6910bfe33b3afe82cde611a285d25c9c81bd1c9a7e85512",
+    "bytes": 1367
+  },
+  {
+    "path": "src/app/api/restaurant/orders/delivery/addresses/route.ts",
+    "sha256": "cdb4f034d7efd15c771d79aebc73e7865e46e89a2852b4996125f7c46989e063",
+    "bytes": 91
+  },
+  {
+    "path": "src/app/api/restaurant/orders/delivery/attach/route.ts",
+    "sha256": "9de6b2d8ef4c2a6475c0c55b961297dfdf496116da4755041d9bf57ff6b85b57",
+    "bytes": 89
+  },
+  {
+    "path": "src/app/api/restaurant/orders/delivery/zones/route.ts",
+    "sha256": "ef42686b61e8e00fd40465819a69544ca110549123a82b922d2df56348ecee00",
+    "bytes": 87
+  },
+  {
+    "path": "src/app/api/restaurant/orders/detail/route.ts",
+    "sha256": "d3228ea6439d0dfb1dd70fc36a383baee115b498ec22e41dae009e9a40d27292",
+    "bytes": 1037
+  },
+  {
+    "path": "src/app/api/restaurant/orders/effective-menu/route.ts",
+    "sha256": "54217bb4cac40b399d24ea4fae24c68fdfba1d9fa85bb5d81d28a0a20c63c0cd",
+    "bytes": 2540
+  },
+  {
+    "path": "src/app/api/restaurant/orders/fire/route.ts",
+    "sha256": "d03a3296f54d248d650f5ac08d3881ff6e8df25c7d6bdb1a75fcbd0797d4c2e5",
+    "bytes": 768
+  },
+  {
+    "path": "src/app/api/restaurant/orders/hold/route.ts",
+    "sha256": "f70022844d020841c434ef414633586eab15f7cb03b4efd8abcfe68a9d6ba1e4",
+    "bytes": 492
+  },
+  {
+    "path": "src/app/api/restaurant/orders/mark-served/route.ts",
+    "sha256": "a1a421b21e0aa8ec1e70054187729594d15ccb9a489f5d1e7b460c083bfb4ea0",
+    "bytes": 539
+  },
+  {
+    "path": "src/app/api/restaurant/orders/merge-tables/route.ts",
+    "sha256": "c5c0433bbf8f233083a3edfe4372af82aab738a0f27ec8309977b53bf4dbd4ac",
+    "bytes": 538
+  },
+  {
+    "path": "src/app/api/restaurant/orders/move-table/route.ts",
+    "sha256": "d844f6979cfe3ab66f396c7a814dc782215616e82d8240e9a3698ca35492287e",
+    "bytes": 559
+  },
+  {
+    "path": "src/app/api/restaurant/orders/open-orders/route.ts",
+    "sha256": "9371f2ad94989e0f8da26b478f6136ec26f53c904272da14ac493d5521cece9a",
+    "bytes": 645
+  },
+  {
+    "path": "src/app/api/restaurant/orders/open/route.ts",
+    "sha256": "d0ca4e5e9be35daa97f8b3a8926ec35befe4e4d2bacadd4db048bb4243c1c2e5",
+    "bytes": 1178
+  },
+  {
+    "path": "src/app/api/restaurant/orders/remake/route.ts",
+    "sha256": "a4b805247b74d16dad55507806c06f952ed553409e352f7fe3a6fcafbfb667d0",
+    "bytes": 583
+  },
+  {
+    "path": "src/app/api/restaurant/orders/reprint-kot/route.ts",
+    "sha256": "fba96bc37be6c082943b649b55abf479f4a17a2b5e185c835a1442758552acce",
+    "bytes": 818
+  },
+  {
+    "path": "src/app/api/restaurant/orders/void/route.ts",
+    "sha256": "ca9c461e497fd093401a0dac53488a910fc99e9baf3c176c02e14390e26d8a19",
+    "bytes": 3254
+  },
+  {
+    "path": "src/app/api/restaurant/print-bridge/route.ts",
+    "sha256": "dde298c38f93391c1e937e638e9ef57cee504aab473f49ec389e487293c7322f",
+    "bytes": 9094
+  },
+  {
+    "path": "src/app/api/restaurant/receipt-layout/route.ts",
+    "sha256": "e24ee4b5b005703debdbfecf70ed4ebd6add37ecf469db9a4ca8415af902e9e0",
+    "bytes": 3293
+  },
+  {
+    "path": "src/app/api/restaurant/reports/export/route.ts",
+    "sha256": "d2056707322be957141a2504f440f2acadd09ce824cd332ad018c7425ba0e58b",
+    "bytes": 1992
+  },
+  {
+    "path": "src/app/api/restaurant/sop/evidence/route.ts",
+    "sha256": "6bdd8ebc59c1bca086830fbfe0c5978641ca0fe676d947a4852a42a1261c7e6f",
+    "bytes": 6640
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/co-authorize/route.ts",
+    "sha256": "ea6c7f19a60e8a59343d25f25b8d98e2c6fee39a325959ba9d6a201e3a3fe26e",
+    "bytes": 4515
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/establish/route.ts",
+    "sha256": "4b957e645004faa598a1a4d292fc5c1cb3c09990409bc736ce98ba48b254fc7e",
+    "bytes": 1405
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/heartbeat/route.ts",
+    "sha256": "d554a25e081758b1d29a9120dea552dbb487114d6fb483edad18dfb5ccb172c2",
+    "bytes": 909
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/layout/route.ts",
+    "sha256": "72585ae697332d70ea9ba76343ea170103301696957099fb61965941e2b470cf",
+    "bytes": 958
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/lock/route.ts",
+    "sha256": "fbaea44525fee06498355cf7fc9c72be2db141b01eb83d93f1ecb35ce8efdafc",
+    "bytes": 1239
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/operators/route.ts",
+    "sha256": "a0e5734d9f03b38aead38207042c6c152760f292d6c13b365ba6a6d87d2c9a75",
+    "bytes": 1324
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/switch/route.ts",
+    "sha256": "be94c634a6867abbcfec01f2abb03f023c83bc874044fd7bc6282a202a146372",
+    "bytes": 3553
+  },
+  {
+    "path": "src/app/api/restaurant/terminal/unlock/route.ts",
+    "sha256": "0b8a1bfc33876698e9d27e21fa491a8a64569485b10d68a1fc001f225917b1cf",
+    "bytes": 3401
+  },
+  {
+    "path": "src/app/api/restaurant/webhooks/[source]/route.ts",
+    "sha256": "840d545c59fe96bf3cf91f118d70f043e389cf886f20b7d4babd5bc5edd438b8",
+    "bytes": 4746
+  },
+  {
+    "path": "src/app/api/scim/v2/Groups/[id]/route.ts",
+    "sha256": "603666fdb7761cf65104838a5f02bb939d7d0bee4b4e82f5701d13dbad73aaf6",
+    "bytes": 4218
+  },
+  {
+    "path": "src/app/api/scim/v2/Groups/route.ts",
+    "sha256": "6ff6b0197f40e4bd87bdd6159bb08518917716635de1f5ae0e24c3cb3929e170",
+    "bytes": 2303
+  },
+  {
+    "path": "src/app/api/scim/v2/ResourceTypes/route.ts",
+    "sha256": "31437cf4da10c26081751dfcb6ca4792500b567d8bca6296dcce954f7b5d0822",
+    "bytes": 942
+  },
+  {
+    "path": "src/app/api/scim/v2/Schemas/route.ts",
+    "sha256": "6e4ecd125124379d5d3d6f40cdd0e35bf2e578630eebc7a9bc125562a1bf674b",
+    "bytes": 1079
+  },
+  {
+    "path": "src/app/api/scim/v2/ServiceProviderConfig/route.ts",
+    "sha256": "295563859ebe0a3136add90084521a7e8f7eeba556ecade980aca88bc969ae98",
+    "bytes": 694
+  },
+  {
+    "path": "src/app/api/scim/v2/Users/[id]/route.ts",
+    "sha256": "9b7bc3e07fdcf0ab569d2bf040b000f115f0d3cf5ef1313fb348736bf69f6eb1",
+    "bytes": 6913
+  },
+  {
+    "path": "src/app/api/scim/v2/Users/route.ts",
+    "sha256": "ed960d6543c66c7bf322a85adce1b4126080d49edcd3b0ac6cdfe510100fe9de",
+    "bytes": 5519
+  },
+  {
+    "path": "src/app/api/sso/oidc/[connectionId]/callback/route.ts",
+    "sha256": "032dd1fc9da718aa8cd858beaae625883b2c02eb3adddd18e3576dd5781861e0",
+    "bytes": 2545
+  },
+  {
+    "path": "src/app/api/sso/oidc/[connectionId]/start/route.ts",
+    "sha256": "9ceb5f3180b1064365ff0ac3f05a6461dde0cc746aaec2179752091fead5e9cc",
+    "bytes": 1752
+  },
+  {
+    "path": "src/app/api/sso/saml/[connectionId]/callback/route.ts",
+    "sha256": "78dac7021ff14c4141683ce767d4b91b93f23d6311b8aebfad8e84f5fccd0ffb",
+    "bytes": 3289
+  },
+  {
+    "path": "src/app/api/sso/saml/[connectionId]/metadata/route.ts",
+    "sha256": "9e982fa45fb2b7d1cc7480c87d4e2b7edf02323e0425cb5fec9c69f6fb366edd",
+    "bytes": 1722
+  },
+  {
+    "path": "src/app/api/sso/saml/[connectionId]/start/route.ts",
+    "sha256": "78964673e16f90e778dea1c70da513307239f3286a2333a8f4d88c499dda65a9",
+    "bytes": 2074
+  },
+  {
+    "path": "src/app/api/support-session/launch/route.ts",
+    "sha256": "7d530717d75e35a832a5d563c0cec17f059e2c5f2032cace11ec182421ccf9f4",
+    "bytes": 1627
+  },
+  {
+    "path": "src/app/api/support-session/route.ts",
+    "sha256": "acf64e3dfde48e165367b0058e3c688d506a3acf32c17e55b46216555bd77642",
+    "bytes": 1508
+  },
+  {
+    "path": "src/app/api/trpc/[trpc]/route.ts",
+    "sha256": "26c7d3513a011100fd4af21cd6ad6205f74bfb5175d30b077d0a4aad8755338c",
+    "bytes": 17177
+  },
+  {
+    "path": "src/app/api/upload/route.ts",
+    "sha256": "2095c237f1164e610c2869369aa9eeb8bb00646ee6bb7228f8b4e45936a19fad",
+    "bytes": 3151
+  },
+  {
+    "path": "src/app/api/v1/boards/[id]/route.ts",
+    "sha256": "7f242edc39f6642c432fe480eb06682d8a79a5cde267e9c72e8e532811076d1d",
+    "bytes": 1243
+  },
+  {
+    "path": "src/app/api/v1/clients/[id]/route.ts",
+    "sha256": "1c313b363c5175c4230220f71492b896f6a8e0577673e7586c7f8e5b70834975",
+    "bytes": 1878
+  },
+  {
+    "path": "src/app/api/v1/clients/route.ts",
+    "sha256": "acd07bc476a766f306a4e7a836ee453deb6f4dffd27bfa505a351cf010e555ac",
+    "bytes": 2366
+  },
+  {
+    "path": "src/app/api/v1/finance/summary/route.ts",
+    "sha256": "635659e98a28380b5be46509981d762d792c40bbf4a080148cf1af6aa7d0ba9b",
+    "bytes": 2778
+  },
+  {
+    "path": "src/app/api/v1/invoices/[id]/route.ts",
+    "sha256": "cd6ff980c371186677561d3445f4e865953140b4864ee11529448593a2d0e740",
+    "bytes": 2579
+  },
+  {
+    "path": "src/app/api/v1/invoices/route.ts",
+    "sha256": "4b8b6faf5be4a69de69535eee5211120abe1d5f25f0cdf6710124d35b18e9413",
+    "bytes": 4149
+  },
+  {
+    "path": "src/app/api/v1/meetings/route.ts",
+    "sha256": "8c3378494882fc0ec1b11f8c999e8f5710889004200744bc280135b046059b20",
+    "bytes": 3626
+  },
+  {
+    "path": "src/app/api/v1/projects/[id]/route.ts",
+    "sha256": "2907d28dc2727a93c775e41e7bd4d33e14d8be1cb1e97ca5e8e1708f6d449f29",
+    "bytes": 1892
+  },
+  {
+    "path": "src/app/api/v1/projects/route.ts",
+    "sha256": "633797a8ba49c4f11ca1b85bdb403d9bb2fe4fa252247d94610bcc43a30b8d89",
+    "bytes": 2866
+  },
+  {
+    "path": "src/app/api/v1/spec/route.ts",
+    "sha256": "51b11838c0ddc1f413b9210d6a6bc2736907b318e8ebd0f54236cf3e9b6d5443",
+    "bytes": 15288
+  },
+  {
+    "path": "src/app/api/v1/tasks/[id]/comments/route.ts",
+    "sha256": "d3334fcd61e9a05d4e301e452d1f3592699c79694811aeb9415738070df0af66",
+    "bytes": 2680
+  },
+  {
+    "path": "src/app/api/v1/tasks/[id]/route.ts",
+    "sha256": "e1566ebe48439094e38383f0c3a7a925839e7c6bb2791a3da6196d800571db92",
+    "bytes": 8431
+  },
+  {
+    "path": "src/app/api/v1/tasks/route.ts",
+    "sha256": "5556370c02db6ed7a3531bec3b4176a3b9b6c15132adcdd5717946d3c8464087",
+    "bytes": 5657
+  },
+  {
+    "path": "src/app/api/v1/team/route.ts",
+    "sha256": "2dd134f290d0b64dddf7b505a1dd85ec36574c09d46aeb433ed27834c23bf139",
+    "bytes": 914
+  },
+  {
+    "path": "src/app/api/v1/transactions/[id]/route.ts",
+    "sha256": "644132ce9d50e1eb93fd41d2570f8416ecae3425d3f6fb6524fd833df4429ecd",
+    "bytes": 2195
+  },
+  {
+    "path": "src/app/api/v1/transactions/route.ts",
+    "sha256": "0806496652db56684fab278ebdac1f1fe9c1b599e6e36485952c7daee0e8f2e9",
+    "bytes": 3711
+  },
+  {
+    "path": "src/app/brand/brand-showcase.tsx",
+    "sha256": "2465d735d4753e6a71249b80a4e3633167c73e5a73048d646ac86bb6d8cd8db5",
+    "bytes": 11241
+  },
+  {
+    "path": "src/app/brand/page.tsx",
+    "sha256": "f3972905984b94214b2500bf73e3a1da55e1ee6e5bbf31bb19785dafb96f226a",
+    "bytes": 310
+  },
+  {
+    "path": "src/app/brand/preview/page.tsx",
+    "sha256": "eacc16fc62d7ca9d5d4a20401ef7c8633d970a37da571e3d6f9b6a8045157a44",
+    "bytes": 6912
+  },
+  {
+    "path": "src/app/error.tsx",
+    "sha256": "10ed7ae2f4fbe4844e1e07ad73d9afd37c45540b7011f75ed2c4443228d9b7dc",
+    "bytes": 1071
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-400-cyrillic-ext.woff2",
+    "sha256": "c6f09ee0e0a24b7c85ecb2a601eb99332f65b1f6b37c31e0bbe73fb307625eca",
+    "bytes": 4348
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-400-cyrillic.woff2",
+    "sha256": "7b59d6bf7f8b8408ac28f27d01dca9a890abeae77045d343b1d8ccb089a92e54",
+    "bytes": 5476
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-400-latin-ext.woff2",
+    "sha256": "f1050dc5317b43434c0aeda599d4624c774ffc162e87a8cf204b949b6a85816d",
+    "bytes": 8860
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-400-latin.woff2",
+    "sha256": "c36f509c0a8f9f85f29cb44bc8701d8a9e0b14c499e77a884f789ead7093a7ac",
+    "bytes": 10052
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-400-vietnamese.woff2",
+    "sha256": "0a8b854cc18641bd1b8222afa7ec82a75e59bc6501f777744ec87db1b6cd7a2c",
+    "bytes": 4000
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-500-cyrillic-ext.woff2",
+    "sha256": "311098be73eac339128f0b5a6e33d72645b6f87488541fdf467c402152d297fd",
+    "bytes": 4336
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-500-cyrillic.woff2",
+    "sha256": "d524dc8ff6dbf7ed69772f3b2ff4affaf5a89b5762b270e36c3f21da0d4e39f5",
+    "bytes": 5500
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-500-latin-ext.woff2",
+    "sha256": "77f03e26f981c582bdba3a7abed4baa2d3149211c01366bb3ab3ba7622ec4ae5",
+    "bytes": 8848
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-500-latin.woff2",
+    "sha256": "a76f53ca6612e7b3828eec2311098675b7f9849ae4169a8bcef6302aec02a6c0",
+    "bytes": 10060
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-500-vietnamese.woff2",
+    "sha256": "b2529fba93fd07a50ffb8fc3d103eb04b0c298d4f6564d2833c44fde286de7e4",
+    "bytes": 4036
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-600-cyrillic-ext.woff2",
+    "sha256": "f746246b6b0b641f99d9e26e0bf4e42197bde692126857857f0195a94362d52a",
+    "bytes": 4320
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-600-cyrillic.woff2",
+    "sha256": "b814a03d7e57b0626a906f76911b9361d173a1aabc5544c40f72d6a35a1e4940",
+    "bytes": 5548
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-600-latin-ext.woff2",
+    "sha256": "1b6b18fd0fd240bc6d5850f4df621484722d4b5d3650ebdd1e3a8bbd81c75854",
+    "bytes": 8960
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-600-latin.woff2",
+    "sha256": "ad4580d8cb4b5f627c2d18457656732f7f7b070f7837fbc380e08054157e6f6c",
+    "bytes": 10120
+  },
+  {
+    "path": "src/app/fonts/ibm-plex-mono-600-vietnamese.woff2",
+    "sha256": "69744cabbccc9faf77516ce9b744361e1e6be7f8081400006035a153797d2965",
+    "bytes": 4116
+  },
+  {
+    "path": "src/app/fonts/instrument-sans-400-700-latin-ext.woff2",
+    "sha256": "21fac8da552a915e7a9fb84c5afaeb85d35507b2616346d592e78128c1cfe3e0",
+    "bytes": 11092
+  },
+  {
+    "path": "src/app/fonts/instrument-sans-400-700-latin.woff2",
+    "sha256": "6219bc4bfdfc5d9b2201dcdf046218b122a758f932e25ed5f168f929b7ca2311",
+    "bytes": 29904
+  },
+  {
+    "path": "src/app/forgot-password/forgot-password-form.tsx",
+    "sha256": "fea0d0c4d6e16a32486eb04c81f281769903d5b71d71317482f828e68d238730",
+    "bytes": 4326
+  },
+  {
+    "path": "src/app/forgot-password/page.tsx",
+    "sha256": "711347c892e823e5176aa9e3903b6e3dad4d280efb16cbe0571fc3db7363f6b9",
+    "bytes": 1057
+  },
+  {
+    "path": "src/app/globals.css",
+    "sha256": "03072a034af3072c5d93e0665f86bc019641a221fad95037ef3e3111cee486cd",
+    "bytes": 39517
+  },
+  {
+    "path": "src/app/invite/[token]/accept-invite-form.tsx",
+    "sha256": "e68e431408842050eaa71308476dd6b939bcd3ff9c3ff165091768369f56152c",
+    "bytes": 11710
+  },
+  {
+    "path": "src/app/invite/[token]/page.tsx",
+    "sha256": "4d6ad4855159cca055c10aa6024b1a4f4e88f0b84952960aa0727145f5a67cbe",
+    "bytes": 1187
+  },
+  {
+    "path": "src/app/layout.tsx",
+    "sha256": "36252b8e76a6bd5e4bd9cf569d5599d37174fc1a1045caf84c3d97f5f4067db8",
+    "bytes": 7088
+  },
+  {
+    "path": "src/app/login/login-errors.ts",
+    "sha256": "856b39be03fa84fd35cd1d36039603cfb15f24381417cd483ca21f522604bf95",
+    "bytes": 1609
+  },
+  {
+    "path": "src/app/login/login-form.tsx",
+    "sha256": "b8b552eb2bb818f504b532bfb60540cfc5120c63c9d771b724d3ee3081b70e66",
+    "bytes": 9224
+  },
+  {
+    "path": "src/app/login/login-hero.tsx",
+    "sha256": "c4f3a9ea6cb234004e10898581be0a3de5fab147883c4fa173c60435893f177b",
+    "bytes": 3367
+  },
+  {
+    "path": "src/app/login/page.tsx",
+    "sha256": "06785552d0c220d32709bb137dd1094b9847f7ad4f7b79106a12ee0f5d368518",
+    "bytes": 5806
+  },
+  {
+    "path": "src/app/login/shared-login-form.tsx",
+    "sha256": "4374da8e22382c2501275cad63a1a2b841f4e8defe6ce0d09808f75ed6736033",
+    "bytes": 18911
+  },
+  {
+    "path": "src/app/login/submit/route.ts",
+    "sha256": "463c91aaa19e3a4903a734ee00c57670c99b0e333e2dfa012bab817729a2af4c",
+    "bytes": 9937
+  },
+  {
+    "path": "src/app/login/use-hydrated.ts",
+    "sha256": "c343595808e7191e8b525e950800cba5de2085df96a7128655d6be6617835bc3",
+    "bytes": 526
+  },
+  {
+    "path": "src/app/meet/[publicId]/admit/route.ts",
+    "sha256": "d7c6c85fe7954da91db93fdebe1c3005d1990a845c51392438f806debf090c66",
+    "bytes": 2388
+  },
+  {
+    "path": "src/app/meet/[publicId]/loading.tsx",
+    "sha256": "bbbebaac1c95b23c3e8b3dc497e416120b0903c6dbf19a4e6d092570abf304f4",
+    "bytes": 296
+  },
+  {
+    "path": "src/app/meet/[publicId]/page.tsx",
+    "sha256": "5646cd28b843056a3dc6b4dcc2a16a32bb254223b1f29c036f1a15dac57f39f7",
+    "bytes": 406
+  },
+  {
+    "path": "src/app/not-found.tsx",
+    "sha256": "9b7d6d5cb3c0e9145efad3b74c5dc6bca7373241f75eb2dea9c0464fc78d8347",
+    "bytes": 967
+  },
+  {
+    "path": "src/app/page.tsx",
+    "sha256": "1a0d30befb0c6fff66aaf2957feb0c072a8dfa1135eefacde53b11b36f52ba0a",
+    "bytes": 110
+  },
+  {
+    "path": "src/app/platform/(auth)/login/page.tsx",
+    "sha256": "807bca6e9d72274849acc4a6d7cc956a8f8c23ca41c5b7d5d56f067f7469b479",
+    "bytes": 4485
+  },
+  {
+    "path": "src/app/platform/(auth)/login/platform-login-form.tsx",
+    "sha256": "533fe6b39e70b759c9c45565d020a11339eba9ccf89a6f4c369c25d6f0fc1465",
+    "bytes": 4688
+  },
+  {
+    "path": "src/app/platform/(console)/audit/page.tsx",
+    "sha256": "9370ce5d92d11953a1a0486d7e24ce090bdbac8771145c6217802310711a71b7",
+    "bytes": 6959
+  },
+  {
+    "path": "src/app/platform/(console)/catalog/page.tsx",
+    "sha256": "7b21af9875eef58c8008cf24da61514d96fadb17c53016995a2c462fa1977a96",
+    "bytes": 28134
+  },
+  {
+    "path": "src/app/platform/(console)/commercial/page.tsx",
+    "sha256": "d5146f2a3d838ef4c25df35790bbb7630531ef46728e45f187e9034e8c98fd0f",
+    "bytes": 26410
+  },
+  {
+    "path": "src/app/platform/(console)/crm/page.tsx",
+    "sha256": "2fca7f311612502fc2c35e53ca6c0e980ed3f0dacb5da2e1172bb846d6701cdd",
+    "bytes": 22391
+  },
+  {
+    "path": "src/app/platform/(console)/deployments/page.tsx",
+    "sha256": "b5f9e6f79d914515f5ebdb470f5697b22fa2d76b43e01936b73d1f157d95aef1",
+    "bytes": 7866
+  },
+  {
+    "path": "src/app/platform/(console)/jobs/page.tsx",
+    "sha256": "9baafac24b157b2f377aaf8eedd2b57d4f903e54d1fd7d22702f28a77764b8df",
+    "bytes": 6285
+  },
+  {
+    "path": "src/app/platform/(console)/layout.tsx",
+    "sha256": "c858918dc46652198308f67376e8d835017c11c39f03376b3b209353f4453590",
+    "bytes": 704
+  },
+  {
+    "path": "src/app/platform/(console)/operators/page.tsx",
+    "sha256": "492115d7858d00eb8a59031da23616be13c5fb7e6c2c9504bf7cc126e36e955a",
+    "bytes": 6843
+  },
+  {
+    "path": "src/app/platform/(console)/organizations/[id]/page.tsx",
+    "sha256": "cd8c80612de77430aa560a6368be67fb4a9b8076cc3e39ce26209125e52fff75",
+    "bytes": 90507
+  },
+  {
+    "path": "src/app/platform/(console)/organizations/new/page.tsx",
+    "sha256": "c3ed3d5e84d5210917e404e3c63bad8c9305e48b8201fba098bd4e0a88efc750",
+    "bytes": 17412
+  },
+  {
+    "path": "src/app/platform/(console)/organizations/page.tsx",
+    "sha256": "260ddf37146c64458c95ffee2eb4542cfa6d442b57d3b08cb0a78ceb47cd78e4",
+    "bytes": 7703
+  },
+  {
+    "path": "src/app/platform/(console)/page.tsx",
+    "sha256": "e9b435da2929f24e89223cd72aae54db6c33358050c0109d03eae1a8fa544ba4",
+    "bytes": 14508
+  },
+  {
+    "path": "src/app/platform/(console)/settings/page.tsx",
+    "sha256": "899c24680222b970550ce4ef71b75f1a7db8c28d558f7261acaf3be81f516524",
+    "bytes": 6676
+  },
+  {
+    "path": "src/app/platform/(console)/support/page.tsx",
+    "sha256": "3846838eebd4a365f16836e1d80dbfb1618e133374a6b2db7c0a8f03e6daf8a5",
+    "bytes": 5578
+  },
+  {
+    "path": "src/app/reset-password/[token]/page.tsx",
+    "sha256": "2ca05c8291a5cc59bb1f6e6f34c50517891365d04e1f42a9f6869f56f2d5220a",
+    "bytes": 1158
+  },
+  {
+    "path": "src/app/reset-password/[token]/reset-password-form.tsx",
+    "sha256": "6db02b2076ffc79c607f6a85904839625171002f49d6835756c8f38383934c55",
+    "bytes": 7458
+  },
+  {
+    "path": "src/app/sso/complete/page.tsx",
+    "sha256": "edf420908a128c3c47529cfb143dbdc5f4ee1a770e65874a847aff9831e39812",
+    "bytes": 2046
+  },
+  {
+    "path": "src/app/supplier/po/[token]/page.tsx",
+    "sha256": "0029ea24719c962404988bac01c399308bc4455003233174acca86fe12170949",
+    "bytes": 636
+  },
+  {
+    "path": "src/app/supplier/po/[token]/supplier-po-action-form.tsx",
+    "sha256": "f0ce7b6d70a9ca3811d3f974ed94920b7ffd943b6b7bb7aa548dd46dada66d61",
+    "bytes": 6988
+  },
+  {
+    "path": "src/app/terminal/page.tsx",
+    "sha256": "a1a6402cf92a088e4f41231b9862ef2cdbd9c69ff846b82a7eea1c6729331dd6",
+    "bytes": 289
+  },
+  {
+    "path": "src/components/app-providers.tsx",
+    "sha256": "25739355368998853158ba78bc0db04f1652fbfbf7619ddf7b4397df92e5377b",
+    "bytes": 1707
+  },
+  {
+    "path": "src/components/assistant/assistant-panel.tsx",
+    "sha256": "ff1780084c2d01138b7a241baab81d7aad4c3bfc5f70fe70cc473256b5d94200",
+    "bytes": 19069
+  },
+  {
+    "path": "src/components/assistant/markdown.tsx",
+    "sha256": "e1754cdfe2dc5001aeca757dcb27d9d2c9483e21d176eb9c671176e0a928af2e",
+    "bytes": 2945
+  },
+  {
+    "path": "src/components/brand/logo.tsx",
+    "sha256": "adea861132c7fac0729ec7bd815ba2537991625b9a7ec753d5732df124d8d268",
+    "bytes": 3636
+  },
+  {
+    "path": "src/components/camera/camera-evidence-viewer.tsx",
+    "sha256": "343a5ecb99ec72e1cfb6ceb49f2bc09b728f19af8398537c6137bad184010460",
+    "bytes": 4837
+  },
+  {
+    "path": "src/components/camera/camera-privacy-page.tsx",
+    "sha256": "26d306ea7592982eef80e6877ec33cb18512b6cfaf5db41ab2538afaadaa8c83",
+    "bytes": 4100
+  },
+  {
+    "path": "src/components/camera/camera-privacy-panel.tsx",
+    "sha256": "712a751b0799765e158a2478e89b04307a001dbf2516507dab13ca3b78be6894",
+    "bytes": 6052
+  },
+  {
+    "path": "src/components/camera/camera-tile.tsx",
+    "sha256": "0d3184aa31dba6d33cf622e0052b9bfa03076783ba55fa2aba0edaeef1d98a41",
+    "bytes": 1194
+  },
+  {
+    "path": "src/components/camera/cold-chain-camera-section.tsx",
+    "sha256": "040f609a75701cbb14535c84edc30970d291c1bad6c8cc64adc7259d36ee3ebf",
+    "bytes": 4179
+  },
+  {
+    "path": "src/components/camera/excursion-evidence-timeline.tsx",
+    "sha256": "76d49f159efcfe994033f669aecd399c70a34fd5403eca7befa41cd0ebe28d5c",
+    "bytes": 2449
+  },
+  {
+    "path": "src/components/camera/temperature-zone-overlay.tsx",
+    "sha256": "92853b4c51ebe0c94c9115e518d842c98b2433a32a0740a8aa04e8e58b124203",
+    "bytes": 2309
+  },
+  {
+    "path": "src/components/chat/composer/composer-toolbar.tsx",
+    "sha256": "e973afecbeab681d05ff5f47de317fbb1fac28bc279075d360383ef2185ea20f",
+    "bytes": 5369
+  },
+  {
+    "path": "src/components/chat/composer/emoji-picker.tsx",
+    "sha256": "697e9f5f2935fdc2cf3a65f69249fb72ff3a48be0e8d64c69c5bca59abf824b4",
+    "bytes": 11022
+  },
+  {
+    "path": "src/components/chat/composer/mention-extension.ts",
+    "sha256": "64978ce91dba8820e5013378d97528fc1131c5eb1087409cf37e4b921d97be11",
+    "bytes": 5088
+  },
+  {
+    "path": "src/components/chat/composer/mention-list.tsx",
+    "sha256": "7de8fe16a41458b102c00f29cad7745da5aea8d1ae514761079a1a78a0fd8e02",
+    "bytes": 4126
+  },
+  {
+    "path": "src/components/chat/composer/message-composer.tsx",
+    "sha256": "b02bde441399bced4b25ac032ce8c225b0dcb69709fc3195c36dac1cb54bb045",
+    "bytes": 16066
+  },
+  {
+    "path": "src/components/chat/composer/voice-recorder.tsx",
+    "sha256": "3cd840c86fcba621dc2cb1ca7d9cc54a3cef763c4fec34797f188489d7511620",
+    "bytes": 20008
+  },
+  {
+    "path": "src/components/chat/message/message-actions.tsx",
+    "sha256": "e68cc52b77a9751e9adf951322cb6e7623724a18d39de6b3e8fe8d7a7ffb007e",
+    "bytes": 6811
+  },
+  {
+    "path": "src/components/chat/message/message-content.tsx",
+    "sha256": "81930ce28d7da33243f5775f8f52c99d367d72026d16519d600bf828d9de0563",
+    "bytes": 6233
+  },
+  {
+    "path": "src/components/chat/message/message-editor.tsx",
+    "sha256": "4d7a5eab7eb384f4f4abe7e7054baa3da1c4fbffe261a345ee9600bff58b61d8",
+    "bytes": 3476
+  },
+  {
+    "path": "src/components/chat/message/message-item.tsx",
+    "sha256": "e6916ddc4dd94a22a185e2cf924838b4387fa1ca6a1fc1499035689e07f059c4",
+    "bytes": 11601
+  },
+  {
+    "path": "src/components/chat/message/message-list.tsx",
+    "sha256": "00f9c73bddf94b342629cc42db2acb656dd9c734710031c379d986d386bdd7ae",
+    "bytes": 9054
+  },
+  {
+    "path": "src/components/chat/message/reaction-bar.tsx",
+    "sha256": "5c9178a01b4272694f0ef1aac6f29169d074029fce4936b891cec7c4a60a4411",
+    "bytes": 5013
+  },
+  {
+    "path": "src/components/chat/message/thread-panel.tsx",
+    "sha256": "9bc849198b7316a340bc4542f3741383108c15d379ffc0c6594b4c420f19904e",
+    "bytes": 4135
+  },
+  {
+    "path": "src/components/chat/message/voice-message.tsx",
+    "sha256": "d81aa20985211a0bec6befc79342755ffd3d7f9b31700a99cae6bc8c640cb329",
+    "bytes": 7486
+  },
+  {
+    "path": "src/components/chat/power/pins-panel.tsx",
+    "sha256": "e93677861e9e4ca8e9524969e0bdf9e1a70db6584949dcd777aac0ab00e8456b",
+    "bytes": 4846
+  },
+  {
+    "path": "src/components/chat/power/presence-indicator.tsx",
+    "sha256": "571f862b73c70389a586a29d0c595446b48d121b7d2d9c9abee8a5ffd51cc6e4",
+    "bytes": 1372
+  },
+  {
+    "path": "src/components/chat/power/quick-switcher.tsx",
+    "sha256": "a27a1187d9f7b85c82677a9b714be042545040efc7ea3f5b33e4d987b0fceae7",
+    "bytes": 5511
+  },
+  {
+    "path": "src/components/chat/power/saved-view.tsx",
+    "sha256": "4283d049f941c818f99348faa86123300737a73c79d4a93db9858f3d227899cb",
+    "bytes": 5354
+  },
+  {
+    "path": "src/components/chat/power/search-panel.tsx",
+    "sha256": "b6df5e39433b35f604acfb86cd2c88c981e5cc267f9346a8ee9bf466d23b4efb",
+    "bytes": 5785
+  },
+  {
+    "path": "src/components/chat/power/typing-indicator.tsx",
+    "sha256": "3785ca6f851291f2f89a9d6329689445170a552896e3ab4d44ac242356975c3a",
+    "bytes": 2307
+  },
+  {
+    "path": "src/components/chat/power/use-chat-notifications.ts",
+    "sha256": "d7b21d9e46bfbef199eb27426a94df591ab818189d8aaa09986d4f8f70e4720f",
+    "bytes": 3127
+  },
+  {
+    "path": "src/components/chat/realtime-provider.tsx",
+    "sha256": "8f52f453449c70cc0abcf69ea44ed26c2a6353f001c596aa72f39c205579c982",
+    "bytes": 11536
+  },
+  {
+    "path": "src/components/chat/sidebar/browse-channels-dialog.tsx",
+    "sha256": "3acafb598299f2f800ab180b6f0ded247ce88637f1c468774d14e831d49e56a1",
+    "bytes": 4672
+  },
+  {
+    "path": "src/components/chat/sidebar/channel-header.tsx",
+    "sha256": "e5381d36c102e84333b0283aa27f5140e7308016458e62698f4392e33142fceb",
+    "bytes": 6091
+  },
+  {
+    "path": "src/components/chat/sidebar/channel-list-item.tsx",
+    "sha256": "d173ee1dfe30100e161770eb60dafb14379b383e0ec644ce3a76c81036fff6e6",
+    "bytes": 3116
+  },
+  {
+    "path": "src/components/chat/sidebar/channel-members-dialog.tsx",
+    "sha256": "b566b9fa0df03b65e950c9d25a32c1abee31b9e953e7de154f4c2fee6885aa8f",
+    "bytes": 8906
+  },
+  {
+    "path": "src/components/chat/sidebar/channel-sidebar.tsx",
+    "sha256": "ce8b5058b8d58ba08f2fd0338b3c26b9664b2c1545a1114e078672756cef586d",
+    "bytes": 8601
+  },
+  {
+    "path": "src/components/chat/sidebar/create-channel-dialog.tsx",
+    "sha256": "249dabf1daf55f973f066309753c5da40429f39a790c9471edc6b507a5ce029b",
+    "bytes": 7451
+  },
+  {
+    "path": "src/components/chat/sidebar/new-dm-dialog.tsx",
+    "sha256": "13c0d7ff92ecf68f79524ce6d933506cb9cb359f25022e098229d7794a7e8f28",
+    "bytes": 4715
+  },
+  {
+    "path": "src/components/entitlements-provider.tsx",
+    "sha256": "092e7f4d5b826f26f82755519be442b60927e40f2d7126315d764b60e687b72e",
+    "bytes": 634
+  },
+  {
+    "path": "src/components/finance/invoice-manage-panel.tsx",
+    "sha256": "3446533d5603d4045be712d730d8e5b85b5894181de67e02c57e7017353bb060",
+    "bytes": 14874
+  },
+  {
+    "path": "src/components/layout/app-shell.tsx",
+    "sha256": "361b481c04fb97990aae5d5bd03073a9592cda4df5eb017b8df2acc7d499905c",
+    "bytes": 11754
+  },
+  {
+    "path": "src/components/layout/sidebar.tsx",
+    "sha256": "b830b72c83e82bfb5e52df993e055d25499ceeb7c3497b5979a8ab24ab0f934f",
+    "bytes": 21488
+  },
+  {
+    "path": "src/components/layout/topbar-breadcrumbs.tsx",
+    "sha256": "c01a1c5683e1a6c7f8304f3f7f4d935a3b9530021ab91e5b07bc53a4ce028c16",
+    "bytes": 2717
+  },
+  {
+    "path": "src/components/layout/topbar.tsx",
+    "sha256": "b033deaca2c630596d9708ca6fd50c186154e4cf46a8f2cb80e1938f898251f4",
+    "bytes": 26810
+  },
+  {
+    "path": "src/components/meetings/meeting-call.tsx",
+    "sha256": "0506bac753751d01407b96672f2012015585707c13220adb548643523158401c",
+    "bytes": 8827
+  },
+  {
+    "path": "src/components/meetings/meeting-detail.tsx",
+    "sha256": "64757e35d8072587e4ed0ecaa64e491e7bd3e77dc884b46bfd5088a6dc311c95",
+    "bytes": 7536
+  },
+  {
+    "path": "src/components/meetings/meeting-lobby-hero.tsx",
+    "sha256": "8ef31aef2e16696b2fa04e147a41bdf19f88c0ea64a9a3b75cc826d8703d46be",
+    "bytes": 2874
+  },
+  {
+    "path": "src/components/meetings/meeting-lobby.tsx",
+    "sha256": "589d6c72fd22af2d36b341035eb13ffe6636d306a3358c45d72419278812f04d",
+    "bytes": 8755
+  },
+  {
+    "path": "src/components/meetings/meeting-roster.tsx",
+    "sha256": "4b676dcf6342cdb226b4ca8d911302d539b2458897f8e1b74568a2f6f759d831",
+    "bytes": 1133
+  },
+  {
+    "path": "src/components/meetings/occurrence-join-links.tsx",
+    "sha256": "1239c85120c1a447f6b6827820cf07799f1cc835a8939ece353e5bade4139f0e",
+    "bytes": 3023
+  },
+  {
+    "path": "src/components/motion/count-up.tsx",
+    "sha256": "59510c04b037cd4f3155330cd1297c84e25ebc4f031c5e0c5e1f0817f4dc7f0c",
+    "bytes": 2000
+  },
+  {
+    "path": "src/components/motion/magnetic.tsx",
+    "sha256": "c6722449eb63f0abfbbf20b44e32d459b0186d9b95a6956b32c775d03644114a",
+    "bytes": 1341
+  },
+  {
+    "path": "src/components/motion/page-transition.tsx",
+    "sha256": "029c818072daddbdb72bb5b3435b4d40a938344e1c57c20a7b65f62aa02dc805",
+    "bytes": 1033
+  },
+  {
+    "path": "src/components/motion/reveal.tsx",
+    "sha256": "25b3a945addc2f0db393e972ab64e752c508d528eefe691f8517c7577b32032d",
+    "bytes": 2015
+  },
+  {
+    "path": "src/components/notes/note-editor.tsx",
+    "sha256": "3494bdba43800bcbcc27e89b16d4603c87025e68abbb96f5a17b0b1a34b653b0",
+    "bytes": 13649
+  },
+  {
+    "path": "src/components/notes/note-link-extension.ts",
+    "sha256": "87406d265d57e04115fb959ed7f212837116404aa1b20e6012c0e1cf7ebbde5d",
+    "bytes": 2577
+  },
+  {
+    "path": "src/components/notes/note-link-list.tsx",
+    "sha256": "a134c71c9ac79fe82ccc9ec6f9c7b624d8a74d8b0e016e0be4e384582495c936",
+    "bytes": 3350
+  },
+  {
+    "path": "src/components/onboarding/first-run-checklist.tsx",
+    "sha256": "897e6ba1ead26769bd6d1ac56358c048b4475c334d82268f5523298d9004242b",
+    "bytes": 1058
+  },
+  {
+    "path": "src/components/onboarding/readiness-checklist.tsx",
+    "sha256": "2984f0ec39b61ebe815178c65d92dda5c2e097173cd12699089932994d08c9f6",
+    "bytes": 6498
+  },
+  {
+    "path": "src/components/pharmacy/cameras/pharmacy-camera-wizard.tsx",
+    "sha256": "bed72883d60f32d4de1c98b5f3d0b68f02c4fe5e3544b40efe0fc7c02c7d2e5e",
+    "bytes": 8866
+  },
+  {
+    "path": "src/components/pharmacy/cameras/pharmacy-cameras-console.tsx",
+    "sha256": "a07c20906063f5dfd4201f9536c94b01c0c3df1b14ca2df466e49fff6244aca9",
+    "bytes": 19129
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-cart.tsx",
+    "sha256": "3543d9f62180c363dfac8cf64a422fcde33628abb680cdd7f90a5fdc0812cbd5",
+    "bytes": 5855
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-console.tsx",
+    "sha256": "8f587918239e4732f8cde2725d8d89d87a49661097d9c989752807789d951503",
+    "bytes": 78709
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-keymap-legend.tsx",
+    "sha256": "e12b82cff7058451955e74bb48a7ede70c3f69664439793b1075c41ab8cfea22",
+    "bytes": 3417
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-receipt-view.tsx",
+    "sha256": "c7ff34ccd0998e2e15e0b1d8a691c2ffed7f7f66604aafc81a3191ea596dd664",
+    "bytes": 22452
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-return-panel.tsx",
+    "sha256": "bfca6fcfc5c2f1669f8c299e7ed2f37e583241182b9d4ce41f3376ff74eaf41b",
+    "bytes": 23117
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-rx-panel.tsx",
+    "sha256": "8cd2980f65e01de396c6ef1d85ca4152f04b7cd873a44b9b615767b25c992362",
+    "bytes": 36845
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-search-results.tsx",
+    "sha256": "4719a73372de3c734ae6a1661ca0269e4c67f0b3386c530af549fb14e05b18cb",
+    "bytes": 9845
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-substitute-proposals.tsx",
+    "sha256": "e96904f140788ff7c468d435557822576d1d4e2ef81cce7d170e7e5dcc4e5248",
+    "bytes": 3721
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-tender-panel.tsx",
+    "sha256": "d93cea3cc3465a00bb6bb7fbfd97abe8e297ec7be280dabf555ebc140ba38184",
+    "bytes": 12965
+  },
+  {
+    "path": "src/components/pharmacy/counter/counter-unit-toggle.tsx",
+    "sha256": "be9fdce410b0ca39a469cab0b26b60301087a75d4ea06f331e41044f89ff659e",
+    "bytes": 7503
+  },
+  {
+    "path": "src/components/pharmacy/counter/payment-sandbox-panel.tsx",
+    "sha256": "c76a90efc1aa6754494be2fdaf31b7fa27522bd11bd723efb15d836d472f2639",
+    "bytes": 6944
+  },
+  {
+    "path": "src/components/pharmacy/counter/tender-attempt-storage.ts",
+    "sha256": "c31ff42d3969a85c38dc704c5790c3c8789a342de321904b6fb42ea740f88da2",
+    "bytes": 5070
+  },
+  {
+    "path": "src/components/pharmacy/customer-ordering-console.tsx",
+    "sha256": "e06f85e96df2848f417bfc158f10656238d57b052d8b287591bc4cab574325fa",
+    "bytes": 26051
+  },
+  {
+    "path": "src/components/pharmacy/delivery-evidence-form.tsx",
+    "sha256": "6a46bb85a9afc7e4dd39701978e3708d59f3a5fa232781279eb159e4c99b33df",
+    "bytes": 5622
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/controlled-register-console.tsx",
+    "sha256": "699bd4eeba1d1481187bef60c1caee2eeaf126aa8d5b8676a5f91826d4a1dded",
+    "bytes": 6542
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/field.tsx",
+    "sha256": "88562dcff63cbbb7aa4ada0beafd55ff395addbeca88b84931e974a931c4ccf0",
+    "bytes": 1204
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/medication-card.tsx",
+    "sha256": "b3f8e0f9255620fc61203f3637d29025d9b4e5843ec08ed15f7f63da55334f4b",
+    "bytes": 7023
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/pharmacist-queue-console.tsx",
+    "sha256": "3c8d3b106312756cb245cb34510ac1de5ee3de926985dab8419dbbbb4a54f3b1",
+    "bytes": 9568
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/prescriptions-console.tsx",
+    "sha256": "8afd265ecf4ebdd7bf97d51a74aa41cebf024aaf28aa048de039f5916c0bd60e",
+    "bytes": 32421
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/queue-actions.tsx",
+    "sha256": "6d0282227c0ae82aef5846d13f1a4b8db81d80a1187e033aa13218ac863b456b",
+    "bytes": 4973
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/substitution-console.tsx",
+    "sha256": "de9be8fdcc6fea465bfbc744674a8057154b9b1f0a6c68c289ba4943d67415b6",
+    "bytes": 3663
+  },
+  {
+    "path": "src/components/pharmacy/dispensing/substitution-form.tsx",
+    "sha256": "98a46461e38b9902c5c677776539ac80b6bc822460badf4df04db9a7b84d5fbc",
+    "bytes": 3058
+  },
+  {
+    "path": "src/components/pharmacy/inventory/expiry-board.tsx",
+    "sha256": "dd52da15d00b7d1ce984142e622f190757f1e250373abf2f2769ab62c42df15b",
+    "bytes": 17235
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/packing-slip-print-button.tsx",
+    "sha256": "42e2618520af96c8afbaf870ed22062d2cbf2d4da9f72a1deb72749712d0bb83",
+    "bytes": 2193
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/packing-slip.ts",
+    "sha256": "05450c02d77b25ae816cf86575d66d5200fef63786911a7b13f3d5f2baf243f7",
+    "bytes": 4977
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/transfer-action-form.tsx",
+    "sha256": "5c26e567eb636f42cd8a4a99ef7590b1986c2ddeabbea22cb8ab55217e37fbf2",
+    "bytes": 2770
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/transfer-allocate-form.tsx",
+    "sha256": "3f1e27ba18e0e016dad6cfe35fa0f528da37bb3d1938121b6063b73e517ec412",
+    "bytes": 2582
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/transfer-card.tsx",
+    "sha256": "ef6ecd33adba1e34e9ca87da2d36029416ff2322aae853460f742475ead77b1d",
+    "bytes": 6608
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/transfer-form-data.ts",
+    "sha256": "e4a35d2a06065aa51aa94f9f43b94147a323d76d1fc776852529129104558e4b",
+    "bytes": 2669
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/transfer-navigation.ts",
+    "sha256": "a274640036a84c5c5583d3b7e1af9e9d008f90286cfa3c212108f7a35781447d",
+    "bytes": 387
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/transfer-presentation.ts",
+    "sha256": "d626ea622145c35fa36db370575edb743d7363c5829fb8f0d4840749eb252e9a",
+    "bytes": 5203
+  },
+  {
+    "path": "src/components/pharmacy/inventory/transfers/transfer-receive-form.tsx",
+    "sha256": "b6cb106b5e2694dd54331dc5d0d39b3c91a72516f16cbe27b84b4ab5df256ff4",
+    "bytes": 3588
+  },
+  {
+    "path": "src/components/pharmacy/medicine-pack-setup.tsx",
+    "sha256": "ad480871579f95930192e0291d63ffdb35b89bf258211571c8dccf7d161094f5",
+    "bytes": 11659
+  },
+  {
+    "path": "src/components/pharmacy/medicine-reference-workbench.tsx",
+    "sha256": "7576e4d15352608d552779e0ffffa1068432001d01cf05cc3dbcffca5d770034",
+    "bytes": 19811
+  },
+  {
+    "path": "src/components/pharmacy/onboarding-console.tsx",
+    "sha256": "4e8b0303803403ec615da78f5fbab624bfae2ae02fcf93f20b78ad92ce99ad3b",
+    "bytes": 9854
+  },
+  {
+    "path": "src/components/pharmacy/regulatory-profile-form.tsx",
+    "sha256": "9bf204528dd1023c8a4414da6bca91ac89e39c51edb3178ad6be62fff3529b6d",
+    "bytes": 31534
+  },
+  {
+    "path": "src/components/pharmacy/staged-medicine-catalogue.tsx",
+    "sha256": "976a7134aae3c4453f676e0ab8fec75299d3b89a813b19b71f0e9783125eb688",
+    "bytes": 15654
+  },
+  {
+    "path": "src/components/pharmacy/staged-medicine-export.tsx",
+    "sha256": "42a21ec1474bd4eea71b126eb9471691fae7e794abff175f9cee878314543223",
+    "bytes": 781
+  },
+  {
+    "path": "src/components/platform/platform-command-form.tsx",
+    "sha256": "e3e62c908bb5a90bccd9667aec87856fc1171ea712b51c1795c93326d237afae",
+    "bytes": 20895
+  },
+  {
+    "path": "src/components/platform/platform-mfa-card.tsx",
+    "sha256": "20ad9ac1bebf7aacec4881d2528b7cbbc7e8b52624434beda08995a64ac6abf1",
+    "bytes": 6439
+  },
+  {
+    "path": "src/components/platform/platform-shell.tsx",
+    "sha256": "1daa1253fb10c320e87eb33d4074fde1435a00ca0712633e49421189e7357bc3",
+    "bytes": 14028
+  },
+  {
+    "path": "src/components/platform/platform-ui.tsx",
+    "sha256": "629880ad3d969fabc62050523d08be3a1eba5da74fd89348c4f420036b24b77d",
+    "bytes": 1302
+  },
+  {
+    "path": "src/components/platform/support-access-form.tsx",
+    "sha256": "45b5c07bc2c82fd2a1b4e8cf23895195f181ddf26e9a9a0d5221f71c66c29b9e",
+    "bytes": 3306
+  },
+  {
+    "path": "src/components/preference-bootstrap.tsx",
+    "sha256": "33ee7bdafe08f5efc1f1bd20abbb9c565dcc1f26e366f3624744eb6aaded4f5e",
+    "bytes": 1072
+  },
+  {
+    "path": "src/components/preferences-provider.tsx",
+    "sha256": "4679714c5dd5061b614b5ad555bd7cfbffc9c698c291eedd4d72cc992d46cbca",
+    "bytes": 6986
+  },
+  {
+    "path": "src/components/projects/project-ui.tsx",
+    "sha256": "6547771ad983437f8aaca724b53d52577f099f2c9c68149e75055191c2edf4f0",
+    "bytes": 3905
+  },
+  {
+    "path": "src/components/providers.tsx",
+    "sha256": "66724fc8ac09cd0f490de1c5ebe395f70691d7073609bb5114b193128e105b18",
+    "bytes": 657
+  },
+  {
+    "path": "src/components/receipts/receipt-designer.tsx",
+    "sha256": "eab037bd7c0566ee44be67e608fab9f6218d75f2453c3ad84c95917ef89750f8",
+    "bytes": 10993
+  },
+  {
+    "path": "src/components/restaurant/administrator-staff-profile-callout.tsx",
+    "sha256": "cf49478405494234030603332958b8f23008ec61ce41ab87c38a2253f8e3d58d",
+    "bytes": 3991
+  },
+  {
+    "path": "src/components/restaurant/catalog/catalog-console.tsx",
+    "sha256": "6e54a810aad22636fa0ce7d6cde7bdf1a00a6afae0c7b52ed166fe57811ffe51",
+    "bytes": 116635
+  },
+  {
+    "path": "src/components/restaurant/catering/catering-console.tsx",
+    "sha256": "dd174ac62261e15adc26255129e93555b1342d2eb7d8b616543e779cac80d8e7",
+    "bytes": 68612
+  },
+  {
+    "path": "src/components/restaurant/catering/catering-evidence.tsx",
+    "sha256": "bd3885559a9899802079cfb9520d2641071035c678e0a29e942902d4930f9af5",
+    "bytes": 26188
+  },
+  {
+    "path": "src/components/restaurant/catering/catering-terminal-boundary.tsx",
+    "sha256": "a06bb930fe5b4827e25afeb7eb309fa970bfa812b44708a8207e4343627d8e9d",
+    "bytes": 9268
+  },
+  {
+    "path": "src/components/restaurant/delivery/delivery-console.tsx",
+    "sha256": "6a0ca090519025155fa28932af6bb717d071084e458a61ac1a67cbf03d6e6687",
+    "bytes": 25399
+  },
+  {
+    "path": "src/components/restaurant/floor/floor-console.tsx",
+    "sha256": "b7aa1f11672f692c5e162d716b8f4aaa36f707b745336ad6391826566add244e",
+    "bytes": 50154
+  },
+  {
+    "path": "src/components/restaurant/growth/growth-entries.tsx",
+    "sha256": "8290cc474db5e137ae0a52b2c153e5fe60965d0903a4c3ec839281fb04e5a097",
+    "bytes": 4619
+  },
+  {
+    "path": "src/components/restaurant/growth/growth-review-panel.tsx",
+    "sha256": "5ea852f399472ce01f2f194d52f98959ac2e25c6e5feafcc606d10f8e1841144",
+    "bytes": 9912
+  },
+  {
+    "path": "src/components/restaurant/insights/close-readiness-panel.tsx",
+    "sha256": "2043420e3cb76cdb29b40cae311d88b2ec7f497002c799648b276f2c983cbc48",
+    "bytes": 16502
+  },
+  {
+    "path": "src/components/restaurant/insights/contribution-scenarios.tsx",
+    "sha256": "ce7a966d403972dbc950b5f44629003ef7b77f68bdd5eaa5bfdde81eb82178eb",
+    "bytes": 10293
+  },
+  {
+    "path": "src/components/restaurant/insights/insights-console.tsx",
+    "sha256": "6236c32053388be14fa1ad46d9ce59cc85294358dfcd35c73dd3629ac6359791",
+    "bytes": 27158
+  },
+  {
+    "path": "src/components/restaurant/kds/delivery-board.tsx",
+    "sha256": "e9fa8c2359b3df35754273f7107c5ceca662b8e81178225bd93b693c28f90fdc",
+    "bytes": 11808
+  },
+  {
+    "path": "src/components/restaurant/kds/kds-board.tsx",
+    "sha256": "6e4a243ea429daec4043d61bc326548d28704536a2362fa01b6f940cd158698f",
+    "bytes": 30192
+  },
+  {
+    "path": "src/components/restaurant/loyalty/loyalty-console.tsx",
+    "sha256": "51479d1fe13c87098f45917a8ad33560895180e120c2a95137873d0003fc9da3",
+    "bytes": 52913
+  },
+  {
+    "path": "src/components/restaurant/menu-import/menu-import-console.tsx",
+    "sha256": "d8e639d1cafdfea45f0f92076372ff5721ec0f2db0e690472b703bb9bfc36b16",
+    "bytes": 45569
+  },
+  {
+    "path": "src/components/restaurant/menus/menus-console.tsx",
+    "sha256": "c30fdcab08217cd61ee68be5646cde049ba91a07139cf0af5a1dcb49d4946d5a",
+    "bytes": 94208
+  },
+  {
+    "path": "src/components/restaurant/money/money-console.tsx",
+    "sha256": "f00758cddf90886e49fa2d3c566d285f660429d5240d1993768424af2e1006aa",
+    "bytes": 71502
+  },
+  {
+    "path": "src/components/restaurant/operator-safe-selector.tsx",
+    "sha256": "b25f92ba9422c47fb0e314f20b656f17213837f7ace912f7eaf56364c4f32cea",
+    "bytes": 3464
+  },
+  {
+    "path": "src/components/restaurant/orders/orders-console.tsx",
+    "sha256": "ccc7bcf4f098053cb43145c14a668643c7bb5891dc20c90dc5c4ee6116c9a197",
+    "bytes": 32811
+  },
+  {
+    "path": "src/components/restaurant/pos/checkout-panel.tsx",
+    "sha256": "c494bf85e236fadaf5adc806ecdfff4f7d2c605a47f3e364585b1a5b67eda10b",
+    "bytes": 26952
+  },
+  {
+    "path": "src/components/restaurant/pos/day-close-panel.tsx",
+    "sha256": "ab1db857217fda3d6392819ce3ce4c33cdf3435ca9273d812abfe110de0c9dd9",
+    "bytes": 11415
+  },
+  {
+    "path": "src/components/restaurant/pos/drawer-panel.tsx",
+    "sha256": "ebec1b8b9ec4dcf2fe8147027fcde77ea6b87636f4b0925c82d19c3bf8734933",
+    "bytes": 14825
+  },
+  {
+    "path": "src/components/restaurant/pos/menu-grid.tsx",
+    "sha256": "afdf864a3ac6f27f222fd1baa7317dcc149e47214e108d9c60608cb53ffbb862",
+    "bytes": 10881
+  },
+  {
+    "path": "src/components/restaurant/pos/offline-queue-status.tsx",
+    "sha256": "8c75321f53deb0d95ceaeff9e9502189ab42204065503293d4dcf03d4fa82496",
+    "bytes": 2103
+  },
+  {
+    "path": "src/components/restaurant/pos/operator-switch.tsx",
+    "sha256": "e26e6c81ec78159979084b480db4905a5e9fc9270dde45ea504d32b46404b751",
+    "bytes": 4085
+  },
+  {
+    "path": "src/components/restaurant/pos/order-pad.tsx",
+    "sha256": "c12d3088ad37ff14d1cb68903014ea974fd8d3d23596c741977694fededaa1cb",
+    "bytes": 25997
+  },
+  {
+    "path": "src/components/restaurant/pos/order-ticket-panel.tsx",
+    "sha256": "3faeb3c1769fbff813ced85dec5d2920704e6d3f93f2eb7b7f0bedaf562d1602",
+    "bytes": 21386
+  },
+  {
+    "path": "src/components/restaurant/pos/receipt-browser-print.ts",
+    "sha256": "a2b9a598c31cbd9395f7deb74d3975d87eda205d75fccd948bf1b39caf57f554",
+    "bytes": 1412
+  },
+  {
+    "path": "src/components/restaurant/pos/receipt-print-controls.tsx",
+    "sha256": "2cb8095108bc94ba0432a0ee0552471a234959dc06ee87e87d5f9153ec3b3304",
+    "bytes": 9380
+  },
+  {
+    "path": "src/components/restaurant/pos/receipt-view.tsx",
+    "sha256": "c78aee29459bd69b9d412c7739fc0cb37063d9547162b898374a58de9cf61bc5",
+    "bytes": 6449
+  },
+  {
+    "path": "src/components/restaurant/pos/refund-panel.tsx",
+    "sha256": "0526b6bdaa80c888f013e0e7447631165e6cb7a7aa9e3fe00a0604cfec526742",
+    "bytes": 15672
+  },
+  {
+    "path": "src/components/restaurant/pos/split-bill-dialog.tsx",
+    "sha256": "62ed04a4b35d05f09711916b22fae773922613d079aa5d3b5cfa096077cf6006",
+    "bytes": 6432
+  },
+  {
+    "path": "src/components/restaurant/pos/tender-pad.tsx",
+    "sha256": "aaddcc14dfc07bd35c5d829f4ae3b0060f5f3adc501272ab2f89c9410ef4a178",
+    "bytes": 7481
+  },
+  {
+    "path": "src/components/restaurant/pos/use-pos-runtime.ts",
+    "sha256": "4615fe3b587934e581508115aea7782121f0bfd8f62c48f28b3cc2b9a8d80e8a",
+    "bytes": 39892
+  },
+  {
+    "path": "src/components/restaurant/pos/use-terminal-session.ts",
+    "sha256": "f344e9f0e0bbbdd70ffe68959be996698f0f849848a81e92a5eb7765529df489",
+    "bytes": 14894
+  },
+  {
+    "path": "src/components/restaurant/restaurant-branch-select.tsx",
+    "sha256": "cbf7288c4cc095438f9a186041f54669f07bcdd87e80e7437277f67e2a0f09ff",
+    "bytes": 2136
+  },
+  {
+    "path": "src/components/restaurant/restaurant-branches-console.tsx",
+    "sha256": "702661ee1c6cb165dd2a2bcf71b32a86cfecdecc0a54977189f70b92cfca356f",
+    "bytes": 10685
+  },
+  {
+    "path": "src/components/restaurant/restaurant-camera-player.tsx",
+    "sha256": "d669a5a9351f04d27bc279a5e9f4dc2db765d830d545ebdb03cc6b69c2bea0ef",
+    "bytes": 5283
+  },
+  {
+    "path": "src/components/restaurant/restaurant-camera-wizard.tsx",
+    "sha256": "3db3e0e405eacd6e594a72b0948a1c99e6bb2c12fdbb3eb49e58204eda4c637e",
+    "bytes": 10544
+  },
+  {
+    "path": "src/components/restaurant/restaurant-cameras-console.tsx",
+    "sha256": "47d3c988e35a368fdcd180783cb7a2040f7f9ad588d6fdd5e52e2a05933c8373",
+    "bytes": 11254
+  },
+  {
+    "path": "src/components/restaurant/restaurant-device-select.tsx",
+    "sha256": "732cee2900285c923552f125bd5c4a3a88c3ddf6e54abc0c7640a9cc24e8712e",
+    "bytes": 1842
+  },
+  {
+    "path": "src/components/restaurant/restaurant-devices-console.tsx",
+    "sha256": "302ae9705a5c8de7b9ffc7d31e1fdfcc5a6b866fc607494840fe6edf2943bbd8",
+    "bytes": 25623
+  },
+  {
+    "path": "src/components/restaurant/restaurant-roster-console.tsx",
+    "sha256": "47bd944432e5c0b7d4e27ee96ed0a309dfd00af630ff70c1a10b3df78b0397f8",
+    "bytes": 41999
+  },
+  {
+    "path": "src/components/restaurant/restaurant-staff-console.tsx",
+    "sha256": "0000bb4d66d2a62707cb3ec3ce401cd2b2af91639b01fbeb110acff1a2310f61",
+    "bytes": 32491
+  },
+  {
+    "path": "src/components/restaurant/restaurant-staff-select.tsx",
+    "sha256": "6f5ca357c98ad3c08ee7d308f709edef1fd6b119be305efd5c8a6b9caee5527b",
+    "bytes": 1978
+  },
+  {
+    "path": "src/components/restaurant/restaurant-tax-console.tsx",
+    "sha256": "8af58dac43d4e242a9baaffb26212f9b69868f07e5df84e3ec56bb8a1b5027a9",
+    "bytes": 23064
+  },
+  {
+    "path": "src/components/restaurant/staff-job-roles-dialog.tsx",
+    "sha256": "6f76446e278643ea6b806ee0bf8088befb18a8ebae202021aa3a7b014ed76bb3",
+    "bytes": 15107
+  },
+  {
+    "path": "src/components/tenant-session-boundary.tsx",
+    "sha256": "3ec264d576acc92e6b273417ede269e596425555bb4a9b864963485bb8fc1d18",
+    "bytes": 1488
+  },
+  {
+    "path": "src/components/terminal/terminal-console.tsx",
+    "sha256": "b48288b022b24e8d4186aa1e9fc5566d99e14e2091b2594e6f0ecfa56bd4e6fb",
+    "bytes": 48805
+  },
+  {
+    "path": "src/components/terminal/terminal-state.ts",
+    "sha256": "166463ca459b978e118c076f7a15dbad6b29784cf732e9ff47632a76bef2cfd9",
+    "bytes": 4360
+  },
+  {
+    "path": "src/components/theme-provider.tsx",
+    "sha256": "eb1ade413cfb029d833726df24b2974cbf82ece943de3a186e52d96f3b4959a2",
+    "bytes": 3435
+  },
+  {
+    "path": "src/components/ui/avatar.tsx",
+    "sha256": "29df07e95035123c3fdce86bc4d1b57af4983e96e64f16b84d299e3f04de249b",
+    "bytes": 3005
+  },
+  {
+    "path": "src/components/ui/badge.tsx",
+    "sha256": "80db92354a48ddc493fec8e5918c0786ed96f89b6e0f61ee187dac60adbd9a41",
+    "bytes": 2156
+  },
+  {
+    "path": "src/components/ui/button.tsx",
+    "sha256": "94cb60ebb2573744b7bdde682fdc6a9c41e765a1bfe9bcd29f7fdf2940dbe707",
+    "bytes": 3112
+  },
+  {
+    "path": "src/components/ui/calendar.tsx",
+    "sha256": "8fdf362ad296aea1eac58c2c2965488a1b67ea778f49634ac1d2fcc5ccde313d",
+    "bytes": 7878
+  },
+  {
+    "path": "src/components/ui/card.tsx",
+    "sha256": "0c49baa31c55a49c49905b18887dd8885cac4578187a59f31720aa1154610cec",
+    "bytes": 2672
+  },
+  {
+    "path": "src/components/ui/checkbox.tsx",
+    "sha256": "28f1565cd96eba4e36f59fc34a9c7915964707b95b901950e10b912a2574d3e6",
+    "bytes": 1355
+  },
+  {
+    "path": "src/components/ui/command.tsx",
+    "sha256": "227fa198d485deb461f30ac9be902686969c04536623f5280673d5c59cd92dbd",
+    "bytes": 5097
+  },
+  {
+    "path": "src/components/ui/dialog.tsx",
+    "sha256": "3dd965c15de674cb9649a23f82bb3177b481c0ada175bdca6f8c19f0b84f1720",
+    "bytes": 4023
+  },
+  {
+    "path": "src/components/ui/dropdown-menu.tsx",
+    "sha256": "b4aee4866ace9e1db2390ce62d46b55fac375d04d5a251e61920c7830608cb94",
+    "bytes": 8755
+  },
+  {
+    "path": "src/components/ui/eyebrow.tsx",
+    "sha256": "dadca1c0ec965a51d29c4b3e4051bba3c2cee4f9b06ba9bcb389045fbb954109",
+    "bytes": 523
+  },
+  {
+    "path": "src/components/ui/filter-chips.tsx",
+    "sha256": "bf8037605eaa73862cb95e94144dc03c34ec42a009bbdb93c8b5d60d7051cfaa",
+    "bytes": 1971
+  },
+  {
+    "path": "src/components/ui/input-group.tsx",
+    "sha256": "58d42850e4484fbad1d2b21dd968a64e7eb58a4fd51c18bce5ab5adf0440dc1d",
+    "bytes": 5215
+  },
+  {
+    "path": "src/components/ui/input.tsx",
+    "sha256": "590c4c72fc7f02960bfbae235d75f2265335b7c737d54f8b132aef183011841b",
+    "bytes": 1045
+  },
+  {
+    "path": "src/components/ui/label.tsx",
+    "sha256": "92dd8d74655ebda021f401930a80adf9f4cb3d7477b81daa2f113de66ce669a2",
+    "bytes": 523
+  },
+  {
+    "path": "src/components/ui/page-header.tsx",
+    "sha256": "4252b242b25d3eb119813690331d4d95cc39f4a7eba1f700a99bb85c5d259156",
+    "bytes": 2427
+  },
+  {
+    "path": "src/components/ui/popover.tsx",
+    "sha256": "1fed9a1628e38979c5c0ba77aa1bd455502e408d8124b6d22bfaa0852ef34bef",
+    "bytes": 2569
+  },
+  {
+    "path": "src/components/ui/progress.tsx",
+    "sha256": "0f7bf95d51118559e5f8608db4d8ef858d77aa91f55e64409a522477ded26dcd",
+    "bytes": 1702
+  },
+  {
+    "path": "src/components/ui/scroll-area.tsx",
+    "sha256": "f1b7dac2905b38cea8b25231138a35f3cead9c2843b51bc9a47cf8bef49a5d38",
+    "bytes": 1593
+  },
+  {
+    "path": "src/components/ui/section-card.tsx",
+    "sha256": "8969eca2aad3d6b62a7147283a34d3346b5785b84ed48232c6300c5f703b4b1f",
+    "bytes": 1984
+  },
+  {
+    "path": "src/components/ui/select.tsx",
+    "sha256": "afa9ca31a0eede314a68e560363d6ee81c892aed2bb82d8339e23d857044de45",
+    "bytes": 6635
+  },
+  {
+    "path": "src/components/ui/separator.tsx",
+    "sha256": "e3ebb4f97f2df5dbfeebda5c854005862f20a9f932dddd322ddf31eadf8c559d",
+    "bytes": 544
+  },
+  {
+    "path": "src/components/ui/sheet.tsx",
+    "sha256": "a1616e69cb3790359a04e1a6bb8c07331fea7fafab0c4bb092517f4011dacad9",
+    "bytes": 4322
+  },
+  {
+    "path": "src/components/ui/skeleton.tsx",
+    "sha256": "4c342102b2bbf5bd8c04fa151fe5c13c42faee2f9587a3586c27322020ca35d1",
+    "bytes": 278
+  },
+  {
+    "path": "src/components/ui/sonner.tsx",
+    "sha256": "d968ea1372af7e4e527f8b07656373f3eaec018a3a9c619be3fa82bbbbaa965f",
+    "bytes": 1151
+  },
+  {
+    "path": "src/components/ui/stat.tsx",
+    "sha256": "fc1b1383364bb6fa5ac7ce9d55ef2c229effbba268586ef8d9188a2498a1e85e",
+    "bytes": 2064
+  },
+  {
+    "path": "src/components/ui/status-pill.tsx",
+    "sha256": "41bd4d9d8cd317c9b949c63dec000be0f46d782f2171708e5e1dd42473e1b68c",
+    "bytes": 2865
+  },
+  {
+    "path": "src/components/ui/switch.tsx",
+    "sha256": "020c837fc1ae54706370ef29880198593e25070a70d6d7a034aebbe38db9333a",
+    "bytes": 1713
+  },
+  {
+    "path": "src/components/ui/table.tsx",
+    "sha256": "ab20f6768d486ca37993c317e859e45b0c3c395c43facd82beb57e1d0ecc2b54",
+    "bytes": 2722
+  },
+  {
+    "path": "src/components/ui/tabs.tsx",
+    "sha256": "7f37af88a243d4fb031dc38ac79b8b42116ec4bb34af930d8f88a155b24879b2",
+    "bytes": 3583
+  },
+  {
+    "path": "src/components/ui/textarea.tsx",
+    "sha256": "ea028bcba16f313407e96d15ed2e7ae83b2353ce21fd4e9762bb4f4041597a1e",
+    "bytes": 846
+  },
+  {
+    "path": "src/components/ui/time-picker.tsx",
+    "sha256": "625373dd3b98c27bf6dd133e4a1a988395dad9eb0e5a6330f89971419a2feb8d",
+    "bytes": 7312
+  },
+  {
+    "path": "src/components/ui/tooltip.tsx",
+    "sha256": "d29d0208cb4500060b96f828ece0cd2ea925e5a7dd220d9d0955cc1a8bd672f1",
+    "bytes": 2806
+  },
+  {
+    "path": "src/components/ui/utilization-bar.tsx",
+    "sha256": "c80b805924435e9b1100f00c6e85184202c4c1eb6e862b4d0ba7d26a02b54a44",
+    "bytes": 1606
+  },
+  {
+    "path": "src/lib/abac/index.ts",
+    "sha256": "7a0b69bdef90e5d3754b258ea7e20d7fe48c55493e0b3590b5bcb6e93552c8c0",
+    "bytes": 3698
+  },
+  {
+    "path": "src/lib/abac/policies.ts",
+    "sha256": "ef6aa99c90362ecac088b225ad8536720fd44525d3a6a729b402ee1520f116f8",
+    "bytes": 12583
+  },
+  {
+    "path": "src/lib/abac/types.ts",
+    "sha256": "7cea2be2017569a838de1160d7ebabab198d201d7c7bc78e50456043e1e5666e",
+    "bytes": 1449
+  },
+  {
+    "path": "src/lib/ably.ts",
+    "sha256": "5b785b347efcbac248bb11e0b3b7da51e90467b68c084d246fedd11d09ba5771",
+    "bytes": 4596
+  },
+  {
+    "path": "src/lib/ai/ask-fathom-settings.ts",
+    "sha256": "289984b11bf0e78b599e13870c28a16a7e1cf4c5106855e55e3bce1976674bb4",
+    "bytes": 790
+  },
+  {
+    "path": "src/lib/ai/context.ts",
+    "sha256": "2608f52aef827dc02ab1b7944d5011a69a579c7a674fdfc81cbdfb60a61d6ad8",
+    "bytes": 12062
+  },
+  {
+    "path": "src/lib/ai/growth-recommendations.ts",
+    "sha256": "0009ae88a247c0f15ba7ea24250cc14066789ea864ac541daefb2be0be82b43b",
+    "bytes": 13951
+  },
+  {
+    "path": "src/lib/ai/prompt.ts",
+    "sha256": "c19b1705e6d62cb66edbc754b6457bf2bf30fff8e38d93990ae4d3bb9a91fb3d",
+    "bytes": 4142
+  },
+  {
+    "path": "src/lib/ai/provider.ts",
+    "sha256": "47b29b29f08a082e70ffbe886dacbe6dbc09aff6e1eecc8e6913c470fedc587b",
+    "bytes": 4386
+  },
+  {
+    "path": "src/lib/ai/tools.ts",
+    "sha256": "b2146406802ba2191e9b3d34da749dada16dd1eb9f98f7be4e70d9af71d96eee",
+    "bytes": 10457
+  },
+  {
+    "path": "src/lib/ai/tools/chat.ts",
+    "sha256": "8d9441eac2923009009d3e02c32f7b2fdfb9e689370096e7c62377b9046b8fe8",
+    "bytes": 21264
+  },
+  {
+    "path": "src/lib/ai/tools/clients.ts",
+    "sha256": "8723b1b7639ecafb47bdbb7d1ff5da4ae24c6aeb3692b81aa2ff1da2ddd7a2e3",
+    "bytes": 19286
+  },
+  {
+    "path": "src/lib/ai/tools/finance.ts",
+    "sha256": "737408df992fba5dacb5168928f795211382469d85d27a2bbf4660ba2a1e539d",
+    "bytes": 38951
+  },
+  {
+    "path": "src/lib/ai/tools/insights.ts",
+    "sha256": "88e8cd289b845004ae46360f81039cdae55a584669af48de3fe5832a2af29ada",
+    "bytes": 27020
+  },
+  {
+    "path": "src/lib/ai/tools/meetings.ts",
+    "sha256": "d213418ae06a4926c229600cdfd1219f73be719ff3827e9883d0e5598c69e295",
+    "bytes": 26706
+  },
+  {
+    "path": "src/lib/ai/tools/notes.ts",
+    "sha256": "d9a5e0f7b08e1bce9723a0cdfd72b4f44ee3e9cb9d307fa3bfeb0b0d772d53f8",
+    "bytes": 26059
+  },
+  {
+    "path": "src/lib/ai/tools/people.ts",
+    "sha256": "cce9db8a910bbc24a831967ffec34bf6d5e0011b02163e83ab201b730edc3a98",
+    "bytes": 44822
+  },
+  {
+    "path": "src/lib/ai/tools/pharmacy-reports.ts",
+    "sha256": "022713dfdba0a211579865d884dcc3722f7a68ec219a9bb00ef316cfa575553a",
+    "bytes": 32208
+  },
+  {
+    "path": "src/lib/ai/tools/projects.ts",
+    "sha256": "f683d4e72caf4e43bc2e74bc1e92fbac32e2110b959b14477d0acf7104aa3476",
+    "bytes": 43060
+  },
+  {
+    "path": "src/lib/ai/tools/resignations.ts",
+    "sha256": "d233875bfd9eed463e2938685ff12b69fb1d8d8a369981e79e0cb30b66e4895f",
+    "bytes": 15157
+  },
+  {
+    "path": "src/lib/ai/tools/restaurant-reports.ts",
+    "sha256": "92bc3037e375df83c83af23f4f421f51fa1c36e1e36db63012878d21e2763d29",
+    "bytes": 20259
+  },
+  {
+    "path": "src/lib/ai/tools/tasks.ts",
+    "sha256": "0e67b2b1e2773f0325964c8841a4fef66688ff7a575ccc5d93b687dc418a4b3a",
+    "bytes": 43110
+  },
+  {
+    "path": "src/lib/api-auth.ts",
+    "sha256": "0b2f63a6c39b9eba54303521e9e931c5c130c2078ab6e4bdfbacab1da4c1e5d9",
+    "bytes": 9938
+  },
+  {
+    "path": "src/lib/api-json.ts",
+    "sha256": "730345132742f600e784bdc8048f8a0b9f9de0725258eea40182e88b64c2430a",
+    "bytes": 757
+  },
+  {
+    "path": "src/lib/assistant-store.ts",
+    "sha256": "445dfc6b7f7f53bd067ee540f65ed0c12437cb1a29910e3c0fdf7e83f5baafd2",
+    "bytes": 3228
+  },
+  {
+    "path": "src/lib/auth.ts",
+    "sha256": "c3aa286ec26904666703d238a071a104ba78333be872fef7aee165ccf738af5a",
+    "bytes": 31236
+  },
+  {
+    "path": "src/lib/auth/anonymous-access.ts",
+    "sha256": "bcdb0d4934eaa93d62c51baea3f23f0ff9dd17777f7dcd966781ccca5b95415c",
+    "bytes": 5838
+  },
+  {
+    "path": "src/lib/auth/anonymous-rate-limit.ts",
+    "sha256": "1ce4a7961f96d344b16a95afb3efb23b14d705ef8c50d093af65e8b406299037",
+    "bytes": 3519
+  },
+  {
+    "path": "src/lib/auth/anonymous-tenant.ts",
+    "sha256": "f2d395f742e6bc717af85af49a1879800a39103070ce33f4bb04fe81e6718fcc",
+    "bytes": 4144
+  },
+  {
+    "path": "src/lib/auth/callback-url.ts",
+    "sha256": "234479f7bc7b021b99f72a584be35475c83eeafeb23b73ff8f51c8d3944e3231",
+    "bytes": 5447
+  },
+  {
+    "path": "src/lib/auth/constants.ts",
+    "sha256": "bb23b1a6ac241a3fca613ea9702269a4d5913db0ad22df57f86d4cc9b0d11426",
+    "bytes": 933
+  },
+  {
+    "path": "src/lib/auth/login-candidates.ts",
+    "sha256": "0018a3524fb125c2fb1cfeae2d9280c24e09d88e1f48af4dbebfad8acdd5be41",
+    "bytes": 3225
+  },
+  {
+    "path": "src/lib/auth/login-intent.ts",
+    "sha256": "25abefbc7507520c51939b2c58f5d32475cbed922786ac14e3a8bf64b8f0ab04",
+    "bytes": 6204
+  },
+  {
+    "path": "src/lib/auth/session-state.ts",
+    "sha256": "9febfb6ee72e915f2e2d8b3b75474ee0cb33ac70a378b71f7dbf61b99bea8287",
+    "bytes": 5079
+  },
+  {
+    "path": "src/lib/auth/shared-login.ts",
+    "sha256": "ec8df9ff8467ba505898c3a40aa84a1311cd3b3077ebccd2247ff0dcf241ac11",
+    "bytes": 6233
+  },
+  {
+    "path": "src/lib/auth/sign-out.ts",
+    "sha256": "da147cfb8b51faf07f12df20e5c60b13a13ad00a3a4ffbd792c32859e4789ac8",
+    "bytes": 890
+  },
+  {
+    "path": "src/lib/authz.ts",
+    "sha256": "d800eb9fef903b931bcd9cbd7751a2c8800800499c582f849047b8913da5956d",
+    "bytes": 5812
+  },
+  {
+    "path": "src/lib/breadcrumb-store.ts",
+    "sha256": "51e9d117db4a767d868d99a0669c1308a835f63effbdff539445c70f9aa1b8e9",
+    "bytes": 1618
+  },
+  {
+    "path": "src/lib/browser-uuid.ts",
+    "sha256": "53aa532b93bbdb666179d9f4248b1e3f01dd080acf3a2f3e145e987faf03ff0b",
+    "bytes": 742
+  },
+  {
+    "path": "src/lib/cameras/adapters.ts",
+    "sha256": "02ac53807cac295b083aba66103055349a557b3018cf468c3c0e281f0248a8c6",
+    "bytes": 8141
+  },
+  {
+    "path": "src/lib/cameras/camera-gateway-runtime.ts",
+    "sha256": "7f647c29fd618aa472515a4a55dd41337a245e0e6d249c3385379b0d9d62e0d9",
+    "bytes": 2498
+  },
+  {
+    "path": "src/lib/cameras/camera-gateway.simulated.ts",
+    "sha256": "167722b5bb07994811ae7942800b301d9bfce886ed94dadc38810bb3f26c5bae",
+    "bytes": 1695
+  },
+  {
+    "path": "src/lib/cameras/camera-gateway.ts",
+    "sha256": "951c971af235791c46a7bb661baf366ec72f1a0b6ab22e9ca1aeb23eb4b75a38",
+    "bytes": 1065
+  },
+  {
+    "path": "src/lib/cameras/camera-preset.ts",
+    "sha256": "7545d05048e555504931a8932856d726579687d0815663ad0fd0afda81b820d1",
+    "bytes": 2285
+  },
+  {
+    "path": "src/lib/cameras/cameras.ts",
+    "sha256": "3e8a35e6f6ca630a1c39077e07ec2c2efadd09b172989aa1baa6539a2c7fc858",
+    "bytes": 2890
+  },
+  {
+    "path": "src/lib/cameras/contract.ts",
+    "sha256": "55e5d41124478cf94cb3413a38a8ac0eabf482d63788b298359883115d043793",
+    "bytes": 4406
+  },
+  {
+    "path": "src/lib/cameras/evidence.ts",
+    "sha256": "4018137b860cee9f46dba93f6fe628819b5557a900c7f3cc921dbc612e1e949b",
+    "bytes": 9739
+  },
+  {
+    "path": "src/lib/cameras/excursion-evidence.ts",
+    "sha256": "eac08eb78560d43035ef6ad8693771c8970822dca184c99e7e2146cccd41b70a",
+    "bytes": 5644
+  },
+  {
+    "path": "src/lib/cameras/live-session.ts",
+    "sha256": "115c00a63bb0bef0454f235a5f013a37c6275a8a35c1c7d04baaad32f7cc13ea",
+    "bytes": 1877
+  },
+  {
+    "path": "src/lib/cameras/mediamtx.ts",
+    "sha256": "f4a8e31d1aaddd5e4b63587ed8ee4be8a5e6a14d23dc0b03bfef2d8ad79f5718",
+    "bytes": 9851
+  },
+  {
+    "path": "src/lib/cameras/presets.ts",
+    "sha256": "5d189dd3b6b723e39802c31622ae7f5ecd1b0064f1da1e0debf557205292f22c",
+    "bytes": 4758
+  },
+  {
+    "path": "src/lib/cameras/privacy.ts",
+    "sha256": "8bf015e7683b6b24d579e591a841808bf816ddc3aa961e9d9bc18900a9b72479",
+    "bytes": 7041
+  },
+  {
+    "path": "src/lib/cameras/rtsp.ts",
+    "sha256": "c10cfbfc8f773d734a6e309fff2d2a679dd013cbf4540ada8c1d4849ccce8702",
+    "bytes": 2129
+  },
+  {
+    "path": "src/lib/cameras/simulated-gateway.ts",
+    "sha256": "39b68a1442b650beea43f5a3ad780f2070f86a5acae0281baa0caf96c3229495",
+    "bytes": 4615
+  },
+  {
+    "path": "src/lib/cameras/snapshots.ts",
+    "sha256": "a834a7a22f6faf8e581a1593c929bf048c838d53b47ad87b397a1af4d1ec72f1",
+    "bytes": 1250
+  },
+  {
+    "path": "src/lib/chat/contract.ts",
+    "sha256": "1596de2c90ce53f06d3dc8578b651d8bcd3bccf52a7ad626850c8bbe998df24a",
+    "bytes": 9709
+  },
+  {
+    "path": "src/lib/chat/realtime-store.ts",
+    "sha256": "4fa7a5a62ae94efe58f53e388f009ee08c271d7688d3bb12cf76bd51ab856d84",
+    "bytes": 2884
+  },
+  {
+    "path": "src/lib/chat/tiptap.ts",
+    "sha256": "2ca0a2e359a02aefe8a6369df890969e546df387f87ae091f5c0fe753f750c15",
+    "bytes": 2707
+  },
+  {
+    "path": "src/lib/chat/upload-client.ts",
+    "sha256": "2874fe1e50bbfea13cb66fea003f052251da46bc6a96aeb56944b5299a60efbb",
+    "bytes": 1038
+  },
+  {
+    "path": "src/lib/commerce/loyalty-arithmetic.ts",
+    "sha256": "d080bcba981961f80c4c9df815300425df69c2a43752e34a99280d399144d74a",
+    "bytes": 1103
+  },
+  {
+    "path": "src/lib/db.ts",
+    "sha256": "d20f7836f708d6352ed2b77e331bb16142a740aa357b9ed913c8b9fcf9297176",
+    "bytes": 6321
+  },
+  {
+    "path": "src/lib/demo/isolation.ts",
+    "sha256": "d55eeba817d3b5d54d6a9d347948f62d4d7cfa62049f562e3fc04952578417c5",
+    "bytes": 165
+  },
+  {
+    "path": "src/lib/department-provisioning.ts",
+    "sha256": "529656955f319c0bc19f3b23204de6e42d820a723ad45d41df20d499fbdcd0c8",
+    "bytes": 3152
+  },
+  {
+    "path": "src/lib/email-address.ts",
+    "sha256": "3b806f8ffb271870c387c508b7a3ef07dcfb5562906ae1936b0e163870ab1d28",
+    "bytes": 1443
+  },
+  {
+    "path": "src/lib/email/adapter.ts",
+    "sha256": "ac9cb45d793768995be9730215cbc37fd6071184b4f235f08031f7503be1d7bb",
+    "bytes": 2913
+  },
+  {
+    "path": "src/lib/email/crypto.ts",
+    "sha256": "ddb8d62085a81159922d07fda4b80037242412c43ca941e20a2e17f0bd350040",
+    "bytes": 2363
+  },
+  {
+    "path": "src/lib/email/index.ts",
+    "sha256": "c7cbf6b709a15abbe7fb024980e4a3bd73ef419584cecaa3501eaedba0769d5b",
+    "bytes": 638
+  },
+  {
+    "path": "src/lib/email/layout.ts",
+    "sha256": "04b9433dc5b65038652840f92a9183c33399818b4b862dcb9dfe2ff86d75ae03",
+    "bytes": 13034
+  },
+  {
+    "path": "src/lib/email/oauth.ts",
+    "sha256": "2d9f0dcd36c4032a444e456926b66260e755ac6a68aa8c850167a40e742bdb22",
+    "bytes": 6437
+  },
+  {
+    "path": "src/lib/email/providers/gmail.ts",
+    "sha256": "59ea3f2fe6e21d95be9a45435f9c4c513afcc043f31bd26991729390fc7dd1c3",
+    "bytes": 5220
+  },
+  {
+    "path": "src/lib/email/providers/outlook.ts",
+    "sha256": "5868e985d94230e22245ffbd83ebbf0e9028fbfaa547cdc5028fc208b82d3c9e",
+    "bytes": 3916
+  },
+  {
+    "path": "src/lib/email/send.ts",
+    "sha256": "96b30fdf578aabb36835aa25fa38363de7b72bde7ad5873d8f12ca63b2934b92",
+    "bytes": 3089
+  },
+  {
+    "path": "src/lib/email/sync.ts",
+    "sha256": "0952a3d01cd202dbbb56d5b5a5404ee2e5c8953bf6f6f7992edcc5b405e0fb7a",
+    "bytes": 1790
+  },
+  {
+    "path": "src/lib/email/templates.ts",
+    "sha256": "2a9a2a17472e627be66e7a4166b5a30ff0a3a6aeec7ea5d5515586e189afa0f7",
+    "bytes": 32071
+  },
+  {
+    "path": "src/lib/email/theme.ts",
+    "sha256": "43cb0d8c1f711001c2adab2ae4bb519e9756ec9725d976378663f54fac2b6da7",
+    "bytes": 2323
+  },
+  {
+    "path": "src/lib/entitlement-limits.ts",
+    "sha256": "d53eeab7f5bb4b8c924354b8321b488e05c6eb63876fc1adc063cd6eebba2764",
+    "bytes": 3355
+  },
+  {
+    "path": "src/lib/entitlements.ts",
+    "sha256": "d01d237fb7802aa2319b63e061c6b05e3dadbaae96be1c5088eb46425abf1e62",
+    "bytes": 7452
+  },
+  {
+    "path": "src/lib/finance/currency.ts",
+    "sha256": "d48530e8f2ccd15b10a480d8d884e6469f82ba976dd72dfea82f864adbe5a652",
+    "bytes": 4748
+  },
+  {
+    "path": "src/lib/finance/journal.ts",
+    "sha256": "5897e173053fb3eeaf44f08b4f5fa25872834daf659aff82a2ad0381866bc00d",
+    "bytes": 9987
+  },
+  {
+    "path": "src/lib/hotel/tax.ts",
+    "sha256": "c8e83b7a0cd885d3daaab23294849633420bee816b60e112f3e9b50f98b223bf",
+    "bytes": 3779
+  },
+  {
+    "path": "src/lib/http-origin.ts",
+    "sha256": "340b81ec1ecf68f5e061c58b455aff6cbb98e74624b7074443c8ca66a8d0579d",
+    "bytes": 1202
+  },
+  {
+    "path": "src/lib/invite-token.ts",
+    "sha256": "22aadcdac59016256993b3ff8f0efa934b22e085492bcf16263b185a17a16d0e",
+    "bytes": 833
+  },
+  {
+    "path": "src/lib/meeting-occurrence.ts",
+    "sha256": "ba99084920f51f525590f68ae158b840bb18d41484ccdb2a64983e1015050563",
+    "bytes": 5692
+  },
+  {
+    "path": "src/lib/meetings/admission-contract.ts",
+    "sha256": "0a27fa708c282604bdc1efc7260f4d01f3e3fc91ce3a3e85132640f88ed2fa12",
+    "bytes": 1004
+  },
+  {
+    "path": "src/lib/meetings/admission.ts",
+    "sha256": "a5356f85b28427a5bf01f512917637f1f39d026430c12338384329998c0696ae",
+    "bytes": 10041
+  },
+  {
+    "path": "src/lib/meetings/guest-access.ts",
+    "sha256": "9634b023601cdff3e46b94e54288069172e8f83ceea8c3340f8060dbfecd1725",
+    "bytes": 9250
+  },
+  {
+    "path": "src/lib/meetings/guest-session.ts",
+    "sha256": "0eb72d1fe711f7af3d581f16df1a044d5b512973568ef1cce6da5f3a40256ea5",
+    "bytes": 5921
+  },
+  {
+    "path": "src/lib/meetings/materialize.ts",
+    "sha256": "3794f05e782ea3860fd64559b07537ab7bd0c29f9fb0e68e5a4e107868432846",
+    "bytes": 10580
+  },
+  {
+    "path": "src/lib/meetings/occurrences.ts",
+    "sha256": "cb683186ae78461b85cf8a10c1d85a8f66eb48507a4a7e61320497bfe75c362b",
+    "bytes": 17420
+  },
+  {
+    "path": "src/lib/meetings/recurrence.ts",
+    "sha256": "0e1b6af1e16cd79156cd13b625054ead61e4433dd6f0712600e05a3c27cc7ca6",
+    "bytes": 21226
+  },
+  {
+    "path": "src/lib/module-catalog.ts",
+    "sha256": "3fe9c7fd21ad19af9d538ba620efb985a7c8f647d68ec33040ccf58b0000054f",
+    "bytes": 24183
+  },
+  {
+    "path": "src/lib/motion.ts",
+    "sha256": "7c4689a19c229b93881149eb53d204eab3b1080ac4e7365bb11e8a081efa1adf",
+    "bytes": 816
+  },
+  {
+    "path": "src/lib/notifications.ts",
+    "sha256": "bcef4b6dad5ee92bcfa746f0bdc260230ea3ce60cace1513c50be0ef71af7a63",
+    "bytes": 6735
+  },
+  {
+    "path": "src/lib/onboarding/setup-evaluator.ts",
+    "sha256": "38d64a5ff23cc0225cd28dd6d28a1edc715a086a2f06385daf410f15d38ca132",
+    "bytes": 4490
+  },
+  {
+    "path": "src/lib/password-policy.ts",
+    "sha256": "cc0ba86d5763b69ab709e4d20dd95105296e698533835c516fe8f4775d064b06",
+    "bytes": 1267
+  },
+  {
+    "path": "src/lib/pharmacy/COUNTER-PRINTING.md",
+    "sha256": "20665c77abd04a233d45e59f7e3057f496c57e315f8a5883658c84686cfd65e5",
+    "bytes": 16801
+  },
+  {
+    "path": "src/lib/pharmacy/anomaly-signals-operations.ts",
+    "sha256": "0a65eb31dd19e510e15997405d813596a32a91e6fb39c80225869fbd15db6010",
+    "bytes": 16248
+  },
+  {
+    "path": "src/lib/pharmacy/anomaly-signals.ts",
+    "sha256": "eedd2e6835e6d7d75771af358d9d6820969178ee842f753433f5a69c7aab2c51",
+    "bytes": 12022
+  },
+  {
+    "path": "src/lib/pharmacy/bookkeeping.ts",
+    "sha256": "171920881135881dc7cb9ba66de5b17a07d087a8345f0d95032e4165a0cfada9",
+    "bytes": 11961
+  },
+  {
+    "path": "src/lib/pharmacy/branch-scope.ts",
+    "sha256": "a8ad1c5b3c239f2a629fd08b5989892983db6d6466af7fadc5320dbb5b182175",
+    "bytes": 2563
+  },
+  {
+    "path": "src/lib/pharmacy/central-purchasing.ts",
+    "sha256": "77c311cc790fa2f2414e9478b696a3195356c602842e47d2ef0975b1b1eb3794",
+    "bytes": 7068
+  },
+  {
+    "path": "src/lib/pharmacy/consent-writer.ts",
+    "sha256": "5395922efde06d536d198fcadaf329f1f747b283e02ac754b93df86b7e2d7bdc",
+    "bytes": 2530
+  },
+  {
+    "path": "src/lib/pharmacy/counter-alerts.ts",
+    "sha256": "f2a419aec4561576d7049f9f7351e1c37748ade279617a54be9bd67d5c9a32e5",
+    "bytes": 9779
+  },
+  {
+    "path": "src/lib/pharmacy/counter-browser-print.ts",
+    "sha256": "b0c382e150d5331340abe7b394d88891def51947d764742d15487ed53cec5a7f",
+    "bytes": 5249
+  },
+  {
+    "path": "src/lib/pharmacy/counter-command-queue.ts",
+    "sha256": "db67e3b2875f19d2d4930c33bc18753e5ba959c8a7d0ba6b88e156092dd7b81b",
+    "bytes": 18104
+  },
+  {
+    "path": "src/lib/pharmacy/counter-evidence.ts",
+    "sha256": "4184c264af7d1d835af2e71a8a1679c0fe1daa27aae2b00274ec35667d5d9f9d",
+    "bytes": 9501
+  },
+  {
+    "path": "src/lib/pharmacy/counter-keymap.ts",
+    "sha256": "4681ca97a039e7143b6db7f09a0d9b7a24e7e0fea88f10679a70d0274585e5d8",
+    "bytes": 9688
+  },
+  {
+    "path": "src/lib/pharmacy/counter-messages.ts",
+    "sha256": "9b7f1651e1448761cfe4092facc9c5eeaa799008f1279fb8b2aed4d79696ef21",
+    "bytes": 5141
+  },
+  {
+    "path": "src/lib/pharmacy/counter-offline-runtime.ts",
+    "sha256": "b3342d2fff05d7bc4eb8b81c34052bdaa0384af96e89405ceda84ff69b051bb7",
+    "bytes": 15910
+  },
+  {
+    "path": "src/lib/pharmacy/counter-prescriptions.ts",
+    "sha256": "e0cd23f4348bd314a322b00771e54a25e13ccdb24ebca3211cd79050d62c3a51",
+    "bytes": 7274
+  },
+  {
+    "path": "src/lib/pharmacy/counter-pricing.ts",
+    "sha256": "5be484909972add71d72e66179f5965d41f7d5d9d1537524b23cb5be2c0e349e",
+    "bytes": 8163
+  },
+  {
+    "path": "src/lib/pharmacy/counter-query-refresh.ts",
+    "sha256": "f00437ba95379c746c1de95af900b70acff9b9a5cb9abf8a8434ae2e0fc9fe9f",
+    "bytes": 625
+  },
+  {
+    "path": "src/lib/pharmacy/counter-receipt-presentation.ts",
+    "sha256": "8b2b1406ab69f1d2b75b89ba0d264b36d67ca3eece2c6002812c6e61ca4e1b22",
+    "bytes": 3778
+  },
+  {
+    "path": "src/lib/pharmacy/counter-receipt.ts",
+    "sha256": "64e77bf3de236865186f9d79026cdfe51392382ed5bce649b2a0a6ac2d97403b",
+    "bytes": 10643
+  },
+  {
+    "path": "src/lib/pharmacy/counter.ts",
+    "sha256": "6e9336118bfb73f4c07d7a7d01123a2b3b2c74fd0838063a74120e0cdd03be35",
+    "bytes": 24515
+  },
+  {
+    "path": "src/lib/pharmacy/customer-delivery.ts",
+    "sha256": "20fcdaa903d230d9aa799b9bdc4a489bc77de26461a68f741e48ad3f42e149ba",
+    "bytes": 12951
+  },
+  {
+    "path": "src/lib/pharmacy/customer-loyalty-earned-reversal.ts",
+    "sha256": "4c6984187a23b1f8be6344e1801132f368f9ffd79243d7cfbd886ea4c9e35aad",
+    "bytes": 3373
+  },
+  {
+    "path": "src/lib/pharmacy/customer-loyalty.ts",
+    "sha256": "e534fa7f8ba1f80a749ea0b6c0d58a82bf4af3d97490a3796fb674d95b472dc8",
+    "bytes": 15460
+  },
+  {
+    "path": "src/lib/pharmacy/customer-ordering.ts",
+    "sha256": "986e979cd251d0d69c4e313e3ebfaf5d085edfef7b2c191e33d145a92abf7854",
+    "bytes": 34565
+  },
+  {
+    "path": "src/lib/pharmacy/daily-work-pack.ts",
+    "sha256": "e44e2c5c7b526b08d3349469b40f7f85b4dd0f482c306f5b0865b31e78443306",
+    "bytes": 19068
+  },
+  {
+    "path": "src/lib/pharmacy/dashboard.ts",
+    "sha256": "3c3d101cc43592cc36ec8b4d0e648ff6bd65da7c72006ce3efc56c41581758dc",
+    "bytes": 3232
+  },
+  {
+    "path": "src/lib/pharmacy/demand-evidence-reader.ts",
+    "sha256": "71f0adc244b770df5c52343009be2fe6b60c7ac2a4e690bc003756158fac40e3",
+    "bytes": 13752
+  },
+  {
+    "path": "src/lib/pharmacy/demand-evidence.ts",
+    "sha256": "40a54df5f122e3ef606313e704afdeac64276601b027c9e27bce757ad634d0a4",
+    "bytes": 13394
+  },
+  {
+    "path": "src/lib/pharmacy/dispensing-label.ts",
+    "sha256": "ae5ccac4069a65603423bc5ecf650ceb807c24badc9b9bfcdea7f95228f90504",
+    "bytes": 4424
+  },
+  {
+    "path": "src/lib/pharmacy/dispensing.ts",
+    "sha256": "128fe028206bd2d7e9398133c8d1e65e05550336f150b861a9012fc397ac2165",
+    "bytes": 1595
+  },
+  {
+    "path": "src/lib/pharmacy/drap-monitoring.ts",
+    "sha256": "e1be9a845e63ded746a9e3c6dc336dd29717ee6d048c06156de01cf4ad6bb215",
+    "bytes": 13855
+  },
+  {
+    "path": "src/lib/pharmacy/expiry-advisor-operations.ts",
+    "sha256": "611492141826b56e8287055049a0421fc45500bbe4cf85c3854bbf91d9ede22f",
+    "bytes": 6078
+  },
+  {
+    "path": "src/lib/pharmacy/expiry-advisor.ts",
+    "sha256": "121a3ef5adaf2b12dcae8a35cf057afff396594ff434b7ffbcdb4d28e429e12f",
+    "bytes": 4070
+  },
+  {
+    "path": "src/lib/pharmacy/family-khata.ts",
+    "sha256": "c2fd5fe0a5a5dc5303c651a7ce527019cc2df932c1dd7fc2752f6c99e50c439f",
+    "bytes": 8256
+  },
+  {
+    "path": "src/lib/pharmacy/finance-postings.ts",
+    "sha256": "ba3679c5a7f206e24e01c244fe1664dfb212bc09217a4af04731c194ecf8ee37",
+    "bytes": 30540
+  },
+  {
+    "path": "src/lib/pharmacy/finance-reports.ts",
+    "sha256": "d3e3c8e66a3cbc9c62f20e220885a78823417f781d72ca8b73bfec2e814abbe0",
+    "bytes": 14182
+  },
+  {
+    "path": "src/lib/pharmacy/financial-statements.ts",
+    "sha256": "7b6ec8754151a32947ff4d41c96163e9bc6330b161a49324407844ed6813eec9",
+    "bytes": 3726
+  },
+  {
+    "path": "src/lib/pharmacy/fiscal-store.ts",
+    "sha256": "9fda67a37e0d9221cfb295f1c68e1b421b47605ea99a86b685bd66004dd0e0dc",
+    "bytes": 7309
+  },
+  {
+    "path": "src/lib/pharmacy/fiscal.ts",
+    "sha256": "fac1425cd3036f54b321df37417a58a5f07a27d764396ba2a4b6b5d65ee1201a",
+    "bytes": 5022
+  },
+  {
+    "path": "src/lib/pharmacy/forecasting-inputs.ts",
+    "sha256": "2060b36a93e1f8a77d59fcf64073dc42e36a910c145f66d14779356b47c9a818",
+    "bytes": 11819
+  },
+  {
+    "path": "src/lib/pharmacy/forecasting.ts",
+    "sha256": "61e45ecbb55b5f39883018dc2105c018487a4d5a77d25f3ab2ae46736320a2cd",
+    "bytes": 29171
+  },
+  {
+    "path": "src/lib/pharmacy/goods-receipt.ts",
+    "sha256": "c1e004852669144453c89c92f6531388415a05bd8716027a0c2119dfc663d2b8",
+    "bytes": 16119
+  },
+  {
+    "path": "src/lib/pharmacy/growth-evidence.ts",
+    "sha256": "a2c52717bfcc02733f924309ac3c3f0af571e831e8b4c13d1d33958c03f1d9a6",
+    "bytes": 6463
+  },
+  {
+    "path": "src/lib/pharmacy/growth-insights.ts",
+    "sha256": "1b7ca4eb4f408628a3f689fdc1c1ed25eda74a57d6f66dd8aa581e5a79effbbf",
+    "bytes": 14346
+  },
+  {
+    "path": "src/lib/pharmacy/gs1-datamatrix.ts",
+    "sha256": "f227ebda5da529f46f4019c34581c8d0ba8baa3c96bc43503964c285a6915cc4",
+    "bytes": 4633
+  },
+  {
+    "path": "src/lib/pharmacy/imported-stock.ts",
+    "sha256": "dbf30f780a731083965f2629b93a1f3b59596cec125672c397c3e35ea46ae1c2",
+    "bytes": 4564
+  },
+  {
+    "path": "src/lib/pharmacy/inspection-pack.ts",
+    "sha256": "cb0ab53e7a043a3ef12a32a59d2e060c52b3eb6ea493528e9ab458804930e159",
+    "bytes": 3262
+  },
+  {
+    "path": "src/lib/pharmacy/inventory-operations.ts",
+    "sha256": "486e9b99aaafe1c1a4417db1dc06111ac1a524ba40715f24eb4e8aa85945f006",
+    "bytes": 23370
+  },
+  {
+    "path": "src/lib/pharmacy/inventory.ts",
+    "sha256": "113bce65f89102d020a819b269a6b00de6724c08e9150ce7dacd6a3356e9d4a0",
+    "bytes": 13040
+  },
+  {
+    "path": "src/lib/pharmacy/invoice-ocr.ts",
+    "sha256": "02b14e4a3f4b68a96bccb0c0aa390ea97c6f1a583b982106bb7e19c24ad7661b",
+    "bytes": 6980
+  },
+  {
+    "path": "src/lib/pharmacy/licensed-reference-connectors.ts",
+    "sha256": "c6f2981803469b423d68f3858f4c60a728f5de219dc1b563058bfd44ae4d21c1",
+    "bytes": 302
+  },
+  {
+    "path": "src/lib/pharmacy/marketing-assistance.ts",
+    "sha256": "28404bf1486e02f9fdb07fe56987582d1df87f0ec5042747ef1eaf53078fa4a4",
+    "bytes": 1630
+  },
+  {
+    "path": "src/lib/pharmacy/marketing-attribution.ts",
+    "sha256": "7fddc0ab11401842ebb3e565df1277da5be5e8b817aeab55440444db2511bc91",
+    "bytes": 5449
+  },
+  {
+    "path": "src/lib/pharmacy/marketing-delivery.ts",
+    "sha256": "0ccc7517d132d1544f580f15ba1901154554b79f88459aee4a4652acf4a57653",
+    "bytes": 13702
+  },
+  {
+    "path": "src/lib/pharmacy/marketing-report.ts",
+    "sha256": "dbaa3e7cc3b21955802f56c20ce9df5721825537b4c74390982b5722a0709bd8",
+    "bytes": 9358
+  },
+  {
+    "path": "src/lib/pharmacy/marketing-service.ts",
+    "sha256": "53d16be3a9fee36112c99a594bfd1ad59c9645f01d833017264f61b9f334e391",
+    "bytes": 12458
+  },
+  {
+    "path": "src/lib/pharmacy/marketing.ts",
+    "sha256": "11e0962d5c4949fea881db2dfdaa04bc17a4227dc4fc65bcd892ac2b99428c9f",
+    "bytes": 5647
+  },
+  {
+    "path": "src/lib/pharmacy/medicine.ts",
+    "sha256": "4edf8450035b8de31af98f767d1f5003085c0d44639c1807a68abb37b3f5f095",
+    "bytes": 4616
+  },
+  {
+    "path": "src/lib/pharmacy/migration/abuzar-profiler.ts",
+    "sha256": "48350b8c61c1f28638231825842b4badadc5ccd54d724fd8f37684a6e6255464",
+    "bytes": 4455
+  },
+  {
+    "path": "src/lib/pharmacy/migration/cutover.ts",
+    "sha256": "c1c39a91769196303146c7de826d8a75fa7cd51d1a10a64f94f39aea32b88b97",
+    "bytes": 8148
+  },
+  {
+    "path": "src/lib/pharmacy/migration/excel-csv-profiler.ts",
+    "sha256": "0f1b9269d60944251e52bfa29a7200778b13354a5cc7093e6ca9513285df193e",
+    "bytes": 3747
+  },
+  {
+    "path": "src/lib/pharmacy/migration/first-close.ts",
+    "sha256": "b8ed9ab884d5a38f684657f0022d648566baa6b2a5541a7bf6c03cff715b7c35",
+    "bytes": 4362
+  },
+  {
+    "path": "src/lib/pharmacy/migration/mapping-targets.ts",
+    "sha256": "3f6cd3fd95f802664a1cc09d67ec2acf6bec9dbf1d5ddb592894fd7b1726ce2e",
+    "bytes": 2636
+  },
+  {
+    "path": "src/lib/pharmacy/migration/opening-stock.ts",
+    "sha256": "0c3e600383bec7ec91263ea430abe70be1e093cbf11547d2a45ecf66e5600021",
+    "bytes": 23049
+  },
+  {
+    "path": "src/lib/pharmacy/migration/parallel-run.ts",
+    "sha256": "691abb18e8b66a2628473ec7ec21ccf2ee70fd4804b1ce6f6f720e3950198d53",
+    "bytes": 13425
+  },
+  {
+    "path": "src/lib/pharmacy/migration/profiler.ts",
+    "sha256": "a643326b0f6688331992d43235aaf2b6f61c92ed12503cf970f542e5c4d43c0c",
+    "bytes": 13051
+  },
+  {
+    "path": "src/lib/pharmacy/migration/source-values.ts",
+    "sha256": "551a6d0c67cad59aed914443cec038495b444934597a0c855f1eee75db55c74c",
+    "bytes": 9567
+  },
+  {
+    "path": "src/lib/pharmacy/migration/staged-review-read.ts",
+    "sha256": "5dd6112afa5b92dbe02a13fb1ac784734b0621c27a2e174e4b64a5a88575c6d4",
+    "bytes": 5013
+  },
+  {
+    "path": "src/lib/pharmacy/migration/staged-review.ts",
+    "sha256": "f77a4770621df83af234198a5b7b9c40a370f70d3593cff2f0e226c5b31e4883",
+    "bytes": 4268
+  },
+  {
+    "path": "src/lib/pharmacy/migration/workbench.ts",
+    "sha256": "86e61df65999a30cc58e05b54de437efcf60d600cce4f92bb693ffd603442ffc",
+    "bytes": 7517
+  },
+  {
+    "path": "src/lib/pharmacy/offline-action-matrix.ts",
+    "sha256": "b41d8c90342f8f3c04609690a3d49de5e85f79330fd94b396f6c8c55391ffa60",
+    "bytes": 13318
+  },
+  {
+    "path": "src/lib/pharmacy/offline-command-log.ts",
+    "sha256": "2bcb44872821adf41a028d95823104310941a9f8d048b28ec6b070bff90272bb",
+    "bytes": 10315
+  },
+  {
+    "path": "src/lib/pharmacy/offline-devices.ts",
+    "sha256": "29772fa35ea8026c737960a457e96d82d12a0f8de56768f3081fd166d0313701",
+    "bytes": 6091
+  },
+  {
+    "path": "src/lib/pharmacy/offline-quotas.ts",
+    "sha256": "7e1fe1504c29daaa1ceb308328de8f26f7116188cefc8724b74d30a7cd861c91",
+    "bytes": 7181
+  },
+  {
+    "path": "src/lib/pharmacy/offline-receipt-leases.ts",
+    "sha256": "d93124eacf927120fe77994d68ec9ac05dff8816d56a399936c56579b7497404",
+    "bytes": 7036
+  },
+  {
+    "path": "src/lib/pharmacy/offline-safety-lease.ts",
+    "sha256": "c6820bd8914eb2f2ceabc98ad218b85341273a22a89177d333dc7da24cda07c7",
+    "bytes": 2503
+  },
+  {
+    "path": "src/lib/pharmacy/offline-snapshot-envelope.ts",
+    "sha256": "2c2f0262903e7d8d7b9d48244688e425bf0fa66b4ad25b22ae50eae4b319ceaa",
+    "bytes": 6776
+  },
+  {
+    "path": "src/lib/pharmacy/offline-snapshots.ts",
+    "sha256": "a7f125fd1f7aa1a065a695250b497adda6b1148fde24cd095feeb7206c2f4605",
+    "bytes": 8951
+  },
+  {
+    "path": "src/lib/pharmacy/onboarding-checklist.ts",
+    "sha256": "eb78703584fbd6cab949be29c0d20d50682b3d22167a10badccd580202f1d7af",
+    "bytes": 9210
+  },
+  {
+    "path": "src/lib/pharmacy/onboarding.ts",
+    "sha256": "59273db91e6c0c82e660adb92aea04da231227612c2a29cd17e38f5a04e7e023",
+    "bytes": 12099
+  },
+  {
+    "path": "src/lib/pharmacy/owner-digest.ts",
+    "sha256": "3a6cf04fc0c9846561fd37918828fd4647a8bed7d96c0d7698e8c3eddb0c6cbe",
+    "bytes": 10894
+  },
+  {
+    "path": "src/lib/pharmacy/pack-authentication-operations.ts",
+    "sha256": "25725ec33a76eee7b2232baae06964585ca77fe213a06f54075b665bd81ee148",
+    "bytes": 4651
+  },
+  {
+    "path": "src/lib/pharmacy/pack-authentication.ts",
+    "sha256": "ea54a3964767f98376ffdbbafe2636c80963f29b8cb56d3c850fb7bd07d31deb",
+    "bytes": 2800
+  },
+  {
+    "path": "src/lib/pharmacy/pack-conversion.ts",
+    "sha256": "1917224523651c694f9167295ae5a1fd416db4958cf66c19e50ccf58bc412d91",
+    "bytes": 4181
+  },
+  {
+    "path": "src/lib/pharmacy/patient-prescriptions.ts",
+    "sha256": "16b1eb68717e5d7f74cc18c18dfc4f3517c0dc7915d28ab8a44901a83935489c",
+    "bytes": 2760
+  },
+  {
+    "path": "src/lib/pharmacy/payment-sandbox-admission.ts",
+    "sha256": "22ea9c43d5ca8f24d0264f738a0e2dbbe24d8126ab5a91527997e5831419b80d",
+    "bytes": 614
+  },
+  {
+    "path": "src/lib/pharmacy/payment-sandbox.ts",
+    "sha256": "1187747d70473499ea5745c3a2b0971f6adfad1de6c75a36a79fe0ffc8f05736",
+    "bytes": 8574
+  },
+  {
+    "path": "src/lib/pharmacy/prescription-files.ts",
+    "sha256": "2e9da24d90515e4233a2b9ccf1bc04b571f2dc03aa9bbbbe8a16218dc4f80063",
+    "bytes": 5356
+  },
+  {
+    "path": "src/lib/pharmacy/purchasing-console.ts",
+    "sha256": "ef61a89a3c7f6e0692ff2950f3b62fa1a939ac5afa87db707acf5f5616f74c20",
+    "bytes": 29600
+  },
+  {
+    "path": "src/lib/pharmacy/purchasing.ts",
+    "sha256": "859bb31be03467dbdaa0a71ad40003b45f6a4e1f5354c222cb8d2babd173788b",
+    "bytes": 17503
+  },
+  {
+    "path": "src/lib/pharmacy/receipt-identity.ts",
+    "sha256": "7db40d2a966bbf04b89779d80adad7456df15d77fda97187a5b59695799ee1f2",
+    "bytes": 3863
+  },
+  {
+    "path": "src/lib/pharmacy/receipt-print.ts",
+    "sha256": "944e8e24a741520ae991075db95cdedcb6804858b278f008ef0be4f5a3e40a50",
+    "bytes": 9493
+  },
+  {
+    "path": "src/lib/pharmacy/receiving.ts",
+    "sha256": "206da80b6d8ea7603aa71cb510e5cae7ef6eac12c80dc55b2554e25f97ff139e",
+    "bytes": 16144
+  },
+  {
+    "path": "src/lib/pharmacy/reference-connector-automation.ts",
+    "sha256": "88104d8ed514e49d27af2f29e4acdaec73795a5d4ab2163284eb172436d4f439",
+    "bytes": 10513
+  },
+  {
+    "path": "src/lib/pharmacy/reference-connectors.ts",
+    "sha256": "dc446cc9d17ad055d89d01dc4ffd9172473148256e61074b9ed26a8a58c3b563",
+    "bytes": 5378
+  },
+  {
+    "path": "src/lib/pharmacy/refill-support.ts",
+    "sha256": "ea4f9d886ea65e7757de5d4352fe58d2909f811d401559fb8851163990bc2854",
+    "bytes": 7361
+  },
+  {
+    "path": "src/lib/pharmacy/regulatory-profile-form.ts",
+    "sha256": "21cd5e9edfb7995e1164800d71127dc4b3039506ff46ec607a6bcd1cf49a2f56",
+    "bytes": 7208
+  },
+  {
+    "path": "src/lib/pharmacy/regulatory.ts",
+    "sha256": "77407c9fe018e0df3d6dd1695b60d945d53a3c71efe54ae61a19fa1c86926856",
+    "bytes": 4446
+  },
+  {
+    "path": "src/lib/pharmacy/repeat-purchasing.ts",
+    "sha256": "8ae1dc7a97f6cc75b66152d584d7eeddd4da8ed3a531ac4453c28d6a73871887",
+    "bytes": 15188
+  },
+  {
+    "path": "src/lib/pharmacy/replenishment-report.ts",
+    "sha256": "6aff255e3cef22645abbdf251db4a39290bb4d1c7b712af0c48661e6511bc170",
+    "bytes": 8567
+  },
+  {
+    "path": "src/lib/pharmacy/reports.ts",
+    "sha256": "139fc368ab490c3e7c76bc7d9b14697ddaf376cfee7f7c297a50e9da9a5873d3",
+    "bytes": 17419
+  },
+  {
+    "path": "src/lib/pharmacy/retention.ts",
+    "sha256": "1e440750b1e5cb434a1e6c387bfb8054f710baab220f755e94648ad22f16c8c2",
+    "bytes": 1262
+  },
+  {
+    "path": "src/lib/pharmacy/rx-ocr.ts",
+    "sha256": "c0858a07539353ef0acf2fb71e4a9bf5cc772cd4a7e8c78d5a6270eee7c64fa5",
+    "bytes": 10649
+  },
+  {
+    "path": "src/lib/pharmacy/sale-completion.ts",
+    "sha256": "e59dcef2f8ce14f72c1a176157c8183697c994f5846298395fb7d626d86888c1",
+    "bytes": 4661
+  },
+  {
+    "path": "src/lib/pharmacy/sales.ts",
+    "sha256": "61ded7ded285d8bf8df1b457672439aede8b17f6d6969dbd0f48e54036c8dff7",
+    "bytes": 31456
+  },
+  {
+    "path": "src/lib/pharmacy/settlement.ts",
+    "sha256": "654c9fa4d86f50cd5737864c50e0cf9868f7e500a8a47cb5a6170f36699252d2",
+    "bytes": 25662
+  },
+  {
+    "path": "src/lib/pharmacy/sop-library.ts",
+    "sha256": "bdcaa87811038eb32571afa95d201b05cef6459cda71afb8be8d8c73e437c34c",
+    "bytes": 3511
+  },
+  {
+    "path": "src/lib/pharmacy/stock-ledger.ts",
+    "sha256": "81a1836196dcf79944e5dd5131c7521ed612d10d4fd4324c4bd55230937544d5",
+    "bytes": 31665
+  },
+  {
+    "path": "src/lib/pharmacy/stock-signals-operations.ts",
+    "sha256": "aeba5d13c70e8756436bc7a4f5e3ef02295db584d67200beb84d13d299ecf300",
+    "bytes": 46062
+  },
+  {
+    "path": "src/lib/pharmacy/stock-signals.ts",
+    "sha256": "5bd2419de72f9d75af08e7de97e1c7968297fa8dd1124465107525d94ef49628",
+    "bytes": 19157
+  },
+  {
+    "path": "src/lib/pharmacy/substitute-finder.ts",
+    "sha256": "727a940bf3cc9e76cc6a9186e1721885bfea6dca6c930d6dc0b05d5b6a10e47a",
+    "bytes": 6207
+  },
+  {
+    "path": "src/lib/pharmacy/supplier-action-links.ts",
+    "sha256": "682fd03892192ff93eb65d80b2add453cc28cae652b7f2e7127f45a69ab0ee04",
+    "bytes": 9653
+  },
+  {
+    "path": "src/lib/pharmacy/supplier-credit-follow-up.ts",
+    "sha256": "173d7b8a9628292e8e114677a20f5f25fcffcb9a6a89b4648eae9bda77978a03",
+    "bytes": 6065
+  },
+  {
+    "path": "src/lib/pharmacy/supplier-file-scanner.ts",
+    "sha256": "505d2bec729e8ba1122300a19223054657968e0c5b82f7ad20661d40d0dd7d02",
+    "bytes": 1870
+  },
+  {
+    "path": "src/lib/pharmacy/supplier-returns-operations.ts",
+    "sha256": "53d4c9b74d27fb7f60d2d4cb8dfc57a7a30524056b195218255fc7f42e44326c",
+    "bytes": 18318
+  },
+  {
+    "path": "src/lib/pharmacy/supplier-returns.ts",
+    "sha256": "a789fe31128d58e3ac65d735074be5e897a14201d89e42e8acaee065f4122561",
+    "bytes": 8647
+  },
+  {
+    "path": "src/lib/pharmacy/tax-profiles.ts",
+    "sha256": "6d94aa9e8d3a13e3da1edd88a876d57fa41d081d4fa67da1a4c7deaf5231abc0",
+    "bytes": 4398
+  },
+  {
+    "path": "src/lib/pharmacy/temperature-log.ts",
+    "sha256": "99e335640aa773c575627ee62b77af882aa008904211115a97eed9d39ad80d3d",
+    "bytes": 11396
+  },
+  {
+    "path": "src/lib/pharmacy/whatsapp/inbound.ts",
+    "sha256": "5de06f2bde9a370dc180cf97e09a2185a56b4240c4f48abe66bbbd2c894da5da",
+    "bytes": 8747
+  },
+  {
+    "path": "src/lib/pharmacy/whatsapp/message-log.ts",
+    "sha256": "2ab84fda2ca02279663c69d39bf78cce8d677b45daa31290f1c7870c0fcaa521",
+    "bytes": 3880
+  },
+  {
+    "path": "src/lib/pharmacy/whatsapp/messages.ts",
+    "sha256": "8677f18a41cfa24489b2b50fc96a07cc6e4c831c045d3c6035289c76a7595514",
+    "bytes": 7120
+  },
+  {
+    "path": "src/lib/pharmacy/whatsapp/provider.ts",
+    "sha256": "3b81b881f7bcd0450028a95475832ba4406e2db60244660a8db57b148eb570fb",
+    "bytes": 10198
+  },
+  {
+    "path": "src/lib/pharmacy/whatsapp/refill-reminders.ts",
+    "sha256": "3829aa379b45e08ea3474ed0fb3c0a824a6efa967f81d281384dd5c4e0a74494",
+    "bytes": 9564
+  },
+  {
+    "path": "src/lib/platform/activation-gates.ts",
+    "sha256": "69e6cd898d9374cb3abe10aadd497860fb493d1eddbff9abcb3fbba308bd785b",
+    "bytes": 5783
+  },
+  {
+    "path": "src/lib/platform/auth.ts",
+    "sha256": "d8877dcd8c35c051e7a8a85079b6d54d75f253afac15ec5c3e45fc4f1b40f480",
+    "bytes": 7955
+  },
+  {
+    "path": "src/lib/platform/capabilities.ts",
+    "sha256": "43b8d592041670554667d7ce9526a49d2387c59d5d15be6ec542dfed8944866a",
+    "bytes": 1122
+  },
+  {
+    "path": "src/lib/platform/command-types.ts",
+    "sha256": "a9c03ef8b3a3fce4df6ef34437fe4952ad93c24559de3e1060f4a7585a1d1c91",
+    "bytes": 174
+  },
+  {
+    "path": "src/lib/platform/commands.ts",
+    "sha256": "730e2fc33ceb69aa1ae6f7df1a099618e5e4f116e5f89edd6a1e8ee714c9e0f8",
+    "bytes": 132497
+  },
+  {
+    "path": "src/lib/platform/jobs.ts",
+    "sha256": "daa0711c4a2e794eeaa3e07e749da112452543cb2c7844f492f7c54bc1cc5062",
+    "bytes": 31309
+  },
+  {
+    "path": "src/lib/platform/page-access.ts",
+    "sha256": "ccb6467e4c283229d47c97763c293141f8306b90135d834428f738768da0be6e",
+    "bytes": 959
+  },
+  {
+    "path": "src/lib/platform/provisioning-config.ts",
+    "sha256": "de27dab6c0fb513fa7ff2d747ddc589cb4e4c1659464a4d1c31ec2b34f2f51cc",
+    "bytes": 420
+  },
+  {
+    "path": "src/lib/platform/read-policy.ts",
+    "sha256": "3dbdc11e565a3128dd207ba209158602753c0a0da5be5155b858cca0975c64fa",
+    "bytes": 2733
+  },
+  {
+    "path": "src/lib/platform/security.ts",
+    "sha256": "c6db006592c7d7d9bd6b121889c264e2b4ed46337661a2a177d153e8d1c8f59a",
+    "bytes": 3106
+  },
+  {
+    "path": "src/lib/platform/timezones.ts",
+    "sha256": "9cb537f904961db5bb592415c4127f570eb2453c0889a989d83544b78d83f1ed",
+    "bytes": 212
+  },
+  {
+    "path": "src/lib/rate-limit.ts",
+    "sha256": "3edafca9427cf77950f12a02dce188073affd944b123f870183f7ccd75edd150",
+    "bytes": 2673
+  },
+  {
+    "path": "src/lib/realtime-emit.ts",
+    "sha256": "27df82e2e9062452883893338b379cf71971dc58c66c1d0ca12b9c1f98d32223",
+    "bytes": 2018
+  },
+  {
+    "path": "src/lib/receipts/configuration.ts",
+    "sha256": "8da42248917f304621add3e5a0b3aa7c5d0ca7199bfc2fb7bf7bd289bc4b90b6",
+    "bytes": 1607
+  },
+  {
+    "path": "src/lib/receipts/preview.ts",
+    "sha256": "3aac1c38af6da4a6e443f0980cbda2891926637fff0807f87da12c73a510f861",
+    "bytes": 2996
+  },
+  {
+    "path": "src/lib/receipts/restaurant-settings.ts",
+    "sha256": "cf4d80f58180360b28de3195bebd092acb2c276015d471e1d0b5cdb7b18f7507",
+    "bytes": 2086
+  },
+  {
+    "path": "src/lib/restaurant/administrator-staff-profile.ts",
+    "sha256": "17f5c7f9bd3bf3126fccd81e1793c93f8175ce25e4778f0f230c6a8055ba8667",
+    "bytes": 4112
+  },
+  {
+    "path": "src/lib/restaurant/bills.ts",
+    "sha256": "2f8d0a3206d9e9700f035a844ab3240639ea69aaa6c2057ed26dc23e1f6bc851",
+    "bytes": 64287
+  },
+  {
+    "path": "src/lib/restaurant/business-date.ts",
+    "sha256": "7cbbbfe4afe29141a061257065bb3759ebacde2b53a1e481954757b9a71b0cd4",
+    "bytes": 6296
+  },
+  {
+    "path": "src/lib/restaurant/camera-credentials.ts",
+    "sha256": "513fea41176e7bc8a58a1c123b61831eb2d5b35cd539f008aea73ea132b244b4",
+    "bytes": 1534
+  },
+  {
+    "path": "src/lib/restaurant/camera-gateway-runtime.ts",
+    "sha256": "5f0309400470f7428a728bab650e8ebdf2e7bd792b7ceb8e1ca9d96d671e9994",
+    "bytes": 51
+  },
+  {
+    "path": "src/lib/restaurant/camera-gateway.simulated.ts",
+    "sha256": "39b1015a436256ab90c92c64f4bf2c7eb524de91fcb349273432f52cfc3910af",
+    "bytes": 53
+  },
+  {
+    "path": "src/lib/restaurant/camera-gateway.ts",
+    "sha256": "459e312ac386542a533e8e95695552ffaf43ec2a44fa341bc0a69e4950e618e4",
+    "bytes": 43
+  },
+  {
+    "path": "src/lib/restaurant/camera-presets.ts",
+    "sha256": "3116b8a6d6ddf80458a83b16096e95a599b666d5fdeb565a304c3c98e2b53f3a",
+    "bytes": 651
+  },
+  {
+    "path": "src/lib/restaurant/cameras.ts",
+    "sha256": "371f7c880427942d3c8f94033ffccef5f9fa6eb468e12c7d4ac9782b6cb77f3a",
+    "bytes": 36
+  },
+  {
+    "path": "src/lib/restaurant/cameras/adapters.ts",
+    "sha256": "e2ee3218913e0eae1eee28f52052df521fc850c27c1b54fb0a05f8151a952711",
+    "bytes": 40
+  },
+  {
+    "path": "src/lib/restaurant/cameras/contract.ts",
+    "sha256": "fcb10b2700ab37d95dd9384d56503d41e16b7819f4ee43821104ff051eb3ba90",
+    "bytes": 40
+  },
+  {
+    "path": "src/lib/restaurant/cameras/live-session.ts",
+    "sha256": "47347c80cd3f8f853df2b62a2e54dba6c36ceceb79e482790e8a07d660fc3780",
+    "bytes": 44
+  },
+  {
+    "path": "src/lib/restaurant/cameras/mediamtx.ts",
+    "sha256": "aacc8c5ab32fef76a546703402c0caf54a6156f910fae76d17ca3885ce0b3777",
+    "bytes": 40
+  },
+  {
+    "path": "src/lib/restaurant/cameras/presets.ts",
+    "sha256": "e7ba766944185de8b1a36f56536722717d4307c58faf8d4fd0d1d6477ebfc210",
+    "bytes": 39
+  },
+  {
+    "path": "src/lib/restaurant/cameras/rtsp.ts",
+    "sha256": "d55e66cfcb983bff597a30097d93742b3e73e9c62ba52d2d16ca3d92a60f9bad",
+    "bytes": 36
+  },
+  {
+    "path": "src/lib/restaurant/cameras/simulated-gateway.ts",
+    "sha256": "453fcd5bca332245518020b72ea14b527d5e22428a0d6518cfeceb6323ba38bf",
+    "bytes": 49
+  },
+  {
+    "path": "src/lib/restaurant/catalog.ts",
+    "sha256": "ba240bd9e58ba0e7faf7686024997fda268d6a4c936444173a92a584b5e00eec",
+    "bytes": 32301
+  },
+  {
+    "path": "src/lib/restaurant/catering-money-routes.ts",
+    "sha256": "0a5b395bb39c49018625508539aab60c818381547de701de4026e87151c0380c",
+    "bytes": 3583
+  },
+  {
+    "path": "src/lib/restaurant/catering-money.ts",
+    "sha256": "d6316b154255d1df916649632568327c75d62c8fe4e7c77f668e3c0ef1b63b1e",
+    "bytes": 13187
+  },
+  {
+    "path": "src/lib/restaurant/catering-operations.ts",
+    "sha256": "510a7938c8ded228f1bc12d5b35c8c47d7cc390aa4e209a16f17296232f62fa3",
+    "bytes": 26181
+  },
+  {
+    "path": "src/lib/restaurant/checkout-routes.ts",
+    "sha256": "13a495db1e430e0d7c4d7e6828243268ff2eea9e92d5886a1b8f795e06a42633",
+    "bytes": 31422
+  },
+  {
+    "path": "src/lib/restaurant/close-readiness.ts",
+    "sha256": "06266ca4107daa6b61b6418656169bbe6f9a88d9e2b18816418a72f42d3cb5b2",
+    "bytes": 18748
+  },
+  {
+    "path": "src/lib/restaurant/co-authorization.ts",
+    "sha256": "95af763831dbdaf957b6a6e28a7e1e4fdbaef87a00d26e0410cb3b83dd47b7bd",
+    "bytes": 4965
+  },
+  {
+    "path": "src/lib/restaurant/commercial-limits.ts",
+    "sha256": "18d35961df1feb199c65c54628788180f18af7e0fd44b6a2bf56454d76a85cd7",
+    "bytes": 5673
+  },
+  {
+    "path": "src/lib/restaurant/contribution-scenario.ts",
+    "sha256": "97946fdbb6c431320a6fd7131423c7fed9679911c327ffec4e4afd7199dc18bc",
+    "bytes": 6586
+  },
+  {
+    "path": "src/lib/restaurant/credential-lifecycle.ts",
+    "sha256": "7c5c40ec58f72139ebb5f23d48568b215184c7b140ef226064e39a02f795e65f",
+    "bytes": 5847
+  },
+  {
+    "path": "src/lib/restaurant/customer-privacy.ts",
+    "sha256": "87859888dae77434e37967ea4b91fe12d904d653d6f0cfa6cf0d74dc7a6b514c",
+    "bytes": 6494
+  },
+  {
+    "path": "src/lib/restaurant/customers.ts",
+    "sha256": "bdd41b84e998db3f34c24a78035f7d19a16ed4f9e894a70d4dddd3c3650e3d20",
+    "bytes": 21668
+  },
+  {
+    "path": "src/lib/restaurant/daily-close.ts",
+    "sha256": "34e04f536394ee9a6c769dcfd93f926f2c116061bb46ec2e895fbcff70aaa359",
+    "bytes": 24845
+  },
+  {
+    "path": "src/lib/restaurant/delivery.ts",
+    "sha256": "6132f1863efb9a4c004a51bb29fad4ed9674b2bcb3e58aeb320fa6272d48681d",
+    "bytes": 21123
+  },
+  {
+    "path": "src/lib/restaurant/devices.ts",
+    "sha256": "1b1b753d7e6ba87d13e684dd0de33ca10a415e304d561934bd394db0a3fa2417",
+    "bytes": 7579
+  },
+  {
+    "path": "src/lib/restaurant/drawer-sessions.ts",
+    "sha256": "ca70456ef228ec6377277cffeac238b457013ee1b2f889b48fe8ffa4ea7cbba6",
+    "bytes": 25116
+  },
+  {
+    "path": "src/lib/restaurant/effective-dating.ts",
+    "sha256": "fef965f67ca3485d518db1350a5819f117970385a7410ac06d3f1920691f61d0",
+    "bytes": 8218
+  },
+  {
+    "path": "src/lib/restaurant/financial-comparison.ts",
+    "sha256": "d650a9ea2087c6d5bdba4ed9a0279406bfd88e425b17aa9159842af5610ae923",
+    "bytes": 10160
+  },
+  {
+    "path": "src/lib/restaurant/floor.ts",
+    "sha256": "2688de7d9b0be9e00e39ea764c9050ace22bea96c41eb804318511828d59d899",
+    "bytes": 10023
+  },
+  {
+    "path": "src/lib/restaurant/growth-binding.ts",
+    "sha256": "f928dbc9ece92a628b6393996cee83fade2a2d93d5c05f9a9bcbf5d9c8641561",
+    "bytes": 3342
+  },
+  {
+    "path": "src/lib/restaurant/growth-evidence.ts",
+    "sha256": "a23ef05704d95057d88c2eb4d55dffb503750d6938562819412d15d43bf1eed0",
+    "bytes": 10336
+  },
+  {
+    "path": "src/lib/restaurant/growth-generation.ts",
+    "sha256": "7c44ff25e159a41d688a87594ec9a0318ffef5b611f57925e2c995dca82a380a",
+    "bytes": 6360
+  },
+  {
+    "path": "src/lib/restaurant/growth-review-contract.ts",
+    "sha256": "fab95bca7b9df102af8d3d728ef21d567e7bd820cf602e5be2c2926bcea9f316",
+    "bytes": 4244
+  },
+  {
+    "path": "src/lib/restaurant/growth-review.ts",
+    "sha256": "520ee0dd3aaeeb774e193e83d6917e07e2d5332e0fc99f551b4885e9ac912f9e",
+    "bytes": 10782
+  },
+  {
+    "path": "src/lib/restaurant/growth-sandbox.ts",
+    "sha256": "1cd92c9e7eee0fa0942d19bee8f1016983e56758c863ab4c800f6c39844370a5",
+    "bytes": 12548
+  },
+  {
+    "path": "src/lib/restaurant/growth-snapshot.ts",
+    "sha256": "3fcaabdc850dac18804998d1d2c3c3ad26cbdf12d4ee43be34d30c179d70a585",
+    "bytes": 1468
+  },
+  {
+    "path": "src/lib/restaurant/growth-source.ts",
+    "sha256": "b2fca86e7e60586a4dad14ad5093af93806d716b2727e84ac22138c1ed325647",
+    "bytes": 10599
+  },
+  {
+    "path": "src/lib/restaurant/insight-rollups.ts",
+    "sha256": "1b903e7453564e227559dcf1aa969a44f38d39562899dcc1525e58c45877fe06",
+    "bytes": 20435
+  },
+  {
+    "path": "src/lib/restaurant/insights.ts",
+    "sha256": "db79ef34cacc32ac21436b280ef7128c15de71c66ac67f5e6fd5410ed0d097ae",
+    "bytes": 12484
+  },
+  {
+    "path": "src/lib/restaurant/inventory-ledger.ts",
+    "sha256": "65cc88e5dcea0b55000eaf7f7704acb4d6c52cea8f3238eb24ee187403907b79",
+    "bytes": 14717
+  },
+  {
+    "path": "src/lib/restaurant/inventory.ts",
+    "sha256": "272bd237f33e7dc83571ccf2f82803f5d52864dfd6b603fe5345c1949f21eaf5",
+    "bytes": 29808
+  },
+  {
+    "path": "src/lib/restaurant/job-handlers-core.ts",
+    "sha256": "3cd244e364f5ba8e4aabd3014ae3e0e33cd2db912ad2c541e75fef516c66d28c",
+    "bytes": 4758
+  },
+  {
+    "path": "src/lib/restaurant/job-handlers.ts",
+    "sha256": "ed4c9811a2a48f99a1cdd8f6cbb60e82dd55a5268aa6e1e7f499af15a02996e5",
+    "bytes": 1157
+  },
+  {
+    "path": "src/lib/restaurant/job-roles.ts",
+    "sha256": "ca2e31723695cdb7b28791639ae69cfe8ec2d870d4452ae6e9264616c0d98d21",
+    "bytes": 27355
+  },
+  {
+    "path": "src/lib/restaurant/job-runner.ts",
+    "sha256": "16292fff8ca03e1788a255c9a52ae4527c7ac752a4859e8f9ef4e21f0edca9ea",
+    "bytes": 11593
+  },
+  {
+    "path": "src/lib/restaurant/kds.ts",
+    "sha256": "f89b6bae4ac060cb04aca1fdf261bafc00d875bf76f64e53f5ef2a4ea8ae2cbf",
+    "bytes": 16896
+  },
+  {
+    "path": "src/lib/restaurant/kitchen-tickets.ts",
+    "sha256": "7687c12fb4f04dbb928f8570afbf5089a99240d87e99264712af008acefbd19d",
+    "bytes": 9226
+  },
+  {
+    "path": "src/lib/restaurant/loyalty-expiry.ts",
+    "sha256": "d1202a071892c4d55890c992e69cc32b85a3bcba1c06f3429dff09a78d7f07e0",
+    "bytes": 3873
+  },
+  {
+    "path": "src/lib/restaurant/loyalty.ts",
+    "sha256": "13a2407be46e204af6bab90ac0dcf3b922d4affa4440414f2cd96ecce2d3ca2c",
+    "bytes": 31123
+  },
+  {
+    "path": "src/lib/restaurant/menu-availability.ts",
+    "sha256": "190b23de2ff4f6c727934b943075d457b4de5b66d8192e782025d0a4dc4c1593",
+    "bytes": 8146
+  },
+  {
+    "path": "src/lib/restaurant/menu-extraction-vision.ts",
+    "sha256": "7860f7600f02516b28b5c89229d48d972d7d4980e00514e1aeec1ff639177678",
+    "bytes": 8012
+  },
+  {
+    "path": "src/lib/restaurant/menu-extraction.ts",
+    "sha256": "ea006540121a3a12ee97cbfcd1667c3f18bd4fe9808ee3b560c427c4889539cb",
+    "bytes": 20510
+  },
+  {
+    "path": "src/lib/restaurant/menu-import-legacy.ts",
+    "sha256": "c54e3dc11da09a2febdda0b2c3659a3a129528bf2b46e862e393296604edbc7e",
+    "bytes": 705
+  },
+  {
+    "path": "src/lib/restaurant/menu-import-uploads.ts",
+    "sha256": "7103babdaebd128c8928b6d90683216119c14f66bed757f453a27823500fa325",
+    "bytes": 6497
+  },
+  {
+    "path": "src/lib/restaurant/menu-import.ts",
+    "sha256": "e6d96d2edb2c14cadb3039e0e241896115c9c57865b98a2adb9eb2136e45e23c",
+    "bytes": 46597
+  },
+  {
+    "path": "src/lib/restaurant/menus.ts",
+    "sha256": "5c5785f38c4270f7374715937ef038b6ac8d8b264fc2cf3846bf12cce6ea0def",
+    "bytes": 11326
+  },
+  {
+    "path": "src/lib/restaurant/money.ts",
+    "sha256": "f50045108940b445b937c44d299c221433be119da457fb6043b7e8f79fe31f93",
+    "bytes": 6601
+  },
+  {
+    "path": "src/lib/restaurant/notification-fanout.ts",
+    "sha256": "8873b60feb9f34900ac05fc9d0e6444422ae8138939060aec14c3dbd19448d41",
+    "bytes": 2791
+  },
+  {
+    "path": "src/lib/restaurant/notification-webhook.ts",
+    "sha256": "0e289ae9335d7b53320eea879074073b211811d7b7ee8a8b5c528bae8a091ab3",
+    "bytes": 12646
+  },
+  {
+    "path": "src/lib/restaurant/notifications.ts",
+    "sha256": "492c04777012411fd13a5f576b50e7a5394129609677d955c73318d3af437804",
+    "bytes": 5936
+  },
+  {
+    "path": "src/lib/restaurant/operator-credentials.ts",
+    "sha256": "5c7a4231112895caafbc8967f12fd11d433bd88daccf3c905c3b4fed80d0ca3d",
+    "bytes": 6676
+  },
+  {
+    "path": "src/lib/restaurant/order-channels.ts",
+    "sha256": "3e97ea6a3f3a9b934c94b3879fb8b794a7dd41f7729508d1881d9389fc6eef47",
+    "bytes": 956
+  },
+  {
+    "path": "src/lib/restaurant/order-numbers.ts",
+    "sha256": "89dce12ca33b099e2013f21e21dc17352cfb4ecf0ff5c45b2162b1d25c6168c8",
+    "bytes": 2652
+  },
+  {
+    "path": "src/lib/restaurant/order-pricing.ts",
+    "sha256": "39f41585ae7efa9ae027b9f69412ce8665e4438e33c1ed10d23ab88cf814ee41",
+    "bytes": 11960
+  },
+  {
+    "path": "src/lib/restaurant/order-state-machine.ts",
+    "sha256": "a8e16a2f38b9d4c5805ab6d0ab4b63ea39afb7c6367b70ff5000f89d6b41d252",
+    "bytes": 16542
+  },
+  {
+    "path": "src/lib/restaurant/orders.ts",
+    "sha256": "78534339fae20722231dc49bc83c290fefa77745a88385ed519a5ab3d0e990ab",
+    "bytes": 54887
+  },
+  {
+    "path": "src/lib/restaurant/outbox-dispatcher.ts",
+    "sha256": "14651a7eb088154b6d58157166ed18628d3f4fb097de2e42922a07536af47bea",
+    "bytes": 10043
+  },
+  {
+    "path": "src/lib/restaurant/outbox.ts",
+    "sha256": "840cca8ecbc84b7efaba8fecf78561557a06ed738e2aff3d4173a792bb9c3f1f",
+    "bytes": 5262
+  },
+  {
+    "path": "src/lib/restaurant/pakistan-tax-profiles.ts",
+    "sha256": "1741d3d0e34ad90d86680eb395af7f47e6f367aa018d4115c99e4aea51a6e949",
+    "bytes": 8329
+  },
+  {
+    "path": "src/lib/restaurant/payment-adapter.ts",
+    "sha256": "d1edb474550bcae75af7af96b647d36ad0b1fa44788f6c6a5045a367d28b9215",
+    "bytes": 12001
+  },
+  {
+    "path": "src/lib/restaurant/pos-client-store.ts",
+    "sha256": "a55fed3e5bf5505c5dad07e11dd8705b032b627aa4b1f34c2756757e75af3f9e",
+    "bytes": 15672
+  },
+  {
+    "path": "src/lib/restaurant/pos-command-queue.ts",
+    "sha256": "7813f36bb1cbdd84af44f0b989ef4e133cf99afc8d5004b83ac5bca48c2efe97",
+    "bytes": 23956
+  },
+  {
+    "path": "src/lib/restaurant/pos-offline-runtime.ts",
+    "sha256": "c58af7a56729930a9b462cdeb9d7f3c7425d89acdb7a84c7e65784f9947c0ff7",
+    "bytes": 5227
+  },
+  {
+    "path": "src/lib/restaurant/price-lists.ts",
+    "sha256": "aba870ac9a20f9023711d3a6413188c70e68589f5fef94a9c3cb4400afaac255",
+    "bytes": 14985
+  },
+  {
+    "path": "src/lib/restaurant/printing/contract.ts",
+    "sha256": "b845f8dacc358dd79efc588a9e51b6b628c041cc8b13851a1f6bfa1a6158a4d6",
+    "bytes": 4606
+  },
+  {
+    "path": "src/lib/restaurant/printing/esc-pos.ts",
+    "sha256": "ecee2d873182a2b2bcc71760d2a89fe571602500e1f9267732efe509a1fb37e6",
+    "bytes": 1480
+  },
+  {
+    "path": "src/lib/restaurant/printing/index.ts",
+    "sha256": "ab3c5a45a89d3455038e94c4736bb6ca8908bc9631c5779daa88ec6452fdbe5e",
+    "bytes": 133
+  },
+  {
+    "path": "src/lib/restaurant/printing/routing.ts",
+    "sha256": "5fb301381cae188ac5970927b3a84ada9f566c0c6893d33075f5197361e20b2d",
+    "bytes": 450
+  },
+  {
+    "path": "src/lib/restaurant/printing/runtime.ts",
+    "sha256": "c3e600f6cb8d8757196e5d4a2c717182cbad767087ec3c7b17af85f2c5728ec9",
+    "bytes": 568
+  },
+  {
+    "path": "src/lib/restaurant/printing/service.ts",
+    "sha256": "5767ff367cac6647eb9ba1079858b828bcad211448a686b3963424df00e9dadb",
+    "bytes": 10395
+  },
+  {
+    "path": "src/lib/restaurant/printing/stub.ts",
+    "sha256": "151bacb76de8047ced6ce62e8b1596e72b76beb44e9283144cc74b53b2255fa3",
+    "bytes": 746
+  },
+  {
+    "path": "src/lib/restaurant/promotion-caps.ts",
+    "sha256": "ece1fe79fe6a9d7543208bc3e64a1904a47b34d65c92342fb716015e5dbc45ea",
+    "bytes": 17471
+  },
+  {
+    "path": "src/lib/restaurant/promotion-contracts.ts",
+    "sha256": "838698f8bc1bb78ff27ac37693a940278b0e8455e8de495442bac6a17da7bb2a",
+    "bytes": 10879
+  },
+  {
+    "path": "src/lib/restaurant/promotion-evaluator.ts",
+    "sha256": "13b32783d33454b017ae76d2bdac66ca83b5d0e6a8143d11bab05b69bdc021dd",
+    "bytes": 23961
+  },
+  {
+    "path": "src/lib/restaurant/promotion-schedule.ts",
+    "sha256": "b8ed548f6ced19495bd677c009ff7740969329935cdcf8cc9f5797ffdf402eb8",
+    "bytes": 9899
+  },
+  {
+    "path": "src/lib/restaurant/promotion-snapshot.ts",
+    "sha256": "08480d55820e6593864cb5fa6f061b5774d64bc44f8a88ec943f4a6a36ef4fc2",
+    "bytes": 20749
+  },
+  {
+    "path": "src/lib/restaurant/promotions.ts",
+    "sha256": "aba2948684bbcb2211d3142dbfa703b272931135f788f53d43ea9fc43aa806c1",
+    "bytes": 7888
+  },
+  {
+    "path": "src/lib/restaurant/purchasing.ts",
+    "sha256": "e9ddaf3c9b389bd777f32aab8e059d91d9d2376ff901baf28d7dd94a43f8f3d3",
+    "bytes": 40856
+  },
+  {
+    "path": "src/lib/restaurant/receipt-numbers.ts",
+    "sha256": "1542df3b33f4b27fc7e0d4eaba91eff033f9e76076fac740e9f214ac0741ef5d",
+    "bytes": 2819
+  },
+  {
+    "path": "src/lib/restaurant/recipe-costing.ts",
+    "sha256": "d8f0f2ebe28643078d6d2f5ae7a62b1e31f720e62f4fdff9c1aeb46a487a59bd",
+    "bytes": 12170
+  },
+  {
+    "path": "src/lib/restaurant/recipes.ts",
+    "sha256": "a8b6386f3990f32170f893d6234b5d256f842f0a8705a2858fb525743b8be26b",
+    "bytes": 23429
+  },
+  {
+    "path": "src/lib/restaurant/refunds.ts",
+    "sha256": "492d0c61f95bbebc590932e158c77bbef84e1ec550ac72b4c8fbd735d26defb1",
+    "bytes": 23542
+  },
+  {
+    "path": "src/lib/restaurant/report-net-sales.ts",
+    "sha256": "6583e035bfd4af6bdded5cd01aa9b8b5fe2d14c22dc1fcd54665540871857c94",
+    "bytes": 672
+  },
+  {
+    "path": "src/lib/restaurant/reports.ts",
+    "sha256": "695b6a8e166a7fa3620bcf5c3d4c51ee60794ea317fb11c1dbaaafcc077f9a58",
+    "bytes": 86578
+  },
+  {
+    "path": "src/lib/restaurant/scheduler.ts",
+    "sha256": "ec3c8c68c07ce5cd44953ccc2e103426850a737354570ce3a06d4c79a0eb800c",
+    "bytes": 19087
+  },
+  {
+    "path": "src/lib/restaurant/sections.ts",
+    "sha256": "ba5510fbdfd1baa8b7300635fe1ee586d726d2ac753a4c7bb464490fd817da38",
+    "bytes": 10598
+  },
+  {
+    "path": "src/lib/restaurant/service-charge-policy.ts",
+    "sha256": "7aac48491aeabe7206c8486192c1b863fbbc5265f87a49dd7d2256c995e8bb52",
+    "bytes": 5944
+  },
+  {
+    "path": "src/lib/restaurant/shifts.ts",
+    "sha256": "c1ffc099fe06e0108bcdf737159cbb7d1afbcc389d7feba563ed759bb576d835",
+    "bytes": 18572
+  },
+  {
+    "path": "src/lib/restaurant/sop-assignment.ts",
+    "sha256": "1d3a77dc814b69ec5b353632e3e6067288d3ce5c7a67e1db5c4271a7d027db75",
+    "bytes": 14303
+  },
+  {
+    "path": "src/lib/restaurant/sop-audit.ts",
+    "sha256": "2aaeeb605db1a6acf84762cd1b6d92c139e00aad52dfcba00dee92f82d3351d4",
+    "bytes": 10649
+  },
+  {
+    "path": "src/lib/restaurant/sop-escalation.ts",
+    "sha256": "79b44c1f526f95b0350b57f2bd978de9f97ea40c2f750b9be7d8dabaa6baf074",
+    "bytes": 21702
+  },
+  {
+    "path": "src/lib/restaurant/sop-execution.ts",
+    "sha256": "b38dfa43cffa97240d0f63d09abe86d7d580f000232ee446b16b7b5264c3db1f",
+    "bytes": 13760
+  },
+  {
+    "path": "src/lib/restaurant/sop-late-missed.ts",
+    "sha256": "fae3c99ccfb30e08049c523b2f0ee2f5c757bb7d8e67c0d9fef44a0f1f2f7f4e",
+    "bytes": 5728
+  },
+  {
+    "path": "src/lib/restaurant/sop-occurrence-generation.ts",
+    "sha256": "5f9ae2503882f4bf5761d28edcf1904283bf936c27cb2fa8a9f7508c4b973a6b",
+    "bytes": 8928
+  },
+  {
+    "path": "src/lib/restaurant/sop-recurrence.ts",
+    "sha256": "7f26cf30851bb3feeda37468e064887e806132209203d21974e5972c6a43792e",
+    "bytes": 16138
+  },
+  {
+    "path": "src/lib/restaurant/sop-reporting.ts",
+    "sha256": "c055e18e8d160c16fedfb9c0d61777f370585012d2732fe1a3234bac73e19e1c",
+    "bytes": 3376
+  },
+  {
+    "path": "src/lib/restaurant/sop-score.ts",
+    "sha256": "1cae56463f69aaf449d6f68f5360ac2734e45e9d7fa33e71b3e340ce9fae4cc8",
+    "bytes": 14578
+  },
+  {
+    "path": "src/lib/restaurant/sop-template-packs.ts",
+    "sha256": "a8f47796861cd83077bd9b84f38de6e369b3ebb4203ab863a888d76fa097e55c",
+    "bytes": 12568
+  },
+  {
+    "path": "src/lib/restaurant/sop-templates.ts",
+    "sha256": "2a863446d83f6df53be9a1fe2518e6e134eced37b6141369ba4e2bc5090932eb",
+    "bytes": 28638
+  },
+  {
+    "path": "src/lib/restaurant/sop-verification.ts",
+    "sha256": "51331f59e5315d0eec5567a177db933a8a56b7a0c1d5b1b2867b43ea80274025",
+    "bytes": 8349
+  },
+  {
+    "path": "src/lib/restaurant/staff-branch-authorization.ts",
+    "sha256": "51fb94c68e646b9fed5322296c6ca2f6afa7f40f4acb99e37cf6c01bc6bdcc30",
+    "bytes": 6658
+  },
+  {
+    "path": "src/lib/restaurant/staff.ts",
+    "sha256": "8c70c84d0501af3be48f678a33b1ab669b5b3f6f8bfbe0e42a1a0ec58a687eca",
+    "bytes": 7364
+  },
+  {
+    "path": "src/lib/restaurant/station-routing.ts",
+    "sha256": "a03e5054e59aafc85f8994eba5ca3a551fff32f22972336d0bba2508dc52263f",
+    "bytes": 3124
+  },
+  {
+    "path": "src/lib/restaurant/stations.ts",
+    "sha256": "0d9ec6f517585f2d7442e36eb70a1dcdbf83ce746d74a580afad20cb99ad1d90",
+    "bytes": 11909
+  },
+  {
+    "path": "src/lib/restaurant/tax-calculator.ts",
+    "sha256": "9561060fc3091d9430f9bc1ec8ad9be32ced8fe42bcee23e21ab74ddcb41015d",
+    "bytes": 15721
+  },
+  {
+    "path": "src/lib/restaurant/tax-contracts.ts",
+    "sha256": "7f955ea32cfc88836263fee8fc78c29cd50bbdde0348248dc211906c65913db3",
+    "bytes": 2240
+  },
+  {
+    "path": "src/lib/restaurant/tax-publication.ts",
+    "sha256": "b4140dca15cd16df1cbdd33b144e75dcad55c06c9cc58fa52caa15cff80fb697",
+    "bytes": 4364
+  },
+  {
+    "path": "src/lib/restaurant/tenders.ts",
+    "sha256": "d005924d444bc2e0852ecc65fb13b4cdb812f61a666333b540be1b609b6f8f77",
+    "bytes": 42166
+  },
+  {
+    "path": "src/lib/restaurant/terminal-audit.ts",
+    "sha256": "52a17fe9cc42de9f3ba6222a7812a491a63294af2286bf341bfc1d215a3fc4f5",
+    "bytes": 2345
+  },
+  {
+    "path": "src/lib/restaurant/terminal-auth.ts",
+    "sha256": "fae6dbbdfdb0c06e2b9985d5227eedab8a5e0ffa6902cf2d75508223ce899f4b",
+    "bytes": 26459
+  },
+  {
+    "path": "src/lib/restaurant/terminal-customers.ts",
+    "sha256": "6ce2ce7ae5b959fc86b1fa6903ee81aff1f937d69d7b525dbdf4e58aa166db5b",
+    "bytes": 13380
+  },
+  {
+    "path": "src/lib/restaurant/terminal-delivery-dispatch.ts",
+    "sha256": "f72f3b7e03c95ff7fcd972e2063b9556e8bbdbbecfb6d400511e7ea6091da095",
+    "bytes": 9646
+  },
+  {
+    "path": "src/lib/restaurant/terminal-delivery-orders.ts",
+    "sha256": "741170bfee9444da147333e6aa5b2701369ccf9da24f0b2b3ad8279233a895cd",
+    "bytes": 3455
+  },
+  {
+    "path": "src/lib/restaurant/terminal-loyalty.ts",
+    "sha256": "e91a56466bcb1c5f28542228b69a43251f6011d51949c9f0567cc727147d46fa",
+    "bytes": 9592
+  },
+  {
+    "path": "src/lib/restaurant/terminal-orders.ts",
+    "sha256": "68a28d4c0e6a0ab03b7f77f6a0d35fcef3b01d891253691d972dc79281173e22",
+    "bytes": 32327
+  },
+  {
+    "path": "src/lib/restaurant/terminal-payments.ts",
+    "sha256": "ca86c6509e74c57a4a20bda7442b83510cdd7cee9ae5acb8028cf7811ebe99ea",
+    "bytes": 6130
+  },
+  {
+    "path": "src/lib/restaurant/terminal-session.ts",
+    "sha256": "b7a7a3f88fecae3bffbac8ac39365b51c9b82567a1cb29f3d668d2067738700d",
+    "bytes": 7822
+  },
+  {
+    "path": "src/lib/restaurant/wallet/google-config.ts",
+    "sha256": "8f05b781d379885653fa979eb6d154de268d7842ec10d3f1e892caf2391b7bc9",
+    "bytes": 13092
+  },
+  {
+    "path": "src/lib/restaurant/wallet/google.ts",
+    "sha256": "c5acc5238a82d6ab848817352f1e77148129f96fd6d33a03da858e90b1e34201",
+    "bytes": 27135
+  },
+  {
+    "path": "src/lib/restaurant/webhook-inbox.ts",
+    "sha256": "c957d0929279a46b66bc7c0b3af7472f00e60cb963a34e874914ff53d9875858",
+    "bytes": 9419
+  },
+  {
+    "path": "src/lib/restaurant/workforce.ts",
+    "sha256": "337fdb3df095eab22c4dd91cbd82b1c85b9187e150cbf8da1c836755178e1be4",
+    "bytes": 23067
+  },
+  {
+    "path": "src/lib/retail-terminal/device-secret.ts",
+    "sha256": "3f665cbf96fe1fcfda4666f2f7f722a83232affa244fdd8f46cc035757314820",
+    "bytes": 3573
+  },
+  {
+    "path": "src/lib/retail-terminal/local-store.ts",
+    "sha256": "e501b8cd4f4fe4e463db2906a3d5ae288ef514167a76339521c6df8db6783522",
+    "bytes": 18625
+  },
+  {
+    "path": "src/lib/retail-terminal/outbox-retry.ts",
+    "sha256": "fe42c6717fb416eb731616e0be8ede216bd2a87686fcee86932665e1eb08520d",
+    "bytes": 3127
+  },
+  {
+    "path": "src/lib/retail-terminal/replay-outcome.ts",
+    "sha256": "895251ad16f1ae04d23401fd301170a53fea32c303e2f58fd92fc2bcc527be9f",
+    "bytes": 3539
+  },
+  {
+    "path": "src/lib/scim.ts",
+    "sha256": "e920cefc40ff804a6daf6ea2d7bf267687583dbe64a1c60a68f615f8ce17351c",
+    "bytes": 5409
+  },
+  {
+    "path": "src/lib/secret-crypto.ts",
+    "sha256": "2b675a66eba621e06442d2840fda37aaa5b30d448437fe144a6e60198ae1f21a",
+    "bytes": 1791
+  },
+  {
+    "path": "src/lib/sso.ts",
+    "sha256": "97cddea4d781b90db9a98d2d85936f09516f414b815161579fa92fddd5c27804",
+    "bytes": 10231
+  },
+  {
+    "path": "src/lib/storage.ts",
+    "sha256": "11d980b7257a5b78bb737002a2785db885b6be6113869c7c4e67c6ba1dbb3160",
+    "bytes": 3951
+  },
+  {
+    "path": "src/lib/tax/calculator.ts",
+    "sha256": "3dd5dbf0d55883f184f929f81896a18d5ef471467102ea31bff6e952582baac6",
+    "bytes": 257
+  },
+  {
+    "path": "src/lib/tenancy/demo-identity.ts",
+    "sha256": "e04f908dd1bca54528a2130159d78d9d71274ccb19f5cdbea1c4bfbef9440aa3",
+    "bytes": 1256
+  },
+  {
+    "path": "src/lib/tenancy/demo-isolation.ts",
+    "sha256": "130d63d1fa9d757a9ed0572f09b4d324397c957f73784ff72e6f3eb22bbc3b97",
+    "bytes": 2699
+  },
+  {
+    "path": "src/lib/tenancy/host-routing.ts",
+    "sha256": "11557de87d65c912ec785b44800ed391b30fa9d4d9e23325f09f33ebec605be8",
+    "bytes": 6019
+  },
+  {
+    "path": "src/lib/tenancy/host.ts",
+    "sha256": "673157cfbfd9da131bce947a1d36d26ed5ed5d9d0e7cc1680d62f5881fc19bb4",
+    "bytes": 12394
+  },
+  {
+    "path": "src/lib/tenancy/scoped-db.ts",
+    "sha256": "f7b28754c029a7d059eb1dca4097ef6190a90bad4b67b5aa2ec9af60cc907cd9",
+    "bytes": 6785
+  },
+  {
+    "path": "src/lib/tenancy/support-session.ts",
+    "sha256": "17681cf52eda5cf3e3eddac57ad0d14be5afe09602d4be63a592713576c6fc9e",
+    "bytes": 12696
+  },
+  {
+    "path": "src/lib/tenancy/tenant-actor.ts",
+    "sha256": "13f74da7fc0f9ddf17b6600ea7db6dd768013a85c0e36d179aefadeb1b4b7c81",
+    "bytes": 8363
+  },
+  {
+    "path": "src/lib/tenant-brand.ts",
+    "sha256": "c332a1de5e0f817237b5fd3f560bf70dcb1ab712c3b1fd92b3d91a761ea065ca",
+    "bytes": 3245
+  },
+  {
+    "path": "src/lib/testing/rls-role-guard.ts",
+    "sha256": "01c3c20b2620c12c2e3c9a71c1e4aea67461a5362de3fda63e9ff85aacc25b30",
+    "bytes": 4221
+  },
+  {
+    "path": "src/lib/totp.ts",
+    "sha256": "312b7edf2ad74367899febb69da225b069fca4292e480caee6de0c8bdc5ea7e1",
+    "bytes": 3936
+  },
+  {
+    "path": "src/lib/trpc-provider.tsx",
+    "sha256": "fd21016094c8ec9ac06a683d10853c5b58d5fdae18ca4f4db119e3c1f134c019",
+    "bytes": 3072
+  },
+  {
+    "path": "src/lib/trpc-server.ts",
+    "sha256": "c184986a5de2f74d0572d777d6e1d124f0be3a907f15c3ab742accff6e750c8e",
+    "bytes": 2103
+  },
+  {
+    "path": "src/lib/trpc.ts",
+    "sha256": "03656f74da9b31fe1192c742587366eaa914a114c04c165019fdf14c74fbde9f",
+    "bytes": 160
+  },
+  {
+    "path": "src/lib/utils.ts",
+    "sha256": "9304a861c8673bee09e0f12de31773abbde503b02e59dfd74763ddec2e37cf05",
+    "bytes": 169
+  },
+  {
+    "path": "src/lib/validation-error.ts",
+    "sha256": "df217a222f5e8989de046e0ef37bdc26d9980a103e679afce5bca3a878875df7",
+    "bytes": 765
+  },
+  {
+    "path": "src/lib/validators.ts",
+    "sha256": "a82a33268a70a037827bbc9c9c51a1ac9df6dc67616a4879cbfccd14423c022a",
+    "bytes": 1421
+  },
+  {
+    "path": "src/lib/vertical-catalog.ts",
+    "sha256": "0a371f384a0da386a4cf54c4273b1599a233883791640d1722bfe0d77d1dabaa",
+    "bytes": 42007
+  },
+  {
+    "path": "src/lib/webhooks.ts",
+    "sha256": "fc0f032cbff0c9d1f3a3487ceb7d4cbfa78398d8bb9dcb8559b6c52998b3a1f0",
+    "bytes": 4105
+  },
+  {
+    "path": "src/proxy.ts",
+    "sha256": "299b93555996be472a9c240b7d8498ddc5cb180b6da7643bbb8d144f5d992cb7",
+    "bytes": 5538
+  },
+  {
+    "path": "src/server/activity.ts",
+    "sha256": "cd12f976d08276a22101b706019e08bc31100025ffcc88ea6ad15fe23322de7e",
+    "bytes": 1793
+  },
+  {
+    "path": "src/server/audit.ts",
+    "sha256": "5e1380dfe36be597ffc89c218093eb50c52338f6bbc0bceb64585683c066614b",
+    "bytes": 22082
+  },
+  {
+    "path": "src/server/authz.ts",
+    "sha256": "1f2973c4cf0223458131d2c829e75ebf9f9af7ffb8fa3b970f6e05f6cf0c9424",
+    "bytes": 3671
+  },
+  {
+    "path": "src/server/meetings/provider/events.ts",
+    "sha256": "49b94752ee45dd9a5d6931f510a2edce032b94c739c4947139161b91390360d8",
+    "bytes": 4909
+  },
+  {
+    "path": "src/server/meetings/provider/livekit.ts",
+    "sha256": "8f5de0e9ae4f28ab795914a5ff72a7fd5bc69f989b4b7442c201536532bc0647",
+    "bytes": 3608
+  },
+  {
+    "path": "src/server/meetings/provider/reconciliation.ts",
+    "sha256": "21a9e111a49e770f20507f0a7549b37b45c9b4be3825d47e68bd959f7b8a217d",
+    "bytes": 3315
+  },
+  {
+    "path": "src/server/meetings/provider/types.ts",
+    "sha256": "0f3955a08b0f8fa66f7485d31a15256b2b80deaf50725ef3e27d2cf33b2e69e2",
+    "bytes": 1615
+  },
+  {
+    "path": "src/server/restaurant-actor.ts",
+    "sha256": "666d729684fa0127ee54b8456d862264ec82e1d6b1fba7d42f5aa2a1badd4712",
+    "bytes": 1647
+  },
+  {
+    "path": "src/server/restaurant-branch-scope.ts",
+    "sha256": "6f1afd2bfc760aaa54be210694a8c94099540bcbfb6b4b112397f38986efbd14",
+    "bytes": 1527
+  },
+  {
+    "path": "src/server/routers/_app.ts",
+    "sha256": "469e79ab60cb7d96e5fd93176990728dc0ecbe6c512829da50308646a9e45033",
+    "bytes": 6302
+  },
+  {
+    "path": "src/server/routers/anonymous-fallback.ts",
+    "sha256": "ed915bdc4a033d5dfc149a0424f41a767b273b98383d9ce11d1fa8539845957c",
+    "bytes": 3889
+  },
+  {
+    "path": "src/server/routers/api-tokens.ts",
+    "sha256": "ca079e9c405083bcd2d823becfbc07611692283d2216741e0361587099eb0162",
+    "bytes": 5445
+  },
+  {
+    "path": "src/server/routers/audit.ts",
+    "sha256": "752dc07503192bfcc6d339aadcc55d14059a54ab15c8a169d520db0c3503e925",
+    "bytes": 7397
+  },
+  {
+    "path": "src/server/routers/chat-helpers.ts",
+    "sha256": "2d9de05bd73a26da6028e03d0f72694f184d4958c95fe22c70f731f90cd14c66",
+    "bytes": 4790
+  },
+  {
+    "path": "src/server/routers/chat.ts",
+    "sha256": "0f07f63b30f8e4b5a2d6ec5168af2da08cd92c41d14e25a80c9a4c730d0703de",
+    "bytes": 31367
+  },
+  {
+    "path": "src/server/routers/clients.ts",
+    "sha256": "d88802398466f2c3230203dbd6c6e5adac40ea26e7a4a5654eae189168160d29",
+    "bytes": 22111
+  },
+  {
+    "path": "src/server/routers/dashboard.ts",
+    "sha256": "92fb9d7bf4ca510914be7d6b1612a180fd135d64a83a23a2cc441edb76b9b7e7",
+    "bytes": 14707
+  },
+  {
+    "path": "src/server/routers/email.ts",
+    "sha256": "161807e8c45d8b8a1dff6eed91e9a9bfed1402bba1cf6b14a20caa8128f8d736",
+    "bytes": 9866
+  },
+  {
+    "path": "src/server/routers/finance.ts",
+    "sha256": "28a9ed6684f96205be5e8c387755428dbe3d346dc2998821debe8ddc415dae25",
+    "bytes": 37267
+  },
+  {
+    "path": "src/server/routers/invitations.ts",
+    "sha256": "ff45b65219b4b1eb6fdb2e54236250e53bdd46c21ce87cd6c57d0d2cf97c9fbb",
+    "bytes": 5254
+  },
+  {
+    "path": "src/server/routers/meetings.ts",
+    "sha256": "9aa839f2515c76ee58a0e129a2a81a041cec012685e391d9e43ab6991fe65590",
+    "bytes": 47065
+  },
+  {
+    "path": "src/server/routers/notes.ts",
+    "sha256": "bd0e0ffc8eb15b09eabb29b757112fba860f8f5462b7eb2ccc367174ccc07628",
+    "bytes": 31774
+  },
+  {
+    "path": "src/server/routers/organization-admin.ts",
+    "sha256": "8a7bf284587a1eb29fac009b208ef8d68f2b7eb4751932ae11f2542002668d7a",
+    "bytes": 21943
+  },
+  {
+    "path": "src/server/routers/password-reset.ts",
+    "sha256": "c764188ef262c710c6806e4347a7ed979746c9826ae9ad15400e3ed32e41554c",
+    "bytes": 7947
+  },
+  {
+    "path": "src/server/routers/pharmacy-cameras.ts",
+    "sha256": "2589adf3d7eab3a1b8f75dc95e31915afe4850a8d6ac5244530ddd727d1b6f07",
+    "bytes": 14576
+  },
+  {
+    "path": "src/server/routers/pharmacy-dispensing.ts",
+    "sha256": "36ff500b471afb8928ef82eb737d9689a5a22045bad60cef146177393a925273",
+    "bytes": 2626
+  },
+  {
+    "path": "src/server/routers/pharmacy-finance.ts",
+    "sha256": "b01235cc18e17070083877454b985b13712b4c5d8ad1c4734e00e55c9447980d",
+    "bytes": 16890
+  },
+  {
+    "path": "src/server/routers/pharmacy-inventory.ts",
+    "sha256": "cfc68a00cb12f8f951f509d0d0a7d637338609b5708347184bdc4c1078f379ad",
+    "bytes": 70252
+  },
+  {
+    "path": "src/server/routers/pharmacy-marketing.ts",
+    "sha256": "061a4aab1bb79e6be1cf189a7ddc56b3486ae08f53e7959b6e46fc92e708ca16",
+    "bytes": 10705
+  },
+  {
+    "path": "src/server/routers/pharmacy-medicine.ts",
+    "sha256": "d5e3cfe0f2f96d565b0b262039a39ec19b3622b9ccdbb11ff9c68014734fa355",
+    "bytes": 39475
+  },
+  {
+    "path": "src/server/routers/pharmacy-onboarding.ts",
+    "sha256": "c300ebfbc09c6349807b449e98e3eba8cfb89ee50aa57506f93264acd2313571",
+    "bytes": 17983
+  },
+  {
+    "path": "src/server/routers/pharmacy-ordering.ts",
+    "sha256": "6cf7bc76da889fc7c49c57a80bcf30267e9315500a136e72ad1093beb4275110",
+    "bytes": 7200
+  },
+  {
+    "path": "src/server/routers/pharmacy-prescriptions.ts",
+    "sha256": "6919767436c8ef5d0a8c5c773b753b38623b3596082487a4d26a42a5fef42853",
+    "bytes": 17975
+  },
+  {
+    "path": "src/server/routers/pharmacy-purchasing.ts",
+    "sha256": "e595c90193adf50e0af145d599dd34b48791f2596de4d3d51e7d8f6318728226",
+    "bytes": 54526
+  },
+  {
+    "path": "src/server/routers/pharmacy-reports.ts",
+    "sha256": "f0e1dffc618efdd13adf4c487f0e0ca2291d5e34c187aca0edb64af624bd13e2",
+    "bytes": 23996
+  },
+  {
+    "path": "src/server/routers/pharmacy-safety.ts",
+    "sha256": "1610bf8da4d6681e012f7559d91155d67cd39175a6e4d67358d940ffa68866af",
+    "bytes": 5064
+  },
+  {
+    "path": "src/server/routers/pharmacy-sales.ts",
+    "sha256": "45d022c63f564e6040b2ee7b1512f16154ac7f80b9bafe71284a3df9ec009884",
+    "bytes": 39606
+  },
+  {
+    "path": "src/server/routers/pharmacy-staged-review.ts",
+    "sha256": "5110f2e451fa877257383adb765e287f6bf2e728c0ba5ca203696ce94b3e21bc",
+    "bytes": 2384
+  },
+  {
+    "path": "src/server/routers/pharmacy-supplier-links.ts",
+    "sha256": "8cdc30e11fa89dace0bb97edebed4ac3560395678bef1e315c6464786594ce01",
+    "bytes": 4882
+  },
+  {
+    "path": "src/server/routers/projects.ts",
+    "sha256": "c93303dcb1464da05d0e0583fa83b1a54ae91e64c5da56845797db781ab6ba66",
+    "bytes": 68769
+  },
+  {
+    "path": "src/server/routers/resignations.ts",
+    "sha256": "9cd523c44eb0eb8442abbf09cd55325f599fe41c53095c608f37c0c3f7b3b949",
+    "bytes": 8866
+  },
+  {
+    "path": "src/server/routers/restaurant-bills.ts",
+    "sha256": "137c34212dd6524088e5e043a0740e89f2351da11e9c73fea74203c4ad3e0771",
+    "bytes": 10675
+  },
+  {
+    "path": "src/server/routers/restaurant-branches.ts",
+    "sha256": "0cdb8b93c6c8d9ffed8706e32cb75cc52c64487b439eb2648258440cf43a7282",
+    "bytes": 10692
+  },
+  {
+    "path": "src/server/routers/restaurant-cameras.ts",
+    "sha256": "1204c4a0474235a7cc4732a4cabdb4fc0d1b7109a12b955095dea16402edfa00",
+    "bytes": 13401
+  },
+  {
+    "path": "src/server/routers/restaurant-cash.ts",
+    "sha256": "3a9b766256b35b3bc22e8787baac4a78bb4a90e7835516e27c9544c5bbd26afc",
+    "bytes": 14145
+  },
+  {
+    "path": "src/server/routers/restaurant-catalog.ts",
+    "sha256": "7aecf3421050adcbafb5eb9158bf70407d8a2ebed03f93845a9e1a4abaacf70d",
+    "bytes": 36821
+  },
+  {
+    "path": "src/server/routers/restaurant-catering.ts",
+    "sha256": "ebc1874a28dbc116c8ea15a56df0d227905ca92bcd9057caee3555146f3c9f4f",
+    "bytes": 29825
+  },
+  {
+    "path": "src/server/routers/restaurant-customers.ts",
+    "sha256": "0374b8914f6e2b84cdf75590c8b146dbaf22188ee498210ed5c9ab7f86277173",
+    "bytes": 7694
+  },
+  {
+    "path": "src/server/routers/restaurant-dashboard.ts",
+    "sha256": "55896f0a2aaa3366b1eebf8feb754b0f11abc457912ba6042c5645831cd01c32",
+    "bytes": 2986
+  },
+  {
+    "path": "src/server/routers/restaurant-delivery.ts",
+    "sha256": "4a37cc3bb05be50aa32759d42adf0938c2074eb789ef3d40b056ba27962bf0cd",
+    "bytes": 8550
+  },
+  {
+    "path": "src/server/routers/restaurant-devices.ts",
+    "sha256": "a426941945597b0616a64a5e7eb1f0d696c67dce680e26178163868151b681d4",
+    "bytes": 17220
+  },
+  {
+    "path": "src/server/routers/restaurant-floor.ts",
+    "sha256": "403def58d6ce1ede6c57a01dcf6e63e3495d0a832a85e371d14e45bf46eabc85",
+    "bytes": 17348
+  },
+  {
+    "path": "src/server/routers/restaurant-growth.ts",
+    "sha256": "d0c88c393afd96a2c0aa73661fa2ac15290891e6313ab06ee5087af351e831f8",
+    "bytes": 3583
+  },
+  {
+    "path": "src/server/routers/restaurant-insights.ts",
+    "sha256": "d4a7324835ded4e3cde5dc444715e547366cff4223d036f29c251b03c8029929",
+    "bytes": 8550
+  },
+  {
+    "path": "src/server/routers/restaurant-inventory.ts",
+    "sha256": "144920da57ee441b19b9455d86e9ccf4467aea94eafb51ef186b9de491893c50",
+    "bytes": 19190
+  },
+  {
+    "path": "src/server/routers/restaurant-jobs.ts",
+    "sha256": "f4a145f1840f6c1a2f90525824dcff6436f2cd39c67b9d1a5687e1f582c4d0e7",
+    "bytes": 9748
+  },
+  {
+    "path": "src/server/routers/restaurant-loyalty.ts",
+    "sha256": "040dd4bec9ff73d6c0ace7fdd5fef85a532938e588862fc96bff8428b4d09737",
+    "bytes": 7311
+  },
+  {
+    "path": "src/server/routers/restaurant-menu-import.ts",
+    "sha256": "51a20c1582fca9feec6b1ed4609f13a5115a8702c712fd041cc2b43df375c00f",
+    "bytes": 9903
+  },
+  {
+    "path": "src/server/routers/restaurant-menus.ts",
+    "sha256": "f48e0cb6281d7cea7842e250099142d67560fd62822ee6f94b2f1aea52b34fe7",
+    "bytes": 39799
+  },
+  {
+    "path": "src/server/routers/restaurant-notifications.ts",
+    "sha256": "66738538d3674eb0ed369aca67d648dc3d643af18f41081c7c700a6a3459656e",
+    "bytes": 11022
+  },
+  {
+    "path": "src/server/routers/restaurant-orders.ts",
+    "sha256": "bc148716426b8112231158e207f3e270466255db0a46b6be6b531dd9bb8d5f22",
+    "bytes": 27569
+  },
+  {
+    "path": "src/server/routers/restaurant-payments.ts",
+    "sha256": "5902954cd368aa40a3565e19481c3d9231171cb20b0c239942a53cc76eb2ee29",
+    "bytes": 16053
+  },
+  {
+    "path": "src/server/routers/restaurant-purchasing.ts",
+    "sha256": "20a6fa55de021c95fa5341c00e880ceb9a7535391ca3684b845c5506b5ede98f",
+    "bytes": 19113
+  },
+  {
+    "path": "src/server/routers/restaurant-reports.ts",
+    "sha256": "954361f54fd5e19b557843a4c733f2e1b4655a56d4cee44aeb5bc21967a217e6",
+    "bytes": 11725
+  },
+  {
+    "path": "src/server/routers/restaurant-shifts.errors.ts",
+    "sha256": "53bf1c78a2be9641d2e5ef6ce1a0cde1bd2f65733b8bbe996617610b8bedcd44",
+    "bytes": 2099
+  },
+  {
+    "path": "src/server/routers/restaurant-shifts.ts",
+    "sha256": "0135cf1e6e68315dca73491fcec1ec4f41a150bdf0a99bccde73543b6362c38f",
+    "bytes": 17200
+  },
+  {
+    "path": "src/server/routers/restaurant-sop-execution.ts",
+    "sha256": "39cfaa116aa61a425b4aa3689f8cf4fadb6bca0b6ea35d4aeab44447776daa33",
+    "bytes": 19897
+  },
+  {
+    "path": "src/server/routers/restaurant-sop.ts",
+    "sha256": "836dc566751670eb72a381ac1b2259d9c8093b6b6b6a060740ec6805981a71a2",
+    "bytes": 30532
+  },
+  {
+    "path": "src/server/routers/restaurant-staff.ts",
+    "sha256": "4648bb669a86cbccedf3e42733d6cc5815d946bdda00a598e2537325dbde9334",
+    "bytes": 32759
+  },
+  {
+    "path": "src/server/routers/restaurant-tax.ts",
+    "sha256": "4406627fb6b9155ec7bbfaf80ac7595a5fbd28185a39f42001de85d8c7dba9c8",
+    "bytes": 18693
+  },
+  {
+    "path": "src/server/routers/reviews.ts",
+    "sha256": "5a5c07254c7d9f28c59b7d1df16387f13fd098902d88504519b2d93ceca25fcf",
+    "bytes": 11155
+  },
+  {
+    "path": "src/server/routers/search.ts",
+    "sha256": "7e3135d386005ade99bda6878fefdb33303f08adc79a74f87aedba0a555ca151",
+    "bytes": 3763
+  },
+  {
+    "path": "src/server/routers/team-stats.ts",
+    "sha256": "8242fb09d8850020859df23aa195f0c17d7a804361c97970f337471cd60e0ead",
+    "bytes": 20680
+  },
+  {
+    "path": "src/server/routers/team.ts",
+    "sha256": "5a9193662b52dff541ed906a2c5fd26254fa9e3d36986f159d514586aa3cbb10",
+    "bytes": 36924
+  },
+  {
+    "path": "src/server/routers/trello-import.ts",
+    "sha256": "9c53651d20dff0a2a22c677806f1f08e78ee7a28995b6a6c02b15e3d675fb26a",
+    "bytes": 17642
+  },
+  {
+    "path": "src/server/routers/two-factor.ts",
+    "sha256": "5e529ccc648ae867193966de7db2184e399e9039796284d9099964977854b931",
+    "bytes": 6120
+  },
+  {
+    "path": "src/server/routers/webhooks.ts",
+    "sha256": "5d2de7195be785e7048c753b3ff1186eeb068734cadd5757530ff1a57273b6fd",
+    "bytes": 3999
+  },
+  {
+    "path": "src/server/trpc.ts",
+    "sha256": "0d443dcb986b032c24eccec08ba11ec3bffece00a2844b566fe55047cdde6663",
+    "bytes": 11646
+  },
+  {
+    "path": "src/types/next-auth.d.ts",
+    "sha256": "c1bf18cd06ab28b0bcb00a6969787eba96b8e742ebb4feb5d154c3a76d4e9619",
+    "bytes": 2113
+  },
+  {
+    "path": "src/types/trello.ts",
+    "sha256": "1039ce17cec8728c09a29ea53edd3ddd42e90263eca42e104da3e411016c2298",
+    "bytes": 4550
+  },
+  {
+    "path": "tsconfig.json",
+    "sha256": "fe18cad2b63960649a2dca17419d25ef3753dae5bf435f07ebf702d0b6ed89dc",
+    "bytes": 799
+  }
+]

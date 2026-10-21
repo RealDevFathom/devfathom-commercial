@@ -31,6 +31,8 @@ import { randomBytes } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
 
 import { assertRlsEnforcingRole } from '@/lib/testing/rls-role-guard';
+import { legacyRecurrenceToRule } from '@/lib/meetings/recurrence';
+import { seedDepartments } from '@/lib/test-support/departments';
 
 // The router reaches `@/server/trpc`, which reaches Auth.js, which cannot load
 // outside a Next server runtime. Nothing under test uses it: the context here
@@ -125,10 +127,17 @@ const user = (userId: string, organizationId: string, role: 'ADMIN' | 'EMPLOYEE'
   status: 'ACTIVE' as const,
 });
 
-type ListRow = { id: string; startTime: Date; recurrence: string | null };
+type ListRow = { id: string; startTime: Date; recurrenceRule: string | null };
 
-/** The predicate the Past section used to apply client-side, for comparison. */
-const isPastRow = (m: ListRow) => m.startTime.getTime() < Date.now() && m.recurrence === null;
+/**
+ * The predicate the Past section used to apply client-side, for comparison.
+ *
+ * WHA-235: reads `recurrenceRule` rather than the deprecated `recurrence`,
+ * matching the column `getPast` now filters on. The PROPERTY is unchanged — a
+ * recurring series is never "past", because its next occurrence belongs to
+ * Upcoming — only the column that records the cadence has moved.
+ */
+const isPastRow = (m: ListRow) => m.startTime.getTime() < Date.now() && m.recurrenceRule === null;
 
 /** The omitted-input schema path: `getPast` invoked with no input argument. */
 const firstPastPage = (organizationId: string, actor: Actor) =>
@@ -200,7 +209,7 @@ const oraclePastIds = (organizationId: string, attendeeId?: string) =>
   deps.withTenantDb(organizationId, async (db) => {
     const rows = await db.meeting.findMany({
       where: {
-        recurrence: null,
+        recurrenceRule: null,
         startTime: { lt: new Date() },
         ...(attendeeId ? { attendees: { some: { userId: attendeeId } } } : {}),
       },
@@ -240,6 +249,7 @@ describeIfDatabase('past meeting retrieval, against PostgreSQL', () => {
             status: 'ACTIVE',
           },
         });
+        await seedDepartments(db, [organizationId], ['ENGINEERING']);
       }
     });
 
@@ -251,6 +261,7 @@ describeIfDatabase('past meeting retrieval, against PostgreSQL', () => {
       endTime: Date;
       createdById: string;
       recurrence?: string;
+      recurrenceRule?: string;
     }> = [];
     const attendees: Array<{ meetingId: string; userId: string }> = [];
 
@@ -261,7 +272,15 @@ describeIfDatabase('past meeting retrieval, against PostgreSQL', () => {
         startTime: new Date(startMs),
         endTime: new Date(startMs + HOUR),
         createdById: attendeeId,
-        ...(recurrence ? { recurrence } : {}),
+        // WHA-235: this fixture writes rows directly rather than through the
+        // router, so it has to write the SAME PAIR the router writes —
+        // `recurrence` for backwards compatibility and `recurrenceRule` as the
+        // cadence every occurrence-backed read expands. A fixture that set only
+        // the deprecated column would describe a series no production write
+        // path can now produce.
+        ...(recurrence
+          ? { recurrence, recurrenceRule: legacyRecurrenceToRule(recurrence) ?? undefined }
+          : {}),
       });
       attendees.push({ meetingId, userId: attendeeId });
     };
