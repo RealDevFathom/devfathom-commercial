@@ -712,7 +712,10 @@ export type RoleTemplate = {
   /** System role templates are created during onboarding (§9 Step 6). */
   isSystem: boolean;
   /** Capabilities granted by default. `['*']` = full administration, matching the
-   * bootstrap admin role. All entries are provisional (Phase 0 / D10). */
+   * bootstrap admin role, except that wildcards (`*`, `pharmacy:*`) never grant
+   * pharmacy:dispense, pharmacy:safety or pharmacy:catalogue-review: those must be
+   * granted exactly (separation of duties). A wildcard DENY still revokes them.
+   * All entries are provisional (Phase 0 / D10). */
   capabilities: readonly string[];
 };
 

@@ -558,13 +558,13 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /devfathom/${EnvironmentName}/web
-      RetentionInDays: 7
+      RetentionInDays: !If [IsProduction, 30, 7]
 
   MigrateLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /devfathom/${EnvironmentName}/migrate
-      RetentionInDays: 7
+      RetentionInDays: !If [IsProduction, 90, 7]
 
   TaskExecutionRole:
     Type: AWS::IAM::Role
@@ -1025,7 +1025,7 @@ Resources:
     Condition: JobsEnabled
     Properties:
       LogGroupName: !Sub /aws/lambda/devfathom-${EnvironmentName}-platform-jobs
-      RetentionInDays: 7
+      RetentionInDays: !If [IsProduction, 30, 7]
 
   JobsScheduleRole:
     Type: AWS::IAM::Role

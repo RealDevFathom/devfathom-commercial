@@ -97,6 +97,9 @@ Images are tagged with the full commit sha, and tags are immutable.
    `IMAGE_TAG=<sha>`.
 4. The build log ends with the image digest. Deploy by digest:
    `892667864163.dkr.ecr.ap-southeast-1.amazonaws.com/devfathom-commercial@sha256:…`.
+   - ECR keeps the 10 newest other images. Before deploying an image to production, also tag it
+     `prod-<sha>` (or `release-<name>`); the lifecycle policy never expires those tags.
+   - Logs are kept 7 days outside production; production keeps web and jobs 30 days, migrate 90.
 
 The build takes about 5 minutes on the 15 GB compute type. That size is needed because the
 Dockerfile's `tsc --noEmit` runs with an 8 GB heap.

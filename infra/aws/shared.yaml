@@ -16,6 +16,8 @@ Resources:
     Properties:
       RepositoryName: !Ref RepositoryName
       # Every pushed tag is a commit sha; a tag never moves to a new image.
+      # Tag an image deployed to production (or cut for a release) also as
+      # prod-<sha> or release-<name> so the lifecycle policy never expires it.
       ImageTagMutability: IMMUTABLE
       ImageScanningConfiguration:
         ScanOnPush: true
@@ -33,7 +35,13 @@ Resources:
               },
               {
                 "rulePriority": 2,
-                "description": "Keep the 10 most recent images, staging and production together, so a running or rollback image stays",
+                "description": "Protect production and release images: an image this rule matches can never be expired by a lower-priority rule",
+                "selection": { "tagStatus": "tagged", "tagPatternList": ["prod-*", "release-*"], "countType": "imageCountMoreThan", "countNumber": 1000 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 3,
+                "description": "Keep the 10 most recent other (sha-tagged staging) images",
                 "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
                 "action": { "type": "expire" }
               }
