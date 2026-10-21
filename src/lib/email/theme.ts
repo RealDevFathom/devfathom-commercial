@@ -83,9 +83,14 @@ export function appUrl(): string {
 
   const hostname = parsed.hostname.toLowerCase();
   const isDevelopmentHost =
-    hostname === 'localhost' || hostname === 'lvh.me' || hostname.endsWith('.localhost');
+    hostname === 'localhost' ||
+    hostname === '127.0.0.1' ||
+    hostname === 'lvh.me' ||
+    hostname.endsWith('.lvh.me');
 
-  return isDevelopmentHost ? configuredUrl : configuredUrl.replace(/^http:/, 'https:');
+  return process.env.NODE_ENV !== 'production' && isDevelopmentHost
+    ? configuredUrl
+    : configuredUrl.replace(/^http:/, 'https:');
 }
 
 // Hosted logo mark (the chevron on an Abyss tile). Overridable via env so it can
