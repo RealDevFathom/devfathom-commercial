@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest';
 import {
   assertBranchMayOperate,
   BranchOperationDeniedError,
+  pendingLegalReviewAllowed,
   type BranchRegulatoryState,
 } from './regulatory';
 
@@ -79,5 +80,45 @@ describe('assertBranchMayOperate', () => {
     const state = validState();
     state.ruleSet.licenceCategories = { provisional: true, values: ['PHARMACY'] };
     expectDenied(state, 'RULE_SET_UNCONFIRMED');
+  });
+});
+
+describe('pending legal review rule sets (#162)', () => {
+  const pending = () => {
+    const state = validState();
+    state.ruleSet.licenceCategories = {
+      provisional: false,
+      pendingLegalReview: true,
+      values: ['PHARMACY'],
+    };
+    return state;
+  };
+  const operate = (state: BranchRegulatoryState) =>
+    assertBranchMayOperate(state, {
+      name: 'DISPENSE',
+      at,
+      schedule: 'RX',
+      requiresQualifiedPerson: true,
+    });
+
+  it('allows them outside production, and in staging and pilots', () => {
+    expect(pendingLegalReviewAllowed({ NODE_ENV: 'test' })).toBe(true);
+    expect(pendingLegalReviewAllowed({ NODE_ENV: 'production', APP_ENV: 'staging' })).toBe(true);
+    expect(pendingLegalReviewAllowed({ NODE_ENV: 'production', APP_ENV: 'pilot' })).toBe(true);
+    expect(() => operate(pending())).not.toThrow();
+  });
+
+  it('refuses them under production enforcement (fail closed when APP_ENV is unset)', () => {
+    expect(pendingLegalReviewAllowed({ NODE_ENV: 'production' })).toBe(false);
+    expect(pendingLegalReviewAllowed({ NODE_ENV: 'production', APP_ENV: 'production' })).toBe(
+      false
+    );
+    vi.stubEnv('NODE_ENV', 'production');
+    vi.stubEnv('APP_ENV', '');
+    try {
+      expectDenied(pending(), 'RULE_SET_PENDING_LEGAL_REVIEW');
+    } finally {
+      vi.unstubAllEnvs();
+    }
   });
 });

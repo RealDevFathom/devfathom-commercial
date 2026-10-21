@@ -4,6 +4,7 @@ import { recordAudit } from '@/server/audit';
 export type BranchOperationDenialReason =
   | 'PROFILE_MISSING'
   | 'RULE_SET_UNCONFIRMED'
+  | 'RULE_SET_PENDING_LEGAL_REVIEW'
   | 'LICENCE_INVALID'
   | 'QUALIFIED_PERSON_COVERAGE_MISSING'
   | 'SCHEDULE_NOT_PERMITTED';
@@ -40,7 +41,18 @@ export type BranchRegulatoryState = {
   auditDenied: (reason: BranchOperationDenialReason, action: BranchOperationAction) => void;
 };
 
-type RuleField = { provisional?: boolean; values?: unknown };
+type RuleField = { provisional?: boolean; pendingLegalReview?: boolean; values?: unknown };
+
+/**
+ * Rule sets flagged `pendingLegalReview` (e.g. PK-SD v1 until counsel signs off) may be
+ * exercised in development, tests, staging and pilots, but production enforcement
+ * refuses them. Fail closed: under NODE_ENV=production only an explicit
+ * APP_ENV of `staging` or `pilot` allows them.
+ */
+export function pendingLegalReviewAllowed(env: Record<string, string | undefined> = process.env) {
+  if (env.NODE_ENV !== 'production') return true;
+  return env.APP_ENV === 'staging' || env.APP_ENV === 'pilot';
+}
 
 function ruleField(value: unknown): RuleField {
   return value && typeof value === 'object' ? (value as RuleField) : {};
@@ -72,6 +84,12 @@ export function assertBranchMayOperate(
   ];
   if (relevantRules.some((field) => ruleField(field).provisional !== false)) {
     deny('RULE_SET_UNCONFIRMED');
+  }
+  if (
+    relevantRules.some((field) => ruleField(field).pendingLegalReview === true) &&
+    !pendingLegalReviewAllowed()
+  ) {
+    deny('RULE_SET_PENDING_LEGAL_REVIEW');
   }
 
   if (

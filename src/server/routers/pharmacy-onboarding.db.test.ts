@@ -80,10 +80,14 @@ function caller(db: ScopedDb, actingOrganizationId = organizationId) {
   } as never);
 }
 
+/** ISO date `offset` days from today (UTC); profiles cannot be backdated. */
+const day = (offset: number) =>
+  new Date(Date.now() + offset * 86_400_000).toISOString().slice(0, 10);
+
 /** A complete, valid profile; individual tests vary one field at a time. */
 const profile = {
   branchId,
-  effectiveFrom: '2026-09-02',
+  effectiveFrom: day(0),
   provinceCode: 'PK-PB',
   premisesAddressLine: '12 Mall Road',
   premisesCity: 'Lahore',
@@ -91,12 +95,12 @@ const profile = {
   licenceCategory: 'PROVISIONAL',
   licenceNumber: 'LIC-4471',
   licenceValidFrom: '2026-01-01',
-  licenceValidTo: '2027-01-01',
+  licenceValidTo: day(400),
   licenceEvidenceFileRef: '/api/files/licence.pdf',
   permittedSchedules: [] as string[],
   qualifiedPersonRegistration: 'PC-9981',
   qualifiedPersonValidFrom: '2026-01-01',
-  qualifiedPersonValidTo: '2027-01-01',
+  qualifiedPersonValidTo: day(400),
   qualifiedPersonCoverageRosterRef: '/api/files/roster.pdf',
   fiscalStatus: 'UNCONFIRMED' as const,
   retentionPrescriptionYears: 5,
@@ -247,7 +251,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       await expect(
         caller(db).saveRegulatoryProfile({
           ...profile,
-          effectiveFrom: '2026-10-15',
+          effectiveFrom: day(0),
           provinceCode: 'PK-SD',
           licenceCategory: 'RETAIL',
           permittedSchedules: ['G'],
@@ -255,6 +259,17 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
         message: expect.stringContaining('This branch is registered in'),
+      });
+    });
+  });
+
+  it('refuses a backdated effective date (#162)', async () => {
+    await withTenantDb(organizationId, async (db) => {
+      await expect(
+        caller(db).saveRegulatoryProfile({ ...profile, effectiveFrom: day(-1) })
+      ).rejects.toMatchObject({
+        code: 'BAD_REQUEST',
+        message: expect.stringContaining('cannot be in the past'),
       });
     });
   });
@@ -286,7 +301,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     await withTenantDb(organizationId, async (db) => {
       const saved = await caller(db).saveRegulatoryProfile({
         ...profile,
-        effectiveFrom: '2026-10-01',
+        effectiveFrom: day(29),
         licenceNumber: 'LIC-5588',
       });
       expect(saved.version).toBe(2);
@@ -303,7 +318,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
   it('refuses a version that starts on or before the one already on file', async () => {
     await withTenantDb(organizationId, async (db) => {
       await expect(
-        caller(db).saveRegulatoryProfile({ ...profile, effectiveFrom: '2026-10-01' })
+        caller(db).saveRegulatoryProfile({ ...profile, effectiveFrom: day(29) })
       ).rejects.toMatchObject({
         code: 'BAD_REQUEST',
         message: expect.stringContaining('must start after the version already on file'),
@@ -433,7 +448,7 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
       const saved = await caller(db).saveRegulatoryProfile({
         ...profile,
         branchId: sindhBranchId,
-        effectiveFrom: '2026-10-15',
+        effectiveFrom: day(0),
         provinceCode: 'PK-SD',
         premisesCity: 'Karachi',
         licenceCategory: 'RETAIL',

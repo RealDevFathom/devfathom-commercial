@@ -1,3 +1,6 @@
+-- PK-SD v1 is flagged "pendingLegalReview": usable in staging/pilots, refused by
+-- production enforcement until counsel signs off (docs/ops/production-checklist.md);
+-- clearing it requires a follow-up migration that sets the flag false.
 -- QA-129: a Sindh (PK-SD) pharmacy had no published jurisdiction rules to
 -- operate on. The original pharmacy-regulatory migration shipped only a
 -- provisional Punjab (PK-PB) set, so the regulatory form offered Sindh branches
@@ -24,12 +27,18 @@ INSERT INTO "pharmacy_jurisdiction_rule_sets" (
   "controlledRegisterFlags", "pharmacistCoverageRule", "recordRetentionByClass"
 ) VALUES (
   'pk_sd_published_v1', 'PK-SD', 1, '2026-01-01T00:00:00.000Z',
-  '{"values":["RETAIL","WHOLESALE"],"provisional":false}',
-  '{"values":["G","H"],"provisional":false}',
-  '{"values":["H"],"provisional":false}',
-  '{"values":{"H":1825},"provisional":false}',
-  '{"values":{"H":true},"provisional":false}',
-  '{"values":{"minimumHoursPerWeek":40},"provisional":false}',
-  '{"values":{"prescription":1825},"provisional":false}'
+  '{"values":["RETAIL","WHOLESALE"],"provisional":false,"pendingLegalReview":true}',
+  '{"values":["G","H"],"provisional":false,"pendingLegalReview":true}',
+  '{"values":["H"],"provisional":false,"pendingLegalReview":true}',
+  '{"values":{"H":1825},"provisional":false,"pendingLegalReview":true}',
+  '{"values":{"H":true},"provisional":false,"pendingLegalReview":true}',
+  '{"values":{"minimumHoursPerWeek":40},"provisional":false,"pendingLegalReview":true}',
+  '{"values":{"prescription":1825},"provisional":false,"pendingLegalReview":true}'
 )
 ON CONFLICT ("code", "version") DO NOTHING;
+
+-- Security (#162): a regulatory profile must name a province. NOT VALID keeps any
+-- legacy row from blocking the deploy while enforcing every new/updated row.
+ALTER TABLE "pharmacy_branch_regulatory_profiles"
+  ADD CONSTRAINT "pharmacy_branch_regulatory_profiles_province_nonempty"
+  CHECK (btrim("provinceCode") <> '') NOT VALID;

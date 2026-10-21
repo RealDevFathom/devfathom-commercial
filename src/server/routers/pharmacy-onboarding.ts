@@ -340,6 +340,12 @@ export const pharmacyOnboardingRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = ctx.entitlements.organizationId;
       const effectiveFrom = midnightUtc(input.effectiveFrom);
+      // Security (#162): a profile cannot be backdated. It takes effect today or later,
+      // so it can never retroactively legitimise past dispensing.
+      const today = midnightUtc(new Date().toISOString().slice(0, 10));
+      if (effectiveFrom < today) {
+        throw badRequest('effectiveFrom', 'The effective date cannot be in the past.');
+      }
 
       const branch = await ctx.db.pharmacyBranch.findFirst({
         where: { organizationId, id: input.branchId, active: true },
@@ -354,6 +360,17 @@ export const pharmacyOnboardingRouter = router({
         (candidate) => candidate.provinceCode === input.provinceCode
       );
       if (!jurisdiction) {
+        const earliest = await ctx.db.jurisdictionRuleSet.findFirst({
+          where: { code: input.provinceCode },
+          orderBy: { effectiveFrom: 'asc' },
+          select: { effectiveFrom: true },
+        });
+        if (earliest && effectiveFrom < earliest.effectiveFrom) {
+          throw badRequest(
+            'effectiveFrom',
+            `${provinceName(input.provinceCode)} rules take effect on ${earliest.effectiveFrom.toISOString().slice(0, 10)}. Choose that date or later.`
+          );
+        }
         throw badRequest(
           'provinceCode',
           'No jurisdiction rules are published for that province on the date you chose. Pick a province that appears in the list.'
