@@ -14,6 +14,8 @@ vi.mock('@/lib/webhooks/safe-url', () => ({
 import {
   CLAIM_SQL,
   DELIVERED_RETENTION_MS,
+  DRAIN_ORG_LIMIT,
+  DRAIN_TIME_BUDGET_MS,
   DUE_ORGANIZATIONS_SQL,
   MAX_ATTEMPTS,
   SCRUB_DEAD_EMAIL_SQL,
@@ -250,7 +252,10 @@ describe('outbound effect worker', () => {
   it('lists due organizations and drains each one under tenant scope', async () => {
     const query = vi.fn(async () => [{ organizationId: 'org_a' }, { organizationId: 'org_b' }]);
     await expect(listDueOrganizationIds(query)).resolves.toEqual(['org_a', 'org_b']);
-    expect(query).toHaveBeenCalledWith(DUE_ORGANIZATIONS_SQL, STALE_CLAIM_MS);
+    expect(query).toHaveBeenCalledWith(DUE_ORGANIZATIONS_SQL, STALE_CLAIM_MS, DRAIN_ORG_LIMIT);
+    expect(DRAIN_ORG_LIMIT).toBe(50);
+    expect(DUE_ORGANIZATIONS_SQL).toContain('LIMIT $2');
+    expect(DUE_ORGANIZATIONS_SQL).toContain('ORDER BY MIN("createdAt")');
     expect(DUE_ORGANIZATIONS_SQL).toContain(`status = 'PENDING'`);
     expect(DUE_ORGANIZATIONS_SQL).toContain(`status = 'PROCESSING'`);
 
@@ -279,5 +284,38 @@ describe('outbound effect worker', () => {
       expect.any(Function),
       expect.objectContaining({ skipDrain: true })
     );
+  });
+
+  it('stops before the next organization once the time budget is spent', async () => {
+    const seen: string[] = [];
+    let clock = 1_000;
+    tenancy.withPlatformDb.mockImplementation(async (run: (db: unknown) => Promise<unknown>) =>
+      run({
+        $queryRawUnsafe: async () => [
+          { organizationId: 'org_a' },
+          { organizationId: 'org_b' },
+          { organizationId: 'org_c' },
+        ],
+      })
+    );
+    tenancy.withTenantDb.mockImplementation(
+      async (organizationId: string, run: (db: unknown) => Promise<unknown>) => {
+        seen.push(organizationId);
+        clock += DRAIN_TIME_BUDGET_MS;
+        return run({
+          outboundEffect: {
+            updateMany: async () => ({ count: 0 }),
+            deleteMany: async () => ({ count: 0 }),
+          },
+          $executeRawUnsafe: async () => 0,
+          $queryRawUnsafe: async () => [],
+        });
+      }
+    );
+    await expect(
+      drainDueOrganizations({ now: () => clock, budgetMs: DRAIN_TIME_BUDGET_MS })
+    ).resolves.toEqual({ organizations: 1 });
+    expect(seen).toEqual(['org_a']);
+    expect(DRAIN_TIME_BUDGET_MS).toBe(240_000);
   });
 });

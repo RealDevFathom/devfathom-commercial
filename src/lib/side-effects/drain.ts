@@ -12,6 +12,10 @@ export const MAX_ATTEMPTS = 5;
 const BACKOFF_BASE_MS = 30_000;
 const BACKOFF_CAP_MS = 15 * 60 * 1000;
 export const DELIVERED_RETENTION_MS = 7 * 24 * 60 * 60 * 1000;
+/** One cron call drains at most this many organizations, oldest due work first. */
+export const DRAIN_ORG_LIMIT = 50;
+/** Stop before the next organization once a call has used about four minutes. */
+export const DRAIN_TIME_BUDGET_MS = 240_000;
 
 /**
  * Claim pending rows without blocking on a row another worker already locked.
@@ -33,10 +37,13 @@ WHERE effect.id = picked.id
 RETURNING effect.id, effect.kind, effect.payload, effect.attempts`;
 
 /** Organizations with work the per-tenant drain should pick up, including claims older than the stale window. */
-export const DUE_ORGANIZATIONS_SQL = `SELECT DISTINCT "organizationId"
+export const DUE_ORGANIZATIONS_SQL = `SELECT "organizationId"
 FROM "outbound_effects"
 WHERE (status = 'PENDING' AND "availableAt" <= NOW())
-   OR (status = 'PROCESSING' AND "updatedAt" <= NOW() - ($1::int * INTERVAL '1 millisecond'))`;
+   OR (status = 'PROCESSING' AND "updatedAt" <= NOW() - ($1::int * INTERVAL '1 millisecond'))
+GROUP BY "organizationId"
+ORDER BY MIN("createdAt"), "organizationId"
+LIMIT $2`;
 
 /** Drop recipient email, name, and HTML from dead-lettered email rows. Other fields stay for diagnosis. */
 export const SCRUB_DEAD_EMAIL_SQL = `UPDATE "outbound_effects"
@@ -291,30 +298,41 @@ export async function recordOutcome(
 }
 
 export async function listDueOrganizationIds(
-  query: (sql: string, staleMs: number) => Promise<Array<{ organizationId: string }>>
+  query: (sql: string, staleMs: number, limit: number) => Promise<Array<{ organizationId: string }>>
 ): Promise<string[]> {
-  const rows = await query(DUE_ORGANIZATIONS_SQL, STALE_CLAIM_MS);
+  const rows = await query(DUE_ORGANIZATIONS_SQL, STALE_CLAIM_MS, DRAIN_ORG_LIMIT);
   return rows.map((row) => row.organizationId).filter((id) => id.length > 0);
 }
 
 /**
- * Drain every organization with due or stale outbox work. Retries must not wait
- * for that organization's next enqueue. Platform admin lists the ids; each drain
- * runs under that tenant's row level security.
+ * Drain organizations with due or stale outbox work so a retry does not wait
+ * for that organization's next enqueue. One call takes at most
+ * {@link DRAIN_ORG_LIMIT} organizations and stops once {@link DRAIN_TIME_BUDGET_MS}
+ * has elapsed. Platform admin lists the ids; each drain runs under that
+ * tenant's row level security.
  */
-export async function drainDueOrganizations(): Promise<{ organizations: number }> {
+export async function drainDueOrganizations(options?: {
+  now?: () => number;
+  budgetMs?: number;
+}): Promise<{ organizations: number }> {
+  const now = options?.now ?? Date.now;
+  const budgetMs = options?.budgetMs ?? DRAIN_TIME_BUDGET_MS;
+  const started = now();
   const { withPlatformDb } = await import('@/lib/tenancy/scoped-db');
   const organizationIds = await withPlatformDb((db) =>
-    listDueOrganizationIds((sql, staleMs) =>
-      db.$queryRawUnsafe<Array<{ organizationId: string }>>(sql, staleMs)
+    listDueOrganizationIds((sql, staleMs, limit) =>
+      db.$queryRawUnsafe<Array<{ organizationId: string }>>(sql, staleMs, limit)
     )
   );
+  let drained = 0;
   for (const organizationId of organizationIds) {
+    if (drained > 0 && now() - started >= budgetMs) break;
     await drainOrganization(organizationId).catch((error) => {
       console.error('[side-effects] drain failed', error instanceof Error ? error.name : 'error');
     });
+    drained += 1;
   }
-  return { organizations: organizationIds.length };
+  return { organizations: drained };
 }
 
 /**
