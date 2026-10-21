@@ -6,10 +6,6 @@
 --
 -- The platform-admin flag is its own statement. Putting set_config in a CTE of
 -- the INSERT does not make that flag visible to row level security on the INSERT.
--- Keep the transaction explicit: migrate deploy executes migration statements
--- individually, and the transaction-local platform scope must cover the backfill.
-BEGIN;
-
 SELECT set_config('app.is_platform_admin', 'true', true);
 
 INSERT INTO "pharmacy_branch_assignments" (
@@ -112,5 +108,3 @@ BEGIN
     RAISE EXCEPTION 'pharmacy branch assignment backfill left an active pharmacy organization with eligible members and no assignments';
   END IF;
 END $$;
-
-COMMIT;

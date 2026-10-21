@@ -404,13 +404,12 @@ describeIfDatabase('counter receipt authorization against Postgres', () => {
     const backfill = readFileSync(
       join(
         process.cwd(),
-        'prisma/migrations/20261021133001_pharmacy_branch_assignment_backfill/migration.sql'
+        'prisma/migrations/20261021133000_pharmacy_branch_assignment_backfill/migration.sql'
       ),
       'utf8'
     );
-    const backfillBody = backfill.replace(/^\s*BEGIN;\s*/, '').replace(/\s*COMMIT;\s*$/, '');
-    await withPlatformDb((tx) => runMigrationSql(tx, backfillBody));
-    await withPlatformDb((tx) => runMigrationSql(tx, backfillBody));
+    await withPlatformDb((tx) => runMigrationSql(tx, backfill));
+    await withPlatformDb((tx) => runMigrationSql(tx, backfill));
 
     const assigned = await withTenantDb(ids.orgA, (tx) =>
       tx.pharmacyBranchAssignment.findMany({

@@ -8,7 +8,7 @@ import { PHARMACY_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 const sql = readFileSync(
   join(
     process.cwd(),
-    'prisma/migrations/20261021133001_pharmacy_branch_assignment_backfill/migration.sql'
+    'prisma/migrations/20261021133000_pharmacy_branch_assignment_backfill/migration.sql'
   ),
   'utf8'
 );
@@ -34,9 +34,6 @@ describe('pharmacy branch assignment backfill', () => {
     expect(elevate).toBeGreaterThan(-1);
     expect(elevate).toBeLessThan(insert);
     expect(guard).toBeGreaterThan(insert);
-    expect(sql.trimStart().startsWith('BEGIN;')).toBe(true);
-    expect(sql.trimEnd().endsWith('COMMIT;')).toBe(true);
-    expect(insert).toBeLessThan(sql.lastIndexOf('COMMIT;'));
     expect(sql).not.toContain('WITH elevated');
     expect(sql).toContain(`o."status" = 'ACTIVE'::"OrganizationStatus"`);
   });
