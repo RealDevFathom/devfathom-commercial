@@ -53,6 +53,7 @@ vi.mock('./anomaly-signals-operations', () => ({
 import {
   CaptureChannel,
   composeOwnerDigest,
+  nextDigestDueAt,
   processDueOwnerDigests,
   WhatsAppChannel,
 } from './owner-digest';
@@ -181,6 +182,12 @@ describe('RPT-03 owner digest', () => {
       },
       select: { id: true },
     });
+  });
+
+  it('schedules a digest in UTC for a stored zone Intl refuses, instead of throwing', () => {
+    const now = new Date('2026-09-04T06:30:00.000Z');
+    expect(nextDigestDueAt(now, 'PKT', 480)).toEqual(nextDigestDueAt(now, 'UTC', 480));
+    expect(nextDigestDueAt(now, 'PKT', 480)).toEqual(new Date('2026-09-04T08:00:00.000Z'));
   });
 
   it('never reports a WhatsApp send from the stub', async () => {

@@ -15,6 +15,7 @@ import { hasModule, resolveOrganizationEntitlements } from '@/lib/entitlements';
 import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { isTenantLifecycleAccessible } from '@/lib/tenancy/host';
 import { withTenantDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
+import { workspaceTimezone } from '@/lib/timezone';
 import {
   dispatchSandboxCampaign,
   dispatchDueSandboxCampaigns,
@@ -80,7 +81,9 @@ async function scope(ctx: MarketingAccessContext, branchId: string): Promise<Mar
     organizationId: organization.id,
     branchId,
     actorId: ctx.session!.user.id,
-    timezone: organization.timezone,
+    // Quiet hours are read in this zone and the page names it: a stored value
+    // Intl refuses is UTC for both, never a RangeError.
+    timezone: workspaceTimezone(organization.timezone),
   };
 }
 

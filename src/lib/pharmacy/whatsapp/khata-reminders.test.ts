@@ -7,6 +7,8 @@ const store = vi.hoisted(() => ({
   customers: [] as Array<Record<string, unknown>>,
   consents: [] as Array<Record<string, unknown>>,
   logs: [] as LogRow[],
+  /** The workspace zone the organization row holds. */
+  timezone: 'Asia/Karachi',
 }));
 
 vi.mock('@/lib/entitlements', () => ({
@@ -26,7 +28,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
       findUnique: async () => ({
         vertical: 'PHARMACY',
         status: 'ACTIVE',
-        timezone: 'Asia/Karachi',
+        timezone: store.timezone,
       }),
     },
     pharmacyBranch: { findFirst: async () => ({ id: 'branch-1' }) },
@@ -109,6 +111,7 @@ beforeEach(() => {
   store.customers = [];
   store.consents = [];
   store.logs = [];
+  store.timezone = 'Asia/Karachi';
 });
 
 describe('planKhataReminder', () => {
@@ -214,6 +217,21 @@ describe('processDueWhatsAppKhataReminders', () => {
     expect(result).toMatchObject({ scanned: 1, sent: 0, skippedNoConsent: 1 });
     expect(provider.calls).toEqual([]);
     expect(store.logs).toEqual([]);
+  });
+
+  it('reads the send window and the day in UTC for a stored zone Intl refuses, instead of failing the run', async () => {
+    // NOW is 08:00 UTC, inside the 08:00-22:00 window in UTC.
+    store.timezone = 'PKT';
+    store.accounts = [account()];
+    store.customers = [customer(true)];
+    store.consents = [{ patientId: 'patient-1', granted: true, revokedAt: null }];
+    const provider = new MockWhatsAppProvider(config);
+
+    await expect(
+      processDueWhatsAppKhataReminders({ now: NOW, config, provider })
+    ).resolves.toMatchObject({ scanned: 1, prepared: 1, failed: 0 });
+    expect(provider.calls).toHaveLength(1);
+    expect(store.logs[0]).toMatchObject({ customerDayKey: 'khata:customer-1:2026-10-21' });
   });
 
   it('does nothing until the reminder template name is configured', async () => {

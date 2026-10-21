@@ -7,6 +7,7 @@ import { readAskFathomSettings } from '@/lib/ai/ask-fathom-settings';
 import { passwordSchema } from '@/lib/password-policy';
 import { encryptSecret } from '@/lib/secret-crypto';
 import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { ianaTimezone } from '@/lib/timezone';
 import { annotateAudit } from '@/server/audit';
 import { adminProcedure, protectedProcedure, router } from '@/server/trpc';
 
@@ -294,7 +295,9 @@ export const organizationAdminRouter = router({
     .input(
       z.object({
         displayName: z.string().trim().min(1).max(150),
-        timezone: z.string().trim().min(1).max(100),
+        // Every screen that shows a workspace time formats in this zone, and
+        // Intl throws on one it does not know: the platform's IANA check.
+        timezone: ianaTimezone,
         locale: z.string().trim().min(2).max(20),
         primaryContactName: z.string().trim().max(150).nullable(),
         primaryContactEmail: optionalEmail,

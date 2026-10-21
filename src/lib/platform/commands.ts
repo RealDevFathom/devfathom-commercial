@@ -1617,7 +1617,9 @@ async function runCommand(
           vertical: vertical.optional(),
           packageId: optionalId.optional(),
           deploymentMode: z.enum(['SHARED', 'DEDICATED']).optional(),
-          timezone: z.string().min(1).max(100).optional(),
+          // The zone every workspace screen formats in; Intl throws on one it
+          // does not know, so an update is held to the create path's check.
+          timezone: ianaTimezone.optional(),
           locale: z.string().min(2).max(20).optional(),
           currency: currency.optional(),
           seatLimit: z.coerce.number().int().min(1).max(100_000).optional(),
