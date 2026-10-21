@@ -224,7 +224,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
     !isModuleGranted('pharmacy-counter', entitlements.enabledModules)
   ) {
     return (
-      <SectionCard title="Counter unavailable">
+      <SectionCard titleLevel={2} title="Counter unavailable">
         <p role="status" className="text-sm text-text-body">
           {status === 'loading'
             ? 'Checking counter access…'
@@ -1594,7 +1594,7 @@ function ScopedPharmacyCounterConsole({
     return (
       <div className="space-y-6">
         <PageHeader eyebrow="Pharmacy" heading="Counter" description="Loading this workspace." />
-        <SectionCard title="Loading">
+        <SectionCard titleLevel={2} title="Loading">
           <p className="text-sm text-text-muted" role="status">
             Loading branches…
           </p>
@@ -1611,7 +1611,7 @@ function ScopedPharmacyCounterConsole({
           heading="Counter"
           description="This counter is unavailable."
         />
-        <SectionCard title="Branches unavailable">
+        <SectionCard titleLevel={2} title="Branches unavailable">
           <div className="space-y-3" role="alert">
             <p className="text-sm text-destructive">{messageFrom(branchesQuery.error)}</p>
             <Button
@@ -1644,7 +1644,7 @@ function ScopedPharmacyCounterConsole({
           this lane owns the counter, not that surface, so it links there rather
           than duplicating it.
         */}
-        <SectionCard title="Before this counter can sell">
+        <SectionCard titleLevel={2} title="Before this counter can sell">
           <div className="space-y-3">
             <p className="text-sm text-text-body">
               A counter dispenses from one active pharmacy branch. Two things must exist first:
@@ -1691,7 +1691,7 @@ function ScopedPharmacyCounterConsole({
 
   if (!branchAuthorized) {
     return (
-      <SectionCard title="Counter unavailable">
+      <SectionCard titleLevel={2} title="Counter unavailable">
         <p role="alert" className="text-sm text-text-body">
           This branch could not be verified for your account. Restore branch access before opening a
           saved payment.
@@ -1818,7 +1818,7 @@ function ScopedPharmacyCounterConsole({
 
       <div className="grid min-w-0 gap-4 xl:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_minmax(0,1fr)]">
         <div className="min-w-0 space-y-4">
-          <SectionCard eyebrow="POS-02" title="Scan and search">
+          <SectionCard titleLevel={2} eyebrow="POS-02" title="Scan and search">
             <div className="space-y-4">
               <div className="grid gap-3 sm:grid-cols-[minmax(0,1fr)_auto]">
                 <div className="space-y-1.5">
@@ -1903,7 +1903,11 @@ function ScopedPharmacyCounterConsole({
           </SectionCard>
 
           {substituteInput ? (
-            <SectionCard eyebrow="AI-05 · RX-04" title="Exact substitute suggestions">
+            <SectionCard
+              titleLevel={2}
+              eyebrow="AI-05 · RX-04"
+              title="Exact substitute suggestions"
+            >
               <CounterSubstituteProposals
                 proposals={substitutesQuery.data ?? []}
                 state={
@@ -1932,6 +1936,7 @@ function ScopedPharmacyCounterConsole({
           ) : null}
 
           <SectionCard
+            titleLevel={2}
             eyebrow="POS-03"
             title="Sale unit and quantity"
             actions={
@@ -2013,7 +2018,7 @@ function ScopedPharmacyCounterConsole({
             )}
           </SectionCard>
 
-          <SectionCard eyebrow="POS-01" title="Workflow map">
+          <SectionCard titleLevel={2} eyebrow="POS-01" title="Workflow map">
             <CounterKeymapLegend
               keymap={keymap}
               saving={saveKeymap.isPending}
@@ -2027,6 +2032,7 @@ function ScopedPharmacyCounterConsole({
 
         <div className="min-w-0 space-y-4">
           <SectionCard
+            titleLevel={2}
             eyebrow="POS-03"
             title="Cart and FEFO allocation"
             actions={
@@ -2068,7 +2074,7 @@ function ScopedPharmacyCounterConsole({
             />
           </SectionCard>
 
-          <SectionCard eyebrow="POS-05" title="Tender">
+          <SectionCard titleLevel={2} eyebrow="POS-05" title="Tender">
             <div className="mb-4 space-y-1">
               <Label htmlFor="counter-auto-print" className="flex min-h-11 items-center gap-3">
                 <input
@@ -2136,7 +2142,7 @@ function ScopedPharmacyCounterConsole({
             />
           </SectionCard>
 
-          <SectionCard eyebrow="POS-08" title="Receipt">
+          <SectionCard titleLevel={2} eyebrow="POS-08" title="Receipt">
             <CounterReceiptView
               branchId={branchId}
               receipt={
@@ -2178,6 +2184,7 @@ function ScopedPharmacyCounterConsole({
 
         <div className="min-w-0 space-y-4">
           <SectionCard
+            titleLevel={2}
             eyebrow="CRM-L01"
             title="Customer loyalty and khata"
             actions={
@@ -2281,6 +2288,7 @@ function ScopedPharmacyCounterConsole({
             )}
           </SectionCard>
           <SectionCard
+            titleLevel={2}
             eyebrow="POS-09"
             title="Prescription and patient"
             actions={
@@ -2290,6 +2298,7 @@ function ScopedPharmacyCounterConsole({
             }
           >
             <CounterRxPanel
+              canCapturePrescription={rxPermission.data === true}
               ref={rxPanelRef}
               controlled={{
                 ...controlledAuth,
