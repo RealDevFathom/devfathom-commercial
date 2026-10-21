@@ -807,6 +807,32 @@ export const pharmacySalesRouter = router({
             passwordAuthenticatedAt: ctx.session!.user.passwordAuthenticatedAt,
           }
         );
+        if (account.override) {
+          const sale = await db.pharmacySale.findFirst({
+            where: {
+              id: input.saleId,
+              organizationId: scope.organizationId,
+              branchId: scope.branchId,
+            },
+            select: { customerId: true },
+          });
+          if (!sale?.customerId) throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });
+          annotateAudit(ctx, {
+            category: 'PHARMACY_FINANCE',
+            action: 'khata_credit_limit_override',
+            targetType: 'PharmacyCustomer',
+            targetId: sale.customerId,
+            description: 'Manager approved a Khata sale above the customer credit limit.',
+            metadata: {
+              actorId: scope.actorId,
+              customerId: sale.customerId,
+              familyAccountId: input.familyAccountId,
+              amountOverLimitMinor: account.override.amountOverLimitMinor,
+              creditLimitMinor: account.override.creditLimitMinor,
+              reason: account.override.reason,
+            },
+          });
+        }
         const result = await applyPharmacyTender(db, scope, normalized);
         if (!('tenderId' in result) || typeof result.tenderId !== 'string')
           throw new TRPCError({ code: 'INTERNAL_SERVER_ERROR' });

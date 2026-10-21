@@ -10,6 +10,7 @@ vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(),
   isAuditExcludedPath: vi.fn(() => false),
   recordTrpcAudit: vi.fn(),
+  annotateAudit: vi.fn(),
 }));
 vi.mock('@/lib/abac', () => ({
   can: vi.fn(async () => true),
@@ -28,6 +29,7 @@ import {
   refundPharmacyTender,
 } from '@/lib/pharmacy/settlement';
 import { can } from '@/lib/abac';
+import { annotateAudit } from '@/server/audit';
 import { router, type TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
 const app = router({ pharmacySales: pharmacySalesRouter });
@@ -261,6 +263,72 @@ describe('Khata router trust and recovery boundary', () => {
       expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
     }
   );
+
+  it('allows a manager override with a reason and audits actor, customer and excess amount', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(
+      async (_subject, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+    );
+
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 125,
+        ownerOverride: true,
+        overrideReason: '  Manager approved essential medicine  ',
+      })
+    ).resolves.toMatchObject({ tenderId: 'tender-a' });
+
+    expect(annotateAudit).toHaveBeenCalledWith(
+      f.context,
+      expect.objectContaining({
+        action: 'khata_credit_limit_override',
+        targetType: 'PharmacyCustomer',
+        targetId: 'customer-a',
+        metadata: expect.objectContaining({
+          actorId: 'owner-a',
+          customerId: 'customer-a',
+          familyAccountId: 'family-a',
+          amountOverLimitMinor: 25,
+          reason: 'Manager approved essential medicine',
+        }),
+      })
+    );
+    expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+  });
+
+  it('refuses a manager override when its reason is blank', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(
+      async (_subject, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+    );
+
+    await expect(
+      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: '   ' })
+    ).rejects.toBeDefined();
+    expect(annotateAudit).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
+  it('keeps a cashier capped at the Khata credit limit even with a reason', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+
+    await expect(
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Cashier cannot authorize this',
+      })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    expect(annotateAudit).not.toHaveBeenCalled();
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
 
   it.each(['ADMIN', 'EMPLOYEE'])('requires a reason for owner/manager %s', async (role) => {
     for (const overrideReason of [undefined, '', '   ']) {

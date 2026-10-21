@@ -398,6 +398,9 @@ export async function authorizeKhataCharge(
   );
   if (!account) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
   const projected = account.balanceMinor + input.amountMinor;
+  let override:
+    | { amountOverLimitMinor: number; creditLimitMinor: number; reason: string }
+    | undefined;
   if (
     !Number.isSafeInteger(input.amountMinor) ||
     input.amountMinor <= 0 ||
@@ -439,8 +442,13 @@ export async function authorizeKhataCharge(
           : new Date(owner.passwordAuthenticatedAt),
       overrideLimitMinor: projected,
     });
+    override = {
+      amountOverLimitMinor: projected - account.creditLimitMinor,
+      creditLimitMinor: account.creditLimitMinor,
+      reason: input.overrideReason.trim(),
+    };
   }
-  return account;
+  return { ...account, override };
 }
 
 /** Append a debit and restore AR; never edit the collected payment. Caller owns the transaction. */
