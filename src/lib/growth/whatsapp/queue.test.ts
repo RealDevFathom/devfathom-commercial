@@ -269,6 +269,7 @@ describe('outbound queue', () => {
     });
     const fetchImpl = vi.fn(async () => new Response('no', { status: 500 }));
     const input = {
+      checkCopy: async () => {},
       unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
@@ -371,6 +372,7 @@ describe('outbound queue', () => {
     };
     await expect(
       drainQueue({
+        checkCopy: async () => {},
         unit,
         provider: providerFor(fetchImpl as typeof fetch),
         organizationId: 'org_1',

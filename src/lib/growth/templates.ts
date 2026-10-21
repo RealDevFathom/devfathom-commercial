@@ -197,7 +197,7 @@ const DRUG_FOLD: Record<string, string> = {
 };
 
 function foldDrugText(value: string): string {
-  const digits = value.replace(/[\u0660-\u0669\u06f0-\u06f9]/g, (c) =>
+  const digits = value.toLowerCase().replace(/[\u0660-\u0669\u06f0-\u06f9]/g, (c) =>
     String(c.charCodeAt(0) % 16)
   );
   const policy = [...digits].map((c) => DRUG_FOLD[c] ?? c).join('');
