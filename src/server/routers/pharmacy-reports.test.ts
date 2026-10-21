@@ -472,14 +472,14 @@ describe('owner command centre overdue Khata + access (#247)', () => {
   const input = { from: '2026-09-01', to: '2026-09-30' };
   beforeEach(() => {
     mocks.can.mockReset();
-    mocks.queryRaw.mockReset();
+    mocks.commandCentreRead.mockReset();
     vi.mocked(hasModule).mockReturnValue(true);
     mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
-    mocks.count.mockResolvedValue(0);
-    // The overdue-Khata aggregate carries a value; every other query is empty.
-    mocks.queryRaw.mockImplementation(async (query: { strings: readonly string[] }) =>
-      query.strings.join('?').includes('GREATEST(0, e."amountMinor"') ? [{ amount: BigInt(4200) }] : []
-    );
+    // The report helper returns money in the same minor units used by
+    // pharmacy_khata_events.amountMinor; Rs 42.00 is therefore 4,200 here.
+    mocks.commandCentreRead.mockResolvedValue({
+      metrics: { khataAgingMinor: 4200 },
+    });
   });
 
   // The command-centre gate calls `can` in order: admin:access (ADMIN role only),
@@ -493,6 +493,10 @@ describe('owner command centre overdue Khata + access (#247)', () => {
     const result = await caller().commandCentre(input);
     expect(result.permissions).toEqual({ operational: true, financial: true });
     expect(result.metrics.khataAgingMinor).toBe(4200);
+    expect(mocks.commandCentreRead).toHaveBeenCalledWith(expect.anything(), {
+      ...input,
+      branchIds: ['branch_1'],
+    });
   });
 
   it('masks Khata aging when financial permission is absent', async () => {
@@ -510,6 +514,6 @@ describe('owner command centre overdue Khata + access (#247)', () => {
     await expect(caller().commandCentre(input)).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
-    expect(mocks.queryRaw).not.toHaveBeenCalled();
+    expect(mocks.commandCentreRead).not.toHaveBeenCalled();
   });
 });
