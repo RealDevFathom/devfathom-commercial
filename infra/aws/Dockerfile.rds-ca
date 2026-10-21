@@ -1,0 +1,8 @@
+# Adds the Amazon RDS certificate bundle to the application image, so database
+# URLs can verify the server: sslmode=verify-full&sslrootcert=/opt/devfathom/rds-global-bundle.pem
+# The bundle is Amazon's public CA bundle from
+# https://truststore.pki.rds.amazonaws.com/global/global-bundle.pem, pinned by
+# rds-global-bundle.pem.sha256 and checked by buildspec.yml before this build.
+ARG BASE_IMAGE
+FROM ${BASE_IMAGE}
+COPY --chown=root:root --chmod=0444 rds-global-bundle.pem /opt/devfathom/rds-global-bundle.pem
