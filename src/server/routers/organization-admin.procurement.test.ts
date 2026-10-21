@@ -21,7 +21,8 @@ const app = router({ organizationAdmin: organizationAdminRouter });
 const db = {
   organization: { findUnique: vi.fn() },
   user: { findFirst: vi.fn(), findUnique: vi.fn() },
-  userPermissionOverride: { upsert: vi.fn(), deleteMany: vi.fn(), findFirst: vi.fn() },
+  userPermissionOverride: { deleteMany: vi.fn(), findFirst: vi.fn() },
+  $executeRaw: vi.fn(),
 };
 const caller = (role = 'ADMIN') =>
   app.createCaller({
@@ -48,6 +49,8 @@ describe('setMemberProcurement (per-person Goods in grant)', () => {
       status: 'ACTIVE',
     });
     db.userPermissionOverride.findFirst.mockResolvedValue(null);
+    db.$executeRaw.mockResolvedValue(1);
+    db.userPermissionOverride.deleteMany.mockResolvedValue({ count: 1 });
   });
 
   it('keeps the Pharmacist template without pharmacy:procurement', () => {
@@ -55,18 +58,18 @@ describe('setMemberProcurement (per-person Goods in grant)', () => {
     expect(pharmacist.capabilities).not.toContain('pharmacy:procurement');
   });
 
-  it('grants pharmacy:procurement to one member as a tenant-scoped ALLOW override', async () => {
+  it('grants pharmacy:procurement with one conditional tenant-scoped write', async () => {
     await caller().setMemberProcurement({ id: 'pharmacist_1', enabled: true });
     expect(db.user.findFirst).toHaveBeenCalledWith(
       expect.objectContaining({ where: { id: 'pharmacist_1', organizationId: 'org_a' } })
     );
-    expect(db.userPermissionOverride.upsert).toHaveBeenCalledWith(
-      expect.objectContaining({
-        where: {
-          userId_capability: { userId: 'pharmacist_1', capability: 'pharmacy:procurement' },
-        },
-        create: expect.objectContaining({ organizationId: 'org_a', effect: 'ALLOW' }),
-      })
+    expect(db.$executeRaw).toHaveBeenCalledOnce();
+    const [sql, ...values] = db.$executeRaw.mock.calls[0]!;
+    const text = (sql as string[]).join('?');
+    expect(text).toContain('ON CONFLICT ("userId", capability) DO UPDATE');
+    expect(text).toContain("WHERE user_permission_overrides.effect = 'ALLOW'");
+    expect(values).toEqual(
+      expect.arrayContaining(['org_a', 'pharmacist_1', 'pharmacy:procurement'])
     );
   });
 
@@ -87,7 +90,7 @@ describe('setMemberProcurement (per-person Goods in grant)', () => {
     await expect(
       caller().setMemberProcurement({ id: 'foreign', enabled: true })
     ).rejects.toMatchObject({ code: 'NOT_FOUND' });
-    expect(db.userPermissionOverride.upsert).not.toHaveBeenCalled();
+    expect(db.$executeRaw).not.toHaveBeenCalled();
   });
 
   it('refuses non-admins', async () => {
@@ -96,35 +99,44 @@ describe('setMemberProcurement (per-person Goods in grant)', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
-  it.each([true, false])(
-    'refuses with CONFLICT when a DENY exists (enabled=%s)',
-    async (enabled) => {
-      db.userPermissionOverride.findFirst.mockResolvedValue({ effect: 'DENY' });
-      await expect(
-        caller().setMemberProcurement({ id: 'pharmacist_1', enabled })
-      ).rejects.toMatchObject({ code: 'CONFLICT' });
-      expect(db.userPermissionOverride.upsert).not.toHaveBeenCalled();
-      expect(db.userPermissionOverride.deleteMany).not.toHaveBeenCalled();
-    }
-  );
+  it('returns CONFLICT when the conditional write affects 0 rows because a DENY exists', async () => {
+    db.$executeRaw.mockResolvedValue(0);
+    await expect(
+      caller().setMemberProcurement({ id: 'pharmacist_1', enabled: true })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+  });
+
+  it('returns CONFLICT on removal when only a DENY exists, and leaves it', async () => {
+    db.userPermissionOverride.deleteMany.mockResolvedValue({ count: 0 });
+    db.userPermissionOverride.findFirst.mockResolvedValue({ id: 'deny_1' });
+    await expect(
+      caller().setMemberProcurement({ id: 'pharmacist_1', enabled: false })
+    ).rejects.toMatchObject({ code: 'CONFLICT' });
+    expect(db.userPermissionOverride.deleteMany).toHaveBeenCalledWith({
+      where: expect.objectContaining({ effect: 'ALLOW' }),
+    });
+  });
 
   it('refuses an admin granting themselves', async () => {
     db.user.findFirst.mockResolvedValue({ id: 'owner', email: 'o@x.test', status: 'ACTIVE' });
     await expect(
       caller().setMemberProcurement({ id: 'owner', enabled: true })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(db.userPermissionOverride.upsert).not.toHaveBeenCalled();
+    expect(db.$executeRaw).not.toHaveBeenCalled();
   });
 
-  it('refuses granting to a suspended (INACTIVE) member', async () => {
-    db.user.findFirst.mockResolvedValue({
-      id: 'pharmacist_1',
-      email: 'p@x.test',
-      status: 'INACTIVE',
-    });
-    await expect(
-      caller().setMemberProcurement({ id: 'pharmacist_1', enabled: true })
-    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
-    expect(db.userPermissionOverride.upsert).not.toHaveBeenCalled();
-  });
+  it.each(['INACTIVE', 'ON_LEAVE', 'INVITED'])(
+    'refuses granting to a %s member',
+    async (status) => {
+      db.user.findFirst.mockResolvedValue({
+        id: 'pharmacist_1',
+        email: 'p@x.test',
+        status,
+      });
+      await expect(
+        caller().setMemberProcurement({ id: 'pharmacist_1', enabled: true })
+      ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+      expect(db.$executeRaw).not.toHaveBeenCalled();
+    }
+  );
 });

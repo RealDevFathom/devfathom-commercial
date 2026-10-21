@@ -1,3 +1,4 @@
+import { randomUUID } from 'node:crypto';
 import { createHash, randomBytes } from 'node:crypto';
 import { TRPCError } from '@trpc/server';
 import { hash } from 'bcryptjs';
@@ -512,10 +513,10 @@ export const organizationAdminRouter = router({
           message: 'You cannot grant Goods in to yourself.',
         });
       }
-      if (input.enabled && target.status === 'INACTIVE') {
+      if (input.enabled && target.status !== 'ACTIVE') {
         throw new TRPCError({
           code: 'BAD_REQUEST',
-          message: 'Reactivate this member before granting Goods in.',
+          message: 'Only an active member can be granted Goods in.',
         });
       }
       const org = await ctx.db.organization.findUnique({
@@ -529,41 +530,37 @@ export const organizationAdminRouter = router({
         });
       }
       const capability = 'pharmacy:procurement';
-      const existing = await ctx.db.userPermissionOverride.findFirst({
-        where: { organizationId: id, userId: target.id, capability },
-        select: { effect: true },
-      });
-      // Security (#177): an explicit DENY is a deliberate restriction; this toggle never
-      // overwrites or removes it.
-      if (existing?.effect === 'DENY') {
-        throw new TRPCError({
+      const denied = () =>
+        new TRPCError({
           code: 'CONFLICT',
           message:
             'This member has an explicit Goods in denial. Remove it through access review first.',
         });
-      }
+      // Security (#177): one conditional write each way. An explicit DENY is a deliberate
+      // restriction; the toggle never overwrites or removes it, even under a race.
       if (input.enabled) {
-        await ctx.db.userPermissionOverride.upsert({
-          where: { userId_capability: { userId: target.id, capability } },
-          update: {
-            effect: 'ALLOW',
-            reason: input.reason,
-            expiresAt: null,
-            createdById: ctx.session.user.id,
-          },
-          create: {
-            organizationId: id,
-            userId: target.id,
-            capability,
-            effect: 'ALLOW',
-            reason: input.reason,
-            createdById: ctx.session.user.id,
-          },
-        });
+        const written = await ctx.db.$executeRaw`
+          INSERT INTO user_permission_overrides
+            (id, "organizationId", "userId", capability, effect, reason, "expiresAt", "createdById", "createdAt", "updatedAt")
+          VALUES (${randomUUID()}, ${id}, ${target.id}, ${capability}, 'ALLOW'::"PermissionEffect",
+                  ${input.reason}, NULL, ${ctx.session.user.id}, now(), now())
+          ON CONFLICT ("userId", capability) DO UPDATE
+            SET reason = EXCLUDED.reason, "expiresAt" = NULL,
+                "createdById" = EXCLUDED."createdById", "updatedAt" = now()
+            WHERE user_permission_overrides.effect = 'ALLOW'
+              AND user_permission_overrides."organizationId" = EXCLUDED."organizationId"`;
+        if (written === 0) throw denied();
       } else {
-        await ctx.db.userPermissionOverride.deleteMany({
+        const removed = await ctx.db.userPermissionOverride.deleteMany({
           where: { organizationId: id, userId: target.id, capability, effect: 'ALLOW' },
         });
+        if (removed.count === 0) {
+          const deny = await ctx.db.userPermissionOverride.findFirst({
+            where: { organizationId: id, userId: target.id, capability, effect: 'DENY' },
+            select: { id: true },
+          });
+          if (deny) throw denied();
+        }
       }
       annotateAudit(ctx, {
         targetType: 'User',
