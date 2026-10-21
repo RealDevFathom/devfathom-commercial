@@ -44,6 +44,51 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain('SUM(t."amountMinor")');
     expect(sql).not.toContain('SUM(t."amountMinor" - COALESCE(t."changeGivenMinor",0))');
   });
+
+  it('applies supplier, ingredient, and batch filters to dimensional aggregates', async () => {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+    const pharmacySupplierClaim = { count: vi.fn().mockResolvedValue(0) };
+    const pharmacyReceivingException = { count: vi.fn().mockResolvedValue(0) };
+    await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim,
+        pharmacyReceivingException,
+        branchRegulatoryProfile: { count },
+      } as never,
+      {
+        branchIds: ['branch_1'],
+        from: '2026-09-04',
+        to: '2026-09-04',
+        supplierId: 'supplier_1',
+        ingredientId: 'ingredient_1',
+        batchId: 'batch_1',
+      }
+    );
+
+    const sql = queryRaw.mock.calls
+      .map(([query]) => (query as { strings: readonly string[] }).strings.join('?'))
+      .join('\n');
+    expect(sql).toContain('strength."ingredientId"=?');
+    expect(sql).toContain('lot."manufacturingBatchId"=?');
+    expect(sql).toContain('receipt."supplierId"=?');
+    expect(pharmacySupplierClaim.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          lot: expect.objectContaining({ manufacturingBatchId: 'batch_1' }),
+        }),
+      })
+    );
+    expect(pharmacyReceivingException.count).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({
+          goodsReceipt: { supplierId: 'supplier_1' },
+        }),
+      })
+    );
+  });
 });
 
 // Query-shape regressions follow the existing cash-tender test seam.
