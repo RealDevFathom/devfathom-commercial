@@ -75,6 +75,7 @@ import {
   type CounterBrowserPrintReservation,
   type CounterReceiptFormat,
 } from '@/lib/pharmacy/counter-browser-print';
+import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
 
 type Notice = {
@@ -130,10 +131,13 @@ function useCounterDeviceId(): string | null {
   return useSyncExternalStore(subscribeToNothing, readCounterDeviceId, () => null);
 }
 
-/** Today, as the date-only value the settlement tables store. */
-function businessDate(): Date {
-  const now = new Date();
-  return new Date(Date.UTC(now.getFullYear(), now.getMonth(), now.getDate()));
+/**
+ * Today in the workspace's zone, as the date-only value the settlement tables
+ * store: the day the day close opens on, whatever zone this device is set to.
+ * `workspaceToday` reads a missing or refused zone as UTC, as the close does.
+ */
+function businessDate(timeZone: string | null | undefined): Date {
+  return new Date(`${workspaceToday(timeZone)}T00:00:00.000Z`);
 }
 
 /**
@@ -325,6 +329,9 @@ function ScopedPharmacyCounterConsole({
     staleTime: 60_000,
   });
   const branches = useMemo(() => branchesQuery.data?.branches ?? [], [branchesQuery.data]);
+  // Every drawer, tender and loyalty write is stamped with the workspace's day.
+  const workspaceZone = branchesQuery.data?.timezone;
+  const todayBusinessDate = useCallback(() => businessDate(workspaceZone), [workspaceZone]);
 
   // Derived, not mirrored into state: the default branch is simply "the first
   // one" until the operator picks another, so an effect would only add a render.
@@ -1152,7 +1159,7 @@ function ScopedPharmacyCounterConsole({
           branchId,
           saleId,
           deviceId: counterDeviceId(),
-          businessDate: businessDate(),
+          businessDate: todayBusinessDate(),
           type: input.type,
           amountMinor: input.amountMinor,
           ...(input.cashReceivedMinor !== undefined
@@ -1227,6 +1234,7 @@ function ScopedPharmacyCounterConsole({
       refreshTenderBill,
       saleId,
       tender,
+      todayBusinessDate,
     ]
   );
 
@@ -1311,7 +1319,7 @@ function ScopedPharmacyCounterConsole({
         saleId,
         points: redeemPoints,
         deviceId: counterDeviceId(),
-        businessDate: businessDate(),
+        businessDate: todayBusinessDate(),
         idempotencyKey: `counter-loyalty:${saleId}:${browserUuid()}`,
       });
       await Promise.all([refreshCart(), customerQuery.refetch()]);
@@ -1324,7 +1332,16 @@ function ScopedPharmacyCounterConsole({
     } finally {
       setPending(null);
     }
-  }, [branchId, busy, customerQuery, redeemLoyalty, redeemPoints, refreshCart, saleId]);
+  }, [
+    branchId,
+    busy,
+    customerQuery,
+    redeemLoyalty,
+    redeemPoints,
+    refreshCart,
+    saleId,
+    todayBusinessDate,
+  ]);
 
   const captureShortfall = useCallback(async () => {
     if (busy || !branchAuthorized) return;
@@ -1688,7 +1705,7 @@ function ScopedPharmacyCounterConsole({
             organizationId={organizationId}
             accountId={accountId}
             deviceId={counterDeviceId}
-            businessDate={businessDate}
+            businessDate={todayBusinessDate}
           />
           <Link
             className={buttonVariants({
@@ -1733,7 +1750,7 @@ function ScopedPharmacyCounterConsole({
                   .mutateAsync({
                     branchId,
                     deviceId: counterDeviceId(),
-                    businessDate: businessDate(),
+                    businessDate: todayBusinessDate(),
                     openingFloatMinor: 0,
                   })
                   .then(() =>
@@ -2092,7 +2109,7 @@ function ScopedPharmacyCounterConsole({
                 branchId={branchId}
                 saleId={saleId}
                 deviceId={counterDeviceId()}
-                businessDate={businessDate()}
+                businessDate={todayBusinessDate()}
                 disabled={busy || blocked}
                 onRecorded={refreshCart}
               />
