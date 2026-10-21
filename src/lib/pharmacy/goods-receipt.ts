@@ -25,7 +25,7 @@
  */
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { can } from '@/lib/abac';
-import { appendControlledPurchaseEntries, userHoldsDispense } from './controlled-register';
+import { appendControlledPurchaseEntries } from './controlled-register';
 import {
   clearLockout,
   isLockedOut,
@@ -134,8 +134,7 @@ export async function verifyControlledPurchaseWitness(
     pharmacist.status === 'ACTIVE' &&
     pharmacist.id !== scope.actorId &&
     !isLockedOut(credential, now) &&
-    ((await can(pharmacist, 'pharmacy:dispense', undefined, { db, now })) ||
-      (await userHoldsDispense(db, pharmacist.id, now)));
+    (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
   if (!eligible || !credential || !pharmacist) return { blocked: WITNESS_BLOCKED };
   if (!(await verifyOperatorCredential('PIN', input.pin, credential.credentialHash))) {
     await db.restaurantOperatorCredential.update({

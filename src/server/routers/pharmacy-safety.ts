@@ -6,7 +6,6 @@ import {
   appendControlledCorrection,
   assignedRegisterBranchIds,
   listControlledPinWitnesses,
-  userHoldsDispense,
 } from '@/lib/pharmacy/controlled-register';
 import { chooseRegisterPersonName } from '@/lib/pharmacy/register-print';
 import { maskCnic } from '@/lib/pharmacy/patient-prescriptions';
@@ -163,8 +162,7 @@ export const pharmacySafetyRouter = router({
             pharmacist.status === 'ACTIVE' &&
             pharmacist.id !== actorId &&
             !isLockedOut(credential, now) &&
-            ((await can(pharmacist, 'pharmacy:dispense', undefined, { db, now })) ||
-              (await userHoldsDispense(db, pharmacist.id, now)));
+            (await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }));
           if (!eligible || !credential || !pharmacist) {
             return { blocked: 'A different qualified person must enter their PIN.' };
           }

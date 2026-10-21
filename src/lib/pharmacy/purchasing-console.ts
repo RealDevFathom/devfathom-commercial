@@ -20,7 +20,7 @@
  */
 
 import { z } from 'zod';
-import { holdsDispenseCapability } from './dispense-capability';
+import { can, subjectFromSession } from '@/lib/abac';
 import { normalizeMedicineText } from './medicine';
 import { packConversions, type PackLevelNode } from './pack-conversion';
 import { assertSupplierEligible, PharmacyPurchasingError } from './purchasing';
@@ -339,12 +339,17 @@ export async function purchasingWorkspace(
     }),
   ]);
 
+  const eligibleApprovers = [];
+  for (const user of approvers) {
+    if (await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db, now: at })) {
+      eligibleApprovers.push(user);
+    }
+  }
   return {
     branches,
     stockLocations,
     suppliers,
-    approvers: approvers
-      .filter((user) => holdsDispenseCapability(user))
+    approvers: eligibleApprovers
       .map(({ id, name, email }) => ({ id, name, email })),
     medicines: medicines.map((medicine) => ({
       id: medicine.id,

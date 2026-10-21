@@ -12,7 +12,6 @@ import {
   earlierRegisterEntry,
   EMERGENCY_NO_RX_WINDOW_MS,
   emergencyNoRxDecision,
-  userHoldsDispense,
 } from '@/lib/pharmacy/controlled-register';
 import { annotateAudit } from '@/server/audit';
 import {
@@ -782,7 +781,7 @@ export const pharmacySalesRouter = router({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
           if (!medicine?.controlled) return addSaleLine(db, scope, input);
-          if (!(await userHoldsDispense(db, scope.actorId))) {
+          if (!(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, { db }))) {
             throw new TRPCError({
               code: 'FORBIDDEN',
               message: 'You do not have permission to dispense a controlled medicine.',
@@ -819,8 +818,7 @@ export const pharmacySalesRouter = router({
           )
             return blocked;
           if (
-            !(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now })) &&
-            !(await userHoldsDispense(db, pharmacist.id, now))
+            !(await can(pharmacist, 'pharmacy:dispense', undefined, { db, now }))
           )
             return blocked;
           if (

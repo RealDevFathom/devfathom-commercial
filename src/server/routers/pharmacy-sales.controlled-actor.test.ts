@@ -94,6 +94,16 @@ describe('pharmacySales.addLine controlled actor', () => {
     expect(register).not.toHaveBeenCalled();
   });
 
+  it('honors an explicit ABAC deny even when the role grants dispense', async () => {
+    const { caller, credential, register } = callerFor([
+      { capability: 'pharmacy.dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:dispense', effect: 'DENY' },
+    ]);
+    await expect(caller.addLine(line)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(credential).not.toHaveBeenCalled();
+    expect(register).not.toHaveBeenCalled();
+  });
+
   it('lets a pharmacist past the actor check', async () => {
     const { caller, credential } = callerFor([
       { capability: 'pharmacy.dispense', effect: 'ALLOW' },

@@ -1,26 +1,6 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
-import { holdsDispenseCapability } from './dispense-capability';
-
-export { holdsDispenseCapability } from './dispense-capability';
-
-export async function userHoldsDispense(db: ScopedDb, userId: string, now = new Date()) {
-  const user = await db.user.findUnique({
-    where: { id: userId },
-    select: {
-      status: true,
-      organizationRole: {
-        select: { permissions: { select: { capability: true, effect: true } } },
-      },
-      permissionOverrides: {
-        where: { OR: [{ expiresAt: null }, { expiresAt: { gt: now } }] },
-        select: { capability: true, effect: true },
-      },
-    },
-  });
-  if (!user || user.status !== 'ACTIVE') return false;
-  return holdsDispenseCapability(user);
-}
+import { can } from '@/lib/abac';
 
 /** Running balance after applying a signed delta. Null when the result is not a safe non-negative integer. */
 export function registerBalanceAfter(previous: number, delta: number): number | null {
@@ -513,7 +493,8 @@ export async function listControlledPinWitnesses(db: ScopedDb, actorId: string) 
   });
   const eligible: Array<{ id: string; name: string }> = [];
   for (const profile of staff) {
-    if (profile.user?.status === 'ACTIVE' && holdsDispenseCapability(profile.user)) {
+    if (profile.user?.status === 'ACTIVE' &&
+      (await can(profile.user, 'pharmacy:dispense', undefined, { db }))) {
       eligible.push({ id: profile.id, name: profile.displayName });
     }
   }
