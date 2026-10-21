@@ -644,6 +644,23 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   if (!organization.purgeScheduledAt || organization.purgeScheduledAt > new Date()) {
     throw new Error('The retention window has not elapsed.');
   }
+  // Archive consent proof in the same transaction before destructive work.
+  // A failed archive aborts the purge; idempotency supports worker retries.
+  await db.$executeRaw`
+    INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
+    SELECT "organizationId", 'customer', id,
+      jsonb_build_object('phone', "whatsappE164", 'optIn', "whatsappOptIn",
+        'optInAt', "whatsappOptInAt", 'optOutAt', "whatsappOptOutAt")
+    FROM growth_wa_customers WHERE "organizationId" = ${organizationId}
+      AND ("whatsappOptInAt" IS NOT NULL OR "whatsappOptOutAt" IS NOT NULL)
+    ON CONFLICT DO NOTHING
+  `;
+  await db.$executeRaw`
+    INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
+    SELECT "organizationId", 'inbound', id, to_jsonb(growth_wa_messages)
+    FROM growth_wa_messages WHERE "organizationId" = ${organizationId} AND direction = 'in'
+    ON CONFLICT DO NOTHING
+  `;
   const dependencies = await db.$queryRaw<TableDependency[]>(Prisma.sql`
     WITH tenant_tables AS (
       SELECT table_name
