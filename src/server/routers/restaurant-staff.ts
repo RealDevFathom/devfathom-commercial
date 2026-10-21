@@ -167,7 +167,9 @@ export const restaurantStaffRouter = router({
         message: 'Organization administrator access required.',
       });
     }
-    assertOrganizationWide(await resolveStaffBranchAuthorization(ctx.db, user));
+    assertOrganizationWide(
+      await resolveStaffBranchAuthorization(ctx.db, user, ctx.entitlements.organizationId)
+    );
     const provisioning = await provisionRestaurantOrganization(ctx.db, {
       organizationId,
       administrators: [{ id: user.id, name: user.name, email: user.email }],
@@ -202,7 +204,11 @@ export const restaurantStaffRouter = router({
   listBranches: protectedProcedure.query(async ({ ctx }) => {
     const authorization =
       (await resolveDemoDirectoryScope(ctx, 'branches', demoDirectoryPolicy)) ??
-      (await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user));
+      (await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      ));
     return ctx.db.restaurantBranch.findMany({
       where: {
         organizationId: workspaceOrganizationId(ctx),
@@ -223,7 +229,11 @@ export const restaurantStaffRouter = router({
   listDirectory: protectedProcedure
     .input(z.object({ branchId: z.string().optional() }).optional())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       if (input?.branchId) assertAuthorizedBranch(authorization, input.branchId);
       const staff = await ctx.db.restaurantStaffProfile.findMany({
         where: {
@@ -270,7 +280,11 @@ export const restaurantStaffRouter = router({
         .optional()
     )
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       if (input?.branchId) assertAuthorizedBranch(authorization, input.branchId);
       return ctx.db.restaurantStaffProfile.findMany({
         where: {
@@ -305,7 +319,11 @@ export const restaurantStaffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         if (!authorization.organizationWide) {
           assertAuthorizedBranch(authorization, input.primaryBranchId);
         } else if (input.primaryBranchId) {
@@ -346,7 +364,11 @@ export const restaurantStaffRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         await assertAuthorizedStaffProfile(ctx.db, authorization, id);
         if (patch.primaryBranchId !== undefined && patch.primaryBranchId !== null) {
           assertAuthorizedBranch(authorization, patch.primaryBranchId);
@@ -375,7 +397,11 @@ export const restaurantStaffRouter = router({
     .input(z.object({ id: z.string(), status: STAFF_STATUS }))
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         await assertAuthorizedStaffProfile(ctx.db, authorization, input.id);
         const staff = await setStaffProfileStatusWithinCommercialLimit(
           ctx.db,
@@ -401,7 +427,11 @@ export const restaurantStaffRouter = router({
   listCredentials: staffProcedure
     .input(z.object({ staffProfileId: z.string(), includeRevoked: z.boolean().optional() }))
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       await assertAuthorizedStaffProfile(ctx.db, authorization, input.staffProfileId);
       return ctx.db.restaurantOperatorCredential.findMany({
         where: {
@@ -436,7 +466,11 @@ export const restaurantStaffRouter = router({
       // C4: never let the plaintext secret reach the audit log, even on failure.
       annotateAudit(ctx, { skipInput: true });
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         await assertAuthorizedStaffProfile(ctx.db, authorization, input.staffProfileId);
         if (input.deviceId == null) {
           assertOrganizationWide(authorization);
@@ -478,7 +512,11 @@ export const restaurantStaffRouter = router({
     .mutation(async ({ ctx, input }) => {
       annotateAudit(ctx, { skipInput: true });
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         const existing = await ctx.db.restaurantOperatorCredential.findUnique({
           where: { id: input.credentialId },
           select: { staffProfileId: true, deviceId: true, device: { select: { branchId: true } } },
@@ -515,7 +553,11 @@ export const restaurantStaffRouter = router({
       // capture (the credential id is still recorded below as the audit target).
       annotateAudit(ctx, { skipInput: true });
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         const existing = await ctx.db.restaurantOperatorCredential.findUnique({
           where: { id: input.credentialId },
           select: { staffProfileId: true, deviceId: true, device: { select: { branchId: true } } },
@@ -558,7 +600,13 @@ export const restaurantStaffRouter = router({
     .query(({ ctx, input }) => listJobRoles(ctx.db, { activeOnly: input.activeOnly })),
 
   seedDefaultJobRoles: staffProcedure.mutation(async ({ ctx }) => {
-    assertOrganizationWide(await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user));
+    assertOrganizationWide(
+      await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      )
+    );
     const result = await ensureDefaultJobRoles(ctx.db);
     if (result.created.length > 0) {
       annotateAudit(ctx, {
@@ -583,7 +631,13 @@ export const restaurantStaffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        assertOrganizationWide(await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user));
+        assertOrganizationWide(
+          await resolveStaffBranchAuthorization(
+            ctx.db,
+            ctx.session!.user,
+            ctx.entitlements.organizationId
+          )
+        );
         const role = await createJobRole(ctx.db, input);
         annotateAudit(ctx, {
           targetType: 'RestaurantJobRole',
@@ -610,7 +664,13 @@ export const restaurantStaffRouter = router({
     .mutation(async ({ ctx, input }) => {
       const { id, ...patch } = input;
       try {
-        assertOrganizationWide(await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user));
+        assertOrganizationWide(
+          await resolveStaffBranchAuthorization(
+            ctx.db,
+            ctx.session!.user,
+            ctx.entitlements.organizationId
+          )
+        );
         const role = await updateJobRole(ctx.db, id, patch);
         annotateAudit(ctx, {
           targetType: 'RestaurantJobRole',
@@ -634,7 +694,13 @@ export const restaurantStaffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        assertOrganizationWide(await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user));
+        assertOrganizationWide(
+          await resolveStaffBranchAuthorization(
+            ctx.db,
+            ctx.session!.user,
+            ctx.entitlements.organizationId
+          )
+        );
         const result = await setJobRoleCapabilities(ctx.db, input.jobRoleId, input.capabilities);
         annotateAudit(ctx, {
           targetType: 'RestaurantJobRole',
@@ -650,7 +716,11 @@ export const restaurantStaffRouter = router({
   listStaffJobRoles: staffProcedure
     .input(z.object({ staffProfileId: z.string(), branchId: z.string().optional() }).strict())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       if (input.branchId) assertAuthorizedBranch(authorization, input.branchId);
       await assertStaffProfileExists(ctx.db, input.staffProfileId);
       const rows = await listStaffJobRoles(ctx.db, input.staffProfileId, {
@@ -678,7 +748,11 @@ export const restaurantStaffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await setStaffJobRoles(ctx.db, {
@@ -733,7 +807,11 @@ export const restaurantStaffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await setStaffAccess(ctx.db, {
@@ -772,7 +850,11 @@ export const restaurantStaffRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       if (input.branchId) assertAuthorizedBranch(authorization, input.branchId);
       await assertStaffProfileExists(ctx.db, input.staffProfileId);
       const rows = await listStaffJobRoleAudit(ctx.db, input.staffProfileId, {
@@ -801,7 +883,11 @@ export const restaurantStaffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await setStaffCapabilityOverride(ctx.db, {
@@ -839,7 +925,11 @@ export const restaurantStaffRouter = router({
     )
     .mutation(async ({ ctx, input }) => {
       try {
-        const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+        const authorization = await resolveStaffBranchAuthorization(
+          ctx.db,
+          ctx.session!.user,
+          ctx.entitlements.organizationId
+        );
         assertAuthorizedBranch(authorization, input.branchId);
         await assertStaffProfileExists(ctx.db, input.staffProfileId);
         const result = await clearStaffCapabilityOverride(ctx.db, {
@@ -865,7 +955,11 @@ export const restaurantStaffRouter = router({
   listStaffCapabilityOverrides: staffProcedure
     .input(z.object({ staffProfileId: z.string(), branchId: z.string().optional() }).strict())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       if (input.branchId) assertAuthorizedBranch(authorization, input.branchId);
       await assertStaffProfileExists(ctx.db, input.staffProfileId);
       const rows = await listStaffCapabilityOverrides(ctx.db, input.staffProfileId, {
@@ -885,7 +979,11 @@ export const restaurantStaffRouter = router({
         .strict()
     )
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       if (input.branchId) assertAuthorizedBranch(authorization, input.branchId);
       await assertStaffProfileExists(ctx.db, input.staffProfileId);
       const rows = await listStaffCapabilityAudit(ctx.db, input.staffProfileId, {
@@ -903,7 +1001,11 @@ export const restaurantStaffRouter = router({
   resolveStaffCapabilities: staffProcedure
     .input(z.object({ staffProfileId: z.string(), branchId: z.string() }).strict())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       assertAuthorizedBranch(authorization, input.branchId);
       await assertStaffProfileExists(ctx.db, input.staffProfileId);
       const decision = await resolveStaffCapabilityDecision(
@@ -923,7 +1025,11 @@ export const restaurantStaffRouter = router({
   listRoleHolders: staffProcedure
     .input(z.object({ jobRoleId: z.string(), branchId: z.string() }).strict())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       assertAuthorizedBranch(authorization, input.branchId);
       return listRoleHoldersAtBranch(ctx.db, input.jobRoleId, input.branchId);
     }),

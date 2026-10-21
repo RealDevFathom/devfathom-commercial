@@ -32,7 +32,12 @@ const ids = {
   role: `role_wha856_manager_${suffix}`,
 };
 
-const sessionUser = (id: string) => ({ id, role: 'EMPLOYEE' as const, status: 'ACTIVE' as const });
+const sessionUser = (id: string) => ({
+  id,
+  role: 'EMPLOYEE' as const,
+  status: 'ACTIVE' as const,
+  organizationId: ids.orgA,
+});
 let client: pg.Client;
 let deps: {
   createTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['createTenantDb'];
@@ -140,13 +145,13 @@ describeIfDatabase('staff branch authorization (real PostgreSQL)', () => {
   it('covers organization admin, branch manager, ordinary staff, and list filtering', async () => {
     const db = deps.createTenantDb(ids.orgA);
     await expect(
-      deps.authorization.resolveStaffBranchAuthorization(db, sessionUser(ids.admin))
+      deps.authorization.resolveStaffBranchAuthorization(db, sessionUser(ids.admin), ids.orgA)
     ).resolves.toMatchObject({ organizationWide: true, branchIds: [ids.branchA, ids.branchB] });
     await expect(
-      deps.authorization.resolveStaffBranchAuthorization(db, sessionUser(ids.manager))
+      deps.authorization.resolveStaffBranchAuthorization(db, sessionUser(ids.manager), ids.orgA)
     ).resolves.toMatchObject({ organizationWide: false, branchIds: [ids.branchA] });
     await expect(
-      deps.authorization.resolveStaffBranchAuthorization(db, sessionUser(ids.ordinary))
+      deps.authorization.resolveStaffBranchAuthorization(db, sessionUser(ids.ordinary), ids.orgA)
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
@@ -154,7 +159,8 @@ describeIfDatabase('staff branch authorization (real PostgreSQL)', () => {
     const db = deps.createTenantDb(ids.orgA);
     const authorization = await deps.authorization.resolveStaffBranchAuthorization(
       db,
-      sessionUser(ids.manager)
+      sessionUser(ids.manager),
+      ids.orgA
     );
     const expected = { code: 'FORBIDDEN', message: expect.stringContaining('not authorized') };
     for (const branchId of [ids.branchB, ids.foreignBranch, `arbitrary_${suffix}`]) {
@@ -173,7 +179,8 @@ describeIfDatabase('staff branch authorization (real PostgreSQL)', () => {
     const db = deps.createTenantDb(ids.orgA);
     const authorization = await deps.authorization.resolveStaffBranchAuthorization(
       db,
-      sessionUser(ids.manager)
+      sessionUser(ids.manager),
+      ids.orgA
     );
     await expect(
       deps.authorization.assertAuthorizedStaffProfile(db, authorization, ids.target)

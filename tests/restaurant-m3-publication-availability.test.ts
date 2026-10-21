@@ -189,9 +189,15 @@ function makeFixture() {
   const db: Record<string, unknown> = {
     restaurantBranch: {
       findUnique: vi.fn(async ({ where }: IdArgs) => (where.id === branch.id ? branch : null)),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.filter((id) => id === branch.id).map((id) => ({ id }))
+      ),
     },
     restaurantMenu: {
       findUnique: vi.fn(async ({ where }: IdArgs) => (where.id === menu.id ? menu : null)),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.filter((id) => id === menu.id).map((id) => ({ id }))
+      ),
     },
     restaurantMenuItem: {
       findUnique: vi.fn(async ({ where }: IdArgs) =>
@@ -206,6 +212,9 @@ function makeFixture() {
     },
     restaurantPriceList: {
       findUnique: vi.fn(async ({ where }: IdArgs) => priceLists.get(where.id) ?? null),
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.flatMap((id) => (priceLists.has(id) ? [{ id }] : []))
+      ),
       findFirst: vi.fn(
         async () => [...priceLists.values()].find((priceList) => priceList.isDefault) ?? null
       ),
@@ -410,6 +419,7 @@ function caller(fixture: Fixture) {
   return apiRouter.createCaller({
     db: fixture.db,
     entitlements: {
+      organizationId: 'org_m3',
       enabledModules: ['restaurant-menu'],
       activeSeats: 1,
       seatLimit: 50,

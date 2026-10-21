@@ -453,7 +453,11 @@ export const restaurantPromotionsRouter = router({
     .input(strict({ branchId: z.string().min(1) }))
     .query(async ({ ctx, input }) => {
       const branch = await ctx.db.restaurantBranch.findFirst({
-        where: { id: input.branchId, active: true },
+        where: {
+          id: input.branchId,
+          organizationId: ctx.entitlements.organizationId,
+          active: true,
+        },
         select: { id: true, name: true, timezone: true },
       });
       if (!branch) {

@@ -68,7 +68,8 @@ export async function POST(request: Request) {
     const authorization = await resolveCapabilityBranchAuthorization(
       db,
       actor.session.user,
-      'devices:manage'
+      'devices:manage',
+      { organizationId: actor.organization.id }
     );
     assertAuthorizedBranch(authorization, input.branchId);
     const branch = await db.restaurantBranch.findUnique({ where: { id: input.branchId } });

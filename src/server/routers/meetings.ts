@@ -18,6 +18,7 @@ import {
   type SeriesRow,
 } from '@/lib/meetings/occurrences';
 import { guestSecretExpiryFor, mintGuestSecret } from '@/lib/meetings/guest-access';
+import { assertInOrganization, workspaceId } from '../org-refs';
 
 /** Page size `getAll` falls back to when the caller sends no `limit` (#38). */
 const MEETINGS_PAGE_SIZE = 50;
@@ -349,6 +350,7 @@ export const meetingsRouter = router({
 
       const { attendeeIds, ...meetingData } = input;
       const allAttendees = [...new Set([user.id, ...attendeeIds])];
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), allAttendees);
 
       const meeting = await ctx.db.meeting.create({
         data: {
@@ -391,8 +393,9 @@ export const meetingsRouter = router({
       const { id, attendeeIds, ...data } = input;
 
       if (attendeeIds) {
-        await ctx.db.meetingAttendee.deleteMany({ where: { meetingId: id } });
         const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];
+        await assertInOrganization(ctx.db.user, workspaceId(ctx), allAttendees);
+        await ctx.db.meetingAttendee.deleteMany({ where: { meetingId: id } });
         await ctx.db.meetingAttendee.createMany({
           data: allAttendees.map((userId) => ({ meetingId: id, userId })),
         });

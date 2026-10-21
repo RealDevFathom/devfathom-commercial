@@ -54,10 +54,15 @@ This project uses **Bun** as its package manager and runtime.
 ```bash
 bun install          # install dependencies
 bun run db:generate  # generate the Prisma client
-bunx prisma migrate deploy
-bun run db:seed      # (optional) seed demo data
-bun run dev          # start Next.js
+bunx prisma migrate deploy   # uses MIGRATION_DATABASE_URL when set
+bun run db:seed              # same migration URL; the app role is RLS-bound
+bun run dev                  # start Next.js
 ```
+
+`DATABASE_URL` is the application role and must be `NOSUPERUSER` `NOBYPASSRLS`.
+`MIGRATION_DATABASE_URL` is used by Prisma migrations when it is set. Production
+startup refuses a database role that bypasses row-level security. The local
+setup guide has the role statements.
 
 For local multi-host development, open
 `http://devfathom.localhost:3000` for the tenant workspace and
