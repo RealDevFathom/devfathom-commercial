@@ -14,6 +14,7 @@ const sql = readFileSync(
   it('repairs legacy seats, preserves custom and single-seat limits, and audits once', async () => {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
+    const schema = `seat_${randomUUID().replaceAll('-', '')}`;
     try {
       const {
         rows: [role],
@@ -24,9 +25,8 @@ const sql = readFileSync(
       await client.query('BEGIN');
       // Isolate migration execution from any shared database data. These tables
       // expose the migration columns with their production defaults and RLS.
-      const schema = `seat_${randomUUID().replaceAll('-', '')}`;
       await client.query(`CREATE SCHEMA "${schema}"`);
-      await client.query(`SET LOCAL search_path TO "${schema}"`);
+      await client.query(`SET search_path TO "${schema}"`);
       await client.query(`
         CREATE TABLE platform_packages (id text PRIMARY KEY, key text, vertical text,
           "defaultSeats" integer NOT NULL DEFAULT 1, "updatedAt" timestamp NOT NULL DEFAULT now());
@@ -53,7 +53,20 @@ const sql = readFileSync(
       `);
       await client.query("SELECT set_config('app.is_platform_admin', 'false', true)");
       expect((await client.query('SELECT * FROM organizations')).rows).toHaveLength(0);
-      await client.query(sql);
+      await client.query('COMMIT');
+      // No outer transaction: each statement has migrate deploy semantics.
+      const deploy = async () => {
+        const results = [];
+        for (const statement of sql.split(';').filter((part) => part.trim())) {
+          results.push(await client.query(statement));
+        }
+        return results;
+      };
+      const results = await deploy();
+      expect(results.filter((result) => result.command === 'UPDATE').map((result) => result.rowCount)).toEqual([1]);
+      expect(results.find((result) => result.command === 'INSERT')?.rowCount).toBe(2);
+      expect((await client.query('SELECT * FROM organizations')).rowCount).toBe(0);
+      await client.query("SELECT set_config('app.is_platform_admin', 'true', false)");
       const snapshot = async () => ({
         orgs: (await client.query('SELECT * FROM organizations ORDER BY id')).rows,
         audits: (await client.query('SELECT * FROM platform_audit_logs ORDER BY "organizationId"'))
@@ -71,11 +84,14 @@ const sql = readFileSync(
         ['hotel', { seatLimit: 1 }, { seatLimit: 15, packageId: 'hotel' }],
         ['raise', { seatLimit: 1 }, { seatLimit: 42, packageId: 'team' }],
       ]);
-      await client.query("SELECT set_config('app.is_platform_admin', 'false', true)");
-      await client.query(sql);
+      await client.query("SELECT set_config('app.is_platform_admin', 'false', false)");
+      const rerun = await deploy();
+      expect(rerun.find((result) => result.command === 'INSERT')?.rowCount).toBe(0);
+      await client.query("SELECT set_config('app.is_platform_admin', 'true', false)");
       expect(await snapshot()).toEqual(first);
     } finally {
       await client.query('ROLLBACK');
+      await client.query(`DROP SCHEMA IF EXISTS "${schema}" CASCADE`);
       await client.end();
     }
   });

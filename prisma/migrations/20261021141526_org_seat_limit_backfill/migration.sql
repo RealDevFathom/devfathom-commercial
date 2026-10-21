@@ -1,3 +1,5 @@
+BEGIN;
+
 -- Migration jobs run before catalog sync. Repair legacy hospitality packages first
 -- so the organization backfill also works on the first deployment.
 SELECT set_config('app.is_platform_admin', 'true', true);
@@ -25,3 +27,5 @@ SELECT 'seat_backfill_' || md5(id || ':20261021141526'), id,
        jsonb_build_object('seatLimit', "seatLimit", 'packageId', "packageId"),
        'Repair legacy single-seat package inheritance (#206)'
 FROM updated;
+
+COMMIT;
