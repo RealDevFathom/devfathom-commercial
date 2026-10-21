@@ -29,3 +29,9 @@ forced tenant RLS, a composite tenant/branch/sale foreign key and tenant-scoped
 sale/USIN uniqueness. Existing sale RLS is preserved. A future live adapter must
 be dispatched outside the settlement transaction, implement USIN idempotency,
 and verify the official FBR wire contract and mandatory receipt fields first.
+
+The mock snapshot omits tax fields pending confirmation of the FBR contract; keep
+the receipt text "not valid for tax verification" until those requirements are met.
+The tenant-only outbox policy has no platform-admin bypass. When a platform-wide
+retry worker is introduced, add the `app.is_platform_admin` policy clause while
+preserving forced RLS and tenant isolation.

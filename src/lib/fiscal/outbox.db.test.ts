@@ -19,7 +19,7 @@ suite('FBR migration PostgreSQL tenant boundary', () => {
         UNIQUE ("organizationId", "branchId", id));
       INSERT INTO pharmacy_sales VALUES ('sale-a','org-a','branch-a'),('sale-b','org-b','branch-b');`);
     await client.query(
-      readFileSync('prisma/migrations/20261021110000_fbr_pos_outbox/migration.sql', 'utf8')
+      readFileSync('prisma/migrations/20261021141548_fbr_pos_outbox/migration.sql', 'utf8')
     );
     // Make the app role the owner: FORCE RLS must protect even the table owner.
     await client.query(`GRANT USAGE ON SCHEMA ${schema} TO ${role};
