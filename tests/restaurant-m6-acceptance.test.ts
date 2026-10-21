@@ -1147,14 +1147,28 @@ describeIfDatabase('WHA-74 M6 inventory/purchasing acceptance (real PostgreSQL +
         idempotencyKey: `recipe_bill_${suffix}`,
       },
     });
-    await deps.withTenantDb(orgId, (tx) =>
-      deps.settleBill(tx, {
+    await deps.withTenantDb(orgId, async (tx) => {
+      const bill = await tx.restaurantBill.findUniqueOrThrow({
+        where: { id: cut.billIds[0]! },
+        select: { businessDate: true, grandTotal: true },
+      });
+      await tx.restaurantTender.create({
+        data: {
+          billId: cut.billIds[0]!,
+          type: 'CARD',
+          amount: bill.grandTotal,
+          businessDate: bill.businessDate,
+          staffProfileId: ids.staff,
+          deviceId: ids.recipeDevice,
+        },
+      });
+      await deps.settleBill(tx, {
         billId: cut.billIds[0]!,
         staffProfileId: ids.staff,
         deviceId: ids.recipeDevice,
         at: new Date('2026-08-19T13:00:00.000Z'),
-      })
-    );
+      });
+    });
     expect(
       await api.orders.close({
         orderId: ids.recipeOrder,

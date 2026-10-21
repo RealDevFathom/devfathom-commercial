@@ -103,10 +103,8 @@ async function openWithItem(over?: { course?: number; tableIds?: readonly string
   return { orderId: opened.orderId, itemId: added.itemId, db };
 }
 
-/** Cut one bill for the whole order and settle it, so the M5-L2 settlement guard
- * lets the order close. Uses the real bills command layer + the `settleBill` seam
- * L4's tender flow calls; here we settle directly (no tender) to exercise the
- * order-close path without pulling in the not-yet-built tender lane. */
+/** Cut and cover one bill for the whole order, then settle it so the M5-L2
+ * settlement guard lets the order close without pulling in the tender service. */
 async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
   const cut = await deps.bills.cutBills(db, {
     orderId,
@@ -114,14 +112,28 @@ async function settleOrderFully(db: ScopedDb, orderId: string): Promise<void> {
     split: { kind: 'NONE' },
     actor: actor(),
   });
-  await deps.withTenantDb(orgId, (tx) =>
-    deps.bills.settleBill(tx, {
+  await deps.withTenantDb(orgId, async (tx) => {
+    const bill = await tx.restaurantBill.findUniqueOrThrow({
+      where: { id: cut.billIds[0]! },
+      select: { businessDate: true, grandTotal: true },
+    });
+    await tx.restaurantTender.create({
+      data: {
+        billId: cut.billIds[0]!,
+        type: 'CARD',
+        amount: bill.grandTotal,
+        businessDate: bill.businessDate,
+        staffProfileId: ids.operator,
+        deviceId,
+      },
+    });
+    await deps.bills.settleBill(tx, {
       billId: cut.billIds[0]!,
       staffProfileId: ids.operator,
       deviceId,
       at: AT,
-    })
-  );
+    });
+  });
 }
 
 beforeAll(async () => {
