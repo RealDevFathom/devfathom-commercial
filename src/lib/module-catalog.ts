@@ -368,6 +368,8 @@ export const ROUTE_MODULES: ReadonlyArray<readonly [string, string]> = [
 
 /** Resolve the module that owns a route. Dashboard is a baseline module for every vertical. */
 export function moduleForPath(pathname: string, _vertical?: OrganizationVertical): string | null {
+  // Invitations are baseline administration; member detail and HR remain licensed.
+  if (pathname === '/team') return moduleForProcedure('team.inviteMember');
   void _vertical; // Retained for source compatibility; baseline dashboard no longer dispatches.
   const moduleKey =
     ROUTE_MODULES.find(
