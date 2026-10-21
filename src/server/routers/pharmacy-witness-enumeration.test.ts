@@ -38,7 +38,9 @@ describe.each(['safety', 'purchasing'] as const)('%s witness enumeration', (surf
   function query(f: ReturnType<typeof fixture>) {
     return surface === 'safety'
       ? f.caller.safety.controlledPharmacists()
-      : f.caller.purchasing.controlledWitnesses();
+      : (
+          f.caller.purchasing as unknown as { controlledWitnesses: () => Promise<unknown> }
+        ).controlledWitnesses();
   }
   it('denies a cashier before enumerating PIN holders', async () => {
     const f = fixture('pharmacy.counter');

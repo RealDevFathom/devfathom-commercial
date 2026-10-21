@@ -2227,26 +2227,34 @@ function ScopedPharmacyCounterConsole({
           >
             <CounterRxPanel
               ref={rxPanelRef}
-              controlled={{
-                ...controlledAuth,
-                pharmacists: pharmacistsQuery.data ?? [],
-                loading: pharmacistsQuery.isLoading,
-                error: pharmacistsQuery.isError,
-                patientAddress,
-                onChange: (field, value) => {
-                  if (field === 'patientAddress') {
-                    setPatientAddressDraft(typeof value === 'string' ? value : '');
-                    return;
-                  }
-                  setControlledAuth((current) => {
-                    if (field === 'emergency' || field === 'rxSerialWritten') {
-                      return { ...current, [field]: value === true };
+              controlled={
+                // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
+                // FORBIDDEN read means this actor cannot dispense, so the controlled
+                // authorization panel is not offered (the server refuses it anyway).
+                (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
+                'FORBIDDEN'
+                  ? undefined
+                  : {
+                      ...controlledAuth,
+                      pharmacists: pharmacistsQuery.data ?? [],
+                      loading: pharmacistsQuery.isLoading,
+                      error: pharmacistsQuery.isError,
+                      patientAddress,
+                      onChange: (field, value) => {
+                        if (field === 'patientAddress') {
+                          setPatientAddressDraft(typeof value === 'string' ? value : '');
+                          return;
+                        }
+                        setControlledAuth((current) => {
+                          if (field === 'emergency' || field === 'rxSerialWritten') {
+                            return { ...current, [field]: value === true };
+                          }
+                          if (typeof value !== 'string') return current;
+                          return { ...current, [field]: value };
+                        });
+                      },
                     }
-                    if (typeof value !== 'string') return current;
-                    return { ...current, [field]: value };
-                  });
-                },
-              }}
+              }
               alerts={alerts}
               patient={patient}
               candidates={patientsQuery.data?.patients ?? []}
