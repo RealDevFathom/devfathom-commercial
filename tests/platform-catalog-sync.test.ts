@@ -6,6 +6,7 @@ import { syncPlatformCatalog } from '../prisma/catalog-sync';
 import {
   HOSPITALITY_PACKAGES,
   PHARMACY_PACKAGES,
+  packageDefaultSeats,
   RESTAURANT_PACKAGES,
 } from '../src/lib/vertical-catalog';
 
@@ -41,11 +42,13 @@ describe('catalog sync legacy seat defaults (#191)', () => {
     };
 
     const result = await syncPlatformCatalog(tx as unknown as Prisma.TransactionClient);
-    const expectedSeats = [10, 100, 2500, 10, 50, 2500];
-    expect(packages).toEqual(before.map((pkg, index) => ({
-      ...pkg,
-      defaultSeats: seats === 1 && index < expectedSeats.length ? expectedSeats[index] : seats,
-    })));
+    const expectedSeats = definitions.map(packageDefaultSeats);
+    expect(packages).toEqual(
+      before.map((pkg, index) => ({
+        ...pkg,
+        defaultSeats: seats === 1 ? expectedSeats[index] : seats,
+      }))
+    );
     expect(result).toMatchObject({ packagesCreated: 0, linksCreated: 0 });
     expect(tx.platformPackage.upsert).not.toHaveBeenCalled();
     expect(tx.platformPackageModule.upsert).not.toHaveBeenCalled();
