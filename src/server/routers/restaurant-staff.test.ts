@@ -87,6 +87,7 @@ function caller() {
   return restaurantStaffRouter.createCaller({
     db,
     entitlements: {
+      organizationId: 'org_workspace',
       enabledModules: ['restaurant-core'],
       activeSeats: 1,
       seatLimit: 50,
@@ -112,7 +113,11 @@ beforeEach(() => {
   mocks.staffCount.mockResolvedValue(0);
   mocks.raw.mockResolvedValue([{ id: 'org_1' }]);
   mocks.staffFindFirst.mockResolvedValue(null);
-  mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1' }]);
+  mocks.branchFindMany.mockImplementation(async (args?: { where?: { id?: { in?: string[] } } }) => {
+    const ids = args?.where?.id?.in;
+    if (!ids) return [{ id: 'branch_1' }];
+    return ids.map((id) => ({ id }));
+  });
   mocks.branchFindUnique.mockResolvedValue({ id: 'branch_1' });
   mocks.deviceFindUnique.mockResolvedValue({ branchId: 'branch_1' });
   mocks.userFindFirst.mockResolvedValue({ id: 'user_1' });

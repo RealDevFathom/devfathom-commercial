@@ -86,6 +86,11 @@ function fixture(raw: unknown = input) {
   const execute = vi.fn().mockResolvedValue(0);
   const transaction = vi.fn(async (callback) => callback(db));
   const db = only({
+    pharmacyBranch: only({
+      findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
+        where.id.in.map((id) => ({ id }))
+      ),
+    }),
     pharmacySale: only({ findFirst: saleRead }),
     pharmacyMoneyIdempotencyKey: only({ findUnique: keyRead }),
     pharmacyTender: only({ findFirst: tenderRead }),

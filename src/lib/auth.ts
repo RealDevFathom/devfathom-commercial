@@ -1,4 +1,7 @@
-import { demoSeatFromOrganizationId, isCanonicalDemoOrganization } from '@/lib/tenancy/demo-identity';
+import {
+  demoSeatFromOrganizationId,
+  isCanonicalDemoOrganization,
+} from '@/lib/tenancy/demo-identity';
 import NextAuth, { CredentialsSignin } from 'next-auth';
 import Credentials from 'next-auth/providers/credentials';
 import { compare } from 'bcryptjs';
@@ -22,11 +25,7 @@ import { emailSchema } from '@/lib/email-address';
 import { requestHost } from '@/lib/tenancy/host';
 import { isSharedHost } from '@/lib/tenancy/host-routing';
 import { getDemoSeatCount, isDemoEnabled } from '@/lib/demo/config';
-import {
-  DEMO_PERSONAS,
-  demoPersonaForUser,
-  demoPersonaUserRole,
-} from '@/lib/demo/personas';
+import { DEMO_PERSONAS, demoPersonaForUser, demoPersonaUserRole } from '@/lib/demo/personas';
 
 // Fail fast in production if the session-signing secret is missing, so the app
 // can never run with unsigned/insecure sessions. (Dev lets NextAuth handle it.)
@@ -183,8 +182,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
         // force a password nor burn CPU on prefix-matching bcrypt compares.
         const ipRateLimitKey = `login:ip:${ip ?? 'unknown'}`;
         const accountRateLimitKey = `login:acct:${email}`;
-        const ipGate = rateLimit(ipRateLimitKey, 30, 5 * 60_000);
-        const acctGate = rateLimit(accountRateLimitKey, 10, 5 * 60_000);
+        const ipGate = await rateLimit(ipRateLimitKey, 30, 5 * 60_000);
+        const acctGate = await rateLimit(accountRateLimitKey, 10, 5 * 60_000);
         if (!ipGate.ok || !acctGate.ok) {
           recordAuthAudit({
             type: 'LOGIN_FAILED',
@@ -340,8 +339,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // TOTP codes. Every failing path above returns or throws before this
           // line, so a failure still consumes its unit, the limits are unchanged
           // and a throttled response stays byte-identical to a wrong password.
-          clearRateLimit(ipRateLimitKey);
-          clearRateLimit(accountRateLimitKey);
+          await clearRateLimit(ipRateLimitKey);
+          await clearRateLimit(accountRateLimitKey);
 
           // Update last active
           await tenantDb.user.update({
@@ -410,7 +409,7 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         // D18: selection is rate limited independently of the credential check,
         // so a valid intent cannot be used to grind organization ids.
-        const selectionGate = rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
+        const selectionGate = await rateLimit(`login:select:${ip ?? 'unknown'}`, 30, 5 * 60_000);
         if (!selectionGate.ok) return null;
 
         const rawIntent = parseCookie(request.headers.get('cookie'), LOGIN_INTENT_COOKIE);
@@ -433,7 +432,9 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
 
         const organization = await resolveOrganizationById(organizationId);
         if (!organization || !isTenantLifecycleAccessible(organization.status)) return null;
-        const demoSeat = organization.isDemo ? demoSeatFromOrganizationId(organization.id, getDemoSeatCount()) : null;
+        const demoSeat = organization.isDemo
+          ? demoSeatFromOrganizationId(organization.id, getDemoSeatCount())
+          : null;
         const demoPersona = demoSeat
           ? demoPersonaForUser(demoSeat, { id: candidate.userId, email: intent.email })
           : null;
@@ -531,8 +532,8 @@ export const { handlers, auth, signIn, signOut } = NextAuth({
           // password, and refunding it there would let whoever holds the password
           // mint intents without limit and grind second-factor codes through them.
           // `intent.email` is the same normalized address /api/login keyed on.
-          clearRateLimit(`login:ip:${ip ?? 'unknown'}`);
-          clearRateLimit(`login:acct:${intent.email}`);
+          await clearRateLimit(`login:ip:${ip ?? 'unknown'}`);
+          await clearRateLimit(`login:acct:${intent.email}`);
 
           await tenantDb.user.update({
             where: { id: user.id },

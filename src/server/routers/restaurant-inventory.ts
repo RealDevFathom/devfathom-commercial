@@ -180,14 +180,11 @@ export const restaurantInventoryRouter = router({
     .mutation(async ({ ctx, input }) => {
       const organizationId = requireOrganizationId(ctx);
       const limit = stockLocationLimit(ctx.entitlements.limits as Record<string, number>);
-      const branch = await ctx.db.restaurantBranch.findUnique({
-        where: { id: input.branchId },
-        select: { id: true, active: true },
+      const branch = await ctx.db.restaurantBranch.findFirst({
+        where: { id: input.branchId, organizationId, active: true },
+        select: { id: true },
       });
       if (!branch) throw new TRPCError({ code: 'NOT_FOUND', message: 'Branch not found.' });
-      if (!branch.active) {
-        throw new TRPCError({ code: 'BAD_REQUEST', message: 'The branch is inactive.' });
-      }
       await resolveRestaurantActor(ctx, [branch.id]);
 
       return ctx.db.$transaction(async (tx) => {

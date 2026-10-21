@@ -17,6 +17,7 @@ import { appUrl, templates, sendEmail } from '@/lib/email';
 import { notify } from '@/lib/notifications';
 import type { NotificationPrefs } from '@/lib/notifications';
 import { emailSchema } from '@/lib/email-address';
+import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
 
@@ -496,6 +497,7 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
       return ctx.db.leaveBalance.upsert({
         where: {
           userId_year_type: { userId: input.userId, year: input.year, type: input.type },
@@ -933,6 +935,7 @@ export const teamRouter = router({
       })
     )
     .mutation(async ({ ctx, input }) => {
+      await assertInOrganization(ctx.db.user, workspaceId(ctx), [input.userId]);
       return ctx.db.performanceNote.create({
         data: {
           userId: input.userId,
