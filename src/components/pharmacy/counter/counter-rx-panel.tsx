@@ -605,9 +605,15 @@ export const CounterRxPanel = forwardRef<HTMLDivElement, CounterRxPanelProps>(
     },
     ref
   ) {
-    const blocks = alerts.filter((alert) => alert.severity === 'SAFETY_BLOCK');
-    const advice = alerts.filter((alert) => alert.severity === 'CLINICAL_ADVICE');
-    const commercial = alerts.filter((alert) => alert.severity === 'COMMERCIAL');
+    // A mismatch is meaningful only after the bill has an attached patient.
+    // In particular, do not make the initial anonymous-bill state look as if
+    // the operator selected the wrong person.
+    const visibleAlerts = alerts.filter(
+      (alert) => alert.code !== 'PRESCRIPTION_PATIENT_MISMATCH' || patient !== null
+    );
+    const blocks = visibleAlerts.filter((alert) => alert.severity === 'SAFETY_BLOCK');
+    const advice = visibleAlerts.filter((alert) => alert.severity === 'CLINICAL_ADVICE');
+    const commercial = visibleAlerts.filter((alert) => alert.severity === 'COMMERCIAL');
 
     return (
       <div ref={ref} tabIndex={-1} className="space-y-5 focus-visible:outline-none">

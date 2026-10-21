@@ -19,6 +19,7 @@ import { annotateAudit } from '@/server/audit';
 import {
   prescriptionConsumedUnits,
   prescriptionMatchesSalePatient,
+  prescriptionSalePatientStatus,
 } from '@/lib/pharmacy/rx-quantity';
 import { needsPrescription, PharmacySafetyBlockError } from '@/lib/pharmacy/rx-gate';
 import {
@@ -1057,15 +1058,14 @@ export const pharmacySalesRouter = router({
                 !Number.isSafeInteger(units)
               )
                 return rxBlocked;
-              if (
-                !(await prescriptionMatchesSalePatient(
-                  db,
-                  scope,
-                  input.saleId,
-                  rx.prescription.patientId
-                ))
-              )
-                return rxPatientMismatch;
+              const salePatientStatus = await prescriptionSalePatientStatus(
+                db,
+                scope,
+                input.saleId,
+                rx.prescription.patientId
+              );
+              if (salePatientStatus === 'MISSING') return rxBlocked;
+              if (salePatientStatus === 'MISMATCH') return rxPatientMismatch;
               const previous = await db.pharmacySaleLine.findFirst({
                 where: {
                   organizationId: scope.organizationId,

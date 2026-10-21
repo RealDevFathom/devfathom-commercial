@@ -273,7 +273,9 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
     });
     await expect(
       f.caller.addLine({ ...line, rxAuthorization: { prescriptionLineId: 'rx-line-1' } })
-    ).resolves.toHaveProperty('blocked');
+    ).resolves.toMatchObject({
+      blocked: expect.not.stringContaining('not for the patient'),
+    });
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(f.db.prescriptionFill.create).not.toHaveBeenCalled();
   });

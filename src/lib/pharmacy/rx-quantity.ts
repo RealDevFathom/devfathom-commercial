@@ -23,12 +23,12 @@ export async function prescriptionConsumedUnits(
   return Number(rows[0]?.units ?? 0);
 }
 
-export async function prescriptionMatchesSalePatient(
+export async function prescriptionSalePatientStatus(
   db: ScopedDb,
   scope: LedgerScope,
   saleId: string,
   patientId: string
-) {
+): Promise<'MISSING' | 'MATCH' | 'MISMATCH'> {
   // Prevent customer changes until this transaction has recorded the fill.
   await db.$queryRaw`SELECT id FROM pharmacy_sales WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${saleId} FOR UPDATE`;
   const sale = await db.pharmacySale.findFirst({
@@ -39,5 +39,15 @@ export async function prescriptionMatchesSalePatient(
   // the prescription's patient. A sale with no linked customer, or one linked to
   // a different patient, is refused — an anonymous bill can no longer launder an
   // arbitrary patient's prescription.
-  return Boolean(sale && sale.customer?.patientId === patientId);
+  if (!sale?.customer?.patientId) return 'MISSING';
+  return sale.customer.patientId === patientId ? 'MATCH' : 'MISMATCH';
+}
+
+export async function prescriptionMatchesSalePatient(
+  db: ScopedDb,
+  scope: LedgerScope,
+  saleId: string,
+  patientId: string
+) {
+  return (await prescriptionSalePatientStatus(db, scope, saleId, patientId)) === 'MATCH';
 }
