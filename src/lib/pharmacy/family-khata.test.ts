@@ -77,6 +77,7 @@ describe('CRM-L02 family privacy and khata settlement', () => {
       familyAccountId: 'family_1',
       amountMinor: 7_000,
       occurredAt: new Date('2026-07-10'),
+      paymentMethod: 'CASH',
     });
 
     expect(result).toMatchObject({ paidMinor: 7_000, remainingBalanceMinor: 3_000 });
@@ -84,6 +85,40 @@ describe('CRM-L02 family privacy and khata settlement', () => {
       { settlesChargeId: 'charge_a', amountMinor: 4_000 },
       { settlesChargeId: 'charge_b', amountMinor: 3_000 },
     ]);
+  });
+
+  it.each([
+    ['CASH', 'CASH'],
+    ['CARD', 'BANK'],
+    ['BANK_TRANSFER', 'BANK'],
+    ['WALLET', 'BANK'],
+  ] as const)('posts a %s collection to the %s account', async (paymentMethod, accountCode) => {
+    const db = {
+      $queryRaw: vi.fn(),
+      financeJournalEntry: {
+        findFirst: vi.fn().mockResolvedValue(null),
+        create: vi.fn().mockResolvedValue({ id: 'journal' }),
+        findFirstOrThrow: vi.fn().mockResolvedValue({ id: 'journal', lines: [] }),
+      },
+      financeJournalLine: { create: vi.fn().mockResolvedValue({}) },
+      pharmacyKhataEvent: {
+        findMany: vi.fn().mockResolvedValue([
+          { id: 'charge_a', kind: 'CHARGE', amountMinor: 500, occurredAt: new Date() },
+        ]),
+        create: vi.fn().mockResolvedValue({ id: 'payment_a', amountMinor: 500 }),
+      },
+    };
+
+    await settleFamilyKhata(db as never, scope, {
+      familyAccountId: 'family_1',
+      amountMinor: 500,
+      occurredAt: new Date('2026-07-10'),
+      paymentMethod,
+    });
+
+    expect(db.financeJournalLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ accountCode, side: 'DEBIT', amountMinor: 500 }),
+    });
   });
 });
 

@@ -157,13 +157,16 @@ describe('Khata router trust and recovery boundary', () => {
       reason: 'Khata cash collection',
       actorId: 'owner-a',
     } });
+    expect(f.db.financeJournalLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ accountCode: 'CASH', side: 'DEBIT', amountMinor: 250 }),
+    });
     expect(foldExpectedCash([
       { kind: 'OPENING_FLOAT', amountMinor: 1_000 },
       { kind: 'CASH_SALE', amountMinor: 250 },
     ])).toBe(1_250);
   });
 
-  it('does not add a non-cash Khata collection to the drawer', async () => {
+  it.each(['CARD', 'BANK_TRANSFER', 'WALLET'] as const)('posts a %s Khata collection to bank and not the cash drawer', async (paymentMethod) => {
     const f = fixture();
     f.db.pharmacyKhataEvent.findMany.mockResolvedValueOnce([]).mockResolvedValueOnce([
       { id: 'charge-a', kind: 'CHARGE', amountMinor: 250, occurredAt: new Date() },
@@ -174,12 +177,15 @@ describe('Khata router trust and recovery boundary', () => {
       branchId: 'branch-a',
       familyAccountId: 'family-a',
       amountMinor: 250,
-      paymentMethod: 'CARD',
-      idempotencyKey: 'collection-card-a',
+      paymentMethod,
+      idempotencyKey: `collection-${paymentMethod.toLowerCase()}-a`,
     });
 
     expect(f.db.pharmacyDrawerSession.findFirst).not.toHaveBeenCalled();
     expect(f.db.pharmacyDrawerMovement.create).not.toHaveBeenCalled();
+    expect(f.db.financeJournalLine.create).toHaveBeenCalledWith({
+      data: expect.objectContaining({ accountCode: 'BANK', side: 'DEBIT', amountMinor: 250 }),
+    });
   });
 
   it.each([1, 99, 100])(

@@ -8,6 +8,7 @@ import { postJournalEntry } from '@/lib/finance/journal';
 import { auditPatientRead } from './patient-prescriptions';
 
 export type FamilyKhataScope = { organizationId: string; branchId: string; actorId: string };
+export type KhataPaymentMethod = 'CASH' | 'CARD' | 'BANK_TRANSFER' | 'WALLET';
 
 export class FamilyKhataError extends Error {
   constructor(
@@ -154,7 +155,13 @@ export async function readFamilyMemberDispensing(
 export async function settleFamilyKhata(
   db: ScopedDb,
   scope: FamilyKhataScope,
-  input: { familyAccountId: string; amountMinor: number; occurredAt: Date; collectionKey?: string }
+  input: {
+    familyAccountId: string;
+    amountMinor: number;
+    occurredAt: Date;
+    paymentMethod: KhataPaymentMethod;
+    collectionKey?: string;
+  }
 ) {
   if (!Number.isSafeInteger(input.amountMinor) || input.amountMinor <= 0)
     throw new FamilyKhataError('INVALID_AMOUNT');
@@ -218,7 +225,7 @@ export async function settleFamilyKhata(
       occurredAt: input.occurredAt,
       lines: [
         {
-          accountCode: 'CASH',
+          accountCode: input.paymentMethod === 'CASH' ? 'CASH' : 'BANK',
           side: 'DEBIT',
           amountMinor: allocation.amountMinor,
           branchId: scope.branchId,

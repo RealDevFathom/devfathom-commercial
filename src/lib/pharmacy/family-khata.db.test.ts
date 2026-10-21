@@ -125,7 +125,7 @@ suite('family Khata restricted PostgreSQL', () => {
   it('collects, clears AR, reopens a dishonoured payment and settles it again', async () => {
     const f = await fixture(orgA, 'Collections', new Date('2026-01-01T00:00:00Z'));
     await inScope(f, async db => {
-      const result = await khata.settleFamilyKhata(db, f, { ...f, amountMinor: 600, occurredAt: new Date('2026-10-20T10:00:00Z') });
+      const result = await khata.settleFamilyKhata(db, f, { ...f, amountMinor: 600, occurredAt: new Date('2026-10-20T10:00:00Z'), paymentMethod: 'CASH' });
       expect(result.remainingBalanceMinor).toBe(0);
       const lines = await db.financeJournalLine.findMany({where:{organizationId:orgA, branchId:f.branchId}});
       expect(lines.filter(l => l.accountCode==='ACCOUNTS_RECEIVABLE').reduce((n,l)=> n+(l.side==='CREDIT'?l.amountMinor:-l.amountMinor),0)).toBe(600);
@@ -136,7 +136,7 @@ suite('family Khata restricted PostgreSQL', () => {
       const {readDueKhataAccounts} = await import('./whatsapp/khata-reminders');
       const due = await readDueKhataAccounts(db,orgA,new Date('2026-10-21T12:00:00Z'),100,1);
       expect(due.find(a => a.familyAccountId===f.familyAccountId)?.oldestOverdueAt.toISOString()).toBe('2026-10-20T11:00:00.000Z');
-      const paid = await khata.settleFamilyKhata(db,f,{...f,amountMinor:50,occurredAt:new Date('2026-10-21T12:00:00Z')});
+      const paid = await khata.settleFamilyKhata(db,f,{...f,amountMinor:50,occurredAt:new Date('2026-10-21T12:00:00Z'),paymentMethod:'CASH'});
       expect(paid.allocations[0]!.settlesChargeId).toBe(event.id);
       expect(await khata.readKhataBalance(db,f,f.familyAccountId)).toBe(0);
       expect(await db.pharmacyKhataEvent.count({where:{id:event.id}})).toBe(1);
@@ -147,7 +147,7 @@ suite('family Khata restricted PostgreSQL', () => {
     await inScope(f,async db => {
       const sale = await db.pharmacySale.findFirstOrThrow({where:{id:f.saleId}});
       await db.pharmacyCustomer.update({where:{id:sale.customerId!}, data:{creditLimitMinor:9999}});
-      await khata.settleFamilyKhata(db,f,{...f,amountMinor:250,occurredAt:new Date()});
+      await khata.settleFamilyKhata(db,f,{...f,amountMinor:250,occurredAt:new Date(),paymentMethod:'CASH'});
       const {readCustomerSnapshot} = await import('./customer-loyalty');
       const snapshot = await readCustomerSnapshot(db,f,sale.customerId!);
       expect(snapshot.creditBalanceMinor).toBe(350);

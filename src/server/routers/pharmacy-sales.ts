@@ -589,6 +589,7 @@ export const pharmacySalesRouter = router({
         familyAccountId: input.familyAccountId,
         amountMinor: input.amountMinor,
         occurredAt: new Date(),
+        paymentMethod: input.paymentMethod,
         collectionKey: key,
       });
       if (drawerSessionId) await db.pharmacyDrawerMovement.create({ data: {
