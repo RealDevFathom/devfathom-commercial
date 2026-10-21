@@ -296,7 +296,9 @@ export async function appendControlledPurchaseReversals(
   });
   let serial = (await nextSerial(db, input.organizationId, input.branchId)) - 1;
   for (const original of purchases) {
-    if (!original.medicineId) continue;
+    if (!original.medicineId) {
+      throw new Error(`Purchase register entry ${original.id} has no medicine`);
+    }
     const reversalMovementId = input.movements.find(
       (movement) => movement.sourceMovementId === original.stockMovementId
     )?.reversalMovementId;

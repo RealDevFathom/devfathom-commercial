@@ -4,6 +4,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import {
   appendControlledCorrection,
   appendControlledPurchaseEntries,
+  appendControlledPurchaseReversals,
   appendControlledSaleEntries,
   derivedCorrectionDelta,
   emergencyNoRxDecision,
@@ -393,5 +394,38 @@ describe('appendControlledPurchaseEntries', () => {
         witnessedByUserId: 'pharmacist',
       }),
     });
+  });
+});
+
+describe('appendControlledPurchaseReversals', () => {
+  it('refuses to silently skip a purchase row that has no medicine', async () => {
+    const create = vi.fn();
+    const db = {
+      $queryRaw: vi.fn(),
+      pharmacyControlledRegisterEntry: {
+        findMany: vi.fn().mockResolvedValue([
+          {
+            id: 'purchase-without-medicine',
+            medicineId: null,
+            stockMovementId: 'purchase-movement',
+          },
+        ]),
+        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        create,
+      },
+    } as unknown as ScopedDb;
+
+    await expect(
+      appendControlledPurchaseReversals(db, {
+        organizationId: 'org',
+        branchId: 'branch',
+        movements: [
+          { sourceMovementId: 'purchase-movement', reversalMovementId: 'reversal-movement' },
+        ],
+        recordedByUserId: 'receiver',
+        reason: 'Goods receipt reversed.',
+      })
+    ).rejects.toThrow('Purchase register entry purchase-without-medicine has no medicine');
+    expect(create).not.toHaveBeenCalled();
   });
 });
