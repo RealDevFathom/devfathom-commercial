@@ -84,7 +84,7 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        action.startsWith('pharmacy:')
+        action === 'pharmacy:orders'
       );
     }
   });
@@ -281,30 +281,76 @@ it.each(['pharmacy:procurement', 'pharmacy.procurement', 'pharmacy.*'])(
   }
 );
 
-it.each(['pharmacy.dispense', 'pharmacy.*'])(
-  'normalizes legacy dispensing grant %s and preserves DENY precedence',
+const clinicalActions = [
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+] as const;
+it.each(clinicalActions)('requires explicit clinical grant for %s', async (action) => {
+  for (const capability of ['pharmacy.*', 'pharmacy:*', '*']) {
+    await expect(
+      can(employee, action, undefined, {
+        db: authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] }),
+      })
+    ).resolves.toBe(false);
+    for (const denySource of ['rolePermissions', 'overrides'] as const) {
+      await expect(
+        can(employee, action, undefined, {
+          db: authorizationDb({
+            rolePermissions: [{ capability: action, effect: 'ALLOW' }],
+            [denySource]: [
+              { capability: action, effect: 'ALLOW' },
+              { capability, effect: 'DENY' },
+            ],
+          }),
+        })
+      ).resolves.toBe(false);
+    }
+  }
+});
+it.each(['pharmacy.dispense', 'pharmacy:dispense'])(
+  'accepts exact dispense grant %s and denies across formats and sources',
   async (capability) => {
-    for (const denied of [false, true]) {
+    await expect(
+      can(employee, 'pharmacy:dispense', undefined, {
+        db: authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] }),
+      })
+    ).resolves.toBe(true);
+    for (const denial of ['pharmacy.dispense', 'pharmacy:dispense']) {
       await expect(
         can(employee, 'pharmacy:dispense', undefined, {
           db: authorizationDb({
-            rolePermissions: [
-              { capability, effect: 'ALLOW' },
-              ...(denied ? [{ capability: 'pharmacy.dispense', effect: 'DENY' as const }] : []),
-            ],
+            overrides: [{ capability, effect: 'ALLOW' }],
+            rolePermissions: [{ capability: denial, effect: 'DENY' }],
           }),
         })
-      ).resolves.toBe(!denied);
+      ).resolves.toBe(false);
+    }
+  }
+);
+it('gives the Pharmacist an explicit canonical dispense grant', async () => {
+  const capabilities = roleTemplatesForVertical('PHARMACY').find(
+    (role) => role.key === 'pharmacist'
+  )!.capabilities;
+  expect(capabilities).toContain('pharmacy:dispense');
+  expect(capabilities).not.toContain('pharmacy.dispense');
+  await expect(
+    can(employee, 'pharmacy:dispense', undefined, {
+      db: authorizationDb({
+        rolePermissions: capabilities.map((capability) => ({ capability, effect: 'ALLOW' })),
+      }),
+    })
+  ).resolves.toBe(true);
+});
+it.each(['pharmacy.safety', 'pharmacy.catalogue-review', 'pharmacy.procurement.extra'])(
+  'does not normalize unlisted legacy name %s',
+  async (capability) => {
+    for (const action of [...clinicalActions, 'pharmacy:procurement'] as const) {
       await expect(
-        can(employee, 'pharmacy:dispense', undefined, {
-          db: authorizationDb({
-            overrides: [
-              { capability, effect: 'ALLOW' },
-              ...(denied ? [{ capability: 'pharmacy.*', effect: 'DENY' as const }] : []),
-            ],
-          }),
+        can(employee, action, undefined, {
+          db: authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] }),
         })
-      ).resolves.toBe(!denied);
+      ).resolves.toBe(false);
     }
   }
 );

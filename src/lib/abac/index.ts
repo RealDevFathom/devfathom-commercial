@@ -25,10 +25,23 @@ export type CanOptions = {
   db?: AuthzDb;
 };
 
-function capabilityMatches(rule: string, action: string): boolean {
-  // Legacy pharmacy grants use dots; evaluate them against canonical actions.
-  rule = rule.replace(/^pharmacy\./, 'pharmacy:');
-  if (rule === '*' || rule === action) return true;
+const LEGACY_CAPABILITIES: Record<string, string> = {
+  'pharmacy.procurement': 'pharmacy:procurement',
+  'pharmacy.dispense': 'pharmacy:dispense',
+};
+const CLINICAL_ACTIONS = new Set([
+  'pharmacy:dispense',
+  'pharmacy:safety',
+  'pharmacy:catalogue-review',
+]);
+
+function capabilityMatches(rule: string, action: string, effect: 'ALLOW' | 'DENY'): boolean {
+  rule = LEGACY_CAPABILITIES[rule] ?? rule;
+  if (rule === action) return true;
+  // Clinical access is opt-in; broad denials still restrict explicit grants.
+  if (effect === 'ALLOW' && CLINICAL_ACTIONS.has(action)) return false;
+  if (rule === '*') return true;
+  if (rule === 'pharmacy.*') return action.startsWith('pharmacy:');
   if (!rule.endsWith(':*')) return false;
   return action.startsWith(rule.slice(0, -1));
 }
@@ -53,14 +66,14 @@ async function customDecision(
   });
   if (!user) return false;
   const overrides = user.permissionOverrides.filter((rule) =>
-    capabilityMatches(rule.capability, action)
+    capabilityMatches(rule.capability, action, rule.effect)
   );
   if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
-    capabilityMatches(rule.capability, action)
+    capabilityMatches(rule.capability, action, rule.effect)
   );
   if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
