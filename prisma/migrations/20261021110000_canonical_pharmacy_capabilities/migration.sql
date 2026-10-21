@@ -14,7 +14,7 @@ SELECT 'qa130_' || md5(p.id || a.canonical), p."organizationId",p."organizationR
 FROM organization_role_permissions p WHERE p.capability=a.legacy
   -- Owner roles get the Owner template instead (backfill below).
   AND NOT (a.legacy='pharmacy.*' AND EXISTS (
-    SELECT 1 FROM organization_roles r WHERE r.id=p."organizationRoleId" AND r.key='owner'))
+    SELECT 1 FROM organization_roles r WHERE r.id=p."organizationRoleId" AND r.key='owner' AND r."isSystem" = true))
 ON CONFLICT ("organizationRoleId",capability) DO UPDATE SET effect =
  CASE WHEN organization_role_permissions.effect='DENY' OR EXCLUDED.effect='DENY'
  THEN 'DENY'::"PermissionEffect" ELSE 'ALLOW'::"PermissionEffect" END;
@@ -63,7 +63,7 @@ FROM organization_roles r
 JOIN organization_role_permissions star
   ON star."organizationRoleId" = r.id AND star.capability IN ('pharmacy.*', 'pharmacy:*') AND star.effect = 'ALLOW'
 CROSS JOIN (VALUES ('pharmacy:*'), ('reports:operational'), ('reports:financial')) AS c(capability)
-WHERE r.key = 'owner'
+WHERE r.key = 'owner' AND r."isSystem" = true
 ON CONFLICT ("organizationRoleId",capability) DO NOTHING;
 DELETE FROM organization_role_permissions WHERE capability IN (SELECT legacy FROM pharmacy_capability_aliases);
 DELETE FROM user_permission_overrides WHERE capability IN (SELECT legacy FROM pharmacy_capability_aliases);
