@@ -77,6 +77,10 @@ zone with four NS records (the `NameServers` output of `devfathom-staging-dns`).
   notice; once it is set, port 80 redirects to HTTPS (TLS 1.2 minimum). Meanwhile a listener
   rule that no request can match keeps the target group attached, because the load balancer
   health-checks only a target group that some rule uses.
+- **Client addresses.** The web task sets `TRUSTED_PROXY_HOPS=1`: the load balancer appends the
+  client's address to `X-Forwarded-For`, and rate limits read that last entry. Production
+  refuses to start without one of `CLIENT_IP_HEADER`, `TRUSTED_PROXY_CIDRS` or
+  `TRUSTED_PROXY_HOPS`.
 - **Health checks.** The load balancer checks `/api/live`, which reads nothing, because ECS
   replaces the tasks that fail it: a check on the database would fail on every task at once
   during a failover or maintenance. `/api/ready` (half-applied migrations, schema drift on the

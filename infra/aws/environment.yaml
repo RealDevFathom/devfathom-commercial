@@ -670,6 +670,11 @@ Resources:
               Value: !Ref UploadsBucket
             - Name: AWS_REGION
               Value: !Ref AWS::Region
+            # The load balancer is the one proxy in front of the app: it appends
+            # the client's address to X-Forwarded-For, so rate limits read the
+            # last entry. Production refuses to start without this setting.
+            - Name: TRUSTED_PROXY_HOPS
+              Value: '1'
           Secrets:
             - Name: DATABASE_URL
               ValueFrom: !Sub '${DatabaseAppUrlSecret}:value::'
