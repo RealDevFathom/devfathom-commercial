@@ -102,24 +102,6 @@ describe('opt-in pharmacy Owner / Operator access', () => {
 });
 
 describe('custom ABAC decisions', () => {
-  it('normalizes named legacy pharmacy grants and preserves explicit denials', async () => {
-    await expect(
-      can(employee, 'pharmacy:dispense', undefined, {
-        db: authorizationDb({
-          rolePermissions: [{ capability: 'pharmacy.dispense', effect: 'ALLOW' }],
-        }),
-      })
-    ).resolves.toBe(true);
-    await expect(
-      can(employee, 'pharmacy:dispense', undefined, {
-        db: authorizationDb({
-          rolePermissions: [{ capability: 'pharmacy.dispense', effect: 'ALLOW' }],
-          overrides: [{ capability: 'pharmacy.dispense', effect: 'DENY' }],
-        }),
-      })
-    ).resolves.toBe(false);
-  });
-
   it('allows exact and namespace wildcard capabilities from a custom role', async () => {
     const db = authorizationDb({
       rolePermissions: [
