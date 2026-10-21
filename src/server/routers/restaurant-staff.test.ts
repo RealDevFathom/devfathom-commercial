@@ -184,8 +184,20 @@ describe('staff CRUD', () => {
   });
 
   it('creates a staff profile and audits it', async () => {
-    const result = await caller().create({ displayName: 'Dana', email: 'Dana@R.com' });
-    expect(result).toMatchObject({ id: 'staff_new', email: 'dana@r.com' });
+    const result = await caller().create({
+      displayName: 'Dana',
+      email: 'Dana@R.com',
+      userId: 'user_1',
+    });
+    expect(result).toMatchObject({ id: 'staff_new', email: 'dana@r.com', userId: 'user_1' });
+    expect(mocks.userFindFirst).toHaveBeenCalledWith({
+      where: {
+        id: 'user_1',
+        status: { in: ['ACTIVE', 'INVITED'] },
+        restaurantStaffProfiles: { none: {} },
+      },
+      select: { id: true },
+    });
     expect(mocks.annotateAudit).toHaveBeenCalledWith(
       expect.anything(),
       expect.objectContaining({ targetType: 'RestaurantStaffProfile', targetId: 'staff_new' })
