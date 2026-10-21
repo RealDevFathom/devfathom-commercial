@@ -14,6 +14,11 @@ import {
   moneyLabel,
   type CurrencyAmount,
 } from '@/lib/finance/currency';
+import {
+  canTransitionInvoiceStatus,
+  INVOICE_STATUSES,
+  type InvoiceStatus,
+} from '@/lib/finance/invoice-status';
 
 // Monthly-equivalent multiplier for a recurring expense's billing interval, so an
 // ongoing subscription's run-rate can be folded into burn/profit (FIN-05).
@@ -447,7 +452,7 @@ export const financeRouter = router({
     .input(
       z.object({
         id: z.string(),
-        status: z.enum(['DRAFT', 'SENT', 'PAID', 'OVERDUE', 'CANCELLED']),
+        status: z.enum(INVOICE_STATUSES),
       })
     )
     .mutation(async ({ ctx, input }) => {
@@ -470,14 +475,7 @@ export const financeRouter = router({
         });
       }
 
-      const ALLOWED: Record<string, string[]> = {
-        DRAFT: ['SENT', 'CANCELLED'],
-        SENT: ['PAID', 'OVERDUE', 'CANCELLED', 'DRAFT'],
-        OVERDUE: ['PAID', 'CANCELLED', 'SENT'],
-        PAID: ['CANCELLED'],
-        CANCELLED: ['DRAFT'],
-      };
-      if (!ALLOWED[prior]?.includes(next)) {
+      if (!canTransitionInvoiceStatus(prior as InvoiceStatus, next)) {
         throw new TRPCError({
           code: 'BAD_REQUEST',
           message: `Cannot change an invoice from ${prior} to ${next}.`,
