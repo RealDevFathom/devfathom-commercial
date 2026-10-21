@@ -3,6 +3,9 @@ name: QA gate
 on:
   push:
     branches: [restaurantv2]
+  pull_request:
+    branches:
+      - 'integration/**'
   workflow_dispatch:
     inputs:
       sha:
@@ -170,16 +173,21 @@ jobs:
             -c 'GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO gate_runtime;' \
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO gate_runtime;' \
             -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
-          role_attributes=$(psql "$RUNTIME_URL" -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text FROM pg_roles WHERE rolname = current_user")
-          if [ "$role_attributes" = 'false:false' ]; then
-            printf '%s\n' "$role_attributes" >gate/runtime-role-check.stdout.log
-            : > gate/runtime-role-check.stderr.log
-            record runtime-role-check 0
-          else
-            echo "Runtime database role is not restricted: ${role_attributes:-<empty>}" >gate/runtime-role-check.stderr.log
-            : > gate/runtime-role-check.stdout.log
-            record runtime-role-check 1
-          fi
+          : > gate/runtime-role-check.stdout.log
+          : > gate/runtime-role-check.stderr.log
+          role_ok=0
+          for role_url in "gate_runtime|$RUNTIME_URL" "receipt_runtime|$RECEIPT_RUNTIME_URL"; do
+            role_name="${role_url%%|*}"
+            role_dsn="${role_url#*|}"
+            role_attributes=$(psql "$role_dsn" -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> current_user AND (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member'))::text FROM pg_roles WHERE rolname = current_user")
+            if [ "$role_attributes" = 'false:false:false' ]; then
+              printf '%s %s\n' "$role_name" "$role_attributes" >>gate/runtime-role-check.stdout.log
+            else
+              echo "Runtime database role ${role_name} is not restricted: ${role_attributes:-<empty>}" >>gate/runtime-role-check.stderr.log
+              role_ok=1
+            fi
+          done
+          record runtime-role-check "$role_ok"
           DATABASE_URL="$OWNER_URL" MIGRATION_DATABASE_URL="$OWNER_URL" run seed bunx prisma db seed
           # These suites require isolated fixtures and different runtime privileges.
           for lane in cohort receipt; do
@@ -353,8 +361,8 @@ jobs:
               -c 'ALTER DEFAULT PRIVILEGES IN SCHEMA public GRANT USAGE, SELECT ON SEQUENCES TO gate_runtime;'
             DATABASE_URL="$owner_base/$db" MIGRATION_DATABASE_URL="$owner_base/$db" bunx prisma db seed
           done
-          role_attributes=$(PGPASSWORD=gate-runtime-ci-only psql -h 127.0.0.1 -p 55432 -U gate_runtime -d restaurant_e2e_gate -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text FROM pg_roles WHERE rolname = current_user")
-          if [ "$role_attributes" != 'false:false' ]; then
+          role_attributes=$(PGPASSWORD=gate-runtime-ci-only psql -h 127.0.0.1 -p 55432 -U gate_runtime -d restaurant_e2e_gate -Atc "SELECT rolsuper::text || ':' || rolbypassrls::text || ':' || EXISTS (SELECT 1 FROM pg_roles r WHERE r.rolname <> current_user AND (r.rolsuper OR r.rolbypassrls) AND pg_has_role(current_user, r.oid, 'member'))::text FROM pg_roles WHERE rolname = current_user")
+          if [ "$role_attributes" != 'false:false:false' ]; then
             echo "Runtime database role is not restricted: ${role_attributes:-<empty>}" >&2
             exit 1
           fi
