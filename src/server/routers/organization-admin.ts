@@ -150,6 +150,7 @@ export const organizationAdminRouter = router({
         displayName: true,
         status: true,
         deploymentMode: true,
+        vertical: true,
         timezone: true,
         locale: true,
         currency: true,
@@ -216,6 +217,10 @@ export const organizationAdminRouter = router({
             department: true,
             organizationRoleId: true,
             lastActiveAt: true,
+            permissionOverrides: {
+              where: { capability: 'pharmacy:procurement' },
+              select: { effect: true, expiresAt: true },
+            },
           },
         },
         usageCounters: { orderBy: { updatedAt: 'desc' }, take: 25 },
@@ -479,6 +484,72 @@ export const organizationAdminRouter = router({
         metadata: { before, after: input },
       });
       return saved;
+    }),
+
+  /**
+   * Per-person Goods in grant (product decision): the Pharmacist template stays
+   * without pharmacy:procurement; an owner/admin grants it to one staff member via
+   * a user permission override. Disabling removes only an ALLOW override, never a DENY.
+   */
+  setMemberProcurement: adminProcedure
+    .input(
+      z.object({
+        id: z.string(),
+        enabled: z.boolean(),
+        reason: z.string().trim().min(5).max(500).default('Goods in access granted by an admin'),
+      })
+    )
+    .mutation(async ({ ctx, input }) => {
+      const id = organizationId(ctx);
+      const target = await ctx.db.user.findFirst({
+        where: { id: input.id, organizationId: id },
+        select: { id: true, email: true },
+      });
+      if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+      const org = await ctx.db.organization.findUnique({
+        where: { id },
+        select: { vertical: true },
+      });
+      if (org?.vertical !== 'PHARMACY') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Goods in access applies to pharmacies only.',
+        });
+      }
+      const capability = 'pharmacy:procurement';
+      if (input.enabled) {
+        await ctx.db.userPermissionOverride.upsert({
+          where: { userId_capability: { userId: target.id, capability } },
+          update: {
+            effect: 'ALLOW',
+            reason: input.reason,
+            expiresAt: null,
+            createdById: ctx.session.user.id,
+          },
+          create: {
+            organizationId: id,
+            userId: target.id,
+            capability,
+            effect: 'ALLOW',
+            reason: input.reason,
+            createdById: ctx.session.user.id,
+          },
+        });
+      } else {
+        await ctx.db.userPermissionOverride.deleteMany({
+          where: { organizationId: id, userId: target.id, capability, effect: 'ALLOW' },
+        });
+      }
+      annotateAudit(ctx, {
+        targetType: 'User',
+        targetId: target.id,
+        targetLabel: target.email,
+        description: input.enabled
+          ? 'Granted Goods in (pharmacy:procurement)'
+          : 'Removed Goods in grant',
+        metadata: { capability, enabled: input.enabled },
+      });
+      return { enabled: input.enabled };
     }),
 
   resetMemberPassword: adminProcedure

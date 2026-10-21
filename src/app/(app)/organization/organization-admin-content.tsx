@@ -238,6 +238,11 @@ export function OrganizationAdminContent() {
     onSuccess: () => success('Member access updated.'),
     onError: failure,
   });
+  const procurement = trpc.organizationAdmin.setMemberProcurement.useMutation({
+    onSuccess: (result) =>
+      success(result.enabled ? 'Goods in access granted.' : 'Goods in access removed.'),
+    onError: failure,
+  });
   const password = trpc.organizationAdmin.resetMemberPassword.useMutation({
     onSuccess: () => toast.success('Password reset and existing sessions revoked.'),
     onError: failure,
@@ -555,6 +560,22 @@ export function OrganizationAdminContent() {
                   </label>
                   <SubmitButton pending={member.isPending}>Update access</SubmitButton>
                 </form>
+                {organization.vertical === 'PHARMACY' ? (
+                  <label className="flex items-center gap-2 text-sm">
+                    <input
+                      type="checkbox"
+                      defaultChecked={user.permissionOverrides.some((o) => o.effect === 'ALLOW')}
+                      disabled={
+                        procurement.isPending ||
+                        user.permissionOverrides.some((o) => o.effect === 'DENY')
+                      }
+                      onChange={(event) =>
+                        procurement.mutate({ id: user.id, enabled: event.currentTarget.checked })
+                      }
+                    />
+                    <span>Allow Goods in (receive stock) for this person</span>
+                  </label>
+                ) : null}
                 <form
                   className="space-y-3"
                   onSubmit={(event) => {
