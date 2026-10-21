@@ -213,7 +213,7 @@ export function AppShell({ children, brand }: { children: React.ReactNode; brand
             role="dialog"
             aria-modal="true"
             aria-label="Mobile navigation"
-            className="fixed inset-y-0 left-0 z-50 lg:hidden"
+            className="fixed inset-y-0 start-0 z-50 lg:hidden"
           >
             <Sidebar
               brand={brand}

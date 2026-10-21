@@ -117,7 +117,7 @@ export function MedicationCard({ card }: { card: MedicationCardData }) {
           lang="ur"
           dir="rtl"
           aria-labelledby={`card-ur-${card.id}`}
-          className="border-t border-border-subtle pt-5 text-right md:border-t-0 md:border-l md:pt-0 md:pl-6"
+          className="border-t border-border-subtle pt-5 text-right md:border-t-0 md:border-s md:pt-0 md:ps-6"
         >
           <h4 id={`card-ur-${card.id}`} className="font-display font-semibold text-text-strong">
             اردو
