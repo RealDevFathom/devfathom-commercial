@@ -801,9 +801,11 @@ export function buildPeopleTools(h: AssistantHelpers): ToolSet {
             ? await tx.user.update({
                 where: { id: existing.id },
                 data: { ...profile, password: null, status: 'INVITED' },
+                select: { id: true, name: true },
               })
             : await tx.user.create({
                 data: { ...profile, email: lowerEmail, password: null, status: 'INVITED' },
+                select: { id: true, name: true },
               });
           await tx.invitation.upsert({
             where: { userId: u.id },

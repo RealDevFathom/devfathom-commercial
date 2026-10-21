@@ -6,6 +6,7 @@ describe('safeUserSelect', () => {
   it('never selects authentication or recovery secrets for user responses', () => {
     expect(safeUserSelect).not.toHaveProperty('password');
     expect(safeUserSelect).not.toHaveProperty('passwordChangedAt');
+    expect(safeUserSelect).not.toHaveProperty('mustChangePassword');
     expect(safeUserSelect).not.toHaveProperty('tokenVersion');
     expect(safeUserSelect).not.toHaveProperty('twoFactorSecret');
     expect(safeUserSelect).not.toHaveProperty('recoveryCodes');

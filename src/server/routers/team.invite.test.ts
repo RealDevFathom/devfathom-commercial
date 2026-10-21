@@ -74,6 +74,11 @@ const invite = {
   department: 'ENGINEERING' as const,
   title: 'Engineer',
 };
+const PASSWORD_CANARY = 'PASSWORD_HASH_CANARY_413';
+
+function expectCanaryAbsent(value: unknown) {
+  expect(JSON.stringify(value)).not.toContain(PASSWORD_CANARY);
+}
 
 describe('team.inviteMember duplicate guard', () => {
   beforeEach(() => {
@@ -120,6 +125,23 @@ describe('team.inviteMember duplicate guard', () => {
         select: expect.not.objectContaining({ password: expect.anything() }),
       })
     );
+    expectCanaryAbsent(response);
+  });
+
+  it('never serializes the previous hash when re-inviting a pending member', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.update.mockImplementation(async ({ select }) => {
+      const stored = { id: 'user_pending', name: 'Alex Carter', password: PASSWORD_CANARY };
+      return Object.fromEntries(Object.keys(select).map((key) => [key, stored[key as keyof typeof stored]]));
+    });
+    mocks.invitationUpsert.mockResolvedValue({});
+
+    const response = await caller().inviteMember({ ...invite, email: 'alex@company.com' });
+
+    expectCanaryAbsent(response);
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.not.objectContaining({ password: expect.anything() }),
+    }));
   });
 
   it('retains the administrator capability check without HR', async () => {

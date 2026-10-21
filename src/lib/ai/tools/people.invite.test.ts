@@ -60,6 +60,7 @@ const base = {
   title: 'Engineer',
   role: 'EMPLOYEE',
 };
+const PASSWORD_CANARY = 'PASSWORD_HASH_CANARY_413';
 
 describe('assistant inviteMember duplicate guard', () => {
   beforeEach(() => {
@@ -95,6 +96,21 @@ describe('assistant inviteMember duplicate guard', () => {
         data: expect.objectContaining({ email: 'new.person@company.com' }),
       })
     );
+  });
+
+  it('does not expose the previous password hash when re-inviting a pending member', async () => {
+    mocks.findFirst.mockResolvedValue({ id: 'user_pending', status: 'INVITED' });
+    mocks.update.mockImplementation(async ({ select }) => {
+      const stored = { id: 'user_pending', name: 'Alex Carter', password: PASSWORD_CANARY };
+      return Object.fromEntries(Object.keys(select).map((key) => [key, stored[key as keyof typeof stored]]));
+    });
+
+    const result = await inviteTool().execute({ ...base, email: 'alex@company.com' });
+
+    expect(JSON.stringify(result)).not.toContain(PASSWORD_CANARY);
+    expect(mocks.update).toHaveBeenCalledWith(expect.objectContaining({
+      select: expect.not.objectContaining({ password: expect.anything() }),
+    }));
   });
 
   // WHA-278 — departments are tenant-configured rows behind a composite foreign
