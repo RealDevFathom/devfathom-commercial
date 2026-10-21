@@ -235,6 +235,8 @@ model PharmacyBranch {
   visibilityUnfulfilledDemandEvent         UnfulfilledDemandEvent[]          @relation("UnfulfilledDemandEventVisibilityAnchor")
   visibilityPharmacyRestockInterest        PharmacyRestockInterest[]         @relation("PharmacyRestockInterestVisibilityAnchor")
 
+  branchAssignments                        PharmacyBranchAssignment[]
+
   @@unique([organizationId, id], map: "pharmacy_branches_org_id_key")
   @@unique([organizationId, code], map: "pharmacy_branches_org_code_key")
   @@index([organizationId, active], map: "pharmacy_branches_org_active_idx")
@@ -249,9 +251,13 @@ model PharmacyBranchAssignment {
   userId         String
   active         Boolean  @default(true)
   createdAt      DateTime @default(now())
+  updatedAt      DateTime @updatedAt
 
-  @@unique([organizationId, userId, branchId], map: "pharmacy_branch_assignments_org_user_branch_key")
-  @@index([organizationId, userId, active], map: "pharmacy_branch_assignments_user_idx")
+  branch PharmacyBranch @relation(fields: [organizationId, branchId], references: [organizationId, id], onDelete: Cascade)
+  user   User           @relation(fields: [organizationId, userId], references: [organizationId, id], onDelete: Cascade)
+
+  @@unique([organizationId, branchId, userId], map: "pharmacy_branch_assignments_org_branch_user_key")
+  @@index([organizationId, userId, active])
   @@map("pharmacy_branch_assignments")
 }
 
@@ -2863,6 +2869,8 @@ model User {
   pharmacyDeliveryEvidence PharmacyOrderDeliveryEvidence[] @relation("PharmacyDeliveryEvidenceActor")
 
   hotelPropertyAssignments HotelPropertyAssignment[]
+
+  pharmacyBranchAssignments PharmacyBranchAssignment[]
 
   @@unique([organizationId, id])
   @@unique([organizationId, email])
