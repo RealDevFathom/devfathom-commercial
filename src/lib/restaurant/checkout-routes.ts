@@ -250,7 +250,9 @@ export async function operatorHasCapability(
   const user = profile.user;
 
   const decide = (rules: readonly CapabilityRule[]): boolean | null => {
-    const matching = rules.filter((rule) => capabilityMatches(rule.capability, capability));
+    const matching = rules.filter((rule) =>
+      capabilityMatches(rule.capability, capability, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
+    );
     if (matching.some((rule) => rule.effect === 'DENY')) return false;
     if (matching.some((rule) => rule.effect === 'ALLOW')) return true;
     return null;
@@ -262,14 +264,14 @@ export async function operatorHasCapability(
   if (
     overrides === false ||
     role === false ||
-    [...staff.denied].some((rule) => capabilityMatches(rule, capability))
+    [...staff.denied].some((rule) => capabilityMatches(rule, capability, 'DENY'))
   )
     return false;
 
   return (
     overrides === true ||
     role === true ||
-    [...staff.effective].some((rule) => capabilityMatches(rule, capability))
+    [...staff.effective].some((rule) => capabilityMatches(rule, capability, 'ALLOW'))
   );
 }
 

@@ -35,12 +35,18 @@ Resources:
               },
               {
                 "rulePriority": 2,
-                "description": "Protect production and release images: an image this rule matches can never be expired by a lower-priority rule",
-                "selection": { "tagStatus": "tagged", "tagPatternList": ["prod-*", "release-*"], "countType": "imageCountMoreThan", "countNumber": 1000 },
+                "description": "Protect production images: an image this rule matches can never be expired by a lower-priority rule",
+                "selection": { "tagStatus": "tagged", "tagPatternList": ["prod-*"], "countType": "imageCountMoreThan", "countNumber": 1000 },
                 "action": { "type": "expire" }
               },
               {
                 "rulePriority": 3,
+                "description": "Protect release images the same way (a separate rule: patterns in one list must all match)",
+                "selection": { "tagStatus": "tagged", "tagPatternList": ["release-*"], "countType": "imageCountMoreThan", "countNumber": 1000 },
+                "action": { "type": "expire" }
+              },
+              {
+                "rulePriority": 4,
                 "description": "Keep the 10 most recent other (sha-tagged staging) images",
                 "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
                 "action": { "type": "expire" }

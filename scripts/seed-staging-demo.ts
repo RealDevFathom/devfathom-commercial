@@ -20,6 +20,7 @@
 import { spawnSync } from 'node:child_process';
 import { createHmac, randomBytes } from 'node:crypto';
 import { chmodSync, writeFileSync } from 'node:fs';
+import { assertStagingDemoTarget } from './pharmacy-e2e-environment';
 
 const args = new Set(process.argv.slice(2));
 const env = process.env;
@@ -42,7 +43,8 @@ const logins = {
     url: `https://admin.${baseDomain}/platform`,
   },
   agency: {
-    email: 'alex@company.com (also jordan@, sam@, taylor@, casey@, riley@, morgan@, jamie@company.com)',
+    email:
+      'alex@company.com (also jordan@, sam@, taylor@, casey@, riley@, morgan@, jamie@company.com)',
     password: secret('agency', env.SEED_PASSWORD),
     url: `https://devfathom.${baseDomain}/login`,
   },
@@ -67,7 +69,10 @@ function writeLogins(): void {
     `Generated ${new Date().toISOString()}. Do not paste into chat.`,
     '',
     ...Object.entries(logins).map(
-      ([name, v]) => `## ${name}\n${Object.entries(v).map(([k, x]) => `- ${k}: ${x}`).join('\n')}\n`
+      ([name, v]) =>
+        `## ${name}\n${Object.entries(v)
+          .map(([k, x]) => `- ${k}: ${x}`)
+          .join('\n')}\n`
     ),
   ].join('\n');
   writeFileSync(path, body, { mode: 0o600 });
@@ -91,6 +96,9 @@ async function main(): Promise<void> {
   const adminUrl = env.MIGRATION_DATABASE_URL?.trim() || env.DATABASE_URL;
   const appUrl = env.APP_DATABASE_URL?.trim() || env.DATABASE_URL;
   if (!adminUrl || !appUrl) throw new Error('Set DATABASE_URL (and APP_DATABASE_URL on AWS).');
+  // Fail closed before touching anything unless both URLs are the staging database.
+  assertStagingDemoTarget(adminUrl, env);
+  assertStagingDemoTarget(appUrl, env);
 
   if (!args.has('--skip-base')) {
     // SuperAdmin + agency (org_devfathom) + the full platform catalog, which

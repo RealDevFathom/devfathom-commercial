@@ -699,7 +699,8 @@ async function authorizeDraftIntent(
   // Preserve the established override-before-role, deny-before-allow precedence.
   const capability =
     input.kind === 'DRAFT_TRANSFER' ? 'pharmacy:inventory' : 'pharmacy:procurement';
-  const matches = (rule: { capability: string }) => capabilityMatches(rule.capability, capability);
+  const matches = (rule: { capability: string; effect: string }) =>
+    capabilityMatches(rule.capability, capability, rule.effect === 'DENY' ? 'DENY' : 'ALLOW');
   const overrides = user.permissionOverrides.filter(matches);
   const rules = overrides.length
     ? overrides
