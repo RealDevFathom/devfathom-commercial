@@ -144,25 +144,16 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 }
 
 async function khataScope(ctx: TRPCContext, branch: string) {
-  const scope = await scopeFor(ctx, branch);
+  const organizationId = ctx.entitlements?.organizationId;
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
-    ctx.organization.id !== scope.organizationId ||
-    ctx.session!.user.organizationId !== scope.organizationId ||
-    !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
-      db: ctx.db,
-      source: 'TRPC',
-    }))
+    !organizationId ||
+    ctx.organization.id !== organizationId ||
+    ctx.session!.user.organizationId !== organizationId ||
+    !hasModule(ctx.entitlements, 'pharmacy-counter')
   )
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Pharmacy counter permission required.' });
-  const available = await ctx.db.pharmacyBranch.findFirst({
-    where: { organizationId: scope.organizationId, id: branch, active: true },
-    select: { id: true },
-  });
-  if (!available)
-    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
-  return scope;
+  return requireCounterReceiptAccess(ctx, branch, COUNTER_SALE_CAPABILITIES);
 }
 
 async function bindKhataBranch(db: ScopedDb, scope: LedgerScope) {
@@ -281,6 +272,7 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy:counter',
   'pharmacy.counter',
 ] as const;
+const COUNTER_SALE_CAPABILITIES = ['pharmacy:counter', 'pharmacy.counter'] as const;
 
 function capabilityCovers(rule: string, action: string): boolean {
   if (rule === '*' || rule === action) return true;
@@ -317,7 +309,11 @@ async function branchScopeOrForbidden(ctx: TRPCContext, branch: string): Promise
   }
 }
 
-async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+async function requireCounterReceiptAccess(
+  ctx: TRPCContext,
+  branch: string,
+  capabilities: readonly string[] = RECEIPT_READ_CAPABILITIES
+): Promise<LedgerScope> {
   const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
@@ -349,7 +345,7 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
 
   const overrides = member.permissionOverrides;
   const roleRules = member.organizationRole?.permissions ?? [];
-  const capable = RECEIPT_READ_CAPABILITIES.some((action) => {
+  const capable = capabilities.some((action) => {
     const override = capabilityDecision(overrides, action);
     if (override === 'DENY') return false;
     if (override === 'ALLOW') return true;

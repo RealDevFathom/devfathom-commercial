@@ -84,7 +84,7 @@ beforeEach(() => {
 });
 
 describe('pharmacySales.addLine controlled actor', () => {
-  it('denies a cashier before the witness PIN and writes no register row', async () => {
+  it('still requires pharmacy:dispense for controlled dispensing by a cashier', async () => {
     const { caller, credential, register } = callerFor([
       { capability: 'pharmacy.counter', effect: 'ALLOW' },
       { capability: 'pharmacy:orders', effect: 'ALLOW' },

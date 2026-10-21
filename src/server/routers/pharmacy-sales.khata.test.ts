@@ -41,6 +41,7 @@ const input = {
   familyAccountId: 'family-a',
 };
 function fixture() {
+  const permissions = [{ capability: 'pharmacy:counter', effect: 'ALLOW' }];
   const db = {
     $queryRaw: vi.fn().mockResolvedValue([]),
     $transaction: vi.fn(),
@@ -49,6 +50,17 @@ function fixture() {
       findMany: vi.fn(async ({ where }: { where: { id: { in: string[] } } }) =>
         where.id.in.map((id) => ({ id }))
       ),
+    },
+    user: {
+      findUnique: vi.fn(async () => ({
+        status: 'ACTIVE',
+        organizationId: 'org-a',
+        organizationRole: { permissions },
+        permissionOverrides: [],
+      })),
+    },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch-a' }]),
     },
     pharmacyTender: { findFirst: vi.fn().mockResolvedValue({ type: 'CREDIT' }) },
     pharmacySale: { findFirst: vi.fn().mockResolvedValue({ customerId: 'customer-a' }) },
@@ -90,6 +102,7 @@ function fixture() {
   };
   return {
     db,
+    permissions,
     user,
     context,
     caller: () => app.createCaller(context as unknown as TRPCContext).pharmacySales,
@@ -111,8 +124,9 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
-  it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
+  it('lets a cashier charge within the limit using counter permission', async () => {
     const f = fixture();
+    f.user.role = 'EMPLOYEE';
     await f.caller().tender(input);
     expect(applyPharmacyTender).toHaveBeenCalledWith(
       f.db,
@@ -129,6 +143,36 @@ describe('Khata router trust and recovery boundary', () => {
         amountMinor: 100,
       }),
     });
+    expect(f.db.$queryRaw).toHaveBeenCalledTimes(3);
+    expect(can).not.toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:dispense',
+      expect.anything(),
+      expect.anything()
+    );
+  });
+  it('locks the account and refuses a charge that would exceed its credit limit', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.db.pharmacyKhataEvent.groupBy.mockResolvedValue([
+      { kind: 'CHARGE', _sum: { amountMinor: 1 } },
+    ] as never);
+    await expect(f.caller().tender(input)).rejects.toMatchObject({
+      message: 'CREDIT_LIMIT_EXCEEDED',
+    });
+    expect(f.db.$queryRaw).toHaveBeenCalledTimes(3);
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+    expect(f.db.pharmacyKhataEvent.create).not.toHaveBeenCalled();
+  });
+  it('refuses Khata account reads and charges without counter permission', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.permissions.splice(0, 1, { capability: 'pharmacy:dispense', effect: 'ALLOW' });
+    await expect(
+      f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
@@ -191,8 +235,10 @@ describe('Khata router trust and recovery boundary', () => {
     const f = fixture();
     f.db.pharmacyBranch.findFirst.mockResolvedValue(null as never);
     await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    vi.mocked(can).mockResolvedValue(false);
+    f.db.pharmacyBranch.findFirst.mockResolvedValue({ id: 'branch-a' });
+    f.permissions.splice(0);
     await expect(f.caller().tender(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    f.permissions.push({ capability: 'pharmacy:counter', effect: 'ALLOW' });
     f.context.organization.vertical = 'RESTAURANT';
     await expect(
       f.caller().khataAccounts({ branchId: 'branch-a', saleId: 'sale-a' })
