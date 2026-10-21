@@ -162,7 +162,7 @@ migration task definition with a command override.
 
 Staging, on demand: roughly US$90–110 a month. The main items:
 
-- the database (db.t4g.small, 20 GB gp3);
+- the database (db.t4g.micro, single-AZ outside production, 20 GB gp3, 1-day backups);
 - one Fargate task (1 vCPU, 2 GB);
 - the load balancer;
 - public IPv4 addresses.

@@ -55,17 +55,22 @@ Parameters:
     Default: 1
     MinValue: 0
     MaxValue: 4
+  WebCapacityProvider:
+    Type: String
+    Default: FARGATE_SPOT
+    AllowedValues: [FARGATE_SPOT, FARGATE]
+    Description: Capacity provider for the web service. FARGATE_SPOT is the low-cost default; set FARGATE to fall back to on-demand.
   WebCpu:
     Type: String
-    Default: '1024'
+    Default: '512'
     AllowedValues: ['512', '1024', '2048']
   WebMemory:
     Type: String
-    Default: '2048'
+    Default: '1024'
     AllowedValues: ['1024', '2048', '3072', '4096']
   DbInstanceClass:
     Type: String
-    Default: db.t4g.small
+    Default: db.t4g.micro
   DbEngineVersion:
     Type: String
     Default: '16.12'
@@ -466,7 +471,7 @@ Resources:
       EngineVersion: !Ref DbEngineVersion
       DBInstanceClass: !Ref DbInstanceClass
       AllocatedStorage: !Ref DbAllocatedStorage
-      MaxAllocatedStorage: 200
+      MaxAllocatedStorage: 50
       StorageType: gp3
       StorageEncrypted: true
       DBName: devfathom
@@ -478,7 +483,7 @@ Resources:
         - !Ref DatabaseSecurityGroup
       PubliclyAccessible: false
       MultiAZ: !If [IsProduction, true, false]
-      BackupRetentionPeriod: !If [IsProduction, 14, 7]
+      BackupRetentionPeriod: !If [IsProduction, 14, 1]
       PreferredBackupWindow: '21:00-22:00'
       PreferredMaintenanceWindow: 'sun:22:30-sun:23:30'
       AutoMinorVersionUpgrade: true
@@ -544,18 +549,22 @@ Resources:
     Type: AWS::ECS::Cluster
     Properties:
       ClusterName: !Sub devfathom-${EnvironmentName}
+      CapacityProviders: [FARGATE_SPOT, FARGATE]
+      DefaultCapacityProviderStrategy:
+        - CapacityProvider: FARGATE_SPOT
+          Weight: 1
 
   WebLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /devfathom/${EnvironmentName}/web
-      RetentionInDays: 30
+      RetentionInDays: 7
 
   MigrateLogGroup:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: !Sub /devfathom/${EnvironmentName}/migrate
-      RetentionInDays: 90
+      RetentionInDays: 7
 
   TaskExecutionRole:
     Type: AWS::IAM::Role
@@ -885,7 +894,9 @@ Resources:
       ServiceName: web
       Cluster: !Ref Cluster
       TaskDefinition: !Ref WebTaskDefinition
-      LaunchType: FARGATE
+      CapacityProviderStrategy:
+        - CapacityProvider: !Ref WebCapacityProvider
+          Weight: 1
       DesiredCount: !If [HasImage, !Ref DesiredCount, 0]
       HealthCheckGracePeriodSeconds: 120
       DeploymentConfiguration:
@@ -1014,7 +1025,7 @@ Resources:
     Condition: JobsEnabled
     Properties:
       LogGroupName: !Sub /aws/lambda/devfathom-${EnvironmentName}-platform-jobs
-      RetentionInDays: 30
+      RetentionInDays: 7
 
   JobsScheduleRole:
     Type: AWS::IAM::Role

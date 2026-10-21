@@ -33,8 +33,8 @@ Resources:
               },
               {
                 "rulePriority": 2,
-                "description": "Keep the 100 most recent images, staging and production together, so a running or rollback image stays",
-                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 100 },
+                "description": "Keep the 10 most recent images, staging and production together, so a running or rollback image stays",
+                "selection": { "tagStatus": "any", "countType": "imageCountMoreThan", "countNumber": 10 },
                 "action": { "type": "expire" }
               }
             ]
@@ -86,7 +86,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /devfathom/codebuild/image
-      RetentionInDays: 30
+      RetentionInDays: 7
 
   BuildRole:
     Type: AWS::IAM::Role

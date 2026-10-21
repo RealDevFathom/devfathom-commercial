@@ -59,7 +59,7 @@ Resources:
     Type: AWS::Logs::LogGroup
     Properties:
       LogGroupName: /devfathom/codebuild/image
-      RetentionInDays: 30
+      RetentionInDays: 7
 
   BuildRole:
     Type: AWS::IAM::Role
