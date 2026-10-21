@@ -18,7 +18,9 @@ it.skipIf(!process.env.GROWTH_METRICS_TEST_DATABASE_URL)(
         getTypeParser: (oid) =>
           oid === types.builtins.TIMESTAMP
             ? (value: string) => new Date(`${value}Z`)
-            : types.getTypeParser(oid),
+            : oid === types.builtins.INT8
+              ? BigInt
+              : types.getTypeParser(oid),
       },
     });
     await client.connect();
@@ -52,17 +54,17 @@ it.skipIf(!process.env.GROWTH_METRICS_TEST_DATABASE_URL)(
       expect(byId.never).toMatchObject({
         orders90d: 0,
         totalOrders: 0,
-        spend90dMinor: 0,
+        spend90dMinor: BigInt(0),
         lastPurchaseAt: null,
         medianGapDays: null,
       });
       expect(byId.low).toMatchObject({
         orders90d: 3,
         totalOrders: 3,
-        spend90dMinor: 6300,
+        spend90dMinor: BigInt(6300),
         medianGapDays: 30,
       });
-      expect(byId.lost).toMatchObject({ orders90d: 0, totalOrders: 3, spend90dMinor: 0 });
+      expect(byId.lost).toMatchObject({ orders90d: 0, totalOrders: 3, spend90dMinor: BigInt(0) });
       for (const band of ['low', 'medium', 'high', 'lost'])
         expect(calculateChurn(byId[band], now).churnBand).toBe(band);
       expect(
@@ -73,6 +75,13 @@ it.skipIf(!process.env.GROWTH_METRICS_TEST_DATABASE_URL)(
         )
       ).toEqual(new Date('2026-11-19T00:00:00Z'));
       expect((await client.query(sql.text, sql.values)).rows).toEqual(rows);
+      await client.query(
+        `UPDATE pharmacy_sale_lines SET "unitPriceMinor" = 1000000000 WHERE "saleId" = 'low-0'`
+      );
+      const largeSpend = (await client.query(sql.text, sql.values)).rows.find(
+        (row) => row.customerId === 'low'
+      );
+      expect(largeSpend.spend90dMinor).toBe(BigInt(3000004100));
     } finally {
       await client.query('ROLLBACK');
       await client.end();

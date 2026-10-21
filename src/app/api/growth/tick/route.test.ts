@@ -24,6 +24,8 @@ describe.each([
     vi.clearAllMocks();
     vi.stubEnv('CRON_SECRET', secret);
     vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'error').mockImplementation(() => {});
+    mocks.runCustomerMetrics.mockResolvedValue(true);
     mocks.withPlatformDb.mockImplementation((run) => run({ organization: { findMany } }));
     findMany.mockResolvedValue([{ id: 'org_enabled' }, { id: 'org_disabled' }]);
     mocks.isGrowthEnabled.mockImplementation(async (id) => id === 'org_enabled');
@@ -81,6 +83,32 @@ describe.each([
       '[growth] tick organizationId=org_enabled'
     );
   });
+
+  it.each(['isGrowthEnabled', 'runCustomerMetrics'] as const)(
+    'continues to the next organization when %s fails',
+    async (operation) => {
+      findMany.mockResolvedValue([{ id: 'org_failing' }, { id: 'org_healthy' }]);
+      mocks.isGrowthEnabled.mockResolvedValue(true);
+      const error = new Error('tenant processing failed');
+      mocks[operation].mockRejectedValueOnce(error);
+      const response = await handler(
+        new Request('http://localhost/api/growth/tick', {
+          method,
+          headers: { authorization: `Bearer ${secret}` },
+        })
+      );
+      expect(response.status).toBe(200);
+      expect(await response.json()).toEqual({ ok: true });
+      expect(mocks.runCustomerMetrics).toHaveBeenCalledWith('org_healthy');
+      expect(console.error).toHaveBeenCalledExactlyOnceWith(
+        '[growth] tick failed organizationId=org_failing',
+        error
+      );
+      expect(console.info).toHaveBeenCalledExactlyOnceWith(
+        '[growth] tick organizationId=org_healthy'
+      );
+    }
+  );
 
   it('logs nothing when no organizations are enabled', async () => {
     mocks.isGrowthEnabled.mockResolvedValue(false);
