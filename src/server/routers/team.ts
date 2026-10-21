@@ -20,6 +20,7 @@ import { emailSchema } from '@/lib/email-address';
 import { assertInOrganization, workspaceId } from '../org-refs';
 import { passwordSchema } from '@/lib/password-policy';
 import { generateInviteToken } from '@/lib/invite-token';
+import { lockOrganizationSeat } from '@/lib/seat-lock';
 
 // IMP-AUTH-04: per-category × per-channel notification opt-outs. Sparse —
 // anything unset means "opted in" (notify() defaults to ON). Keys mirror
@@ -161,9 +162,15 @@ export const teamRouter = router({
         skills: input.skills,
       };
 
+      const orgId = workspaceId(ctx);
       const user = await ctx.db.$transaction(async (tx) => {
         // Upsert the user (re-invite refreshes the seeded details), then replace
-        // any prior invitation with a fresh single-use token.
+        // any prior invitation with a fresh single-use token. The pre-check above
+        // reads a request-time entitlement snapshot; for a *new* seat we must also
+        // take the organization seat lock inside this transaction so concurrent
+        // invites (or an invite racing createMember/reactivation) can't each pass
+        // a stale check and collectively exceed the license.
+        if (!existing) await lockOrganizationSeat(tx, orgId, ctx.entitlements.seatLimit);
         const u = existing
           ? await tx.user.update({
               where: { id: existing.id },
