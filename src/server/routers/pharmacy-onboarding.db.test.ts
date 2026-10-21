@@ -263,6 +263,65 @@ describeIfDatabase('pharmacy onboarding router against PostgreSQL', () => {
     });
   });
 
+  it('fails closed when the branch has no province on record (#162)', async () => {
+    // A branch that predates the non-empty province CHECK — added NOT VALID, so
+    // it never validated the rows already on file — carries an empty province.
+    // The client picks a published province (PK-PB), which clears the
+    // jurisdiction lookup, so the only thing standing between it and a stored
+    // profile is the branch-province check. That check must refuse, never wave
+    // an unverifiable branch through on the client's say-so.
+    await owner.query(
+      'ALTER TABLE pharmacy_branches DROP CONSTRAINT IF EXISTS pharmacy_branches_province_nonempty'
+    );
+    await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = '' WHERE id = $1`, [
+      secondBranchId,
+    ]);
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        const before = await db.branchRegulatoryProfile.count({ where: { organizationId } });
+        await expect(
+          caller(db).saveRegulatoryProfile({
+            ...profile,
+            branchId: secondBranchId,
+            provinceCode: 'PK-PB',
+          })
+        ).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('no province on record'),
+        });
+        expect(await db.branchRegulatoryProfile.count({ where: { organizationId } })).toBe(before);
+      });
+    } finally {
+      await owner.query(`UPDATE pharmacy_branches SET "provinceCode" = 'PK-PB' WHERE id = $1`, [
+        secondBranchId,
+      ]);
+      await owner.query(
+        `ALTER TABLE pharmacy_branches ADD CONSTRAINT pharmacy_branches_province_nonempty CHECK (btrim("provinceCode") <> '') NOT VALID`
+      );
+    }
+  });
+
+  it('rejects an invalid workspace time zone with a validation error, not a 500 (#162)', async () => {
+    // A bad IANA zone stored on the organization once reached the licence-expiry
+    // check and threw a RangeError deep inside the schema — an uncaught 500. It
+    // must surface as a BAD_REQUEST instead.
+    await owner.query(`UPDATE organizations SET "timezone" = 'Not/AZone' WHERE id = $1`, [
+      organizationId,
+    ]);
+    try {
+      await withTenantDb(organizationId, async (db) => {
+        await expect(caller(db).saveRegulatoryProfile(profile)).rejects.toMatchObject({
+          code: 'BAD_REQUEST',
+          message: expect.stringContaining('time zone'),
+        });
+      });
+    } finally {
+      await owner.query(`UPDATE organizations SET "timezone" = 'UTC' WHERE id = $1`, [
+        organizationId,
+      ]);
+    }
+  });
+
   it.each([
     ['expired', '2026-01-01', '2026-06-01'],
     ['expiring today', '2026-01-01', day(0)],

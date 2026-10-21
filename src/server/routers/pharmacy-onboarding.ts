@@ -38,7 +38,7 @@ import {
   pharmacyOnboardingChecklist,
 } from '@/lib/pharmacy/onboarding-checklist';
 import {
-  canonicalProvinceCode,
+  branchProvinceMismatch,
   fieldError,
   provinceName,
   regulatoryProfileShape,
@@ -46,6 +46,7 @@ import {
   ruleSetOptions,
   type RegulatoryProfileInput,
 } from '@/lib/pharmacy/regulatory-profile-form';
+import { isSupportedTimezone } from '@/lib/platform/timezones';
 import { adminProcedure, router, type TRPCContext } from '../trpc';
 
 /** The gates an operator may attest to; the rest are answered from data. */
@@ -382,9 +383,18 @@ export const pharmacyOnboardingRouter = router({
         where: { id: organizationId },
         select: { timezone: true },
       });
-      const validated = regulatoryProfileSchema(organization?.timezone ?? undefined).safeParse(
-        input
-      );
+      // Security (#162): a mis-configured workspace timezone must surface as a
+      // rejected request, never as the `RangeError` the licence-expiry check
+      // would otherwise throw deep inside `safeParse` (an uncaught 500).
+      const timezone = organization?.timezone ?? undefined;
+      if (timezone !== undefined && !isSupportedTimezone(timezone)) {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message:
+            "This workspace's time zone is not a valid IANA zone. Fix the workspace time zone before recording a regulatory profile.",
+        });
+      }
+      const validated = regulatoryProfileSchema(timezone).safeParse(input);
       if (!validated.success) {
         throw new TRPCError({ code: 'BAD_REQUEST', cause: validated.error });
       }
@@ -418,16 +428,12 @@ export const pharmacyOnboardingRouter = router({
           'No jurisdiction rules are published for that province on the date you chose. Pick a province that appears in the list.'
         );
       }
-      // QA-129: a branch operates under its own province's rules. Never accept a
-      // client-chosen province that differs from the one the branch records.
-      if (
-        branch.provinceCode &&
-        canonicalProvinceCode(branch.provinceCode) !== input.provinceCode
-      ) {
-        throw badRequest(
-          'provinceCode',
-          `This branch is registered in ${provinceName(branch.provinceCode)}. Use that province's rules.`
-        );
+      // QA-129 / Security (#162): a branch operates under its own province's
+      // rules, and a branch with no province on record fails the check closed
+      // rather than letting the client's chosen province stand unverified.
+      const provinceMismatch = branchProvinceMismatch(branch.provinceCode, input.provinceCode);
+      if (provinceMismatch) {
+        throw badRequest(provinceMismatch.field, provinceMismatch.message);
       }
       if (
         jurisdiction.licenceCategories.length > 0 &&

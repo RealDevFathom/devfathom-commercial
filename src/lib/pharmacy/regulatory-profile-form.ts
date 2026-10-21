@@ -80,6 +80,40 @@ export function defaultProvinceCode(
   return jurisdictions[0]?.provinceCode ?? '';
 }
 
+/**
+ * Which province a branch's regulatory profile may be recorded against.
+ *
+ * A branch operates under its own province's rules (QA-129), so the province
+ * the client submits must be the one the branch records. Crucially this fails
+ * *closed*: a branch with no province on record cannot be verified at all, so
+ * the save is refused rather than trusting whatever province the client chose
+ * (PR #162 — an empty branch province must never wave the check through).
+ *
+ * Returns the field error to raise, or `null` when `inputProvinceCode` is the
+ * branch's own province. Legacy un-prefixed branch codes are canonicalised
+ * first, so `PB` recorded on the branch matches a submitted `PK-PB`.
+ */
+export function branchProvinceMismatch(
+  branchProvinceCode: string | null | undefined,
+  inputProvinceCode: string
+): { field: 'provinceCode'; message: string } | null {
+  const recorded = branchProvinceCode?.trim() ?? '';
+  if (!recorded) {
+    return {
+      field: 'provinceCode',
+      message:
+        "This branch has no province on record, so its licence rules can't be verified. Set the branch's province before recording a regulatory profile.",
+    };
+  }
+  if (canonicalProvinceCode(recorded) !== inputProvinceCode) {
+    return {
+      field: 'provinceCode',
+      message: `This branch is registered in ${provinceName(recorded)}. Use that province's rules.`,
+    };
+  }
+  return null;
+}
+
 /** Fiscal registration states, with the sentence the operator picks by. */
 export const FISCAL_STATUSES = [
   { value: 'REGISTERED', label: 'Registered for sales tax' },

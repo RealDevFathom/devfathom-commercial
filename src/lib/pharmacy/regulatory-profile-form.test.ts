@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 
 import { formatValidationError } from '@/lib/validation-error';
 import {
+  branchProvinceMismatch,
   canonicalProvinceCode,
   defaultProvinceCode,
   FISCAL_STATUSES,
@@ -161,6 +162,33 @@ describe('branch regulatory profile input', () => {
     expect(canonicalProvinceCode('AJK')).toBe('PK-AJK');
     expect(canonicalProvinceCode('PK-SD')).toBe('PK-SD');
     expect(canonicalProvinceCode('UNKNOWN')).toBe('UNKNOWN');
+  });
+});
+
+describe('branchProvinceMismatch (QA-129 / #162 fail closed)', () => {
+  it('accepts the branch’s own province', () => {
+    expect(branchProvinceMismatch('PK-PB', 'PK-PB')).toBeNull();
+  });
+
+  it('accepts a legacy branch code against its canonical submitted province', () => {
+    expect(branchProvinceMismatch('PB', 'PK-PB')).toBeNull();
+  });
+
+  it('rejects a province that differs from the branch’s, naming the branch’s province', () => {
+    const error = branchProvinceMismatch('PK-SD', 'PK-PB');
+    expect(error).toMatchObject({ field: 'provinceCode' });
+    expect(error?.message).toContain('Sindh');
+  });
+
+  it.each([
+    ['null', null],
+    ['undefined', undefined],
+    ['empty string', ''],
+    ['whitespace only', '   '],
+  ])('fails closed when the branch has no province on record (%s)', (_label, recorded) => {
+    const error = branchProvinceMismatch(recorded, 'PK-PB');
+    expect(error).toMatchObject({ field: 'provinceCode' });
+    expect(error?.message).toContain('no province on record');
   });
 });
 
