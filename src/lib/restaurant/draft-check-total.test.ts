@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { quoteDraftCheckTotal } from './draft-check-total';
+import { DraftCheckTaxError, quoteDraftCheckTotal } from './draft-check-total';
 import type { TaxProfile, TaxRule } from './tax-calculator';
 
 const at = new Date('2030-06-01T00:00:00Z');
@@ -45,6 +45,8 @@ describe('quoteDraftCheckTotal', () => {
     expect(
       quoteDraftCheckTotal({
         at,
+        profiles: [profile],
+        rules: [rule('CASH', '0'), rule('CARD', '0'), rule('OTHER', '0')],
         lines: [{ id: 'rounded', unitPrice: '10.005', quantity: 1 }],
       })
     ).toBe('10.01');
@@ -74,12 +76,31 @@ describe('quoteDraftCheckTotal', () => {
     ).toBe('4.50');
   });
 
-  it('keeps two decimal places when tax, service, and delivery are zero', () => {
+  it('keeps two decimal places when a published profile charges no tax', () => {
     expect(
       quoteDraftCheckTotal({
         at,
+        profiles: [profile],
+        rules: [rule('CASH', '0'), rule('CARD', '0'), rule('OTHER', '0')],
         lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
       })
     ).toBe('4.50');
+  });
+
+  it('fails closed when no tax profile is in effect', () => {
+    expect(() =>
+      quoteDraftCheckTotal({
+        at,
+        lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1 }],
+      })
+    ).toThrow(DraftCheckTaxError);
+    expect(() =>
+      quoteDraftCheckTotal({
+        at,
+        profiles: [],
+        rules: [],
+        lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1 }],
+      })
+    ).toThrow('No tax profile is in effect.');
   });
 });

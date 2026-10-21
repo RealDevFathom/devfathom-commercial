@@ -5,6 +5,7 @@ import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { equals } from './money-arithmetic';
 import { classifyTenderAmount } from './tenders';
+import { DraftCheckTaxError } from './draft-check-total';
 import { getOrderForBranch } from './terminal-orders';
 
 const at = new Date('2026-10-21T00:00:00.000Z');
@@ -146,5 +147,13 @@ describe('order totals ignore stored tax and service', () => {
     );
     expect(detail?.totals.tax).toBe('0.23');
     expect(detail?.totals.serviceCharge).toBe('0.00');
+  });
+
+  it('fails closed when the branch has no tax profile in effect', async () => {
+    const db = dbFor('DINE_IN');
+    db.restaurantTaxProfileVersion.findMany.mockResolvedValueOnce([]);
+    await expect(
+      getOrderForBranch(db as unknown as ScopedDb, 'order-1', 'branch-1')
+    ).rejects.toBeInstanceOf(DraftCheckTaxError);
   });
 });

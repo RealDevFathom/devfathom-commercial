@@ -17,7 +17,7 @@ import { SectionCard } from '@/components/ui/section-card';
 import { StatusPill } from '@/components/ui/status-pill';
 import { ORDER_CHANNELS } from '@/lib/restaurant/order-channels';
 import type { CommercialTermsQuote } from '@/lib/restaurant/commercial-terms';
-import { quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
+import { DraftCheckTaxError, quoteDraftCheckTotal } from '@/lib/restaurant/draft-check-total';
 import { shouldHandleCounterKey } from '@/lib/pharmacy/counter-keymap';
 
 export function OrderPad({ demo = false }: { demo?: boolean }) {
@@ -634,12 +634,13 @@ function draftCheckTotal(pos: {
         quantity: line.quantity,
         modifierDeltas: modifierDeltas(line, pos.draftMenu),
       })),
-      ...(terms.profiles.length ? { profiles: terms.profiles, rules: terms.rules } : {}),
+      profiles: terms.profiles,
+      rules: terms.rules,
       serviceChargeRate: pos.channel === 'DINE_IN' ? (terms.serviceChargeRate ?? '0') : '0',
       deliveryFee: pos.channel === 'DELIVERY' ? (pos.selectedDeliveryZone?.fee ?? '0.00') : '0.00',
     });
-  } catch {
-    return '—';
+  } catch (error) {
+    return error instanceof DraftCheckTaxError ? error.message : '—';
   }
 }
 

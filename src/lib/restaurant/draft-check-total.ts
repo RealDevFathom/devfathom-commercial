@@ -35,10 +35,20 @@ export type DraftCheckBreakdown = {
   total: string;
 };
 
+/** No published profile is in effect, so the check cannot be priced. */
+export class DraftCheckTaxError extends Error {
+  readonly code = 'TAX_PROFILE_UNAVAILABLE' as const;
+
+  constructor(message = 'No tax profile is in effect.') {
+    super(message);
+    this.name = 'DraftCheckTaxError';
+  }
+}
+
 /** Tax, service, and the amount due. A stored or client total is not an input. */
 export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftCheckBreakdown {
+  if (!input.profiles?.length) throw new DraftCheckTaxError();
   const at = input.at ?? new Date();
-  const fallback = input.profiles ? null : zeroTax(at);
   const lines = input.lines.map((line) => ({
     id: line.id,
     unitPrice: line.unitPrice,
@@ -54,8 +64,8 @@ export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftChec
       : (input.serviceCharge ?? '0.00');
   const quote = quoteTaxSettlement({
     lines,
-    profiles: input.profiles ?? fallback!.profiles,
-    rules: input.rules ?? fallback!.rules,
+    profiles: input.profiles,
+    rules: input.rules ?? [],
     at,
     proposedTenderType: 'CASH',
     serviceCharge: { amount: serviceAmount, taxable: false },
@@ -69,31 +79,4 @@ export function quoteDraftCheckBreakdown(input: DraftCheckTotalInput): DraftChec
 
 export function quoteDraftCheckTotal(input: DraftCheckTotalInput): string {
   return quoteDraftCheckBreakdown(input).total;
-}
-
-function zeroTax(at: Date): { profiles: TaxProfile[]; rules: TaxRule[] } {
-  const effectiveFrom = new Date(at.getTime() - 86_400_000);
-  const effectiveTo = new Date(at.getTime() + 86_400_000);
-  const profile: TaxProfile = {
-    id: 'draft-zero-tax',
-    effectiveFrom,
-    effectiveTo,
-    status: 'PUBLISHED',
-    approvalReference: 'DRAFT-ZERO',
-    approvedAt: effectiveFrom,
-  };
-  const rules = (['CASH', 'CARD', 'OTHER'] as const).map((category): TaxRule => ({
-    id: `draft-zero-${category}`,
-    profileVersionId: profile.id,
-    paymentCategory: category,
-    priceMode: 'EXCLUSIVE',
-    rate: '0',
-    effectiveFrom,
-    effectiveTo,
-    status: 'PUBLISHED',
-    approvalReference: 'DRAFT-ZERO',
-    approvedAt: effectiveFrom,
-    sourceExpiresAt: effectiveTo,
-  }));
-  return { profiles: [profile], rules };
 }

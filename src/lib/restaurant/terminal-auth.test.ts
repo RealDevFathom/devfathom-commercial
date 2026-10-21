@@ -91,7 +91,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => {
 import { hashDeviceSecret } from './devices';
 import { hashTerminalSessionToken } from './terminal-session';
 import { TERMINAL_DEVICE_COOKIE, withDeviceAuth, withTerminalAuth } from './terminal-auth';
-import { openOrderBody, terminalCommandRoute } from './terminal-orders';
+import { addItemBody, openOrderBody, terminalCommandRoute } from './terminal-orders';
 
 const ORG = 'org_restaurant_test';
 const DEMO_ORG = 'org_demo_restaurant_seat_1';
@@ -333,6 +333,35 @@ describe('withTerminalAuth', () => {
     expect(run).not.toHaveBeenCalled();
     expect(h.store.devices[0].lastSeenAt).toBeNull();
     expect(h.store.sessions[0].lastActivityAt).toBeNull();
+  });
+
+  it('rejects a tampered total in the request body before the command runs', async () => {
+    seedDevice();
+    seedSession({ activeStaffProfileId: 'staff_1', lastActivityAt: null });
+    const run = vi.fn();
+    const handler = terminalCommandRoute(addItemBody, run, 201);
+    const response = await handler(
+      new Request('https://tenant.test/api/restaurant/orders/add-item', {
+        method: 'POST',
+        headers: {
+          authorization: `Bearer ${deviceSecret}`,
+          'x-terminal-session': sessionToken,
+          'idempotency-key': 'tampered-total',
+          'content-type': 'application/json',
+        },
+        body: JSON.stringify({
+          orderId: 'order-1',
+          menuItemId: 'coffee',
+          quantity: 1,
+          total: '0.01',
+        }),
+      })
+    );
+
+    expect(response.status).toBe(400);
+    await expect(response.json()).resolves.toMatchObject({ error: 'Invalid input' });
+    expect(run).not.toHaveBeenCalled();
+    expect(h.store.devices[0].lastSeenAt).toBeNull();
   });
 
   it('rejects mid-session when the device is revoked (403, no trust cache)', async () => {

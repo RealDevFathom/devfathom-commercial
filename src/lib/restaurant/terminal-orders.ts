@@ -551,7 +551,8 @@ export async function getOrderForBranch(db: ScopedDb, orderId: string, branchId:
     deliveryFee: (
       order.deliveryFulfillment?.deliveryFeeSnapshot ?? new Prisma.Decimal(0)
     ).toString(),
-    ...(terms.profiles.length > 0 ? { profiles: terms.profiles, rules: terms.rules } : {}),
+    profiles: terms.profiles,
+    rules: terms.rules,
   });
   return {
     id: order.id,
