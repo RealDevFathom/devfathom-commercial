@@ -1,5 +1,7 @@
 import 'server-only';
 
+import { consentKeyword } from '@/lib/growth/consent';
+
 import { resolveTxt } from 'node:dns/promises';
 import { createHash } from 'node:crypto';
 import {
@@ -650,25 +652,35 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
     INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
     SELECT "organizationId", 'customer', id,
       jsonb_build_object('phone', "whatsappE164", 'timestamp', "whatsappOptInAt",
-        'keyword', 'opt-in', 'id', id)
+        'keyword', CASE WHEN "whatsappOptInAt" IS NOT NULL THEN 'opt-in' ELSE 'opt-out' END, 'id', id, 'optOutAt', "whatsappOptOutAt")
     FROM growth_wa_customers WHERE "organizationId" = ${organizationId}
-      AND "whatsappOptInAt" IS NOT NULL
+      AND ("whatsappOptInAt" IS NOT NULL OR "whatsappOptOutAt" IS NOT NULL)
     ON CONFLICT DO NOTHING
   `;
-  await db.$executeRaw`
-    INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
-    SELECT m."organizationId", 'inbound', m.id,
-      jsonb_build_object('id', m.id, 'waMessageId', m."waMessageId",
-        'phone', c."whatsappE164", 'timestamp', m."createdAt",
-        'keyword', CASE WHEN lower(trim(m.body)) ~ '^(stop|unsubscribe|band karo|بند)(\\s|$)'
-          THEN 'STOP' ELSE 'START' END)
+  const inboundProof = await db.$queryRaw<Array<{
+    id: string; waMessageId: string | null; phone: string | null;
+    timestamp: Date; body: string;
+  }>>(Prisma.sql`
+    SELECT m.id, m."waMessageId", c."whatsappE164" AS phone,
+      m."createdAt" AS timestamp, m.body
     FROM growth_wa_messages m
     LEFT JOIN growth_wa_customers c ON c.id = m."customerId"
       AND c."organizationId" = m."organizationId"
     WHERE m."organizationId" = ${organizationId} AND m.direction = 'in'
-      AND lower(trim(m.body)) ~ '^(stop|unsubscribe|band karo|بند|start|yes|haan|ہاں)(\\s|$)'
-    ON CONFLICT DO NOTHING
-  `;
+  `);
+  for (const row of inboundProof) {
+    const keyword = consentKeyword(row.body);
+    if (!keyword) continue;
+    const evidence = JSON.stringify({
+      id: row.id, waMessageId: row.waMessageId, phone: row.phone,
+      timestamp: row.timestamp, keyword: keyword.toUpperCase(),
+    });
+    await db.$executeRaw`
+      INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
+      VALUES (${organizationId}, 'inbound', ${row.id}, ${evidence}::jsonb)
+      ON CONFLICT DO NOTHING
+    `;
+  }
   const dependencies = await db.$queryRaw<TableDependency[]>(Prisma.sql`
     WITH tenant_tables AS (
       SELECT table_name

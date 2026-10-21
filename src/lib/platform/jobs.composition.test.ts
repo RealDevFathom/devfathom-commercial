@@ -274,3 +274,37 @@ it('archives consent proof without storing message text and aborts on archive fa
   expect(m.execute).not.toHaveBeenCalled();
   expect(m.organizationUpdate).not.toHaveBeenCalled();
 });
+
+it.each(['STOP.', 'رک جاؤ', 'بند', 'band kar do', 'رُک جاؤ'])(
+  'archives normalized opt-out proof for %s', async (body) => {
+    queue(job('PURGE_DATA'));
+    const baseQuery = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql) => {
+      if (sql.text?.includes('AS phone')) return [{
+        id: 'in-1', waMessageId: 'wa-1', phone: '+923001234567', timestamp: now, body,
+      }];
+      return baseQuery(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1 });
+    const archive = m.raw.mock.calls.find((call) => call[0].join('').includes('VALUES ('));
+    expect(archive).toBeDefined();
+    expect(JSON.parse(archive![3])).toMatchObject({ keyword: 'STOP', timestamp: now.toISOString() });
+    const customerArchive = m.raw.mock.calls.find((call) => call[0].join('').includes("'customer'"));
+    expect(customerArchive![0].join('')).toContain("'optOutAt', \"whatsappOptOutAt\"");
+  }
+);
+
+it.each(["Yes, I'll pick it up tomorrow", 'haan kal', 'START offers'])(
+  'does not archive ordinary conversation as opt-in: %s', async (body) => {
+    queue(job('PURGE_DATA'));
+    const baseQuery = m.query.getMockImplementation()!;
+    m.query.mockImplementation(async (sql) => {
+      if (sql.text?.includes('AS phone')) return [{
+        id: 'in-1', waMessageId: 'wa-1', phone: '+923001234567', timestamp: now, body,
+      }];
+      return baseQuery(sql);
+    });
+    await expect(processPlatformJobs(1)).resolves.toMatchObject({ succeeded: 1 });
+    expect(m.raw.mock.calls.some((call) => call[0].join('').includes('VALUES ('))).toBe(false);
+  }
+);
