@@ -1,6 +1,7 @@
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
 
+import { can, subjectFromSession } from '@/lib/abac';
 import { hasModule } from '@/lib/entitlements';
 import { CustomerNotFound, setCustomerOptIn } from '@/lib/growth/consent';
 import {
@@ -49,6 +50,24 @@ function fail(error: unknown): never {
 const manage = capabilityProcedure('growth.manage');
 const member = protectedProcedure;
 
+async function assertCounterOperator(ctx: TRPCContext) {
+  const user = ctx.session?.user;
+  if (!user) {
+    throw new TRPCError({ code: 'UNAUTHORIZED', message: 'You must be logged in.' });
+  }
+  const subject = subjectFromSession(user);
+  const options = { db: ctx.db as never };
+  const allowed =
+    (await can(subject, 'pharmacy.counter', undefined, options)) ||
+    (await can(subject, 'pos:operate', undefined, options));
+  if (!allowed) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+  }
+}
+
 export const growthRouter = router({
   templates: router({
     list: manage.query(async ({ ctx }) => {
@@ -81,7 +100,7 @@ export const growthRouter = router({
       }),
   }),
   customers: router({
-    /** POS consent. Cashiers do not receive growth.manage; the module flag still applies. */
+    /** POS consent. Only till roles (pharmacy.counter or pos:operate) may record it. */
     setOptIn: member
       .input(
         z
@@ -94,6 +113,7 @@ export const growthRouter = router({
       )
       .mutation(async ({ ctx, input }) => {
         assertGrowthEnabled(ctx);
+        await assertCounterOperator(ctx);
         try {
           return await setCustomerOptIn(growthStore(ctx.db), {
             organizationId: organizationIdFrom(ctx),

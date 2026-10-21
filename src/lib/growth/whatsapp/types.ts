@@ -6,7 +6,8 @@
 
 export type MessageDirection = 'out' | 'in';
 
-export type MessageStatus = 'queued' | 'sent' | 'delivered' | 'read' | 'failed' | 'received';
+export type MessageStatus =
+  'queued' | 'sending' | 'sent' | 'delivered' | 'read' | 'failed' | 'received';
 
 export type GrowthCustomer = {
   id: string;
@@ -89,6 +90,8 @@ export type GrowthWhatsAppStore = {
     input: Omit<CustomerWrite, 'id'> & { displayName: string | null }
   ): Promise<GrowthCustomer>;
   queuedMessages(organizationId: string, limit: number): Promise<MessageLogRow[]>;
+  /** Commits a queued row to `sending` so a later rollback cannot return it to the queue. */
+  claimQueued(organizationId: string, id: string): Promise<MessageLogRow | null>;
   countSentToday(organizationId: string, since: Date): Promise<number>;
   markMessage(
     id: string,

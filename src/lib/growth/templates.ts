@@ -64,6 +64,70 @@ export class MissingTemplateVariable extends Error {
   }
 }
 
+export type TemplatePurpose = 'marketing' | 'utility';
+
+/** `refill_reminder` is a utility template. Every other default is marketing. */
+export const TEMPLATE_PURPOSE: Record<TemplateKey, TemplatePurpose> = {
+  birthday_offer: 'marketing',
+  refill_reminder: 'utility',
+  winback: 'marketing',
+  slow_day: 'marketing',
+  holiday: 'marketing',
+  review_request: 'marketing',
+  referral: 'marketing',
+  generic: 'marketing',
+};
+
+/**
+ * Drug categories a promotional campaign must not include. Pharmaceutical and
+ * biological families are medicines; front-shop, device, and alternative are not.
+ */
+const DRUG_PRODUCT_CATEGORIES = new Set([
+  'pharmaceutical',
+  'biological',
+  'drug',
+  'medicine',
+  'prescription',
+  'rx',
+  'controlled',
+]);
+
+export class DrugCategoryInPromo extends Error {
+  readonly categories: readonly string[];
+
+  constructor(categories: readonly string[]) {
+    super('Promotional campaigns can only include non-drug product categories.');
+    this.name = 'DrugCategoryInPromo';
+    this.categories = categories;
+  }
+}
+
+export function isDrugProductCategory(category: string): boolean {
+  const normalized = category
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, '_');
+  return DRUG_PRODUCT_CATEGORIES.has(normalized);
+}
+
+export function assertPromoProductCategories(categories: readonly string[]): void {
+  const blocked = categories.filter(isDrugProductCategory);
+  if (blocked.length > 0) throw new DrugCategoryInPromo(blocked);
+}
+
+/**
+ * Marketing sends refuse a drug product category. A utility template such as
+ * `refill_reminder` may name the medicine being refilled.
+ */
+export function assertCampaignProducts(input: {
+  templateKey: string;
+  productCategories: readonly string[];
+}): void {
+  if (!isTemplateKey(input.templateKey)) throw new UnknownTemplateVariable(input.templateKey);
+  if (TEMPLATE_PURPOSE[input.templateKey] === 'utility') return;
+  assertPromoProductCategories(input.productCategories);
+}
+
 export class UnknownTemplateVariable extends Error {
   readonly variable: string;
   constructor(variable: string) {

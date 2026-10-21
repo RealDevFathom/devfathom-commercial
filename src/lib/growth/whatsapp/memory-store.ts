@@ -75,6 +75,19 @@ export function createMemoryStore(options?: { now?: () => Date }): MemoryStore {
       customers.push(created);
       return created;
     },
+    async claimQueued(organizationId, id) {
+      const row = messages.find(
+        (item) =>
+          item.id === id &&
+          item.organizationId === organizationId &&
+          item.direction === 'out' &&
+          item.status === 'queued'
+      );
+      if (!row) return null;
+      row.status = 'sending';
+      row.updatedAt = now();
+      return { ...row };
+    },
     async queuedMessages(organizationId, limit) {
       return messages
         .filter(

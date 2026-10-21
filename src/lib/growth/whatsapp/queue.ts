@@ -45,34 +45,55 @@ function failureText(error: unknown): string {
   return message.replace(/\s+/g, ' ').slice(0, 300);
 }
 
+/** One short transaction. Sleep and provider HTTP stay outside it. */
+export type StoreUnit = <T>(run: (store: GrowthWhatsAppStore) => Promise<T>) => Promise<T>;
+
 async function attemptRow(
-  store: GrowthWhatsAppStore,
+  unit: StoreUnit,
   provider: WhatsAppProvider,
   organizationId: string,
   row: MessageLogRow
-): Promise<'sent' | 'failed'> {
-  const customer = row.customerId ? await store.customer(organizationId, row.customerId) : null;
+): Promise<'sent' | 'failed' | 'skipped'> {
+  const priorAttempts = readAttempts(row.error);
+  const claimed = await unit(async (store) => {
+    const next = await store.claimQueued(organizationId, row.id);
+    if (!next) return null;
+    const customer = next.customerId ? await store.customer(organizationId, next.customerId) : null;
+    return { row: next, customer };
+  });
+  if (!claimed) return 'skipped';
+  let result;
   try {
-    const result = await sendText({ provider, customer, body: row.body });
-    await store.markMessage(row.id, {
+    result = await sendText({
+      provider,
+      customer: claimed.customer,
+      body: claimed.row.body,
+    });
+  } catch (error) {
+    if (error instanceof NotOptedIn || error instanceof MissingStop) {
+      await unit((store) =>
+        store.markMessage(claimed.row.id, { status: 'failed', error: error.name })
+      );
+      return 'failed';
+    }
+    const attempts = priorAttempts + 1;
+    const detail = `attempts=${attempts} ${failureText(error)}`.slice(0, 500);
+    await unit((store) =>
+      store.markMessage(claimed.row.id, {
+        status: attempts >= MAX_ATTEMPTS ? 'failed' : 'queued',
+        error: detail,
+      })
+    );
+    return 'failed';
+  }
+  await unit((store) =>
+    store.markMessage(claimed.row.id, {
       status: 'sent',
       waMessageId: result.providerMessageId,
       error: null,
-    });
-    return 'sent';
-  } catch (error) {
-    if (error instanceof NotOptedIn || error instanceof MissingStop) {
-      await store.markMessage(row.id, { status: 'failed', error: error.name });
-      return 'failed';
-    }
-    const attempts = readAttempts(row.error) + 1;
-    const detail = `attempts=${attempts} ${failureText(error)}`.slice(0, 500);
-    await store.markMessage(row.id, {
-      status: attempts >= MAX_ATTEMPTS ? 'failed' : 'queued',
-      error: detail,
-    });
-    return 'failed';
-  }
+    })
+  );
+  return 'sent';
 }
 
 /**
@@ -80,7 +101,7 @@ async function attemptRow(
  * Stops at the daily cap, at quiet hours, or after 60s of wall time.
  */
 export async function drainQueue(input: {
-  store: GrowthWhatsAppStore;
+  unit: StoreUnit;
   provider: WhatsAppProvider;
   organizationId: string;
   settings: GrowthSettings;
@@ -89,30 +110,33 @@ export async function drainQueue(input: {
   clock?: QueueClock;
 }): Promise<DrainResult> {
   const zone = businessTimeZone(input.timeZone);
-  if (isQuietHours(input.now, zone, input.settings.quietHoursStart, input.settings.quietHoursEnd)) {
-    return { sent: 0, reason: 'quiet_hours' };
-  }
+  const clock = input.clock ?? realClock;
+  const quietAt = (at: Date) =>
+    isQuietHours(at, zone, input.settings.quietHoursStart, input.settings.quietHoursEnd);
+  if (quietAt(input.now) || quietAt(clock.now())) return { sent: 0, reason: 'quiet_hours' };
+
   const cap = effectiveDailyCap(input.settings, input.now);
-  const sentToday = await input.store.countSentToday(
-    input.organizationId,
-    zonedDayStart(input.now, zone)
+  const sentToday = await input.unit((store) =>
+    store.countSentToday(input.organizationId, zonedDayStart(input.now, zone))
   );
   const remaining = Math.max(0, cap - sentToday);
   if (remaining === 0) return { sent: 0, reason: 'daily_cap' };
 
-  const rows = await input.store.queuedMessages(input.organizationId, remaining);
-  const clock = input.clock ?? realClock;
+  const rows = await input.unit((store) => store.queuedMessages(input.organizationId, remaining));
   const started = clock.now().getTime();
   let sent = 0;
   for (let index = 0; index < rows.length; index += 1) {
     if (clock.now().getTime() - started >= WALL_MS) break;
+    if (quietAt(clock.now())) return { sent, reason: 'quiet_hours' };
     if (index > 0) {
       const waitMs = (input.settings.minSecondsBetweenMsgs + clock.random() * 3) * 1000;
       if (clock.now().getTime() - started + waitMs >= WALL_MS) break;
       await clock.sleep(waitMs);
+      if (clock.now().getTime() - started >= WALL_MS) break;
+      if (quietAt(clock.now())) return { sent, reason: 'quiet_hours' };
     }
     const outcome = await attemptRow(
-      input.store,
+      input.unit,
       input.provider,
       input.organizationId,
       rows[index]!
@@ -153,26 +177,29 @@ export async function drainOrganizationQueue(
   organizationId: string,
   now = new Date()
 ): Promise<DrainResult> {
-  return withTenantDb(organizationId, async (db) => {
-    const store = growthStore(db);
+  const unit: StoreUnit = (run) => withTenantDb(organizationId, (db) => run(growthStore(db)));
+  const ready = await unit(async (store) => {
     const settings = await store.settings(organizationId);
-    if (!settings) return { sent: 0, reason: 'no_settings' };
-    if (!evolutionConfigured(settings)) return { sent: 0, reason: 'not_configured' };
-    let provider: WhatsAppProvider | null;
-    try {
-      provider = createEvolutionProvider(settings);
-    } catch {
-      return { sent: 0, reason: 'not_configured' };
-    }
-    if (!provider) return { sent: 0, reason: 'not_configured' };
+    if (!settings) return { kind: 'no_settings' as const };
+    if (!evolutionConfigured(settings)) return { kind: 'not_configured' as const };
     const organization = await store.organization(organizationId);
-    return drainQueue({
-      store,
-      provider,
-      organizationId,
-      settings,
-      timeZone: organization?.timezone,
-      now,
-    });
+    return { kind: 'ready' as const, settings, timeZone: organization?.timezone ?? null };
+  });
+  if (ready.kind !== 'ready') return { sent: 0, reason: ready.kind };
+
+  let provider: WhatsAppProvider | null = null;
+  try {
+    provider = await createEvolutionProvider(ready.settings);
+  } catch {
+    provider = null;
+  }
+  if (!provider) return { sent: 0, reason: 'not_configured' };
+  return drainQueue({
+    unit,
+    provider,
+    organizationId,
+    settings: ready.settings,
+    timeZone: ready.timeZone,
+    now,
   });
 }

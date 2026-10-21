@@ -2,12 +2,16 @@ import { describe, expect, it } from 'vitest';
 
 import { createMemoryStore } from './whatsapp/memory-store';
 import {
+  assertCampaignProducts,
   DEFAULT_TEMPLATES,
+  DrugCategoryInPromo,
   ensureDefaultTemplates,
   MissingStop,
   MissingTemplateVariable,
   renderTemplate,
   saveTemplateBody,
+  TEMPLATE_KEYS,
+  TEMPLATE_PURPOSE,
   UnknownTemplateVariable,
 } from './templates';
 
@@ -23,6 +27,38 @@ const vars = {
 };
 
 describe('message templates', () => {
+  it('marks refill_reminder as utility and every other default as marketing', () => {
+    expect(TEMPLATE_PURPOSE.refill_reminder).toBe('utility');
+    for (const key of TEMPLATE_KEYS) {
+      if (key === 'refill_reminder') continue;
+      expect(TEMPLATE_PURPOSE[key]).toBe('marketing');
+    }
+  });
+
+  it('refuses a drug category on a promo and allows it on a refill reminder', () => {
+    expect(() =>
+      assertCampaignProducts({
+        templateKey: 'birthday_offer',
+        productCategories: ['FRONT_SHOP', 'PHARMACEUTICAL'],
+      })
+    ).toThrow(DrugCategoryInPromo);
+    expect(() =>
+      assertCampaignProducts({
+        templateKey: 'slow_day',
+        productCategories: ['Front Shop'],
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertCampaignProducts({
+        templateKey: 'refill_reminder',
+        productCategories: ['PHARMACEUTICAL', 'BIOLOGICAL'],
+      })
+    ).not.toThrow();
+    expect(() =>
+      assertCampaignProducts({ templateKey: 'not_a_template', productCategories: [] })
+    ).toThrow(UnknownTemplateVariable);
+  });
+
   it('refuses a body without STOP', () => {
     expect(() => renderTemplate('Salaam {{name}}', { name: 'Ayesha' })).toThrow(MissingStop);
   });

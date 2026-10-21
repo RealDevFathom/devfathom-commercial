@@ -111,15 +111,29 @@ describe('STOP and START', () => {
     expect(sendText).not.toHaveBeenCalled();
   });
 
-  it('treats a first inbound message from an unknown number as opt-in', async () => {
-    const { store, sendText, result } = await inbound('Salaam');
+  it('records an unknown number without creating an opted-in customer', async () => {
+    const { store, sendText, result } = await inbound('who is this?');
+    expect(result).toBe('logged');
+    expect(await store.customerByPhone('org_1', from)).toBeNull();
+    expect(store.messages).toEqual([
+      expect.objectContaining({
+        direction: 'in',
+        status: 'received',
+        customerId: null,
+        body: 'who is this?',
+      }),
+    ]);
+    expect(sendText).not.toHaveBeenCalled();
+  });
+
+  it('opts in an unknown number only when the text is START', async () => {
+    const { store, result } = await inbound('START');
     expect(result).toBe('opt_in');
     expect(await store.customerByPhone('org_1', from)).toMatchObject({
       whatsappOptIn: true,
       whatsappE164: from,
       whatsappOptInAt: now,
     });
-    expect(sendText).not.toHaveBeenCalled();
   });
 
   it('does not opt in a known customer who sends an ordinary message', async () => {

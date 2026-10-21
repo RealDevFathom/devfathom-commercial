@@ -6,6 +6,7 @@ import type { GrowthWhatsAppStore, MessageStatus } from './types';
 
 const RANK: Record<MessageStatus, number> = {
   queued: 0,
+  sending: 0,
   received: 0,
   failed: 1,
   sent: 1,

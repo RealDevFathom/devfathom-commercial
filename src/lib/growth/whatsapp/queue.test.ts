@@ -1,8 +1,34 @@
 import { describe, expect, it, vi } from 'vitest';
 
+const tx = vi.hoisted(() => ({
+  depth: 0,
+  max: 0,
+  httpInside: false,
+  store: null as null | ReturnType<typeof import('./memory-store').createMemoryStore>,
+}));
+
+vi.mock('@/lib/tenancy/scoped-db', () => ({
+  withTenantDb: async (_organizationId: string, run: (db: object) => Promise<unknown>) => {
+    tx.depth += 1;
+    tx.max = Math.max(tx.max, tx.depth);
+    try {
+      return await run({});
+    } finally {
+      tx.depth -= 1;
+    }
+  },
+}));
+
+vi.mock('./store', () => ({
+  growthStore: () => {
+    if (!tx.store) throw new Error('store missing');
+    return tx.store;
+  },
+}));
+
 import { EvolutionWhatsAppProvider } from './evolution';
 import { createMemoryStore } from './memory-store';
-import { drainQueue, enqueueOutbound } from './queue';
+import { drainQueue, drainOrganizationQueue, enqueueOutbound, type StoreUnit } from './queue';
 import { effectiveDailyCap, isQuietHours, zonedDayStart } from './time';
 import { NotOptedIn, type GrowthCustomer, type GrowthSettings } from './types';
 
@@ -36,6 +62,10 @@ function customer(id: string, phone: string, whatsappOptIn = true): GrowthCustom
     whatsappOptInAt: whatsappOptIn ? day : null,
     whatsappOptOutAt: null,
   };
+}
+
+function unitFor(store: ReturnType<typeof createMemoryStore>): StoreUnit {
+  return (run) => run(store);
 }
 
 function providerFor(fetchImpl: typeof fetch) {
@@ -86,7 +116,7 @@ describe('outbound queue', () => {
     });
     const sleeps: number[] = [];
     const result = await drainQueue({
-      store,
+      unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
       settings: settings({ maxMsgsPerDay: 2 }),
@@ -128,7 +158,7 @@ describe('outbound queue', () => {
     });
     const fetchImpl = vi.fn();
     const result = await drainQueue({
-      store,
+      unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
       settings: settings(),
@@ -166,7 +196,7 @@ describe('outbound queue', () => {
       return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
     });
     const result = await drainQueue({
-      store,
+      unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
       settings: settings(),
@@ -201,7 +231,7 @@ describe('outbound queue', () => {
     });
     const fetchImpl = vi.fn(async () => new Response('no', { status: 500 }));
     const input = {
-      store,
+      unit: unitFor(store),
       provider: providerFor(fetchImpl as typeof fetch),
       organizationId: 'org_1',
       settings: settings(),
@@ -217,6 +247,197 @@ describe('outbound queue', () => {
     expect(store.messages[0]?.error).toContain('attempts=3');
     await drainQueue(input);
     expect(fetchImpl).toHaveBeenCalledTimes(3);
+  });
+
+  it('sends outside the tenant transaction and commits each row on its own', async () => {
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    store.putCustomer(customer('c2', '+923002222222'));
+    for (const id of ['c1', 'c2']) {
+      await store.insertMessage({
+        organizationId: 'org_1',
+        customerId: id,
+        direction: 'out',
+        waMessageId: null,
+        body: `${id}. Reply STOP to opt out.`,
+        status: 'queued',
+        campaignId: null,
+        recipientId: null,
+        error: null,
+      });
+    }
+    let open = 0;
+    const fetchImpl = vi.fn(async () => {
+      expect(open).toBe(0);
+      expect(store.messages.find((row) => row.status === 'sending')).toBeTruthy();
+      return new Response(JSON.stringify({ key: { id: `wamid-${open}` } }), { status: 200 });
+    });
+    const result = await drainQueue({
+      unit: async (run) => {
+        open += 1;
+        try {
+          return await run(store);
+        } finally {
+          open -= 1;
+        }
+      },
+      provider: providerFor(fetchImpl as typeof fetch),
+      organizationId: 'org_1',
+      settings: settings({ minSecondsBetweenMsgs: 0 }),
+      timeZone: 'Asia/Karachi',
+      now: day,
+      clock: {
+        now: () => day,
+        sleep: async () => {
+          expect(open).toBe(0);
+        },
+        random: () => 0,
+      },
+    });
+    expect(result).toEqual({ sent: 2, reason: 'ok' });
+    expect(open).toBe(0);
+    expect(store.messages.map((row) => row.status)).toEqual(['sent', 'sent']);
+  });
+
+  it('leaves a claimed row sending when the sent mark rolls back', async () => {
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    await store.insertMessage({
+      organizationId: 'org_1',
+      customerId: 'c1',
+      direction: 'out',
+      waMessageId: null,
+      body: 'Once. Reply STOP to opt out.',
+      status: 'queued',
+      campaignId: null,
+      recipientId: null,
+      error: null,
+    });
+    const fetchImpl = vi.fn(async () => {
+      return new Response(JSON.stringify({ key: { id: 'wamid-1' } }), { status: 200 });
+    });
+    const unit: StoreUnit = async (run) => {
+      const before = store.messages.map((row) => ({ ...row }));
+      try {
+        const result = await run(store);
+        const markedSent = store.messages.some(
+          (row, index) => before[index]?.status !== 'sent' && row.status === 'sent'
+        );
+        if (markedSent) throw new Error('transaction timeout');
+        return result;
+      } catch (error) {
+        store.messages.forEach((row, index) => Object.assign(row, before[index]));
+        throw error;
+      }
+    };
+    await expect(
+      drainQueue({
+        unit,
+        provider: providerFor(fetchImpl as typeof fetch),
+        organizationId: 'org_1',
+        settings: settings(),
+        timeZone: 'Asia/Karachi',
+        now: day,
+        clock: { now: () => day, sleep: async () => undefined, random: () => 0 },
+      })
+    ).rejects.toThrow('transaction timeout');
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(store.messages[0]?.status).toBe('sending');
+    await drainQueue({
+      unit: unitFor(store),
+      provider: providerFor(fetchImpl as typeof fetch),
+      organizationId: 'org_1',
+      settings: settings(),
+      timeZone: 'Asia/Karachi',
+      now: day,
+      clock: { now: () => day, sleep: async () => undefined, random: () => 0 },
+    });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(store.messages[0]?.status).toBe('sending');
+  });
+
+  it('re-checks quiet hours after the gap and does not send the next row', async () => {
+    const start = new Date('2026-10-21T15:59:30.000Z');
+    let elapsed = 0;
+    const store = createMemoryStore();
+    store.putCustomer(customer('c1', '+923001111111'));
+    store.putCustomer(customer('c2', '+923002222222'));
+    for (const id of ['c1', 'c2']) {
+      await store.insertMessage({
+        organizationId: 'org_1',
+        customerId: id,
+        direction: 'out',
+        waMessageId: null,
+        body: `${id}. Reply STOP to opt out.`,
+        status: 'queued',
+        campaignId: null,
+        recipientId: null,
+        error: null,
+      });
+    }
+    const fetchImpl = vi.fn(async () => {
+      return new Response(JSON.stringify({ key: { id: 'wamid' } }), { status: 200 });
+    });
+    const result = await drainQueue({
+      unit: unitFor(store),
+      provider: providerFor(fetchImpl as typeof fetch),
+      organizationId: 'org_1',
+      settings: settings(),
+      timeZone: 'Asia/Karachi',
+      now: start,
+      clock: {
+        now: () => new Date(start.getTime() + elapsed),
+        sleep: async () => {
+          elapsed += 40_000;
+        },
+        random: () => 0,
+      },
+    });
+    expect(result).toEqual({ sent: 1, reason: 'quiet_hours' });
+    expect(fetchImpl).toHaveBeenCalledTimes(1);
+    expect(store.messages.map((row) => row.status)).toEqual(['sent', 'queued']);
+  });
+
+  it('does not hold one tenant transaction across the Evolution call', async () => {
+    tx.depth = 0;
+    tx.max = 0;
+    tx.httpInside = false;
+    const store = createMemoryStore();
+    tx.store = store;
+    store.putSettings(
+      settings({ waApiUrl: 'http://localhost:8080', waInstanceName: 'org_1', waApiKeyEnc: null })
+    );
+    store.putCustomer(customer('c1', '+923001111111'));
+    await store.insertMessage({
+      organizationId: 'org_1',
+      customerId: 'c1',
+      direction: 'out',
+      waMessageId: null,
+      body: 'Hello. Reply STOP to opt out.',
+      status: 'queued',
+      campaignId: null,
+      recipientId: null,
+      error: null,
+    });
+    vi.stubEnv('EVOLUTION_API_URL', 'http://localhost:8080');
+    vi.stubEnv('EVOLUTION_API_KEY', 'env-key');
+    vi.useFakeTimers({ now: day });
+    const fetchMock = vi.spyOn(globalThis, 'fetch').mockImplementation(async () => {
+      tx.httpInside = tx.depth > 0;
+      return new Response(JSON.stringify({ key: { id: 'wamid-live' } }), { status: 200 });
+    });
+    try {
+      const result = await drainOrganizationQueue('org_1', day);
+      expect(result).toEqual({ sent: 1, reason: 'ok' });
+    } finally {
+      fetchMock.mockRestore();
+      vi.useRealTimers();
+      vi.unstubAllEnvs();
+      tx.store = null;
+    }
+    expect(tx.httpInside).toBe(false);
+    expect(tx.max).toBe(1);
+    expect(store.messages[0]).toMatchObject({ status: 'sent', waMessageId: 'wamid-live' });
   });
 
   it('does not enqueue a customer who has not opted in', async () => {

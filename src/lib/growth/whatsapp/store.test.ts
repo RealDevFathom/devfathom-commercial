@@ -75,6 +75,15 @@ describe('growth WhatsApp Prisma adapter', () => {
       op: 'count',
       args: { where: expect.objectContaining({ organizationId: 'org_1', direction: 'out' }) },
     });
+    await store.claimQueued('org_1', 'msg_1');
+    expect(calls.filter((call) => call.op === 'updateMany').at(-1)).toMatchObject({
+      model: 'messageLog',
+      op: 'updateMany',
+      args: {
+        where: { id: 'msg_1', organizationId: 'org_1', direction: 'out', status: 'queued' },
+        data: { status: 'sending' },
+      },
+    });
     expect(calls[2]).toMatchObject({
       model: 'customer',
       op: 'updateMany',

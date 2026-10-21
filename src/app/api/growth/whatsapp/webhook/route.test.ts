@@ -64,14 +64,72 @@ describe('growth WhatsApp webhook', () => {
     expect(mocks.isGrowthEnabled).not.toHaveBeenCalled();
   });
 
+  it('rejects the secret from the query string and from the apikey header', async () => {
+    const query = await POST(
+      request(`http://localhost/api/growth/whatsapp/webhook?secret=${secret}`, {
+        event: 'messages.update',
+      })
+    );
+    const apikey = await POST(
+      request(
+        'http://localhost/api/growth/whatsapp/webhook',
+        { event: 'messages.update' },
+        { apikey: secret }
+      )
+    );
+    expect(query.status).toBe(401);
+    expect(apikey.status).toBe(401);
+    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
+  });
+
+  it('rejects every request when the webhook secret is unset', async () => {
+    vi.stubEnv('GROWTH_WEBHOOK_SECRET', '');
+    const response = await POST(
+      request(
+        'http://localhost/api/growth/whatsapp/webhook',
+        { event: 'messages.update' },
+        { 'x-growth-webhook-secret': secret }
+      )
+    );
+    expect(response.status).toBe(401);
+    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
+  });
+
+  it('rate-limits by IP before parsing the body', async () => {
+    const headers = {
+      'x-forwarded-for': '203.0.113.44',
+      'x-growth-webhook-secret': secret,
+    };
+    for (let attempt = 0; attempt < 120; attempt += 1) {
+      const response = await POST(
+        request('http://localhost/api/growth/whatsapp/webhook', { event: 'nope' }, headers)
+      );
+      expect(response.status).toBe(200);
+    }
+    const blocked = await POST(
+      new Request('http://localhost/api/growth/whatsapp/webhook', {
+        method: 'POST',
+        headers: { ...headers, 'content-type': 'application/json' },
+        body: '{',
+      })
+    );
+    expect(blocked.status).toBe(429);
+    expect(blocked.headers.get('Retry-After')).toBeTruthy();
+    expect(mocks.withPlatformDb).not.toHaveBeenCalled();
+  });
+
   it('returns 204 when growth is off and does not open a tenant transaction', async () => {
     mocks.isGrowthEnabled.mockResolvedValue(false);
     const response = await POST(
-      request(`http://localhost/api/growth/whatsapp/webhook?secret=${secret}`, {
-        event: 'messages.update',
-        instance: 'shop',
-        data: { keyId: 'wamid.1', status: 'DELIVERY_ACK' },
-      })
+      request(
+        'http://localhost/api/growth/whatsapp/webhook',
+        {
+          event: 'messages.update',
+          instance: 'shop',
+          data: { keyId: 'wamid.1', status: 'DELIVERY_ACK' },
+        },
+        { 'x-growth-webhook-secret': secret }
+      )
     );
     expect(response.status).toBe(204);
     expect(mocks.withPlatformDb).toHaveBeenCalledOnce();
@@ -80,10 +138,14 @@ describe('growth WhatsApp webhook', () => {
 
   it('ignores an unknown event with 200', async () => {
     const response = await POST(
-      request(`http://localhost/api/growth/whatsapp/webhook?secret=${secret}`, {
-        event: 'qrcode.updated',
-        instance: 'shop',
-      })
+      request(
+        'http://localhost/api/growth/whatsapp/webhook',
+        {
+          event: 'qrcode.updated',
+          instance: 'shop',
+        },
+        { 'x-growth-webhook-secret': secret }
+      )
     );
     expect(response.status).toBe(200);
     expect(await response.json()).toEqual({ ok: true, ignored: true });

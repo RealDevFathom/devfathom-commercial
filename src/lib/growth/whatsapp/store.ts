@@ -30,6 +30,7 @@ type OrganizationReader = {
 
 const MESSAGE_STATUSES = new Set<MessageStatus>([
   'queued',
+  'sending',
   'sent',
   'delivered',
   'read',
@@ -244,6 +245,16 @@ export function growthStore(db: object): GrowthWhatsAppStore {
       return rows(found)
         .map(asMessage)
         .filter((row): row is MessageLogRow => row !== null);
+    },
+    async claimQueued(organizationId, id) {
+      const result = await call(messages().updateMany, {
+        where: { id, organizationId, direction: 'out', status: 'queued' },
+        data: { status: 'sending' },
+      });
+      if (!result?.count) return null;
+      return asMessage(
+        await call(messages().findFirst, { where: { id, organizationId, status: 'sending' } })
+      );
     },
     async countSentToday(organizationId, since) {
       return call(messages().count, {

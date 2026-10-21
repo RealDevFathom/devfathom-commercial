@@ -159,7 +159,7 @@ export async function handleInboundText(input: {
     return 'opt_out';
   }
 
-  if (keyword === 'start' || !known) {
+  if (keyword === 'start') {
     await optInCustomer(input.store, input.organizationId, input.fromE164, input.now);
     return 'opt_in';
   }

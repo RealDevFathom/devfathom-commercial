@@ -1,7 +1,40 @@
+import { lookup } from 'node:dns/promises';
+import { BlockList, isIP } from 'node:net';
+
 import { decryptSecret } from '@/lib/secret-crypto';
 
 import type { GrowthSettings } from './types';
 import type { WhatsAppConnection, WhatsAppProvider, WhatsAppSendResult } from './provider';
+
+const blockedAddresses = new BlockList();
+blockedAddresses.addSubnet('0.0.0.0', 8, 'ipv4');
+blockedAddresses.addSubnet('10.0.0.0', 8, 'ipv4');
+blockedAddresses.addSubnet('100.64.0.0', 10, 'ipv4');
+blockedAddresses.addSubnet('127.0.0.0', 8, 'ipv4');
+blockedAddresses.addSubnet('169.254.0.0', 16, 'ipv4');
+blockedAddresses.addSubnet('172.16.0.0', 12, 'ipv4');
+blockedAddresses.addSubnet('192.168.0.0', 16, 'ipv4');
+blockedAddresses.addSubnet('224.0.0.0', 4, 'ipv4');
+blockedAddresses.addAddress('::', 'ipv6');
+blockedAddresses.addAddress('::1', 'ipv6');
+blockedAddresses.addSubnet('fc00::', 7, 'ipv6');
+blockedAddresses.addSubnet('fe80::', 10, 'ipv6');
+blockedAddresses.addSubnet('ff00::', 8, 'ipv6');
+
+const BLOCKED_HOSTS = new Set([
+  'localhost',
+  'localhost.localdomain',
+  'metadata',
+  'metadata.google.internal',
+  'metadata.google.com',
+]);
+
+export type HostLookup = (hostname: string) => Promise<readonly string[]>;
+
+async function publicLookup(hostname: string): Promise<readonly string[]> {
+  const records = await lookup(hostname, { all: true, verbatim: true });
+  return records.map((record) => record.address);
+}
 
 export type EvolutionConfig = {
   baseUrl: string;
@@ -21,15 +54,85 @@ function text(value: unknown): string | null {
   return typeof value === 'string' && value.trim() ? value : null;
 }
 
-export function evolutionConfigFrom(
+function httpUrl(value: string): URL | null {
+  try {
+    const url = new URL(value);
+    if ((url.protocol !== 'http:' && url.protocol !== 'https:') || url.username || url.password) {
+      return null;
+    }
+    return url;
+  } catch {
+    return null;
+  }
+}
+
+function sameOrigin(left: string, right: string): boolean {
+  const a = httpUrl(left);
+  const b = httpUrl(right);
+  return Boolean(a && b && a.origin === b.origin);
+}
+
+function isBlockedAddress(address: string): boolean {
+  const value = address.toLowerCase();
+  if (value.startsWith('::ffff:')) {
+    const mapped = value.slice('::ffff:'.length);
+    return isIP(mapped) !== 4 || isBlockedAddress(mapped);
+  }
+  const kind = isIP(value);
+  if (kind === 0) return true;
+  return blockedAddresses.check(value, kind === 4 ? 'ipv4' : 'ipv6');
+}
+
+function blockedHost(hostname: string): boolean {
+  const host = hostname.toLowerCase().replace(/\.$/, '');
+  return !host || BLOCKED_HOSTS.has(host) || host.endsWith('.localhost') || /^\d+$/.test(host);
+}
+
+/** True for an https origin whose host does not resolve to a private or metadata address. */
+export async function isPublicHttpsUrl(value: string, resolve: HostLookup): Promise<boolean> {
+  const url = httpUrl(value);
+  if (!url || url.protocol !== 'https:' || blockedHost(url.hostname)) return false;
+  if (isIP(url.hostname) !== 0) return !isBlockedAddress(url.hostname);
+  let addresses: readonly string[];
+  try {
+    addresses = await resolve(url.hostname);
+  } catch {
+    return false;
+  }
+  return addresses.length > 0 && addresses.every((address) => !isBlockedAddress(address));
+}
+
+/**
+ * The env base URL is the allowlist and may use `EVOLUTION_API_KEY`. A different
+ * per-tenant URL must be public https and uses only that tenant's own key.
+ */
+export async function resolveEvolutionConfig(
   settings: GrowthSettings | null,
-  env: NodeJS.ProcessEnv = process.env
-): EvolutionConfig | null {
-  const baseUrl = (settings?.waApiUrl || env.EVOLUTION_API_URL || '').trim().replace(/\/$/, '');
+  env: NodeJS.ProcessEnv = process.env,
+  resolve: HostLookup = publicLookup
+): Promise<EvolutionConfig | null> {
+  const envUrl = (env.EVOLUTION_API_URL || '').trim().replace(/\/$/, '');
+  const tenantUrl = (settings?.waApiUrl || '').trim().replace(/\/$/, '');
   const instance = (settings?.waInstanceName || settings?.organizationId || '').trim();
-  let apiKey = (env.EVOLUTION_API_KEY || '').trim();
-  if (settings?.waApiKeyEnc) apiKey = decryptSecret(settings.waApiKeyEnc);
-  if (!baseUrl || !apiKey || !instance) return null;
+  const globalKey = (env.EVOLUTION_API_KEY || '').trim();
+  let tenantKey = '';
+  if (settings?.waApiKeyEnc) {
+    try {
+      tenantKey = decryptSecret(settings.waApiKeyEnc).trim();
+    } catch {
+      return null;
+    }
+  }
+  if (!instance) return null;
+
+  if (tenantUrl && !(envUrl && sameOrigin(tenantUrl, envUrl))) {
+    if (!tenantKey || !(await isPublicHttpsUrl(tenantUrl, resolve))) return null;
+    return { baseUrl: tenantUrl, apiKey: tenantKey, instance };
+  }
+
+  const baseUrl = tenantUrl || envUrl;
+  const apiKey = tenantKey || globalKey;
+  if (!httpUrl(baseUrl) || !apiKey) return null;
   return { baseUrl, apiKey, instance };
 }
 
@@ -74,6 +177,7 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
     const url = `${this.config.baseUrl}/message/sendText/${encodeURIComponent(this.config.instance)}`;
     const response = await this.fetchImpl(url, {
       method: 'POST',
+      redirect: 'manual',
       headers: {
         apikey: this.config.apiKey,
         'content-type': 'application/json',
@@ -81,6 +185,7 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
       body: JSON.stringify({ number, text: body }),
       signal: AbortSignal.timeout(10_000),
     });
+    if (response.status >= 300 && response.status < 400) throw new Error(`HTTP ${response.status}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const json = (await response.json().catch(() => null)) as unknown;
     const id = messageId(json);
@@ -92,9 +197,11 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
     const url = `${this.config.baseUrl}/instance/connectionState/${encodeURIComponent(this.config.instance)}`;
     try {
       const response = await this.fetchImpl(url, {
+        redirect: 'manual',
         headers: { apikey: this.config.apiKey },
         signal: AbortSignal.timeout(10_000),
       });
+      if (response.status >= 300 && response.status < 400) return 'unavailable';
       if (!response.ok) return 'unavailable';
       const state = connectionState(await response.json().catch(() => null));
       if (state === 'open') return 'connected';
@@ -105,12 +212,13 @@ export class EvolutionWhatsAppProvider implements WhatsAppProvider {
   }
 }
 
-export function createEvolutionProvider(
+export async function createEvolutionProvider(
   settings: GrowthSettings | null,
   env: NodeJS.ProcessEnv = process.env,
-  fetchImpl: FetchImpl = fetch
-): WhatsAppProvider | null {
-  const config = evolutionConfigFrom(settings, env);
+  fetchImpl: FetchImpl = fetch,
+  resolve: HostLookup = publicLookup
+): Promise<WhatsAppProvider | null> {
+  const config = await resolveEvolutionConfig(settings, env, resolve);
   if (!config) return null;
   return new EvolutionWhatsAppProvider(config, fetchImpl);
 }
