@@ -329,7 +329,9 @@ describe('counter receipt authorization', () => {
   });
 
   it('keeps Khata tender off the branch-assignment guard', async () => {
-    const f = fixture(dispense);
+    // Khata is gated on pharmacy:counter (qa-300), not the branch-assignment
+    // guard, so a counter cashier reaches the money transaction directly.
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
     f.db.$transaction.mockRejectedValue(new Error('khata-reached'));
     await expect(
       f.caller().tender({
@@ -372,6 +374,50 @@ describe('counter receipt authorization', () => {
         f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
       ).resolves.toMatchObject({ receiptNumber: 7 });
     }
+  });
+
+  it('allows a cashier whose counter grant is the canonical pharmacy:counter', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ receiptNumber: 7 });
+  });
+
+  it('lets a pharmacy:* wildcard reach the counter through the non-clinical grant', async () => {
+    const f = fixture([{ capability: 'pharmacy:*', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).resolves.toMatchObject({ receiptNumber: 7 });
+  });
+
+  it('denies when a wildcard would only reach the clinical dispense capability', async () => {
+    // pharmacy:* is allowed, but the non-clinical counter and receipt grants are
+    // explicitly denied. The only receipt-read action a wildcard could still match
+    // is the clinical pharmacy:dispense, which a wildcard must never confer.
+    const f = fixture([
+      { capability: 'pharmacy:*', effect: 'ALLOW' },
+      { capability: 'pharmacy:counter', effect: 'DENY' },
+      { capability: 'pharmacy:receipt', effect: 'DENY' },
+    ]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('honors a wildcard denial over a clinical capability held by exact grant', async () => {
+    // A dispenser's explicit pharmacy:dispense would otherwise admit them, but a
+    // wildcard DENY revokes clinical access just as broadly as any other.
+    const f = fixture([
+      { capability: 'pharmacy:dispense', effect: 'ALLOW' },
+      { capability: 'pharmacy:*', effect: 'DENY' },
+    ]);
+    assign(f, ['branch-a']);
+    await expect(
+      f.caller().counterReceipt({ branchId: 'branch-a', saleId: 'sale-a' })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 
   it('denies an inactive database user and an inactive assignment', async () => {

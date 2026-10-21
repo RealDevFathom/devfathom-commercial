@@ -199,6 +199,33 @@ describe('Khata router trust and recovery boundary', () => {
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
+  it.each([1, 99, 100])(
+    'allows a cashier with only pharmacy:counter to charge %i minor units within the limit',
+    async (amountMinor) => {
+      const f = fixture();
+      f.user.role = 'EMPLOYEE';
+      vi.mocked(can).mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+
+      await expect(f.caller().tender({ ...input, amountMinor })).resolves.toMatchObject({
+        tenderId: 'tender-a',
+      });
+
+      expect(can).toHaveBeenCalledWith(
+        f.user,
+        'pharmacy:counter',
+        undefined,
+        expect.objectContaining({ db: f.db, source: 'TRPC' })
+      );
+      expect(can).not.toHaveBeenCalledWith(
+        expect.anything(),
+        'pharmacy:dispense',
+        expect.anything(),
+        expect.anything()
+      );
+      expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+    }
+  );
   it('appends a refund payment once without editing the original charge', async () => {
     const f = fixture();
     const charge = { id: 'khata:tender-a', familyAccountId: 'family-a' };

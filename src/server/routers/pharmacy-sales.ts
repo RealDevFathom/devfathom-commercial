@@ -144,12 +144,15 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
 
 async function khataScope(ctx: TRPCContext, branch: string) {
   const scope = await scopeFor(ctx, branch);
+  // Khata is a counter tender, not a clinical dispensing decision. Cashiers may
+  // charge within the account limit; pharmacy:manage is checked separately only
+  // when an over-limit override is requested.
   if (
     ctx.organization?.vertical !== 'PHARMACY' ||
     ctx.organization.id !== scope.organizationId ||
     ctx.session!.user.organizationId !== scope.organizationId ||
     !hasModule(ctx.entitlements, 'pharmacy-counter') ||
-    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
+    !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:counter', undefined, {
       db: ctx.db,
       source: 'TRPC',
     }))
@@ -271,17 +274,48 @@ async function loadCounterReceipt(ctx: TRPCContext, scope: LedgerScope, saleId: 
   });
 }
 
-const RECEIPT_READ_CAPABILITIES = [
-  'pharmacy:dispense',
-  'pharmacy.dispense',
-  'pharmacy:receipt',
-  'pharmacy.receipt',
-  'pharmacy.counter',
-] as const;
+// Canonical capabilities that admit a cashier or dispenser to the counter sale
+// and receipt surfaces. The 20261021110000_canonical_pharmacy_capabilities
+// migration rewrites the dotted grants (e.g. `pharmacy.counter`) to these names
+// and deletes the legacy rows, so the gate is keyed on the canonical form.
+const RECEIPT_READ_CAPABILITIES = ['pharmacy:counter', 'pharmacy:dispense', 'pharmacy:receipt'] as const;
 
-function capabilityCovers(rule: string, action: string): boolean {
-  if (rule === '*' || rule === action) return true;
-  if (rule.endsWith(':*') || rule.endsWith('.*')) return action.startsWith(rule.slice(0, -1));
+// A grant still carrying a legacy dotted name is honored only through this exact
+// alias map — never by a dotted wildcard — so a role left mid-migration keeps its
+// counter access without widening it.
+const LEGACY_CAPABILITY_ALIASES: Record<string, string> = {
+  'pharmacy.counter': 'pharmacy:counter',
+  'pharmacy.dispense': 'pharmacy:dispense',
+  'pharmacy.receipt': 'pharmacy:receipt',
+};
+
+// Clinical capabilities are never conferred by a wildcard: dispensing, the
+// controlled-register/incident safety surface, and catalogue review must each be
+// held explicitly. This mirrors the migration, which excludes pharmacy:safety
+// from the legacy `pharmacy.*` expansion.
+const CLINICAL_CAPABILITIES = new Set(['pharmacy:dispense', 'pharmacy:safety', 'pharmacy:catalogue-review']);
+
+function capabilityGrants(rule: string, action: string): boolean {
+  // Exact canonical grant, or a legacy dotted grant matched by its exact alias.
+  if (rule === action) return true;
+  if (LEGACY_CAPABILITY_ALIASES[rule] === action) return true;
+  // A wildcard confers only non-clinical, canonical-namespace capabilities. A
+  // clinical action is never reached by a wildcard, and a legacy dotted wildcard
+  // (`pharmacy.*`) confers nothing because it is not an alias above.
+  if (CLINICAL_CAPABILITIES.has(action)) return false;
+  if (rule === '*') return true;
+  if (rule.endsWith(':*')) return action.startsWith(rule.slice(0, -1));
+  return false;
+}
+
+function capabilityDenies(rule: string, action: string): boolean {
+  // A denial is honored broadly, including a wildcard over a clinical action, so
+  // revoking access is never weaker than granting it. Legacy dotted denials still
+  // match only by their exact alias.
+  if (rule === action) return true;
+  if (LEGACY_CAPABILITY_ALIASES[rule] === action) return true;
+  if (rule === '*') return true;
+  if (rule.endsWith(':*')) return action.startsWith(rule.slice(0, -1));
   return false;
 }
 
@@ -289,9 +323,10 @@ function capabilityDecision(
   rules: { capability: string; effect: string }[],
   action: string
 ): 'ALLOW' | 'DENY' | null {
-  const matched = rules.filter((rule) => capabilityCovers(rule.capability, action));
-  if (matched.some((rule) => rule.effect === 'DENY')) return 'DENY';
-  if (matched.some((rule) => rule.effect === 'ALLOW')) return 'ALLOW';
+  if (rules.some((rule) => rule.effect === 'DENY' && capabilityDenies(rule.capability, action)))
+    return 'DENY';
+  if (rules.some((rule) => rule.effect === 'ALLOW' && capabilityGrants(rule.capability, action)))
+    return 'ALLOW';
   return null;
 }
 
