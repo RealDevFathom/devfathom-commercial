@@ -205,7 +205,12 @@ export const dayCorrectBody = z
 /** The five money capabilities a terminal route may gate on, plus the approver's
  * `coauth:approve` — all pre-existing entries in `vertical-catalog.ts` (C11). */
 export type MoneyCapability =
-  'payments:collect' | 'payments:refund' | 'cash:open' | 'cash:adjust' | 'cash:close';
+  | 'orders:complimentary'
+  | 'payments:collect'
+  | 'payments:refund'
+  | 'cash:open'
+  | 'cash:adjust'
+  | 'cash:close';
 
 type CapabilityRule = { capability: string; effect: 'ALLOW' | 'DENY' };
 
