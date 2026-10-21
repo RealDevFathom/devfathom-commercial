@@ -503,9 +503,21 @@ export const organizationAdminRouter = router({
       const id = organizationId(ctx);
       const target = await ctx.db.user.findFirst({
         where: { id: input.id, organizationId: id },
-        select: { id: true, email: true },
+        select: { id: true, email: true, status: true },
       });
       if (!target) throw new TRPCError({ code: 'NOT_FOUND', message: 'Member not found.' });
+      if (input.enabled && target.id === ctx.session.user.id) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You cannot grant Goods in to yourself.',
+        });
+      }
+      if (input.enabled && target.status === 'INACTIVE') {
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Reactivate this member before granting Goods in.',
+        });
+      }
       const org = await ctx.db.organization.findUnique({
         where: { id },
         select: { vertical: true },
@@ -517,6 +529,19 @@ export const organizationAdminRouter = router({
         });
       }
       const capability = 'pharmacy:procurement';
+      const existing = await ctx.db.userPermissionOverride.findFirst({
+        where: { organizationId: id, userId: target.id, capability },
+        select: { effect: true },
+      });
+      // Security (#177): an explicit DENY is a deliberate restriction; this toggle never
+      // overwrites or removes it.
+      if (existing?.effect === 'DENY') {
+        throw new TRPCError({
+          code: 'CONFLICT',
+          message:
+            'This member has an explicit Goods in denial. Remove it through access review first.',
+        });
+      }
       if (input.enabled) {
         await ctx.db.userPermissionOverride.upsert({
           where: { userId_capability: { userId: target.id, capability } },

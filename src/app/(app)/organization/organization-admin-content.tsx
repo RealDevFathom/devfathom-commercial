@@ -564,7 +564,11 @@ export function OrganizationAdminContent() {
                   <label className="flex items-center gap-2 text-sm">
                     <input
                       type="checkbox"
-                      defaultChecked={user.permissionOverrides.some((o) => o.effect === 'ALLOW')}
+                      defaultChecked={user.permissionOverrides.some(
+                        (o) =>
+                          o.effect === 'ALLOW' &&
+                          (o.expiresAt === null || new Date(o.expiresAt) > new Date())
+                      )}
                       disabled={
                         procurement.isPending ||
                         user.permissionOverrides.some((o) => o.effect === 'DENY')
