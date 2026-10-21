@@ -1,3 +1,4 @@
+import { staffHasCapability } from '@/lib/restaurant/job-roles';
 import { NextResponse } from 'next/server';
 
 import { operatorHasCapability } from '@/lib/restaurant/checkout-routes';
@@ -30,10 +31,27 @@ export const GET = withTerminalAuth(async (ctx) => {
     },
   });
 
+  const eligible =
+    ctx.device.kind === 'KDS'
+      ? (
+          await Promise.all(
+            operators.map(async (operator) =>
+              (await staffHasCapability(
+                ctx.db,
+                operator.id,
+                ctx.device.branchId,
+                'kitchen:operate'
+              ))
+                ? operator
+                : null
+            )
+          )
+        ).filter((operator) => operator !== null)
+      : operators;
   const now = new Date();
   return NextResponse.json({
     operators: await Promise.all(
-      operators.map(async (operator) => ({
+      eligible.map(async (operator) => ({
         staffProfileId: operator.id,
         displayName: operator.displayName,
         role: operator.user?.organizationRole?.name ?? operator.user?.title ?? 'Staff',

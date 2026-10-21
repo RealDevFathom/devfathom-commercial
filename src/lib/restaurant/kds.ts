@@ -22,7 +22,7 @@ import {
   missingIdempotencyKey,
   orderErrorResponse,
 } from './terminal-orders';
-import { withTerminalAuth } from './terminal-auth';
+import { withKdsAuth } from './kds-auth';
 
 /**
  * M4-L4 — the KDS read-model projection + the fixed KDS action mapping.
@@ -388,7 +388,7 @@ export const kdsAdvanceBody = z
  * action can only ever be a legal item transition.
  */
 export function kdsAdvanceRoute(action: KdsAction) {
-  return withTerminalAuth(async (ctx, request) => {
+  return withKdsAuth(async (ctx, request) => {
     const station = requireKdsStation(ctx.device);
     if (!station.ok) return station.response;
 

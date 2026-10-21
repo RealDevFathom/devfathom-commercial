@@ -339,3 +339,21 @@ describe('mutation wiring', () => {
     });
   });
 });
+
+it.each(['kitchen', 'cashier', 'server'])(
+  'requires kitchen:operate for the %s KDS ticket reader',
+  async (role) => {
+    mocks.can.mockImplementation(
+      async (_subject, action) => action === 'kitchen:operate' && role === 'kitchen'
+    );
+    const result = caller().listKitchenTickets({ branchId: 'branch_1' });
+    if (role === 'kitchen') await expect(result).resolves.toEqual({ tickets: [] });
+    else await expect(result).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'kitchen:operate',
+      undefined,
+      expect.anything()
+    );
+  }
+);

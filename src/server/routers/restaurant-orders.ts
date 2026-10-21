@@ -172,7 +172,7 @@ export const restaurantOrdersRouter = router({
     .input(z.object({ orderId: ID }).strict())
     .query(async ({ ctx, input }) => getOrder(ctx.db, input.orderId)),
 
-  listKitchenTickets: readProcedure
+  listKitchenTickets: capabilityProcedure('kitchen:operate')
     .input(
       z
         .object({
@@ -374,7 +374,7 @@ export const restaurantOrdersRouter = router({
       return result;
     }),
 
-  advanceItem: manageProcedure
+  advanceItem: capabilityProcedure('kitchen:operate')
     .input(
       z
         .object({
