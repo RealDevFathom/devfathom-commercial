@@ -37,6 +37,10 @@ vi.mock('@/lib/restaurant/operator-credentials', async (importOriginal) => ({
   registerFailedAttempt: vi.fn(() => ({})),
   clearLockout: vi.fn(() => ({})),
 }));
+vi.mock('@/lib/pharmacy/regulatory', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/pharmacy/regulatory')>()),
+  assertStoredBranchMayOperate: vi.fn(async () => undefined),
+}));
 
 import { can } from '@/lib/abac';
 import {
@@ -58,7 +62,6 @@ const line = {
   packLevelId: 'pack-1',
   saleUnit: 'STRIP' as const,
   quantity: 1,
-  canonicalUnitsPerSaleUnit: 10,
   idempotencyKey: 'counter:sale-1:medicine-rx',
 };
 
@@ -79,6 +82,15 @@ function fixture(flags: { rx?: boolean; restricted?: boolean } = { rx: true }) {
         restricted: false,
         controlled: false,
         ...flags,
+      })),
+    },
+    presentation: {
+      findFirst: vi.fn(async () => ({
+        id: 'presentation-1',
+        packLevels: [
+          { id: 'pack-1', parentPackLevelId: null, unitsPerParent: 1 },
+          { id: 'unit-1', parentPackLevelId: 'pack-1', unitsPerParent: 10 },
+        ],
       })),
     },
     pharmacySale: {
@@ -155,6 +167,19 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
     await f.caller.addLine(line);
     expect(addSaleLine).toHaveBeenCalledOnce();
     expect(f.authorizationCreate).not.toHaveBeenCalled();
+    expect(addSaleLine).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.anything(),
+      expect.objectContaining({ canonicalUnitsPerSaleUnit: 10 })
+    );
+  });
+
+  it('rejects a client-supplied canonical conversion instead of trusting it', async () => {
+    const f = fixture({ rx: false });
+    await expect(
+      f.caller.addLine({ ...line, canonicalUnitsPerSaleUnit: 1 } as typeof line)
+    ).rejects.toThrow();
+    expect(addSaleLine).not.toHaveBeenCalled();
   });
 
   it('refuses a prescription line for another medicine or an expired prescription', async () => {
@@ -298,7 +323,9 @@ describe('pharmacySales.addLine prescription gate (SEC)', () => {
     });
     await expect(
       f.caller.addLine({ ...line, rxAuthorization: { prescriptionLineId: 'rx-line-1' } })
-    ).resolves.toHaveProperty('blocked');
+    ).resolves.toMatchObject({
+      blocked: expect.not.stringContaining('not for the patient'),
+    });
     expect(addSaleLine).not.toHaveBeenCalled();
     expect(f.db.prescriptionFill.create).not.toHaveBeenCalled();
   });

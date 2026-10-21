@@ -20,7 +20,11 @@ import {
 } from './receiving';
 
 const AT = new Date('2026-09-02T09:00:00.000Z');
-const LICENCE = { expiresAt: new Date('2027-01-01T00:00:00.000Z'), verified: true };
+const LICENCE = {
+  expiresAt: new Date('2027-01-01T00:00:00.000Z'),
+  verified: true,
+  superseded: false,
+};
 
 /** Everything present: the one shape that is allowed to become saleable stock. */
 function completeEvidence(overrides: Partial<SaleableEvidence> = {}): SaleableEvidence {
@@ -77,7 +81,13 @@ describe('PUR-02 — stock is not saleable until every named field is present', 
           completeEvidence({
             supplier: {
               authorized: true,
-              licences: [{ expiresAt: new Date('2026-09-01T00:00:00.000Z'), verified: true }],
+              licences: [
+                {
+                  expiresAt: new Date('2026-09-01T00:00:00.000Z'),
+                  verified: true,
+                  superseded: false,
+                },
+              ],
             },
           })
         )

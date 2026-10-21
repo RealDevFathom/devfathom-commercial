@@ -34,6 +34,23 @@ const props: CounterRxPanelProps = {
 };
 
 describe('counter prescription capture permission', () => {
+  it('shows a patient mismatch only after a patient is attached', () => {
+    const mismatch = {
+      key: 'rx-patient-mismatch:line-1',
+      severity: 'SAFETY_BLOCK' as const,
+      code: 'PRESCRIPTION_PATIENT_MISMATCH',
+      message: 'This prescription is not for the patient linked to this sale.',
+      saleLineRef: 'line-1',
+      remedy: 'Link the correct patient.',
+    };
+
+    const { rerender } = render(<CounterRxPanel {...props} patient={null} alerts={[mismatch]} />);
+    expect(screen.queryByText(mismatch.message)).not.toBeInTheDocument();
+
+    rerender(<CounterRxPanel {...props} alerts={[mismatch]} />);
+    expect(screen.getByText(mismatch.message)).toBeInTheDocument();
+  });
+
   it('hides capture and photo upload from cashiers even with a capture callback', () => {
     render(<CounterRxPanel {...props} onCapturePrescription={vi.fn()} />);
     expect(screen.queryByText('Capture prescription')).not.toBeInTheDocument();
