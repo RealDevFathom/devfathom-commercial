@@ -240,7 +240,11 @@ export const pharmacySafetyRouter = router({
   createInspectionPack: safety
     .input(z.object({ branchId: z.string().min(1), from: z.date(), to: z.date() }).strict())
     .query(async ({ ctx, input }) => {
-      if (input.from > input.to) throw new Error('Inspection pack start must not follow its end.');
+      if (input.from > input.to)
+        throw new TRPCError({
+          code: 'BAD_REQUEST',
+          message: 'Inspection pack start must not follow its end.',
+        });
       const manifest = await createInspectionPack(ctx.db, input);
       annotateAudit(ctx, {
         category: 'PHARMACY_SAFETY',
