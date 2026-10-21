@@ -649,16 +649,24 @@ async function purgeData(db: PrismaClient, job: PlatformJob): Promise<JobResult>
   await db.$executeRaw`
     INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
     SELECT "organizationId", 'customer', id,
-      jsonb_build_object('phone', "whatsappE164", 'optIn', "whatsappOptIn",
-        'optInAt', "whatsappOptInAt", 'optOutAt', "whatsappOptOutAt")
+      jsonb_build_object('phone', "whatsappE164", 'timestamp', "whatsappOptInAt",
+        'keyword', 'opt-in', 'id', id)
     FROM growth_wa_customers WHERE "organizationId" = ${organizationId}
-      AND ("whatsappOptInAt" IS NOT NULL OR "whatsappOptOutAt" IS NOT NULL)
+      AND "whatsappOptInAt" IS NOT NULL
     ON CONFLICT DO NOTHING
   `;
   await db.$executeRaw`
     INSERT INTO growth_wa_consent_retention ("tenantId", "evidenceKind", "sourceId", evidence)
-    SELECT "organizationId", 'inbound', id, to_jsonb(growth_wa_messages)
-    FROM growth_wa_messages WHERE "organizationId" = ${organizationId} AND direction = 'in'
+    SELECT m."organizationId", 'inbound', m.id,
+      jsonb_build_object('id', m.id, 'waMessageId', m."waMessageId",
+        'phone', c."whatsappE164", 'timestamp', m."createdAt",
+        'keyword', CASE WHEN lower(trim(m.body)) ~ '^(stop|unsubscribe|band karo|بند)(\\s|$)'
+          THEN 'STOP' ELSE 'START' END)
+    FROM growth_wa_messages m
+    LEFT JOIN growth_wa_customers c ON c.id = m."customerId"
+      AND c."organizationId" = m."organizationId"
+    WHERE m."organizationId" = ${organizationId} AND m.direction = 'in'
+      AND lower(trim(m.body)) ~ '^(stop|unsubscribe|band karo|بند|start|yes|haan|ہاں)(\\s|$)'
     ON CONFLICT DO NOTHING
   `;
   const dependencies = await db.$queryRaw<TableDependency[]>(Prisma.sql`
@@ -895,6 +903,10 @@ export type ProcessJobsResult = {
 
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
+  // Runs on every scheduled platform worker pass, even with no queued jobs.
+  await withPlatformDb((db) => db.$executeRaw`
+    DELETE FROM growth_wa_consent_retention WHERE "expiresAt" <= now()
+  `);
   await enqueueCameraEvidenceJobs(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),

@@ -239,12 +239,18 @@ describeIfDatabase('tenant purge, against PostgreSQL', () => {
     });
 
     const evidence = await withPlatformDb((db) =>
-      db.$queryRawUnsafe<Array<{ evidenceKind: string }>>(
-        `SELECT "evidenceKind" FROM growth_wa_consent_retention WHERE "tenantId" = $1 ORDER BY "evidenceKind"`,
+      db.$queryRawUnsafe<Array<{ evidenceKind: string; evidence: Record<string, unknown>; expiresAt: Date; retainedAt: Date }>>(
+        `SELECT "evidenceKind", evidence, "expiresAt", "retainedAt" FROM growth_wa_consent_retention WHERE "tenantId" = $1 ORDER BY "evidenceKind"`,
         PURGED_ORG
       )
     );
     expect(evidence.map((row) => row.evidenceKind)).toEqual(['customer', 'inbound']);
+    for (const row of evidence) {
+      expect(Object.keys(row.evidence).sort()).toEqual(
+        (row.evidenceKind === 'inbound' ? ['id', 'waMessageId', 'phone', 'timestamp', 'keyword'] : ['id', 'phone', 'timestamp', 'keyword']).sort()
+      );
+      expect(row.expiresAt.getTime() - row.retainedAt.getTime()).toBe(365 * 24 * 60 * 60 * 1000);
+    }
     const isolated = await withTenantDb(LIVE_ORG, (db) =>
       db.$queryRawUnsafe<unknown[]>(
         `SELECT evidence FROM growth_wa_consent_retention WHERE "tenantId" = $1`,
