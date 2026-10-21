@@ -39,6 +39,7 @@ vi.mock('@/server/trpc', async () => ({
 }));
 
 import type { TRPCContext } from '../trpc';
+import { router } from '../trpc';
 import { pharmacyPrescriptionsRouter } from './pharmacy-prescriptions';
 import { GET } from '@/app/api/pharmacy/prescription-files/route';
 import { GET as sharedFileGET } from '@/app/api/files/[name]/route';
@@ -121,6 +122,32 @@ describe('prescription capture and private delivery', () => {
       support: null,
     });
     mocks.context.mockResolvedValue(context());
+  });
+
+  it('allows counter patient lookup without dispensing and denies missing counter access', async () => {
+    const ctx = context();
+    const findMany = vi.fn().mockResolvedValue([]);
+    Object.assign(ctx.db.pharmacyPatient, { findMany });
+    mocks.hasModule.mockImplementation((_entitlements, key) => key === 'pharmacy-counter');
+    mocks.can.mockImplementation(async (_subject, action) => action === 'pharmacy:counter');
+    const app = router({ pharmacyPrescriptions: pharmacyPrescriptionsRouter });
+    const api = app.createCaller(ctx).pharmacyPrescriptions;
+    await expect(api.counterPatients({ query: 'Ali' })).resolves.toEqual({ patients: [] });
+    expect(findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-a' }),
+      })
+    );
+    mocks.can.mockResolvedValue(false);
+    await expect(api.counterPatients({ query: 'Ali' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    mocks.can.mockResolvedValue(true);
+    mocks.hasModule.mockReturnValue(false);
+    await expect(api.counterPatients({ query: 'Ali' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(findMany).toHaveBeenCalledTimes(1);
   });
 
   it('records consent under the shared patient lock with server-owned version', async () => {

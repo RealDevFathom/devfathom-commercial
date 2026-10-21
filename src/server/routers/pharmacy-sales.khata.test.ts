@@ -111,6 +111,80 @@ beforeEach(() => {
   });
 });
 describe('Khata router trust and recovery boundary', () => {
+  it('allows a cashier with counter permission to charge exactly the limit without override', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    vi.mocked(can).mockImplementation(async (_s, action) => action === 'pharmacy:counter');
+    await f.caller().tender(input);
+    expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+  });
+
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'audits a reason and real history for owner/manager %s',
+    async (role) => {
+      const f = fixture();
+      f.user.role = role;
+      vi.mocked(can).mockImplementation(
+        async (_s, action) => action === 'pharmacy:counter' || action === 'pharmacy:manage'
+      );
+      const charge = {
+        id: 'history-charge',
+        kind: 'CHARGE',
+        amountMinor: 50,
+        occurredAt: new Date(Date.now() - 20 * 86400000),
+        dueAt: new Date(Date.now() - 10 * 86400000),
+      };
+      f.db.pharmacyKhataEvent.findMany.mockResolvedValue([charge] as never);
+      await f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: '  Emergency approved  ',
+      });
+      expect(f.db.pharmacyKhataEvent.findMany).toHaveBeenCalledWith(
+        expect.objectContaining({
+          where: expect.objectContaining({
+            organizationId: 'org-a',
+            branchId: 'branch-a',
+            familyAccountId: 'family-a',
+            occurredAt: { gte: expect.any(Date), lte: expect.any(Date) },
+          }),
+        })
+      );
+      const decision = f.db.pharmacyKhataLimitDecision.create.mock.calls[0]![0].data;
+      expect(decision).toMatchObject({
+        organizationId: 'org-a',
+        branchId: 'branch-a',
+        kind: 'OVERRIDDEN',
+        ownerActorId: 'owner-a',
+        score: 88,
+        reasons: {
+          reasons: expect.arrayContaining([
+            '1 charge(s) in the stated window',
+            '1 overdue unsettled charge(s)',
+            'Override reason: Emergency approved',
+          ]),
+        },
+      });
+      expect(decision.windowEnd.getTime() - decision.windowStart.getTime()).toBe(180 * 86400000);
+      expect(applyPharmacyTender).toHaveBeenCalledTimes(1);
+    }
+  );
+
+  it.each(['ADMIN', 'EMPLOYEE'])('requires a reason for owner/manager %s', async (role) => {
+    for (const overrideReason of [undefined, '', '   ']) {
+      const f = fixture();
+      f.user.role = role;
+      await expect(
+        f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason })
+      ).rejects.toBeDefined();
+      expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
+      expect(f.db.pharmacyFamilyAccount.update).not.toHaveBeenCalled();
+    }
+    expect(applyPharmacyTender).not.toHaveBeenCalled();
+  });
+
   it('uses server tenant, CREDIT settlement and an atomic member charge', async () => {
     const f = fixture();
     await f.caller().tender(input);
@@ -132,7 +206,12 @@ describe('Khata router trust and recovery boundary', () => {
   });
   it('hands only the fresh server-session claim to the audited owner gate', async () => {
     const f = fixture();
-    await f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Trusted customer emergency' });
+    await f.caller().tender({
+      ...input,
+      amountMinor: 101,
+      ownerOverride: true,
+      overrideReason: 'Trusted customer emergency',
+    });
     expect(f.db.pharmacyKhataLimitDecision.create).toHaveBeenCalledWith({
       data: expect.objectContaining({
         reasons: expect.objectContaining({
@@ -156,13 +235,23 @@ describe('Khata router trust and recovery boundary', () => {
     const f = fixture();
     f.user.passwordAuthenticatedAt -= 301000;
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Trusted customer emergency' })
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Trusted customer emergency',
+      })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     f.user.passwordAuthenticatedAt = Date.now();
     f.user.role = 'EMPLOYEE';
     vi.mocked(can).mockImplementation(async (_s, action) => action !== 'pharmacy:manage');
     await expect(
-      f.caller().tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Trusted customer emergency' })
+      f.caller().tender({
+        ...input,
+        amountMinor: 101,
+        ownerOverride: true,
+        overrideReason: 'Trusted customer emergency',
+      })
     ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     expect(applyPharmacyTender).not.toHaveBeenCalled();
   });
@@ -175,7 +264,11 @@ describe('Khata router trust and recovery boundary', () => {
       replayUnsafe: true,
       result,
     });
-    expect(await f.caller().tender({ ...input, ownerOverride: true, overrideReason: 'Trusted customer emergency' })).toEqual({
+    expect(
+      await f
+        .caller()
+        .tender({ ...input, ownerOverride: true, overrideReason: 'Trusted customer emergency' })
+    ).toEqual({
       ...result,
       replayed: true,
     });

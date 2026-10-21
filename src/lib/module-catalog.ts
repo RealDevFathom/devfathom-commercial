@@ -268,6 +268,7 @@ export const ACCOUNT_PROCEDURES: ReadonlySet<string> = new Set([
 
 export function moduleForProcedure(path: string): string | null {
   if (ACCOUNT_PROCEDURES.has(path)) return null;
+  if (path === 'pharmacyPrescriptions.counterPatients') return 'pharmacy-counter';
   if (
     /^pharmacyFinance\.(perpetualValuation|grossMargin|leakageReport|marginComparison|financialStatements)$/.test(
       path
