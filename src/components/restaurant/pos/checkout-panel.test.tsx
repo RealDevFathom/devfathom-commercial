@@ -109,6 +109,15 @@ describe('CheckoutPanel', () => {
     expect(screen.getAllByText('24.00')).toHaveLength(3);
   });
 
+  it('does not render the complimentary option or total', async () => {
+    const request: TerminalRequest = async <T,>() =>
+      ({ ...billed, bills: [{ ...billed.bills[0], compTotal: '6.00' }] }) as T;
+    render(<CheckoutPanel open orderId="order-1" request={request} onClose={vi.fn()} />);
+
+    expect(await screen.findByText('Bill total')).toBeVisible();
+    expect(screen.queryByText(/^Comp(?:limentary)?(?: total)?$/i)).not.toBeInTheDocument();
+  });
+
   it('loads summary and cuts one bill through the L5 endpoint', async () => {
     const calls: { path: string; options?: TerminalRequestOptions }[] = [];
     let reads = 0;
