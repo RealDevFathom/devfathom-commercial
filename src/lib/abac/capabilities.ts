@@ -13,10 +13,15 @@ export const EXACT_GRANT_ONLY_ACTIONS: ReadonlySet<string> = new Set([
   'pharmacy:catalogue-review',
 ]);
 
-export function capabilityMatches(rule: string, action: string): boolean {
+export function capabilityMatches(
+  rule: string,
+  action: string,
+  effect: 'ALLOW' | 'DENY' = 'ALLOW'
+): boolean {
   if (!actionPattern.test(action)) return false;
   if (actionPattern.test(rule)) return rule === action;
-  if (EXACT_GRANT_ONLY_ACTIONS.has(action)) return false;
+  // Only grants need the exact name; a wildcard DENY still revokes these actions.
+  if (effect === 'ALLOW' && EXACT_GRANT_ONLY_ACTIONS.has(action)) return false;
   if (rule === '*') return true;
   return wildcardPattern.test(rule) && action.startsWith(rule.slice(0, -1));
 }

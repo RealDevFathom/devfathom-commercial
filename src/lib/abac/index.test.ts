@@ -80,6 +80,36 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
+  it.each(['*', 'pharmacy:*'])(
+    'lets a %s DENY override revoke an exact sensitive grant',
+    async (wildcard) => {
+      for (const action of [
+        'pharmacy:dispense',
+        'pharmacy:catalogue-review',
+        'pharmacy:safety',
+      ] as const) {
+        await expect(
+          can(proprietor, action, undefined, {
+            db: authorizationDb({
+              rolePermissions: permissionsFor('owner-operator'),
+              overrides: [{ capability: wildcard, effect: 'DENY' }],
+            }),
+          })
+        ).resolves.toBe(false);
+        await expect(
+          can(proprietor, action, undefined, {
+            db: authorizationDb({
+              rolePermissions: [
+                ...permissionsFor('owner-operator'),
+                { capability: wildcard, effect: 'DENY' },
+              ],
+            }),
+          })
+        ).resolves.toBe(false);
+      }
+    }
+  );
+
   it('grants owners pharmacy actions and both report actions, but not exact-grant-only ones', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
     const exactOnly = ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:safety'];

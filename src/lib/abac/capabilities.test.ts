@@ -113,6 +113,13 @@ describe('sensitive pharmacy actions need an exact grant', () => {
     }
   });
 
+  it('still lets a wildcard DENY revoke them', () => {
+    for (const action of sensitive) {
+      expect(capabilityMatches('*', action, 'DENY')).toBe(true);
+      expect(capabilityMatches('pharmacy:*', action, 'DENY')).toBe(true);
+    }
+  });
+
   it('leaves wildcards working for every other action', () => {
     expect(capabilityMatches('*', 'pharmacy:counter')).toBe(true);
     expect(capabilityMatches('pharmacy:*', 'pharmacy:counter')).toBe(true);
