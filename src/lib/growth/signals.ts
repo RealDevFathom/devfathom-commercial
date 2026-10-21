@@ -1,4 +1,5 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { budgetMonthStart } from './budget';
 import { calendar, DAY, localDate } from './calendar';
 export function revenueByWeekday(
   sales: Array<{
@@ -52,13 +53,11 @@ export async function plannerSignals(
       _count: { select: { recipients: { where: { redeemedAt: { not: null } } } } },
     },
   });
-  const month = localDate(now);
-  month.setUTCDate(1);
-  month.setUTCHours(0, 0, 0, 0);
+  const monthStart = await budgetMonthStart(db, organizationId, now);
   const redeemed = await db.campaignRecipient.findMany({
     where: {
       organizationId,
-      redeemedAt: { gte: new Date(month.getTime() - 5 * 3600000), lte: now },
+      redeemedAt: { gte: monthStart, lte: now },
     },
     select: { sale: { select: { lines: { select: { discountMinor: true } } } } },
   });

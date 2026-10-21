@@ -114,6 +114,7 @@ describe('weekly planner', () => {
   it('runs once per local week on scheduler retries', async () => {
     const saved = { ...settings } as typeof settings & { lastPlanRunAt: Date | null };
     const db = {
+      $queryRaw: vi.fn(async () => [{ start: new Date('2026-09-30T19:00:00Z') }]),
       growthSettings: {
         findUnique: vi.fn(async () => saved),
         update: vi.fn(async ({ data }) => Object.assign(saved, data)),
@@ -174,6 +175,7 @@ it('computes tenant-scoped segment, spend, basket, and redemption signals withou
     growthMetrics: { churnBand: 'high', nextRefillDueAt: new Date('2026-10-28T00:00:00Z') },
   };
   const db = {
+    $queryRaw: vi.fn(async () => [{ start: new Date('2026-09-30T19:00:00Z') }]),
     pharmacySale: {
       findMany: vi.fn(async () => [
         { completedAt: now, lines: [{ quantity: 2, unitPriceMinor: 1000, discountMinor: 100 }] },
@@ -205,7 +207,7 @@ it('computes tenant-scoped segment, spend, basket, and redemption signals withou
     redemptionRate: 0.1,
     segments: { high: 1, medium: 1, birthdays: 1, refillDue: 1, optedIn: 2 },
   });
-  for (const table of Object.values(db))
+  for (const table of [db.pharmacySale, db.pharmacyCustomer, db.campaign, db.campaignRecipient])
     expect(table.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ where: expect.objectContaining({ organizationId: 'org' }) })
     );

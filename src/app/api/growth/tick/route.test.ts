@@ -113,6 +113,31 @@ describe.each([
     expect(error).toHaveBeenCalledTimes(1);
   });
 
+  it.each(['advance', 'dispatch'])('continues to the next org after %s fails', async (stage) => {
+    findMany.mockResolvedValue([{ id: 'org_enabled' }, { id: 'org_second' }]);
+    mocks.isGrowthEnabled.mockResolvedValue(true);
+    const failure = new Error('private recipient details');
+    (stage === 'advance'
+      ? mocks.advanceCampaigns
+      : mocks.dispatchCampaignMessages
+    ).mockRejectedValueOnce(failure);
+    const error = vi.spyOn(console, 'error').mockImplementation(() => {});
+    const response = await handler(
+      new Request('http://localhost/api/growth/tick', {
+        method,
+        headers: { authorization: `Bearer ${secret}` },
+      })
+    );
+    expect(response.status).toBe(200);
+    expect(mocks.advanceCampaigns).toHaveBeenCalledWith({}, 'org_second');
+    expect(mocks.dispatchCampaignMessages).toHaveBeenCalledWith('org_second');
+    expect(error).toHaveBeenCalledExactlyOnceWith(
+      '[growth.dispatch] failed',
+      'org_enabled',
+      'Error'
+    );
+  });
+
   it('logs nothing when no organizations are enabled', async () => {
     mocks.isGrowthEnabled.mockResolvedValue(false);
     const response = await handler(

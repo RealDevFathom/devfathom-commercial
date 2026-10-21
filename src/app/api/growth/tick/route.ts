@@ -36,8 +36,16 @@ export async function POST(request: Request) {
           );
         }
       }
-      await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
-      await dispatchCampaignMessages(organization.id);
+      try {
+        await withTenantDb(organization.id, (db) => advanceCampaigns(db, organization.id));
+        await dispatchCampaignMessages(organization.id);
+      } catch (error) {
+        console.error(
+          '[growth.dispatch] failed',
+          organization.id,
+          error instanceof Error ? error.name : 'UnknownError'
+        );
+      }
     }
   }
   return NextResponse.json({ ok: true });

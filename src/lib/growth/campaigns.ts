@@ -1,4 +1,6 @@
 import 'server-only';
+import { formatMinor } from '@/lib/pharmacy/counter-receipt';
+import { budgetMonthStart } from './budget';
 import { z } from 'zod';
 import { assertNonClinicalMarketingBody } from '@/lib/pharmacy/marketing';
 import type { Campaign } from '@/generated/prisma/client';
@@ -172,7 +174,7 @@ export async function advanceCampaigns(db: ScopedDb, organizationId: string, now
       const avg = Math.ceil(
         (metrics._sum.spend90dMinor ?? 0) / Math.max(1, metrics._sum.orders90d ?? 0)
       );
-      const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+      const monthStart = await budgetMonthStart(db, organizationId, now);
       const spend = await db.campaignRecipient.findMany({
         where: { organizationId, redeemedAt: { gte: monthStart } },
         select: { sale: { select: { lines: { select: { discountMinor: true } } } } },
@@ -309,7 +311,7 @@ export async function dispatchCampaignMessage(
       discount:
         c.discountType === 'percent'
           ? `${c.discountValue}% on non-medicine products only`
-          : `${c.discountValue ?? 0} minor units on non-medicine products only`,
+          : `${org.currency} ${formatMinor(c.discountValue ?? 0)} on non-medicine products only`,
       code: recipient.code ?? '',
       product: 'item',
       expires: c.codeExpiresAt?.toISOString().slice(0, 10) ?? '',

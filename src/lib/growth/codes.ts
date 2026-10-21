@@ -1,6 +1,7 @@
 import { randomBytes } from 'node:crypto';
 import type { Campaign } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
+import { budgetMonthStart } from './budget';
 import { validateDiscount } from '@/lib/pharmacy/sales';
 
 export function campaignCode(name: string) {
@@ -69,7 +70,7 @@ export async function redeemCode(
   const campaign = recipient.campaign;
   validateCode(recipient, campaign, sale.customerId, now);
   const settings = await db.growthSettings.findUniqueOrThrow({ where: { organizationId } });
-  const monthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const monthStart = await budgetMonthStart(db, organizationId, now);
   const monthly = await db.campaignRecipient.findMany({
     where: { organizationId, redeemedAt: { gte: monthStart } },
     select: { sale: { select: { lines: { select: { discountMinor: true } } } } },

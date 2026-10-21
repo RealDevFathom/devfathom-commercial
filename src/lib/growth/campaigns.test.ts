@@ -180,9 +180,13 @@ function fixture(patch = {}) {
     minSecondsBetweenMsgs: 4,
   };
   const db = {
-    $queryRaw: vi.fn(async () => []),
+    $queryRaw: vi.fn(async () => [{ start: new Date('2026-09-30T19:00:00Z') }]),
     organization: {
-      findUniqueOrThrow: async () => ({ displayName: 'Demo Pharmacy', timezone: 'Asia/Karachi' }),
+      findUniqueOrThrow: async () => ({
+        displayName: 'Demo Pharmacy',
+        timezone: 'Asia/Karachi',
+        currency: 'PKR',
+      }),
     },
     growthSettings: { findUnique: async () => settings, findUniqueOrThrow: async () => settings },
     customerMetrics: { aggregate: async () => ({ _sum: { spend90dMinor: 30000, orders90d: 3 } }) },
@@ -320,7 +324,7 @@ describe('G5 lifecycle and existing outbox', () => {
 });
 
 describe('G5 POS redemption', () => {
-  it('redeems once, attaches customer, reuses line discount and exhausts budget', async () => {
+  it('redeems once, discounts only front-shop lines in a mixed basket and exhausts budget', async () => {
     const c = campaign({ status: 'sent', budgetCapMinor: 100 });
     const r = {
       id: 'recipient',
@@ -351,8 +355,16 @@ describe('G5 POS redemption', () => {
         },
       ],
     };
+    sale.lines.push({
+      id: 'medicine-line',
+      quantity: 1,
+      unitPriceMinor: 10000,
+      unitCostMinor: 5000,
+      discountMinor: 0,
+      medicine: { productFamily: 'MEDICINE', rx: true, controlled: false, restricted: false },
+    });
     const db = {
-      $queryRaw: vi.fn(),
+      $queryRaw: vi.fn(async () => [{ start: new Date('2026-09-30T19:00:00Z') }]),
       growthSettings: { findUniqueOrThrow: async () => ({ monthlyBudgetMinor: 1000 }) },
       campaignRecipient: {
         findFirst: async ({ where }: { where: { organizationId: string } }) =>
@@ -393,6 +405,11 @@ describe('G5 POS redemption', () => {
       now
     );
     expect(result).toEqual({ customerId: 'a', discountMinor: 100 });
+    expect(db.pharmacySaleLine.update).toHaveBeenCalledTimes(1);
+    expect(db.pharmacySaleLine.update).toHaveBeenCalledWith(
+      expect.objectContaining({ where: { id: 'line' } })
+    );
+    expect(sale.lines[1].discountMinor).toBe(0);
     expect(sale.customerId).toBe('a');
     expect(c.status).toBe('exhausted');
     expect(r.status).toBe('redeemed');
