@@ -17,6 +17,14 @@ WITH updated AS (
   SET "seatLimit" = p."defaultSeats", "updatedAt" = CURRENT_TIMESTAMP
   FROM platform_packages p
   WHERE o."packageId" = p.id AND o."seatLimit" = 1 AND p."defaultSeats" > 1
+  -- Preserve explicit operator limits recorded by organization.update.
+  AND NOT EXISTS (
+    SELECT 1 FROM platform_audit_logs a
+    WHERE a."organizationId" = o.id
+      AND a.action = 'organization.update'
+      AND a."targetType" = 'Organization' AND a."targetId" = o.id
+      AND a.after @> '{"seatLimit": 1}'::jsonb
+  )
   RETURNING o.id, o."packageId", o."seatLimit"
 )
 INSERT INTO platform_audit_logs

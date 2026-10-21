@@ -39,7 +39,7 @@ describe('backfill SQL splitter', () => {
 });
 
 (databaseUrl ? describe : describe.skip)('seat backfill on PostgreSQL with forced RLS', () => {
-  it('repairs legacy seats, preserves custom and single-seat limits, and audits once', async () => {
+  it('repairs legacy seats, preserves manual, custom and single-seat limits, and audits once', async () => {
     const client = new Client({ connectionString: databaseUrl });
     await client.connect();
     const schema = `seat_${randomUUID().replaceAll('-', '')}`;
@@ -77,7 +77,11 @@ describe('backfill SQL splitter', () => {
           ('team', 'team', 'AGENCY', 42), ('solo', 'solo', 'AGENCY', 1),
           ('hotel', 'hotel-essentials', 'HOSPITALITY', 1);
         INSERT INTO organizations (id, "packageId", "seatLimit") VALUES
-          ('raise', 'team', 1), ('custom', 'team', 7), ('solo', 'solo', 1), ('hotel', 'hotel', 1);
+          ('manual', 'team', 1), ('raise', 'team', 1), ('custom', 'team', 7), ('solo', 'solo', 1), ('hotel', 'hotel', 1);
+        INSERT INTO platform_audit_logs
+          (id, "organizationId", action, "targetType", "targetId", before, after)
+        VALUES ('manual-seat-limit', 'manual', 'organization.update', 'Organization', 'manual',
+          '{"seatLimit": 42}', '{"seatLimit": 1}');
       `);
       const originalSeats = new Map(
         (await client.query('SELECT id, "seatLimit" FROM organizations')).rows.map((o) => [
@@ -112,13 +116,20 @@ describe('backfill SQL splitter', () => {
       expect(first.orgs.map((o) => [o.id, o.seatLimit])).toEqual([
         ['custom', 7],
         ['hotel', 15],
+        ['manual', 1],
         ['raise', 42],
         ['solo', 1],
       ]);
-      expect(first.audits).toHaveLength(2);
-      const updatedOrgCount = first.orgs.filter((o) => o.seatLimit !== originalSeats.get(o.id)).length;
+      expect(first.audits).toHaveLength(3);
+      const updatedOrgCount = first.orgs.filter(
+        (o) => o.seatLimit !== originalSeats.get(o.id)
+      ).length;
       expect(updatedOrgCount).toBe(2);
-      expect(first.audits.map((a) => [a.organizationId, a.before, a.after])).toEqual([
+      expect(
+        first.audits
+          .filter((a) => a.action === 'organization.seat_limit.backfill')
+          .map((a) => [a.organizationId, a.before, a.after])
+      ).toEqual([
         ['hotel', { seatLimit: 1 }, { seatLimit: 15, packageId: 'hotel' }],
         ['raise', { seatLimit: 1 }, { seatLimit: 42, packageId: 'team' }],
       ]);
