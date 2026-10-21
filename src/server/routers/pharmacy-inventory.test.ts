@@ -215,6 +215,25 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
   });
 
+  it.each([
+    [
+      'acknowledgeRecall',
+      () => caller().acknowledgeRecall({ branchId: 'branch_a', recallNoticeId: 'recall_1' }),
+    ],
+    ['closeRecall', () => caller().closeRecall({ recallNoticeId: 'recall_1' })],
+  ] as const)('requires the pharmacy safety capability before %s', async (_procedure, call) => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(call()).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.anything(),
+      'pharmacy:safety',
+      undefined,
+      expect.anything()
+    );
+    expect(db.$transaction).not.toHaveBeenCalled();
+  });
+
   it('cannot reactivate a recalled or quarantined batch outside the reviewed reversal flow', async () => {
     db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({
       id: 'batch_1',
