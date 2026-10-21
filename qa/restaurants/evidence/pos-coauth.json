@@ -1,0 +1,44 @@
+{
+  "prep": {
+    "roles": {
+      "status": 200,
+      "text": "{\"result\":{\"data\":{\"json\":{\"granted\":[\"cmvhhclf000361yjssb1hecpy\"],\"revoked\":[]}}}}"
+    },
+    "pin": {
+      "status": 200,
+      "text": "{\"result\":{\"data\":{\"json\":{\"id\":\"cmvhl2gjg007schjsk0k9wnti\",\"staffProfileId\":\"cmvhl1tkv005xchjsjecd9zz9\",\"type\":\"PIN\",\"deviceId\":null,\"createdAt\":\"2026-10-21T03:59:34.204Z\"},\"meta\":{\"values\":{\"createdAt\":[\"Date\"]},\"v\":1}}}}"
+    }
+  },
+  "flow": [
+    {
+      "id": "establish",
+      "status": 201,
+      "note": "{\"sessionToken\":\"[redacted]\",\"session\":{\"id\":\"cmvhl2gv80080chjsltknhvrg\",\"state\":\"LOCKED\",\"establishedAt\":\"2026-10-21T03:59:34.626Z\"},\"device\":{\"id\":\"cmvhl2glb007xchjs89sj1mh5\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"name\":\"QA Coauth\",\"kind\":\"POS\",\"stationId\":null,\"branchNam"
+    },
+    {
+      "id": "unlock",
+      "status": 200,
+      "note": "{\"session\":{\"id\":\"cmvhl2gv80080chjsltknhvrg\",\"state\":\"UNLOCKED\",\"activeStaffProfileId\":\"cmvhhclfk004o1yjs8ekhf7z5\"}}"
+    },
+    {
+      "id": "drawer",
+      "status": 200,
+      "note": "{\"drawerSessionId\":\"cmvhl2h4y0083chjsjh85r62z\",\"businessDate\":\"2026-10-21\",\"openingFloat\":\"100.00\",\"replayed\":false}"
+    },
+    {
+      "id": "PAY-03c",
+      "status": 200,
+      "note": "{\"tenderId\":\"cmvhl2h6d0086chjsvphdjk9v\",\"billId\":\"cmvhkt5ds0027chjsijqnsxuk\",\"type\":\"CASH\",\"amount\":\"145.50\",\"tipAmount\":\"0.00\",\"changeGiven\":\"54.50\",\"paymentId\":null,\"drawerSessionId\":\"cmvhl2h4y0083chjsjh85r62z\",\"settled\":true,\"receiptNumber\":1,\"remainingDue\":\"0.00\",\"replayed\":false}"
+    },
+    {
+      "id": "PAY-07",
+      "status": 403,
+      "note": "{\"error\":\"The approving manager lacks the \\\"coauth:approve\\\" capability.\"}"
+    },
+    {
+      "id": "PAY-comp",
+      "status": 403,
+      "note": "{\"error\":\"The approving manager lacks the \\\"coauth:approve\\\" capability.\"}"
+    }
+  ]
+}

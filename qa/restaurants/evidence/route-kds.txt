@@ -1,0 +1,21 @@
+Skip to kitchen display
+
+DevFathom
+
+Restaurant KDS
+
+DISCONNECTED
+RESTAURANT KDS
+Checking enrollment
+
+Verifying this browser with the server.
+
+Browser enrollment
+
+This browser is not enrolled, the enrollment expired, or the device was revoked.
+
+Return to admin-assisted enrollment
+Acting operator
+Operators unavailable — verify the device secret
+Operator PIN
+Verify PIN and unlock

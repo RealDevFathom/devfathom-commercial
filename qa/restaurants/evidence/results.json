@@ -1,0 +1,239 @@
+{
+  "results": [
+    {
+      "id": "SET-02",
+      "status": "pass",
+      "notes": "tenant login HTTP 200, platform login HTTP 200, agency orgs 1",
+      "evidence": []
+    },
+    {
+      "id": "SET-03",
+      "status": "pass",
+      "notes": "Platform session landed on http://admin.localhost:3000/platform. MFA enrollment was completed in this local database when the product required it. docs/LOCAL_SETUP.md does not mention authenticator enrollment.",
+      "evidence": []
+    },
+    {
+      "id": "ONB-01",
+      "status": "pass",
+      "notes": "Type chooser shows four verticals and says nothing is preselected.",
+      "evidence": []
+    },
+    {
+      "id": "ONB-02",
+      "status": "fail",
+      "notes": "Packages: Restaurant Enterprise · 1 default seats | Restaurant Essentials · 1 default seats | Restaurant Operations · 1 default seats. Dedicated controls: 1. Required copy present: true.",
+      "evidence": []
+    },
+    {
+      "id": "ONB-03",
+      "status": "pass",
+      "notes": "Empty submit stayed on the onboarding form.",
+      "evidence": []
+    },
+    {
+      "id": "ONB-04",
+      "status": "pass",
+      "notes": "DB ONBOARDING|RESTAURANT|PKR; branch Clifton|MAIN|true|04:00. Page includes ONBOARDING: true.",
+      "evidence": []
+    },
+    {
+      "id": "ONB-05",
+      "status": "pass",
+      "notes": "HTTP 500 {\"error\":\"The platform command could not be completed.\"}. Rows 1.",
+      "evidence": []
+    },
+    {
+      "id": "ONB-06",
+      "status": "pass",
+      "notes": "HTTP 400 {\"error\":\"The selected package is not available for the RESTAURANT vertical.\"}. Rows 0.",
+      "evidence": []
+    },
+    {
+      "id": "LCY-01",
+      "status": "pass",
+      "notes": "HTTP 400 {\"error\":\"Activation preflight failed: add ready production deployment.\",\"gates\":[{\"gate\":\"production_deployment\",\"message\":\"Add a ready production deployment.\",\"action\":{\"label\":\"Add deployment\",\"href\":\"/platform/deployments?organizationId=cmvhhcld5000g1yjsl1lp4a8v\"}}]}. Status ONBOARDING.",
+      "evidence": []
+    },
+    {
+      "id": "LCY-02",
+      "status": "pass",
+      "notes": "HTTP 200 {\"data\":{\"branch\":{\"id\":\"cmvhhcldp000m1yjs2sc9obnz\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"name\":\"Clifton\",\"code\":\"MAIN\",\"timezone\":\"Asia/Karachi\",\"businessDayCutoff\":\"04:00\",\"shiftSignInEnforced\":false,\"receiptLayout\":null,\"receiptLayoutRevision\":0,\"address\":\"14 Sea View, Karachi\",\"active\":true,\"isDefault\":true,\"createdAt\":\"2026-10-21T02:15:28.573Z\",\"updatedAt\":\"2026-10-21T02:15:34.208Z\"},. Acknowledgements 4.",
+      "evidence": []
+    },
+    {
+      "id": "LCY-03",
+      "status": "pass",
+      "notes": "Deployment READY|http://qa-karahi-house.localhost. Jobs exit 0.",
+      "evidence": []
+    },
+    {
+      "id": "LCY-04",
+      "status": "pass",
+      "notes": "HTTP 200 {\"data\":{\"id\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"slug\":\"qa-karahi-house\",\"legalName\":\"QA Karahi House (Pvt) Ltd\",\"displayName\":\"QA Karahi House\",\"vertical\":\"RESTAURANT\",\"status\":\"ACTIVE\",\"deploymentMode\":\"SHARED\",\"packageId\":\"cmvhh2f3u0028g9js1qtdffbj\",\"timezone\":\"Asia/Karachi\",\"locale\":\"en\",\"currency\":\"PKR\",\"seatLimit\":25,\"isDemo\":false,\"askFathomEnabled\":true,\"lastDemoResetAt\":null,\"gracePeriodDays\":0,\"activatedAt\":\"2026-10-21T02:15:47.499Z\",\"suspendedAt\":null,\"terminatedAt\":null,\"purgeScheduledAt\":null,\"dataResidency\":null,\"primaryContactName\":\"Ayesha Khan\",\"primaryContactEmail\":\"qa-karahi-contac. Status ACTIVE.",
+      "evidence": []
+    },
+    {
+      "id": "LCY-05",
+      "status": "pass",
+      "notes": "HTTP 200 status ACTIVE.",
+      "evidence": []
+    },
+    {
+      "id": "LCY-04-login",
+      "status": "pass",
+      "notes": "Owner landed on http://devfathom.localhost:3000/dashboard.",
+      "evidence": []
+    },
+    {
+      "id": "ONB-07",
+      "status": "pass",
+      "notes": "GET /platform on tenant host 307 location /dashboard. Control API 404 {\"error\":\"Not found.\"}.",
+      "evidence": []
+    },
+    {
+      "id": "TNT-02",
+      "status": "pass",
+      "notes": "Primary navigation text on the dashboard did not include pharmacy Onboarding, Counter, or Regulatory labels.",
+      "evidence": []
+    },
+    {
+      "id": "BRN-01",
+      "status": "fail",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving forward. Email Password Forgot password? Sign in Need access? Contact your workspace admin.",
+      "evidence": []
+    },
+    {
+      "id": "CAT-01",
+      "status": "fail",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving forward. Email Password Forgot password? Sign in Need access? Contact your workspace admin.",
+      "evidence": []
+    },
+    {
+      "id": "CAT-02",
+      "status": "fail",
+      "notes": "click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByRole('tab', { name: /Categories/ })\n",
+      "evidence": []
+    },
+    {
+      "id": "CAT-04",
+      "status": "fail",
+      "notes": "click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByRole('tab', { name: /Categories/ })\n",
+      "evidence": []
+    },
+    {
+      "id": "CAT-05",
+      "status": "fail",
+      "notes": "click: Timeout 30000ms exceeded.\nCall log:\n  - waiting for getByRole('tab', { name: /Categories/ })\n",
+      "evidence": []
+    },
+    {
+      "id": "ORD-01",
+      "status": "pass",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving forward. Email Password Forgot password? Sign in Need access? Contact your workspace admin.",
+      "evidence": []
+    },
+    {
+      "id": "LOY-01",
+      "status": "pass",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving forward. Email Password Forgot password? Sign in Need access? Contact your workspace admin.",
+      "evidence": []
+    },
+    {
+      "id": "INV-01",
+      "status": "pass",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving forward. Email Password Forgot password? Sign in Need access? Contact your workspace admin.",
+      "evidence": []
+    },
+    {
+      "id": "FLR-01",
+      "status": "fail",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving forward. Email Password Forgot password? Sign in Need access? Contact your workspace admin.",
+      "evidence": []
+    },
+    {
+      "id": "MNU-04",
+      "status": "fail",
+      "notes": "Direct page loaded: false. Sidebar mentions menu import: false. DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving",
+      "evidence": []
+    },
+    {
+      "id": "NTF-01",
+      "status": "fail",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving forward. Email Password Forgot password? Sign in Need access? Contact your workspace admin.",
+      "evidence": []
+    },
+    {
+      "id": "NTF-03",
+      "status": "pass",
+      "notes": "No WhatsApp control on notifications, loyalty, or the dashboard shell.",
+      "evidence": []
+    },
+    {
+      "id": "CFG-05",
+      "status": "pass",
+      "notes": "DevFathom FIELDBOOK / 01 THE DELIVERY DESK Work with the whole picture. Projects, finance, clients, and people — each moving part visible before it becomes a decision. All systems operational DevFathom · Company hub SECURE WORKSPACE ACCESS Welcome back Sign in to pick up the work your team is moving",
+      "evidence": []
+    },
+    {
+      "id": "KDS-01",
+      "status": "pass",
+      "notes": "Skip to kitchen display DevFathom Restaurant KDS DISCONNECTED RESTAURANT KDS Checking enrollment Verifying this browser with the server. Browser enrollment This browser is not enrolled, the enrollment expired, or the device was revoked. Return to admin-assisted enrollment Acting operator Operators u",
+      "evidence": []
+    },
+    {
+      "id": "SEC-01",
+      "status": "pass",
+      "notes": "GET /api/restaurant/orders/open-orders 401 {\"error\":\"Terminal browser is not enrolled.\"} || POST /api/restaurant/orders/open 401 {\"error\":\"Terminal browser is not enrolled.\"} || POST /api/restaurant/checkout/tender 401 {\"error\":\"Terminal browser is not enrolled.\"} || POST /api/restaurant/checkout/refund 401 {\"error\":\"Terminal browser is not enrolled.\"} || GET /api/restaurant/kds/queue 401 {\"error\":\"Terminal browser is not enrolled.\"} || GET /api/trpc/restaurantCatalog.listCategories 401 {\"error\":\"Unauthorized\"}",
+      "evidence": []
+    },
+    {
+      "id": "TNT-04-tenant-session",
+      "status": "fail",
+      "notes": "Owner listCategories 401 {\"error\":\"Unauthorized\"}",
+      "evidence": []
+    },
+    {
+      "id": "TNT-04",
+      "status": "pass",
+      "notes": "no cookie 401 {\"error\":\"Unauthorized\"}; platform cookie 401 {\"error\":\"Unauthorized\"}",
+      "evidence": []
+    },
+    {
+      "id": "TNT-01",
+      "status": "pass",
+      "notes": "Agency catalog HTTP list 403. Leaked names: false. Snippet DevFathom Company workspace Alex Carter CEO & Founder Restaurant Catalog Search workspace ⌘K Ask Fathom Ask Fathom chat availability is being checked. Try again shortly. AC 01 Dashboard 02 Projects 03 Clients 04 Notes 05 Meetings 06 Chat 07 Finance 08 Team 09 Reviews 10 Insights 11 HR 12 Audit Log 1",
+      "evidence": []
+    },
+    {
+      "id": "LOY-04",
+      "status": "fail",
+      "notes": "waitForURL: Timeout 25000ms exceeded.\n=========================== logs ===========================\nwaiting for navigation until \"load\"\n============================================================",
+      "evidence": []
+    },
+    {
+      "id": "A11Y-01",
+      "status": "pass",
+      "notes": "No serious or critical axe violations.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/axe-catalog.png"
+      ]
+    },
+    {
+      "id": "UX-02",
+      "status": "pass",
+      "notes": "Dashboard has no horizontal overflow at 390px.",
+      "evidence": []
+    },
+    {
+      "id": "PERF-01",
+      "status": "pass",
+      "notes": "/dashboard 291ms, /restaurant/catalog 340ms, /restaurant/orders 364ms, /restaurant/reports 368ms",
+      "evidence": []
+    }
+  ],
+  "notes": [
+    "shared deployment click 200 {\"data\":{\"id\":\"cmvhhclgw00811yjs48e50p63\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"environment\":\"production\",\"mode\":\"SHARED\",\"status\":\"READY\",\"provider\":\"VERCEL\",\"projectId\":null,\"region\":null,\"url\":\"http://qa-karahi-house.localhost\",\"databaseRef\":null,\"edgeConfigRef\":null,\"version\":null,\"healt",
+    "platform jobs exit 0 {\"recovered\":0,\"claimed\":1,\"succeeded\":1,\"retried\":0,\"failed\":0}\n $ tsx --tsconfig scripts/tsconfig.json scripts/process-platform-jobs.ts \"--max-jobs=25\"\n"
+  ],
+  "commit": "fa3658b715bf2e672f7e38f983b558d8d86b5a75"
+}

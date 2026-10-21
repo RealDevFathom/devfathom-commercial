@@ -1,0 +1,27 @@
+[
+  {
+    "id": "kds-establish",
+    "status": 201,
+    "note": "{\"sessionToken\":\"[redacted]\",\"session\":{\"id\":\"cmvhl1y2p007fchjs8tgsk5o7\",\"state\":\"LOCKED\",\"establishedAt\":\"2026-10-21T03:59:10.270Z\"},\"device\":{\"id\":\"cmvhl1xq2007dchjsuaeqbys4\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"branchId\":\"cmvhhcldp000m1yjs2sc9obnz\",\"name\":\"QA Hot line\",\"kind\":\"KDS\",\"stat"
+  },
+  {
+    "id": "kds-unlock",
+    "status": 200,
+    "note": "{\"session\":{\"id\":\"cmvhl1y2p007fchjs8tgsk5o7\",\"state\":\"UNLOCKED\",\"activeStaffProfileId\":\"cmvhhclfk004o1yjs8ekhf7z5\"}}"
+  },
+  {
+    "id": "KDS-queue",
+    "status": 200,
+    "note": "{\"stationId\":\"cmvhjughs00gq1yjsrw6ss058\",\"businessDate\":\"2026-10-21\",\"tickets\":[{\"ticketId\":\"cmvhkt57t001pchjske8hyc2g\",\"ticketNumber\":1,\"orderId\":\"cmvhkt52y001cchjsuh40tmvw\",\"orderNumber\":1,\"createdAt\":\"2026-10-21T03:52:19.625Z\",\"displayStatus\":\"NEW\",\"items\":[{\"orderItemId\":\"cmvhkt54w001hchjsgvpsnl"
+  },
+  {
+    "id": "KDS-02",
+    "status": 200,
+    "note": "{\"itemId\":\"cmvhkzgjf0048chjskiqxbjtg\",\"replayed\":false,\"action\":\"ACK\"}"
+  },
+  {
+    "id": "KDS-03",
+    "status": 200,
+    "note": "{\"itemId\":\"cmvhkzgjf0048chjskiqxbjtg\",\"replayed\":false,\"action\":\"BUMP\"}"
+  }
+]

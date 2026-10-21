@@ -1,0 +1,357 @@
+{
+  "finishedAt": "2026-10-21T03:25:34.002Z",
+  "bag": {
+    "branchId": "cmvhhcldp000m1yjs2sc9obnz",
+    "brandId": "cmvhjudbm00ey1yjsub1it7sh",
+    "categoryId": "cmvhjudd200f01yjsn2lus46n",
+    "productId": "cmvhjueo300f51yjsrcfr7m60",
+    "naanId": "cmvhjuep700f71yjszelmzid6",
+    "groupId": "cmvhjuesh00fb1yjsy459zrku",
+    "optionId": "cmvhjuetg00fd1yjsa23u017m",
+    "unitId": "cmvhjuf4s00fh1yjslrk94hvx",
+    "ingredientId": "cmvhjufq300fj1yjsc3xbdvpn",
+    "recipeId": "cmvhjufrb00fl1yjsypp47i1c",
+    "recipeVersionId": "cmvhjufsi00fn1yjsldnm7syr",
+    "priceListId": "cmvhjufuz00fr1yjso41bfzwd",
+    "priceVersionId": "cmvhjufw600ft1yjs9ypk6oag",
+    "menuId": "cmvhjug2200g21yjs5jqr333f",
+    "sectionId": "cmvhjug3300g41yjsgxxl417c",
+    "menuItemId": "cmvhjug3w00g61yjs7gxjuya0",
+    "naanItemId": "cmvhjug5700g81yjs0ftsyw6m",
+    "publicationId": "cmvhjug6c00ga1yjs31fwgynt",
+    "floorId": "cmvhjugc700gh1yjs03i3z0j4",
+    "tableId": "cmvhjugd800gj1yjsyhrvof1u",
+    "table2Id": "cmvhjugeh00gl1yjsoi2y6l3q",
+    "stationId": "cmvhjughs00gq1yjsrw6ss058",
+    "ownerStaffId": "",
+    "ownerStaffNote": "200  / 200 ",
+    "ownerRoleId": "",
+    "cashierRoleId": "",
+    "kitchenRoleId": "",
+    "serverRoleId": "",
+    "cashierStaffId": "",
+    "kitchenStaffId": "",
+    "serverStaffId": "",
+    "customerId": "cmvhjuhgi00hl1yjsasvwg6c5",
+    "loyaltyAccountId": "cmvhjuhit00hq1yjso57sdh72",
+    "zoneId": "cmvhjuhlm00hu1yjspc206mkr",
+    "addressId": "",
+    "stockItemId": "cmvhjuhnn00hx1yjs6ryqzro3",
+    "locationId": "cmvhjuhou00hz1yjsua7b8fut",
+    "supplierId": "cmvhjuhpx00i11yjsspqimfse",
+    "poId": "cmvhjuhqu00i31yjsxxh59pxr",
+    "dineOrderId": "",
+    "dineItemId": "",
+    "takeOrderId": "",
+    "billId": "",
+    "tenderId": ""
+  },
+  "results": [
+    {
+      "id": "CAT-reload",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Catalog Search workspace ⌘K Ask Fathom AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admin 13 SOP oversight 14 Restaurant staff 15 Roster 16 Tax 17 Branches 18 Delivery 19 Restaurant device",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/api-catalog.png"
+      ]
+    },
+    {
+      "id": "CAT-02-ui",
+      "status": "pass",
+      "notes": "QA Karahi House Company workspace Ayesha Khan Organization administrator Restaurant Catalog Search workspace ⌘K Ask Fathom AK 01 Dashboard 02 Point of sale 03 Kitchen display 04 Floor 05 Orders 06 Catering 07 Finance & reconciliation 08 Inventory 09 Purchasing 10 SOP board 11 SOP reports 12 SOP admi",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/api-cat-mains.png"
+      ]
+    },
+    {
+      "id": "CAT-05",
+      "status": "pass",
+      "notes": "status 200  dialog none raw false",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/api-xss.png"
+      ]
+    },
+    {
+      "id": "CAT-07",
+      "status": "pass",
+      "notes": "200  users 10",
+      "evidence": []
+    },
+    {
+      "id": "CAT-04",
+      "status": "pass",
+      "notes": "400 Name: Too small: expected string to have >=1 characters",
+      "evidence": []
+    },
+    {
+      "id": "CAT-02",
+      "status": "pass",
+      "notes": "product 200 ; naan 200 ; active 200 ",
+      "evidence": []
+    },
+    {
+      "id": "CAT-03",
+      "status": "pass",
+      "notes": "group 200 ; option 200 ; link 200 ",
+      "evidence": []
+    },
+    {
+      "id": "CAT-06",
+      "status": "pass",
+      "notes": "unit 200 ; ingredient 200 ; recipe 200 ; line 200 ",
+      "evidence": []
+    },
+    {
+      "id": "VAL-01",
+      "status": "pass",
+      "notes": "1.999 400 Price may have at most two decimal places.; -5 400 Price must not be negative.; 850 200 ; naan 200 ; version 200 ",
+      "evidence": []
+    },
+    {
+      "id": "MNU-02",
+      "status": "pass",
+      "notes": "activate 200 ; menu 200 ; item 200 ; naan 200 ; publish 200 ",
+      "evidence": []
+    },
+    {
+      "id": "BRN-02",
+      "status": "pass",
+      "notes": "200  {\"result\":{\"data\":{\"json\":{\"id\":\"cmvhjug8n00gd1yjsy5uz71rz\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"name\":\"Saddar\",\"code\":\"SADDAR\",\"timezone\":\"Asia/Karachi\",\"businessDayCutoff\":\"04:00\",\"shiftSignInEnforced\":false,\"",
+      "evidence": []
+    },
+    {
+      "id": "BRN-05",
+      "status": "pass",
+      "notes": "400 Business Day Cutoff: Invalid string: must match pattern /^(?:[01]\\d|2[0-3]):[0-5]\\d$/",
+      "evidence": []
+    },
+    {
+      "id": "BRN-03",
+      "status": "pass",
+      "notes": "400 Choose another primary branch before deactivating this one. {\"error\":{\"json\":{\"message\":\"Choose another primary branch before deactivating this one.\",\"code\":-32600,\"data\":{\"code\":\"BAD_REQUEST\",\"httpStatus\":400,\"stack\":\"TRPCError: Choose another primary branch before deactivating ",
+      "evidence": []
+    },
+    {
+      "id": "FLR-02",
+      "status": "pass",
+      "notes": "floor 200 ; t1 200 ; section 200 ; station 200 ",
+      "evidence": []
+    },
+    {
+      "id": "FLR-03",
+      "status": "pass",
+      "notes": "409 A table with code \"T1\" already exists on this floor.",
+      "evidence": []
+    },
+    {
+      "id": "STF-owner-pin",
+      "status": "fail",
+      "notes": "staff  200  / 200 ; roles 400 0; jobs 403 You are not authorized to administer staff for this branch.; pin 403 You are not authorized to administer staff for this branch.",
+      "evidence": []
+    },
+    {
+      "id": "VAL-02",
+      "status": "pass",
+      "notes": "403 The HR module is not enabled for this organization.",
+      "evidence": []
+    },
+    {
+      "id": "STF-02",
+      "status": "fail",
+      "notes": "invite 403 The HR module is not enabled for this organization.; accept 0 no token",
+      "evidence": []
+    },
+    {
+      "id": "STF-03",
+      "status": "fail",
+      "notes": "kitchen role 404 Member not found. profile 500 \nInvalid `prisma.restaurantStaffProfile.create()` invocation:\n\n\nForeign key constraint violated on the constraint: `restaurant_staff_profiles_userId_fkey` pin 403; server role 404 profile 500; cashier role 404 Member not found. profile 500 \nInvalid `prisma.restaurantStaffProfile.create()` invocation:\n\n\nForeign key constraint violated on the constraint: `restaurant_staff_profiles_userId_fkey`",
+      "evidence": []
+    },
+    {
+      "id": "STF-06",
+      "status": "fail",
+      "notes": "400 Staff Profile Id: Too small: expected string to have >=1 characters {\"error\":{\"json\":{\"message\":\"Staff Profile Id: Too small: expected string to have >=1 characters\",\"code\":-32600,\"data\":{\"code\":\"BAD_REQUEST\",\"httpStatus\":400,\"stack\":\"TRPCError: [\\n  {\\n    \\\"origin\\\"",
+      "evidence": []
+    },
+    {
+      "id": "PERM-04-setup",
+      "status": "fail",
+      "notes": "accept 0 no token; role 404 Member not found.; roles ",
+      "evidence": []
+    },
+    {
+      "id": "LOY-02",
+      "status": "pass",
+      "notes": "200  {\"result\":{\"data\":{\"json\":{\"id\":\"cmvhjuhgi00hl1yjsasvwg6c5\",\"displayName\":\"Sana Guest\",\"givenName\":\"Sana\",\"familyName\":\"Guest\",\"birthDate\":null,\"notes\":null,\"anonymizedAt\":null,\"createdAt\":\"2026-10-21T03:25:22.530Z\",\"upd",
+      "evidence": []
+    },
+    {
+      "id": "LOY-03",
+      "status": "pass",
+      "notes": "config 200 ; enroll 200 ; adjust 200 ",
+      "evidence": []
+    },
+    {
+      "id": "ORD-04-setup",
+      "status": "fail",
+      "notes": "zone 200 ; address 400 Address Line1: Invalid input: expected string, received undefined",
+      "evidence": []
+    },
+    {
+      "id": "INV-02",
+      "status": "pass",
+      "notes": "item 200 ; loc 200 ; po 200 ; submit 200 ; approve 200 ; receive 200 ; waste 200 ",
+      "evidence": []
+    },
+    {
+      "id": "INV-04",
+      "status": "pass",
+      "notes": "supplier 200 ; po 200; approve 200 ; receive 200 ",
+      "evidence": []
+    },
+    {
+      "id": "INV-05",
+      "status": "pass",
+      "notes": "200  {\"result\":{\"data\":{\"json\":{\"id\":\"cmvhjuhwy00if1yjs5v35eqj1\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"locationId\":\"cmvhjuhou00hz1yjsua7b8fut\",\"status\":\"DRAFT\",\"reference\":\"QA count\",\"countedAt\":nu",
+      "evidence": []
+    },
+    {
+      "id": "NTF-02",
+      "status": "pass",
+      "notes": "blank 400 Endpoint Url: Too small: expected string to have >=1 characters; http 500 Webhook endpoint must use HTTPS.; https 200 ; test 200 ",
+      "evidence": []
+    },
+    {
+      "id": "CFG-01",
+      "status": "pass",
+      "notes": "config 200 ; preview 200  {\"result\":{\"data\":{\"json\":{\"net\":\"100.00\",\"tax\":\"15.00\",\"gross\":\"115.00\"}}}}",
+      "evidence": []
+    },
+    {
+      "id": "RPT-02",
+      "status": "pass",
+      "notes": "food 200 ; dish 200 ",
+      "evidence": []
+    },
+    {
+      "id": "RPT-04",
+      "status": "pass",
+      "notes": "200 ",
+      "evidence": []
+    },
+    {
+      "id": "SEC-01",
+      "status": "pass",
+      "notes": "order 401 {\"error\":\"Terminal browser is not enrolled.\"}; trpc 401",
+      "evidence": []
+    },
+    {
+      "id": "CFG-02",
+      "status": "pass",
+      "notes": "enroll 303  url http://qa-karahi-house.localhost:3000/pos Skip to order pad DevFathom Restaurant POS NOT ENROLLED RESTAURANT POS Checking enrollment Verifying this browser with the server. Verifying browser Please wait while the terminal ",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/api-pos.png"
+      ]
+    },
+    {
+      "id": "SEC-02",
+      "status": "fail",
+      "notes": "401 Missing or malformed terminal session token.",
+      "evidence": []
+    },
+    {
+      "id": "POS-unlock",
+      "status": "fail",
+      "notes": "401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}",
+      "evidence": []
+    },
+    {
+      "id": "PAY-04-copy",
+      "status": "fail",
+      "notes": "Skip to order pad DevFathom Restaurant POS NOT ENROLLED RESTAURANT POS Checking enrollment Verifying this browser with the server. Verifying browser Please wait while the terminal credential is revalidated.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/api-pos-open.png"
+      ]
+    },
+    {
+      "id": "ORD-02",
+      "status": "fail",
+      "notes": "open 401 Missing or malformed terminal session token.; add 401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}; naan 401 Missing or malformed terminal session token.; fire 401 Missing or malformed terminal session token.",
+      "evidence": []
+    },
+    {
+      "id": "ORD-03",
+      "status": "fail",
+      "notes": "open 401 Missing or malformed terminal session token.; item 401 Missing or malformed terminal session token.",
+      "evidence": []
+    },
+    {
+      "id": "ORD-05",
+      "status": "fail",
+      "notes": "401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}",
+      "evidence": []
+    },
+    {
+      "id": "KDS-02",
+      "status": "fail",
+      "notes": "enroll 303 ; unlock 401 Missing or malformed terminal session token.; ack 401 Missing or malformed terminal session token.; bump 401 Missing or malformed terminal session token.",
+      "evidence": [
+        "/workspace/qa/restaurants/evidence/api-kds.png"
+      ]
+    },
+    {
+      "id": "PERM-02",
+      "status": "pass",
+      "notes": "401 Missing or malformed terminal session token.",
+      "evidence": []
+    },
+    {
+      "id": "PAY-01",
+      "status": "fail",
+      "notes": "drawer 401 Missing or malformed terminal session token.; bill 401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}",
+      "evidence": []
+    },
+    {
+      "id": "PAY-03",
+      "status": "fail",
+      "notes": "401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}",
+      "evidence": []
+    },
+    {
+      "id": "PAY-06",
+      "status": "fail",
+      "notes": "401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}",
+      "evidence": []
+    },
+    {
+      "id": "PAY-04",
+      "status": "fail",
+      "notes": "401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}; mock copy false",
+      "evidence": []
+    },
+    {
+      "id": "PAY-02",
+      "status": "fail",
+      "notes": "item 401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}; seat 401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}",
+      "evidence": []
+    },
+    {
+      "id": "PAY-05",
+      "status": "fail",
+      "notes": "401 Missing or malformed terminal session token. {\"error\":\"Missing or malformed terminal session token.\"}",
+      "evidence": []
+    },
+    {
+      "id": "PERM-03",
+      "status": "fail",
+      "notes": "switch 401 Missing or malformed terminal session token.; refund 401 Missing or malformed terminal session token.",
+      "evidence": []
+    },
+    {
+      "id": "STF-04",
+      "status": "fail",
+      "notes": "deny 403 You are not authorized to administer staff for this branch.; switch 401 Missing or malformed terminal session token.; tender 401 Missing or malformed terminal session token.",
+      "evidence": []
+    }
+  ]
+}

@@ -1,0 +1,72 @@
+[
+  {
+    "id": "BRN-04",
+    "status": 403,
+    "note": "{\"error\":{\"json\":{\"message\":\"Your plan supports 1 active branch.\",\"code\":-32003,\"data\":{\"code\":\"FORBIDDEN\",\"httpStatus\":403,\"stack\":\"TRPCError: Your plan supports 1 active branch.\\n    at /workspace/.next/dev/server/chunks/src_server_routers_1934tdm._.js:30774:27\\n    at process.processTicksAndRejec"
+  },
+  {
+    "id": "LOY-04",
+    "status": 403,
+    "note": "{\"error\":{\"json\":{\"message\":\"The Customers and Loyalty module is not enabled for this organization.\",\"code\":-32003,\"data\":{\"code\":\"FORBIDDEN\",\"httpStatus\":403,\"stack\":\"TRPCError: The Customers and Loyalty module is not enabled for this organization.\\n    at assertModuleLicensed (/workspace/.next/dev"
+  },
+  {
+    "id": "TNT-03-ess",
+    "status": 200,
+    "note": "{\"result\":{\"data\":{\"json\":{\"id\":\"cmvhjueo300f51yjsrcfr7m60\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"categoryId\":\"cmvhjudd200f01yjsn2lus46n\",\"type\":\"ITEM\",\"status\":\"ACTIVE\",\"name\":\"Chicken Karahi\",\"nameLocalized\":null,\"description\":\"QA karahi\",\"descriptionLocalized\":null,\"sortOrder\":0,\"createdA"
+  },
+  {
+    "id": "ESS-URL",
+    "status": "http://qa-karahi-essentials.localhost:3000/dashboard",
+    "note": "http://qa-karahi-essentials.localhost:3000/dashboard"
+  },
+  {
+    "id": "BRN-01",
+    "status": "http://qa-karahi-house.localhost:3000/restaurant/settings/branches",
+    "note": "QA Karahi House\nCompany workspace\nAyesha Khan\nOrganization administrator\nRestaurant\nSettings\nBranches\nSearch workspace\n⌘K\nAsk Fathom\nAK\n01\nDashboard\n02\nPoint of sale\n03\nKitchen display\n04\nFloor\n05\nOrders\n06\nCatering\n07\nFinance & reconciliat"
+  },
+  {
+    "id": "TNT-03-house",
+    "status": 200,
+    "note": "{\"result\":{\"data\":{\"json\":{\"id\":\"cmvhjueo300f51yjsrcfr7m60\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"categoryId\":\"cmvhjudd200f01yjsn2lus46n\",\"type\":\"ITEM\",\"status\":\"ACTIVE\",\"name\":\"Chicken Karahi\",\"nameLocalized\":null,\"description\":\"QA"
+  },
+  {
+    "id": "UX-02",
+    "status": "pass",
+    "note": "dashboard horizontal overflow at 390px: false"
+  },
+  {
+    "id": "A11Y-01",
+    "status": "fail",
+    "note": "serious color-contrast Elements must meet minimum color contrast ratio thresholds"
+  },
+  {
+    "id": "PERF-01",
+    "status": 584,
+    "note": "wall 584ms navigation 571ms"
+  },
+  {
+    "id": "TNT-01",
+    "status": 403,
+    "note": "http://devfathom.localhost:3000/dashboard DevFathom\nCompany workspace\nAlex Carter\nCEO & Founder\nDashboard\nSearch workspace\n⌘K\nAsk Fathom\n3\nAC\n01\nDashboard\n02\nProjects\n03\nClients\n04\nNotes\n05\nMeetings\n06\nChat\n07\nFinance\n08\nT api {\"error\":{\"json\":{\"message\":\"The Menu and Costing module is not enabled for this organization.\",\"code\":-32003,\"data\":{\"code\":\"FORBIDDEN\",\"httpStatus\":403,\"stack\":\"TRPCError:"
+  },
+  {
+    "id": "TNT-HOST",
+    "status": 200,
+    "note": "first http://devfathom.localhost:3000/login slug devfathom next http://devfathom.localhost:3000/login"
+  },
+  {
+    "id": "PLATFORM",
+    "status": "http://admin.localhost:3000/platform",
+    "note": "http://admin.localhost:3000/platform"
+  },
+  {
+    "id": "LCY-06",
+    "status": 200,
+    "note": "suspend 200 {\"data\":{\"id\":\"cmvhhd11m008f1yjsvn9l8mrd\",\"slug\":\"qa-karahi-essentials\",\"legalName\":\"QA Karahi Essentials Ltd\",\"displayName\":\"QA Karahi Essentials\",\"vertical\":\"; login http://qa-karahi-essentials.localhost:3000/login; resume 200 {\"data\":{\"id\":\"cmvhhd11m008f1yjsvn9l8mrd\",\"slug\":\"qa-karahi-essentials\",\"legalName\":\"QA Karahi Essentials Ltd\",\"displayN"
+  },
+  {
+    "id": "REV-01",
+    "status": 200,
+    "note": "disable 200 {\"data\":{\"id\":\"cmvhl53it0093chjsovtfvmo0\",\"organizationId\":\"cmvhhcld5000g1yjsl1lp4a8v\",\"moduleId\":\"cmvhh2f1o000vg9jsr1u3o3be\",\"status\":\"DISABLED\",\"seatLimit\":null,\"startsAt\":\"2026-; pos 200 http://qa-karahi-house.localhost:3000/pos; enable 200"
+  }
+]
