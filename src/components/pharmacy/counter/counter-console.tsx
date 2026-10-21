@@ -240,6 +240,7 @@ export function PharmacyCounterConsole(props: ConsoleProps = {}) {
       organizationId={user.organizationId}
       accountId={user.id}
       evidenceAuthorized={user.role === 'ADMIN'}
+      safetyLicensed={isModuleGranted('pharmacy-safety', entitlements.enabledModules)}
       accountEmail={user.email}
     />
   );
@@ -260,11 +261,14 @@ function ScopedPharmacyCounterConsole({
   organizationId,
   accountId,
   evidenceAuthorized = false,
+  safetyLicensed,
   accountEmail,
 }: ConsoleProps & {
   organizationId: string;
   accountId: string;
   evidenceAuthorized?: boolean;
+  /** Pharmacy Safety owns the approving-pharmacist list; without it that read is refused. */
+  safetyLicensed: boolean;
   accountEmail: string;
 }) {
   const utils = trpc.useUtils();
@@ -292,7 +296,9 @@ function ScopedPharmacyCounterConsole({
     prescriberRegNo: '',
     refSerial: '',
   });
-  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery();
+  const pharmacistsQuery = trpc.pharmacySafety.controlledPharmacists.useQuery(undefined, {
+    enabled: safetyLicensed,
+  });
   const [patientId, setPatientId] = useState<string | null>(null);
   const [patientAddressDraft, setPatientAddressDraft] = useState<string | null>(null);
   const [customerId, setCustomerId] = useState<string | null>(null);
@@ -2317,8 +2323,10 @@ function ScopedPharmacyCounterConsole({
                 // QA-138: controlledPharmacists requires pharmacy:dispense/safety. A
                 // FORBIDDEN read means this actor cannot dispense, so the controlled
                 // authorization panel is not offered (the server refuses it anyway).
+                // Without Pharmacy Safety the read is not made at all, with the same outcome.
+                !safetyLicensed ||
                 (pharmacistsQuery.error as { data?: { code?: string } } | null)?.data?.code ===
-                'FORBIDDEN'
+                  'FORBIDDEN'
                   ? undefined
                   : {
                       ...controlledAuth,

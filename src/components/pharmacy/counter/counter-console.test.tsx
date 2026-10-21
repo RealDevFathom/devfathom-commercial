@@ -24,6 +24,7 @@ const mocks = vi.hoisted(() => ({
   receiptInvalidate: vi.fn(),
   mutationOptions: vi.fn(),
   receiptProps: vi.fn(),
+  queryOptions: vi.fn(),
   outcomeQuery: vi.fn(),
   khataAccounts: vi.fn(),
   khataStatement: vi.fn(),
@@ -36,7 +37,10 @@ const mocks = vi.hoisted(() => ({
       user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
     },
   },
-  entitlements: { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] },
+  entitlements: {
+    organizationId: 'org-a',
+    enabledModules: ['pharmacy-counter', 'pharmacy-safety'],
+  },
 }));
 
 vi.mock('next-auth/react', () => ({ useSession: () => mocks.session, signIn: mocks.signIn }));
@@ -50,7 +54,10 @@ vi.mock('@/lib/trpc', () => {
       names.map((name) => [
         name,
         {
-          useQuery: () => mocks.queries[name],
+          useQuery: (_input: unknown, options?: unknown) => {
+            mocks.queryOptions(name, options);
+            return mocks.queries[name];
+          },
           useMutation: (options: unknown) => {
             mocks.mutationOptions(name, options);
             return {
@@ -211,7 +218,10 @@ beforeEach(() => {
       user: { id: 'account-a', organizationId: 'org-a', status: 'ACTIVE', sessionRevoked: false },
     },
   };
-  mocks.entitlements = { organizationId: 'org-a', enabledModules: ['pharmacy-counter'] };
+  mocks.entitlements = {
+    organizationId: 'org-a',
+    enabledModules: ['pharmacy-counter', 'pharmacy-safety'],
+  };
   mocks.outcomeQuery.mockReset().mockResolvedValue({ status: 'UNKNOWN', replayUnsafe: true });
   mocks.receiptRefetch
     .mockReset()
@@ -1208,6 +1218,25 @@ describe('PharmacyCounterConsole controlled authorization visibility (QA-138)', 
 
   it('shows the controlled authorization panel to a dispenser', () => {
     render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
+  });
+});
+
+describe('PharmacyCounterConsole module boundaries', () => {
+  it('neither asks for approving pharmacists nor offers controlled authorization without Pharmacy Safety', () => {
+    // Pharmacy Essentials sells the counter without Pharmacy Safety: no read it would refuse.
+    mocks.entitlements.enabledModules = ['pharmacy-counter'];
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: false });
+    expect(mocks.queryOptions).not.toHaveBeenCalledWith('controlledPharmacists', {
+      enabled: true,
+    });
+    expect(screen.queryByTestId('controlled-authorization')).toBeNull();
+  });
+
+  it('asks for approving pharmacists when Pharmacy Safety is licensed', () => {
+    render(<PharmacyCounterConsole initialSaleId="sale-a" initialBranchId="branch-a" />);
+    expect(mocks.queryOptions).toHaveBeenCalledWith('controlledPharmacists', { enabled: true });
     expect(screen.getByTestId('controlled-authorization')).toBeTruthy();
   });
 });
