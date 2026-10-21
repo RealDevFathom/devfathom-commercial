@@ -845,7 +845,11 @@ export const restaurantSopRouter = router({
   // ── Audit history ───────────────────────────────────────────────────────────
 
   listRecentOccurrences: manageProcedure.query(async ({ ctx }) => {
-    const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+    const authorization = await resolveStaffBranchAuthorization(
+      ctx.db,
+      ctx.session!.user,
+      ctx.entitlements.organizationId
+    );
     return ctx.db.restaurantSopOccurrence.findMany({
       where: { branchId: { in: authorization.branchIds } },
       select: {
@@ -867,7 +871,11 @@ export const restaurantSopRouter = router({
   occurrenceAuditTrail: manageProcedure
     .input(z.object({ occurrenceId: z.string() }).strict())
     .query(async ({ ctx, input }) => {
-      const authorization = await resolveStaffBranchAuthorization(ctx.db, ctx.session!.user);
+      const authorization = await resolveStaffBranchAuthorization(
+        ctx.db,
+        ctx.session!.user,
+        ctx.entitlements.organizationId
+      );
       const accessible = await ctx.db.restaurantSopOccurrence.findFirst({
         where: { id: input.occurrenceId, branchId: { in: authorization.branchIds } },
         select: { id: true },

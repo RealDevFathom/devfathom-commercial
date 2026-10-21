@@ -21,8 +21,9 @@ const user = {
   id: 'user_actor',
   role: 'EMPLOYEE',
   status: 'ACTIVE',
-  organizationId: 'org_1',
+  organizationId: 'org_session',
 };
+const tenantId = 'org_1';
 const database = () => ({
   restaurantBranch: { findMany: vi.fn(async () => [{ id: 'a' }, { id: 'b' }]) },
   restaurantStaffProfile: {
@@ -51,10 +52,27 @@ beforeEach(() => {
 });
 
 describe('staff branch authorization', () => {
+  it('fails closed when the active tenant is missing', async () => {
+    mocks.can.mockResolvedValue(true);
+    await expect(
+      resolveStaffBranchAuthorization(database() as never, user, null)
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: expect.stringContaining('not authorized'),
+    });
+    await expect(
+      resolveCapabilityBranchAuthorization(database() as never, user, 'devices:manage', {
+        organizationId: '',
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   it('gives restaurant:configure administrators every active in-tenant branch', async () => {
     mocks.can.mockResolvedValue(true);
     const db = database();
-    await expect(resolveStaffBranchAuthorization(db as never, user)).resolves.toMatchObject({
+    await expect(
+      resolveStaffBranchAuthorization(db as never, user, tenantId)
+    ).resolves.toMatchObject({
       organizationWide: true,
       branchIds: ['a', 'b'],
     });
@@ -65,13 +83,13 @@ describe('staff branch authorization', () => {
   });
 
   it('keeps only effective staff:manage branches, including DENY subtraction', async () => {
-    await expect(resolveStaffBranchAuthorization(database() as never, user)).resolves.toMatchObject(
-      {
-        actorStaffProfileId: 'actor',
-        organizationWide: false,
-        branchIds: ['a'],
-      }
-    );
+    await expect(
+      resolveStaffBranchAuthorization(database() as never, user, tenantId)
+    ).resolves.toMatchObject({
+      actorStaffProfileId: 'actor',
+      organizationWide: false,
+      branchIds: ['a'],
+    });
     expect(mocks.resolve).toHaveBeenCalledTimes(2);
   });
 
@@ -82,6 +100,7 @@ describe('staff branch authorization', () => {
 
     await expect(
       resolveCapabilityBranchAuthorization(database() as never, user, 'devices:manage', {
+        organizationId: tenantId,
         requireExactlyOneActiveActor: true,
       })
     ).resolves.toMatchObject({ actorStaffProfileId: 'actor', branchIds: ['b'] });
@@ -106,7 +125,9 @@ describe('staff branch authorization', () => {
     ]);
 
     await expect(
-      resolveCapabilityBranchAuthorization(db as never, user, 'devices:manage')
+      resolveCapabilityBranchAuthorization(db as never, user, 'devices:manage', {
+        organizationId: tenantId,
+      })
     ).resolves.toMatchObject({ actorStaffProfileId: 'actor-a' });
     expect(db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
       expect.objectContaining({ orderBy: { id: 'asc' }, take: 2 })
@@ -119,7 +140,7 @@ describe('staff branch authorization', () => {
       database() as never,
       user,
       'devices:manage',
-      { requireExactlyOneActiveActor: true }
+      { organizationId: tenantId, requireExactlyOneActiveActor: true }
     );
 
     expect(() => assertActorEligibleForBranch(authorization, 'a')).not.toThrow();
@@ -132,7 +153,7 @@ describe('staff branch authorization', () => {
       database() as never,
       user,
       'devices:manage',
-      { requireExactlyOneActiveActor: true }
+      { organizationId: tenantId, requireExactlyOneActiveActor: true }
     );
 
     expect(() => assertActorEligibleForBranch(authorization, 'a')).not.toThrow();
@@ -146,6 +167,7 @@ describe('staff branch authorization', () => {
     missing.restaurantStaffProfile.findMany.mockResolvedValueOnce([]);
     await expect(
       resolveCapabilityBranchAuthorization(missing as never, user, 'devices:manage', {
+        organizationId: tenantId,
         requireExactlyOneActiveActor: true,
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -157,6 +179,7 @@ describe('staff branch authorization', () => {
     ] as never);
     await expect(
       resolveCapabilityBranchAuthorization(ambiguous as never, user, 'devices:manage', {
+        organizationId: tenantId,
         requireExactlyOneActiveActor: true,
       })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
@@ -164,7 +187,7 @@ describe('staff branch authorization', () => {
 
   it('returns one error for unauthorized, arbitrary, and missing identifiers', async () => {
     const db = database();
-    const authorization = await resolveStaffBranchAuthorization(db as never, user);
+    const authorization = await resolveStaffBranchAuthorization(db as never, user, tenantId);
     const expected = { code: 'FORBIDDEN', message: expect.stringContaining('not authorized') };
     expect(() => assertAuthorizedBranch(authorization, 'b')).toThrowError(
       expect.objectContaining(expected)
@@ -184,7 +207,7 @@ describe('staff branch authorization', () => {
       jobRoles: [{ branchId: 'a' }, { branchId: 'b' }],
       directCapabilityGrants: [],
     } as never);
-    const authorization = await resolveStaffBranchAuthorization(db as never, user);
+    const authorization = await resolveStaffBranchAuthorization(db as never, user, tenantId);
     await expect(
       assertAuthorizedStaffProfile(db as never, authorization, 'target')
     ).rejects.toMatchObject({
@@ -201,7 +224,7 @@ describe('staff branch authorization', () => {
       directCapabilityGrants: [],
     } as never);
     mocks.resolve.mockResolvedValue(new Set(['staff:manage']));
-    const authorization = await resolveStaffBranchAuthorization(db as never, user);
+    const authorization = await resolveStaffBranchAuthorization(db as never, user, tenantId);
     await expect(
       assertAuthorizedStaffProfile(db as never, authorization, 'target')
     ).resolves.toBeUndefined();

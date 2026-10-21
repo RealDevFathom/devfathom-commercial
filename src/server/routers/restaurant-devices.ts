@@ -74,7 +74,8 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { organizationId: ctx.entitlements.organizationId }
       );
       assertAuthorizedBranch(authorization, input.branchId);
       const branch = await ctx.db.restaurantBranch.findFirst({
@@ -120,7 +121,8 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { organizationId: ctx.entitlements.organizationId }
       );
       assertAuthorizedBranch(authorization, input.branchId);
       return ctx.db.restaurantPrinter.findMany({
@@ -144,7 +146,8 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { organizationId: ctx.entitlements.organizationId }
       );
       assertAuthorizedBranch(authorization, input.branchId);
       try {
@@ -169,7 +172,8 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { organizationId: ctx.entitlements.organizationId }
       );
       assertAuthorizedBranch(authorization, input.branchId);
       try {
@@ -202,7 +206,8 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { organizationId: ctx.entitlements.organizationId }
       );
       assertAuthorizedBranch(authorization, input.branchId);
       try {
@@ -244,7 +249,8 @@ export const restaurantDevicesRouter = router({
       authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { organizationId: ctx.entitlements.organizationId }
       );
     }
     const now = new Date();
@@ -275,7 +281,7 @@ export const restaurantDevicesRouter = router({
         ctx.db,
         ctx.session!.user,
         'devices:manage',
-        { requireExactlyOneActiveActor: true }
+        { organizationId: ctx.entitlements.organizationId, requireExactlyOneActiveActor: true }
       );
       const actingStaffProfileId = authorization.actorStaffProfileId;
       if (!actingStaffProfileId) denyStaffBranchAccess();
@@ -335,7 +341,8 @@ export const restaurantDevicesRouter = router({
       const authorization = await resolveCapabilityBranchAuthorization(
         ctx.db,
         ctx.session!.user,
-        'devices:manage'
+        'devices:manage',
+        { organizationId: ctx.entitlements.organizationId }
       );
       assertAuthorizedBranch(authorization, input.branchId);
       const organizationId = ctx.session!.user.organizationId;
@@ -422,7 +429,7 @@ export const restaurantDevicesRouter = router({
         ctx.db,
         ctx.session!.user,
         'devices:manage',
-        { requireExactlyOneActiveActor: true }
+        { organizationId: ctx.entitlements.organizationId, requireExactlyOneActiveActor: true }
       );
       const actingStaffProfileId = authorization.actorStaffProfileId;
       if (!actingStaffProfileId) denyStaffBranchAccess();
@@ -543,7 +550,7 @@ export const restaurantDevicesRouter = router({
         ctx.db,
         ctx.session!.user,
         'devices:manage',
-        { requireExactlyOneActiveActor: true }
+        { organizationId: ctx.entitlements.organizationId, requireExactlyOneActiveActor: true }
       );
       const actingStaffProfileId = authorization.actorStaffProfileId;
       if (!actingStaffProfileId) denyStaffBranchAccess();

@@ -40,12 +40,16 @@ export type StaffBranchAuthorization = {
   branchIds: string[];
 };
 
-/** Resolve an authenticated staff actor's effective branch scope for one capability. */
+/**
+ * Resolve an authenticated staff actor's effective branch scope for one capability.
+ * `organizationId` is the active tenant (`ctx.entitlements.organizationId`). A missing
+ * tenant fails closed and is never taken from the session user.
+ */
 export async function resolveCapabilityBranchAuthorization(
   db: ScopedDb,
   user: SessionUser,
   capability: string,
-  options: { requireExactlyOneActiveActor?: boolean } = {}
+  options: { organizationId: string | null | undefined; requireExactlyOneActiveActor?: boolean }
 ): Promise<StaffBranchAuthorization> {
   const actors = await db.restaurantStaffProfile.findMany({
     where: { userId: user.id, status: 'ACTIVE' },
@@ -70,7 +74,7 @@ export async function resolveCapabilityBranchAuthorization(
       ]
     : [];
 
-  const organizationId = user.organizationId;
+  const organizationId = options.organizationId;
   if (!organizationId) denyStaffBranchAccess();
 
   if (
@@ -113,9 +117,10 @@ export async function resolveCapabilityBranchAuthorization(
 /** Resolve the authenticated actor's staff-administration scope, failing closed. */
 export function resolveStaffBranchAuthorization(
   db: ScopedDb,
-  user: SessionUser
+  user: SessionUser,
+  organizationId: string | null | undefined
 ): Promise<StaffBranchAuthorization> {
-  return resolveCapabilityBranchAuthorization(db, user, 'staff:manage');
+  return resolveCapabilityBranchAuthorization(db, user, 'staff:manage', { organizationId });
 }
 
 export function assertAuthorizedBranch(
@@ -217,6 +222,7 @@ export async function resolveDemoDirectoryScope(
   if (!(await can(subjectFromSession(user), capability, undefined, { db: ctx.db, source: 'TRPC' })))
     denyStaffBranchAccess();
   return resolveCapabilityBranchAuthorization(ctx.db, user, capability, {
+    organizationId: ctx.entitlements?.organizationId,
     requireExactlyOneActiveActor: true,
   });
 }
