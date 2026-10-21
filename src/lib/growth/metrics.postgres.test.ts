@@ -1,5 +1,5 @@
 // @vitest-environment node
-import { Client } from 'pg';
+import { Client, types } from 'pg';
 import { expect, it, vi } from 'vitest';
 vi.mock('@/lib/tenancy/scoped-db', () => ({ withTenantDb: vi.fn() }));
 import { customerMetricsQuery } from './metrics';
@@ -11,7 +11,16 @@ import { nextRefillDueAt } from './refill';
 it.skipIf(!process.env.GROWTH_METRICS_TEST_DATABASE_URL)(
   'aggregates real SQL fixtures without tenant leakage or basket fanout',
   async () => {
-    const client = new Client({ connectionString: process.env.GROWTH_METRICS_TEST_DATABASE_URL });
+    const client = new Client({
+      connectionString: process.env.GROWTH_METRICS_TEST_DATABASE_URL,
+      types: {
+        // Fixture timestamps represent UTC, regardless of the runner's local timezone.
+        getTypeParser: (oid) =>
+          oid === types.builtins.TIMESTAMP
+            ? (value: string) => new Date(`${value}Z`)
+            : types.getTypeParser(oid),
+      },
+    });
     await client.connect();
     try {
       await client.query('BEGIN');
