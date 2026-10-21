@@ -78,7 +78,10 @@ export function assertBranchMayOperate(
     !branch.licenceCategory.trim() ||
     !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
     at < branch.licenceValidFrom ||
-    at >= branch.licenceValidTo
+    // Licence dates are stored as UTC date-only values. Expiry is inclusive
+    // through the end of that calendar day in Asia/Karachi (UTC+05:00).
+    at.getTime() >=
+      Date.parse(`${branch.licenceValidTo.toISOString().slice(0, 10)}T00:00:00+05:00`) + 86_400_000
   ) {
     deny('LICENCE_INVALID');
   }
