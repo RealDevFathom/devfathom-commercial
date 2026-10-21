@@ -1,11 +1,12 @@
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 export async function readCounterBranchAssignments(
-  _db: ScopedDb,
-  _organizationId: string,
-  _userId: string
+  db: ScopedDb,
+  organizationId: string,
+  userId: string
 ): Promise<{ branchId: string }[]> {
-  // TODO(#107): use its canonical active branch-assignment helper once merged.
-  // Fail closed for members until that dependency lands; do not duplicate its schema.
-  return [];
+  return db.pharmacyBranchAssignment.findMany({
+    where: { organizationId, userId, active: true, branch: { active: true, organizationId } },
+    select: { branchId: true },
+  });
 }

@@ -1,10 +1,8 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-vi.mock('@/lib/pharmacy/counter-branch-access', () => ({
-  readCounterBranchAssignments: vi.fn(
-    async (db: { pharmacyBranchAssignment: { findMany: () => Promise<unknown> } }) =>
-      db.pharmacyBranchAssignment.findMany()
-  ),
+vi.mock('@/lib/pharmacy/sales', async (original) => ({
+  ...(await original<typeof import('@/lib/pharmacy/sales')>()),
+  addSaleLine: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -30,6 +28,7 @@ vi.mock('@/lib/pharmacy/substitute-finder', () => ({
   },
 }));
 
+import { addSaleLine } from '@/lib/pharmacy/sales';
 import { findSubstituteProposals } from '@/lib/pharmacy/substitute-finder';
 import type { TRPCContext } from '../trpc';
 import { pharmacySalesRouter } from './pharmacy-sales';
@@ -59,11 +58,19 @@ function caller(
           : [],
       })),
     },
-    pharmacyBranch: { findFirst: vi.fn(async () => branch) },
+    pharmacyBranch: {
+      findFirst: vi.fn(async () => branch),
+      findMany: vi.fn(async () => [{ id: 'branch-1' }]),
+    },
     pharmacyBranchAssignment: {
       findMany: vi.fn(async () => assignedBranchIds.map((branchId) => ({ branchId }))),
     },
   };
+  Object.assign(db, {
+    $transaction: async (run: (tx: unknown) => Promise<unknown>) => run(db),
+    medicine: { findFirst: vi.fn(async () => ({ controlled: false })) },
+    auditLog: { create: vi.fn() },
+  });
   return pharmacySalesRouter.createCaller({
     db,
     entitlements: { organizationId: 'org-1', enabledModules: ['pharmacy-counter'], modules: [] },
@@ -84,6 +91,41 @@ function caller(
 }
 
 describe('substitute proposals', () => {
+  it('enforces substitute authorization at addLine even after listing an override', async () => {
+    vi.mocked(findSubstituteProposals).mockResolvedValue([]);
+    vi.mocked(addSaleLine).mockResolvedValue({
+      line: {
+        id: 'line-1',
+        saleId: 'sale-1',
+        medicineId: 'alternate',
+        presentationId: 'alternate-p',
+        packLevelId: 'pack-1',
+        canonicalUnits: 1,
+        quantity: 1,
+        unitPriceMinor: 200,
+      },
+      allocation: { allocations: [{ inventoryLotId: 'lot-1' }] },
+    } as never);
+    await expect(
+      caller({ id: 'branch-1' }).addLine({
+        branchId: 'branch-1',
+        saleId: 'sale-1',
+        medicineId: 'alternate',
+        presentationId: 'alternate-p',
+        packLevelId: 'pack-1',
+        saleUnit: 'UNIT',
+        quantity: 1,
+        canonicalUnitsPerSaleUnit: 1,
+        idempotencyKey: 'attempt-1',
+        substitution: {
+          requestedMedicineId: 'medicine-1',
+          requestedPresentationId: 'presentation-1',
+          inventoryLotId: 'lot-1',
+        },
+      })
+    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
   beforeEach(() => {
     vi.mocked(findSubstituteProposals).mockClear();
   });

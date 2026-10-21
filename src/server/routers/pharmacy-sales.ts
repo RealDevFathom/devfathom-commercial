@@ -1,3 +1,4 @@
+import { authorizeSubstituteSale } from '@/lib/pharmacy/substitute-sale-authorization';
 import { readCounterBranchAssignments } from '@/lib/pharmacy/counter-branch-access';
 import { ControlledRestorationDenied } from '@/lib/pharmacy/controlled-restoration-authorization';
 import { hasModule } from '@/lib/entitlements';
@@ -171,8 +172,8 @@ async function khataScope(ctx: TRPCContext, branch: string) {
  * empty assignment denies. A session `ADMIN` of this organization may read a
  * branch they are not assigned to; that exception is recorded on the audit.
  */
-async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
-  const scope = await scopeFor(ctx, branch);
+async function requireSubstituteAccess(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
   const user = ctx.session!.user;
   if (!user.organizationId || user.organizationId !== scope.organizationId) {
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
@@ -194,7 +195,10 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
     throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
   }
 
-  const capable = await can(subjectFromSession(user), 'pharmacy:dispense', undefined, { db: ctx.db, source: 'TRPC' });
+  const capable = await can(subjectFromSession(user), 'pharmacy:dispense', undefined, {
+    db: ctx.db,
+    source: 'TRPC',
+  });
   if (!capable) {
     throw new TRPCError({
       code: 'FORBIDDEN',
@@ -903,6 +907,15 @@ export const pharmacySalesRouter = router({
     .input(
       z
         .object({
+          substitution: z
+            .object({
+              requestedMedicineId: z.string().min(1),
+              requestedPresentationId: z.string().min(1),
+              inventoryLotId: z.string().min(1),
+              priceOverrideReason: z.string().trim().min(1).max(1000).optional(),
+            })
+            .strict()
+            .optional(),
           controlledAuthorization: z
             .object({
               prescriptionLineId: z.string().min(1).optional(),
@@ -977,10 +990,22 @@ export const pharmacySalesRouter = router({
         const outcome = await ctx.db.$transaction(async (tx) => {
           const db = txDb(tx);
           const scope = await scopeFor(ctx, input.branchId);
+          const addAuthorizedLine = async () => {
+            if (input.substitution) await requireSubstituteAccess(ctx, input.branchId);
+            if (input.substitution)
+              return authorizeSubstituteSale(
+                db,
+                scope,
+                input.substitution,
+                input.quantity * input.canonicalUnitsPerSaleUnit,
+                () => addSaleLine(db, scope, input)
+              );
+            return addSaleLine(db, scope, input);
+          };
           const medicine = await db.medicine.findFirst({
             where: { id: input.medicineId, organizationId: scope.organizationId },
           });
-          if (!medicine?.controlled) return addSaleLine(db, scope, input);
+          if (!medicine?.controlled) return addAuthorizedLine();
           if (
             !(await can(subjectFromSession(ctx.session!.user), 'pharmacy:dispense', undefined, {
               db,
@@ -1083,7 +1108,7 @@ export const pharmacySalesRouter = router({
               return { blocked: 'Patient dispensing consent is required.' };
             }
             await db.$queryRaw`SELECT pg_advisory_xact_lock(hashtextextended(${scope.organizationId + ':' + scope.branchId},0))`;
-            const result = await addSaleLine(db, scope, input);
+            const result = await addAuthorizedLine();
             await appendControlledSaleEntries(db, {
               organizationId: scope.organizationId,
               branchId: scope.branchId,
@@ -1174,7 +1199,7 @@ export const pharmacySalesRouter = router({
           });
           if (!consent?.granted || consent.revokedAt)
             return { blocked: 'Patient dispensing consent is required.' };
-          const result = await addSaleLine(db, scope, input);
+          const result = await addAuthorizedLine();
           await db.prescriptionFill.create({
             data: {
               organizationId: scope.organizationId,
@@ -1384,7 +1409,7 @@ export const pharmacySalesRouter = router({
     )
     .query(async ({ ctx, input }) => {
       try {
-        const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        const scope = await requireSubstituteAccess(ctx, input.branchId);
         return await findSubstituteProposals(ctx.db, scope, {
           medicineId: input.medicineId,
           presentationId: input.presentationId,
@@ -1410,7 +1435,7 @@ export const pharmacySalesRouter = router({
         .strict()
     )
     .mutation(async ({ ctx, input }) => {
-      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const scope = await requireSubstituteAccess(ctx, input.branchId);
       return findSubstituteProposals(ctx.db, scope, {
         medicineId: input.medicineId,
         presentationId: input.presentationId,
