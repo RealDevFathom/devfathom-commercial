@@ -48,6 +48,7 @@ type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
   receipts: typeof import('./goods-receipt');
   ledger: typeof import('./stock-ledger');
+  controlledRegister: typeof import('./controlled-register');
 };
 let deps: Deps;
 
@@ -314,13 +315,14 @@ async function balancesFor(db: ScopedDb, organizationId: string, inventoryLotId:
 
 beforeAll(async () => {
   if (!TEST_DATABASE_URL) return;
-  const [scopedDb, receipts, ledger, roleGuard] = await Promise.all([
+  const [scopedDb, receipts, ledger, controlledRegister, roleGuard] = await Promise.all([
     import('@/lib/tenancy/scoped-db'),
     import('./goods-receipt'),
     import('./stock-ledger'),
+    import('./controlled-register'),
     import('@/lib/testing/rls-role-guard'),
   ]);
-  deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger };
+  deps = { withTenantDb: scopedDb.withTenantDb, receipts, ledger, controlledRegister };
   await roleGuard.assertRlsEnforcingRole(scopedDb.withPlatformDb);
 }, 120_000);
 
@@ -1057,24 +1059,26 @@ describeIfDatabase('PUR-04 — reversal creates linked movements and never edits
         at: RECEIVED_AT,
       });
       const line = posted.lines[0]!;
-      await db.pharmacyControlledRegisterEntry.create({
-        data: {
-          organizationId: ORG_A,
-          branchId: BRANCH_A,
-          serial: 1,
-          entryKind: 'PURCHASE',
-          medicineId: f.medicineId,
-          inventoryLotId: line.inventoryLotId,
-          stockMovementId: line.acceptedMovementId!,
-          batchNumber: drafted.lines[0]!.batchNumber,
-          quantityCanonicalUnits: 20,
-          balanceDelta: 20,
-          runningBalance: 20,
-          recordedByUserId: RECEIVER,
-          witnessedByUserId: APPROVER,
-          signatureRef: `pin:${APPROVER}`,
-          counterpartyName: 'Test distributor',
-        },
+      // Use the production purchase writer used by postGoodsReceipt rather than
+      // manufacturing a register row in the test. This guards the complete
+      // PURCHASE -> receipt reversal -> CORRECTION contract.
+      await deps.controlledRegister.appendControlledPurchaseEntries(db, {
+        organizationId: ORG_A,
+        branchId: BRANCH_A,
+        lines: [
+          {
+            medicineId: f.medicineId,
+            inventoryLotId: line.inventoryLotId,
+            stockMovementId: line.acceptedMovementId!,
+            batchNumber: drafted.lines[0]!.batchNumber,
+            quantityCanonicalUnits: 20,
+            counterpartyName: 'Test distributor',
+            manufacturer: null,
+          },
+        ],
+        recordedByUserId: RECEIVER,
+        witnessedByUserId: APPROVER,
+        signatureRef: `pin:${APPROVER}`,
       });
 
       await deps.receipts.reverseGoodsReceipt(db, scopeOf(f), {
