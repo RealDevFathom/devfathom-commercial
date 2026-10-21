@@ -216,13 +216,18 @@ describe('metric contract (reports.ts PHARMACY_METRIC_CONTRACT)', () => {
 describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () => {
   type Counts = { recalls: number; claims: number; receiving: number; coverage: number };
 
-  function makeDb(rawResults: unknown[][], counts: Counts) {
+  function makeDb(rawResults: unknown[][], counts: Counts, khataValue = 4_250n) {
     const calls: CapturedSql[] = [];
     const coverageArgs: unknown[] = [];
     let index = 0;
     const db = {
       $queryRaw: vi.fn(async (query: CapturedSql) => {
         calls.push({ sql: query.sql, values: query.values });
+        if (query.sql.includes("current_setting('app.current_branch_id'"))
+          return [{ branchId: null }];
+        if (query.sql.includes('FROM "pharmacy_khata_events" charge'))
+          return [{ value: khataValue }];
+        if (query.sql.includes("set_config('app.current_branch_id'")) return [];
         return rawResults[index++] ?? [];
       }),
       pharmacyRecallNotice: { count: vi.fn(async () => counts.recalls) },
@@ -251,7 +256,6 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     ],
     [{ open: 3, recommended: 1 }],
     [{ d30: 100, d60: 250, d90: 250, d180: 900, quarantine: 4 }],
-    [{ value: 4_250 }],
     [{ value: 2 }],
     [{ aging: 1, rejected: 2 }],
   ];
@@ -309,10 +313,10 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     expect(where.effectiveFrom.lte.toISOString()).toBe('2026-03-10T12:00:00.000Z');
   });
 
-  it('issues six raw reads; sales use businessDate while margin uses UTC occurredAt in the same statement', async () => {
+  it('issues branch-context Khata reads in addition to five aggregate reads', async () => {
     const { db, calls } = makeDb(populated, populatedCounts);
     await readPharmacyOwnerCommandCentre(db, filters);
-    expect(calls).toHaveLength(6);
+    expect(calls).toHaveLength(9);
     const money = calls[0];
     expect(money?.sql).toContain('s."businessDate">=');
     expect(money?.sql).toContain('entry."occurredAt" >=');
@@ -322,7 +326,11 @@ describe('owner command centre (reports.ts readPharmacyOwnerCommandCentre)', () 
     ]);
     // Expiry and fiscal aging use the database clock, not the JS clock used for freshness.
     expect(calls[2]?.sql).toContain('CURRENT_TIMESTAMP');
-    expect(calls[5]?.sql).toContain('CURRENT_TIMESTAMP');
+    expect(calls[4]?.sql).toContain('CURRENT_TIMESTAMP');
+    expect(calls[5]?.sql).toContain("current_setting('app.current_branch_id'");
+    expect(calls[6]?.sql).toContain("set_config('app.current_branch_id'");
+    expect(calls[7]?.sql).toContain('FROM "pharmacy_khata_events" charge');
+    expect(calls[8]?.sql).toContain("set_config('app.current_branch_id'");
   });
 
   it('salesMinor is gross of returns: no return-line or refund term in the sales expression', async () => {
