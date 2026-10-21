@@ -43,8 +43,10 @@ import { enqueueInsightRollup } from './insight-rollups';
  *                    (board decision WHA-1621 Q1; refunds are still reported
  *                    separately as refundTotal)
  *   - tipTotal     = Σ tender.tipAmount for the date (== Σ child tipAmount)
- *   - refundTotal  = Σ refund.amount for the PROCESSING date (C7 — cross-date
- *                    corrections land on the day processed, never a prior close)
+ *   - refundTotal  = Σ (refund.amount − refund.taxRefundAmount) for the
+ *                    PROCESSING date (C7 — cross-date corrections land on the
+ *                    day processed, never a prior close). Like grossSales, this
+ *                    is pre-tax.
  *   - voidTotal    = Σ VOID bill.grandTotal
  *   - cash{Expected,Counted,Variance} = Σ over drawer sessions of the ledger fold
  *                    / counted / (counted − expected)
@@ -103,6 +105,7 @@ export type AggregateTender = {
 };
 export type AggregateRefund = {
   amount: Prisma.Decimal;
+  taxRefundAmount: Prisma.Decimal;
   deliveryFeeRefundAmount: Prisma.Decimal;
 };
 export type AggregateDrawer = {
@@ -162,7 +165,7 @@ export function computeCloseAggregate(inputs: AggregateInputs): CloseAggregate {
   const voidTotal = sum(voided.map((b) => b.grandTotal));
 
   const tipTotal = sum(inputs.tenders.map((t) => t.tipAmount));
-  const refundTotal = sum(inputs.refunds.map((r) => r.amount));
+  const refundTotal = sum(inputs.refunds.map((r) => sub(r.amount, r.taxRefundAmount)));
   const netSales = sub(sub(sub(grossSales, compTotal), discountTotal), refundTotal);
   const deliveryFeeRefunds = sum(inputs.refunds.map((r) => r.deliveryFeeRefundAmount));
 
@@ -254,7 +257,7 @@ async function loadCloseInputs(
   });
   const refunds = await db.restaurantRefund.findMany({
     where: { businessDate, bill: { branchId } },
-    select: { amount: true, deliveryFeeRefundAmount: true },
+    select: { amount: true, taxRefundAmount: true, deliveryFeeRefundAmount: true },
   });
   const drawers = await db.restaurantDrawerSession.findMany({
     where: { branchId, businessDate },

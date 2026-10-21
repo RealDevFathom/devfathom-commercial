@@ -63,7 +63,9 @@ describe('computeCloseAggregate (pure, exact Decimal)', () => {
         { type: 'CARD', amount: D('30.00'), tipAmount: D('10.00') },
         { type: 'CASH', amount: D('20.00'), tipAmount: D('0') },
       ],
-      refunds: [{ amount: D('15.00'), deliveryFeeRefundAmount: D('3.00') }],
+      refunds: [
+        { amount: D('15.00'), taxRefundAmount: D('0'), deliveryFeeRefundAmount: D('3.00') },
+      ],
       drawers: [{ status: 'CLOSED', expectedCash: D('180.00'), countedCash: D('178.00') }],
     });
     expect(aggregate.grossSales.toString()).toBe('100'); // OPEN bill excluded
@@ -103,12 +105,40 @@ describe('resolveChainTip (pure)', () => {
     const aggregate = computeCloseAggregate({
       bills: [bill, bill],
       tenders: [],
-      refunds: [{ amount: D('14.00'), deliveryFeeRefundAmount: D('0') }],
+      refunds: [
+        { amount: D('14.00'), taxRefundAmount: D('0'), deliveryFeeRefundAmount: D('0') },
+      ],
       drawers: [],
     });
     expect(aggregate.grossSales.toFixed(2)).toBe('28.00');
     expect(aggregate.refundTotal.toFixed(2)).toBe('14.00');
     expect(aggregate.netSales.toFixed(2)).toBe('14.00');
+  });
+
+  it('compares pre-tax sales with the pre-tax portion of a tax-inclusive refund', () => {
+    const aggregate = computeCloseAggregate({
+      bills: [
+        {
+          status: 'SETTLED',
+          subtotal: D('100.00'),
+          deliveryFeeTotal: D('0'),
+          taxTotal: D('10.00'),
+          serviceChargeTotal: D('0'),
+          compTotal: D('0'),
+          discountTotal: D('0'),
+          grandTotal: D('110.00'),
+        },
+      ],
+      tenders: [],
+      refunds: [
+        { amount: D('55.00'), taxRefundAmount: D('5.00'), deliveryFeeRefundAmount: D('0') },
+      ],
+      drawers: [],
+    });
+
+    expect(aggregate.grossSales.toFixed(2)).toBe('100.00');
+    expect(aggregate.refundTotal.toFixed(2)).toBe('50.00');
+    expect(aggregate.netSales.toFixed(2)).toBe('50.00');
   });
 
   it('finds the unsuperseded tip of a linear chain', () => {
