@@ -33,6 +33,16 @@ import type { ScopedDb } from '../src/lib/tenancy/scoped-db.js';
 import { PHARMACY_E2E } from '../tests/e2e/pharmacy-counter-fixture.js';
 import { resolvePharmacyE2eDatabaseUrl } from './pharmacy-e2e-environment.js';
 
+const PHARMACY_E2E_ADMIN_CAPABILITIES = [
+  'pharmacy:counter',
+  'pharmacy:manage',
+  'pharmacy:procurement',
+  'pharmacy:inventory',
+  'pharmacy:orders',
+  'reports:operational',
+  'reports:financial',
+] as const;
+
 const FIXED_AT = new Date('2026-09-01T00:00:00.000Z');
 /** Received well in the past, so nothing is blocked as UNRECEIVED. */
 const RECEIVED_AT = new Date('2026-08-01T00:00:00.000Z');
@@ -191,21 +201,28 @@ async function seedWorkspace(email: string, passwordHash: string) {
         updatedAt: FIXED_AT,
       },
     });
-    // The administrator role holds every capability, granted exactly as prisma/seed.ts grants
-    // its own administrator role. The counter's receipt guard asks the organization role for a
-    // capability before it honours a session ADMIN, so without this grant the admin the spec
-    // signs in as cannot read the bill it is selling.
-    await tx.organizationRolePermission.upsert({
-      where: {
-        organizationRoleId_capability: { organizationRoleId: PHARMACY_E2E.roleId, capability: '*' },
-      },
-      update: { effect: 'ALLOW' },
-      create: {
-        organizationId: PHARMACY_E2E.organizationId,
-        organizationRoleId: PHARMACY_E2E.roleId,
-        capability: '*',
-        effect: 'ALLOW',
-      },
+    // The administrator role gets explicit, non-sensitive grants only (never `*`). The counter's
+    // receipt guard asks the organization role for a capability before it honours a session
+    // ADMIN, so without pharmacy:counter the admin the spec signs in as cannot read the bill it
+    // is selling. pharmacy:dispense, pharmacy:safety and pharmacy:catalogue-review are
+    // deliberately absent: the counter spec exercises none of them.
+    for (const capability of PHARMACY_E2E_ADMIN_CAPABILITIES) {
+      await tx.organizationRolePermission.upsert({
+        where: {
+          organizationRoleId_capability: { organizationRoleId: PHARMACY_E2E.roleId, capability },
+        },
+        update: { effect: 'ALLOW' },
+        create: {
+          organizationId: PHARMACY_E2E.organizationId,
+          organizationRoleId: PHARMACY_E2E.roleId,
+          capability,
+          effect: 'ALLOW',
+        },
+      });
+    }
+    // Remove a `*` grant left by an earlier run of this seed.
+    await tx.organizationRolePermission.deleteMany({
+      where: { organizationRoleId: PHARMACY_E2E.roleId, capability: '*' },
     });
     const user = {
       organizationId: PHARMACY_E2E.organizationId,

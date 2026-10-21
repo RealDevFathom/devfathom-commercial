@@ -80,11 +80,12 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
-  it('grants owners pharmacy actions and both report actions', async () => {
+  it('grants owners pharmacy actions and both report actions, but not exact-grant-only ones', async () => {
     const db = authorizationDb({ rolePermissions: permissionsFor('owner') });
+    const exactOnly = ['pharmacy:dispense', 'pharmacy:catalogue-review', 'pharmacy:safety'];
     for (const action of grantedActions) {
       await expect(can(proprietor, action, undefined, { db })).resolves.toBe(
-        true
+        !exactOnly.includes(action)
       );
     }
   });
@@ -214,37 +215,47 @@ describe('hospitality capability namespace', () => {
     expect(ALL_ACTIONS.filter((action) => action.startsWith('hotel:'))).toEqual(actions);
     for (const action of actions) expect(POLICIES[action]).toEqual([]);
   });
-  it.each(['EMPLOYEE', 'ADMIN'])('does not grant hospitality through the %s role alone', async (role) => {
-    const db = authorizationDb({});
-    for (const action of actions) {
-      await expect(can({ ...employee, role }, action, undefined, { db })).resolves.toBe(false);
+  it.each(['EMPLOYEE', 'ADMIN'])(
+    'does not grant hospitality through the %s role alone',
+    async (role) => {
+      const db = authorizationDb({});
+      for (const action of actions) {
+        await expect(can({ ...employee, role }, action, undefined, { db })).resolves.toBe(false);
+      }
     }
-  });
+  );
   it.each(actions)('allows an explicit organization-role grant for %s', async (action) => {
     const db = authorizationDb({ rolePermissions: [{ capability: action, effect: 'ALLOW' }] });
     await expect(can(employee, action, undefined, { db })).resolves.toBe(true);
   });
   it('does not widen folio access into folio adjustment', async () => {
-    const db = authorizationDb({ rolePermissions: [{ capability: 'hotel:folio', effect: 'ALLOW' }] });
+    const db = authorizationDb({
+      rolePermissions: [{ capability: 'hotel:folio', effect: 'ALLOW' }],
+    });
     await expect(can(employee, 'hotel:folio', undefined, { db })).resolves.toBe(true);
     await expect(can(employee, 'hotel:folio-adjust', undefined, { db })).resolves.toBe(false);
   });
-  it.each(['hotel:*', '*'])('allows explicit %s while preserving user-level deny precedence', async (capability) => {
-    const subject = { ...employee, role: 'ADMIN' };
-    const granted = authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] });
-    const denied = authorizationDb({
-      rolePermissions: [{ capability, effect: 'ALLOW' }],
-      overrides: [{ capability: 'hotel:*', effect: 'DENY' }],
-    });
-    for (const action of actions) {
-      await expect(can(subject, action, undefined, { db: granted })).resolves.toBe(true);
-      await expect(can(subject, action, undefined, { db: denied })).resolves.toBe(false);
+  it.each(['hotel:*', '*'])(
+    'allows explicit %s while preserving user-level deny precedence',
+    async (capability) => {
+      const subject = { ...employee, role: 'ADMIN' };
+      const granted = authorizationDb({ rolePermissions: [{ capability, effect: 'ALLOW' }] });
+      const denied = authorizationDb({
+        rolePermissions: [{ capability, effect: 'ALLOW' }],
+        overrides: [{ capability: 'hotel:*', effect: 'DENY' }],
+      });
+      for (const action of actions) {
+        await expect(can(subject, action, undefined, { db: granted })).resolves.toBe(true);
+        await expect(can(subject, action, undefined, { db: denied })).resolves.toBe(false);
+      }
     }
-  });
+  );
   it('fails closed when hospitality permission lookup is unavailable', async () => {
     const db = authorizationDb({ throws: true });
     for (const role of ['EMPLOYEE', 'ADMIN']) {
-      await expect(can({ ...employee, role }, 'hotel:folio-adjust', undefined, { db })).resolves.toBe(false);
+      await expect(
+        can({ ...employee, role }, 'hotel:folio-adjust', undefined, { db })
+      ).resolves.toBe(false);
     }
   });
 });
