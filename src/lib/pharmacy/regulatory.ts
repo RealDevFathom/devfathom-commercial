@@ -1,4 +1,4 @@
-import { licenceDateValid } from './licence-validity';
+import { licenceDateStarted, licenceDateValid } from './licence-validity';
 import type { PrismaClient } from '@/generated/prisma/client';
 import { recordAudit } from '@/server/audit';
 
@@ -100,7 +100,7 @@ export function assertBranchMayOperate(
   if (
     !branch.licenceCategory.trim() ||
     !stringValues(branch.ruleSet.licenceCategories).includes(branch.licenceCategory) ||
-    at < branch.licenceValidFrom ||
+    !licenceDateStarted(branch.licenceValidFrom, at, branch.timezone) ||
     !licenceDateValid(branch.licenceValidTo, at, branch.timezone)
   ) {
     deny('LICENCE_INVALID');

@@ -166,7 +166,7 @@ describe('expiry save validation at PKT day boundaries', () => {
       expect(error.fields.licenceValidTo).toEqual([
         'The licence expiry date must be today or later.',
       ]);
-      expect(error.message).toMatch(/^Licence valid to:/);
+      expect(error.message).toMatch(/^Licence Valid To:/);
     }
   });
 });

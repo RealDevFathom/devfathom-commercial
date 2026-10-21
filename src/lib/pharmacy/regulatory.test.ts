@@ -192,3 +192,16 @@ it.each([
   if (allowed) expect(run).not.toThrow();
   else expect(run).toThrowError(new BranchOperationDeniedError('LICENCE_INVALID'));
 });
+
+it.each([
+  ['00:00', '2026-10-20T19:00:00Z'],
+  ['04:59', '2026-10-20T23:59:00Z'],
+  ['05:00', '2026-10-21T00:00:00Z'],
+])('runtime gate starts a licence at %s PKT on its calendar start day', (_localTime, instant) => {
+  const state = validState();
+  state.timezone = 'Asia/Karachi';
+  state.licenceValidFrom = new Date('2026-10-21T00:00:00Z');
+  expect(() =>
+    assertBranchMayOperate(state, { name: 'DISPENSE', at: new Date(instant) })
+  ).not.toThrow();
+});
