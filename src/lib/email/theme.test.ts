@@ -18,4 +18,19 @@ describe('appUrl', () => {
 
     expect(appUrl()).toBe(expectedUrl);
   });
+
+  it.each([
+    ['javascript:alert(1)'],
+    ['data:text/html,<script>alert(1)</script>'],
+    ['file:///etc/passwd'],
+    ['ftp://example.com'],
+    ['mailto:attacker@example.com'],
+    ['//evil.example.com'],
+    ['not a url'],
+    [''],
+  ])('fails closed to the default for non-http(s) or unparseable value %p', (configuredUrl) => {
+    vi.stubEnv('NEXT_PUBLIC_APP_URL', configuredUrl);
+
+    expect(appUrl()).toBe('https://dev-fathom-hub.vercel.app');
+  });
 });
