@@ -1,3 +1,5 @@
+BEGIN;
+SELECT set_config('app.is_platform_admin', 'true', true);
 -- Consent proof expires one year after archival. Preserve existing FORCE RLS.
 ALTER TABLE growth_wa_consent_retention ADD COLUMN "expiresAt" timestamptz;
 UPDATE growth_wa_consent_retention SET "expiresAt" = "retainedAt" + interval '365 days';
@@ -14,10 +16,12 @@ SET evidence = jsonb_strip_nulls(jsonb_build_object(
   'customerId', evidence->'customerId',
   'timestamp', COALESCE(evidence->'timestamp', evidence->'optInAt', evidence->'createdAt'),
   'optOutAt', evidence->'optOutAt',
-  'keyword', COALESCE(evidence->'keyword', to_jsonb(CASE
+  'keyword', to_jsonb(CASE
     WHEN "evidenceKind" = 'customer' AND evidence->>'optInAt' IS NOT NULL THEN 'opt-in'
     WHEN "evidenceKind" = 'customer' AND evidence->>'optOutAt' IS NOT NULL THEN 'opt-out'
-    WHEN lower(trim(evidence->>'body')) ~ '^(stop|unsubscribe|band[[:space:]]*karo|band[[:space:]]*kar[[:space:]]*do|ruk[[:space:]]*jaa?o|بند|رک[[:space:]]*جاؤ)([^[:alnum:]]|$)' THEN 'STOP'
-    WHEN lower(trim(evidence->>'body')) IN ('start', 'yes', 'haan', 'ہاں') THEN 'START'
-    ELSE NULL END))
+    WHEN lower(trim(COALESCE(evidence->>'body', evidence->>'keyword'))) ~ '^(stop|unsubscribe|band[[:space:]]*karo|band[[:space:]]*kar[[:space:]]*do|ruk[[:space:]]*jaa?o|بند|رک[[:space:]]*جاؤ)([^[:alnum:]]|$)' THEN 'STOP'
+    WHEN lower(trim(COALESCE(evidence->>'body', evidence->>'keyword'))) IN ('start', 'شروع') THEN 'START'
+    ELSE NULL END)
 ));
+
+COMMIT;
