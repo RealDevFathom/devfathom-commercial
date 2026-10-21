@@ -178,3 +178,15 @@ Builds cost cents.
 - **AI** (`AI_PROVIDER`) is `disabled`; Azure OpenAI was Azure-only.
 - **Meetings:** the LiveKit server (`infra/meetings.bicep`) is not ported. Calls need `NEXT_PUBLIC_LIVEKIT_URL`.
 - **Public URLs:** the metadata base URL and the plain-text email footer still name `dev-fathom-hub.vercel.app` until the production domain is final.
+
+## Staging demo tenants
+
+In `seed` mode the migration task also runs `bun scripts/seed-staging-demo.ts --skip-base`
+after `prisma/seed.ts`. It seeds the pharmacy tenant (`pharmacy-counter-e2e`) and restaurant
+demo seat 1 (tax-inclusive, passwordless personas behind `DEMO_ACCESS_CODE`, secret
+`demo-access-code`). The agency workspace and SuperAdmin come from `prisma/seed.ts`. The
+pharmacy password is HMAC-derived from `seed-password`, so an operator writes the login sheet
+without a database connection:
+
+    SEED_PASSWORD=… PLATFORM_ADMIN_PASSWORD=… DEMO_ACCESS_CODE=… PLATFORM_BASE_DOMAIN=staging.devfathom.com \
+      STAGING_LOGINS_FILE=/workspace/plan/staging-logins.md bun scripts/seed-staging-demo.ts --logins-only
