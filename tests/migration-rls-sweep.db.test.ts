@@ -1,11 +1,11 @@
 // @vitest-environment node
-import { readFileSync } from 'node:fs';
+import { readdirSync, readFileSync } from 'node:fs';
 import pg from 'pg';
 import { describe, expect, it } from 'vitest';
 
 const url = process.env.MIGSWEEP_DATABASE_URL;
 const repairs = [
-  '20261021180000_repair_package_module_cleanup',
+  '20261021180800_repair_package_module_cleanup',
   '20261021180100_repair_pharmacy_reference_permissions',
   '20261021180200_repair_pharmacy_branch_assignments',
   '20261021180300_repair_outbound_effect_cleanup',
@@ -15,6 +15,20 @@ const repairs = [
   '20261021180700_repair_delivery_payment_mode',
 ];
 const sql = (name: string) => readFileSync(`prisma/migrations/${name}/migration.sql`, 'utf8');
+
+describe('migration #218 repair contracts', () => {
+  it('uses unique timestamps and transaction-local platform scope', () => {
+    const migrationNames = readdirSync('prisma/migrations');
+
+    for (const name of repairs) {
+      const timestamp = name.split('_', 1)[0];
+      expect(migrationNames.filter((candidate) => candidate.startsWith(`${timestamp}_`))).toEqual([name]);
+      expect(sql(name)).toMatch(
+        /^--[^\n]*\n(?:--[^\n]*\n)*BEGIN;\nSELECT set_config\('app\.is_platform_admin', 'true', true\);[\s\S]*\nCOMMIT;\s*$/,
+      );
+    }
+  });
+});
 
 describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
   it('reproduces lost scope, repairs safe data changes without restoring revoked access, and permits replay', async () => {
@@ -89,12 +103,7 @@ describe.skipIf(!url)('migration #218 with a non-bypass database owner', () => {
 
       // Separate queries model the autocommit execution path that loses LOCAL scope.
       await db.query(`SELECT set_config('app.is_platform_admin', 'true', true)`);
-      if (pass === 0) await db.query(`BEGIN;
-          SELECT set_config('app.is_platform_admin', 'true', true);
-          INSERT INTO users (id,"organizationId","organizationRoleId",name,email,department,title,status,"updatedAt")
-          VALUES ('sweep218_new','sweep218_a','sweep218_role_a','New','sweep218-new@example.invalid','test','test','ACTIVE',now());
-          COMMIT;`);
-        expect((await db.query(`SELECT count(*)::int n FROM users WHERE id LIKE 'sweep218_%'`)).rows[0].n).toBe(0);
+      expect((await db.query(`SELECT count(*)::int n FROM users WHERE id LIKE 'sweep218_%'`)).rows[0].n).toBe(0);
       for (const name of repairs) {
         const body = sql(name).split("SELECT set_config('app.is_platform_admin', 'true', true);")[1]
           .replace(/COMMIT;\s*$/, '');

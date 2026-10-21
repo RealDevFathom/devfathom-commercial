@@ -15,7 +15,7 @@ All migration files containing `app.is_platform_admin` or case-insensitive `SET 
 | `20260728104000_platform_mfa` | Missing platform scope: UPDATE on forced platform_users can affect zero rows. Repair 20261021180400; only unenrolled, still-required rows change. |
 | `20260802130000_pending_login_intents` | Platform scope appears only in policy definitions/comments; no migration-time data change requiring replay. |
 | `20260803120000_meeting_occurrences` | Unscoped local setting, but immediate row_security_active guard raises before DML. No silently-applied repair needed; populated autocommit execution must abort. |
-| `20260818120000_package_module_inheritance_cleanup` | Silent DELETE no-op under FORCE RLS. Repair 20261021180000 repeats the conservative redundancy predicate; preserves overrides. |
+| `20260818120000_package_module_inheritance_cleanup` | Silent DELETE no-op under FORCE RLS. Repair 20261021180800 repeats the conservative redundancy predicate; preserves overrides. |
 | `20260818130000_organization_vertical_foundation` | NOT NULL validations reject missed vertical updates. No silently-applied repair needed. |
 | `20260818140000_restaurant_staff_operators_devices` | Platform scope appears only in policy definitions/comments; no migration-time data change requiring replay. |
 | `20260818160000_restaurant_brands_catalog_menus` | Platform scope appears only in policy definitions/comments; no migration-time data change requiring replay. |
