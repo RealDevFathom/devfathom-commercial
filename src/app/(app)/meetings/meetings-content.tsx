@@ -206,8 +206,13 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
   );
   const [attendeeIds, setAttendeeIds] = useState<string[]>([]);
 
+  const hasCompleteTimeRange = Boolean(date && startTime && endTime);
+  const hasInvalidTimeRange =
+    hasCompleteTimeRange &&
+    new Date(`${date}T${endTime}`).getTime() <= new Date(`${date}T${startTime}`).getTime();
+
   const handleCreate = () => {
-    if (!title.trim() || !date || !startTime || !endTime) return;
+    if (!title.trim() || !hasCompleteTimeRange || hasInvalidTimeRange) return;
     onSubmit({
       title: title.trim(),
       description: description.trim() || undefined,
@@ -293,6 +298,12 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </div>
         </div>
 
+        {hasInvalidTimeRange && (
+          <p role="alert" className="text-xs font-medium text-destructive">
+            End time must be after start time.
+          </p>
+        )}
+
         {/* Recurrence */}
         <div>
           <label className="block text-xs font-medium text-foreground mb-1.5">Repeat</label>
@@ -362,7 +373,7 @@ const CreateMeetingForm = memo(function CreateMeetingForm({
           </button>
           <button
             onClick={handleCreate}
-            disabled={!title.trim() || !date || !startTime || !endTime || isPending}
+            disabled={!title.trim() || !hasCompleteTimeRange || hasInvalidTimeRange || isPending}
             className="flex items-center gap-1.5 rounded-xl bg-primary px-5 py-2 text-xs font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
           >
             {isPending ? (

@@ -50,6 +50,7 @@ const mocks = vi.hoisted(() => ({
   pages: [] as Array<{ items: unknown[]; nextCursor?: string }>,
   hasNextPage: false,
   fetchNextPage: vi.fn(),
+  createMeeting: vi.fn(),
 }));
 
 vi.mock('next-auth/react', () => ({
@@ -61,7 +62,7 @@ vi.mock('next/link', () => ({
   ),
 }));
 vi.mock('@/lib/trpc', () => {
-  const mutation = () => ({ useMutation: () => ({ mutate: vi.fn(), isPending: false }) });
+  const mutation = (mutate = vi.fn()) => ({ useMutation: () => ({ mutate, isPending: false }) });
   return {
     trpc: {
       useUtils: () => ({
@@ -81,7 +82,7 @@ vi.mock('@/lib/trpc', () => {
             isFetchingNextPage: false,
           }),
         },
-        create: mutation(),
+        create: mutation(mocks.createMeeting),
         update: mutation(),
         delete: mutation(),
       },
@@ -108,6 +109,28 @@ describe('MeetingsContent pagination', () => {
     mocks.pages = [];
     mocks.hasNextPage = false;
     mocks.fetchNextPage.mockClear();
+    mocks.createMeeting.mockClear();
+  });
+
+  it('blocks a meeting whose end time is not after its start time', () => {
+    const { container } = render(<MeetingsContent />);
+
+    fireEvent.click(screen.getByRole('button', { name: /schedule meeting/i }));
+    fireEvent.change(screen.getByPlaceholderText('e.g. Sprint Planning'), {
+      target: { value: 'Planning' },
+    });
+    fireEvent.change(container.querySelector('input[type="date"]')!, {
+      target: { value: '2026-10-22' },
+    });
+    fireEvent.click(screen.getByRole('button', { name: 'Start time' }));
+    fireEvent.click(screen.getByRole('option', { name: '9:00 AM' }));
+    fireEvent.click(screen.getByRole('button', { name: 'End time' }));
+    fireEvent.click(screen.getByRole('option', { name: '9:00 AM' }));
+
+    expect(screen.getByRole('alert')).toHaveTextContent('End time must be after start time.');
+    expect(screen.getByRole('button', { name: /^schedule$/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /^schedule$/i }));
+    expect(mocks.createMeeting).not.toHaveBeenCalled();
   });
 
   // The defect issue #44 reports, at the surface that shows it. A tenant whose
