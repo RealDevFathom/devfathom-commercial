@@ -25,6 +25,7 @@ const blocked = [
   'Neurontin',
   'Codrex',
   'MS Contin',
+  'xan ax',
   'Calmese',
   'Lexotanil',
   'Rivotril',
@@ -81,6 +82,13 @@ describe('PR 175 regression corpus', () => {
       await expect(assertMarketingCopyAllowed(db, 'tenant', body)).resolves.toBeUndefined();
     }
   );
+  it.each([
+    'Rx discount', 'prescription', 'nuskha', 'dawai discount', 'dawa discount',
+    'دوائی کی رعایت', 'ask your doctor', 'medicine sale', 'نسخہ پر رعایت',
+    'دوا کی رعایت', 'ڈاکٹر سے پوچھیں', 'xan ax',
+  ])('refuses generic medicine or split drug promo: %s', async (body) => {
+    await expect(assertMarketingCopyAllowed(db, 'tenant', body)).rejects.toThrow();
+  });
   it('still blocks insulin outside the accessory phrase', async () => {
     await expect(
       assertMarketingCopyAllowed(db, 'tenant', 'insulin pen needles and insulin')

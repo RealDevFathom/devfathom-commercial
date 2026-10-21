@@ -329,6 +329,14 @@ export async function assertMarketingCopyAllowed(
   organizationId: string,
   body: string
 ): Promise<void> {
+  // Generic medicine language is prohibited even when no catalog drug is named.
+  if (
+    /(?<![\p{L}\p{N}])r\s*x(?![\p{L}\p{N}])/u.test(foldDrugText(body)) ||
+    bodyNamesProhibitedDrug(body, [
+      'prescription', 'nuskha', 'dawai', 'dawa', 'medicine',
+      'دوائی', 'دوا', 'نسخہ', 'ask your doctor', 'ڈاکٹر سے پوچھیں',
+    ])
+  ) throw new ProhibitedDrugInCopy();
   let rows: unknown;
   try {
     rows = await readMedicines(db, {
