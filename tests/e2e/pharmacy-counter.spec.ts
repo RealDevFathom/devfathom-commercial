@@ -825,7 +825,7 @@ test('day close — open sell count lock and print Z-report', async ({ page, con
         await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)
       ).toBe(true);
       await page.screenshot({
-        path: `${process.env.PAPERCLIP_RUN_SCRATCH_DIR}/day-close-${width}-${theme}.png`,
+        path: test.info().outputPath(`day-close-${width}-${theme}.png`),
         fullPage: true,
       });
     }
