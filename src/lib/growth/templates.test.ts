@@ -120,7 +120,7 @@ describe('message templates', () => {
     expect(
       bodyNamesProhibitedDrug('Ask for Xanax today. Reply STOP', ['Alprazolam', 'Xanax'])
     ).toBe(true);
-    expect(bodyNamesProhibitedDrug('panadolol tablets', ['Panadol'])).toBe(false);
+    expect(bodyNamesProhibitedDrug('panadolol tablets', ['Panadol'])).toBe(true);
     expect(bodyNamesProhibitedDrug('Try PANADOL tonight', ['Panadol'])).toBe(true);
     expect(bodyNamesProhibitedDrug('Rx only', ['Rx'])).toBe(false);
   });

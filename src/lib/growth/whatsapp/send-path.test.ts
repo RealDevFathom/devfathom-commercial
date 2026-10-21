@@ -13,10 +13,13 @@ const ALLOWED = new Set([
   'src/lib/growth/whatsapp/evolution.ts',
   'src/lib/growth/whatsapp/provider.ts',
   'src/lib/growth/consent.ts',
+  // Existing utility-only pharmacy provider and consent acknowledgement.
+  'src/lib/pharmacy/whatsapp/provider.ts',
+  'src/lib/pharmacy/whatsapp/inbound.ts',
   'src/app/api/growth/whatsapp/webhook/route.ts',
 ]);
 
-const ROOTS = ['src/lib/growth', 'src/lib/ai', 'src/server', 'src/app'];
+const ROOTS = ['src'];
 
 function sourceFiles(directory: string): string[] {
   const found: string[] = [];
@@ -32,21 +35,37 @@ function sourceFiles(directory: string): string[] {
   return found;
 }
 
+function forbiddenSource(source: string, relative: string): boolean {
+  const compact = source.replace(/['"`\s+]/g, '');
+  return (
+    /\bsendText\b/.test(source) ||
+    source.includes('createEvolutionProvider') ||
+    /\[sendText\]/.test(compact) ||
+    (!relative.endsWith('/whatsapp/store.ts') &&
+      (source.includes('outboundGrowthStore') || /(?:\.|\[)insertMessage/.test(compact)))
+  );
+}
+
 describe('marketing sends go through enqueueMarketing', () => {
+  it.each([
+    "provider['send' + 'Text'](phone, body)",
+    "provider['sendText'](phone, body)",
+    'provider.sendText(phone, body)',
+    "store['insert' + 'Message']({ direction: 'out' })",
+    "store.insertMessage({ direction: 'out', status: 'queued' })",
+    'const writer = outboundGrowthStore(db)',
+  ])('rejects alternate send/write spelling: %s', (source) => {
+    expect(forbiddenSource(source, 'src/lib/pharmacy/campaign.ts')).toBe(true);
+  });
   it('keeps provider sends out of campaign and AI modules', () => {
     const violations: string[] = [];
     for (const root of ROOTS) {
-      let files: string[] = [];
-      try {
-        files = sourceFiles(join(process.cwd(), root));
-      } catch {
-        continue;
-      }
+      const files = sourceFiles(join(process.cwd(), root));
       for (const file of files) {
         const relative = file.slice(process.cwd().length + 1);
         if (ALLOWED.has(relative)) continue;
         const source = readFileSync(file, 'utf8');
-        if (/\bsendText\s*\(/.test(source) || source.includes('createEvolutionProvider')) {
+        if (forbiddenSource(source, relative)) {
           violations.push(relative);
         }
       }

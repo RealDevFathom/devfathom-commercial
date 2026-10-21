@@ -20,7 +20,7 @@ vi.mock('@/lib/tenancy/scoped-db', () => ({
 }));
 
 vi.mock('./store', () => ({
-  growthStore: () => {
+  outboundGrowthStore: () => {
     if (!tx.store) throw new Error('store missing');
     return tx.store;
   },
@@ -657,4 +657,46 @@ describe('business local time', () => {
       '2026-10-20T19:00:00.000Z'
     );
   });
+});
+
+describe('campaign drain copy gate', () => {
+  it.each(['prohibited copy', 'catalog unavailable', 'missing gate'])(
+    'fails closed before provider send: %s',
+    async (reason) => {
+      const store = createMemoryStore();
+      store.putCustomer(customer('drain', '+923001234567'));
+      const row = await store.insertMessage({
+        organizationId: 'org_1',
+        customerId: 'drain',
+        direction: 'out',
+        body: 'Xаnax offer. Reply STOP',
+        status: 'queued',
+        campaignId: 'campaign',
+        recipientId: null,
+        waMessageId: null,
+        error: null,
+      });
+      const sendText = vi.fn();
+      const checkCopy =
+        reason === 'missing gate'
+          ? undefined
+          : async (body: string) => {
+              if (reason === 'catalog unavailable') throw new Error('catalog unavailable');
+              const { assertMarketingCopyAllowed } = await import('@/lib/growth/templates');
+              await assertMarketingCopyAllowed(medicineDb(), 'org_1', body);
+            };
+      const result = await drainQueue({
+        unit: (run) => run(store),
+        provider: { sendText, getStatus: async () => 'connected' },
+        organizationId: 'org_1',
+        settings: settings(),
+        now: day,
+        clock: { now: () => day, sleep: async () => {}, random: () => 0 },
+        checkCopy,
+      });
+      expect(result.sent).toBe(0);
+      expect(sendText).not.toHaveBeenCalled();
+      expect(store.messages.find((message) => message.id === row.id)?.status).toBe('failed');
+    }
+  );
 });

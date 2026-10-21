@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 
 import { DuplicateInboundMessage } from './duplicate';
-import { growthStore } from './store';
+import { outboundGrowthStore as growthStore } from './store';
 
 type Call = { model: string; op: string; args: unknown };
 

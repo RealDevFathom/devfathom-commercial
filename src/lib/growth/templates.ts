@@ -186,7 +186,8 @@ function escapeRegExp(value: string): string {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
-const DRUG_LEET: Record<string, string> = {
+// UTS #39-style subset for common Latin/Greek/Cyrillic lookalikes.
+const DRUG_FOLD: Record<string, string> = {
   '0': 'o',
   '1': 'i',
   '3': 'e',
@@ -196,40 +197,80 @@ const DRUG_LEET: Record<string, string> = {
   '@': 'a',
   $: 's',
   '!': 'i',
+  '|': 'i',
+  '€': 'e',
+  l: 'i',
+  а: 'a',
+  е: 'e',
+  о: 'o',
+  р: 'p',
+  с: 'c',
+  х: 'x',
+  у: 'y',
+  і: 'i',
+  ј: 'j',
+  к: 'k',
+  м: 'm',
+  т: 't',
+  в: 'b',
+  н: 'h',
+  ѕ: 's',
+  α: 'a',
+  ο: 'o',
+  ρ: 'p',
+  χ: 'x',
+  ι: 'i',
+  κ: 'k',
+  τ: 't',
+  ν: 'v',
+  υ: 'y',
+  ε: 'e',
+  ϲ: 'c',
+  ي: 'ی',
+  ى: 'ی',
+  ك: 'ک',
+  ه: 'ہ',
+  ة: 'ہ',
 };
 
-/** Lowercase, common leetspeak, then letters and digits only. */
-export function normalizeDrugName(value: string): string {
-  const folded = value.normalize('NFKC').toLowerCase();
-  let out = '';
-  for (const character of folded) out += DRUG_LEET[character] ?? character;
-  return out.replace(/[^\p{L}\p{N}]+/gu, '');
-}
-
 function foldDrugText(value: string): string {
-  const folded = value.normalize('NFKC').toLowerCase();
-  let out = '';
-  for (const character of folded) out += DRUG_LEET[character] ?? character;
-  return out;
+  return [
+    ...value
+      .normalize('NFKD')
+      .toLowerCase()
+      .replace(/[\p{M}\u0640]/gu, ''),
+  ]
+    .map((character) => DRUG_FOLD[character] ?? character)
+    .join('');
 }
 
-/**
- * Match after lowercase, stripped spacing and punctuation, common leetspeak,
- * and a trailing plural. Names shorter than 3 characters are ignored. A longer
- * word that merely starts with the name does not match.
- */
+export function normalizeDrugName(value: string): string {
+  return foldDrugText(value)
+    .replace(/[^\p{L}\p{N}]+/gu, '')
+    .replace(/(.)\1+/gu, '$1');
+}
+
+/** Long names allow affixes. Short names retain boundaries; repeated letters
+ * and separators are accepted on both the body and catalog/list side. */
 export function bodyNamesProhibitedDrug(body: string, names: readonly string[]): boolean {
   const text = foldDrugText(body);
+  // A common adjective, explicitly reviewed in PR #175. Apply only to the
+  // Lyrica alias so tenant catalog names remain enforceable.
+
   for (const raw of names) {
     const name = normalizeDrugName(raw);
     if (name.length < 3) continue;
-    const letters = [...name].map((character) => escapeRegExp(character)).join('[^\\p{L}\\p{N}]*');
-    const plural =
-      /^[\p{Script=Latin}\p{N}]+$/u.test(name) && name.length >= 4 && !name.endsWith('s')
-        ? 's?'
-        : '';
-    const pattern = new RegExp(`(?<![\\p{L}\\p{N}])${letters}${plural}(?![\\p{L}\\p{N}])`, 'iu');
-    if (pattern.test(text)) return true;
+    const letters = [...name].map((c) => `(?:${escapeRegExp(c)}[^\\p{L}\\p{N}]*)+`).join('');
+    const long = normalizeDrugName(raw).length >= 5;
+    const pattern = new RegExp(
+      `${long ? '' : '(?<![\\p{L}\\p{N}])'}${letters}${long ? '' : '(?![\\p{L}\\p{N}])'}`,
+      'iu'
+    );
+    const candidate =
+      normalizeDrugName(raw) === normalizeDrugName('lyrica')
+        ? text.replace(/(?<![\p{L}\p{N}])iyricai(?![\p{L}\p{N}])/gu, '')
+        : text;
+    if (pattern.test(candidate)) return true;
   }
   return false;
 }
@@ -340,7 +381,12 @@ export async function assertMarketingCopyAllowed(
     if (error instanceof ProhibitedDrugInCopy) throw error;
     throw new ProhibitedDrugInCopy();
   }
-  if (bodyNamesProhibitedDrug(body, [...prohibitedNames(rows), ...PROHIBITED_DRUG_NAMES])) {
+  // The accessory noun must immediately follow insulin; insulin elsewhere still blocks.
+  const checkedBody = body.replace(
+    /\binsulin\s+(?:pen\s+needles|cooler\s+bags?|syringes)\b/giu,
+    'device accessory'
+  );
+  if (bodyNamesProhibitedDrug(checkedBody, [...prohibitedNames(rows), ...PROHIBITED_DRUG_NAMES])) {
     throw new ProhibitedDrugInCopy();
   }
 }

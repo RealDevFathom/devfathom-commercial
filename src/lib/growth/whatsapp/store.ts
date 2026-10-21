@@ -179,7 +179,7 @@ function isUniqueConflict(error: unknown): boolean {
  * `growthWaSettings`, `growthWaCustomer`, `growthWaMessage`, `growthWaTemplate`.
  * Those names stay off a future G1 `growthSettings` / `customer` / `messageLog` schema.
  */
-export function growthStore(db: object): GrowthWhatsAppStore {
+export function outboundGrowthStore(db: object): GrowthWhatsAppStore {
   const organizations = db as OrganizationReader;
   const settingsModel = () => model(db, 'growthWaSettings');
   const customers = () => model(db, 'growthWaCustomer');
@@ -436,4 +436,12 @@ export function growthStore(db: object): GrowthWhatsAppStore {
       return created;
     },
   };
+}
+
+/** General callers can record inbound traffic only. Outbound capability is
+ * restricted to queue/consent by the source enforcement test. */
+export function growthStore(db: object): Omit<GrowthWhatsAppStore, 'insertMessage'> & {
+  insertMessage(input: NewMessage & { direction: 'in' }): Promise<MessageLogRow>;
+} {
+  return outboundGrowthStore(db);
 }
