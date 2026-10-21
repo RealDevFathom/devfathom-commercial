@@ -21,6 +21,8 @@
  * documents.
  */
 
+import { daysUntilExpiry, nearExpiryAlertBand } from './near-expiry-alerts';
+
 export class PharmacyStockSignalError extends Error {
   constructor(readonly reason: 'INVALID_UNITS' | 'INVALID_POLICY' | 'NOT_FOUND' | 'INVALID_STATE') {
     super(reason);
@@ -450,12 +452,14 @@ export function evaluateStockSignals(
       );
     }
 
+    const nearExpiryDays = daysUntilExpiry(lot.expiresAt, at);
     if (
       lot.disposition === 'AVAILABLE' &&
-      lot.expiresAt.getTime() > at.getTime() &&
-      lot.expiresAt.getTime() <= addDays(at, policy.nearExpiryDays).getTime()
+      nearExpiryDays > 0 &&
+      nearExpiryDays <= policy.nearExpiryDays
     ) {
-      const days = Math.ceil((lot.expiresAt.getTime() - at.getTime()) / DAY_MS);
+      const days = nearExpiryDays;
+      const band = nearExpiryAlertBand(lot.expiresAt, at);
       signals.push(
         build(context, {
           kind: 'NEAR_EXPIRY',
@@ -467,7 +471,9 @@ export function evaluateStockSignals(
           neededUnits: 0,
           onHandUnits: held,
           inboundUnits: 0,
-          explanation: `${held} units expire in ${days} days, inside the ${policy.nearExpiryDays}-day near-expiry window.`,
+          explanation: band
+            ? `${held} units expire in ${days} days. This is the ${band}-day near-expiry alert.`
+            : `${held} units expire in ${days} days, inside the ${policy.nearExpiryDays}-day near-expiry window.`,
         })
       );
     }

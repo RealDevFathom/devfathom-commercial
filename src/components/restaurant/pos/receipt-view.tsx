@@ -43,6 +43,13 @@ export type Receipt = {
     roundingAdjustment: string;
     grandTotal: string;
   };
+  /** Present when the settled bill is attached to a restaurant customer. */
+  loyalty?: {
+    pointsBalance: number;
+    pointsEarned: number;
+    pointsPerPkr: string | null;
+    balancePkr: string;
+  } | null;
 };
 
 type ReceiptViewProps = {
@@ -164,6 +171,30 @@ export function ReceiptView({ billId, request }: ReceiptViewProps) {
             <dd className="font-mono tabular-nums text-text-strong">{value}</dd>
           </div>
         ))}
+        {receipt.loyalty ? (
+          <>
+            <div className="flex justify-between gap-3">
+              <dt className="text-text-muted">Loyalty balance</dt>
+              <dd className="font-mono tabular-nums text-text-strong">
+                {receipt.loyalty.pointsBalance} points
+              </dd>
+            </div>
+            <div className="flex justify-between gap-3">
+              <dt className="text-text-muted">Wallet value</dt>
+              <dd className="font-mono tabular-nums text-text-strong">
+                {receipt.loyalty.balancePkr}
+              </dd>
+            </div>
+            {receipt.loyalty.pointsEarned > 0 ? (
+              <div className="flex justify-between gap-3">
+                <dt className="text-text-muted">Earned this sale</dt>
+                <dd className="font-mono tabular-nums text-text-strong">
+                  {receipt.loyalty.pointsEarned} points
+                </dd>
+              </div>
+            ) : null}
+          </>
+        ) : null}
       </dl>
 
       <div className="space-y-2">

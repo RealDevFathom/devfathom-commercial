@@ -188,6 +188,28 @@ describe('pharmacy navigation', () => {
   });
 });
 
+describe('growth navigation', () => {
+  it('shows Growth only when the growth_ai flag is on', () => {
+    const hidden = visibleNavigation(
+      { vertical: 'PHARMACY', enabledModules: ['pharmacy-core'] },
+      'ADMIN'
+    ).map((item) => item.href);
+    expect(hidden).not.toContain('/growth');
+
+    const shown = visibleNavigation(
+      { vertical: 'PHARMACY', enabledModules: ['growth_ai'] },
+      'MEMBER'
+    ).map((item) => item.href);
+    expect(shown).toContain('/growth');
+
+    const restaurant = visibleNavigation(
+      { vertical: 'RESTAURANT', enabledModules: ['restaurant-core', 'growth_ai'] },
+      'ADMIN'
+    ).map((item) => item.href);
+    expect(restaurant).toContain('/growth');
+  });
+});
+
 describe('hospitality navigation', () => {
   const hotelModules = ['hotel-core', 'hotel-banquets', 'hotel-upsell'];
   const everyRailCapability = ['hotel:property-admin', 'hotel:rates', 'hotel:marketing'] as const;

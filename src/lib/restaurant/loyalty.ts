@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { expireAccountLoyaltyPoints } from './loyalty-expiry';
-import { add, compare, money, multiply, roundMoney, sub, sum, ZERO } from './money';
+import { add, compare, formatMoney, money, multiply, roundMoney, sub, sum, ZERO } from './money';
 
 export type LoyaltyErrorReason =
   | 'NOT_FOUND'
@@ -132,6 +132,61 @@ export async function loyaltyBalance(db: ScopedDb, accountId: string): Promise<n
     _sum: { points: true },
   });
   return aggregate._sum.points ?? 0;
+}
+
+/**
+ * The growth-module read for one restaurant customer. Points are the wallet;
+ * `pointsPerPkr` is the earn rate in force now (whole points per 1 PKR, floored
+ * at earn time); `balancePkr` is that wallet priced at the current redemption
+ * value. Returns null when the customer does not exist in this tenant. Does not
+ * send messages — win-back stays in the growth module.
+ */
+export type LoyaltySummary = {
+  customerId: string;
+  accountId: string | null;
+  active: boolean;
+  pointsBalance: number;
+  pointsPerPkr: string | null;
+  redemptionValuePerPoint: string | null;
+  balancePkr: string;
+};
+
+export async function getLoyaltySummary(
+  db: ScopedDb,
+  customerId: string
+): Promise<LoyaltySummary | null> {
+  const customer = await db.restaurantCustomer.findUnique({
+    where: { id: customerId },
+    select: {
+      id: true,
+      loyaltyAccount: { select: { id: true, active: true } },
+    },
+  });
+  if (!customer) return null;
+
+  const account = customer.loyaltyAccount;
+  const pointsBalance = account ? await loyaltyBalance(db, account.id) : 0;
+  let pointsPerPkr: string | null = null;
+  let redemptionValuePerPoint: string | null = null;
+  let balancePkr = formatMoney(0);
+  try {
+    const program = await effectiveProgram(db, new Date());
+    pointsPerPkr = program.earnRate.toString();
+    redemptionValuePerPoint = program.redemptionValue.toString();
+    balancePkr = formatMoney(roundMoney(multiply(pointsBalance, program.redemptionValue)));
+  } catch (err) {
+    if (!(err instanceof LoyaltyError) || err.reason !== 'PROGRAM_NOT_CONFIGURED') throw err;
+  }
+
+  return {
+    customerId: customer.id,
+    accountId: account?.id ?? null,
+    active: account?.active ?? false,
+    pointsBalance,
+    pointsPerPkr,
+    redemptionValuePerPoint,
+    balancePkr,
+  };
 }
 
 export async function listLoyaltyAccounts(

@@ -1,181 +1,260 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
+import { TRPCError } from '@trpc/server';
 
-vi.mock('server-only', () => ({}));
-vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
-vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  enabled: vi.fn(),
+  can: vi.fn(),
+}));
+
+vi.mock('@/lib/growth', () => ({ isGrowthEnabled: mocks.enabled }));
+vi.mock('@/lib/abac', async () => {
+  const actual = await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac');
+  return { ...actual, can: mocks.can };
+});
 vi.mock('@/server/audit', () => ({
-  ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
+  ipFromHeaders: () => null,
+  isAuditExcludedPath: () => false,
+  recordTrpcAudit: vi.fn(async () => undefined),
   annotateAudit: vi.fn(),
-  diffChanges: vi.fn(() => ({})),
 }));
 
 import { decryptSecret } from '@/lib/secret-crypto';
-import { webhookSecretHash } from '@/lib/growth/whatsapp/webhook-secret';
-import { annotateAudit } from '@/server/audit';
-import { PHARMACY_ROLE_TEMPLATES, RESTAURANT_ROLE_TEMPLATES } from '@/lib/vertical-catalog';
 
-import { growthRouter } from './growth';
+import { growthRouter, growthStore } from './growth';
 
-type Permission = { capability: string; effect: 'ALLOW' };
+let sequence = 0;
 
-function permissionsFor(
-  templates: readonly { key: string; capabilities: readonly string[] }[],
-  key: string
-): Permission[] {
-  return templates
-    .find((role) => role.key === key)!
-    .capabilities.map((capability) => ({ capability, effect: 'ALLOW' }));
-}
-
-function customerRow() {
-  return {
-    id: 'c1',
-    organizationId: 'org_1',
-    displayName: 'Ayesha',
-    whatsappE164: '+923001234567',
-    whatsappOptIn: false,
-    whatsappOptInAt: null as Date | null,
-    whatsappOptOutAt: null as Date | null,
-  };
-}
-
-function dbFor(rolePermissions: Permission[]) {
-  const customer = customerRow();
-  const updateMany = vi.fn(async ({ data }: { data: Partial<typeof customer> }) => {
-    Object.assign(customer, data);
-    return { count: 1 };
-  });
-  return {
-    customer,
-    updateMany,
-    db: {
-      user: {
-        findUnique: async () => ({
-          organizationRole: { permissions: rolePermissions },
-          permissionOverrides: [],
-        }),
-      },
-      growthWaCustomer: {
-        findFirst: async () => customer,
-        updateMany,
-      },
-    },
-  };
-}
-
-function caller(db: ReturnType<typeof dbFor>['db'], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOYEE') {
-  return growthRouter.createCaller({
-    db,
+function caller() {
+  sequence += 1;
+  const organizationId = `org_growth_ui_${sequence}`;
+  const api = growthRouter.createCaller({
+    db: {},
     entitlements: {
+      organizationId,
       enabledModules: ['growth_ai'],
-      activeSeats: 1,
-      seatLimit: 50,
       modules: [],
+      seatLimit: 5,
+      activeSeats: 1,
       limits: {},
     },
     session: {
-      expires: 'later',
       user: {
-        id: 'user_1',
-        role,
-        department: 'OPERATIONS',
+        id: 'user_owner',
+        name: 'Hina Malik',
+        email: 'hina@sehat.test',
+        organizationId,
+        role: 'ADMIN',
         status: 'ACTIVE',
-        organizationId: 'org_1',
       },
     },
-    organization: { id: 'org_1', isDemo: false },
+    organization: { id: organizationId, isDemo: false, vertical: 'PHARMACY' },
     support: null,
     requestMeta: { ip: null, userAgent: null },
     audit: { detail: {} },
   } as never);
+  return { api, organizationId };
 }
 
-describe('growth.customers.setOptIn', () => {
-  let fixture: ReturnType<typeof dbFor>;
+const proposal = {
+  name: 'Welcome back',
+  kind: 'manual' as const,
+  segment: { type: 'all' as const },
+  sendAt: '2026-10-24T06:00:00.000Z',
+  discountType: 'none' as const,
+  discountValue: null,
+  budgetCapMinor: 0,
+  templateId: 'tpl_generic',
+  rationale: null as string | null,
+};
 
-  beforeEach(() => {
-    fixture = dbFor([]);
-  });
+const settingsInput = {
+  monthlyBudgetMinor: 0,
+  autoApproveUnderMinor: 0,
+  quietHoursStart: 22,
+  quietHoursEnd: 8,
+  maxMsgsPerDay: 30,
+  maxDiscountPct: 25,
+  customDates: [] as string[],
+  waInstanceName: 'shop',
+  waApiUrl: 'http://127.0.0.1:8080',
+};
 
-  it.each([
-    ['pharmacy cashier', permissionsFor(PHARMACY_ROLE_TEMPLATES, 'cashier')],
-    ['pharmacy owner', permissionsFor(PHARMACY_ROLE_TEMPLATES, 'owner')],
-    ['restaurant cashier', permissionsFor(RESTAURANT_ROLE_TEMPLATES, 'cashier')],
-  ])('allows the %s', async (_label, rolePermissions) => {
-    fixture = dbFor(rolePermissions);
-    const saved = await caller(fixture.db).customers.setOptIn({
-      customerId: 'c1',
-      whatsappOptIn: true,
-    });
-    expect(saved.whatsappOptIn).toBe(true);
-    expect(fixture.updateMany).toHaveBeenCalledOnce();
-  });
-
-  it.each([
-    ['pharmacy finance', permissionsFor(PHARMACY_ROLE_TEMPLATES, 'finance')],
-    ['growth.manage only', [{ capability: 'growth.manage', effect: 'ALLOW' as const }]],
-    ['no counter role', []],
-  ])('refuses the %s', async (_label, rolePermissions) => {
-    fixture = dbFor(rolePermissions);
-    await expect(
-      caller(fixture.db).customers.setOptIn({ customerId: 'c1', whatsappOptIn: true })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(fixture.customer.whatsappOptIn).toBe(false);
-    expect(fixture.updateMany).not.toHaveBeenCalled();
-  });
-
-  it('refuses a till opt-in after the customer sent STOP', async () => {
-    fixture = dbFor(permissionsFor(PHARMACY_ROLE_TEMPLATES, 'cashier'));
-    fixture.customer.whatsappOptIn = false;
-    fixture.customer.whatsappOptOutAt = new Date('2026-10-21T05:00:00.000Z');
-    await expect(
-      caller(fixture.db).customers.setOptIn({ customerId: 'c1', whatsappOptIn: true })
-    ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(fixture.updateMany).not.toHaveBeenCalled();
-  });
+beforeEach(() => {
+  mocks.enabled.mockResolvedValue(true);
+  mocks.can.mockResolvedValue(true);
+  process.env.PLATFORM_ENCRYPTION_KEY = 'a'.repeat(64);
 });
 
-describe('growth.whatsapp.rotateWebhookSecret', () => {
-  it('shows 32 random bytes once to an admin and stores only the sealed secret', async () => {
-    vi.stubEnv('PLATFORM_ENCRYPTION_KEY', 'growth-test-key');
-    const writes: Array<{ waWebhookSecretHash: string; waWebhookSecretEnc: string }> = [];
-    const db = {
-      ...dbFor([]).db,
-      growthWaSettings: {
-        upsert: async (args: {
-          create: { waWebhookSecretHash: string; waWebhookSecretEnc: string };
-        }) => {
-          writes.push(args.create);
-          return args.create;
-        },
-      },
-    };
-    await expect(caller(db).whatsapp.rotateWebhookSecret()).rejects.toMatchObject({
-      code: 'FORBIDDEN',
-    });
-    expect(writes).toHaveLength(0);
+describe('growth admin procedures', () => {
+  it('lists the proposal and approves it onto the scheduled queue', async () => {
+    const { api } = caller();
+    const proposed = await api.campaigns.list({ tab: 'proposed' });
+    expect(proposed.campaigns.map((campaign) => campaign.name)).toEqual(['Welcome back']);
+    const approved = await api.campaigns.approve({ id: 'cmp_proposal' });
+    expect(approved.status).toBe('approved');
+    expect(approved.approvedBy).toBe('user_owner');
+    const scheduled = await api.campaigns.list({ tab: 'scheduled' });
+    expect(scheduled.campaigns.map((campaign) => campaign.id)).toContain('cmp_proposal');
+    await expect(api.campaigns.approve({ id: 'cmp_proposal' })).rejects.toBeInstanceOf(TRPCError);
+  });
 
-    const first = await caller(db, 'ADMIN').whatsapp.rotateWebhookSecret();
-    const second = await caller(db, 'ADMIN').whatsapp.rotateWebhookSecret();
-    expect(Buffer.from(first.secret, 'base64url')).toHaveLength(32);
-    expect(first.secret).not.toBe(second.secret);
-    expect(writes[0]?.waWebhookSecretHash).toBe(webhookSecretHash(first.secret));
-    expect(decryptSecret(writes[0]!.waWebhookSecretEnc)).toBe(first.secret);
-    expect(writes[0]?.waWebhookSecretEnc).not.toContain(first.secret);
-    expect(writes[1]?.waWebhookSecretHash).not.toBe(writes[0]?.waWebhookSecretHash);
-    expect(vi.mocked(annotateAudit).mock.calls.map((call) => JSON.stringify(call))).not.toEqual(
-      expect.arrayContaining([expect.stringContaining(first.secret)])
-    );
-    expect(annotateAudit).toHaveBeenCalledWith(
-      expect.anything(),
-      expect.objectContaining({
-        targetType: 'GrowthWaSettings',
-        targetId: 'org_1',
-        metadata: { rotated: true },
+  it('rejects a proposal and refuses edits once it is no longer proposed', async () => {
+    const { api } = caller();
+    const rejected = await api.campaigns.cancel({ id: 'cmp_proposal' });
+    expect(rejected.status).toBe('cancelled');
+    expect(
+      (await api.campaigns.list({ tab: 'proposed' })).campaigns.map((campaign) => campaign.id)
+    ).not.toContain('cmp_proposal');
+    await expect(api.campaigns.update({ ...proposal, id: 'cmp_proposal' })).rejects.toMatchObject({
+      message: 'Only a proposal can be edited.',
+    });
+  });
+
+  it('edits a proposal and creates another that stays proposed when auto-approve is off', async () => {
+    const { api } = caller();
+    const edited = await api.campaigns.update({
+      ...proposal,
+      id: 'cmp_proposal',
+      name: 'Welcome back, softer',
+      rationale: 'A smaller note.',
+    });
+    expect(edited.name).toBe('Welcome back, softer');
+    expect(edited.status).toBe('proposed');
+    expect(edited.approvedBy).toBeNull();
+    const created = await api.campaigns.create({
+      ...proposal,
+      name: 'Friday',
+      templateId: 'tpl_winback',
+    });
+    expect(created.status).toBe('proposed');
+    expect(created.createdBy).toBe('user_owner');
+    expect(created.estimatedReach).toBe(0);
+    expect(created.segment).toEqual({ type: 'all' });
+  });
+
+  it('approves on the server when the cap is under autoApproveUnderMinor', async () => {
+    const { api } = caller();
+    await api.settings.update({ ...settingsInput, autoApproveUnderMinor: 50_000 });
+    const under = await api.campaigns.create({
+      ...proposal,
+      name: 'Small',
+      budgetCapMinor: 49_999,
+    });
+    expect(under.status).toBe('approved');
+    expect(under.approvedBy).toBe('user_owner');
+    expect(under.approvedAt).toEqual(expect.any(String));
+    const atThreshold = await api.campaigns.create({
+      ...proposal,
+      name: 'At the line',
+      budgetCapMinor: 50_000,
+    });
+    expect(atThreshold.status).toBe('proposed');
+    expect(atThreshold.approvedBy).toBeNull();
+  });
+
+  it('refuses a fixed discount larger than the campaign budget', async () => {
+    const { api } = caller();
+    await expect(
+      api.campaigns.create({
+        ...proposal,
+        name: 'Too much off',
+        discountType: 'fixed',
+        discountValue: 20_000,
+        budgetCapMinor: 10_000,
       })
+    ).rejects.toMatchObject({
+      message: 'A fixed discount cannot be larger than the campaign budget.',
+    });
+    const saved = await api.campaigns.create({
+      ...proposal,
+      name: 'Fits',
+      discountType: 'fixed',
+      discountValue: 10_000,
+      budgetCapMinor: 10_000,
+    });
+    expect(saved.discountValue).toBe(10_000);
+    expect(saved.status).toBe('proposed');
+  });
+
+  it('returns no phone and no spend on the seeded proposal', async () => {
+    const { api } = caller();
+    const detail = await api.campaigns.get({ id: 'cmp_proposal' });
+    expect(detail.campaign.estimatedReach).toBe(0);
+    expect(detail.campaign.spentMinor).toBe(0);
+    expect(detail.campaign.redemptionCount).toBe(0);
+    expect(detail.recipients).toEqual([]);
+    expect(JSON.stringify(detail)).not.toContain('phone');
+    expect(detail.preview).toMatch(/STOP/);
+  });
+
+  it('stores the Evolution key as ciphertext and refuses a host that is not allowlisted', async () => {
+    const { api, organizationId } = caller();
+    const saved = await api.settings.update({ ...settingsInput, waApiKey: 'new-secret-1234' });
+    expect(saved.quietHoursStart).toBe(22);
+    expect(saved.quietHoursEnd).toBe(8);
+    expect(saved.waApiKeyHint).toBe('••••1234');
+    expect(JSON.stringify(saved)).not.toContain('new-secret-1234');
+    const stored = growthStore(organizationId).settings.waApiKeyEnc;
+    expect(stored?.startsWith('v1.')).toBe(true);
+    expect(stored).not.toContain('new-secret-1234');
+    expect(decryptSecret(stored ?? '')).toBe('new-secret-1234');
+    expect(JSON.stringify(await api.settings.get())).not.toContain('new-secret-1234');
+    const kept = await api.settings.update({ ...settingsInput, waApiKey: undefined });
+    expect(growthStore(organizationId).settings.waApiKeyEnc).toBe(stored);
+    expect(kept.waApiKeyHint).toBe('••••1234');
+    expect((await api.connection.status()).managerUrl).toBe('http://127.0.0.1:8080');
+    await expect(
+      api.settings.update({ ...settingsInput, waApiUrl: 'https://evil.example' })
+    ).rejects.toMatchObject({ message: 'That Evolution host is not allowlisted.' });
+    const cleared = await api.settings.update({ ...settingsInput, waInstanceName: null });
+    expect(cleared.quietHoursStart).toBe(22);
+    expect((await api.connection.status()).status).toBe('needs_pairing');
+  });
+
+  it('returns approved campaigns to proposed when their template changes', async () => {
+    const { api, organizationId } = caller();
+    await api.campaigns.approve({ id: 'cmp_proposal' });
+    const scheduled = growthStore(organizationId).campaigns.find(
+      (campaign) => campaign.id === 'cmp_proposal'
     );
-    vi.unstubAllEnvs();
+    if (scheduled) {
+      scheduled.status = 'scheduled';
+      scheduled.approvedBy = 'user_owner';
+      scheduled.approvedAt = '2026-10-20T00:00:00.000Z';
+    }
+    const other = await api.campaigns.create({
+      ...proposal,
+      name: 'Other template',
+      templateId: 'tpl_winback',
+    });
+    await api.campaigns.approve({ id: other.id });
+    await expect(
+      api.templates.update({ id: 'tpl_generic', body: 'Salaam {{nope}}. Reply STOP to opt out.' })
+    ).rejects.toMatchObject({ message: expect.stringMatching(/\{\{nope\}\}/) });
+    expect((await api.campaigns.get({ id: 'cmp_proposal' })).campaign.status).toBe('scheduled');
+    await expect(
+      api.templates.update({ id: 'tpl_generic', body: 'Salaam {{name}}' })
+    ).rejects.toMatchObject({ message: expect.stringMatching(/STOP/) });
+    const next = 'Salaam {{name}}. Reply STOP to opt out.';
+    await api.templates.update({ id: 'tpl_generic', body: next });
+    const reset = (await api.campaigns.get({ id: 'cmp_proposal' })).campaign;
+    expect(reset.status).toBe('proposed');
+    expect(reset.approvedBy).toBeNull();
+    expect(reset.approvedAt).toBeNull();
+    expect((await api.campaigns.get({ id: other.id })).campaign.status).toBe('approved');
+    expect(
+      (await api.templates.list()).templates.find((template) => template.id === 'tpl_generic')?.body
+    ).toBe(next);
+  });
+
+  it('denies a shop with the flag off and a cashier', async () => {
+    mocks.enabled.mockResolvedValue(false);
+    await expect(caller().api.campaigns.list()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Growth AI is off for this shop.',
+    });
+    mocks.enabled.mockResolvedValue(true);
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().api.campaigns.list()).rejects.toMatchObject({ code: 'FORBIDDEN' });
   });
 });
