@@ -276,6 +276,7 @@ const RECEIPT_READ_CAPABILITIES = [
   'pharmacy.dispense',
   'pharmacy:receipt',
   'pharmacy.receipt',
+  'pharmacy:counter',
   'pharmacy.counter',
 ] as const;
 
