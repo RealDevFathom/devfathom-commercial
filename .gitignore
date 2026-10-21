@@ -63,3 +63,12 @@ docker/livekit/livekit.dev.keys.yaml
 # Playwright output
 /test-results/
 /playwright-report/
+
+# AWS CDK app
+/infra/aws/node_modules/
+/infra/aws/cdk.out/
+/infra/aws/dist/
+
+# Public Amazon RDS CA bundle shipped in the images. The *.pem rule above
+# is for private keys; this file is the published global trust store.
+!/docker/rds/global-bundle.pem

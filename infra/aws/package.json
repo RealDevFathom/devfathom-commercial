@@ -1,0 +1,25 @@
+{
+  "name": "@devfathom/aws-infra",
+  "version": "0.1.0",
+  "private": true,
+  "description": "DevFathom staging and production infrastructure on AWS. Synth only until an account is bootstrapped.",
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "build": "tsc --noEmit",
+    "synth": "tsc --noEmit && cdk synth --strict",
+    "synth:production": "tsc --noEmit && cdk synth --strict -c stage=production"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.214.0",
+    "constructs": "^10.4.2"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "aws-cdk": "^2.214.0",
+    "cdk-nag": "^2.35.0",
+    "tsx": "^4.21.0",
+    "typescript": "^5.6.0"
+  }
+}

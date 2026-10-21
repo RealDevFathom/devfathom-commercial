@@ -1,0 +1,113 @@
+name: AWS production
+
+# Manual promotion. Copies the three staging images of one tag into the
+# production repositories and rolls production. There is no push trigger.
+
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: Git SHA already pushed to the staging ECR repositories
+        required: true
+        type: string
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-production
+  cancel-in-progress: false
+
+jobs:
+  promote:
+    name: Promote image to production
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      AWS_REGION: ap-south-1
+      STACK_NAME: DevFathom-production
+    steps:
+      - uses: actions/checkout@v7
+      - name: Require the production role
+        env:
+          ROLE: ${{ vars.AWS_PRODUCTION_DEPLOY_ROLE_ARN }}
+        run: |
+          set -euo pipefail
+          if [ -z "$ROLE" ]; then
+            echo "::error::Set the GitHub variable AWS_PRODUCTION_DEPLOY_ROLE_ARN to the DeployRoleArn output before promoting."
+            exit 1
+          fi
+      - name: Require a git SHA
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          if ! printf '%s' "$IMAGE_TAG" | grep -Eq '^[0-9a-f]{7,40}$'; then
+            echo "::error::image_tag must be the git SHA that staging already built."
+            exit 1
+          fi
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_PRODUCTION_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Read stack outputs
+        run: |
+          set -euo pipefail
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].Outputs' --output json > outputs.json
+          val() { jq -er --arg key "$1" '.[] | select(.OutputKey == $key) | .OutputValue' outputs.json; }
+          {
+            echo "CLUSTER=$(val ClusterName)"
+            echo "PRIVATE_SUBNETS=$(val PrivateSubnetIds)"
+            echo "APP_SECURITY_GROUP=$(val AppSecurityGroupId)"
+            echo "MIGRATE_FAMILY=$(val MigrateTaskDefinitionFamily)"
+            echo "WEB_FAMILY=$(val WebTaskDefinitionFamily)"
+            echo "EVOLUTION_FAMILY=$(val EvolutionTaskDefinitionFamily)"
+            echo "WEB_SERVICE=$(val WebServiceName)"
+            echo "EVOLUTION_SERVICE=$(val EvolutionServiceName)"
+            echo "WEB_REPOSITORY_URI=$(val WebRepositoryUri)"
+            echo "MIGRATE_REPOSITORY_URI=$(val MigrateRepositoryUri)"
+            echo "EVOLUTION_REPOSITORY_URI=$(val EvolutionRepositoryUri)"
+            echo "MIGRATE_LOG_GROUP=$(val MigrateLogGroupName)"
+            echo "ALB_URL=$(val AlbUrl)"
+          } >> "$GITHUB_ENV"
+      - name: Copy staging images
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+        run: |
+          set -euo pipefail
+          account="$(aws sts get-caller-identity --query Account --output text)"
+          registry="${account}.dkr.ecr.${AWS_REGION}.amazonaws.com"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$registry"
+          copy_image() {
+            local name="$1"
+            local destination_uri="$2"
+            local source="${registry}/devfathom-stg-${name}:${IMAGE_TAG}"
+            aws ecr describe-images \
+              --repository-name "devfathom-stg-${name}" \
+              --image-ids "imageTag=${IMAGE_TAG}" >/dev/null
+            if aws ecr describe-images \
+              --repository-name "devfathom-prd-${name}" \
+              --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "${destination_uri}:${IMAGE_TAG} already exists"
+              return
+            fi
+            docker pull "$source"
+            docker tag "$source" "${destination_uri}:${IMAGE_TAG}"
+            docker push "${destination_uri}:${IMAGE_TAG}"
+          }
+          copy_image web "$WEB_REPOSITORY_URI"
+          copy_image migrate "$MIGRATE_REPOSITORY_URI"
+          copy_image evolution "$EVOLUTION_REPOSITORY_URI"
+      - name: Migrate and roll production
+        env:
+          IMAGE_TAG: ${{ inputs.image_tag }}
+          IMAGE_TAG_PARAMETER: /devfathom/production/deployed-image-tag
+        run: bash infra/aws/scripts/rollout.sh
+      - name: Smoke check the load balancer
+        run: |
+          set -euo pipefail
+          curl --fail --silent --show-error --retry 20 --retry-delay 15 --retry-all-errors \
+            --insecure "${ALB_URL}/api/health"

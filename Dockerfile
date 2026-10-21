@@ -37,15 +37,40 @@ ENV NEXT_BUILD_SKIP_TYPECHECK=1 \
 # `oven/bun` ships a `node` that is a symlink to `bun` — being explicit is the point.
 RUN AUTH_SECRET=container-build-only node node_modules/next/dist/bin/next build
 
+# One-off Prisma migration task. Not the default image: the runner stage stays
+# last so `docker build .` still produces the web app. CI builds this with
+# `docker build --target migrate`. It creates the Evolution database (if missing)
+# and then runs `prisma migrate deploy`. It does not seed.
+FROM oven/bun:1.3.14-slim AS migrate
+WORKDIR /app
+ENV NODE_ENV=production \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/rds-global-bundle.pem
+COPY package.json bun.lock prisma.config.ts ./
+COPY prisma ./prisma
+COPY docker/aws-entrypoint.sh /usr/local/bin/aws-entrypoint.sh
+COPY docker/rds/global-bundle.pem /etc/ssl/rds-global-bundle.pem
+RUN chmod 755 /usr/local/bin/aws-entrypoint.sh \
+ && chmod 644 /etc/ssl/rds-global-bundle.pem \
+ && bun install --production --frozen-lockfile --ignore-scripts \
+ && chown -R bun:bun /app
+USER bun
+ENTRYPOINT ["aws-entrypoint.sh"]
+CMD ["bunx", "prisma", "migrate", "deploy"]
+
 FROM oven/bun:1.3.14-slim AS runner
 WORKDIR /app
 ENV NODE_ENV=production \
     NEXT_TELEMETRY_DISABLED=1 \
     HOSTNAME=0.0.0.0 \
-    PORT=3000
+    PORT=3000 \
+    NODE_EXTRA_CA_CERTS=/etc/ssl/rds-global-bundle.pem
 COPY package.json bun.lock prisma.config.ts ./
 COPY prisma ./prisma
-RUN chown bun:bun /app
+COPY docker/aws-entrypoint.sh /usr/local/bin/aws-entrypoint.sh
+COPY docker/rds/global-bundle.pem /etc/ssl/rds-global-bundle.pem
+RUN chmod 755 /usr/local/bin/aws-entrypoint.sh \
+ && chmod 644 /etc/ssl/rds-global-bundle.pem \
+ && chown bun:bun /app
 USER bun
 RUN bun install --production --frozen-lockfile --ignore-scripts
 COPY --chown=bun:bun --from=builder /app/.next/standalone ./
@@ -55,4 +80,5 @@ COPY --chown=bun:bun --from=builder /app/scripts ./scripts
 COPY --chown=bun:bun --from=builder /app/src ./src
 COPY --chown=bun:bun --from=builder /app/tsconfig.json ./tsconfig.json
 EXPOSE 3000
+ENTRYPOINT ["aws-entrypoint.sh"]
 CMD ["bun", "server.js"]

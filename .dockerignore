@@ -8,3 +8,5 @@ coverage
 private-uploads
 docs
 *.log
+infra
+cdk.out

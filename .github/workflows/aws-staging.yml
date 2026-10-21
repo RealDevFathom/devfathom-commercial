@@ -1,0 +1,101 @@
+name: AWS staging
+
+# Build, push, migrate, and roll the AWS staging services. Azure deploy on
+# main is a different workflow and is unchanged. Production is not deployed here.
+
+on:
+  push:
+    branches: [infra/aws, staging]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: aws-staging
+  cancel-in-progress: false
+
+jobs:
+  verify:
+    uses: ./.github/workflows/aws-ci.yml
+
+  deploy:
+    name: Build and roll staging
+    needs: verify
+    if: vars.AWS_STAGING_DEPLOY_ROLE_ARN != ''
+    runs-on: ubuntu-latest
+    environment: staging
+    env:
+      AWS_REGION: ap-south-1
+      STACK_NAME: DevFathom-staging
+    steps:
+      - uses: actions/checkout@v7
+      - uses: aws-actions/configure-aws-credentials@v6
+        with:
+          role-to-assume: ${{ vars.AWS_STAGING_DEPLOY_ROLE_ARN }}
+          aws-region: ap-south-1
+      - name: Read stack outputs
+        run: |
+          set -euo pipefail
+          aws cloudformation describe-stacks --stack-name "$STACK_NAME" \
+            --query 'Stacks[0].Outputs' --output json > outputs.json
+          val() { jq -er --arg key "$1" '.[] | select(.OutputKey == $key) | .OutputValue' outputs.json; }
+          {
+            echo "CLUSTER=$(val ClusterName)"
+            echo "PRIVATE_SUBNETS=$(val PrivateSubnetIds)"
+            echo "APP_SECURITY_GROUP=$(val AppSecurityGroupId)"
+            echo "MIGRATE_FAMILY=$(val MigrateTaskDefinitionFamily)"
+            echo "WEB_FAMILY=$(val WebTaskDefinitionFamily)"
+            echo "EVOLUTION_FAMILY=$(val EvolutionTaskDefinitionFamily)"
+            echo "WEB_SERVICE=$(val WebServiceName)"
+            echo "EVOLUTION_SERVICE=$(val EvolutionServiceName)"
+            echo "WEB_REPOSITORY_URI=$(val WebRepositoryUri)"
+            echo "MIGRATE_REPOSITORY_URI=$(val MigrateRepositoryUri)"
+            echo "EVOLUTION_REPOSITORY_URI=$(val EvolutionRepositoryUri)"
+            echo "MIGRATE_LOG_GROUP=$(val MigrateLogGroupName)"
+            echo "ALB_URL=$(val AlbUrl)"
+          } >> "$GITHUB_ENV"
+      - name: Build and push images
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+        run: |
+          set -euo pipefail
+          registry="${WEB_REPOSITORY_URI%%/*}"
+          aws ecr get-login-password --region "$AWS_REGION" \
+            | docker login --username AWS --password-stdin "$registry"
+          publish() {
+            local repo_name="$1"
+            local uri="$2"
+            shift 2
+            if aws ecr describe-images --repository-name "$repo_name" --image-ids "imageTag=${IMAGE_TAG}" >/dev/null 2>&1; then
+              echo "${uri}:${IMAGE_TAG} already exists"
+              return
+            fi
+            docker build --platform linux/amd64 "$@" -t "${uri}:${IMAGE_TAG}"
+            docker push "${uri}:${IMAGE_TAG}"
+          }
+          publish devfathom-stg-web "$WEB_REPOSITORY_URI" .
+          publish devfathom-stg-migrate "$MIGRATE_REPOSITORY_URI" --target migrate .
+          publish devfathom-stg-evolution "$EVOLUTION_REPOSITORY_URI" -f docker/evolution/Dockerfile docker
+      - name: Migrate and roll services
+        env:
+          IMAGE_TAG: ${{ github.sha }}
+          IMAGE_TAG_PARAMETER: /devfathom/staging/deployed-image-tag
+        run: bash infra/aws/scripts/rollout.sh
+      - name: Smoke check the load balancer
+        run: |
+          set -euo pipefail
+          # The certificate is for the stage hostname, which may not be in DNS
+          # yet. This checks the ALB itself.
+          curl --fail --silent --show-error --retry 20 --retry-delay 15 --retry-all-errors \
+            --insecure "${ALB_URL}/api/health"
+
+  deploy-skipped:
+    name: Staging deploy skipped
+    needs: verify
+    if: vars.AWS_STAGING_DEPLOY_ROLE_ARN == ''
+    runs-on: ubuntu-latest
+    steps:
+      - name: Explain the skip
+        run: echo "::warning::AWS_STAGING_DEPLOY_ROLE_ARN is unset. Synth passed and no staging deploy was attempted."
