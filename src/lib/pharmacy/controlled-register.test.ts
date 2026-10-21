@@ -349,6 +349,78 @@ describe('appendControlledSaleEntries', () => {
       data: expect.objectContaining({ balanceDelta: -4, runningBalance: 6 }),
     });
   });
+
+  it('refuses a confirmed Sindh sale with no complete address before writing any row', async () => {
+    const lock = vi.fn();
+    const db = { $queryRaw: lock } as unknown as ScopedDb;
+    await expect(
+      appendControlledSaleEntries(db, {
+        organizationId: 'org',
+        branchId: 'branch',
+        movementIds: ['mov'],
+        patientId: 'patient',
+        patientAddress: '   ',
+        medicineId: 'med',
+        manufacturer: null,
+        prescriberId: 'prescriber',
+        prescriberName: 'Dr Khan',
+        prescriberRegNo: 'R-1',
+        prescriptionId: 'rx',
+        prescriptionLineId: 'line',
+        emergency: false,
+        rxSerialWritten: true,
+        refEntryId: null,
+        recordedByUserId: 'cashier',
+        witnessedByUserId: 'pharmacist',
+        signatureRef: 'pin:pharmacist',
+        province: { provinceCode: 'PK-SD', pendingLegalReview: false },
+      })
+    ).rejects.toThrow(/complete address/);
+    // It fails before taking the register lock.
+    expect(lock).not.toHaveBeenCalled();
+  });
+
+  it('allows a Sindh sale whose rules are still pending legal review', async () => {
+    const create = vi.fn().mockResolvedValue({ id: 'sale-row' });
+    const db = {
+      $queryRaw: vi.fn(),
+      pharmacyControlledRegisterEntry: {
+        aggregate: vi.fn().mockResolvedValue({ _max: { serial: 1 } }),
+        findFirst: vi.fn().mockResolvedValue({ runningBalance: 10 }),
+        create,
+      },
+      pharmacyStockMovement: {
+        findFirstOrThrow: vi.fn(async () => ({ id: 'mov', inventoryLotId: 'lot', quantityUnits: -4 })),
+      },
+      pharmacyInventoryLot: {
+        findFirstOrThrow: vi.fn(async () => ({ id: 'lot', batch: { batchNumber: 'B' } })),
+      },
+      pharmacyStockBalance: { aggregate: vi.fn() },
+    } as unknown as ScopedDb;
+
+    await appendControlledSaleEntries(db, {
+      organizationId: 'org',
+      branchId: 'branch',
+      movementIds: ['mov'],
+      patientId: 'patient',
+      patientAddress: '',
+      medicineId: 'med',
+      manufacturer: null,
+      prescriberId: 'prescriber',
+      prescriberName: 'Dr Khan',
+      prescriberRegNo: 'R-1',
+      prescriptionId: 'rx',
+      prescriptionLineId: 'line',
+      emergency: false,
+      rxSerialWritten: true,
+      refEntryId: null,
+      recordedByUserId: 'cashier',
+      witnessedByUserId: 'pharmacist',
+      signatureRef: 'pin:pharmacist',
+      province: { provinceCode: 'PK-SD', pendingLegalReview: true },
+    });
+    expect(create).toHaveBeenCalled();
+  });
 });
 
 describe('appendControlledPurchaseEntries', () => {
