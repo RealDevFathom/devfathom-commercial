@@ -38,13 +38,19 @@ async function loadPendingInvitation(db: PrismaClient, token: string) {
           title: true,
           department: true,
           role: true,
+          status: true,
           organization: { select: { isDemo: true } },
         },
       },
     },
   });
 
-  if (!invitation || invitation.acceptedAt || invitation.user.organization.isDemo) {
+  if (
+    !invitation ||
+    invitation.acceptedAt ||
+    invitation.user.status !== 'INVITED' ||
+    invitation.user.organization.isDemo
+  ) {
     throw invalidInvitation();
   }
   if (invitation.expiresAt.getTime() < Date.now()) throw invalidInvitation();
@@ -112,8 +118,11 @@ export const invitationsRouter = router({
         });
         if (claimed.count !== 1) throw invalidInvitation();
 
-        await tx.user.update({
-          where: { id: invitation.userId },
+        // The administrator can deactivate the invitee after the public read.
+        // Make activation conditional as well, so that race cannot reactivate a
+        // user whose invitation has just been withdrawn.
+        const activated = await tx.user.updateMany({
+          where: { id: invitation.userId, status: 'INVITED' },
           data: {
             password: hashed,
             status: 'ACTIVE',
@@ -122,6 +131,7 @@ export const invitationsRouter = router({
             ...(input.skills ? { skills: input.skills } : {}),
           },
         });
+        if (activated.count !== 1) throw invalidInvitation();
 
         return { email: invitation.user.email };
       });
