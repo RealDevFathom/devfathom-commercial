@@ -22,6 +22,7 @@ import {
 } from './money';
 import { allocateReceiptNumber } from './receipt-numbers';
 import { consumeReservations } from './promotion-caps';
+import { serviceChargeFor } from './service-charge';
 
 /**
  * M5-L2 / C4 — the bill (check) command layer.
@@ -361,7 +362,7 @@ export function planBills(order: LoadedBillOrder, split: SplitSpec): PlannedBill
   const policy = order.serviceChargePolicyVersion;
   if (!policy) return planned;
   const totalBasis = sum(planned.map((bill) => bill.subtotal));
-  const totalCharge = roundMoney(multiply(totalBasis, policy.rate));
+  const totalCharge = serviceChargeFor(totalBasis, policy.rate);
   const billCharges = allocate(
     totalCharge,
     planned.map((bill) => bill.subtotal.mul(100).toNumber())

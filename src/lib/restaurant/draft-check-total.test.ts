@@ -1,6 +1,10 @@
 import { describe, expect, it } from 'vitest';
 
-import { DraftCheckTaxError, quoteDraftCheckTotal } from './draft-check-total';
+import {
+  DraftCheckTaxError,
+  quoteDraftCheckBreakdown,
+  quoteDraftCheckTotal,
+} from './draft-check-total';
 import type { TaxProfile, TaxRule } from './tax-calculator';
 
 const at = new Date('2030-06-01T00:00:00Z');
@@ -85,6 +89,18 @@ describe('quoteDraftCheckTotal', () => {
         lines: [{ id: 'coffee', unitPrice: '4.00', quantity: 1, modifierDeltas: ['0.50'] }],
       })
     ).toBe('4.50');
+  });
+
+  it('reports the cash tender it quotes under, so the UI can flag a differing card rate', () => {
+    const breakdown = quoteDraftCheckBreakdown({
+      at,
+      profiles: [profile],
+      rules: [rule('CASH', '0.05'), rule('CARD', '0.10'), rule('OTHER', '0.00')],
+      lines: [{ id: 'steak', unitPrice: '10.00', quantity: 1 }],
+    });
+    // Priced at the 5% cash rate, not the 10% card rate.
+    expect(breakdown.tax).toBe('0.50');
+    expect(breakdown.tenderType).toBe('CASH');
   });
 
   it('fails closed when no tax profile is in effect', () => {
