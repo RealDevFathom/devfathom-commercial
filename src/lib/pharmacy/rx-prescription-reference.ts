@@ -51,7 +51,7 @@ export async function resolvePrescriptionReference(
     units: number;
   },
   now: Date = new Date()
-): Promise<{ prescriptionLineId: string }> {
+): Promise<{ prescriptionLineId: string; patientId: string }> {
   await db.$queryRaw(
     Prisma.sql`SELECT id FROM pharmacy_prescription_lines WHERE "organizationId"=${scope.organizationId} AND id=${input.prescriptionLineId} FOR UPDATE`
   );
@@ -76,6 +76,7 @@ export async function resolvePrescriptionReference(
     where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
     select: { customer: { select: { patientId: true } } },
   });
+  if (!sale) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
   if (
     line.prescription.patientId !== input.patientId ||
     (sale?.customer && sale.customer.patientId !== input.patientId)
@@ -91,7 +92,7 @@ export async function resolvePrescriptionReference(
     line.fills.length > line.prescription.authorizedRepeats
   )
     throw new PharmacyRxReferenceError('PRESCRIPTION_EXHAUSTED');
-  return { prescriptionLineId: line.id };
+  return { prescriptionLineId: line.id, patientId: line.prescription.patientId };
 }
 
 /**
@@ -101,11 +102,14 @@ export async function resolvePrescriptionReference(
 export async function attachPrescriptionReference(
   db: ScopedDb,
   scope: LedgerScope,
-  input: { prescriptionLineId: string; saleLineId: string }
+  input: { prescriptionLineId: string; patientId: string; saleLineId: string }
 ): Promise<void> {
   await db.pharmacySaleLine.update({
     where: { organizationId_id: { organizationId: scope.organizationId, id: input.saleLineId } },
-    data: { prescriptionLineId: input.prescriptionLineId },
+    data: {
+      prescriptionLineId: input.prescriptionLineId,
+      prescriptionPatientId: input.patientId,
+    },
   });
 }
 
@@ -121,11 +125,16 @@ export async function recordCompletedPrescriptionReference(
     presentationId: string;
     canonicalUnits: number;
     prescriptionLineId: string;
+    prescriptionPatientId: string | null;
+    saleId: string;
   },
   now: Date = new Date()
 ): Promise<void> {
   if (input.organizationId !== scope.organizationId || input.branchId !== scope.branchId)
     throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_sales WHERE "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} AND id=${input.saleId} FOR UPDATE`
+  );
   const idempotencyKey = `rx-reference:${input.id}`;
   if (
     await db.prescriptionFill.findUnique({
@@ -158,11 +167,24 @@ export async function recordCompletedPrescriptionReference(
     },
     select: {
       authorizedCanonicalUnits: true,
-      prescription: { select: { validFrom: true, validUntil: true, authorizedRepeats: true } },
+      prescription: {
+        select: { patientId: true, validFrom: true, validUntil: true, authorizedRepeats: true },
+      },
       fills: { select: { quantityCanonicalUnits: true } },
     },
   });
   if (!line) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
+  const sale = await db.pharmacySale.findFirst({
+    where: { id: input.saleId, organizationId: scope.organizationId, branchId: scope.branchId },
+    select: { customer: { select: { patientId: true } } },
+  });
+  if (!sale) throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_FOUND');
+  if (
+    !input.prescriptionPatientId ||
+    input.prescriptionPatientId !== line.prescription.patientId ||
+    (sale?.customer && sale.customer.patientId !== line.prescription.patientId)
+  )
+    throw new PharmacyRxReferenceError('PRESCRIPTION_PATIENT_MISMATCH');
   if (line.prescription.validFrom > now || line.prescription.validUntil <= now)
     throw new PharmacyRxReferenceError('PRESCRIPTION_NOT_IN_DATE');
   const filled = line.fills.reduce((sum, fill) => sum + fill.quantityCanonicalUnits, 0);

@@ -1465,6 +1465,7 @@ model PharmacySaleLine {
   approvalPolicy            String?
   approvedByUserId          String?
   prescriptionLineId        String?
+  prescriptionPatientId     String?
   idempotencyKey            String
   createdAt                 DateTime                     @default(now())
   sale                      PharmacySale                 @relation(fields: [organizationId, branchId, saleId], references: [organizationId, branchId, id], onDelete: Restrict)

@@ -16,6 +16,7 @@ export class PharmacyLoyaltyError extends Error {
     readonly reason:
       | 'LOYALTY_CONSENT_REQUIRED'
       | 'CUSTOMER_NOT_FOUND'
+      | 'PRESCRIPTION_PATIENT_MISMATCH'
       | 'SALE_NOT_OPEN'
       | 'SALE_NOT_LINKED'
       | 'INSUFFICIENT_POINTS'
@@ -38,6 +39,9 @@ export async function linkCustomerToSale(
   });
   if (!consent?.granted || consent.revokedAt)
     throw new PharmacyLoyaltyError('LOYALTY_CONSENT_REQUIRED');
+  await db.$queryRaw(
+    Prisma.sql`SELECT id FROM pharmacy_sales WHERE id=${input.saleId} AND "organizationId"=${scope.organizationId} AND "branchId"=${scope.branchId} FOR UPDATE`
+  );
   const sale = await db.pharmacySale.findFirst({
     where: {
       id: input.saleId,
@@ -47,6 +51,17 @@ export async function linkCustomerToSale(
     },
   });
   if (!sale) throw new PharmacyLoyaltyError('SALE_NOT_OPEN');
+  const referencedLine = await db.pharmacySaleLine.findFirst({
+    where: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      saleId: sale.id,
+      prescriptionLineId: { not: null },
+      prescriptionPatientId: { not: input.patientId },
+    },
+    select: { id: true },
+  });
+  if (referencedLine) throw new PharmacyLoyaltyError('PRESCRIPTION_PATIENT_MISMATCH');
   const customer = await db.pharmacyCustomer.upsert({
     where: {
       organizationId_patientId: {
