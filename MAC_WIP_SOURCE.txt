@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/.codex/worktrees/1ef6/Devfathom-Commercial
+Branch: codex/documentation-commercial-pack
+HEAD: 447375a1a1d44343aa39106e8793221ba49e8015
+Mode: applied
+Excluded (secrets): 3
