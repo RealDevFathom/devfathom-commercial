@@ -1,6 +1,10 @@
 import { describe, expect, it, vi } from 'vitest';
 
 vi.mock('server-only', () => ({}));
+vi.mock('./finance-postings', async () => ({
+  ...(await vi.importActual<typeof import('./finance-postings')>('./finance-postings')),
+  postDailyCloseEntry: vi.fn(),
+}));
 
 import { cutPharmacyDailyClose } from '@/lib/pharmacy/settlement';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
@@ -23,7 +27,11 @@ function fixture(camera: { id: string } | null) {
     pharmacyDailyClose: {
       // No prior close for the day; the evidence subject lookup finds the new one.
       findFirst: vi.fn(async ({ where }) => (where.id === 'close-1' ? { id: 'close-1' } : null)),
-      create: vi.fn(async ({ data }) => ({ id: 'close-1', ...data })),
+      create: vi.fn(async ({ data }) => ({
+        id: 'close-1',
+        createdAt: new Date('2026-09-29T18:00:00Z'),
+        ...data,
+      })),
     },
     pharmacySale: { findMany: vi.fn().mockResolvedValue([]) },
     pharmacyRefund: { findMany: vi.fn().mockResolvedValue([]) },
