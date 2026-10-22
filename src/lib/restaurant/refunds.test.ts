@@ -40,6 +40,8 @@ const ids = {
   priceList: `pl_${suffix}`,
   priceVersion: `plv_${suffix}`,
   publication: `pub_${suffix}`,
+  taxSource: `tax_source_${suffix}`,
+  taxProfile: `tax_profile_${suffix}`,
 };
 const AT = new Date('2026-08-19T18:00:00.000Z');
 const NEXT_DAY = new Date('2026-08-20T18:00:00.000Z');
@@ -174,6 +176,43 @@ beforeAll(async () => {
   await deps.withTenantDb(orgId, async (tx) => {
     await tx.restaurantBranch.create({
       data: { id: ids.branch, name: 'Main', timezone: 'UTC', businessDayCutoff: '00:00' },
+    });
+    await tx.restaurantTaxOfficialSource.create({
+      data: {
+        id: ids.taxSource,
+        authorityCode: 'SYNTHETIC_TEST_ONLY',
+        documentTitle: 'Synthetic zero-rate refund fixture',
+        sourceUrl: 'https://example.invalid/synthetic-tax',
+        contentHash: `synthetic-${suffix}`,
+        retrievedAt: new Date('2026-08-01T00:00:00.000Z'),
+        expiresAt: new Date('2027-08-01T00:00:00.000Z'),
+      },
+    });
+    await tx.restaurantTaxProfileVersion.create({
+      data: {
+        id: ids.taxProfile,
+        branchId: ids.branch,
+        versionNumber: 1,
+        status: 'PUBLISHED',
+        effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+        approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+        approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+        publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+        rules: {
+          create: (['CASH', 'CARD', 'OTHER'] as const).map((paymentCategory) => ({
+            officialSourceId: ids.taxSource,
+            ruleCode: `SYNTHETIC_${paymentCategory}`,
+            paymentCategory,
+            priceMode: 'EXCLUSIVE',
+            rate: '0.000000',
+            status: 'PUBLISHED',
+            effectiveFrom: new Date('2026-08-01T00:00:00.000Z'),
+            approvalReference: 'SYNTHETIC_TEST_APPROVAL',
+            approvedAt: new Date('2026-08-01T00:00:00.000Z'),
+            publishedAt: new Date('2026-08-01T00:00:00.000Z'),
+          })),
+        },
+      },
     });
     await tx.restaurantStaffProfile.create({
       data: { id: ids.operator, displayName: 'Operator', status: 'ACTIVE' },

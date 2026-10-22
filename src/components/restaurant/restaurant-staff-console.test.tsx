@@ -1,10 +1,14 @@
-import { fireEvent, render, screen } from '@testing-library/react';
+import { act, fireEvent, render, screen, within } from '@testing-library/react';
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 import type { EntitlementView } from '@/lib/module-catalog';
 
 type IssueOptions = { onError?: (error: { message: string }) => void };
 type IssueCallOptions = { onSettled?: () => void };
+type MutationOptions = {
+  onSuccess?: (result: { granted: string[]; revoked: string[] }) => void;
+  onError?: (error: { message: string }) => void;
+};
 
 const mocks = vi.hoisted(() => ({
   staff: {
@@ -37,6 +41,10 @@ const mocks = vi.hoisted(() => ({
   noopMutate: vi.fn(),
   noopReset: vi.fn(),
   invalidate: vi.fn(),
+  roleSave: vi.fn(),
+  roleSaveOptions: undefined as MutationOptions | undefined,
+  setOverride: vi.fn(),
+  clearOverride: vi.fn(),
 }));
 
 vi.mock('sonner', () => ({ toast: { error: vi.fn(), success: vi.fn() } }));
@@ -49,18 +57,65 @@ vi.mock('@/lib/trpc', () => ({
         // SOP-1: the job-roles dialog invalidates its own two queries on save.
         listStaffJobRoles: { invalidate: mocks.invalidate },
         listStaffJobRoleAudit: { invalidate: mocks.invalidate },
+        resolveStaffCapabilities: { invalidate: mocks.invalidate },
       },
     }),
     restaurantStaff: {
       list: { useQuery: () => mocks.staff },
+      listBranches: {
+        useQuery: () => ({
+          data: [{ id: 'branch_1', name: 'Downtown', active: true, isDefault: true }],
+          error: null,
+          isLoading: false,
+        }),
+      },
       listCredentials: { useQuery: () => mocks.credentials },
       // SOP-1: the job-roles dialog is mounted (closed) by the console, so its
       // hooks must resolve even though these cases never open it.
-      listJobRoles: { useQuery: () => ({ data: [], isLoading: false }) },
+      listJobRoles: {
+        useQuery: () => ({
+          data: [
+            {
+              id: 'cashier',
+              key: 'cashier',
+              name: 'Cashier',
+              isSystem: true,
+              description: '',
+              capabilities: [{ capability: 'pos:operate' }, { capability: 'payments:collect' }],
+            },
+            {
+              id: 'server',
+              key: 'server',
+              name: 'Server',
+              isSystem: true,
+              description: '',
+              capabilities: [{ capability: 'orders:read' }, { capability: 'customers:read' }],
+            },
+          ],
+          error: null,
+          isLoading: false,
+        }),
+      },
       listStaffJobRoles: { useQuery: () => ({ data: [], isLoading: false }) },
       listStaffJobRoleAudit: { useQuery: () => ({ data: [], isLoading: false }) },
+      resolveStaffCapabilities: {
+        useQuery: () => ({
+          data: { capabilities: [], inherited: [], allowed: [], denied: [] },
+          error: null,
+          isLoading: false,
+        }),
+      },
       setStaffJobRoles: {
-        useMutation: () => ({ mutate: mocks.noopMutate, isPending: false }),
+        useMutation: (options: MutationOptions) => {
+          mocks.roleSaveOptions = options;
+          return { mutate: mocks.roleSave, isPending: false };
+        },
+      },
+      setStaffCapabilityOverride: {
+        useMutation: () => ({ mutate: mocks.setOverride, isPending: false }),
+      },
+      clearStaffCapabilityOverride: {
+        useMutation: () => ({ mutate: mocks.clearOverride, isPending: false }),
       },
       create: {
         useMutation: () => ({
@@ -107,6 +162,22 @@ vi.mock('@/lib/trpc', () => ({
         }),
       },
     },
+    restaurantDevices: {
+      list: {
+        useQuery: () => ({
+          data: [
+            {
+              id: 'device_1',
+              name: 'Front Register',
+              branch: { id: 'branch_1', name: 'Downtown' },
+              status: 'ACTIVE',
+            },
+          ],
+          error: null,
+          isLoading: false,
+        }),
+      },
+    },
   },
 }));
 
@@ -150,10 +221,12 @@ describe('Restaurant staff credential UI', () => {
 
     fireEvent.click(screen.getByRole('button', { name: 'Credentials' }));
     const type = screen.getByLabelText('Credential type');
-    const deviceId = screen.getByLabelText('Device ID (optional)');
+    const deviceId = screen.getByLabelText('Device restriction');
     const secret = screen.getByLabelText('New operator secret');
     fireEvent.change(type, { target: { value: 'BADGE' } });
     fireEvent.change(deviceId, { target: { value: 'device_1' } });
+    expect(screen.getByText('Front Register — Downtown')).toBeVisible();
+    expect(screen.queryByText('device_1')).not.toBeInTheDocument();
     fireEvent.change(secret, { target: { value: 'badge-482913' } });
     fireEvent.click(screen.getByRole('button', { name: 'Issue credential' }));
 
@@ -186,5 +259,81 @@ describe('Restaurant staff credential UI', () => {
     expect(
       screen.queryByRole('heading', { level: 3, name: '0 staff members' })
     ).not.toBeInTheDocument();
+  });
+});
+
+describe('Restaurant staff role profiles', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.roleSaveOptions = undefined;
+    mocks.staff.data = [
+      {
+        id: 'staff_1',
+        displayName: 'Shift Lead',
+        email: 'lead@example.com',
+        userId: null,
+        primaryBranchId: 'branch_1',
+        status: 'ACTIVE',
+        createdAt: new Date('2026-08-18T07:00:00Z'),
+        updatedAt: new Date('2026-08-18T07:00:00Z'),
+        primaryBranch: { id: 'branch_1', name: 'Downtown' },
+      },
+    ];
+    mocks.staff.isLoading = false;
+  });
+
+  function openProfile() {
+    render(
+      <EntitlementsProvider value={entitlements}>
+        <RestaurantStaffConsole />
+      </EntitlementsProvider>
+    );
+    fireEvent.click(screen.getByRole('button', { name: 'Job roles' }));
+  }
+
+  it('previews Cashier inherited defaults, supports multi-role selection, and survives filtering', () => {
+    openProfile();
+    const cashier = screen.getByRole('button', { name: /Cashier/ });
+    const server = screen.getByRole('button', { name: /Server/ });
+    fireEvent.click(cashier);
+    expect(cashier).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('pos:operate').parentElement).toHaveTextContent('Inherited');
+    fireEvent.click(server);
+    expect(server).toHaveAttribute('aria-pressed', 'true');
+    expect(screen.getByText('customers:read').parentElement).toHaveTextContent('Inherited');
+    fireEvent.change(screen.getByPlaceholderText('Search capabilities'), {
+      target: { value: 'cash:' },
+    });
+    fireEvent.change(screen.getByPlaceholderText('Search capabilities'), { target: { value: '' } });
+    expect(cashier).toHaveAttribute('aria-pressed', 'true');
+  });
+
+  it('adds a direct discount and denies an inherited capability with pressed buttons', () => {
+    openProfile();
+    fireEvent.click(screen.getByRole('button', { name: /Cashier/ }));
+    const discount = screen.getByText('orders:discount').parentElement!;
+    fireEvent.click(within(discount).getByRole('button', { name: 'Direct' }));
+    expect(mocks.setOverride).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'orders:discount', effect: 'ALLOW' })
+    );
+    const pos = screen.getByText('pos:operate').parentElement!;
+    fireEvent.click(within(pos).getByRole('button', { name: 'Deny' }));
+    expect(mocks.setOverride).toHaveBeenCalledWith(
+      expect.objectContaining({ capability: 'pos:operate', effect: 'DENY' })
+    );
+  });
+
+  it('preserves role selection after a save error and sends it again', () => {
+    openProfile();
+    const cashier = screen.getByRole('button', { name: /Cashier/ });
+    fireEvent.click(cashier);
+    fireEvent.click(screen.getByRole('button', { name: 'Save role profiles' }));
+    act(() => mocks.roleSaveOptions?.onError?.({ message: 'Save failed.' }));
+    expect(screen.getByRole('alert')).toHaveTextContent('Your selections are still here');
+    expect(cashier).toHaveAttribute('aria-pressed', 'true');
+    fireEvent.click(screen.getByRole('button', { name: 'Save role profiles' }));
+    expect(mocks.roleSave).toHaveBeenLastCalledWith(
+      expect.objectContaining({ jobRoleIds: ['cashier'] })
+    );
   });
 });

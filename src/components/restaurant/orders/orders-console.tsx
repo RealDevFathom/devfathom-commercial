@@ -30,11 +30,15 @@ import {
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from '../restaurant-branch-select';
+import { RestaurantDeviceSelect } from '../restaurant-device-select';
+import { RestaurantStaffSelect } from '../restaurant-staff-select';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
 type OrderPage = RouterOutputs['restaurantOrders']['listOrders'];
 type OrderSummary = OrderPage['orders'][number];
 type OrderDetail = RouterOutputs['restaurantOrders']['getOrder'];
+type StaffOption = RouterOutputs['restaurantStaff']['listDirectory'][number];
 type OrderStatus = OrderSummary['status'];
 type Channel = OrderSummary['channel'];
 type Disposition = 'WASTE' | 'RESTOCK' | 'NONE';
@@ -110,6 +114,9 @@ export function OrdersConsole() {
   const posModule = entitlements.modules.find((module) => module.key === 'restaurant-pos');
   const posEnabled = posModule?.enabled ?? entitlements.enabledModules.includes('restaurant-pos');
   const utils = trpc.useUtils();
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: posEnabled,
+  });
   const [branchId, setBranchId] = useState('');
   const [businessDate, setBusinessDate] = useState('');
   const [status, setStatus] = useState<'' | OrderStatus>('');
@@ -123,6 +130,11 @@ export function OrdersConsole() {
 
   const normalizedBranchId = branchId.trim();
   const listEnabled = posEnabled && normalizedBranchId.length > 0;
+  const staffQuery = trpc.restaurantStaff.listDirectory.useQuery(
+    { branchId: normalizedBranchId },
+    { enabled: listEnabled }
+  );
+  const devicesQuery = trpc.restaurantDevices.list.useQuery(undefined, { enabled: listEnabled });
   const listInput = {
     branchId: normalizedBranchId,
     ...(businessDate ? { businessDate } : {}),
@@ -223,13 +235,13 @@ export function OrdersConsole() {
         <>
           <SectionCard eyebrow="Order ledger" title="Filters">
             <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_11rem_12rem_11rem_8rem]">
-              <Field label="Branch ID">
-                <Input
-                  aria-label="Branch ID"
+              <Field label="Branch">
+                <RestaurantBranchSelect
+                  branches={branchesQuery.data ?? []}
+                  loading={branchesQuery.isLoading}
+                  error={Boolean(branchesQuery.error)}
                   value={branchId}
-                  onChange={(event) => updateBranch(event.target.value)}
-                  placeholder="branch_…"
-                  className="h-11"
+                  onChange={updateBranch}
                 />
               </Field>
               <Field label="Business date">
@@ -296,8 +308,8 @@ export function OrdersConsole() {
           {!listEnabled ? (
             <SectionCard title="Choose a branch">
               <EmptyState
-                title="Branch ID required"
-                detail="Enter a branch ID to load its order ledger."
+                title="Branch required"
+                detail="Select a branch to load its order ledger."
               />
             </SectionCard>
           ) : permissionDenied ? (
@@ -421,6 +433,7 @@ export function OrdersConsole() {
               {selectedOrderId ? (
                 <OrderDetailPanel
                   order={orderQuery.data}
+                  staff={staffQuery.data ?? []}
                   isLoading={orderQuery.isLoading}
                   error={orderQuery.error}
                   onRetry={() => void orderQuery.refetch()}
@@ -459,11 +472,24 @@ export function OrdersConsole() {
               </p>
             ) : null}
             <div className="grid gap-4 sm:grid-cols-2">
-              <Field label="Acting staff profile ID">
-                <Input name="staffProfileId" required className="h-11" />
+              <Field label="Acting staff member">
+                <RestaurantStaffSelect
+                  name="staffProfileId"
+                  required
+                  staff={staffQuery.data ?? []}
+                  loading={staffQuery.isLoading}
+                  error={Boolean(staffQuery.error)}
+                  label="Acting staff member"
+                />
               </Field>
-              <Field label="Device ID">
-                <Input name="deviceId" required className="h-11" />
+              <Field label="Device">
+                <RestaurantDeviceSelect
+                  devices={devicesQuery.data ?? []}
+                  branchId={normalizedBranchId}
+                  loading={devicesQuery.isLoading}
+                  error={Boolean(devicesQuery.error)}
+                  required
+                />
               </Field>
             </div>
             <Field label="Reason">
@@ -478,8 +504,16 @@ export function OrdersConsole() {
                   <option value="NONE">None</option>
                 </select>
               </Field>
-              <Field label="Approving staff profile ID (optional)">
-                <Input name="approvingStaffProfileId" className="h-11" />
+              <Field label="Approving staff member (optional)">
+                <RestaurantStaffSelect
+                  name="approvingStaffProfileId"
+                  staff={staffQuery.data ?? []}
+                  loading={staffQuery.isLoading}
+                  error={Boolean(staffQuery.error)}
+                  allowEmpty
+                  emptyLabel="No additional approval"
+                  label="Approving staff member"
+                />
               </Field>
             </div>
             <p className="text-xs text-text-muted">
@@ -518,6 +552,7 @@ export function OrdersConsole() {
 
 function OrderDetailPanel({
   order,
+  staff,
   isLoading,
   error,
   onRetry,
@@ -525,12 +560,18 @@ function OrderDetailPanel({
   onCancel,
 }: {
   order?: OrderDetail;
+  staff: StaffOption[];
   isLoading: boolean;
   error?: UiError | null;
   onRetry: () => void;
   onClose: () => void;
   onCancel: () => void;
 }) {
+  const staffLabel = (staffProfileId: string | null) =>
+    staffProfileId
+      ? (staff.find((person) => person.id === staffProfileId)?.displayName ??
+        'Staff name unavailable')
+      : 'System';
   if (isLoading) {
     return (
       <SectionCard title="Loading order detail…">
@@ -583,16 +624,8 @@ function OrderDetailPanel({
         </div>
 
         <dl className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
-          <DetailField label="Order ID" value={order.id} />
-          <DetailField label="Branch ID" value={order.branchId} />
           <DetailField label="Business date" value={order.businessDate} />
           <DetailField label="Covers" value={order.coverCount} />
-          <DetailField label="Section ID" value={order.sectionId} />
-          <DetailField label="Server staff ID" value={order.serverStaffProfileId} />
-          <DetailField label="Opening staff ID" value={order.staffProfileId} />
-          <DetailField label="Device ID" value={order.deviceId} />
-          <DetailField label="Publication ID" value={order.publicationId} />
-          <DetailField label="Price-list version ID" value={order.priceListVersionId} />
           <DetailField label="Opened" value={instant(order.openedAt)} />
           <DetailField label="Closed" value={instant(order.closedAt)} />
           <DetailField label="Cancelled" value={instant(order.cancelledAt)} />
@@ -774,9 +807,8 @@ function OrderDetailPanel({
                       {instant(event.createdAt)}
                     </time>
                   </div>
-                  <p className="mt-1 font-mono text-[0.625rem] text-text-faint">
-                    {event.id} · staff {event.actorStaffProfileId ?? '—'} · device{' '}
-                    {event.actorDeviceId ?? '—'}
+                  <p className="mt-1 text-xs text-text-muted">
+                    Recorded by {staffLabel(event.actorStaffProfileId)}
                   </p>
                   <pre className="mt-3 max-h-48 overflow-auto rounded-md bg-surface-sunken p-3 text-xs whitespace-pre-wrap text-text-muted">
                     {JSON.stringify(event.payload, null, 2) ?? 'null'}

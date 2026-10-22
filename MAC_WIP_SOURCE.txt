@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-845-continue-restaurant-union-with-the-accepted-multi-branch-role-resolution
+Branch: WHA-845-continue-restaurant-union-with-the-accepted-multi-branch-role-resolution
+HEAD: 27b4e51165428e00248edc12d1b6e175f31933a6
+Mode: applied
+Excluded (secrets): 0

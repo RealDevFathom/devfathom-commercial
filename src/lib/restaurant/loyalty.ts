@@ -4,7 +4,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { expireAccountLoyaltyPoints } from './loyalty-expiry';
-import { add, compare, multiply, roundMoney, sub, sum, ZERO } from './money';
+import { add, compare, money, multiply, roundMoney, sub, sum, ZERO } from './money';
 
 export type LoyaltyErrorReason =
   | 'NOT_FOUND'
@@ -328,6 +328,66 @@ export async function earnLoyaltyForClosedOrder(tx: ScopedDb, orderId: string, a
     );
   }
   return created;
+}
+
+/**
+ * Append the loyalty earn for one successfully settled bill using the eligible
+ * merchandise basis frozen by settlement. The caller owns the transaction: this
+ * function deliberately does not open one, so the earn cannot survive a rollback
+ * of the tax snapshot, bill totals, promotion consumption, tender, or receipt.
+ *
+ * The idempotency key is shared with the legacy order-close path. During rollout,
+ * whichever path reaches the bill first owns the single EARN row and the other is
+ * an exact no-op.
+ */
+export async function accrueLoyaltyForSettledBill(
+  tx: ScopedDb,
+  input: { billId: string; eligibleNetMerchandise: Prisma.Decimal; at: Date }
+) {
+  const bill = await tx.restaurantBill.findUnique({
+    where: { id: input.billId },
+    select: { order: { select: { customerId: true } } },
+  });
+  const customerId = bill?.order.customerId;
+  if (!customerId) return null;
+
+  const account = await tx.loyaltyAccount.findUnique({
+    where: { customerId },
+    select: { id: true, active: true },
+  });
+  if (!account?.active) return null;
+
+  const idempotencyKey = `loyalty:earn:${input.billId}`;
+  const prior = await tx.loyaltyPointsEntry.findFirst({
+    where: { idempotencyKey },
+    select: { id: true, billId: true, points: true },
+  });
+  if (prior) return prior;
+
+  const eligible = money(input.eligibleNetMerchandise);
+  if (eligible.isNegative()) {
+    throw new LoyaltyError('Settlement loyalty basis cannot be negative.', 'INVALID');
+  }
+  const program = await effectiveProgram(tx, input.at);
+  const points = wholePoints(multiply(eligible, program.earnRate));
+  if (points === 0) return null;
+
+  const expiresAt = program.expiryDays
+    ? new Date(input.at.getTime() + program.expiryDays * 86_400_000)
+    : null;
+  return tx.loyaltyPointsEntry.create({
+    data: {
+      accountId: account.id,
+      programVersionId: program.id,
+      kind: 'EARN',
+      points,
+      billId: input.billId,
+      expiresAt,
+      occurredAt: input.at,
+      idempotencyKey,
+    },
+    select: { id: true, billId: true, points: true },
+  });
 }
 
 export function adjustLoyaltyPoints(

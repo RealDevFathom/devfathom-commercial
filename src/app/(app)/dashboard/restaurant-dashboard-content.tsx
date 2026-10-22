@@ -41,11 +41,24 @@ export function RestaurantDashboardContent({ enabledModules }: { enabledModules:
         eyebrow="Restaurant workspace"
         heading="Service dashboard"
         description="Move from service readiness to orders, stock, procedures, and guest insights."
-        actions={<StatusPill status="Live" tone="success" label="Workspace ready" />}
+        actions={
+          <StatusPill
+            status="Live"
+            tone="success"
+            label="Workspace ready"
+            className="text-text-body [&>span]:bg-success"
+          />
+        }
+        className="[&_[data-slot=eyebrow]]:text-text-body"
       />
 
       {visibleLinks.length > 0 ? (
-        <SectionCard eyebrow="Operations" title="Open a workspace">
+        <SectionCard
+          eyebrow="Operations"
+          title="Open a workspace"
+          titleLevel={2}
+          className="[&_[data-slot=eyebrow]]:text-text-body"
+        >
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
             {visibleLinks.map((item) => {
               const Icon = item.icon;
@@ -74,7 +87,9 @@ export function RestaurantDashboardContent({ enabledModules }: { enabledModules:
         <SectionCard
           eyebrow="Setup"
           title="Your restaurant workspace is ready for modules"
+          titleLevel={2}
           actions={<StatusPill status="Core only" tone="info" />}
+          className="[&_[data-slot=eyebrow]]:text-text-body"
         >
           <p className="max-w-2xl text-sm leading-6 text-text-muted">
             Restaurant Core is active. Ask your organization administrator to enable an operational

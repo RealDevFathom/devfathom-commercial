@@ -29,6 +29,7 @@ import {
   TableRow,
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
+import { RestaurantBranchSelect } from '../restaurant-branch-select';
 import type { AppRouter } from '@/server/routers/_app';
 
 type RouterOutputs = inferRouterOutputs<AppRouter>;
@@ -172,6 +173,9 @@ export function LoyaltyConsole() {
   const moduleEnabled =
     moduleView?.enabled ?? entitlements.enabledModules.includes('restaurant-loyalty');
   const utils = trpc.useUtils();
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: moduleEnabled,
+  });
 
   const [search, setSearch] = useState('');
   const [tagId, setTagId] = useState('');
@@ -657,6 +661,9 @@ export function LoyaltyConsole() {
               }
               onAppendConsent={submitConsent}
               onAppendInteraction={submitInteraction}
+              branches={branchesQuery.data ?? []}
+              branchesLoading={branchesQuery.isLoading}
+              branchesError={Boolean(branchesQuery.error)}
             />
           )}
         </SectionCard>
@@ -1084,6 +1091,9 @@ function CustomerDetail({
   onRemoveTag,
   onAppendConsent,
   onAppendInteraction,
+  branches,
+  branchesLoading,
+  branchesError,
 }: {
   customer: Customer;
   availableTags: RouterOutputs['restaurantCustomers']['listTags'];
@@ -1092,6 +1102,9 @@ function CustomerDetail({
   onRemoveTag: (tagId: string) => void;
   onAppendConsent: (event: FormEvent<HTMLFormElement>) => void;
   onAppendInteraction: (event: FormEvent<HTMLFormElement>) => void;
+  branches: Array<{ id: string; name: string; active: boolean; isDefault: boolean }>;
+  branchesLoading: boolean;
+  branchesError: boolean;
 }) {
   return (
     <div className="space-y-6">
@@ -1325,12 +1338,13 @@ function CustomerDetail({
       >
         <h3 className="font-semibold text-text-strong">Append branch interaction</h3>
         <div className="mt-3 grid gap-3 sm:grid-cols-3">
-          <Field label="Branch ID">
-            <Input
+          <Field label="Branch">
+            <RestaurantBranchSelect
               name="branchId"
               required
-              maxLength={200}
-              className="mt-1 min-h-11"
+              branches={branches}
+              loading={branchesLoading}
+              error={branchesError}
               disabled={busy}
             />
           </Field>

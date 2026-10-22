@@ -29,6 +29,7 @@ import {
 } from '@/components/ui/table';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
+import { RestaurantBranchSelect } from './restaurant-branch-select';
 
 /**
  * Completion wave — the branch shift roster console.
@@ -36,10 +37,8 @@ import type { AppRouter } from '@/server/routers/_app';
  * Deliberately built from the same grammar as the staff console it sits beside
  * (`restaurant-staff-console.tsx`): PageHeader → filter row → bounded table →
  * dialogs for the write paths, Studio semantic tokens throughout, no new visual
- * vocabulary. Branch selection reuses the plain branch-id field the insights and
- * money consoles already use, because the tenant API exposes no branch list
- * procedure; the operator picker, by contrast, reads real staff profiles so a
- * manager never types a raw profile id.
+ * vocabulary. Branch and operator selection both use tenant-scoped records, so
+ * internal identifiers never become operator-entered data.
  *
  * Instants are entered with `datetime-local`, i.e. in the manager's own device
  * time zone, and the SERVER stamps the branch's operating day from the branch
@@ -109,6 +108,10 @@ export function RestaurantRosterConsole() {
   const [formOpen, setFormOpen] = useState(false);
   const [editing, setEditing] = useState<Shift | null>(null);
   const [cancelling, setCancelling] = useState<Shift | null>(null);
+
+  const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
+    enabled: restaurantEnabled,
+  });
 
   const normalizedBranchId = branchId.trim();
   const branchReady = restaurantEnabled && normalizedBranchId.length > 0;
@@ -236,14 +239,15 @@ export function RestaurantRosterConsole() {
             <div className="grid gap-3 md:grid-cols-[minmax(0,1fr)_10rem_10rem_auto] md:items-end">
               <div className="space-y-1.5">
                 <label htmlFor="roster-branch" className={labelClass}>
-                  Branch ID
+                  Branch
                 </label>
-                <Input
+                <RestaurantBranchSelect
                   id="roster-branch"
+                  branches={branchesQuery.data ?? []}
+                  loading={branchesQuery.isLoading}
+                  error={Boolean(branchesQuery.error)}
                   value={branchId}
-                  onChange={(event) => setBranchId(event.target.value)}
-                  placeholder="branch_…"
-                  className="h-11"
+                  onChange={setBranchId}
                 />
               </div>
               <div className="space-y-1.5">
@@ -303,7 +307,7 @@ export function RestaurantRosterConsole() {
                 <div className="rounded-md border border-dashed border-border-default px-5 py-10 text-center">
                   <p className="font-medium text-text-strong">No branch selected.</p>
                   <p className="mt-1 text-sm text-text-muted">
-                    Enter a branch ID above to load its roster.
+                    Select a branch above to load its roster.
                   </p>
                 </div>
               ) : rosterQuery.isLoading ? (
@@ -432,7 +436,7 @@ export function RestaurantRosterConsole() {
               <p className="rounded-md bg-surface-sunken p-3 text-sm text-text-body">
                 Operator:{' '}
                 <span className="font-medium text-text-strong">
-                  {editing.staffProfile?.displayName ?? editing.staffProfileId}
+                  {editing.staffProfile?.displayName ?? 'Operator name unavailable'}
                 </span>
                 . Reassigning a shift to another operator means cancelling it and scheduling a
                 replacement.

@@ -146,6 +146,8 @@ const TAX_CORE_TABLES = [
   'restaurant_tax_rule_versions',
   'restaurant_tax_transaction_snapshots',
   'restaurant_tax_rate_bucket_snapshots',
+  'restaurant_tax_tender_allocation_snapshots',
+  'restaurant_tax_refund_allocations',
 ] as const;
 
 // R-lane (WHA-194): OCR menu import — upload, per-page extraction and the review
