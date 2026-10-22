@@ -1,7 +1,7 @@
 import 'server-only';
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import type { Prisma } from '@/generated/prisma/client';
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { stagedReference, exceptionWorkflow } from './staged-review';
 
@@ -17,7 +17,11 @@ export const reviewListInput = reviewBatchInput
   .strict();
 export const REVIEW_PAGE_SIZE = 25;
 
-/** Staging is organization-wide: only workspace admins may review it, after branch validation. */
+/**
+ * Only workspace admins review staging, one branch at a time. The PH-MIG tables are forced-RLS
+ * on organization AND branch (import 1/5), so the validated branch is bound for the rest of the
+ * caller's transaction; without the binding every read returns nothing.
+ */
 export async function assertReviewBranch(db: ScopedDb, organizationId: string, branchId: string) {
   const branch = await db.pharmacyBranch.findFirst({
     where: { id: branchId, organizationId, active: true },
@@ -28,6 +32,7 @@ export async function assertReviewBranch(db: ScopedDb, organizationId: string, b
       code: 'FORBIDDEN',
       message: 'Choose an active branch in this workspace.',
     });
+  await db.$queryRaw(Prisma.sql`SELECT set_config('app.current_branch_id', ${branchId}, true)`);
 }
 async function sourceBatch(
   db: ScopedDb,
@@ -58,13 +63,27 @@ async function sourceBatch(
     });
   return batch;
 }
-export async function listStagedMedicines(
+export function listStagedMedicines(
+  scopedDb: ScopedDb,
+  organizationId: string,
+  input: z.infer<typeof reviewListInput>
+) {
+  return scopedDb.$transaction((db) =>
+    readStagedMedicines(db as unknown as ScopedDb, organizationId, input)
+  );
+}
+async function readStagedMedicines(
   db: ScopedDb,
   organizationId: string,
   input: z.infer<typeof reviewListInput>
 ) {
   const batch = await sourceBatch(db, organizationId, input);
-  const base = { organizationId, branchId: input.branchId, batchId: batch.id, targetModelKey: 'med.product' };
+  const base = {
+    organizationId,
+    branchId: input.branchId,
+    batchId: batch.id,
+    targetModelKey: 'med.product',
+  };
   const where: Prisma.PharmacyMigrationRowWhereInput = { ...base };
   if (input.query)
     where.OR = [
@@ -130,14 +149,29 @@ export async function listStagedMedicines(
     rows: rows.map((row) => stagedReference(row, batch.source, batch.id)),
   };
 }
-export async function stagedMedicineDetail(
+export function stagedMedicineDetail(
+  scopedDb: ScopedDb,
+  organizationId: string,
+  input: z.infer<typeof reviewBatchInput> & { rowId: string }
+) {
+  return scopedDb.$transaction((db) =>
+    readStagedMedicineDetail(db as unknown as ScopedDb, organizationId, input)
+  );
+}
+async function readStagedMedicineDetail(
   db: ScopedDb,
   organizationId: string,
   input: z.infer<typeof reviewBatchInput> & { rowId: string }
 ) {
   const batch = await sourceBatch(db, organizationId, input);
   const row = await db.pharmacyMigrationRow.findFirst({
-    where: { organizationId, branchId: input.branchId, batchId: batch.id, id: input.rowId, targetModelKey: 'med.product' },
+    where: {
+      organizationId,
+      branchId: input.branchId,
+      batchId: batch.id,
+      id: input.rowId,
+      targetModelKey: 'med.product',
+    },
     include: {
       exceptions: {
         where: { organizationId },

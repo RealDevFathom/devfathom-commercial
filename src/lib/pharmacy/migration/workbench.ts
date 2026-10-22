@@ -3,10 +3,11 @@ import 'server-only';
 /**
  * PH-MIG / MIG-01, MIG-02 — the migration workbench's write and read paths.
  *
- * The ONLY module that persists profiling results. It takes an already-scoped
- * client, so tenant scope is the caller's `withTenantDb` and every statement
- * below is decided by row-level security rather than by a `where` clause anyone
- * could forget.
+ * The ONLY module that persists profiling results. Every exported function opens
+ * its transaction through `enterImportBranch`: central `can()` for
+ * `pharmacy:data-import`, the branch check, then the branch binding that the
+ * forced organization-and-branch row-level security decides every statement by.
+ * There is no exported write that skips that door; the raw inserts are private.
  *
  * MIG-01's "source never modified" holds trivially here: this module hashes the
  * source bytes and never retains, rewrites or re-encodes them. There is no
@@ -22,11 +23,22 @@ import { createHash } from 'node:crypto';
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
-import type {
-  ExceptionBucket,
-  MigrationSourceKind,
-  ProfileResult,
-  SourceProfiler,
+import { abuzarProfiler } from './abuzar-profiler';
+import { excelCsvProfiler } from './excel-csv-profiler';
+import {
+  enterImportBranch,
+  inImportTransaction,
+  PharmacyImportError,
+  type ImportRequest,
+  type ImportScope,
+} from './import-authority';
+import { ASYNC_IMPORT_THRESHOLD_BYTES, parseImportFile } from './import-core';
+import {
+  profileTable,
+  type ExceptionBucket,
+  type MigrationSourceKind,
+  type ProfileResult,
+  type SourceProfiler,
 } from './profiler';
 
 /** SHA-256 of the handed-over bytes, lowercase hex. The source's identity. */
@@ -43,29 +55,34 @@ export type RecordedSource = {
 };
 
 /**
- * Register an incumbent export as read-only evidence.
+ * Register an incumbent export as read-only evidence of one branch.
  *
- * Registering the same bytes twice returns the existing source rather than
- * creating a second one: the file is the same file, and a duplicate would let
- * two batches claim different evidence for one handover.
+ * Registering the same bytes twice in a branch returns the existing source rather than
+ * creating a second one: the file is the same file, and a duplicate would let two batches claim
+ * different evidence for one handover. Authorizes itself (`pharmacy:data-import`, branch).
  */
 export async function recordSource(
   db: ScopedDb,
-  input: {
-    branchId: string;
-    kind: MigrationSourceKind;
-    fileName: string;
-    bytes: Uint8Array | string;
-    createdByUserId: string;
-  }
+  request: ImportRequest,
+  input: { kind: MigrationSourceKind; fileName: string; bytes: Uint8Array | string }
+): Promise<RecordedSource> {
+  return inImportTransaction(db, async (tx) =>
+    insertSource(tx, await enterImportBranch(tx, request), input)
+  );
+}
+
+async function insertSource(
+  tx: ScopedDb,
+  scope: ImportScope,
+  input: { kind: MigrationSourceKind; fileName: string; bytes: Uint8Array | string }
 ): Promise<RecordedSource> {
   const contentHash = hashSourceBytes(input.bytes);
   const byteSize = BigInt(
     typeof input.bytes === 'string' ? Buffer.byteLength(input.bytes) : input.bytes.byteLength
   );
 
-  const existing = await db.pharmacyMigrationSource.findFirst({
-    where: { branchId: input.branchId, contentHash },
+  const existing = await tx.pharmacyMigrationSource.findFirst({
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, contentHash },
   });
   if (existing) {
     return {
@@ -77,14 +94,15 @@ export async function recordSource(
     };
   }
 
-  const created = await db.pharmacyMigrationSource.create({
+  const created = await tx.pharmacyMigrationSource.create({
     data: {
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
       kind: input.kind,
-      branchId: input.branchId,
       fileName: input.fileName,
       byteSize,
       contentHash,
-      createdByUserId: input.createdByUserId,
+      createdByUserId: scope.actorId,
     },
   });
 
@@ -113,24 +131,39 @@ export type PersistedProfile = {
  */
 export async function persistProfile(
   db: ScopedDb,
+  request: ImportRequest,
   input: {
-    branchId: string;
     sourceId: string;
     label: string;
     profiler: Pick<SourceProfiler, 'version'>;
     result: ProfileResult;
-    createdByUserId: string;
+  }
+): Promise<PersistedProfile> {
+  return inImportTransaction(db, async (tx) =>
+    insertProfile(tx, await enterImportBranch(tx, request), input)
+  );
+}
+
+async function insertProfile(
+  db: ScopedDb,
+  scope: ImportScope,
+  input: {
+    sourceId: string;
+    label: string;
+    profiler: Pick<SourceProfiler, 'version'>;
+    result: ProfileResult;
   }
 ): Promise<PersistedProfile> {
   const { rows, exceptions } = input.result;
 
   const batch = await db.pharmacyMigrationBatch.create({
     data: {
+      organizationId: scope.organizationId,
       sourceId: input.sourceId,
-      branchId: input.branchId,
+      branchId: scope.branchId,
       label: input.label,
       profilerVersion: input.profiler.version,
-      createdByUserId: input.createdByUserId,
+      createdByUserId: scope.actorId,
       status: 'PARSING',
     },
   });
@@ -138,8 +171,9 @@ export async function persistProfile(
   if (rows.length > 0) {
     await db.pharmacyMigrationRow.createMany({
       data: rows.map((row) => ({
+        organizationId: scope.organizationId,
         batchId: batch.id,
-        branchId: input.branchId,
+        branchId: scope.branchId,
         sourceKey: row.sourceKey,
         rowNumber: row.rowNumber,
         rawPayload: row.rawPayload,
@@ -165,7 +199,7 @@ export async function persistProfile(
   // exceptions. `sourceKey` is unique within a batch, which is what makes this
   // a lookup rather than a positional guess.
   const persistedRows = await db.pharmacyMigrationRow.findMany({
-    where: { branchId: input.branchId, batchId: batch.id },
+    where: { organizationId: scope.organizationId, branchId: scope.branchId, batchId: batch.id },
     select: { id: true, sourceKey: true },
   });
   const rowIdBySourceKey = new Map(persistedRows.map((row) => [row.sourceKey, row.id]));
@@ -175,8 +209,9 @@ export async function persistProfile(
       data: exceptions.map((exception) => {
         const sourceKey = exception.rowIndex === null ? null : rows[exception.rowIndex]?.sourceKey;
         return {
+          organizationId: scope.organizationId,
           batchId: batch.id,
-          branchId: input.branchId,
+          branchId: scope.branchId,
           rowId:
             sourceKey === null || sourceKey === undefined
               ? null
@@ -190,7 +225,12 @@ export async function persistProfile(
   }
 
   const transitioned = await db.pharmacyMigrationBatch.updateMany({
-    where: { id: batch.id, branchId: input.branchId, status: 'PARSING' },
+    where: {
+      id: batch.id,
+      organizationId: scope.organizationId,
+      branchId: scope.branchId,
+      status: 'PARSING',
+    },
     data: {
       status: 'PREVIEW',
       rowCount: rows.length,
@@ -223,35 +263,81 @@ export async function persistProfile(
  */
 export async function signOffException(
   db: ScopedDb,
-  input: { exceptionId: string; actorUserId: string; note?: string }
+  request: ImportRequest,
+  input: { exceptionId: string; note?: string }
 ): Promise<void> {
-  const updated = await db.pharmacyMigrationException.updateMany({
-    where: { id: input.exceptionId, status: 'OPEN' },
-    data: {
-      status: 'SIGNED_OFF',
-      signedOffByUserId: input.actorUserId,
-      signedOffAt: new Date(),
-      signOffNote: input.note ?? null,
-    },
+  await inImportTransaction(db, async (tx) => {
+    const scope = await enterImportBranch(tx, request);
+    const updated = await tx.pharmacyMigrationException.updateMany({
+      where: {
+        id: input.exceptionId,
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        status: 'OPEN',
+      },
+      data: {
+        status: 'SIGNED_OFF',
+        signedOffByUserId: scope.actorId,
+        signedOffAt: new Date(),
+        signOffNote: input.note ?? null,
+      },
+    });
+    if (updated.count === 0) throw new PharmacyImportError('EXCEPTION_NOT_FOUND');
   });
-
-  if (updated.count === 0) {
-    throw new Error('No open migration exception with that identifier in this organization.');
-  }
 }
 
 /** Open exception counts per bucket for one batch — the workbench queue. */
 export async function openExceptionCounts(
   db: ScopedDb,
+  request: ImportRequest,
   batchId: string
 ): Promise<Partial<Record<ExceptionBucket, number>>> {
-  const grouped = await db.pharmacyMigrationException.groupBy({
-    by: ['bucket'],
-    where: { batchId, status: 'OPEN' },
-    _count: { _all: true },
+  return inImportTransaction(db, async (tx) => {
+    const scope = await enterImportBranch(tx, request);
+    const grouped = await tx.pharmacyMigrationException.groupBy({
+      by: ['bucket'],
+      where: {
+        organizationId: scope.organizationId,
+        branchId: scope.branchId,
+        batchId,
+        status: 'OPEN',
+      },
+      _count: { _all: true },
+    });
+    const counts: Partial<Record<ExceptionBucket, number>> = {};
+    for (const group of grouped) counts[group.bucket] = group._count._all;
+    return counts;
   });
+}
 
-  const counts: Partial<Record<ExceptionBucket, number>> = {};
-  for (const group of grouped) counts[group.bucket] = group._count._all;
-  return counts;
+const PROFILERS: Readonly<Record<MigrationSourceKind, SourceProfiler>> = {
+  ABUZAR: abuzarProfiler,
+  EXCEL_CSV: excelCsvProfiler,
+};
+
+/**
+ * The synchronous upload entry point: parse untrusted bytes (limits, no formulas, no macros),
+ * profile them, then record the source and its preview batch in ONE authorized transaction.
+ * Files at or above the async threshold belong to the background scheduler.
+ */
+export async function importSourceFile(
+  db: ScopedDb,
+  request: ImportRequest,
+  input: { kind: MigrationSourceKind; fileName: string; bytes: Uint8Array; label: string }
+): Promise<PersistedProfile & { sourceId: string; contentHash: string }> {
+  if (input.bytes.byteLength >= ASYNC_IMPORT_THRESHOLD_BYTES)
+    throw new PharmacyImportError('ASYNC_REQUIRED');
+  const profiler = PROFILERS[input.kind];
+  const result = profileTable(profiler, await parseImportFile(input.fileName, input.bytes));
+  return inImportTransaction(db, async (tx) => {
+    const scope = await enterImportBranch(tx, request);
+    const source = await insertSource(tx, scope, input);
+    const persisted = await insertProfile(tx, scope, {
+      sourceId: source.id,
+      label: input.label,
+      profiler,
+      result,
+    });
+    return { ...persisted, sourceId: source.id, contentHash: source.contentHash };
+  });
 }

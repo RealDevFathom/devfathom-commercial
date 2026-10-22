@@ -26,7 +26,10 @@ function makeDb() {
     quantityCanonical: null,
     exceptions: [],
   };
-  return {
+  const client = {
+    // Import 1/5: staging reads run in one transaction that binds the reviewed branch.
+    $transaction: vi.fn(async (work: (tx: unknown) => unknown) => work(client)),
+    $queryRaw: vi.fn().mockResolvedValue([]),
     user: {
       findUnique: vi.fn().mockResolvedValue({ organizationRole: null, permissionOverrides: [] }),
     },
@@ -55,6 +58,7 @@ function makeDb() {
     },
     pharmacyMigrationException: { groupBy: vi.fn().mockResolvedValue([]) },
   };
+  return client;
 }
 let db = makeDb();
 function caller(
@@ -111,6 +115,13 @@ describe('staged review authorization and reads', () => {
       expect.objectContaining({ where: { organizationId: 'org_a', id: 'branch_a', active: true } })
     );
     expect(db.pharmacyMigrationBatch.findFirst).not.toHaveBeenCalled();
+  });
+  it('binds the reviewed branch for the forced branch-scoped policies before reading', async () => {
+    await caller().stagedRows(scope);
+    const bind = db.$queryRaw.mock.invocationCallOrder[0]!;
+    expect(JSON.stringify(db.$queryRaw.mock.calls[0])).toContain('app.current_branch_id');
+    expect(JSON.stringify(db.$queryRaw.mock.calls[0])).toContain('branch_a');
+    expect(bind).toBeLessThan(db.pharmacyMigrationBatch.findFirst.mock.invocationCallOrder[0]!);
   });
   it('rejects wrong source/batch pairing before rows are read', async () => {
     db.pharmacyMigrationBatch.findFirst.mockResolvedValue(null);

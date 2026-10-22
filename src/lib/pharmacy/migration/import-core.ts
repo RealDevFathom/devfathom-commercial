@@ -1,7 +1,7 @@
 import 'server-only';
 
 import ExcelJS from 'exceljs';
-import { inflateRawSync } from 'node:zlib';
+import { crc32, inflateRawSync } from 'node:zlib';
 import { parseDelimitedText, type SourceTable } from './source-values';
 
 export const IMPORT_LIMITS = Object.freeze({
@@ -16,13 +16,7 @@ export const IMPORT_LIMITS = Object.freeze({
 export const ASYNC_IMPORT_THRESHOLD_BYTES = 2 * 1024 * 1024;
 
 export type ImportBatchStatus =
-  | 'UPLOADED'
-  | 'PARSING'
-  | 'PREVIEW'
-  | 'COMMITTING'
-  | 'COMMITTED'
-  | 'ROLLED_BACK'
-  | 'FAILED';
+  'UPLOADED' | 'PARSING' | 'PREVIEW' | 'COMMITTING' | 'COMMITTED' | 'ROLLED_BACK' | 'FAILED';
 const NEXT_STATUS: Readonly<Record<ImportBatchStatus, readonly ImportBatchStatus[]>> = {
   UPLOADED: ['PARSING', 'FAILED'],
   PARSING: ['PREVIEW', 'FAILED'],
@@ -37,88 +31,8 @@ export function assertBatchTransition(from: ImportBatchStatus, to: ImportBatchSt
     throw new Error(`Invalid import batch transition: ${from} -> ${to}`);
 }
 
-export function importRowIdempotencyKey(
-  contentHash: string,
-  sourceKey: string,
-  operation: 'CREATED' | 'STOCK_MOVEMENT'
-): string {
-  return `pharmacy-import:${contentHash}:${sourceKey}:${operation}`;
-}
-
-/** Atomically wins one lifecycle edge; a concurrent/stale writer affects no row. */
-export async function transitionImportBatch(
-  db: { pharmacyMigrationBatch: { updateMany(args: unknown): Promise<{ count: number }> } },
-  scope: { organizationId: string; branchId: string; batchId: string },
-  expected: ImportBatchStatus,
-  next: ImportBatchStatus
-): Promise<void> {
-  assertBatchTransition(expected, next);
-  const result = await db.pharmacyMigrationBatch.updateMany({
-    where: { id: scope.batchId, organizationId: scope.organizationId, branchId: scope.branchId, status: expected },
-    data: { status: next },
-  });
-  if (result.count !== 1) throw new Error('Import batch transition lost a concurrent race or is outside branch scope');
-}
-
-export type ImportManifestEntry = {
-  entityType: string;
-  entityId: string;
-  operation: 'CREATED' | 'STOCK_MOVEMENT';
-  referencedSince?: boolean;
-};
-export function planRollback(entries: readonly ImportManifestEntry[]) {
-  const blocked = entries.filter((entry) => entry.operation === 'CREATED' && entry.referencedSince);
-  return {
-    blocked,
-    deleteEntityIds: blocked.length
-      ? []
-      : entries.filter((e) => e.operation === 'CREATED').map((e) => e.entityId),
-    reverseMovementIds: blocked.length
-      ? []
-      : entries.filter((e) => e.operation === 'STOCK_MOVEMENT').map((e) => e.entityId),
-  };
-}
-
-export type RollbackManifestEntry = ImportManifestEntry & {
-  manifestId: string;
-  quantity?: bigint;
-};
-
-/**
- * Roll back under one branch-scoped transaction. The adapter's lock operation
- * must SELECT the batch, manifest rows, target rows and their references FOR
- * UPDATE; references are deliberately checked again after those locks rather
- * than trusting a preview-time plan.
- */
-export async function rollbackImportBatch(
-  db: { $transaction<T>(work: (tx: unknown) => Promise<T>): Promise<T> },
-  scope: { organizationId: string; branchId: string; batchId: string },
-  adapter: {
-    lockManifest(tx: unknown, scope: { organizationId: string; branchId: string; batchId: string }): Promise<readonly RollbackManifestEntry[]>;
-    isReferenced(tx: unknown, scope: { organizationId: string; branchId: string; batchId: string }, entry: RollbackManifestEntry): Promise<boolean>;
-    deleteCreated(tx: unknown, scope: { organizationId: string; branchId: string; batchId: string }, entry: RollbackManifestEntry): Promise<void>;
-    compensateStock(tx: unknown, scope: { organizationId: string; branchId: string; batchId: string }, entry: RollbackManifestEntry, signedQuantity: bigint): Promise<string>;
-    linkReversal(tx: unknown, manifestId: string, reversalId: string): Promise<void>;
-    transition(tx: unknown, scope: { organizationId: string; branchId: string; batchId: string }, expected: 'COMMITTED', next: 'ROLLED_BACK'): Promise<boolean>;
-  }
-): Promise<void> {
-  await db.$transaction(async (tx) => {
-    const entries = await adapter.lockManifest(tx, scope);
-    for (const entry of entries) {
-      if (entry.operation === 'CREATED') {
-        if (await adapter.isReferenced(tx, scope, entry))
-          throw new Error(`Imported entity became referenced: ${entry.entityId}`);
-        await adapter.deleteCreated(tx, scope, entry);
-      } else {
-        if (entry.quantity === undefined) throw new Error('Stock manifest is missing signed quantity');
-        const reversalId = await adapter.compensateStock(tx, scope, entry, -entry.quantity);
-        await adapter.linkReversal(tx, entry.manifestId, reversalId);
-      }
-    }
-    if (!(await adapter.transition(tx, scope, 'COMMITTED', 'ROLLED_BACK')))
-      throw new Error('Import rollback lost a concurrent race or is outside branch scope');
-  });
-}
+// Commit, rollback and the persisted retry barrier live in ./import-commit, behind
+// ./import-authority. This module stays pure: limits, the state machine, parsing and matching.
 
 export class ImportValidationError extends Error {
   constructor(
@@ -129,51 +43,153 @@ export class ImportValidationError extends Error {
   }
 }
 
+const ZIP_LOCAL = 0x04034b50;
+const ZIP_CENTRAL = 0x02014b50;
+const ZIP_END = 0x06054b50;
+const ZIP64_LOCATOR = 0x07064b50;
+const ZIP_MAX16 = 0xffff;
+const ZIP_MAX32 = 0xffffffff;
+
+/**
+ * Inflate one entry, bounded by its declared size, and prove the directory told the truth:
+ * the exact size and CRC-32 it states. A size the directory understated is a bomb (MAX_BYTES);
+ * anything else that does not match is a corrupt or truncated archive (UNSUPPORTED).
+ */
+function verifiedEntry(
+  bytes: Uint8Array,
+  view: DataView,
+  entry: {
+    local: number;
+    name: Uint8Array;
+    method: number;
+    crc: number;
+    compressed: number;
+    uncompressed: number;
+  }
+): Uint8Array {
+  const { local, name, method, crc, compressed, uncompressed } = entry;
+  if (local + 30 > bytes.length || view.getUint32(local, true) !== ZIP_LOCAL)
+    throw new ImportValidationError('UNSUPPORTED');
+  const localNameLength = view.getUint16(local + 26, true);
+  const start = local + 30 + localNameLength + view.getUint16(local + 28, true);
+  const localName = bytes.subarray(local + 30, local + 30 + localNameLength);
+  if (
+    start + compressed > bytes.length ||
+    localName.length !== name.length ||
+    localName.some((byte, index) => byte !== name[index])
+  )
+    throw new ImportValidationError('UNSUPPORTED');
+  const payload = bytes.subarray(start, start + compressed);
+  let data: Uint8Array;
+  if (method === 0) {
+    data = payload;
+  } else {
+    try {
+      data = inflateRawSync(payload, { maxOutputLength: Math.max(1, uncompressed) });
+    } catch (error) {
+      if ((error as { code?: unknown }).code === 'ERR_BUFFER_TOO_LARGE')
+        throw new ImportValidationError('MAX_BYTES');
+      throw new ImportValidationError('UNSUPPORTED');
+    }
+  }
+  if (data.length !== uncompressed || crc32(data) !== crc)
+    throw new ImportValidationError('UNSUPPORTED');
+  return data;
+}
+
+/**
+ * Check an XLSX archive before any workbook parser sees it. Refused: macros, path traversal,
+ * encrypted entries, ZIP64 and multi-disk archives, duplicate names, compression other than
+ * stored/deflate, entry/size/ratio limits, and any entry whose real content does not match the
+ * size and CRC-32 its directory declares (so the limits above cannot be lied past).
+ */
 function inspectXlsxArchive(bytes: Uint8Array): void {
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
   let eocd = -1;
   for (let i = bytes.length - 22; i >= Math.max(0, bytes.length - 65_557); i -= 1) {
-    if (view.getUint32(i, true) === 0x06054b50) { eocd = i; break; }
+    if (view.getUint32(i, true) === ZIP_END) {
+      eocd = i;
+      break;
+    }
   }
   if (eocd < 0) throw new ImportValidationError('UNSUPPORTED');
   const entries = view.getUint16(eocd + 10, true);
+  const directorySize = view.getUint32(eocd + 12, true);
+  const directoryOffset = view.getUint32(eocd + 16, true);
+  if (
+    (eocd >= 20 && view.getUint32(eocd - 20, true) === ZIP64_LOCATOR) ||
+    view.getUint16(eocd + 4, true) !== 0 ||
+    view.getUint16(eocd + 6, true) !== 0 ||
+    view.getUint16(eocd + 8, true) !== entries ||
+    entries === ZIP_MAX16 ||
+    directorySize === ZIP_MAX32 ||
+    directoryOffset === ZIP_MAX32 ||
+    directoryOffset + directorySize > eocd
+  )
+    throw new ImportValidationError('UNSUPPORTED');
   if (entries > IMPORT_LIMITS.maxZipEntries) throw new ImportValidationError('MAX_BYTES');
-  let offset = view.getUint32(eocd + 16, true);
+  const names = new Set<string>();
+  let offset = directoryOffset;
   let total = 0;
   for (let index = 0; index < entries; index += 1) {
-    if (offset + 46 > bytes.length || view.getUint32(offset, true) !== 0x02014b50)
+    if (offset + 46 > bytes.length || view.getUint32(offset, true) !== ZIP_CENTRAL)
       throw new ImportValidationError('UNSUPPORTED');
+    const flags = view.getUint16(offset + 8, true);
+    const method = view.getUint16(offset + 10, true);
+    const crc = view.getUint32(offset + 16, true);
     const compressed = view.getUint32(offset + 20, true);
     const uncompressed = view.getUint32(offset + 24, true);
-    const compressionMethod = view.getUint16(offset + 10, true);
     const nameLength = view.getUint16(offset + 28, true);
     const extraLength = view.getUint16(offset + 30, true);
     const commentLength = view.getUint16(offset + 32, true);
+    const local = view.getUint32(offset + 42, true);
     const end = offset + 46 + nameLength + extraLength + commentLength;
     if (end > bytes.length) throw new ImportValidationError('UNSUPPORTED');
-    const name = new TextDecoder().decode(bytes.subarray(offset + 46, offset + 46 + nameLength))
-      .replace(/\\/g, '/').replace(/^\/+/, '').toLowerCase();
+    // Bit 0: encrypted; bit 6: strong encryption. 0xFFFFFFFF fields mean ZIP64.
+    if (
+      flags & 0x0041 ||
+      (method !== 0 && method !== 8) ||
+      compressed === ZIP_MAX32 ||
+      uncompressed === ZIP_MAX32 ||
+      local === ZIP_MAX32
+    )
+      throw new ImportValidationError('UNSUPPORTED');
+    const rawName = bytes.subarray(offset + 46, offset + 46 + nameLength);
+    const name = new TextDecoder()
+      .decode(rawName)
+      .replace(/\\/g, '/')
+      .replace(/^\/+/, '')
+      .toLowerCase();
     if (name.split('/').includes('..')) throw new ImportValidationError('UNSUPPORTED');
-    if (name.includes('vbaproject') || name.endsWith('.bin')) throw new ImportValidationError('MACRO');
-    if (name === '[content_types].xml') {
-      const local = view.getUint32(offset + 42, true);
-      if (local + 30 > bytes.length || view.getUint32(local, true) !== 0x04034b50)
-        throw new ImportValidationError('UNSUPPORTED');
-      const localNameLength = view.getUint16(local + 26, true);
-      const localExtraLength = view.getUint16(local + 28, true);
-      const start = local + 30 + localNameLength + localExtraLength;
-      const payload = bytes.subarray(start, start + compressed);
-      let xml: Uint8Array;
-      try { xml = compressionMethod === 0 ? payload : new Uint8Array(inflateRawSync(payload)); }
-      catch { throw new ImportValidationError('UNSUPPORTED'); }
-      const types = new TextDecoder().decode(xml).toLowerCase();
-      if (types.includes('macroenabled') || types.includes('vba')) throw new ImportValidationError('MACRO');
-    }
+    if (name.includes('vbaproject') || name.endsWith('.bin'))
+      throw new ImportValidationError('MACRO');
+    if (names.has(name)) throw new ImportValidationError('UNSUPPORTED');
+    names.add(name);
     total += uncompressed;
-    if (uncompressed > IMPORT_LIMITS.maxZipEntryBytes || total > IMPORT_LIMITS.maxZipUncompressedBytes)
+    if (
+      uncompressed > IMPORT_LIMITS.maxZipEntryBytes ||
+      total > IMPORT_LIMITS.maxZipUncompressedBytes
+    )
       throw new ImportValidationError('MAX_BYTES');
-    if (compressed === 0 ? uncompressed !== 0 : uncompressed / compressed > IMPORT_LIMITS.maxZipCompressionRatio)
+    if (
+      compressed === 0
+        ? uncompressed !== 0
+        : uncompressed / compressed > IMPORT_LIMITS.maxZipCompressionRatio
+    )
       throw new ImportValidationError('MAX_BYTES');
+    const data = verifiedEntry(bytes, view, {
+      local,
+      name: rawName,
+      method,
+      crc,
+      compressed,
+      uncompressed,
+    });
+    if (name === '[content_types].xml') {
+      const types = new TextDecoder().decode(data).toLowerCase();
+      if (types.includes('macroenabled') || types.includes('vba'))
+        throw new ImportValidationError('MACRO');
+    }
     offset = end;
   }
 }
@@ -197,7 +213,8 @@ export async function parseImportFile(fileName: string, bytes: Uint8Array): Prom
   if (extension !== 'xlsx') throw new ImportValidationError('UNSUPPORTED');
   inspectXlsxArchive(bytes);
   const workbook = new ExcelJS.Workbook();
-  await workbook.xlsx.load(Buffer.from(bytes));
+  // A copied ArrayBuffer: ExcelJS's Buffer type is an ArrayBuffer, not Node's generic Buffer.
+  await workbook.xlsx.load(new Uint8Array(bytes).buffer);
   const sheet = workbook.worksheets[0];
   if (!sheet) return { headers: [], rows: [] };
   if (sheet.columnCount > IMPORT_LIMITS.maxColumns) throw new ImportValidationError('MAX_COLUMNS');

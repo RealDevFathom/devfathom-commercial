@@ -44,6 +44,7 @@ const suffix = randomBytes(6).toString('hex');
 const orgA = `org_wha1163_a_${suffix}`;
 const orgB = `org_wha1163_b_${suffix}`;
 const signerA = `user_wha1163_a_${suffix}`;
+const signerB = `user_wha1163_b_${suffix}`;
 const branchA = `branch_wha1163_a_${suffix}`;
 const branchB = `branch_wha1163_b_${suffix}`;
 
@@ -70,24 +71,32 @@ function inOrgB<T>(work: (tx: ScopedDb) => Promise<T>): Promise<T> {
   });
 }
 
+/** Import 1/5: every workbench write authorizes itself (pharmacy:data-import, branch). */
+const requestA = {
+  organizationId: orgA,
+  branchId: branchA,
+  actor: { userId: signerA, role: 'ADMIN' },
+};
+const requestB = {
+  organizationId: orgB,
+  branchId: branchB,
+  actor: { userId: signerB, role: 'ADMIN' },
+};
+
 /** Register the fixture and profile it into a batch, as a caller would. */
-async function profileMissingFieldsFixture(db: ScopedDb, label: string) {
+async function profileMissingFieldsFixture(db: ScopedDb, label: string, request = requestA) {
   const bytes = readFileSync(MISSING_FIELDS_FIXTURE);
-  const source = await deps.workbench.recordSource(db, {
-    branchId: branchA,
+  const source = await deps.workbench.recordSource(db, request, {
     kind: 'EXCEL_CSV',
     fileName: 'excel-missing-fields.csv',
     bytes,
-    createdByUserId: signerA,
   });
   const result = profileTable(excelCsvProfiler, parseDelimitedText(bytes.toString('utf8')));
-  const persisted = await deps.workbench.persistProfile(db, {
-    branchId: branchA,
+  const persisted = await deps.workbench.persistProfile(db, request, {
     sourceId: source.id,
     label,
     profiler: excelCsvProfiler,
     result,
-    createdByUserId: signerA,
   });
   return { source, result, persisted };
 }
@@ -146,14 +155,30 @@ beforeAll(async () => {
       }
     }
 
-    await owner.query(
-      `INSERT INTO "users"
-        ("id", "organizationId", "name", "email", "role", "department", "title",
-         "startDate", "status", "createdAt", "updatedAt")
-       VALUES ($1, $2, 'Migration Lead', $3, 'ADMIN', 'LEADERSHIP', 'Pharmacist',
-         CURRENT_TIMESTAMP, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
-      [signerA, orgA, `${signerA}@example.test`]
-    );
+    // Import 1/5: the signers hold pharmacy:data-import through a persisted organization role.
+    for (const [tenant, organizationId, signer] of [
+      ['a', orgA, signerA],
+      ['b', orgB, signerB],
+    ] as const) {
+      await owner.query(
+        `INSERT INTO "organization_roles" ("id", "organizationId", "key", "name", "createdAt", "updatedAt")
+         VALUES ($1, $2, $1, 'Import lead', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [`role_wha1163_${tenant}_${suffix}`, organizationId]
+      );
+      await owner.query(
+        `INSERT INTO "organization_role_permissions" ("id", "organizationId", "organizationRoleId", "capability", "effect")
+         VALUES ($1, $2, $3, 'pharmacy:data-import', 'ALLOW')`,
+        [`perm_wha1163_${tenant}_${suffix}`, organizationId, `role_wha1163_${tenant}_${suffix}`]
+      );
+      await owner.query(
+        `INSERT INTO "users"
+          ("id", "organizationId", "name", "email", "role", "department", "title",
+           "startDate", "status", "organizationRoleId", "createdAt", "updatedAt")
+         VALUES ($1, $2, 'Migration Lead', $3, 'ADMIN', 'LEADERSHIP', 'Pharmacist',
+           CURRENT_TIMESTAMP, 'ACTIVE', $4, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
+        [signer, organizationId, `${signer}@example.test`, `role_wha1163_${tenant}_${suffix}`]
+      );
+    }
     await owner.query(
       `INSERT INTO "pharmacy_branches" ("id","organizationId","code","name","addressLine","city","provinceCode","createdAt","updatedAt")
        VALUES ($1,$2,'A','Branch A','Test','Karachi','SD',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
@@ -195,19 +220,15 @@ describeIfDatabase('PH-MIG workbench — MIG-01 read-only source evidence', () =
     const bytes = readFileSync(join(FIXTURE_DIR, 'excel-clean.csv'));
 
     const { first, second } = await inOrgA(async (db) => ({
-      first: await deps.workbench.recordSource(db, {
-        branchId: branchA,
-    kind: 'EXCEL_CSV',
+      first: await deps.workbench.recordSource(db, requestA, {
+        kind: 'EXCEL_CSV',
         fileName: 'excel-clean.csv',
         bytes,
-        createdByUserId: signerA,
       }),
-      second: await deps.workbench.recordSource(db, {
-        branchId: branchA,
-    kind: 'EXCEL_CSV',
+      second: await deps.workbench.recordSource(db, requestA, {
+        kind: 'EXCEL_CSV',
         fileName: 'excel-clean-resent.csv',
         bytes,
-        createdByUserId: signerA,
       }),
     }));
 
@@ -217,12 +238,10 @@ describeIfDatabase('PH-MIG workbench — MIG-01 read-only source evidence', () =
 
   it('refuses every update and delete against a registered source', async () => {
     const { source, updated, deleted, stillThere } = await inOrgA(async (db) => {
-      const created = await deps.workbench.recordSource(db, {
-        branchId: branchA,
+      const created = await deps.workbench.recordSource(db, requestA, {
         kind: 'ABUZAR',
         fileName: 'abuzar-stock-export.csv',
         bytes: readFileSync(join(FIXTURE_DIR, 'abuzar-stock-export.csv')),
-        createdByUserId: signerA,
       });
       return {
         source: created,
@@ -255,6 +274,8 @@ describeIfDatabase('PH-MIG workbench — MIG-01 read-only source evidence', () =
 
     expect(triggers).toEqual([
       { table: 'pharmacy_migration_rows', trigger: 'pharmacy_migration_rows_append_only' },
+      { table: 'pharmacy_migration_rows', trigger: 'pharmacy_migration_rows_legacy_lineage' },
+      { table: 'pharmacy_migration_sources', trigger: 'pharmacy_migration_sources_legacy_lineage' },
       { table: 'pharmacy_migration_sources', trigger: 'pharmacy_migration_sources_read_only' },
     ]);
   });
@@ -367,20 +388,19 @@ describeIfDatabase('PH-MIG workbench — MIG-02 exception workbench', () => {
   it('records the sign-off actor and time, and clears the open queue', async () => {
     const { before, after, signed } = await inOrgA(async (db) => {
       const { persisted } = await profileMissingFieldsFixture(db, 'sign-off');
-      const openBefore = await deps.workbench.openExceptionCounts(db, persisted.batchId);
+      const openBefore = await deps.workbench.openExceptionCounts(db, requestA, persisted.batchId);
       const target = await db.pharmacyMigrationException.findFirstOrThrow({
         where: { batchId: persisted.batchId, bucket: 'MISSING_MRP' },
       });
 
-      await deps.workbench.signOffException(db, {
+      await deps.workbench.signOffException(db, requestA, {
         exceptionId: target.id,
-        actorUserId: signerA,
         note: 'Confirmed against the paper purchase invoice.',
       });
 
       return {
         before: openBefore,
-        after: await deps.workbench.openExceptionCounts(db, persisted.batchId),
+        after: await deps.workbench.openExceptionCounts(db, requestA, persisted.batchId),
         signed: await db.pharmacyMigrationException.findUniqueOrThrow({ where: { id: target.id } }),
       };
     });
@@ -400,14 +420,14 @@ describeIfDatabase('PH-MIG workbench — MIG-02 exception workbench', () => {
       const target = await db.pharmacyMigrationException.findFirstOrThrow({
         where: { batchId: persisted.batchId, bucket: 'MISSING_BATCH' },
       });
-      await deps.workbench.signOffException(db, { exceptionId: target.id, actorUserId: signerA });
+      await deps.workbench.signOffException(db, requestA, { exceptionId: target.id });
       return target.id;
     });
 
     // The application path reports it as "no open exception"…
     await expect(
-      inOrgA((db) => deps.workbench.signOffException(db, { exceptionId, actorUserId: signerA }))
-    ).rejects.toThrow(/No open migration exception/);
+      inOrgA((db) => deps.workbench.signOffException(db, requestA, { exceptionId }))
+    ).rejects.toThrow(/No open exception/);
 
     // …and the database refuses it even when the status filter is bypassed.
     await expect(
@@ -444,7 +464,7 @@ describeIfDatabase('PH-MIG workbench — cross-tenant isolation', () => {
   it('shows one tenant nothing of the other, in either direction', async () => {
     const a = await inOrgA((db) => profileMissingFieldsFixture(db, 'tenant A'));
     // Tenant B profiles its own copy, so "isolated" is distinguishable from "empty".
-    const b = await inOrgB((db) => profileMissingFieldsFixture(db, 'tenant B'));
+    const b = await inOrgB((db) => profileMissingFieldsFixture(db, 'tenant B', requestB));
 
     expect(b.persisted.batchId).not.toBe(a.persisted.batchId);
 
@@ -476,8 +496,8 @@ describeIfDatabase('PH-MIG workbench — cross-tenant isolation', () => {
     });
 
     await expect(
-      inOrgB((db) => deps.workbench.signOffException(db, { exceptionId, actorUserId: signerA }))
-    ).rejects.toThrow(/No open migration exception/);
+      inOrgB((db) => deps.workbench.signOffException(db, requestB, { exceptionId }))
+    ).rejects.toThrow(/No open exception/);
 
     const stillOpen = await inOrgA((db) =>
       db.pharmacyMigrationException.findUniqueOrThrow({ where: { id: exceptionId } })

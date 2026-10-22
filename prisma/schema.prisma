@@ -11518,9 +11518,12 @@ enum PharmacyMigrationBatchStatus {
   FAILED
 }
 
+/// Import 1/5: CREATED names an entity an import created, STOCK_MOVEMENT the OPENING posting it
+/// made, STOCK_REVERSAL the exact compensating posting its rollback made.
 enum PharmacyMigrationEntityOperation {
   CREATED
   STOCK_MOVEMENT
+  STOCK_REVERSAL
 }
 
 enum PharmacyMigrationExceptionBucket {
@@ -11546,36 +11549,43 @@ enum PharmacyMigrationExceptionStatus {
 /// MIG-01 — immutable evidence of one incumbent export. The file bytes are NOT
 /// stored; `contentHash` proves the profiled bytes are the handed-over bytes.
 /// A trigger and SELECT/INSERT-only policies both forbid UPDATE and DELETE.
+///
+/// Import 1/5: every new source names its branch and actor. Rows that predate it are
+/// `legacy` with no branch: invisible to the branch-scoped policies until a platform operator
+/// assigns them with pharmacy_migration_remediate_legacy_source(). The branch-qualified
+/// foreign keys, the policies and the legacy guards live in the migration.
 model PharmacyMigrationSource {
-  id             String                      @id @default(cuid())
-  organizationId String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  kind           PharmacyMigrationSourceKind
-  fileName       String
-  byteSize       BigInt
-  contentHash    String
-  branchId        String
+  id              String                      @id @default(cuid())
+  organizationId  String                      @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String?
+  kind            PharmacyMigrationSourceKind
+  fileName        String
+  byteSize        BigInt
+  contentHash     String
   createdByUserId String?
   createdBySystem Boolean                     @default(false)
-  capturedAt     DateTime                    @default(now())
-  createdAt      DateTime                    @default(now())
+  legacy          Boolean                     @default(false)
+  capturedAt      DateTime                    @default(now())
+  createdAt       DateTime                    @default(now())
 
   organization Organization             @relation(fields: [organizationId], references: [id], onDelete: Restrict, onUpdate: Restrict)
   batches      PharmacyMigrationBatch[]
 
   @@unique([organizationId, id])
-  @@unique([organizationId, branchId, id])
-  @@unique([organizationId, branchId, contentHash])
-  @@index([organizationId, branchId, kind, capturedAt])
+  @@unique([organizationId, branchId, id], map: "pharmacy_migration_sources_org_branch_id_key")
+  @@unique([organizationId, branchId, contentHash], map: "pharmacy_migration_sources_branch_hash_key")
+  @@index([organizationId, branchId, kind, capturedAt], map: "pharmacy_migration_sources_branch_kind_idx")
   @@map("pharmacy_migration_sources")
 }
 
 /// One profiling pass over a source. Re-profiling creates a NEW batch; rows are
-/// never edited in place.
+/// never edited in place. Import 1/5 adds the commit lifecycle; the transition, identity and
+/// timestamp rules are database triggers and CHECKs.
 model PharmacyMigrationBatch {
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId        String?
   sourceId        String
-  branchId        String
   label           String
   status          PharmacyMigrationBatchStatus @default(UPLOADED)
   rowCount        Int                          @default(0)
@@ -11583,43 +11593,69 @@ model PharmacyMigrationBatch {
   profilerVersion String
   createdByUserId String?
   createdBySystem Boolean                      @default(false)
+  legacy          Boolean                      @default(false)
+  profiledAt      DateTime?
   committedAt     DateTime?
   rolledBackAt    DateTime?
   failureReason   String?
-  profiledAt      DateTime?
   createdAt       DateTime                     @default(now())
   updatedAt       DateTime                     @updatedAt
 
-  source     PharmacyMigrationSource      @relation(fields: [organizationId, branchId, sourceId], references: [organizationId, branchId, id], onDelete: Restrict)
+  source     PharmacyMigrationSource      @relation(fields: [organizationId, sourceId], references: [organizationId, id], onDelete: Restrict)
   rows       PharmacyMigrationRow[]
   exceptions PharmacyMigrationException[]
-  entities   PharmacyMigrationBatchEntity[]
 
   @@unique([organizationId, id])
-  @@unique([organizationId, branchId, id])
-  @@index([organizationId, branchId, sourceId, status])
+  @@unique([organizationId, branchId, id], map: "pharmacy_migration_batches_org_branch_id_key")
+  @@index([organizationId, branchId, sourceId, status], map: "pharmacy_migration_batches_branch_source_status_idx")
   @@map("pharmacy_migration_batches")
 }
 
-/// Immutable commit manifest. It is the rollback allow-list: entities absent
-/// from this table are pre-existing and can never be deleted by an import.
+/// Import 1/5 — the immutable commit manifest and rollback allow-list: an entity absent from it
+/// is pre-existing and no import can delete it. Written and read through raw SQL in
+/// src/lib/pharmacy/migration/import-commit.ts. `applicationKey` is the retry barrier (unique
+/// among unreleased rows of a branch); the same-batch reversal keys, the typed ledger link and
+/// the ledger checks are migration constraints.
 model PharmacyMigrationBatchEntity {
   id              String                           @id @default(cuid())
   organizationId  String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
-  batchId         String
   branchId        String
+  batchId         String
   rowSourceKey    String
+  applicationKey  String
   entityType      String
   entityId        String
   operation       PharmacyMigrationEntityOperation
+  stockMovementId String?
+  quantityUnits   Int?
+  reversesEntryId String?
   reversedById    String?
+  releasedAt      DateTime?
   createdAt       DateTime                         @default(now())
-  batch           PharmacyMigrationBatch           @relation(fields: [organizationId, branchId, batchId], references: [organizationId, branchId, id], onDelete: Restrict)
 
-  @@unique([organizationId, id])
-  @@unique([organizationId, batchId, rowSourceKey, entityType, entityId, operation])
-  @@index([organizationId, branchId, batchId, operation])
+  @@unique([organizationId, id], map: "pharmacy_migration_batch_entities_org_id_key")
+  @@unique([organizationId, branchId, batchId, id], map: "pharmacy_migration_batch_entities_batch_id_key")
+  @@unique([organizationId, stockMovementId], map: "pharmacy_migration_batch_entities_movement_key")
+  @@index([organizationId, branchId, batchId, operation], map: "pharmacy_migration_batch_entities_batch_operation_idx")
   @@map("pharmacy_migration_batch_entities")
+}
+
+/// Import 1/5 — who assigned a legacy source (and its batches, rows and exceptions) to a branch,
+/// why and when. Append-only; written only by pharmacy_migration_remediate_legacy_source().
+model PharmacyMigrationLegacyRemediation {
+  id             String   @id @default(dbgenerated("(gen_random_uuid())::text"))
+  organizationId String
+  sourceId       String
+  branchId       String
+  decidedBy      String
+  reason         String
+  batchCount     Int
+  rowCount       Int
+  exceptionCount Int
+  remediatedAt   DateTime @default(now())
+
+  @@unique([organizationId, sourceId], map: "pharmacy_migration_legacy_remediations_source_key")
+  @@map("pharmacy_migration_legacy_remediations")
 }
 
 /// MIG-01 — every imported row keeps its incumbent source key and its import
@@ -11628,8 +11664,8 @@ model PharmacyMigrationBatchEntity {
 model PharmacyMigrationRow {
   id                String    @id @default(cuid())
   organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String?
   batchId           String
-  branchId          String
   sourceKey         String
   rowNumber         Int
   rawPayload        Json
@@ -11647,15 +11683,16 @@ model PharmacyMigrationRow {
   supplierName      String?
   customerName      String?
   balanceMinor      BigInt?
+  legacy            Boolean   @default(false)
   createdAt         DateTime  @default(now())
 
-  batch      PharmacyMigrationBatch       @relation(fields: [organizationId, branchId, batchId], references: [organizationId, branchId, id], onDelete: Restrict)
+  batch      PharmacyMigrationBatch       @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
   exceptions PharmacyMigrationException[]
 
   @@unique([organizationId, id])
-  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, id], map: "pharmacy_migration_rows_org_branch_id_key")
   @@unique([organizationId, batchId, sourceKey])
-  @@index([organizationId, branchId, batchId, targetModelKey])
+  @@index([organizationId, branchId, batchId, targetModelKey], map: "pharmacy_migration_rows_branch_batch_target_idx")
   @@index([organizationId, targetModelKey, targetNaturalKey])
   @@map("pharmacy_migration_rows")
 }
@@ -11667,8 +11704,8 @@ model PharmacyMigrationRow {
 model PharmacyMigrationException {
   id                String                             @id @default(cuid())
   organizationId    String                             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  branchId          String?
   batchId           String
-  branchId          String
   rowId             String?
   bucket            PharmacyMigrationExceptionBucket
   severity          PharmacyMigrationExceptionSeverity
@@ -11677,14 +11714,15 @@ model PharmacyMigrationException {
   signedOffByUserId String?
   signedOffAt       DateTime?
   signOffNote       String?
+  legacy            Boolean                            @default(false)
   createdAt         DateTime                           @default(now())
   updatedAt         DateTime                           @updatedAt
 
-  batch PharmacyMigrationBatch @relation(fields: [organizationId, branchId, batchId], references: [organizationId, branchId, id], onDelete: Restrict)
-  row   PharmacyMigrationRow?  @relation(fields: [organizationId, branchId, rowId], references: [organizationId, branchId, id], onDelete: Restrict)
+  batch PharmacyMigrationBatch @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
+  row   PharmacyMigrationRow?  @relation(fields: [organizationId, rowId], references: [organizationId, id], onDelete: Restrict)
 
-  @@index([organizationId, branchId, batchId, bucket])
-  @@index([organizationId, branchId, batchId, status, severity])
+  @@index([organizationId, branchId, batchId, bucket], map: "pharmacy_migration_exceptions_branch_bucket_idx")
+  @@index([organizationId, branchId, batchId, status, severity], map: "pharmacy_migration_exceptions_branch_status_idx")
   @@index([organizationId, rowId])
   @@map("pharmacy_migration_exceptions")
 }
