@@ -29,6 +29,11 @@ Use one status on every capability claim:
 | Release owners | [Living status ledger](status-ledger.md) | Evidence, blockers, owners, and next gates |
 | Documentation owners | [Documentation QA](qa.md) | Link, stale-reference, and consistency checks |
 
+## Agency guides
+
+- [Agency guide](product/agency-guide.md): plain-language guide for agency owners, managers and staff
+- [Agency glossary](product/agency-glossary.md)
+
 ## Module PRDs
 
 - [Kitchen Display System (KDS)](product/modules/kds.md) — station queue, ticket lifecycle, actions, permissions, and acceptance criteria
