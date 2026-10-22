@@ -158,14 +158,19 @@ export class PrintBridgeService {
 /** Atomically lease one queued job for a branch-bound bridge device. */
 export async function claimNextPrintJob(
   db: ScopedDb,
-  branchId: string,
+  bridgeId: string,
   now = new Date()
 ): Promise<ClaimedPrintJob | null> {
   const leaseBefore = new Date(now.getTime() - CLAIM_LEASE_MS);
+  const bridge = await db.restaurantRegisteredDevice.findUnique({
+    where: { id: bridgeId },
+    select: { branchId: true, kind: true },
+  });
+  if (!bridge || bridge.kind !== 'PRINT_BRIDGE') return null;
   const candidates = await db.restaurantPrintJob.findMany({
     where: {
-      branchId,
-      printerId: { not: null },
+      branchId: bridge.branchId,
+      printer: { bridgeId },
       status: { in: ['PENDING', 'OFFLINE'] },
       OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lte: leaseBefore } }],
     },
@@ -176,7 +181,8 @@ export async function claimNextPrintJob(
     const claimed = await db.restaurantPrintJob.updateMany({
       where: {
         id: candidate.id,
-        branchId,
+        branchId: bridge.branchId,
+        printer: { bridgeId },
         status: { in: ['PENDING', 'OFFLINE'] },
         OR: [{ lastAttemptAt: null }, { lastAttemptAt: { lte: leaseBefore } }],
       },
@@ -184,9 +190,15 @@ export async function claimNextPrintJob(
     });
     if (claimed.count !== 1 || !candidate.printerId) continue;
     const document = PrintDocumentSchema.parse(candidate.document);
+    const printer = await db.restaurantPrinter.findFirst({
+      where: { id: candidate.printerId, bridgeId },
+      select: { address: true },
+    });
+    if (!printer) continue;
     return {
       id: candidate.id,
       printerId: candidate.printerId,
+      address: printer.address,
       documentType: candidate.documentType,
       bytes: Buffer.from(renderEscPos(document)).toString('base64'),
     };
@@ -197,11 +209,17 @@ export async function claimNextPrintJob(
 /** Acknowledge a claimed job without allowing a bridge to cross its bound branch. */
 export async function acknowledgePrintJob(
   db: ScopedDb,
-  input: { branchId: string; jobId: string; status: 'PRINTED' | 'OFFLINE'; now?: Date }
+  input: {
+    bridgeId: string;
+    jobId: string;
+    status: 'PRINTED' | 'OFFLINE';
+    error?: string;
+    now?: Date;
+  }
 ): Promise<{ acknowledged: boolean; replayed: boolean }> {
   const current = await db.restaurantPrintJob.findFirst({
-    where: { id: input.jobId, branchId: input.branchId },
-    select: { status: true, document: true },
+    where: { id: input.jobId, printer: { bridgeId: input.bridgeId } },
+    select: { status: true, document: true, printerId: true },
   });
   if (!current) return { acknowledged: false, replayed: false };
   if (current.status === 'PRINTED') return { acknowledged: true, replayed: true };
@@ -219,5 +237,17 @@ export async function acknowledgePrintJob(
           }
         : { status: 'OFFLINE', lastAttemptAt: now },
   });
+  if (current.printerId)
+    await db.restaurantPrinter.update({
+      where: { id: current.printerId },
+      data: {
+        status: input.status === 'PRINTED' ? 'ONLINE' : 'OFFLINE',
+        lastSeenAt: now,
+        lastError:
+          input.status === 'OFFLINE'
+            ? (input.error?.slice(0, 500) ?? 'Printer unavailable.')
+            : null,
+      },
+    });
   return { acknowledged: true, replayed: false };
 }

@@ -79,7 +79,7 @@ function limitReached(label: string, limit: number): never {
 export type CommercialDeviceInput = {
   branchId: string;
   name: string;
-  kind?: 'POS' | 'KDS';
+  kind?: 'POS' | 'KDS' | 'PRINT_BRIDGE';
   stationId?: string | null;
 };
 

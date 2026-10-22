@@ -1,0 +1,5 @@
+Mac worktree: /Users/Saad/Developer/paperclip-worktrees/devfathom/WHA-1186-restaurant-kot-printing-end-to-end-for-kitchens-without-a-kds-auto-enqueue-on-send-real-print-bridge-runtime-re
+Branch: WHA-1186-restaurant-kot-printing-end-to-end-for-kitchens-without-a-kds-auto-enqueue-on-send-real-print-bridge-runtime-re
+HEAD: 54fae723affdefe14d53bdaa1c2cc24dfcc19678
+Mode: applied
+Excluded (secrets): 4

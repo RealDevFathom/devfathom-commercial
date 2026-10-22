@@ -137,6 +137,18 @@ beforeEach(() => {
 });
 
 describe('withDeviceAuth', () => {
+  it('authenticates a PRINT_BRIDGE heartbeat and records its check-in', async () => {
+    seedDevice({ kind: 'PRINT_BRIDGE' });
+    const heartbeat = withDeviceAuth((ctx) => {
+      expect(ctx.device.kind).toBe('PRINT_BRIDGE');
+      return new Response(null, { status: 204 });
+    });
+    const response = await heartbeat(req({ authorization: `Bearer ${deviceSecret}` }));
+
+    expect(response.status).toBe(204);
+    expect(h.store.devices[0].lastSeenAt).toBeInstanceOf(Date);
+  });
+
   it('rejects a missing or malformed device credential with 401', async () => {
     seedDevice();
     const handler = withDeviceAuth(() => new Response('ok'));
