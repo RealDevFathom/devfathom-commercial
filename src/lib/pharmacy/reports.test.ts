@@ -1,6 +1,7 @@
 import { describe, expect, it, vi } from 'vitest';
 import {
   PHARMACY_METRIC_CONTRACT,
+  PHARMACY_UNATTRIBUTABLE_METRICS,
   pharmacyReportCatalog,
   readPharmacyOwnerCommandCentre,
   validatePharmacyReportFilters,
@@ -257,5 +258,124 @@ describe('PH-RPT aggregate corrections', () => {
         to: '2026-01-01',
       })
     ).toThrow('Too many');
+  });
+});
+
+describe('#402 supplier, ingredient and batch filters', () => {
+  const dimensions = { supplierId: 'supplier_1', ingredientId: 'ingredient_1', batchId: 'batch_1' };
+
+  async function narrowedRead(extra: Partial<typeof dimensions> = dimensions) {
+    const queryRaw = vi.fn().mockResolvedValue([]);
+    const count = vi.fn().mockResolvedValue(0);
+    const result = await readPharmacyOwnerCommandCentre(
+      {
+        $queryRaw: queryRaw,
+        pharmacyRecallNotice: { count },
+        pharmacySupplierClaim: { count },
+        pharmacyReceivingException: { count },
+        branchRegulatoryProfile: { count },
+      } as never,
+      { branchIds: ['branch_1'], from: '2026-09-04', to: '2026-09-04', ...extra }
+    );
+    const queries = queryRaw.mock.calls.map(([query]) => {
+      const statement = query as { strings: readonly string[]; values: unknown[] };
+      return { sql: statement.strings.join('?'), values: statement.values };
+    });
+    return { result, queries, count };
+  }
+
+  it('documents for every metric how the three filters narrow it', () => {
+    for (const metric of PHARMACY_METRIC_CONTRACT) expect(metric.filters).toBeTruthy();
+    for (const key of PHARMACY_UNATTRIBUTABLE_METRICS) {
+      expect(PHARMACY_METRIC_CONTRACT.find((metric) => metric.key === key)?.filters).toMatch(
+        /^Not attributable/
+      );
+    }
+  });
+
+  it('lists a dimension filter only on reports whose metrics it can narrow', () => {
+    const unattributable = new Set<string>(PHARMACY_UNATTRIBUTABLE_METRICS);
+    for (const report of pharmacyReportCatalog()) {
+      const narrowable = report.metrics.some((metric) => !unattributable.has(metric));
+      for (const filter of ['supplier', 'ingredient', 'batch'] as const) {
+        expect({
+          report: report.key,
+          filter,
+          listed: report.filters.includes(filter as never),
+        }).toEqual({
+          report: report.key,
+          filter,
+          listed: narrowable,
+        });
+      }
+    }
+  });
+
+  it('binds every filter value into each traceable KPI query and runs no untraceable one', async () => {
+    const { result, queries, count } = await narrowedRead();
+    const traced = [
+      'FROM "pharmacy_sale_line_allocations" a',
+      'FROM "pharmacy_stock_signals" s',
+      'FROM "pharmacy_stock_balances" bal',
+      'FROM "pharmacy_recall_notices" r',
+      'FROM "pharmacy_supplier_claims" c',
+      'FROM "pharmacy_receiving_exceptions" x',
+      'FROM "pharmacy_pharmacist_review_items" i',
+    ];
+    for (const table of traced) {
+      const query = queries.find(({ sql }) => sql.includes(table));
+      expect(query, table).toBeDefined();
+      for (const value of Object.values(dimensions))
+        expect({ table, bound: query!.values.includes(value) }).toEqual({ table, bound: true });
+      expect(query!.sql, table).not.toContain('supplier_1');
+    }
+    for (const untraceable of [
+      'pharmacy_tenders',
+      'pharmacy_refunds',
+      'pharmacy_daily_closes',
+      'pharmacy_fiscal_documents',
+      'pharmacy_khata_events',
+    ])
+      expect(
+        queries.some(({ sql }) => sql.includes(untraceable)),
+        untraceable
+      ).toBe(false);
+    // Counts for recalls, claims and exceptions are narrowed in SQL, coverage is skipped.
+    expect(count).not.toHaveBeenCalled();
+    expect(result.filterCoverage).toEqual({
+      dimensions: ['supplier', 'ingredient', 'batch'],
+      unavailableMetrics: [...PHARMACY_UNATTRIBUTABLE_METRICS],
+    });
+    for (const key of PHARMACY_UNATTRIBUTABLE_METRICS) expect(result.metrics[key]).toBeNull();
+  });
+
+  it('apportions sales across lot allocations like the posting, and margin through the journal', async () => {
+    const { queries } = await narrowedRead({ batchId: 'batch_1' });
+    const money = queries[0]!.sql;
+    expect(money).toContain(
+      'ROW_NUMBER() OVER (PARTITION BY a."organizationId", a."saleLineId" ORDER BY a."id" DESC)'
+    );
+    expect(money).toContain('div(gross::numeric * units, "lineUnits")');
+    expect(money).toContain('div(discount::numeric * units, "lineUnits")');
+    expect(money).toContain('lot."manufacturingBatchId"=?');
+    expect(money).toContain('FROM "finance_journal_lines" line');
+    expect(money).not.toContain('pharmacy_tenders');
+  });
+
+  it('keeps an ingredient-only sales read at whole-line level', async () => {
+    const { queries } = await narrowedRead({ ingredientId: 'ingredient_1' });
+    const money = queries[0]!.sql;
+    expect(money).toContain('strength."ingredientId"=?');
+    expect(money).not.toContain('pharmacy_sale_line_allocations');
+    expect(queries[0]!.values).toContain('ingredient_1');
+  });
+
+  it('resolves a supplier through the lot’s latest posted goods receipt', async () => {
+    const { queries } = await narrowedRead({ supplierId: 'supplier_1' });
+    const stock = queries.find(({ sql }) => sql.includes('FROM "pharmacy_stock_balances" bal'))!;
+    expect(stock.sql).toContain(
+      `gr."status"='POSTED' ORDER BY gr."postedAt" DESC, gr."id" DESC LIMIT 1)=?`
+    );
+    expect(stock.values).toContain('supplier_1');
   });
 });

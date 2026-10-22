@@ -198,26 +198,39 @@ function scopeMatches(
 
 export async function readPharmacyAnomalySignals(db: ScopedDb, filters: PharmacyReportFilters) {
   const window = validatePharmacyReportFilters(filters);
-  const [rows, ingredientMedicines] = await Promise.all([
-    db.pharmacyAnomalySignal.findMany({
-      where: {
-        branchId: { in: filters.branchIds },
-        status: { in: [...LIVE_STATUSES] },
-        dataWindowStart: window.from,
-        dataWindowEnd: window.to,
-      },
-      orderBy: [{ status: 'asc' }, { severity: 'desc' }, { computedAt: 'desc' }],
-      take: 200,
-    }),
-    filters.ingredientId
-      ? db.medicineStrengthComponent.findMany({
-          where: { ingredientId: filters.ingredientId },
-          select: { medicineId: true },
-          take: 5_000,
-        })
-      : Promise.resolve([]),
-  ]);
+  const ingredientMedicines = filters.ingredientId
+    ? await db.medicineStrengthComponent.findMany({
+        where: { ingredientId: filters.ingredientId },
+        select: { medicineId: true },
+        take: 5_000,
+      })
+    : [];
   const medicineIds = new Set(ingredientMedicines.map((item) => item.medicineId));
+  // #402: the scope filters run in the query, so the 200-row cap cannot hide a match
+  // behind signals for other suppliers, ingredients or batches.
+  const rows = await db.pharmacyAnomalySignal.findMany({
+    where: {
+      branchId: { in: filters.branchIds },
+      status: { in: [...LIVE_STATUSES] },
+      dataWindowStart: window.from,
+      dataWindowEnd: window.to,
+      AND: [
+        ...(filters.supplierId
+          ? [{ scope: { path: ['supplierId'], equals: filters.supplierId } }]
+          : []),
+        ...(filters.batchId ? [{ scope: { path: ['batchId'], equals: filters.batchId } }] : []),
+        ...(filters.ingredientId
+          ? [
+              {
+                OR: [...medicineIds].map((id) => ({ scope: { path: ['medicineId'], equals: id } })),
+              },
+            ]
+          : []),
+      ],
+    },
+    orderBy: [{ status: 'asc' }, { severity: 'desc' }, { computedAt: 'desc' }],
+    take: 200,
+  });
   return rows.filter((row) => scopeMatches(row.scope, filters, medicineIds));
 }
 

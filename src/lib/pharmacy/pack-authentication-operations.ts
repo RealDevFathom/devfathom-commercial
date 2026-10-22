@@ -1,10 +1,17 @@
 import 'server-only';
 
 import { TRPCError } from '@trpc/server';
+import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { normalizeMedicineText } from './medicine';
 import { parseGs1DataMatrix } from './gs1-datamatrix';
 import { evaluatePackAuthentication } from './pack-authentication';
+import {
+  activeReportDimensions,
+  andMedicineHasIngredient,
+  lotFromSupplier,
+  type PharmacyReportDimensions,
+} from './report-dimensions';
 
 type AuthenticationSource = 'RECEIVING' | 'DISPENSING';
 
@@ -148,11 +155,38 @@ export async function acknowledgePackAuthenticationFlag(
   });
 }
 
-export async function readPackAuthenticationFlags(db: ScopedDb, branchIds: string[]) {
+/**
+ * #402: `dimensions` narrows the flags before the 200-row cap: an ingredient through the
+ * scan's resolved medicine, a batch through its resolved manufacturing batch, and a
+ * supplier when a lot of that batch at the scan's branch came from the supplier. A scan
+ * whose medicine or batch could not be resolved matches none of those filters.
+ */
+export async function readPackAuthenticationFlags(
+  db: ScopedDb,
+  branchIds: string[],
+  dimensions: PharmacyReportDimensions = {}
+) {
   if (!branchIds.length) return [];
-  return db.pharmacyPackAuthenticationScan.findMany({
-    where: { branchId: { in: branchIds }, status: { not: 'VERIFIED' } },
-    orderBy: { createdAt: 'desc' },
-    take: 200,
+  if (!activeReportDimensions(dimensions).length)
+    return db.pharmacyPackAuthenticationScan.findMany({
+      where: { branchId: { in: branchIds }, status: { not: 'VERIFIED' } },
+      orderBy: { createdAt: 'desc' },
+      take: 200,
+    });
+  const matched = await db.$queryRaw<Array<{ id: string }>>(
+    Prisma.sql`SELECT s."id" FROM "pharmacy_pack_authentication_scans" s WHERE s."branchId" IN (${Prisma.join(branchIds)}) AND s."status"<>'VERIFIED'${andMedicineHasIngredient(
+      dimensions,
+      { id: Prisma.sql`s."medicineId"`, organizationId: Prisma.sql`s."organizationId"` }
+    )}${dimensions.batchId ? Prisma.sql` AND s."manufacturingBatchId"=${dimensions.batchId}` : Prisma.empty}${
+      dimensions.supplierId
+        ? Prisma.sql` AND EXISTS (SELECT 1 FROM "pharmacy_inventory_lots" lot WHERE lot."organizationId"=s."organizationId" AND lot."branchId"=s."branchId" AND lot."manufacturingBatchId"=s."manufacturingBatchId" AND ${lotFromSupplier(dimensions.supplierId)})`
+        : Prisma.empty
+    } ORDER BY s."createdAt" DESC, s."id" DESC LIMIT 200`
+  );
+  if (!matched.length) return [];
+  const order = new Map(matched.map((row, index) => [row.id, index]));
+  const rows = await db.pharmacyPackAuthenticationScan.findMany({
+    where: { id: { in: matched.map((row) => row.id) }, branchId: { in: branchIds } },
   });
+  return rows.sort((a, b) => order.get(a.id)! - order.get(b.id)!);
 }

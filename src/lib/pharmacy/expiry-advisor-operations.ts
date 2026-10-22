@@ -2,6 +2,7 @@ import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
 import { adviseExpiryLots, type ExpiryLotFact } from './expiry-advisor';
+import { andMedicineHasIngredient, type PharmacyReportDimensions } from './report-dimensions';
 import { createPurchaseReturn } from './supplier-returns-operations';
 
 type AdvisorRow = Omit<ExpiryLotFact, 'onHandUnits' | 'soldUnits' | 'historyDays'> & {
@@ -10,12 +11,26 @@ type AdvisorRow = Omit<ExpiryLotFact, 'onHandUnits' | 'soldUnits' | 'historyDays
   historyDays: number;
 };
 
+/**
+ * #402: `dimensions` narrows the advice to a supplier (the supplier this query already
+ * resolves for each lot from its latest posted receipt), an ingredient (the batch's
+ * medicine) or a manufacturing batch.
+ */
 export async function readExpiryAdvice(
   db: ScopedDb,
   branchIds: readonly string[],
-  at = new Date()
+  at = new Date(),
+  dimensions: PharmacyReportDimensions = {}
 ) {
   if (!branchIds.length) return [];
+  const narrowing = Prisma.sql`${andMedicineHasIngredient(dimensions, {
+    id: Prisma.sql`batch."medicineId"`,
+    organizationId: Prisma.sql`batch."organizationId"`,
+  })}${dimensions.batchId ? Prisma.sql` AND batch."id"=${dimensions.batchId}` : Prisma.empty}${
+    dimensions.supplierId
+      ? Prisma.sql` AND source."supplierId"=${dimensions.supplierId}`
+      : Prisma.empty
+  }`;
   const rows = await db.$queryRaw<AdvisorRow[]>(Prisma.sql`
     WITH branch_history AS (
       SELECT s."branchId", LEAST(30, GREATEST(1, (${at}::date-min(s."businessDate")::date)+1))::int AS "historyDays"
@@ -47,7 +62,7 @@ export async function readExpiryAdvice(
       WHERE line."inventoryLotId" IS NOT NULL AND gr."status"='POSTED'
       ORDER BY line."inventoryLotId", gr."postedAt" DESC
     )
-    SELECT lot."id" AS "lotId", lot."branchId", medicine."name" AS "medicineName",
+    SELECT lot."id" AS "lotId", lot."branchId", medicine."productName" AS "medicineName",
       batch."batchNumber", source."supplierId", lot."supplierName", available."stockLocationId",
       available."onHandUnits", lot."unitCostMinor", batch."expiresAt",
       COALESCE(sold."soldUnits",0)::int AS "soldUnits", COALESCE(branch_history."historyDays",0)::int AS "historyDays",
@@ -55,13 +70,13 @@ export async function readExpiryAdvice(
     FROM available
     JOIN "pharmacy_inventory_lots" lot ON lot."organizationId"=available."organizationId" AND lot."branchId"=available."branchId" AND lot."id"=available."inventoryLotId"
     JOIN "pharmacy_manufacturing_batches" batch ON batch."organizationId"=lot."organizationId" AND batch."id"=lot."manufacturingBatchId"
-    JOIN "medicines" medicine ON medicine."organizationId"=batch."organizationId" AND medicine."id"=batch."medicineId"
+    JOIN "pharmacy_medicines" medicine ON medicine."organizationId"=batch."organizationId" AND medicine."id"=batch."medicineId"
     LEFT JOIN sold ON sold."inventoryLotId"=lot."id"
     LEFT JOIN branch_history ON branch_history."branchId"=lot."branchId"
     LEFT JOIN source ON source."inventoryLotId"=lot."id"
     LEFT JOIN "pharmacy_supplier_relationships" relationship ON relationship."organizationId"=lot."organizationId"
       AND relationship."branchId"=lot."branchId" AND relationship."supplierId"=source."supplierId" AND relationship."active"=true
-    WHERE lot."branchId" IN (${Prisma.join(branchIds)}) AND batch."expiresAt">${at}
+    WHERE lot."branchId" IN (${Prisma.join(branchIds)}) AND batch."expiresAt">${at}${narrowing}
   `);
   return adviseExpiryLots(rows, at);
 }

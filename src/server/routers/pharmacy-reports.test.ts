@@ -17,6 +17,7 @@ const mocks = vi.hoisted(() => ({
   creditsRead: vi.fn(),
   refresh: vi.fn(),
   createDraft: vi.fn(),
+  packRead: vi.fn(),
 }));
 
 vi.mock('@/lib/pharmacy/stock-signals-operations', () => ({
@@ -34,6 +35,10 @@ vi.mock('@/lib/pharmacy/anomaly-signals-operations', () => ({
 vi.mock('@/lib/pharmacy/expiry-advisor-operations', () => ({
   readExpiryAdvice: mocks.expiryRead,
   proposeExpiryReturn: mocks.createDraft,
+}));
+vi.mock('@/lib/pharmacy/pack-authentication-operations', () => ({
+  readPackAuthenticationFlags: mocks.packRead,
+  acknowledgePackAuthenticationFlag: vi.fn(),
 }));
 vi.mock('@/lib/pharmacy/purchasing-console', () => ({
   listPurchaseReturns: mocks.returnsRead,
@@ -395,5 +400,49 @@ describe('repeat purchasing authorization', () => {
       caller().repeatPurchasing({ ...input, supplierId: 'supplier' } as typeof input)
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(mocks.repeatRead).not.toHaveBeenCalled();
+  });
+});
+
+describe('#402 report lists honour supplier, ingredient and batch filters', () => {
+  const input = {
+    from: '2026-09-01',
+    to: '2026-09-04',
+    supplierId: 'supplier_1',
+    ingredientId: 'ingredient_1',
+    batchId: 'batch_1',
+  };
+  beforeEach(() => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(hasModule).mockReturnValue(true);
+    mocks.branchFindMany.mockResolvedValue([{ id: 'branch_1', name: 'Main' }]);
+    mocks.expiryRead.mockResolvedValue([]);
+    mocks.packRead.mockResolvedValue([]);
+    mocks.anomalyRead.mockResolvedValue([]);
+  });
+
+  it('passes the three filters to the expiry advice, pack flag and anomaly readers', async () => {
+    const dimensions = {
+      supplierId: 'supplier_1',
+      ingredientId: 'ingredient_1',
+      batchId: 'batch_1',
+    };
+    await caller().expiryAdvice(input);
+    await caller().packAuthenticationFlags(input);
+    await caller().anomalySignals(input);
+    expect(mocks.expiryRead).toHaveBeenCalledWith(
+      expect.anything(),
+      ['branch_1'],
+      undefined,
+      expect.objectContaining(dimensions)
+    );
+    expect(mocks.packRead).toHaveBeenCalledWith(
+      expect.anything(),
+      ['branch_1'],
+      expect.objectContaining(dimensions)
+    );
+    expect(mocks.anomalyRead).toHaveBeenCalledWith(
+      expect.anything(),
+      expect.objectContaining({ ...dimensions, branchIds: ['branch_1'] })
+    );
   });
 });

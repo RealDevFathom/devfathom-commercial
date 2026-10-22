@@ -479,7 +479,8 @@ export const pharmacyReportsRouter = router({
   }),
   expiryAdvice: reports.input(filters).query(async ({ ctx, input }) => {
     const bounded = await ownerFilters(ctx, input);
-    return readExpiryAdvice(ctx.db, bounded.branchIds);
+    // #402: the advice list honours the supplier, ingredient and batch filters too.
+    return readExpiryAdvice(ctx.db, bounded.branchIds, undefined, bounded);
   }),
   proposeExpiryReturn: reports
     .input(
@@ -505,7 +506,7 @@ export const pharmacyReportsRouter = router({
     }),
   packAuthenticationFlags: reports.input(filters).query(async ({ ctx, input }) => {
     const resolved = await ownerFilters(ctx, input);
-    return readPackAuthenticationFlags(ctx.db, resolved.branchIds);
+    return readPackAuthenticationFlags(ctx.db, resolved.branchIds, resolved);
   }),
   acknowledgePackAuthenticationFlag: reports
     .input(anomalyDecision)

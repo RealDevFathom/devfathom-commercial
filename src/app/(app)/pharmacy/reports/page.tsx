@@ -277,17 +277,28 @@ export default async function PharmacyReportsPage({
     redirect(`/pharmacy/reports?${copy.toString()}`);
   }
   const metrics = result?.metrics;
-  const cards = metrics
+  // #402: metrics the supplier, ingredient or batch filter cannot narrow read '—' and say so.
+  const unavailable = new Set<string>(result?.filterCoverage.unavailableMetrics ?? []);
+  const dimensions = result?.filterCoverage.dimensions ?? [];
+  const dimensionLabel = dimensions.length
+    ? `${dimensions.join(', ')} ${dimensions.length > 1 ? 'filters' : 'filter'}`
+    : null;
+  const cardScope = [
+    branch ? 'Selected branch' : 'All available branches',
+    ...(dimensionLabel ? [dimensionLabel] : []),
+    'ledger source',
+  ].join(' · ');
+  const cards: Array<[key: string, label: string, figure: string | number]> = metrics
     ? [
-        ['Sales', money(metrics.salesMinor)],
-        ['Gross margin', money(metrics.marginMinor)],
-        ['Cash', money(metrics.cashMinor)],
-        ['Cash variance', money(metrics.cashVarianceMinor)],
-        ['Refunds', money(metrics.refundsMinor)],
-        ['Open stock signals', metrics.openStockSignals],
-        ['Recommended orders', metrics.recommendedOrders],
-        ['Expiry ≤30d', money(metrics.expiryValueMinor30)],
-        ['Expiry ≤90d', money(metrics.expiryValueMinor90)],
+        ['salesMinor', 'Sales', money(metrics.salesMinor)],
+        ['marginMinor', 'Gross margin', money(metrics.marginMinor)],
+        ['cashMinor', 'Cash', money(metrics.cashMinor)],
+        ['cashVarianceMinor', 'Cash variance', money(metrics.cashVarianceMinor)],
+        ['refundsMinor', 'Refunds', money(metrics.refundsMinor)],
+        ['openStockSignals', 'Open stock signals', metrics.openStockSignals],
+        ['recommendedOrders', 'Recommended orders', metrics.recommendedOrders],
+        ['expiryValueMinor30', 'Expiry ≤30d', money(metrics.expiryValueMinor30)],
+        ['expiryValueMinor90', 'Expiry ≤90d', money(metrics.expiryValueMinor90)],
       ]
     : [];
   return (
@@ -450,21 +461,25 @@ export default async function PharmacyReportsPage({
               on UTC posting dates (start inclusive, next-day end exclusive). It may differ from
               sales grouped by business date. Missing journal evidence is unavailable; posted totals
               do not establish complete source or cost coverage. Supplier, ingredient and batch
-              filters do not apply to these KPI totals, the daily work pack or observed demand.
-              Those panels use branch/date scope only; current snapshots use branch scope only.
+              filters narrow every figure that can be traced to stock: a lot&apos;s supplier is the
+              supplier on its latest posted goods receipt, an ingredient matches through the
+              medicine&apos;s strength components, and a batch is the manufacturing batch. Cash,
+              cash variance and refunds cannot be traced to a supplier, ingredient or batch, so they
+              show — while one of those filters is set. Current snapshots ignore the dates. The
+              marketing summary, observed demand and daily work pack above use branch and date only.
             </p>
             <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-4">
-              {cards.map(([label, figure]) => (
+              {cards.map(([key, label, figure]) => (
                 <Stat
-                  key={label}
+                  key={key}
                   label={label}
                   value={figure}
                   className="min-w-0"
                   valueClassName="break-words"
                   sub={
-                    branch
-                      ? 'Selected branch · ledger source'
-                      : 'All available branches · ledger source'
+                    unavailable.has(key)
+                      ? 'Not traceable to a supplier, ingredient or batch'
+                      : cardScope
                   }
                 />
               ))}
@@ -473,13 +488,17 @@ export default async function PharmacyReportsPage({
               <Stat
                 label="Organization-wide safety queue"
                 value={metrics?.safetyQueue ?? '—'}
-                sub="Current snapshot · organization-wide"
+                sub={
+                  dimensionLabel
+                    ? `Current snapshot · organization-wide · ${dimensionLabel}`
+                    : 'Current snapshot · organization-wide'
+                }
               />
               <p className="mt-2 text-sm text-text-muted">
-                The selected branch does not apply to this queue. Date, supplier, ingredient and
-                batch filters do not apply either. Unsigned pharmacist review items plus open
-                controlled-register incidents, from pharmacist review and controlled-register
-                records at read time.
+                The selected branch and dates do not apply to this queue. Supplier, ingredient and
+                batch filters do: a review item through its sale line, an incident through its
+                register entry. Unsigned pharmacist review items plus open controlled-register
+                incidents, from pharmacist review and controlled-register records at read time.
               </p>
             </div>
           </SectionCard>
@@ -835,7 +854,7 @@ export default async function PharmacyReportsPage({
                 </ol>
               ) : (
                 <p className="mt-5 text-sm text-text-muted">
-                  No pack authentication flags match these branches.
+                  No pack authentication flags match these filters.
                 </p>
               )}
             </SectionCard>
@@ -884,6 +903,10 @@ export default async function PharmacyReportsPage({
                             <div>
                               <dt className="inline font-semibold">Permission: </dt>
                               <dd className="inline">{contract.permission}</dd>
+                            </div>
+                            <div>
+                              <dt className="inline font-semibold">Filters: </dt>
+                              <dd className="inline">{contract.filters}</dd>
                             </div>
                           </dl>
                           {contract.drillThrough ? (

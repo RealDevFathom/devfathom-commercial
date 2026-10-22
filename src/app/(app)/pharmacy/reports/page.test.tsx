@@ -1,20 +1,45 @@
 import { render, screen, within } from '@testing-library/react';
 import { describe, expect, it, vi } from 'vitest';
 
-const commandCentre = vi.fn(async () => ({
-  freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
-  metrics: {
-    salesMinor: 10000,
-    marginMinor: 2500,
-    cashMinor: 6000,
-    cashVarianceMinor: 0,
-    refundsMinor: 0,
-    openStockSignals: 1,
-    recommendedOrders: 1,
-    expiryValueMinor30: 0,
-    expiryValueMinor90: 0,
-  },
-}));
+// Mirrors the router: a supplier, ingredient or batch filter nulls the untraceable metrics.
+const commandCentre = vi.fn(
+  async (input: { supplierId?: string; ingredientId?: string; batchId?: string }) => {
+    const dimensions = [
+      ...(input.supplierId ? ['supplier'] : []),
+      ...(input.ingredientId ? ['ingredient'] : []),
+      ...(input.batchId ? ['batch'] : []),
+    ];
+    const narrowed = dimensions.length > 0;
+    return {
+      freshness: { status: 'CURRENT', asOf: '2026-09-04T10:00:00Z', source: 'ledger' },
+      filterCoverage: {
+        dimensions,
+        unavailableMetrics: narrowed
+          ? [
+              'cashMinor',
+              'cashVarianceMinor',
+              'refundsMinor',
+              'pharmacistCoverage',
+              'khataAgingMinor',
+              'agingFiscalDocuments',
+              'rejectedFiscalDocuments',
+            ]
+          : [],
+      },
+      metrics: {
+        salesMinor: 10000,
+        marginMinor: 2500,
+        cashMinor: narrowed ? null : 6000,
+        cashVarianceMinor: narrowed ? null : 0,
+        refundsMinor: narrowed ? null : 0,
+        openStockSignals: 1,
+        recommendedOrders: 1,
+        expiryValueMinor30: 0,
+        expiryValueMinor90: 0,
+      },
+    };
+  }
+);
 vi.mock('@/server/trpc', () => ({
   createTRPCContext: vi.fn(async () => ({
     organization: { id: 'org-a', currency: 'PKR' },
@@ -124,6 +149,7 @@ vi.mock('@/server/routers/pharmacy-reports', () => ({
             scope: 'selected branches',
             permission: 'reports:financial',
             drillThrough: '/pharmacy/reports?section=sales',
+            filters: 'Ingredient: sale lines whose medicine contains it.',
           },
         ],
       }),
@@ -152,6 +178,20 @@ describe('pharmacy report catalog filters', () => {
     expect(screen.getByLabelText('Batch ID')).toHaveValue('lot1');
     expect(commandCentre).toHaveBeenCalledWith(
       expect.objectContaining({ supplierId: 'sup1', ingredientId: 'ing1', batchId: 'lot1' })
+    );
+    // #402: traceable KPIs say which filters narrowed them; untraceable ones read — and say why.
+    const card = (label: string) => screen.getByText(label).closest('[data-slot="stat"]')!;
+    expect(card('Sales')).toHaveTextContent('supplier, ingredient, batch filters');
+    for (const label of ['Cash', 'Cash variance', 'Refunds']) {
+      expect(card(label)).toHaveTextContent('—');
+      expect(card(label)).toHaveTextContent('Not traceable to a supplier, ingredient or batch');
+    }
+    expect(screen.queryByText(/filters do not apply to these KPI totals/)).toBeNull();
+    expect(
+      screen.getByText(/filters narrow every figure that can be traced to stock/)
+    ).toBeVisible();
+    expect(screen.getByText('Filters:').parentElement).toHaveTextContent(
+      'Ingredient: sale lines whose medicine contains it.'
     );
     expect(screen.getByText('Source:').parentElement).toHaveTextContent('pharmacy_sales');
     expect(screen.getByRole('heading', { name: 'Daily owner digest' })).toBeVisible();

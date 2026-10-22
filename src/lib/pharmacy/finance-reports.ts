@@ -20,22 +20,41 @@
 import { Prisma } from '@/generated/prisma/client';
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 
+import {
+  andLotMatches,
+  andMedicineHasIngredient,
+  type PharmacyReportDimensions,
+} from './report-dimensions';
+
 export type ReportScope = {
   organizationId: string;
   /** Omit to report across every branch in the organization. */
   branchId?: string;
 };
 
-type JournalReportScope = Omit<ReportScope, 'organizationId'> & {
-  organizationId: string | Prisma.Sql;
-  branchIds?: string[];
-};
+type JournalReportScope = Omit<ReportScope, 'organizationId'> &
+  PharmacyReportDimensions & {
+    organizationId: string | Prisma.Sql;
+    branchIds?: string[];
+  };
 
 function branchFilter(scope: JournalReportScope) {
   if (scope.branchIds) return Prisma.sql`AND line."branchId" IN (${Prisma.join(scope.branchIds)})`;
   return scope.branchId
     ? Prisma.sql`AND line."branchId" = ${scope.branchId}`
     : Prisma.sql`AND TRUE`;
+}
+
+/**
+ * #402: a journal leg belongs to an ingredient through its product, and to a batch or a
+ * supplier through its lot (every sale and return leg carries one); a leg without a lot
+ * cannot be attributed to either and is left out while that filter is set.
+ */
+function dimensionFilter(scope: JournalReportScope) {
+  return Prisma.sql`${andMedicineHasIngredient(scope, {
+    id: Prisma.sql`line."productId"`,
+    organizationId: Prisma.sql`line."organizationId"`,
+  })}${andLotMatches(scope)}`;
 }
 
 export type ValuationRow = {
@@ -145,7 +164,7 @@ export function grossMarginQuery(
          AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
          AND entry."occurredAt" >= ${input.from}
          AND entry."occurredAt" < ${input.to}
-         ${branchFilter(scope)}
+         ${branchFilter(scope)}${dimensionFilter(scope)}
     )
     SELECT "key",
            -- Revenue is a credit account: a credit increases it, so its signed
