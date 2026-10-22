@@ -608,6 +608,24 @@ describe('PharmacyCounterConsole durable tender recovery', () => {
     });
   });
 
+  it('preserves unrelated parameters and removes the bill id when the counter is idle', async () => {
+    window.history.replaceState(null, '', '/pharmacy/counter?lane=2&orderSaleId=old-sale');
+
+    render(<PharmacyCounterConsole initialBranchId="branch-a" />);
+
+    await waitFor(() => {
+      expect(window.location.search).toBe('?lane=2&branchId=branch-a');
+    });
+  });
+
+  it('does not persist an untrusted branch and sale pair before branch authorization', () => {
+    window.history.replaceState(null, '', '/pharmacy/counter?lane=2');
+
+    render(<PharmacyCounterConsole initialBranchId="branch-denied" initialSaleId="sale-denied" />);
+
+    expect(window.location.search).toBe('?lane=2');
+  });
+
   it('persists and reads back before dispatching money', async () => {
     mocks.mutations.tender!.mockImplementation(async (input) => {
       expect(readTenderAttempt(scope)).toEqual({
