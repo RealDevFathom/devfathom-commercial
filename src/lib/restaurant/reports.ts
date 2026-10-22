@@ -448,7 +448,7 @@ type CostAggregate = {
 export type FoodCostExclusionReason =
   'NO_RECIPE' | 'RECIPE_UNAVAILABLE' | 'NO_PORTION_COST' | 'MISSING_INGREDIENT_COST';
 
-async function readProductSalesRows(db: ScopedDb, range: RestaurantReportRange, limit: number) {
+async function readProductSalesRows(db: ScopedDb, range: RestaurantReportRange) {
   const parsed = validateRestaurantReportRange(range);
   const rows = await db.$queryRaw<ProductSalesRow[]>(Prisma.sql`
     WITH bill_lines AS (
@@ -501,9 +501,8 @@ async function readProductSalesRows(db: ScopedDb, range: RestaurantReportRange, 
       item."variantId", category."id", category."name"
     ORDER BY product."name" ASC, item."productId" ASC, allocated."branchId" ASC,
       item."variantId" ASC NULLS FIRST
-    LIMIT ${limit + 1}
   `);
-  return { rows: rows.slice(0, limit), truncated: rows.length > limit };
+  return rows;
 }
 
 function accumulateCost(
@@ -549,15 +548,11 @@ function serializeCostAggregate(row: CostAggregate) {
  * reconcile to the bill ledger; current recipe costs remain explicitly
  * theoretical and never overwrite historical financial facts.
  */
-export async function readFoodCostReport(
-  db: ScopedDb,
-  range: RestaurantReportRange,
-  limit = MAX_INTERACTIVE_ROWS
-) {
-  const sales = await readProductSalesRows(db, range, limit);
-  const recipes = sales.rows.length
+async function buildFoodCostReport(db: ScopedDb, range: RestaurantReportRange) {
+  const salesRows = await readProductSalesRows(db, range);
+  const recipes = salesRows.length
     ? await db.restaurantRecipe.findMany({
-        where: { productId: { in: [...new Set(sales.rows.map((row) => row.productId))] } },
+        where: { productId: { in: [...new Set(salesRows.map((row) => row.productId))] } },
         orderBy: [{ createdAt: 'asc' }, { id: 'asc' }],
         select: { id: true, organizationId: true, productId: true, variantId: true },
       })
@@ -593,7 +588,7 @@ export async function readFoodCostReport(
   let costedNetSales = ZERO;
   let theoreticalCost = ZERO;
 
-  for (const row of sales.rows) {
+  for (const row of salesRows) {
     const quantity = new Prisma.Decimal(row.quantity.toString());
     netSales = netSales.plus(row.netSales);
     const linked = recipesByProduct.get(row.productId) ?? [];
@@ -708,15 +703,13 @@ export async function readFoodCostReport(
       foodCostPercent: shareOfTotal(theoreticalCost, costedNetSales),
       grossMargin: serializeDecimal(grossMargin),
     },
-    products: productRows.slice(0, limit),
+    products: productRows,
     categories: [...categories.values()]
       .map(serializeCostAggregate)
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .slice(0, limit),
+      .sort((left, right) => left.name.localeCompare(right.name)),
     branches: [...branches.values()]
       .map(serializeCostAggregate)
-      .sort((left, right) => left.name.localeCompare(right.name))
-      .slice(0, limit),
+      .sort((left, right) => left.name.localeCompare(right.name)),
     uncostedProducts: [...exclusions.values()]
       .map((row) => ({
         productId: row.productId,
@@ -728,14 +721,27 @@ export async function readFoodCostReport(
         reason: row.reason,
         missingIngredientCount: row.missingIngredientCount,
       }))
-      .sort((left, right) => left.productName.localeCompare(right.productName))
-      .slice(0, limit),
+      .sort((left, right) => left.productName.localeCompare(right.productName)),
+  };
+}
+
+export async function readFoodCostReport(
+  db: ScopedDb,
+  range: RestaurantReportRange,
+  limit = MAX_INTERACTIVE_ROWS
+) {
+  const report = await buildFoodCostReport(db, range);
+  return {
+    ...report,
+    products: report.products.slice(0, limit),
+    categories: report.categories.slice(0, limit),
+    branches: report.branches.slice(0, limit),
+    uncostedProducts: report.uncostedProducts.slice(0, limit),
     truncated:
-      sales.truncated ||
-      products.size > limit ||
-      categories.size > limit ||
-      branches.size > limit ||
-      exclusions.size > limit,
+      report.products.length > limit ||
+      report.categories.length > limit ||
+      report.branches.length > limit ||
+      report.uncostedProducts.length > limit,
   };
 }
 
@@ -757,7 +763,7 @@ export async function readDishProfitabilityReport(
   range: RestaurantReportRange,
   limit = MAX_INTERACTIVE_ROWS
 ) {
-  const foodCost = await readFoodCostReport(db, range, limit);
+  const foodCost = await buildFoodCostReport(db, range);
   const medianVolume = decimalMedian(foodCost.products.map((row) => row.quantity));
   const medianMargin = decimalMedian(foodCost.products.map((row) => row.marginPerItem));
   const menuEngineering = foodCost.products.map((row) => {
@@ -774,6 +780,10 @@ export async function readDishProfitabilityReport(
   });
   return {
     ...foodCost,
+    products: foodCost.products.slice(0, limit),
+    categories: foodCost.categories.slice(0, limit),
+    branches: foodCost.branches.slice(0, limit),
+    uncostedProducts: foodCost.uncostedProducts.slice(0, limit),
     thresholds: {
       medianVolume: medianVolume.toString(),
       medianMargin: serializeDecimal(medianMargin),
@@ -782,18 +792,23 @@ export async function readDishProfitabilityReport(
       (left, right) =>
         new Prisma.Decimal(right.marginPerItem).comparedTo(left.marginPerItem) ||
         left.productName.localeCompare(right.productName)
-    ),
+    ).slice(0, limit),
     byVolume: [...menuEngineering].sort(
       (left, right) =>
         new Prisma.Decimal(right.quantity).comparedTo(left.quantity) ||
         new Prisma.Decimal(right.marginPerItem).comparedTo(left.marginPerItem) ||
         left.productName.localeCompare(right.productName)
-    ),
-    menuEngineering,
+    ).slice(0, limit),
+    menuEngineering: menuEngineering.slice(0, limit),
     quadrantCounts: menuEngineering.reduce<Record<MenuEngineeringQuadrant, number>>(
       (counts, row) => ({ ...counts, [row.quadrant]: counts[row.quadrant] + 1 }),
       { STAR: 0, PLOWHORSE: 0, PUZZLE: 0, DOG: 0 }
     ),
+    truncated:
+      foodCost.products.length > limit ||
+      foodCost.categories.length > limit ||
+      foodCost.branches.length > limit ||
+      foodCost.uncostedProducts.length > limit,
   };
 }
 
