@@ -1,6 +1,11 @@
 import { describe, expect, it } from 'vitest';
 
-import { cancelMyCustomerOrder, isCustomerOrderableMedicine } from './customer-ordering';
+import {
+  cancelMyCustomerOrder,
+  isCustomerOrderableMedicine,
+  isCustomerOrderReleaseEligible,
+  isCustomerOrderReservationDeadlineEnforced,
+} from './customer-ordering';
 
 const otc = {
   saleable: true,
@@ -25,6 +30,16 @@ describe('MKT-03 customer-order catalogue eligibility', () => {
 });
 
 describe('MKT-03/MKT-05 reservation lifecycle', () => {
+  it('keeps a ready collection order recoverable after its proposal deadline', () => {
+    expect(isCustomerOrderReleaseEligible('READY_FOR_COLLECTION')).toBe(true);
+    expect(isCustomerOrderReservationDeadlineEnforced('READY_FOR_COLLECTION')).toBe(false);
+  });
+
+  it('allows checkout after delivery handoff without making dispatched stock releasable', () => {
+    expect(isCustomerOrderReleaseEligible('OUT_FOR_DELIVERY')).toBe(false);
+    expect(isCustomerOrderReservationDeadlineEnforced('OUT_FOR_DELIVERY')).toBe(false);
+  });
+
   it('releases the linked DEM-03 reservation and audits customer cancellation', async () => {
     const calls: Array<[string, unknown]> = [];
     const db = {

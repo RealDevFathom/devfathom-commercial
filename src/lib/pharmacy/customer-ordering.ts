@@ -70,7 +70,20 @@ type ReservationCandidate = {
   printedMrpMinor: number;
 };
 
-const ACTIVE_ORDER_STATUSES: CustomerOrderStatus[] = ['PROPOSED', 'ACCEPTED', 'PACKING'];
+const RELEASABLE_ORDER_STATUSES: CustomerOrderStatus[] = [
+  'PROPOSED',
+  'ACCEPTED',
+  'PACKING',
+  'READY_FOR_COLLECTION',
+];
+
+export function isCustomerOrderReleaseEligible(status: CustomerOrderStatus) {
+  return RELEASABLE_ORDER_STATUSES.includes(status);
+}
+
+export function isCustomerOrderReservationDeadlineEnforced(status: CustomerOrderStatus) {
+  return !['READY_FOR_COLLECTION', 'OUT_FOR_DELIVERY'].includes(status);
+}
 
 export function isCustomerOrderableMedicine(medicine: {
   saleable: boolean;
@@ -712,7 +725,7 @@ export async function transitionCustomerOrder(
   if (!order) throw new PharmacyCustomerOrderError('ORDER_NOT_FOUND');
   if (input.action === 'cancel' || input.action === 'expire') {
     if (
-      !ACTIVE_ORDER_STATUSES.includes(order.status as CustomerOrderStatus) ||
+      !isCustomerOrderReleaseEligible(order.status as CustomerOrderStatus) ||
       order.counterSaleId ||
       (input.action === 'expire' && order.reservationExpiresAt.getTime() > Date.now())
     ) {
@@ -799,7 +812,10 @@ export async function startCustomerOrderCheckout(
     throw new PharmacyCustomerOrderError('INVALID_STATE');
   if (order.counterSaleId) return { saleId: order.counterSaleId, replayed: true };
   const reservations = await revalidateOrderReservations(db, scope, order.id);
-  if (order.reservationExpiresAt.getTime() <= Date.now()) {
+  if (
+    isCustomerOrderReservationDeadlineEnforced(order.status as CustomerOrderStatus) &&
+    order.reservationExpiresAt.getTime() <= Date.now()
+  ) {
     throw new PharmacyCustomerOrderError('RESERVATION_UNAVAILABLE');
   }
   await releaseOrderReservations(db, scope, order.id);
@@ -823,7 +839,9 @@ export async function startCustomerOrderCheckout(
         idempotencyKey: `customer-order:${order.id}:${line.id}`,
       },
       {
-        expiresAt: order.reservationExpiresAt,
+        // Handoff confirms that this stock remains committed to the order; the
+        // proposal deadline no longer invalidates checkout after that point.
+        expiresAt: null,
         allocations: reservations
           .filter((row) => row.orderLineId === line.id)
           .map((row) => ({
