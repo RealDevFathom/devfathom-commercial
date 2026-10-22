@@ -62,7 +62,12 @@ const CLINICAL = /\b(?:diagnos|treat|cure|dose|dosage|take|stop taking|side effe
 
 /** Defence in depth: model output cannot contain dosage or clinical advice. */
 export function safeReminderText(text: string): string {
-  const cleaned = text.replace(DOSAGE, '').replace(CLINICAL, '').replace(/\s{2,}/g, ' ').trim();
+  const cleaned = text
+    .replace(DOSAGE, '')
+    .replace(CLINICAL, '')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .replace(/^[\s.,;:!?-]+/, '');
   if (!cleaned)
     return 'A medicine you previously purchased may be due for a refill. Please contact the pharmacy if you would like us to prepare it.';
   return cleaned.slice(0, 500);
