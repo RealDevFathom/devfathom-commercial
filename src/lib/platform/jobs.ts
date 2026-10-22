@@ -8,7 +8,8 @@ import {
   type PlatformJobType,
   type PrismaClient,
 } from '@/generated/prisma/client';
-import { withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { withOrganizationDefaults, withPlatformDb } from '@/lib/tenancy/scoped-db';
+import { loadBundledPharmacyCatalog, seedPharmacyCatalog } from '@/lib/pharmacy/catalog/preload';
 import { vercelProvisioningConfiguration } from '@/lib/platform/provisioning-config';
 import { CAMERA_EVIDENCE_CAPTURE_WINDOW_MS, cameraEvidenceDueSql } from '@/lib/cameras/evidence';
 import {
@@ -756,6 +757,13 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        PHARMACY_CATALOG_SEED_V1: async (database, item) => {
+          const organizationId = requiredOrganization(item);
+          const catalog = await loadBundledPharmacyCatalog();
+          return withOrganizationDefaults(database, organizationId, (tenantDb) =>
+            seedPharmacyCatalog(tenantDb, organizationId, catalog, item.requestedById ?? undefined)
+          );
+        },
       };
       return handlers[job.type](db, job, payload);
     },
@@ -763,7 +771,8 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
       timeout:
         job.type === 'EXPORT_DATA' ||
         job.type === 'PURGE_DATA' ||
-        job.type === 'CAMERA_EVIDENCE_RETENTION_V1'
+        job.type === 'CAMERA_EVIDENCE_RETENTION_V1' ||
+        job.type === 'PHARMACY_CATALOG_SEED_V1'
           ? 120_000
           : 30_000,
     }

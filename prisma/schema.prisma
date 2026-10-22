@@ -546,6 +546,10 @@ model PackLevel {
   effectiveFrom         DateTime
   effectiveTo           DateTime?
   referencedAt          DateTime?
+  catalogDefaultSalePriceMinor     Int?
+  catalogDefaultPurchasePriceMinor Int?
+  sellingPriceMinor                Int?
+  purchasePriceMinor               Int?
   supersedesPackLevelId String?
   createdAt             DateTime                    @default(now())
   presentation          Presentation                @relation(fields: [presentationId], references: [id], onDelete: Restrict)
@@ -2690,6 +2694,7 @@ enum PlatformJobType {
   RESUME
   PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
   CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
+  PHARMACY_CATALOG_SEED_V1     @map("pharmacy.catalog.seed.v1")
 }
 
 enum PlatformJobStatus {
@@ -4849,6 +4854,8 @@ enum RestaurantActivationAcknowledgementKind {
 
 model Organization {
   pharmacyMigrationSources PharmacyMigrationSource[]
+  pharmacyCatalogSeedRuns  CatalogSeedRun[]
+  pharmacyCatalogSettings  PharmacyCatalogSetting?
   pharmacyMessageLogs      PharmacyMessageLog[]
   id                       String                     @id @default(cuid())
   slug                     String                     @unique
@@ -11532,6 +11539,43 @@ enum PharmacyMigrationExceptionSeverity {
 enum PharmacyMigrationExceptionStatus {
   OPEN
   SIGNED_OFF
+}
+
+enum CatalogSeedRunStatus {
+  RUNNING
+  COMPLETED
+}
+
+/// Durable checkpoint for the bundled catalogue. RUNNING rows are intentionally
+/// resumable: child rows use deterministic ids and skipDuplicates before completion.
+model CatalogSeedRun {
+  id             String               @id @default(cuid())
+  organizationId String               @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  catalogVersion String
+  status         CatalogSeedRunStatus @default(RUNNING)
+  expectedCount  Int
+  createdCount   Int                  @default(0)
+  completedAt    DateTime?
+  requestedById  String?
+  createdAt      DateTime             @default(now())
+  updatedAt      DateTime             @updatedAt
+  organization   Organization         @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@unique([organizationId, catalogVersion])
+  @@index([organizationId, status])
+  @@map("pharmacy_catalog_seed_runs")
+}
+
+model PharmacyCatalogSetting {
+  organizationId          String       @id @default(dbgenerated("current_setting('app.current_organization_id', true)"))
+  useCatalogDefaultPrices Boolean      @default(false)
+  enabledById             String?
+  enabledAt               DateTime?
+  createdAt               DateTime     @default(now())
+  updatedAt               DateTime     @updatedAt
+  organization            Organization @relation(fields: [organizationId], references: [id], onDelete: Cascade)
+
+  @@map("pharmacy_catalog_settings")
 }
 
 /// MIG-01 — immutable evidence of one incumbent export. The file bytes are NOT

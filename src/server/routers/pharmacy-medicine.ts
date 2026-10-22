@@ -22,6 +22,7 @@ import {
   runManualReferenceConnector,
 } from '@/lib/pharmacy/reference-connector-automation';
 import { MANUAL_FILE_RIGHTS, type ConnectorRights } from '@/lib/pharmacy/reference-connectors';
+import { setCatalogDefaultPrices } from '@/lib/pharmacy/catalog/preload';
 import {
   adminProcedure,
   auditedProtectedProcedure,
@@ -174,6 +175,16 @@ function domainError(error: unknown): never {
 }
 
 export const pharmacyMedicineRouter = router({
+  setCatalogDefaultPrices: adminProcedure
+    .input(z.object({ enabled: z.boolean() }).strict())
+    .mutation(({ ctx, input }) =>
+      setCatalogDefaultPrices(
+        ctx.db,
+        ctx.entitlements.organizationId,
+        ctx.session.user.id,
+        input.enabled
+      )
+    ),
   priceNotices: capabilityProcedure('pharmacy:safety').query(({ ctx }) =>
     priceIntelligence(ctx.db, {
       organizationId: ctx.entitlements.organizationId,

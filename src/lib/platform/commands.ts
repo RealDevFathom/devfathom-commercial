@@ -1033,6 +1033,19 @@ async function bootstrapOrganization(
         provinceCode: input.firstBranchProvinceCode!,
       },
     });
+    // The bundled catalogue is deliberately a job: onboarding must not hold a
+    // control-plane transaction while roughly nineteen thousand products are
+    // materialized. The worker narrows this platform transaction to tenant RLS.
+    await db.platformJob.create({
+      data: {
+        organizationId: organization.id,
+        type: 'PHARMACY_CATALOG_SEED_V1',
+        requestedById: actor?.id,
+        idempotencyKey: `pharmacy-catalog-v1:${organization.id}`,
+        payload: { catalogVersion: 'pharmacy-catalog-v1' },
+        maxAttempts: 5,
+      },
+    });
   }
   // §9 Step 6 — instantiate the vertical's role templates from the catalog.
   //
