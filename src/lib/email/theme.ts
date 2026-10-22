@@ -54,12 +54,18 @@ export const layout = {
 
 // The app's public base URL, used to build deep links and load the logo.
 export function appUrl(): string {
-  return (
+  const configuredUrl =
     process.env.NEXT_PUBLIC_APP_URL ??
     process.env.NEXTAUTH_URL ??
     process.env.AUTH_URL ??
-    'https://dev-fathom-hub.vercel.app'
-  ).replace(/\/$/, '');
+    'https://dev-fathom-hub.vercel.app';
+
+  const url = new URL(configuredUrl);
+  if (url.protocol !== 'http:' && url.protocol !== 'https:') {
+    throw new Error('The application URL must use HTTP or HTTPS');
+  }
+
+  return url.toString().replace(/\/$/, '');
 }
 
 // Hosted logo mark (the chevron on an Abyss tile). Overridable via env so it can
