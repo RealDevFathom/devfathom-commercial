@@ -125,6 +125,7 @@ function fixture(permissions: Permission[], role: 'EMPLOYEE' | 'ADMIN' = 'EMPLOY
       ]),
     },
     organization: { findUnique: vi.fn(async () => ({ currency: 'PKR' })) },
+    restaurantStaffProfile: { findMany: vi.fn(async () => [] as unknown[]) },
     $transaction: vi.fn(),
   };
   db.$transaction.mockImplementation(async (fn: (inner: typeof db) => Promise<unknown>) => fn(db));
@@ -530,5 +531,51 @@ describe('counter receipt authorization', () => {
         }),
       })
     );
+  });
+});
+
+describe('controlled return witnesses (#523)', () => {
+  it('lists independent PIN pharmacists to an assigned dispenser', async () => {
+    const f = fixture(dispense);
+    assign(f, ['branch-a']);
+    f.db.restaurantStaffProfile.findMany.mockResolvedValue([
+      {
+        id: 'staff-2',
+        displayName: 'Pharmacist Two',
+        user: {
+          id: 'user-2',
+          role: 'EMPLOYEE',
+          status: 'ACTIVE',
+          organizationId: 'org-a',
+        },
+      },
+    ]);
+    await expect(f.caller().returnWitnesses({ branchId: 'branch-a' })).resolves.toEqual({
+      actorCanDispense: true,
+      witnesses: [{ id: 'staff-2', name: 'Pharmacist Two' }],
+    });
+    expect(f.db.restaurantStaffProfile.findMany).toHaveBeenCalledWith(
+      expect.objectContaining({
+        where: expect.objectContaining({ organizationId: 'org-a', userId: { not: 'user-a' } }),
+      })
+    );
+  });
+
+  it('tells a counter user without dispense that they cannot record one, listing nobody', async () => {
+    const f = fixture([{ capability: 'pharmacy:counter', effect: 'ALLOW' }]);
+    assign(f, ['branch-a']);
+    await expect(f.caller().returnWitnesses({ branchId: 'branch-a' })).resolves.toEqual({
+      actorCanDispense: false,
+      witnesses: [],
+    });
+    expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
+  });
+
+  it('refuses a branch the caller is not assigned to', async () => {
+    const f = fixture(dispense);
+    await expect(f.caller().returnWitnesses({ branchId: 'branch-a' })).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+    });
+    expect(f.db.restaurantStaffProfile.findMany).not.toHaveBeenCalled();
   });
 });

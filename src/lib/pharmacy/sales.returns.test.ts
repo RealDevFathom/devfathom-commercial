@@ -138,6 +138,42 @@ describe('counter return boundaries', () => {
     const line = { quantity: 1, unitPriceMinor: 100, discountMinor: 2, canonicalUnits: 3 };
     expect([1, 2, 3].map((n) => returnedLineValue(line, n))).toEqual([32, 65, 98]);
   });
+  it('marks controlled lines in the return history so the counter asks for a witness (#523)', async () => {
+    const line = (id: string, controlled: boolean) => ({
+      id,
+      medicine: { productName: id, controlled },
+      saleUnit: 'STRIP',
+      quantity: 1,
+      canonicalUnitsPerSaleUnit: 10,
+      canonicalUnits: 10,
+      unitPriceMinor: 100,
+      discountMinor: 0,
+      returnLines: [],
+      unidentifiedReturnHolds: [],
+      allocations: [],
+    });
+    const findFirst = vi.fn().mockResolvedValue({
+      id: 'sale',
+      lines: [line('morphine', true), line('paracetamol', false)],
+      tenders: [],
+      returns: [],
+    });
+    const history = await readReturnHistory(
+      {
+        pharmacySale: { findFirst },
+        pharmacyStockLocation: { findMany: vi.fn().mockResolvedValue([]) },
+      } as never,
+      scope,
+      'sale'
+    );
+    expect(history.lines.map((row) => [row.id, row.controlled])).toEqual([
+      ['morphine', true],
+      ['paracetamol', false],
+    ]);
+    expect(findFirst.mock.calls[0][0].include.lines.include.medicine).toEqual({
+      select: { productName: true, controlled: true },
+    });
+  });
   it('does not disclose another branch receipt history', async () => {
     const findFirst = vi.fn().mockResolvedValue(null);
     await expect(

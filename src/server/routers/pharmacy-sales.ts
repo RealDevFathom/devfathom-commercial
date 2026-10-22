@@ -13,6 +13,7 @@ import {
   earlierRegisterEntry,
   EMERGENCY_NO_RX_WINDOW_MS,
   emergencyNoRxDecision,
+  listControlledPinWitnesses,
 } from '@/lib/pharmacy/controlled-register';
 import { ACTIVE_STATUSES } from '@/lib/auth/session-state';
 import { annotateAudit } from '@/server/audit';
@@ -1254,6 +1255,28 @@ export const pharmacySalesRouter = router({
       } catch (error) {
         fail(error);
       }
+    }),
+  /**
+   * #523: who can witness a controlled-medicine return at this counter. Recording one needs
+   * pharmacy:dispense (authorizeControlledRestoration), so anyone else gets an empty list and
+   * `actorCanDispense: false`. The witness PIN is sent only with returnLine and never stored.
+   */
+  returnWitnesses: protectedProcedure
+    .input(z.object({ branchId }).strict())
+    .query(async ({ ctx, input }) => {
+      const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+      const actorCanDispense = await can(
+        subjectFromSession(ctx.session!.user),
+        'pharmacy:dispense',
+        undefined,
+        { db: ctx.db, source: 'TRPC' }
+      );
+      return {
+        actorCanDispense,
+        witnesses: actorCanDispense
+          ? await listControlledPinWitnesses(ctx.db, scope.organizationId, scope.actorId)
+          : [],
+      };
     }),
   returnLine: protectedProcedure
     .input(
