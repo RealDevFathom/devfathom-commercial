@@ -1,12 +1,19 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ assertProjectAccess: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  assertProjectAccess: vi.fn(),
+  capabilityProcedure: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('../trpc', async () => {
   const { initTRPC } = await import('@trpc/server');
   const t = initTRPC.context<object>().create();
-  return { router: t.router, protectedProcedure: t.procedure };
+  return {
+    router: t.router,
+    protectedProcedure: t.procedure,
+    capabilityProcedure: mocks.capabilityProcedure.mockImplementation(() => t.procedure),
+  };
 });
 vi.mock('../authz', () => ({
   assertProjectAccess: mocks.assertProjectAccess,
@@ -41,11 +48,20 @@ const caller = () =>
   } as never);
 
 beforeEach(() => {
-  vi.clearAllMocks();
+  mocks.assertProjectAccess.mockClear();
+  db.project.findUnique.mockReset();
+  db.project.update.mockReset();
+  db.project.create.mockReset();
   mocks.assertProjectAccess.mockResolvedValue(undefined);
 });
 
 describe('project date ranges', () => {
+  it('declares the central project-write capability for tRPC writes', () => {
+    expect(mocks.capabilityProcedure).toHaveBeenCalledTimes(2);
+    expect(mocks.capabilityProcedure).toHaveBeenNthCalledWith(1, 'projects:write');
+    expect(mocks.capabilityProcedure).toHaveBeenNthCalledWith(2, 'projects:write');
+  });
+
   it('rejects an inverted date range from tRPC create', async () => {
     await expect(
       caller().create({
