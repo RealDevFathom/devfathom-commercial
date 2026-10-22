@@ -40,3 +40,6 @@ Before planning, designing, reviewing, or implementing any user interface, read
   second graph tool only when a concrete uncovered need justifies its token and maintenance cost.
 
 <!-- END:devfathom-cli-contract -->
+
+## Codex Cloud runtime bootstrap
+Before running tests in a Codex Cloud task, run `source scripts/codex-bootstrap.sh`. It installs Bun 1.4.2, starts a local Postgres and exports DATABASE_URL.
