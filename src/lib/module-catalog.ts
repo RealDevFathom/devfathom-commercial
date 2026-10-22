@@ -217,6 +217,7 @@ export const PROCEDURE_MODULES: Record<string, string> = {
   restaurantReports: 'restaurant-core',
   restaurantGrowth: 'restaurant-core',
   pharmacyMedicine: 'pharmacy-core',
+  pharmacyAccess: 'pharmacy-core',
   // PLAT-02/03: the onboarding checklist, branch regulatory profile and
   // activation status are the pharmacy workspace's own front door — mandatory
   // Pharmacy Core, not a separately licensed console.
