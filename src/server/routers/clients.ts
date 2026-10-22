@@ -6,6 +6,7 @@ import { logActivity } from '../activity';
 import { notify } from '@/lib/notifications';
 import { optionalWebsiteUrl } from '@/lib/validators';
 import { assertInOrganization, workspaceId } from '../org-refs';
+import { sumByCurrency, type CurrencyAmount } from '@/lib/finance/currency';
 
 // Contract `value` shares the Decimal(12,2) money columns used across finance, so
 // the largest value Postgres will accept is 9,999,999,999.99 — bound it here so an
@@ -49,12 +50,20 @@ export const clientsRouter = router({
 
     const revenueByClient = isAdmin
       ? await ctx.db.invoice.groupBy({
-          by: ['clientId'],
+          by: ['clientId', 'currency'],
           where: { status: 'PAID' },
           _sum: { total: true },
         })
       : [];
-    const revenueMap = new Map(revenueByClient.map((r) => [r.clientId, Number(r._sum.total ?? 0)]));
+    const revenueMap = new Map<string, CurrencyAmount[]>();
+    for (const row of revenueByClient) {
+      revenueMap.set(
+        row.clientId,
+        sumByCurrency(revenueMap.get(row.clientId) ?? [], [
+          { currency: row.currency, amount: Number(row._sum.total ?? 0) },
+        ])
+      );
+    }
 
     return clients.map((c) => ({
       ...c,
@@ -62,7 +71,7 @@ export const clientsRouter = router({
         ...c._count,
         invoices: isAdmin ? c._count.invoices : 0,
       },
-      totalRevenue: isAdmin ? (revenueMap.get(c.id) ?? 0) : 0,
+      totalRevenue: isAdmin ? (revenueMap.get(c.id) ?? []) : [],
     }));
   }),
 
