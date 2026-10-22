@@ -111,6 +111,8 @@ export type PosDraftReview = {
 
 export type PosQueuedDraft = {
   draftId: string;
+  /** Staff profile that composed the draft; replay must use this same operator. */
+  composerStaffProfileId: string;
   /** The device that composed it. Replay is refused on any other device. */
   deviceId: string;
   /** Per-device monotonic FIFO position. Never derived from a clock. */
@@ -156,6 +158,7 @@ export function countQueuedCommands(snapshot: PosQueueSnapshot): number {
 
 export type PosDraftInput = {
   deviceId: string;
+  composerStaffProfileId: string;
   catalogVersion: string;
   /** Client-origin UTC instant, metadata only. */
   clientOriginAt: string;
@@ -246,6 +249,7 @@ export function enqueueDraft(
 
   const draft: PosQueuedDraft = {
     draftId: newId(),
+    composerStaffProfileId: input.composerStaffProfileId,
     deviceId: input.deviceId,
     sequence: snapshot.nextSequence,
     clientOriginAt: input.clientOriginAt,

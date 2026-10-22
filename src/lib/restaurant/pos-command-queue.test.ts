@@ -61,6 +61,7 @@ function ids(prefix = 'c') {
 function draftInput(overrides: Partial<PosDraftInput> = {}): PosDraftInput {
   return {
     deviceId: DEVICE,
+    composerStaffProfileId: 'staff-1',
     catalogVersion: 'v1:aaaa',
     clientOriginAt: '2026-08-27T10:00:00.000Z',
     open: { channel: 'DINE_IN', tableIds: ['t1'], coverCount: 2 },

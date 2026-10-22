@@ -269,7 +269,9 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
     async (activeRuntime: Runtime) => {
       const local = offlineRuntime.current;
       if (!local || !navigator.onLine || activeRuntime.state !== 'UNLOCKED') return;
-      const result = await local.replay(async (queued) => {
+      const activeStaffProfileId = activeRuntime.operator?.staffProfileId;
+      if (!activeStaffProfileId) return;
+      const result = await local.replay(activeStaffProfileId, async (queued) => {
         try {
           const response = await fetch(queued.path, {
             method: queued.method,
@@ -296,6 +298,13 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
         }
       });
       syncQueue();
+      if (result.state === 'OPERATOR_MISMATCH') {
+        setNotice({
+          tone: 'warning',
+          message:
+            'Queued orders belong to another operator. Sign in as their composer to send them.',
+        });
+      }
       if (result.state === 'PAUSED' && local.snapshot().queue?.replay === 'PAUSED_REAUTH') {
         const locked = { ...activeRuntime, state: 'LOCKED' as const, operator: null };
         setRuntime(locked);
@@ -529,7 +538,8 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
 
   async function openOrder(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (!runtime || !draftMenu || pending) return;
+    if (!runtime || !runtime.operator || !draftMenu || pending) return;
+    const composerStaffProfileId = runtime.operator.staffProfileId;
     const body = {
       channel,
       publicationId: draftMenu.publicationId,
@@ -650,6 +660,7 @@ export function usePosRuntime({ demo = false }: { demo?: boolean }) {
       if (!local) throw new Error('Local POS storage is unavailable.');
       const enqueued = await local.enqueue({
         deviceId: runtime.deviceId,
+        composerStaffProfileId,
         catalogVersion: draftMenu.version ?? '',
         clientOriginAt: new Date().toISOString(),
         open: body,
