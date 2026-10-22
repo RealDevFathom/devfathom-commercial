@@ -72,6 +72,7 @@ function fixture() {
     pharmacyKhataLimitDecision: { create: vi.fn().mockResolvedValue({}) },
     user: {
       findFirst: vi.fn().mockResolvedValue({
+        role: 'ADMIN',
         organizationRole: { key: 'owner', isSystem: true },
       }),
     },
@@ -166,7 +167,10 @@ describe('Khata router trust and recovery boundary', () => {
   it.each(['owner', 'manager'])('allows the system %s role to approve an override', async (key) => {
     const f = fixture();
     f.user.role = 'EMPLOYEE';
-    f.db.user.findFirst.mockResolvedValue({ organizationRole: { key, isSystem: true } });
+    f.db.user.findFirst.mockResolvedValue({
+      role: 'EMPLOYEE',
+      organizationRole: { key, isSystem: true },
+    });
     await expect(
       f.caller().tender({
         ...input,
@@ -198,13 +202,28 @@ describe('Khata router trust and recovery boundary', () => {
     ]) {
       const nonApprover = fixture();
       nonApprover.user.role = 'EMPLOYEE';
-      nonApprover.db.user.findFirst.mockResolvedValue({ organizationRole });
+      nonApprover.db.user.findFirst.mockResolvedValue({ role: 'EMPLOYEE', organizationRole });
       await expect(
         nonApprover
           .caller()
           .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
       ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
     }
+  });
+  it('honors an explicit ABAC denial for an otherwise eligible approver', async () => {
+    const f = fixture();
+    f.user.role = 'EMPLOYEE';
+    f.db.user.findFirst.mockResolvedValue({
+      role: 'EMPLOYEE',
+      organizationRole: { key: 'manager', isSystem: true },
+    });
+    vi.mocked(can).mockResolvedValueOnce(true).mockResolvedValueOnce(false);
+    await expect(
+      f
+        .caller()
+        .tender({ ...input, amountMinor: 101, ownerOverride: true, overrideReason: 'Emergency' })
+    ).rejects.toMatchObject({ message: 'OWNER_ACTION_REQUIRED' });
+    expect(f.db.pharmacyKhataLimitDecision.create).not.toHaveBeenCalled();
   });
   it('requires a reason for a requested override', async () => {
     const f = fixture();

@@ -184,13 +184,22 @@ async function canApproveKhataLimitOverride(ctx: TRPCContext, organizationId: st
   const user = ctx.session!.user;
   const approver = await ctx.db.user.findFirst({
     where: { id: user.id, organizationId, status: { in: [...ACTIVE_STATUSES] } },
-    select: { organizationRole: { select: { key: true, isSystem: true } } },
+    select: { role: true, organizationRole: { select: { key: true, isSystem: true } } },
   });
   const roleKey = approver?.organizationRole?.key;
   if (!approver) return false;
-  return (
-    user.role === 'ADMIN' ||
-    (approver.organizationRole?.isSystem === true && (roleKey === 'owner' || roleKey === 'manager'))
+  const isTenantAdmin = approver.role === 'ADMIN';
+  const isOwnerOrManager =
+    approver.organizationRole?.isSystem === true && (roleKey === 'owner' || roleKey === 'manager');
+  if (!isTenantAdmin && !isOwnerOrManager) return false;
+
+  // Keep explicit DENY rules authoritative. The coarse tenant admin role and
+  // the canonical Owner/Manager roles use their existing ABAC capabilities.
+  return can(
+    subjectFromSession({ ...user, role: approver.role }),
+    isTenantAdmin ? 'admin:access' : 'pharmacy:manage',
+    undefined,
+    { db: ctx.db, source: 'TRPC' }
   );
 }
 
