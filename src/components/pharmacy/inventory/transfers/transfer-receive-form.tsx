@@ -10,9 +10,9 @@ export const selectClass =
   'mt-1 min-h-11 w-full rounded-[var(--radius-sm)] border border-border-default bg-surface-raised px-3 text-sm text-text-strong focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:cursor-not-allowed disabled:opacity-50';
 
 /**
- * The closing receipt. Each open line is pre-filled with what is outstanding;
- * lowering a count turns the difference into a witnessed variance write-off, so
- * the evidence fields only matter when something arrived short.
+ * Each open line is pre-filled with what is outstanding. The operator can save
+ * the entered units as an interim receipt, or close the transfer and record any
+ * difference as a witnessed variance write-off.
  */
 export function TransferReceiveForm({
   transfer,
@@ -37,6 +37,7 @@ export function TransferReceiveForm({
       <input name="action" type="hidden" value="receive" />
       <input name="branchId" type="hidden" value={branchId} />
       <input name="transferId" type="hidden" value={transfer.id} />
+      <input name="receiptKey" type="hidden" value={crypto.randomUUID()} />
       {open.map((line) => (
         <label className="text-sm" key={line.id}>
           Received units — {line.medicineName} · batch {line.batchNumber}
@@ -85,9 +86,14 @@ export function TransferReceiveForm({
           />
         </label>
       </fieldset>
-      <Button className="md:col-span-3" type="submit">
-        Receive {reference}
-      </Button>
+      <div className="flex flex-wrap justify-end gap-2 md:col-span-3">
+        <Button name="receiptMode" type="submit" value="partial" variant="secondary">
+          Save partial receipt
+        </Button>
+        <Button name="receiptMode" type="submit" value="final">
+          Receive and close {reference}
+        </Button>
+      </div>
     </TransferActionForm>
   );
 }

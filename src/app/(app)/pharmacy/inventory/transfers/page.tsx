@@ -187,8 +187,16 @@ export default async function PharmacyTransfersPage({
           transferId,
           idempotencyKeyPrefix: `ui-dispatch:${transferId}`,
         });
-      else if (action === 'receive')
-        await actionCaller.receiveTransferWithVariance(receiveInput(data));
+      else if (action === 'receive') {
+        const receipt = receiveInput(data);
+        await actionCaller.receiveTransferWithVariance(receipt);
+        return url(
+          branchId,
+          receipt.finalize
+            ? SUCCESS.receive
+            : 'Partial receipt saved. The remaining stock is still in transit.'
+        );
+      }
       else throw new Error('Choose a supported transfer action.');
       return url(branchId, SUCCESS[action]);
     } catch (error) {

@@ -408,16 +408,16 @@ async function transferBoard(db: ScopedDb, scope: LedgerScope) {
 type VarianceReceiptInput = {
   transferId: string;
   lines: ReadonlyArray<{ lineId: string; receivedUnits: number }>;
+  finalize: boolean;
   variance?: { reason: string; witnessId: string; evidenceRef: string };
   idempotencyKeyPrefix: string;
 };
 
 /**
- * The closing receipt of a transfer. Every open line is answered with what
- * physically arrived; what did not is written off out of IN_TRANSIT at the
- * source branch, where dispatch left it. The transfer then closes RECEIVED, so
- * the line-by-line receipt path can never draw written-off units back out of
- * transit. Runs inside the caller's transaction.
+ * Records either an interim or closing receipt. A partial receipt leaves the
+ * outstanding balance in transit. A closing receipt writes off what did not
+ * arrive at the source branch, where dispatch left it, before closing the
+ * transfer. Runs inside the caller's transaction.
  */
 async function receiveTransferWithVariance(
   db: ScopedDb,
@@ -456,9 +456,24 @@ async function receiveTransferWithVariance(
       throw new PharmacyInventoryError('INVALID_UNITS');
   }
   const open = transfer.lines.filter((line) => line.receivedUnits < line.quantityUnits);
-  // A closing receipt answers every open line; silence is not a count.
+  // Every receipt answers every open line; silence is not a count.
   if (open.some((line) => !answered.has(line.id)))
     throw new PharmacyInventoryError('INVALID_UNITS');
+
+  if (!input.finalize) {
+    const partial = open.filter((line) => answered.get(line.id)! > 0);
+    if (partial.length === 0) throw new PharmacyInventoryError('INVALID_UNITS');
+    let updated: Awaited<ReturnType<typeof receiveTransferLine>> | null = null;
+    for (const line of partial) {
+      updated = await receiveTransferLine(db, scope, {
+        transferId: transfer.id,
+        lineId: line.id,
+        receivedUnits: answered.get(line.id)!,
+        idempotencyKeyPrefix: `${input.idempotencyKeyPrefix}:${line.id}`,
+      });
+    }
+    return { transfer: updated!, variances: [] };
+  }
 
   const plan = [];
   for (const line of open) {
@@ -1975,6 +1990,7 @@ export const pharmacyInventoryRouter = router({
             })
             .strict()
             .optional(),
+          finalize: z.boolean().default(true),
           idempotencyKeyPrefix: z.string().trim().min(1).max(160),
         })
         .strict()

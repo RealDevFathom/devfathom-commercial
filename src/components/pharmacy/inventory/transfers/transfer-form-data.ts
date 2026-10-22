@@ -48,6 +48,7 @@ export function allocateInput(data: FormData, rows: number) {
 
 export function receiveInput(data: FormData) {
   const transferId = text(data, 'transferId');
+  const receiptKey = text(data, 'receiptKey');
   const lines = [...data.keys()]
     .filter((key) => key.startsWith('received:'))
     .map((key) => ({
@@ -55,6 +56,7 @@ export function receiveInput(data: FormData) {
       receivedUnits: wholeUnits(text(data, key), 0),
     }));
   if (lines.length === 0) throw new Error('INVALID_UNITS');
+  if (!receiptKey) throw new Error('INVALID_UNITS');
   const reason = text(data, 'varianceReason');
   const witnessId = text(data, 'witnessId');
   const evidenceRef = text(data, 'evidenceRef');
@@ -62,8 +64,9 @@ export function receiveInput(data: FormData) {
     branchId: text(data, 'branchId'),
     transferId,
     lines,
+    finalize: text(data, 'receiptMode') !== 'partial',
     // Partial evidence is no evidence: the router refuses a shortfall without all three.
     variance: reason && witnessId && evidenceRef ? { reason, witnessId, evidenceRef } : undefined,
-    idempotencyKeyPrefix: `ui-receive-close:${transferId}`,
+    idempotencyKeyPrefix: `ui-receive:${transferId}:${receiptKey}`,
   };
 }
