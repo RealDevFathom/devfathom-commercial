@@ -55,6 +55,10 @@ import {
 import { PharmacyInventoryError } from '@/lib/pharmacy/inventory';
 import { onHand } from '@/lib/pharmacy/stock-ledger';
 import {
+  assertStoredBranchMayOperate,
+  BranchOperationDeniedError,
+} from '@/lib/pharmacy/regulatory';
+import {
   buildPharmacyReceiptEscPosJob,
   PharmacyReceiptPrintError,
   readPharmacyReceiptFormat,
@@ -141,6 +145,36 @@ async function scopeFor(ctx: TRPCContext, branch: string): Promise<LedgerScope> 
   if (!organizationId || !actorId) throw new TRPCError({ code: 'UNAUTHORIZED' });
   await assertInOrganization(ctx.db.pharmacyBranch, organizationId, [branch], { active: true });
   return { organizationId, branchId: branch, actorId };
+}
+
+async function assertSaleOperationMayProceed(
+  ctx: TRPCContext,
+  scope: LedgerScope,
+  operation: 'SALE_CREATE' | 'SALE_SETTLE'
+): Promise<void> {
+  if (
+    ctx.organization?.id !== scope.organizationId ||
+    (ctx.organization.status !== 'ACTIVE' && ctx.organization.status !== 'GRACE')
+  ) {
+    throw new TRPCError({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy sales are unavailable until the organization is active.',
+    });
+  }
+  try {
+    await assertStoredBranchMayOperate(ctx.db, scope.organizationId, scope.branchId, {
+      name: operation,
+      requiresQualifiedPerson: true,
+    });
+  } catch (error) {
+    if (error instanceof BranchOperationDeniedError) {
+      throw new TRPCError({
+        code: 'FORBIDDEN',
+        message: 'This branch does not have an operable regulatory profile.',
+      });
+    }
+    throw error;
+  }
 }
 
 async function khataScope(ctx: TRPCContext, branch: string) {
@@ -718,11 +752,13 @@ export const pharmacySalesRouter = router({
             message: 'Khata fields require Khata tender.',
           });
         const scope = await requireCounterReceiptAccess(ctx, input.branchId);
+        await assertSaleOperationMayProceed(ctx, scope, 'SALE_SETTLE');
         return await ctx.db.$transaction((tx) =>
           applyPharmacyTender(txDb(tx), scope, ledgerTender(input))
         );
       }
       const scope = await khataScope(ctx, input.branchId);
+      await assertSaleOperationMayProceed(ctx, scope, 'SALE_SETTLE');
       if (!input.familyAccountId) throw new FamilyKhataError('ACCOUNT_NOT_FOUND');
       const normalized = ledgerTender(input);
       const ownerAuthorized =
@@ -847,11 +883,11 @@ export const pharmacySalesRouter = router({
     }),
   create: protectedProcedure
     .input(z.object({ branchId, quotation: z.boolean().default(false) }).strict())
-    .mutation(async ({ ctx, input }) =>
-      ctx.db.$transaction(async (tx) =>
-        createSale(txDb(tx), await scopeFor(ctx, input.branchId), input.quotation)
-      )
-    ),
+    .mutation(async ({ ctx, input }) => {
+      const scope = await scopeFor(ctx, input.branchId);
+      await assertSaleOperationMayProceed(ctx, scope, 'SALE_CREATE');
+      return ctx.db.$transaction(async (tx) => createSale(txDb(tx), scope, input.quotation));
+    }),
   addLine: protectedProcedure
     .input(
       z
