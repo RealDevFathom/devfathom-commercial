@@ -7,7 +7,12 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
 import { Prisma } from '@/generated/prisma/client';
 
-const mocks = vi.hoisted(() => ({ userFindFirst: vi.fn(), userCreate: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  userFindFirst: vi.fn(),
+  userCreate: vi.fn(),
+  opportunityFindUnique: vi.fn(),
+  opportunityUpdateMany: vi.fn(),
+}));
 
 vi.mock('server-only', () => ({}));
 vi.mock('bcryptjs', () => ({ hash: vi.fn(async () => 'hashed'), compare: vi.fn() }));
@@ -44,6 +49,13 @@ const platformDb = {
   organizationDeployment: { create: record('deployment') },
   platformJob: { create: record('job') },
   organizationLifecycleEvent: { create: record('lifecycle') },
+  platformOpportunity: {
+    findUnique: mocks.opportunityFindUnique,
+    updateMany: mocks.opportunityUpdateMany,
+    update: record('opportunity'),
+  },
+  platformOpportunityStageEvent: { create: record('opportunityStageEvent') },
+  platformAccount: { update: record('account') },
   platformAuditLog: { create: record('audit') },
 };
 
@@ -113,6 +125,63 @@ describe('organization.create admin email', () => {
         data: expect.objectContaining({ email: 'admin@acme.com', mustChangePassword: true }),
       })
     );
+  });
+});
+
+describe('CRM opportunity conversion eligibility', () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    mocks.userFindFirst.mockResolvedValue(null);
+    mocks.userCreate.mockResolvedValue({ id: 'user_new' });
+  });
+
+  it.each([
+    ['an already converted opportunity', 'QUALIFIED', 'org_existing'],
+    ['a won opportunity', 'WON', null],
+    ['a lost opportunity', 'LOST', null],
+  ])('rejects %s before creating another tenant', async (_label, stage, convertedOrganizationId) => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1',
+      accountId: 'account_1',
+      stage,
+      convertedOrganizationId,
+    });
+
+    const error = await executePlatformCommand(
+      actor,
+      'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({
+      status: 409,
+      message: 'Opportunity is not eligible for conversion.',
+    });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
+    expect(mocks.opportunityUpdateMany).not.toHaveBeenCalled();
+  });
+
+  it('rejects a concurrently claimed opportunity before tenant creation', async () => {
+    mocks.opportunityFindUnique.mockResolvedValue({
+      id: 'opp_1',
+      accountId: 'account_1',
+      stage: 'QUALIFIED',
+      convertedOrganizationId: null,
+    });
+    mocks.opportunityUpdateMany.mockResolvedValue({ count: 0 });
+
+    const error = await executePlatformCommand(
+      actor,
+      'crm.opportunity.convert',
+      { ...payload('admin@acme.com'), opportunityId: 'opp_1' },
+      request
+    ).catch((caught: unknown) => caught);
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect(error).toMatchObject({ status: 409 });
+    expect(platformDb.organization.create).not.toHaveBeenCalled();
   });
 });
 
