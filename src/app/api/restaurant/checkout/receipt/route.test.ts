@@ -120,6 +120,10 @@ beforeEach(() => {
       restaurantBranch: { findFirst: findLayout },
       restaurantStaffProfile: {
         findUnique: async () => ({
+          status: 'ACTIVE',
+          primaryBranchId: 'branch-1',
+          jobRoles: [],
+          directCapabilityGrants: [],
           user: {
             permissionOverrides: [],
             organizationRole: {
@@ -128,6 +132,8 @@ beforeEach(() => {
           },
         }),
       },
+      restaurantStaffJobRole: { findMany: async () => [] },
+      restaurantStaffCapabilityGrant: { findMany: async () => [] },
       restaurantPrintRoute: {
         findFirst: async () => (configured ? { printerId: 'queue:///Receipt' } : null),
       },

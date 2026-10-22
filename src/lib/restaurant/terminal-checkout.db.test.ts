@@ -28,6 +28,14 @@ import { Prisma } from '@/generated/prisma/client';
 import { ensureRestaurantTaxProfile } from '@/lib/test-support/restaurant-tax-profile';
 import { ensurePlatformModule, seedDepartments } from '@/lib/test-support/departments';
 
+// This suite makes hundreds of authenticated requests in one process. Exercise
+// the persistent device/session checks without coupling the DB contract to the
+// process-local flood-control budget (covered by terminal-auth.test.ts).
+vi.mock('@/lib/rate-limit', () => ({
+  clientIp: () => '203.0.113.27',
+  rateLimit: () => ({ ok: true, retryAfter: 0, remaining: 100 }),
+}));
+
 /** Assert a serialised money value by Decimal VALUE, tolerant of trailing-zero format
  * (`.toString()` trims computed Decimals: '10' ≡ '10.00'). Never a float comparison. */
 const eqMoney = (actual: unknown, expected: string) =>
