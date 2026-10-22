@@ -46,6 +46,12 @@ function model() {
 
 function makeDb() {
   const db = {
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: { permissions: [] },
+        permissionOverrides: [],
+      }),
+    },
     medicine: model(),
     packLevel: model(),
     pharmacyStockLocation: model(),
@@ -55,6 +61,7 @@ function makeDb() {
     pharmacyStockBalance: model(),
     pharmacyAllocationOverride: model(),
     pharmacyStockDiscrepancy: model(),
+    pharmacyRecallAcknowledgement: model(),
     pharmacySafetyStock: Object.assign(model(), {
       upsert: vi
         .fn()
@@ -182,11 +189,45 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
   });
 
   it('refuses to block a batch without a reason (INV-03 evidence)', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
     db.pharmacyManufacturingBatch.findFirst.mockResolvedValue({ id: 'batch_1' });
     await expect(
       caller().setBatchState({ manufacturingBatchId: 'batch_1', state: 'RECALLED' })
     ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
     expect(db.pharmacyManufacturingBatch.update).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['setBatchState', { manufacturingBatchId: 'batch_1', state: 'ACTIVE' }],
+    ['acknowledgeRecall', { branchId: 'branch_a', recallNoticeId: 'recall_1' }],
+    ['closeRecall', { recallNoticeId: 'recall_1' }],
+  ] as const)('requires pharmacy:safety for %s', async (procedure, input) => {
+    await expect(caller()[procedure](input as never)).rejects.toMatchObject({ code: 'FORBIDDEN' });
+  });
+
+  it('allows an exact pharmacy:safety grant to acknowledge a recall', async () => {
+    db.user.findUnique.mockResolvedValue({
+      organizationRole: {
+        permissions: [{ capability: 'pharmacy:safety', effect: 'ALLOW' }],
+      },
+      permissionOverrides: [],
+    });
+
+    await caller().acknowledgeRecall({ branchId: 'branch_a', recallNoticeId: 'recall_1' });
+
+    expect(db.pharmacyRecallAcknowledgement.create).toHaveBeenCalledWith({
+      data: {
+        organizationId: 'org_a',
+        recallNoticeId: 'recall_1',
+        branchId: 'branch_a',
+        actorId: 'user_a',
+      },
+    });
   });
 
   it('refuses a transfer whose source and destination are the same location', async () => {
