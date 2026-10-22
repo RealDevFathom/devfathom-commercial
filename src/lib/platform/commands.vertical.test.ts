@@ -875,6 +875,73 @@ describe('catalog.package.upsert vertical metadata', () => {
     expect(updateArg.data).not.toHaveProperty('vertical');
     expect(updateArg.data).toHaveProperty('version');
   });
+
+  it('rejects a vertical change that would strand an incompatible module link', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      vertical: 'RESTAURANT',
+      moduleLinks: [{ module: { vertical: 'RESTAURANT' } }],
+      organizations: [],
+    });
+
+    const error = await caught(
+      run('catalog.package.upsert', {
+        id: 'pkg_1',
+        key: 'restaurant-essentials',
+        name: 'Restaurant Essentials',
+        vertical: 'PHARMACY',
+        defaultSeats: 10,
+      })
+    );
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect((error as PlatformSecurityError).message).toContain('module links');
+    expect(mocks.pkgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('rejects a vertical change that would strand an assigned organization', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      vertical: 'RESTAURANT',
+      moduleLinks: [],
+      organizations: [{ vertical: 'RESTAURANT' }],
+    });
+
+    const error = await caught(
+      run('catalog.package.upsert', {
+        id: 'pkg_1',
+        key: 'restaurant-essentials',
+        name: 'Restaurant Essentials',
+        vertical: 'PHARMACY',
+        defaultSeats: 10,
+      })
+    );
+
+    expect(error).toBeInstanceOf(PlatformSecurityError);
+    expect((error as PlatformSecurityError).message).toContain('assigned to organizations');
+    expect(mocks.pkgUpdate).not.toHaveBeenCalled();
+  });
+
+  it('allows a vertical change when links and assignments match the target vertical', async () => {
+    mocks.pkgFindUnique.mockResolvedValue({
+      vertical: 'RESTAURANT',
+      moduleLinks: [
+        { module: { vertical: null } },
+        { module: { vertical: 'PHARMACY' } },
+      ],
+      organizations: [{ vertical: 'PHARMACY' }],
+    });
+
+    await run('catalog.package.upsert', {
+      id: 'pkg_1',
+      key: 'pharmacy-essentials',
+      name: 'Pharmacy Essentials',
+      vertical: 'PHARMACY',
+      defaultSeats: 10,
+    });
+
+    expect(mocks.pkgUpdate).toHaveBeenCalledWith(
+      expect.objectContaining({ data: expect.objectContaining({ vertical: 'PHARMACY' }) })
+    );
+  });
 });
 
 describe('catalog.package.module band compatibility', () => {

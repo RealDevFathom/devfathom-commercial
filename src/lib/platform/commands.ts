@@ -3405,6 +3405,40 @@ async function runCommand(
         })
         .parse(payload);
       const { id: packageId, ...data } = input;
+      if (packageId && input.vertical) {
+        const existingPackage = await db.platformPackage.findUnique({
+          where: { id: packageId },
+          select: {
+            vertical: true,
+            moduleLinks: { select: { module: { select: { vertical: true } } } },
+            organizations: { select: { vertical: true } },
+          },
+        });
+        if (!existingPackage) throw new PlatformSecurityError('Package not found.', 400);
+
+        if (
+          existingPackage.vertical !== input.vertical &&
+          existingPackage.moduleLinks.some(
+            ({ module }) => module.vertical && module.vertical !== input.vertical
+          )
+        ) {
+          throw new PlatformSecurityError(
+            `The package has module links that do not belong to the ${input.vertical} vertical.`,
+            400
+          );
+        }
+        if (
+          existingPackage.vertical !== input.vertical &&
+          existingPackage.organizations.some(
+            (organization) => organization.vertical !== input.vertical
+          )
+        ) {
+          throw new PlatformSecurityError(
+            `The package is assigned to organizations outside the ${input.vertical} vertical.`,
+            400
+          );
+        }
+      }
       const saved = packageId
         ? await db.platformPackage.update({
             where: { id: packageId },
