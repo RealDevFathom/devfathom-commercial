@@ -479,7 +479,7 @@ const MeetingCard = memo(function MeetingCard({
   };
 
   const handleSave = () => {
-    if (!eTitle.trim() || !eDate || !eStart || !eEnd || hasInvalidEditTimeRange) return;
+    if (!eTitle.trim() || !eDate || !eStart || !eEnd) return;
     updateMeeting.mutate({
       id: meeting.id,
       title: eTitle.trim(),
@@ -491,11 +491,6 @@ const MeetingCard = memo(function MeetingCard({
       attendeeIds: eAttendees,
     });
   };
-
-  const hasCompleteEditTimeRange = Boolean(eDate && eStart && eEnd);
-  const hasInvalidEditTimeRange =
-    hasCompleteEditTimeRange &&
-    new Date(`${eDate}T${eEnd}`).getTime() <= new Date(`${eDate}T${eStart}`).getTime();
 
   if (isEditing) {
     return (
@@ -558,11 +553,6 @@ const MeetingCard = memo(function MeetingCard({
               />
             </div>
           </div>
-          {hasInvalidEditTimeRange && (
-            <p role="alert" className="text-xs font-medium text-destructive">
-              End time must be after start time.
-            </p>
-          )}
           <div>
             <label className="block text-[10px] font-medium text-foreground mb-1">Repeat</label>
             <div className="flex gap-1">
@@ -624,12 +614,7 @@ const MeetingCard = memo(function MeetingCard({
             </button>
             <button
               onClick={handleSave}
-              disabled={
-                !eTitle.trim() ||
-                !hasCompleteEditTimeRange ||
-                hasInvalidEditTimeRange ||
-                updateMeeting.isPending
-              }
+              disabled={!eTitle.trim() || !eDate || !eStart || !eEnd || updateMeeting.isPending}
               className="flex items-center gap-1 rounded-lg bg-primary px-3 py-1.5 text-[11px] font-semibold text-white hover:bg-[#0C2E2C] disabled:opacity-40 transition-colors"
             >
               {updateMeeting.isPending ? <Loader2 className="h-3 w-3 animate-spin" /> : null} Save

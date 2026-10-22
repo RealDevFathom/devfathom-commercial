@@ -18,12 +18,7 @@ import {
   type SeriesRow,
 } from '@/lib/meetings/occurrences';
 import { guestSecretExpiryFor, mintGuestSecret } from '@/lib/meetings/guest-access';
-import {
-  createMeetingInput,
-  MEETING_TIME_RANGE_ERROR,
-  meetingUpdateEndsAfterStart,
-  updateMeetingInput,
-} from '@/lib/meetings/validation';
+import { createMeetingInput } from '@/lib/meetings/validation';
 import { assertInOrganization, workspaceId } from '../org-refs';
 
 /** Page size `getAll` falls back to when the caller sends no `limit` (#38). */
@@ -372,26 +367,21 @@ export const meetingsRouter = router({
     }),
 
   update: protectedProcedure
-    .input(updateMeetingInput)
+    .input(
+      z.object({
+        id: z.string(),
+        title: z.string().min(1).optional(),
+        description: z.string().nullable().optional(),
+        startTime: z.date().optional(),
+        endTime: z.date().optional(),
+        location: z.string().nullable().optional(),
+        recurrence: z.enum(['daily', 'weekly', 'biweekly', 'monthly']).nullable().optional(),
+        attendeeIds: z.array(z.string()).optional(),
+      })
+    )
     .mutation(async ({ ctx, input }) => {
       await assertMeetingManage(ctx, input.id);
       const { id, attendeeIds, ...data } = input;
-
-      // An update may provide only one endpoint. Resolve the other endpoint
-      // from the stored row before making ANY writes (including attendee
-      // replacement), otherwise a caller can bypass the create-time invariant
-      // with a partial update and can leave unrelated partial side effects.
-      if (data.startTime !== undefined || data.endTime !== undefined) {
-        const current = await ctx.db.meeting.findUnique({
-          where: { id },
-          select: { startTime: true, endTime: true },
-        });
-        if (!current) throw new TRPCError({ code: 'NOT_FOUND' });
-
-        if (!meetingUpdateEndsAfterStart(current, data)) {
-          throw new TRPCError({ code: 'BAD_REQUEST', message: MEETING_TIME_RANGE_ERROR });
-        }
-      }
 
       if (attendeeIds) {
         const allAttendees = [...new Set([ctx.session.user.id, ...attendeeIds])];
