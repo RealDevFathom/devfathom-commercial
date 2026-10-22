@@ -619,7 +619,44 @@ async function syncContractEntitlements(
 ) {
   if (!['ACTIVE', 'GRACE', 'RENEWAL_DUE'].includes(input.status)) return;
   const expiresAt = input.graceUntil ?? input.endDate;
+
+  // A replacement contract is authoritative for its module set. Expire only
+  // ENABLED rows that can be traced to a contract for this organization; manual
+  // overrides (especially explicit denies) must remain untouched.
+  const [contracts, existingOverrides] = await Promise.all([
+    db.platformContract.findMany({
+      where: { organizationId: input.organizationId },
+      select: { number: true },
+    }),
+    db.organizationModule.findMany({
+      where: { organizationId: input.organizationId },
+      select: { moduleId: true, status: true },
+    }),
+  ]);
+  const contractReasons = contracts.map((contract) => `Contract ${contract.number}`);
+  if (contractReasons.length > 0) {
+    await db.organizationModule.updateMany({
+      where: {
+        organizationId: input.organizationId,
+        status: 'ENABLED',
+        reason: { in: contractReasons },
+        moduleId: { notIn: input.moduleIds },
+      },
+      data: {
+        status: 'EXPIRED',
+        expiresAt: new Date(),
+        changedById: actor.id,
+      },
+    });
+  }
+
+  const explicitlyDenied = new Set(
+    existingOverrides
+      .filter((override) => override.status === 'DISABLED')
+      .map((override) => override.moduleId)
+  );
   for (const moduleId of input.moduleIds) {
+    if (explicitlyDenied.has(moduleId)) continue;
     await db.organizationModule.upsert({
       where: {
         organizationId_moduleId: {

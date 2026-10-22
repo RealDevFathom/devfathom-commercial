@@ -2,7 +2,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
   contractCreate: vi.fn(),
+  contractFindMany: vi.fn(),
+  moduleFindMany: vi.fn(),
   moduleUpsert: vi.fn(),
+  moduleUpdateMany: vi.fn(),
   organizationUpdate: vi.fn(),
   auditCreate: vi.fn(),
 }));
@@ -13,8 +16,12 @@ vi.mock('@/lib/secret-crypto', () => ({ encryptSecret: vi.fn(), decryptSecret: v
 vi.mock('@/lib/platform/auth', () => ({ assertPlatformCapability: vi.fn() }));
 
 const platformDb = {
-  platformContract: { create: mocks.contractCreate },
-  organizationModule: { upsert: mocks.moduleUpsert },
+  platformContract: { create: mocks.contractCreate, findMany: mocks.contractFindMany },
+  organizationModule: {
+    findMany: mocks.moduleFindMany,
+    upsert: mocks.moduleUpsert,
+    updateMany: mocks.moduleUpdateMany,
+  },
   organization: { update: mocks.organizationUpdate },
   platformAuditLog: { create: mocks.auditCreate },
 };
@@ -32,12 +39,18 @@ describe('commercial contract entitlement synchronization', () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mocks.contractCreate.mockResolvedValue({ id: 'contract_1' });
+    mocks.contractFindMany.mockResolvedValue([{ number: 'CON-OLD' }, { number: 'CON-304' }]);
+    mocks.moduleFindMany.mockResolvedValue([
+      { moduleId: 'mod_stale', status: 'ENABLED' },
+      { moduleId: 'mod_denied', status: 'DISABLED' },
+    ]);
+    mocks.moduleUpdateMany.mockResolvedValue({ count: 1 });
     mocks.moduleUpsert.mockResolvedValue({ id: 'override_1' });
     mocks.organizationUpdate.mockResolvedValue({ id: 'org_1' });
     mocks.auditCreate.mockResolvedValue({ id: 'audit_1' });
   });
 
-  it('creates overrides only for modules included in the contract', async () => {
+  it('expires stale contract grants while preserving explicit denies', async () => {
     const endDate = '2027-10-21T00:00:00.000Z';
 
     await executePlatformCommand(
@@ -54,11 +67,25 @@ describe('commercial contract entitlement synchronization', () => {
         seatLimit: 10,
         startDate: '2026-10-21T00:00:00.000Z',
         endDate,
-        moduleIds: ['mod_contract'],
+        moduleIds: ['mod_contract', 'mod_denied'],
       },
       request
     );
 
+    expect(mocks.moduleUpdateMany).toHaveBeenCalledTimes(1);
+    expect(mocks.moduleUpdateMany).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org_1',
+        status: 'ENABLED',
+        reason: { in: ['Contract CON-OLD', 'Contract CON-304'] },
+        moduleId: { notIn: ['mod_contract', 'mod_denied'] },
+      },
+      data: {
+        status: 'EXPIRED',
+        expiresAt: expect.any(Date),
+        changedById: 'operator_1',
+      },
+    });
     expect(mocks.moduleUpsert).toHaveBeenCalledTimes(1);
     expect(mocks.moduleUpsert).toHaveBeenCalledWith({
       where: {
