@@ -79,7 +79,18 @@ export async function issueSupplierActionLink(
   return { token: `${body}.${signature(body)}`, expiresAt: input.expiresAt };
 }
 
-async function liveLink(db: ScopedDb, token: string, now = new Date()) {
+type SupplierActionAuditTarget = {
+  id: string;
+  organizationId: string;
+  branchId: string;
+};
+
+async function liveLink(
+  db: ScopedDb,
+  token: string,
+  now = new Date(),
+  onResolved?: (link: SupplierActionAuditTarget) => void
+) {
   const id = supplierLinkId(token);
   if (!id) throw new SupplierLinkError('INVALID_LINK');
   const secret = token.split('.')[1]!;
@@ -87,12 +98,9 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
     where: {
       id,
       tokenHash: digest(secret),
-      revokedAt: null,
-      expiresAt: { gt: now },
-      relationship: { active: true, revokedAt: null },
     },
     include: {
-      relationship: { select: { supplierId: true } },
+      relationship: { select: { supplierId: true, active: true, revokedAt: true } },
       purchaseOrder: {
         select: {
           id: true,
@@ -113,13 +121,22 @@ async function liveLink(db: ScopedDb, token: string, now = new Date()) {
       },
     },
   });
+  if (link) onResolved?.(link);
   if (
     !link ||
+    link.revokedAt ||
+    link.expiresAt <= now ||
+    !link.relationship.active ||
+    link.relationship.revokedAt ||
     link.relationship.supplierId !== link.purchaseOrder.supplierId ||
     link.branchId !== link.purchaseOrder.branchId
   )
     throw new SupplierLinkError('INVALID_LINK');
   return link;
+}
+
+function isUniqueConflict(error: unknown) {
+  return (error as { code?: unknown } | null)?.code === 'P2002';
 }
 
 export async function getSupplierActionPage(db: ScopedDb, token: string) {
@@ -145,10 +162,8 @@ function validatePayload(kind: string, payload: Record<string, unknown>, lineIds
     throw new SupplierLinkError('MISMATCH');
 }
 
-type SupplierActionLink = Awaited<ReturnType<typeof liveLink>>;
-
 function auditSupplierAction(
-  link: SupplierActionLink,
+  link: SupplierActionAuditTarget,
   action: 'submit' | 'uploadDocument',
   kind: string,
   outcome: 'SUCCESS' | 'FAILURE',
@@ -187,8 +202,11 @@ async function submitSupplierEvidenceInternal(
   },
   audit = true
 ) {
-  const link = await liveLink(db, input.token, input.now);
+  let auditTarget: SupplierActionAuditTarget | undefined;
   try {
+    const link = await liveLink(db, input.token, input.now, (resolved) => {
+      auditTarget = resolved;
+    });
     validatePayload(
       input.kind,
       input.payload,
@@ -217,26 +235,44 @@ async function submitSupplierEvidenceInternal(
         : null;
       if (input.supersedesId && !prior) throw new SupplierLinkError('INVALID_CORRECTION');
       const id = randomUUID();
-      result = await db.pharmacySupplierSubmission.create({
-        data: {
-          id,
-          organizationId: link.organizationId,
-          branchId: link.branchId,
-          actionLinkId: link.id,
-          versionGroupId: prior?.versionGroupId ?? id,
-          version: (prior?.version ?? 0) + 1,
-          supersedesId: prior?.id,
-          kind: input.kind,
-          source: 'SIGNED_LINK',
-          idempotencyKey: input.idempotencyKey,
-          payload: input.payload as Prisma.InputJsonValue,
-        },
-      });
+      try {
+        result = await db.pharmacySupplierSubmission.create({
+          data: {
+            id,
+            organizationId: link.organizationId,
+            branchId: link.branchId,
+            actionLinkId: link.id,
+            versionGroupId: prior?.versionGroupId ?? id,
+            version: (prior?.version ?? 0) + 1,
+            supersedesId: prior?.id,
+            kind: input.kind,
+            source: 'SIGNED_LINK',
+            idempotencyKey: input.idempotencyKey,
+            payload: input.payload as Prisma.InputJsonValue,
+          },
+        });
+      } catch (error) {
+        if (!isUniqueConflict(error)) throw error;
+        const raced = await db.pharmacySupplierSubmission.findUnique({
+          where: {
+            organizationId_actionLinkId_idempotencyKey: {
+              organizationId: link.organizationId,
+              actionLinkId: link.id,
+              idempotencyKey: input.idempotencyKey,
+            },
+          },
+        });
+        if (!raced) throw error;
+        if (raced.kind !== input.kind || digest(JSON.stringify(raced.payload)) !== payloadHash)
+          throw new SupplierLinkError('IDEMPOTENCY_CONFLICT');
+        result = raced;
+      }
     }
     if (audit) auditSupplierAction(link, 'submit', input.kind, 'SUCCESS');
     return result;
   } catch (error) {
-    if (audit) auditSupplierAction(link, 'submit', input.kind, 'FAILURE', error);
+    if (audit && auditTarget)
+      auditSupplierAction(auditTarget, 'submit', input.kind, 'FAILURE', error);
     throw error;
   }
 }
@@ -300,8 +336,11 @@ export async function uploadSupplierDocument(
     scanner?: FileScanner;
   }
 ) {
-  const link = await liveLink(db, input.token, input.now);
+  let auditTarget: SupplierActionAuditTarget | undefined;
   try {
+    const link = await liveLink(db, input.token, input.now, (resolved) => {
+      auditTarget = resolved;
+    });
     const file = await (input.scanner ?? structuralSupplierFileScanner).scan({
       content: input.content,
       declaredMimeType: input.declaredMimeType,
@@ -319,7 +358,6 @@ export async function uploadSupplierDocument(
       false
     );
     const objectName = `supplier-po/${link.id}/${file.sha256}`;
-    await putUpload(link.organizationId, objectName, input.content, file.mimeType);
     const existing = await db.pharmacySupplierDocument.findUnique({
       where: {
         organizationId_submissionId_sha256: {
@@ -329,26 +367,47 @@ export async function uploadSupplierDocument(
         },
       },
     });
-    const result =
-      existing ??
-      (await db.pharmacySupplierDocument.create({
-        data: {
-          organizationId: link.organizationId,
-          branchId: link.branchId,
-          submissionId: submission.id,
-          fileName: input.fileName,
-          ...file,
-          storageUri: objectName,
-          scanMode: file.mode,
-          malwareChecked: file.mode === 'MALWARE_SCANNED',
-        },
-      }));
+    if (existing) {
+      auditSupplierAction(link, 'uploadDocument', 'DOCUMENT', 'SUCCESS');
+      return existing;
+    }
+    await putUpload(link.organizationId, objectName, input.content, file.mimeType);
+    let result = existing;
+    if (!result) {
+      try {
+        result = await db.pharmacySupplierDocument.create({
+          data: {
+            organizationId: link.organizationId,
+            branchId: link.branchId,
+            submissionId: submission.id,
+            fileName: input.fileName,
+            ...file,
+            storageUri: objectName,
+            scanMode: file.mode,
+            malwareChecked: file.mode === 'MALWARE_SCANNED',
+          },
+        });
+      } catch (error) {
+        if (!isUniqueConflict(error)) throw error;
+        result = await db.pharmacySupplierDocument.findUnique({
+          where: {
+            organizationId_submissionId_sha256: {
+              organizationId: link.organizationId,
+              submissionId: submission.id,
+              sha256: file.sha256,
+            },
+          },
+        });
+        if (!result) throw error;
+      }
+    }
     auditSupplierAction(link, 'uploadDocument', 'DOCUMENT', 'SUCCESS');
     return result;
   } catch (error) {
     const mapped =
       error instanceof SupplierFileScanError ? new SupplierLinkError('INVALID_UPLOAD') : error;
-    auditSupplierAction(link, 'uploadDocument', 'DOCUMENT', 'FAILURE', mapped);
+    if (auditTarget)
+      auditSupplierAction(auditTarget, 'uploadDocument', 'DOCUMENT', 'FAILURE', mapped);
     throw mapped;
   }
 }

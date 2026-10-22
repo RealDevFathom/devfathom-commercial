@@ -151,6 +151,79 @@ describe('supplier PO action links — SUP-01 and invariants 24-28', () => {
     expect(JSON.stringify(vi.mocked(recordAudit).mock.calls)).not.toContain('document-secret');
   });
 
+  it('audits attributable expired-link failures without logging the signed token', async () => {
+    const state = await issued();
+    const expiredAt = new Date(Date.now() + 2 * LINK_TTL_MS);
+
+    await expect(
+      submitSupplierEvidence(state.db, {
+        token: state.token,
+        kind: 'ACKNOWLEDGEMENT',
+        idempotencyKey: 'expired-submit',
+        payload: {},
+        now: expiredAt,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
+    await expect(
+      uploadSupplierDocument(state.db, {
+        token: state.token,
+        idempotencyKey: 'expired-upload',
+        fileName: 'evidence.pdf',
+        declaredMimeType: 'application/pdf',
+        content: Buffer.from('%PDF-1.7'),
+        now: expiredAt,
+      })
+    ).rejects.toMatchObject({ reason: 'INVALID_LINK' });
+
+    expect(recordAudit).toHaveBeenNthCalledWith(
+      1,
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.submit',
+        targetId: state.stored[0]!.id,
+        outcome: 'FAILURE',
+        errorCode: 'INVALID_LINK',
+      })
+    );
+    expect(recordAudit).toHaveBeenNthCalledWith(
+      2,
+      expect.objectContaining({
+        organizationId: 'org_a',
+        action: 'pharmacySupplierLinks.uploadDocument',
+        targetId: state.stored[0]!.id,
+        outcome: 'FAILURE',
+        errorCode: 'INVALID_LINK',
+      })
+    );
+    expect(JSON.stringify(vi.mocked(recordAudit).mock.calls)).not.toContain(state.token);
+  });
+
+  it('returns the winning submission when a concurrent request wins the idempotency race', async () => {
+    const state = await issued();
+    const winner = {
+      id: 'submission-winner',
+      kind: 'ACKNOWLEDGEMENT',
+      payload: {},
+    };
+    state.rawDb.pharmacySupplierSubmission.findUnique
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce(winner as never);
+    state.rawDb.pharmacySupplierSubmission.create.mockRejectedValueOnce(
+      Object.assign(new Error('unique constraint'), { code: 'P2002' })
+    );
+
+    await expect(
+      submitSupplierEvidence(state.db, {
+        token: state.token,
+        kind: 'ACKNOWLEDGEMENT',
+        idempotencyKey: 'same-request',
+        payload: {},
+        now: NOW,
+      })
+    ).resolves.toBe(winner);
+    expect(recordAudit).toHaveBeenCalledWith(expect.objectContaining({ outcome: 'SUCCESS' }));
+  });
+
   it('24: rejects a relationship/PO supplier mismatch and exposes only the linked PO projection', async () => {
     const state = fakeDb();
     state.purchaseOrder.supplierId = 'supplier_b';
