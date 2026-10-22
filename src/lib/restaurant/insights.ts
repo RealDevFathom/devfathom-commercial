@@ -14,6 +14,9 @@ export type InsightRangeInput = {
   from?: string;
   to?: string;
   limit?: number;
+  offset?: number;
+  /** Internal export-only switch. Router inputs never accept this property. */
+  unbounded?: boolean;
 };
 
 export type LabourCostInput = {
@@ -235,7 +238,8 @@ export async function listInsightReports(
   const rows = await db.insightDailyRollup.findMany({
     where: rangeWhere(input),
     orderBy: [{ businessDate: 'desc' }, { branchId: 'asc' }],
-    take: input.limit ?? 200,
+    skip: input.offset,
+    take: input.unbounded ? undefined : (input.limit ?? 200),
     select: DAILY_SELECT,
   });
   if (kind !== 'financial') return rows.map((row) => serializeDaily(row as DailyRow, kind));
@@ -302,7 +306,7 @@ export async function exportInsightReports(
   kind: InsightReportKind,
   input: Omit<InsightRangeInput, 'limit'>
 ) {
-  const rows = await listInsightReports(db, kind, { ...input, limit: 5_000 });
+  const rows = await listInsightReports(db, kind, { ...input, unbounded: true });
   const columns =
     kind === 'financial'
       ? [
@@ -385,7 +389,8 @@ export async function listLabourCosts(db: ScopedDb, input: InsightRangeInput) {
   const rows = await db.labourCostFact.findMany({
     where: rangeWhere(input),
     orderBy: [{ businessDate: 'desc' }, { id: 'desc' }],
-    take: input.limit ?? 200,
+    skip: input.offset,
+    take: input.unbounded ? undefined : (input.limit ?? 200),
     select: LABOUR_SELECT,
   });
   return rows.map((row) => serializeLabour(row as LabourRow));
@@ -398,7 +403,7 @@ export async function readLabourCost(db: ScopedDb, id: string) {
 }
 
 export async function exportLabourCosts(db: ScopedDb, input: Omit<InsightRangeInput, 'limit'>) {
-  const rows = await listLabourCosts(db, { ...input, limit: 5_000 });
+  const rows = await listLabourCosts(db, { ...input, unbounded: true });
   return {
     filename: 'restaurant-labour-costs.csv',
     contentType: 'text/csv; charset=utf-8',

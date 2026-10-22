@@ -22,6 +22,11 @@ import {
   readLabourCost,
 } from '@/lib/restaurant/insights';
 import { enqueueInsightBackfill, RollupError } from '@/lib/restaurant/insight-rollups';
+import {
+  assertAuthorizedBranch,
+  assertOrganizationWide,
+  resolveCapabilityBranchAuthorization,
+} from '@/lib/restaurant/staff-branch-authorization';
 import { auditedProtectedProcedure, capabilityProcedure, router, type TRPCContext } from '../trpc';
 
 const DATE = z
@@ -43,9 +48,10 @@ const RANGE = z
     from: DATE.optional(),
     to: DATE.optional(),
     limit: z.number().int().min(1).max(200).optional(),
+    offset: z.number().int().min(0).max(1_000_000).optional(),
   })
   .strict();
-const EXPORT_RANGE = RANGE.omit({ limit: true }).strict();
+const EXPORT_RANGE = RANGE.omit({ limit: true, offset: true }).strict();
 const READ = z.object({ branchId: ID, businessDate: DATE }).strict();
 
 const operationalProcedure = capabilityProcedure('reports:operational');
@@ -68,21 +74,25 @@ async function requireAction(ctx: TRPCContext, action: Action): Promise<void> {
   }
 }
 
-/** Branch proof is an ACTIVE linked operator pinned to the requested branch. */
-async function requireBranchScope(ctx: TRPCContext, branchId?: string): Promise<void> {
-  if (branchId) {
-    const staff = await ctx.db.restaurantStaffProfile.findFirst({
-      where: { userId: ctx.session!.user.id, status: 'ACTIVE' },
-      select: { primaryBranchId: true },
-    });
-    if (staff?.primaryBranchId === branchId) return;
-  }
-  await requireAction(ctx, 'restaurant:configure');
+/** Resolve the capability's canonical active-assignment scope; DENY decisions remain authoritative. */
+async function requireBranchScope(
+  ctx: TRPCContext,
+  capability: Action,
+  branchId?: string
+): Promise<void> {
+  const authorization = await resolveCapabilityBranchAuthorization(
+    ctx.db,
+    ctx.session!.user,
+    capability,
+    { organizationId: ctx.entitlements.organizationId }
+  );
+  if (branchId) assertAuthorizedBranch(authorization, branchId);
+  else assertOrganizationWide(authorization);
 }
 
 async function requireLabourScope(ctx: TRPCContext, branchId?: string): Promise<void> {
   await requireAction(ctx, 'workforce:rates');
-  await requireBranchScope(ctx, branchId);
+  await requireBranchScope(ctx, 'reports:financial', branchId);
 }
 
 function mapInsightError(error: unknown): never {
@@ -99,6 +109,15 @@ function mapInsightError(error: unknown): never {
 }
 
 export const restaurantInsightsRouter = router({
+  canRebuild: auditedProtectedProcedure.query(async ({ ctx }) => {
+    const user = ctx.session?.user;
+    if (!user) return false;
+    return can(subjectFromSession(user), 'restaurant:configure', undefined, {
+      db: ctx.db as Prisma.TransactionClient,
+      source: 'TRPC',
+      ip: ctx.requestMeta.ip,
+    });
+  }),
   prepareClosePacket: auditedProtectedProcedure
     .input(READ.extend({ asOf: z.string().datetime({ offset: true }) }).strict())
     .query(async ({ ctx, input }) => {
@@ -111,7 +130,11 @@ export const restaurantInsightsRouter = router({
       const financial = await allowed('reports:financial');
       const operational = await allowed('reports:operational');
       if (!financial && !operational) throw new TRPCError({ code: 'FORBIDDEN' });
-      await requireBranchScope(ctx, input.branchId);
+      await requireBranchScope(
+        ctx,
+        financial ? 'reports:financial' : 'reports:operational',
+        input.branchId
+      );
       const allowedRoutes: ClosePacketRoute[] = [];
       for (const key of Object.keys(CLOSE_PACKET_ROUTES) as ClosePacketRoute[]) {
         const route = CLOSE_PACKET_ROUTES[key];
@@ -136,7 +159,7 @@ export const restaurantInsightsRouter = router({
     }),
 
   listOperationalReports: operationalProcedure.input(RANGE).query(async ({ ctx, input }) => {
-    await requireBranchScope(ctx, input.branchId);
+    await requireBranchScope(ctx, 'reports:operational', input.branchId);
     try {
       return await listInsightReports(ctx.db, 'operational', input);
     } catch (error) {
@@ -145,7 +168,7 @@ export const restaurantInsightsRouter = router({
   }),
 
   readOperationalReport: operationalProcedure.input(READ).query(async ({ ctx, input }) => {
-    await requireBranchScope(ctx, input.branchId);
+    await requireBranchScope(ctx, 'reports:operational', input.branchId);
     try {
       return await readInsightReport(ctx.db, 'operational', input);
     } catch (error) {
@@ -156,7 +179,7 @@ export const restaurantInsightsRouter = router({
   exportOperationalReports: operationalProcedure
     .input(EXPORT_RANGE)
     .query(async ({ ctx, input }) => {
-      await requireBranchScope(ctx, input.branchId);
+      await requireBranchScope(ctx, 'reports:operational', input.branchId);
       try {
         return await exportInsightReports(ctx.db, 'operational', input);
       } catch (error) {
@@ -165,7 +188,7 @@ export const restaurantInsightsRouter = router({
     }),
 
   listFinancialReports: financialProcedure.input(RANGE).query(async ({ ctx, input }) => {
-    await requireBranchScope(ctx, input.branchId);
+    await requireBranchScope(ctx, 'reports:financial', input.branchId);
     try {
       return await listInsightReports(ctx.db, 'financial', input);
     } catch (error) {
@@ -174,7 +197,7 @@ export const restaurantInsightsRouter = router({
   }),
 
   readFinancialReport: financialProcedure.input(READ).query(async ({ ctx, input }) => {
-    await requireBranchScope(ctx, input.branchId);
+    await requireBranchScope(ctx, 'reports:financial', input.branchId);
     try {
       return await readInsightReport(ctx.db, 'financial', input);
     } catch (error) {
@@ -183,7 +206,7 @@ export const restaurantInsightsRouter = router({
   }),
 
   exportFinancialReports: financialProcedure.input(EXPORT_RANGE).query(async ({ ctx, input }) => {
-    await requireBranchScope(ctx, input.branchId);
+    await requireBranchScope(ctx, 'reports:financial', input.branchId);
     try {
       return await exportInsightReports(ctx.db, 'financial', input);
     } catch (error) {
@@ -243,7 +266,7 @@ export const restaurantInsightsRouter = router({
       await requireAction(ctx, 'workforce:rates');
       try {
         const fact = await readLabourCost(ctx.db, input.id);
-        await requireBranchScope(ctx, fact.branchId);
+        await requireBranchScope(ctx, 'reports:financial', fact.branchId);
         return fact;
       } catch (error) {
         mapInsightError(error);

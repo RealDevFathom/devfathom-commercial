@@ -46,6 +46,8 @@ type ReadQuery<T> = {
   refetch: () => unknown;
 };
 
+const PAGE_SIZE = 100;
+
 const labelClass =
   'block font-mono text-[0.6875rem] font-semibold uppercase tracking-wide text-text-muted';
 
@@ -161,7 +163,7 @@ function TableFrame({ children, label }: { children: ReactNode; label: string })
 function FreshnessPill({ status }: { status: 'CURRENT' | 'STALE' }) {
   return (
     <StatusPill
-      status={status === 'CURRENT' ? 'Current' : 'Stale — rebuild'}
+      status={status === 'CURRENT' ? 'Current' : 'Stale'}
       tone={status === 'CURRENT' ? 'success' : 'warning'}
     />
   );
@@ -177,6 +179,9 @@ export function InsightsConsole() {
   const branchesQuery = trpc.restaurantStaff.listBranches.useQuery(undefined, {
     enabled: insightsEnabled,
   });
+  const rebuildAccess = trpc.restaurantInsights.canRebuild.useQuery(undefined, {
+    enabled: insightsEnabled,
+  });
 
   const [branchId, setBranchId] = useState('');
   const [from, setFrom] = useState('');
@@ -184,6 +189,7 @@ export function InsightsConsole() {
   const [tab, setTab] = useState<InsightsTab>('financial');
   const [selectedDate, setSelectedDate] = useState('');
   const [closeBusinessDate, setCloseBusinessDate] = useState('');
+  const [page, setPage] = useState(0);
 
   const normalizedBranchId = branchId.trim();
   const branchReady = insightsEnabled && normalizedBranchId.length > 0;
@@ -200,7 +206,8 @@ export function InsightsConsole() {
     branchId: normalizedBranchId,
     ...(from ? { from } : {}),
     ...(to ? { to } : {}),
-    limit: 100,
+    limit: PAGE_SIZE + 1,
+    offset: page * PAGE_SIZE,
   };
   const detailInput = { branchId: normalizedBranchId, businessDate: selectedDate };
 
@@ -221,7 +228,10 @@ export function InsightsConsole() {
     enabled: labourActive,
   });
 
-  const resetSelection = () => setSelectedDate('');
+  const resetSelection = () => {
+    setSelectedDate('');
+    setPage(0);
+  };
   const updateBranch = (value: string) => {
     setBranchId(value);
     resetSelection();
@@ -328,6 +338,9 @@ export function InsightsConsole() {
                 detailQuery={financialDetailQuery}
                 selectedDate={selectedDate}
                 onSelect={setSelectedDate}
+                page={page}
+                onPageChange={setPage}
+                canRebuild={rebuildAccess.data === true}
               />
             ) : null}
           </TabsContent>
@@ -342,12 +355,22 @@ export function InsightsConsole() {
                 detailQuery={operationalDetailQuery}
                 selectedDate={selectedDate}
                 onSelect={setSelectedDate}
+                page={page}
+                onPageChange={setPage}
+                canRebuild={rebuildAccess.data === true}
               />
             ) : null}
           </TabsContent>
           <TabsContent value="labour">
             {labourActive ? (
-              <LabourPanel branchId={normalizedBranchId} from={from} to={to} query={labourList} />
+              <LabourPanel
+                branchId={normalizedBranchId}
+                from={from}
+                to={to}
+                query={labourList}
+                page={page}
+                onPageChange={setPage}
+              />
             ) : null}
           </TabsContent>
           <TabsContent value="scenarios">
@@ -438,6 +461,9 @@ function ReportsPanel({
   detailQuery,
   selectedDate,
   onSelect,
+  page,
+  onPageChange,
+  canRebuild,
 }: {
   kind: ReportKind;
   branchId: string;
@@ -447,9 +473,29 @@ function ReportsPanel({
   detailQuery: ReadQuery<ReportDetail | undefined>;
   selectedDate: string;
   onSelect: (businessDate: string) => void;
+  page: number;
+  onPageChange: (page: number) => void;
+  canRebuild: boolean;
 }) {
   const denied = isDenied(listQuery.error);
-  const rows = denied ? [] : (listQuery.data ?? []);
+  const fetchedRows = denied ? [] : (listQuery.data ?? []);
+  const rows = fetchedRows.slice(0, PAGE_SIZE);
+  const hasNextPage = fetchedRows.length > PAGE_SIZE;
+  const backfill = trpc.restaurantInsights.backfill.useMutation({
+    onSuccess: async () => {
+      await listQuery.refetch();
+      if (selectedDate) await detailQuery.refetch();
+    },
+  });
+  const rebuild = (businessDate: string) => {
+    if (!window.confirm(`Rebuild the insight rollup for ${businessDate}?`)) return;
+    backfill.mutate({
+      branchId,
+      from: businessDate,
+      to: businessDate,
+      requestId: `insights:${branchId}:${businessDate}:${Date.now()}`,
+    });
+  };
   return (
     <div className="space-y-5">
       <SectionCard
@@ -509,7 +555,26 @@ function ReportsPanel({
                       </TableCell>
                       <TableCell>{row.branchName}</TableCell>
                       <TableCell>
-                        <FreshnessPill status={row.freshness.status} />
+                        <div className="space-y-2">
+                          <FreshnessPill status={row.freshness.status} />
+                          {row.freshness.status === 'STALE' ? (
+                            canRebuild ? (
+                              <Button
+                                type="button"
+                                size="sm"
+                                variant="outline"
+                                disabled={backfill.isPending}
+                                onClick={() => rebuild(row.businessDate)}
+                              >
+                                {backfill.isPending ? 'Queueing…' : 'Rebuild day'}
+                              </Button>
+                            ) : (
+                              <span className="block max-w-40 text-xs text-text-muted">
+                                Ask a restaurant administrator to rebuild this day.
+                              </span>
+                            )
+                          ) : null}
+                        </div>
                       </TableCell>
                       <TableCell numeric>{row.orderCount}</TableCell>
                       <TableCell numeric>{row.coverCount}</TableCell>
@@ -544,6 +609,43 @@ function ReportsPanel({
             </Table>
           </TableFrame>
         )}
+        {rows.length ? (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-text-muted">
+              Showing {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + rows.length}
+              {hasNextPage ? ' of more results' : ' (end of results)'}.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={page === 0}
+                onClick={() => onPageChange(Math.max(0, page - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!hasNextPage}
+                onClick={() => onPageChange(page + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        ) : null}
+        {backfill.isSuccess ? (
+          <p role="status" className="mt-3 text-sm text-success">
+            Rebuild queued. Reports were refreshed and will update again when the job completes.
+          </p>
+        ) : backfill.error ? (
+          <p role="alert" className="mt-3 text-sm text-destructive">
+            Rebuild could not be queued: {backfill.error.message}
+          </p>
+        ) : null}
       </SectionCard>
 
       {selectedDate ? (
@@ -664,15 +766,21 @@ function LabourPanel({
   from,
   to,
   query,
+  page,
+  onPageChange,
 }: {
   branchId: string;
   from: string;
   to: string;
   query: ReadQuery<LabourRow[]>;
+  page: number;
+  onPageChange: (page: number) => void;
 }) {
   const denied = isDenied(query.error);
   // Fail closed: never surface cached labour figures once the read is denied.
-  const rows = denied || query.error ? [] : (query.data ?? []);
+  const fetchedRows = denied || query.error ? [] : (query.data ?? []);
+  const rows = fetchedRows.slice(0, PAGE_SIZE);
+  const hasNextPage = fetchedRows.length > PAGE_SIZE;
   return (
     <div className="space-y-5">
       <SectionCard
@@ -731,6 +839,34 @@ function LabourPanel({
             </Table>
           </TableFrame>
         )}
+        {rows.length ? (
+          <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-text-muted">
+              Showing {page * PAGE_SIZE + 1}–{page * PAGE_SIZE + rows.length}
+              {hasNextPage ? ' of more results' : ' (end of results)'}.
+            </p>
+            <div className="flex gap-2">
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={page === 0}
+                onClick={() => onPageChange(Math.max(0, page - 1))}
+              >
+                Previous
+              </Button>
+              <Button
+                type="button"
+                size="sm"
+                variant="outline"
+                disabled={!hasNextPage}
+                onClick={() => onPageChange(page + 1)}
+              >
+                Next
+              </Button>
+            </div>
+          </div>
+        ) : null}
       </SectionCard>
     </div>
   );
