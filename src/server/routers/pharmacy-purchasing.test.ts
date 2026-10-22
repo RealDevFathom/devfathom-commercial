@@ -1018,6 +1018,26 @@ describe('PUR-06 — the returns and settlement transport', () => {
     );
   });
 
+  it('refuses submission when the central policy returns an explicit procurement deny', async () => {
+    mocks.can.mockResolvedValue(false);
+
+    await expect(
+      caller().submitPurchaseReturn({ branchId: 'branch_a', purchaseReturnId: 'return_a' })
+    ).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'Pharmacy procurement access required.',
+    });
+
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_a' }),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
+    expect(db.$transaction).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseReturn.findFirst).not.toHaveBeenCalled();
+  });
+
   it('rejects a cross-tenant supplier ID substitution when opening a return', async () => {
     // The tenant-scoped client returns null for another tenant's supplier, so
     // the refusal lands on tenancy before any line is written.
