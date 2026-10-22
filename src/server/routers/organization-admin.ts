@@ -111,6 +111,15 @@ export const organizationAdminRouter = router({
     });
   }),
 
+  roles: adminProcedure.query(async ({ ctx }) => {
+    const id = organizationId(ctx);
+    return ctx.db.organizationRole.findMany({
+      where: { organizationId: id },
+      orderBy: { name: 'asc' },
+      select: { id: true, key: true, name: true },
+    });
+  }),
+
   upsertDepartment: adminProcedure
     .input(
       z.object({
