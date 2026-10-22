@@ -12,9 +12,27 @@ export async function allocateInvoiceNumber(
 ): Promise<string> {
   const rows = await db.$queryRaw<Array<{ nextNumber: number }>>(Prisma.sql`
     INSERT INTO "invoice_number_sequences" ("organizationId", "year", "nextNumber", "updatedAt")
-    VALUES (${organizationId}, ${year}, 1, CURRENT_TIMESTAMP)
+    VALUES (
+      ${organizationId},
+      ${year},
+      COALESCE((
+        SELECT MAX(substring("invoiceNumber" FROM '^INV-[0-9]{4}-([0-9]+)$')::INTEGER) + 1
+        FROM "invoices"
+        WHERE "organizationId" = ${organizationId}
+          AND "invoiceNumber" ~ ${`^INV-${year}-[0-9]+$`}
+      ), 1),
+      CURRENT_TIMESTAMP
+    )
     ON CONFLICT ("organizationId", "year") DO UPDATE
-      SET "nextNumber" = "invoice_number_sequences"."nextNumber" + 1,
+      SET "nextNumber" = GREATEST(
+            "invoice_number_sequences"."nextNumber" + 1,
+            COALESCE((
+              SELECT MAX(substring("invoiceNumber" FROM '^INV-[0-9]{4}-([0-9]+)$')::INTEGER) + 1
+              FROM "invoices"
+              WHERE "organizationId" = ${organizationId}
+                AND "invoiceNumber" ~ ${`^INV-${year}-[0-9]+$`}
+            ), 1)
+          ),
           "updatedAt" = CURRENT_TIMESTAMP
     RETURNING "nextNumber"
   `);

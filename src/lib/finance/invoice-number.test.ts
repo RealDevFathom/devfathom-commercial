@@ -11,10 +11,19 @@ describe('allocateInvoiceNumber', () => {
 
     expect(queryRaw).toHaveBeenCalledOnce();
     const query = queryRaw.mock.calls[0][0];
-    expect(query.values).toEqual(['org_one', 2027]);
+    expect(query.values).toEqual([
+      'org_one',
+      2027,
+      'org_one',
+      '^INV-2027-[0-9]+$',
+      'org_one',
+      '^INV-2027-[0-9]+$',
+    ]);
     expect(query.strings.join('?')).toContain(
       'ON CONFLICT ("organizationId", "year") DO UPDATE'
     );
+    expect(query.strings.join('?')).toContain('GREATEST(');
+    expect(query.strings.join('?')).toContain('FROM "invoices"');
   });
 
   it('does not return a number when the database fails to reserve one', async () => {
