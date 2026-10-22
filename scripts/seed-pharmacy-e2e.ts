@@ -343,7 +343,10 @@ const STAGING_DEMO_PHARMACIST = {
   capabilities: ['pharmacy:dispense', 'pharmacy:catalogue-review'] as const,
 };
 
-async function seedStagingDemoPharmacist(passwordHash: string) {
+async function seedStagingDemoPharmacist(
+  passwordHash: string,
+  opts: { keepExistingPassword?: boolean } = {}
+) {
   await asTenant(async (tx) => {
     const role = await tx.organizationRole.upsert({
       where: {
@@ -389,7 +392,10 @@ async function seedStagingDemoPharmacist(passwordHash: string) {
     };
     await tx.user.upsert({
       where: { id: STAGING_DEMO_PHARMACIST.userId },
-      update: user,
+      // Grants-only top-ups never rotate an existing login's password.
+      update: opts.keepExistingPassword
+        ? (({ password: _password, ...rest }) => rest)(user)
+        : user,
       create: { id: STAGING_DEMO_PHARMACIST.userId, ...user, createdAt: FIXED_AT, updatedAt: FIXED_AT },
     });
     await tx.pharmacyBranchAssignment.upsert({
@@ -956,7 +962,7 @@ async function main() {
       await seedStagingDemoSensitiveGrants();
       const pw = process.env.PHARMACY_E2E_ADMIN_PASSWORD?.trim();
       if (!pw) throw new Error('PHARMACY_E2E_ADMIN_PASSWORD is required for the demo pharmacist.');
-      await seedStagingDemoPharmacist(hashSync(pw, 10));
+      await seedStagingDemoPharmacist(hashSync(pw, 10), { keepExistingPassword: true });
       return;
     }
 

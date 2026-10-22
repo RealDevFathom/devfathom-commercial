@@ -102,6 +102,11 @@ async function main(): Promise<void> {
   assertStagingDemoTarget(appUrl, env);
 
   if (args.has('--grants-only')) {
+    // Never fall back to a random password: a new demo pharmacist must get a known one,
+    // and existing logins keep theirs (the seed does not rewrite passwords in this mode).
+    if (!env.SEED_PASSWORD?.trim() && !env.STAGING_DEMO_PHARMACY_PASSWORD?.trim()) {
+      throw new Error('--grants-only requires SEED_PASSWORD (or STAGING_DEMO_PHARMACY_PASSWORD).');
+    }
     // Idempotent top-up of the demo pharmacy admin's explicit ALLOW grants for capabilities
     // wildcards no longer confer. Touches nothing else; still behind assertStagingDemoTarget.
     run('Pharmacy demo admin grants (top-up)', ['bun', 'scripts/seed-pharmacy-e2e.ts'], {
