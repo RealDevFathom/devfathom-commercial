@@ -16,6 +16,10 @@ import {
   runCameraEvidenceRetentionJob,
   runCounterEvidenceSnapshotJob,
 } from '@/lib/pharmacy/counter-evidence';
+import {
+  GROWTH_METRICS_NIGHTLY_JOB,
+  runGrowthMetricsNightlyJob,
+} from '@/lib/growth/nightly-metrics';
 
 type JobPayload = Record<string, unknown>;
 type JobResult = Record<string, unknown>;
@@ -756,6 +760,8 @@ async function executeJob(job: PlatformJob): Promise<JobResult> {
         PHARMACY_CAMERA_SNAPSHOT_V1: runCounterEvidenceSnapshotJob,
         CAMERA_EVIDENCE_RETENTION_V1: (database, item) =>
           runCameraEvidenceRetentionJob(database, item),
+        GROWTH_METRICS_NIGHTLY_V1: (database, item) =>
+          runGrowthMetricsNightlyJob(database, item),
       };
       return handlers[job.type](db, job, payload);
     },
@@ -868,6 +874,35 @@ async function enqueueCameraEvidenceJobs(now: Date): Promise<void> {
   });
 }
 
+/** Enqueue only exact-branch settings whose complete rule set allows the job.
+ * BOOL_OR(DENY) is evaluated separately so no ALLOW can mask a revocation. */
+async function enqueueNightlyGrowthMetrics(now: Date): Promise<void> {
+  const metricDate = now.toISOString().slice(0, 10);
+  await withPlatformDb(async (db) => {
+    const scopes = await db.$queryRaw<
+      Array<{ organizationId: string; branchId: string; vertical: string }>
+    >(Prisma.sql`
+      SELECT "organizationId", "branchId", vertical
+      FROM growth_settings
+      GROUP BY "organizationId", "branchId", vertical
+      HAVING BOOL_OR(effect='ALLOW' AND "nightlyMetricsEnabled")
+         AND NOT BOOL_OR(effect='DENY')
+    `);
+    if (!scopes.length) return;
+    await db.platformJob.createMany({
+      data: scopes.map((scope) => ({
+        organizationId: scope.organizationId,
+        type: 'GROWTH_METRICS_NIGHTLY_V1' as const,
+        payload: { branchId: scope.branchId, vertical: scope.vertical },
+        idempotencyKey:
+          `${GROWTH_METRICS_NIGHTLY_JOB}:${scope.organizationId}:` +
+          `${scope.branchId}:${scope.vertical}:${metricDate}`,
+      })),
+      skipDuplicates: true,
+    });
+  });
+}
+
 export type ProcessJobsResult = {
   recovered: number;
   claimed: number;
@@ -879,6 +914,7 @@ export type ProcessJobsResult = {
 export async function processPlatformJobs(maxJobs = 10): Promise<ProcessJobsResult> {
   const limit = Math.max(1, Math.min(100, Math.floor(maxJobs)));
   await enqueueCameraEvidenceJobs(new Date());
+  await enqueueNightlyGrowthMetrics(new Date());
   const result: ProcessJobsResult = {
     recovered: await recoverStaleJobs(),
     claimed: 0,

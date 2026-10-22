@@ -2689,6 +2689,7 @@ enum PlatformJobType {
   RESUME
   PHARMACY_CAMERA_SNAPSHOT_V1  @map("pharmacy.camera.snapshot.v1")
   CAMERA_EVIDENCE_RETENTION_V1 @map("camera.evidence.retention.v1")
+  GROWTH_METRICS_NIGHTLY_V1    @map("growth.metrics.nightly.v1")
 }
 
 enum PlatformJobStatus {
@@ -14115,6 +14116,37 @@ model GrowthInsight {
   @@unique([organizationId, branchId, id])
   @@index([organizationId, branchId, createdAt], map: "growth_insights_scope")
   @@map("growth_insights")
+}
+
+/// Branch-exact opt-in/opt-out rules for automated growth processing. Multiple
+/// rules may apply; application resolution is deliberately DENY-over-ALLOW.
+model GrowthSettings {
+  id                    String   @id @default(cuid())
+  organizationId        String
+  branchId              String
+  vertical              String
+  effect                String
+  nightlyMetricsEnabled Boolean  @default(false)
+  createdAt             DateTime @default(now()) @db.Timestamptz(6)
+  updatedAt             DateTime @updatedAt @db.Timestamptz(6)
+
+  @@unique([organizationId, branchId, vertical, id])
+  @@index([organizationId, branchId, vertical], map: "growth_settings_scope")
+  @@map("growth_settings")
+}
+
+model GrowthMetricSnapshot {
+  id             String   @id @default(cuid())
+  organizationId String
+  branchId       String
+  vertical       String
+  metricDate     DateTime @db.Date
+  metrics        Json
+  createdAt      DateTime @default(now()) @db.Timestamptz(6)
+
+  @@unique([organizationId, branchId, vertical, metricDate])
+  @@index([organizationId, branchId, metricDate], map: "growth_metric_snapshots_scope")
+  @@map("growth_metric_snapshots")
 }
 
 model PharmacyGrowthReview {
