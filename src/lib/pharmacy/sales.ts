@@ -229,6 +229,60 @@ type AddSaleLineInput = {
   idempotencyKey: string;
 };
 
+type AllocatedLotPrice = {
+  canonicalUnits: number;
+  unitPriceMinor: number;
+  proRataCeilingMinor: number;
+};
+
+/**
+ * Preserve the existing single-unit-price sale-line representation while
+ * charging the exact sum of the prices of the lots FEFO actually allocated.
+ * The difference from the highest displayed unit price is persisted as a
+ * non-discretionary MRP adjustment alongside any customer discount.
+ */
+export function priceAllocatedLots(
+  allocations: readonly AllocatedLotPrice[],
+  quantity: number,
+  canonicalUnitsPerSaleUnit: number
+) {
+  if (
+    allocations.some(
+      (part) =>
+        !Number.isSafeInteger(part.canonicalUnits) ||
+        part.canonicalUnits <= 0 ||
+        !Number.isSafeInteger(part.unitPriceMinor) ||
+        part.unitPriceMinor < 0 ||
+        !Number.isSafeInteger(part.proRataCeilingMinor) ||
+        part.unitPriceMinor > part.proRataCeilingMinor
+    )
+  )
+    throw new PharmacySaleError('PRICE_ABOVE_MRP');
+  const unitPriceMinor = Math.max(...allocations.map((part) => part.unitPriceMinor));
+  const proRataCeilingMinor = Math.max(
+    ...allocations.map((part) => part.proRataCeilingMinor)
+  );
+  const grossMinor = allocations.reduce(
+    (total, part) =>
+      total + (part.unitPriceMinor * part.canonicalUnits) / canonicalUnitsPerSaleUnit,
+    0
+  );
+  const displayedGrossMinor = unitPriceMinor * quantity;
+  if (
+    allocations.length === 0 ||
+    !Number.isSafeInteger(grossMinor) ||
+    !Number.isSafeInteger(displayedGrossMinor) ||
+    grossMinor > displayedGrossMinor
+  )
+    throw new PharmacySaleError('INVALID_QUANTITY');
+  return {
+    unitPriceMinor,
+    proRataCeilingMinor,
+    grossMinor,
+    mrpAdjustmentMinor: displayedGrossMinor - grossMinor,
+  };
+}
+
 export async function addSaleLine(db: ScopedDb, scope: LedgerScope, input: AddSaleLineInput) {
   return addSaleLineWithAllocation(db, scope, input);
 }
@@ -300,9 +354,8 @@ async function addSaleLineWithAllocation(
     },
   });
   const lotById = new Map(lots.map((lot) => [lot.id, lot]));
-  let unitPriceMinor = 0,
-    ceiling = 0,
-    costMinor = 0;
+  const allocatedPrices: AllocatedLotPrice[] = [];
+  let costMinor = 0;
   for (const part of allocation.allocations) {
     const lot = lotById.get(part.inventoryLotId);
     if (!lot) throw new PharmacySaleError('NOT_FOUND');
@@ -311,16 +364,23 @@ async function addSaleLineWithAllocation(
       canonicalUnitsInPack: lot.unitsPerPack,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
     });
-    unitPriceMinor = Math.max(unitPriceMinor, price.unitPriceMinor);
-    ceiling = Math.max(ceiling, price.proRataCeilingMinor);
+    allocatedPrices.push({
+      canonicalUnits: part.units,
+      unitPriceMinor: price.unitPriceMinor,
+      proRataCeilingMinor: price.proRataCeilingMinor,
+    });
     costMinor += lot.unitCostMinor * part.units;
   }
-  const grossMinor = unitPriceMinor * input.quantity;
-  const discountMinor = input.discountMinor ?? 0;
+  const pricing = priceAllocatedLots(
+    allocatedPrices,
+    input.quantity,
+    input.canonicalUnitsPerSaleUnit
+  );
+  const customerDiscountMinor = input.discountMinor ?? 0;
   validateDiscount({
     regulated: medicine.rx || medicine.restricted || medicine.controlled,
-    discountMinor,
-    grossMinor,
+    discountMinor: customerDiscountMinor,
+    grossMinor: pricing.grossMinor,
     costMinor,
     approvedByUserId: input.approvedByUserId,
     approvalPolicy: input.approvalPolicy,
@@ -337,11 +397,11 @@ async function addSaleLineWithAllocation(
       quantity: input.quantity,
       canonicalUnitsPerSaleUnit: input.canonicalUnitsPerSaleUnit,
       canonicalUnits,
-      unitPriceMinor,
-      proRataCeilingMinor: ceiling,
+      unitPriceMinor: pricing.unitPriceMinor,
+      proRataCeilingMinor: pricing.proRataCeilingMinor,
       unitCostMinor: Math.ceil(costMinor / input.quantity),
       discountKind: input.discountKind,
-      discountMinor,
+      discountMinor: customerDiscountMinor + pricing.mrpAdjustmentMinor,
       approvalPolicy: input.approvalPolicy,
       approvedByUserId: input.approvedByUserId,
       idempotencyKey: input.idempotencyKey,

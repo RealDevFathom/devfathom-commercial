@@ -6,6 +6,7 @@ import {
   captureSafeRestockArrival,
   changeSaleStatus,
   PharmacySaleError,
+  priceAllocatedLots,
   priceFromLot,
   recoverDemandWithAlternate,
   recoverRestockInterest,
@@ -156,6 +157,47 @@ describe('POS sale voiding', () => {
 });
 
 describe('POS-03 lot-derived pack/strip/unit pricing', () => {
+  it('charges the weighted total when FEFO crosses lots with different MRPs', () => {
+    expect(
+      priceAllocatedLots(
+        [
+          { canonicalUnits: 1, unitPriceMinor: 100, proRataCeilingMinor: 100 },
+          { canonicalUnits: 1, unitPriceMinor: 101, proRataCeilingMinor: 101 },
+        ],
+        2,
+        1
+      )
+    ).toEqual({
+      unitPriceMinor: 101,
+      proRataCeilingMinor: 101,
+      grossMinor: 201,
+      mrpAdjustmentMinor: 1,
+    });
+  });
+
+  it('weights partial sale-unit allocations by their canonical units', () => {
+    expect(
+      priceAllocatedLots(
+        [
+          { canonicalUnits: 5, unitPriceMinor: 1_000, proRataCeilingMinor: 1_000 },
+          { canonicalUnits: 5, unitPriceMinor: 1_010, proRataCeilingMinor: 1_010 },
+        ],
+        1,
+        10
+      )
+    ).toMatchObject({ grossMinor: 1_005, mrpAdjustmentMinor: 5 });
+  });
+
+  it("rejects an allocation price above that lot's own pro-rata MRP ceiling", () => {
+    expect(() =>
+      priceAllocatedLots(
+        [{ canonicalUnits: 1, unitPriceMinor: 101, proRataCeilingMinor: 100 }],
+        1,
+        1
+      )
+    ).toThrow('PRICE_ABOVE_MRP');
+  });
+
   it('derives a strip price from the allocated lot printed MRP', () => {
     expect(
       priceFromLot({
