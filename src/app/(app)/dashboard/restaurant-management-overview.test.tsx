@@ -30,8 +30,8 @@ const mocks = vi.hoisted(() => {
     preferences: query(preference),
     preference,
     branches: query([
-      { id: 'branch_1', name: 'Main', active: true, isDefault: true },
-      { id: 'branch_2', name: 'Harbour', active: true, isDefault: false },
+      { id: 'branch_1', name: 'Main', timezone: 'UTC', active: true, isDefault: true },
+      { id: 'branch_2', name: 'Harbour', timezone: 'Asia/Karachi', active: true, isDefault: false },
     ]),
     financial: query([
       {
@@ -392,9 +392,24 @@ describe('RestaurantManagementOverview', () => {
 });
 
 describe('closedDateRange', () => {
-  it('creates inclusive 7 and 30 day UTC date windows', () => {
+  it('creates inclusive 7 and 30 day windows ending on the prior branch-local date', () => {
     const now = new Date('2026-08-30T15:00:00.000Z');
-    expect(closedDateRange(7, now)).toEqual({ from: '2026-08-23', to: '2026-08-29' });
-    expect(closedDateRange(30, now)).toEqual({ from: '2026-07-31', to: '2026-08-29' });
+    expect(closedDateRange(7, 'UTC', now)).toEqual({ from: '2026-08-23', to: '2026-08-29' });
+    expect(closedDateRange(30, 'UTC', now)).toEqual({
+      from: '2026-07-31',
+      to: '2026-08-29',
+    });
+  });
+
+  it('uses the selected branch calendar around UTC midnight', () => {
+    const now = new Date('2026-08-30T20:30:00.000Z');
+    expect(closedDateRange(7, 'Asia/Karachi', now)).toEqual({
+      from: '2026-08-24',
+      to: '2026-08-30',
+    });
+    expect(closedDateRange(7, 'America/New_York', now)).toEqual({
+      from: '2026-08-23',
+      to: '2026-08-29',
+    });
   });
 });

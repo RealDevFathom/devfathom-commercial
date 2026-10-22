@@ -11,6 +11,7 @@ import { Skeleton } from '@/components/ui/skeleton';
 import { Stat } from '@/components/ui/stat';
 import { StatusPill } from '@/components/ui/status-pill';
 import { cn } from '@/lib/utils';
+import { workspaceToday } from '@/lib/timezone';
 import { trpc } from '@/lib/trpc';
 import type { AppRouter } from '@/server/routers/_app';
 
@@ -59,8 +60,9 @@ function dateString(date: Date): string {
   return date.toISOString().slice(0, 10);
 }
 
-export function closedDateRange(days: 7 | 30, now = new Date()) {
-  const to = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), now.getUTCDate()));
+export function closedDateRange(days: 7 | 30, timeZone: string, now = new Date()) {
+  const [year, month, day] = workspaceToday(timeZone, now).split('-').map(Number);
+  const to = new Date(Date.UTC(year!, month! - 1, day!));
   to.setUTCDate(to.getUTCDate() - 1);
   const from = new Date(to);
   from.setUTCDate(from.getUTCDate() - (days - 1));
@@ -574,8 +576,12 @@ export function RestaurantManagementOverview({ insightsEnabled }: { insightsEnab
     ? (branchOverride ?? '')
     : ((storedBranch ?? fallbackBranch)?.id ?? '');
   const rangeDays = rangeOverride ?? preferencesQuery.data?.rangeDays ?? 7;
+  const selectedBranch = activeBranches.find((branch) => branch.id === selectedBranchId);
 
-  const range = useMemo(() => closedDateRange(rangeDays), [rangeDays]);
+  const range = useMemo(
+    () => closedDateRange(rangeDays, selectedBranch?.timezone ?? 'UTC'),
+    [rangeDays, selectedBranch?.timezone]
+  );
   const branchReady = insightsEnabled && selectedBranchId.length > 0;
   const rangeInput = {
     branchId: selectedBranchId,

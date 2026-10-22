@@ -12,6 +12,7 @@ const mocks = vi.hoisted(() => ({
   exportLabourCosts: vi.fn(),
   enqueueInsightBackfill: vi.fn(),
   prepareClosePacket: vi.fn(),
+  resolveCapabilityBranchAuthorization: vi.fn(),
 }));
 
 vi.mock('server-only', () => ({}));
@@ -57,6 +58,15 @@ vi.mock('@/lib/restaurant/insight-rollups', async () => {
   );
   return { ...actual, enqueueInsightBackfill: mocks.enqueueInsightBackfill };
 });
+vi.mock('@/lib/restaurant/staff-branch-authorization', async () => {
+  const actual = await vi.importActual<
+    typeof import('@/lib/restaurant/staff-branch-authorization')
+  >('@/lib/restaurant/staff-branch-authorization');
+  return {
+    ...actual,
+    resolveCapabilityBranchAuthorization: mocks.resolveCapabilityBranchAuthorization,
+  };
+});
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';
 import { ClosePacketError } from '@/lib/restaurant/close-readiness';
@@ -72,6 +82,7 @@ function caller(overrides: Partial<TRPCContext> = {}) {
   return restaurantInsightsRouter.createCaller({
     db: db as unknown as ScopedDb,
     entitlements: {
+      organizationId: 'org_1',
       enabledModules: ['restaurant-insights'],
       activeSeats: 1,
       seatLimit: 50,
@@ -95,6 +106,14 @@ beforeEach(() => {
   mocks.can.mockImplementation((_subject, action) =>
     Promise.resolve(mocks.grants.has(String(action)))
   );
+  mocks.resolveCapabilityBranchAuthorization.mockImplementation(async () => ({
+    actorStaffProfileId: 'staff_1',
+    actorBranchIds: ['branch_1', 'branch_2'],
+    organizationWide: mocks.grants.has('restaurant:configure'),
+    branchIds: mocks.grants.has('restaurant:configure')
+      ? ['branch_1', 'branch_2']
+      : ['branch_1'],
+  }));
   db.restaurantStaffProfile.findFirst.mockResolvedValue({ primaryBranchId: 'branch_1' });
   db.restaurantBranch.findFirst.mockResolvedValue({ id: 'branch_1' });
   mocks.listInsightReports.mockResolvedValue([
@@ -133,17 +152,19 @@ describe('close packet query boundary', () => {
     expect(mocks.prepareClosePacket).not.toHaveBeenCalled();
   });
 
-  it('rejects cross-branch and inactive staff before the service', async () => {
+  it('rejects cross-branch and unresolved staff scope before the service', async () => {
     mocks.grants.add('reports:financial');
     await expect(
       caller().prepareClosePacket({ ...input, branchId: 'branch_2' })
     ).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    db.restaurantStaffProfile.findFirst.mockResolvedValue(null);
+    mocks.resolveCapabilityBranchAuthorization.mockRejectedValueOnce({ code: 'FORBIDDEN' });
     await expect(caller().prepareClosePacket(input)).rejects.toMatchObject({ code: 'FORBIDDEN' });
-    expect(db.restaurantStaffProfile.findFirst).toHaveBeenCalledWith({
-      where: { userId: 'user_1', status: 'ACTIVE' },
-      select: { primaryBranchId: true },
-    });
+    expect(mocks.resolveCapabilityBranchAuthorization).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ id: 'user_1' }),
+      'reports:financial',
+      { organizationId: 'org_1' }
+    );
     expect(mocks.prepareClosePacket).not.toHaveBeenCalled();
   });
 
@@ -196,7 +217,7 @@ describe('close packet query boundary', () => {
 });
 
 describe('restaurant insights branch and capability guards', () => {
-  it('allows ACTIVE staff to read only their primary branch', async () => {
+  it('allows ACTIVE staff to read an effectively authorized branch', async () => {
     mocks.grants.add('reports:operational');
     const rows = await caller().listOperationalReports({ branchId: 'branch_1' });
     expect(rows).toEqual([{ branchId: 'branch_1', orderCount: 2, coverCount: 4 }]);
@@ -204,6 +225,31 @@ describe('restaurant insights branch and capability guards', () => {
       db,
       'operational',
       expect.objectContaining({ branchId: 'branch_1' })
+    );
+  });
+
+  it('allows a report-capable manager to read an authorized secondary branch', async () => {
+    mocks.grants.add('reports:operational');
+    mocks.resolveCapabilityBranchAuthorization.mockResolvedValueOnce({
+      actorStaffProfileId: 'staff_1',
+      actorBranchIds: ['branch_1', 'branch_2'],
+      organizationWide: false,
+      branchIds: ['branch_1', 'branch_2'],
+    });
+
+    await expect(
+      caller().listOperationalReports({ branchId: 'branch_2' })
+    ).resolves.toHaveLength(1);
+    expect(mocks.resolveCapabilityBranchAuthorization).toHaveBeenCalledWith(
+      db,
+      expect.objectContaining({ id: 'user_1' }),
+      'reports:operational',
+      { organizationId: 'org_1' }
+    );
+    expect(mocks.listInsightReports).toHaveBeenCalledWith(
+      db,
+      'operational',
+      expect.objectContaining({ branchId: 'branch_2' })
     );
   });
 
@@ -218,7 +264,7 @@ describe('restaurant insights branch and capability guards', () => {
 
   it('denies a report-capable user without ACTIVE primary-branch or configure proof', async () => {
     mocks.grants.add('reports:financial');
-    db.restaurantStaffProfile.findFirst.mockResolvedValue(null);
+    mocks.resolveCapabilityBranchAuthorization.mockRejectedValueOnce({ code: 'FORBIDDEN' });
     await expect(caller().listFinancialReports({ branchId: 'branch_1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });
@@ -265,7 +311,12 @@ describe('labour dual-capability default deny', () => {
   it('keeps read-by-id branch guarded after loading the fact', async () => {
     mocks.grants.add('reports:financial');
     mocks.grants.add('workforce:rates');
-    db.restaurantStaffProfile.findFirst.mockResolvedValue({ primaryBranchId: 'branch_2' });
+    mocks.resolveCapabilityBranchAuthorization.mockResolvedValueOnce({
+      actorStaffProfileId: 'staff_1',
+      actorBranchIds: ['branch_2'],
+      organizationWide: false,
+      branchIds: ['branch_2'],
+    });
     await expect(caller().readLabourCost({ id: 'labour_1' })).rejects.toMatchObject({
       code: 'FORBIDDEN',
     });

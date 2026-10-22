@@ -41,6 +41,7 @@ vi.mock('./restaurant-dashboard-content', () => ({ RestaurantDashboardContent: (
 import DashboardPage from './page';
 import { PharmacyDashboardContent } from './pharmacy-dashboard-content';
 import { HotelDashboardContent } from './hotel-dashboard-content';
+import { RestaurantDashboardContent } from './restaurant-dashboard-content';
 
 function helpers() {
   return {
@@ -58,12 +59,9 @@ function helpers() {
 }
 
 describe('DashboardPage vertical dispatch', () => {
-  it.each([
-    ['owner', 'ADMIN', '/restaurant'],
-    ['waiter', 'EMPLOYEE', '/pos'],
-  ])(
-    'redirects a Restaurant %s (%s) to %s before loading dashboard data',
-    async (_persona, role, target) => {
+  it.each(['ADMIN', 'EMPLOYEE'])(
+    'renders the Restaurant management dashboard for an authenticated %s',
+    async (role) => {
       const agencyHelpers = helpers();
       mocks.createSSRHelpers.mockResolvedValue({
         helpers: agencyHelpers,
@@ -71,12 +69,13 @@ describe('DashboardPage vertical dispatch', () => {
         entitlements: { vertical: 'RESTAURANT', enabledModules: ['restaurant-core'] },
       });
 
-      await expect(DashboardPage()).rejects.toThrow('redirect');
+      const page = await DashboardPage();
 
-      expect(mocks.redirect).toHaveBeenCalledWith(target);
+      expect(mocks.redirect).not.toHaveBeenCalled();
       expect(agencyHelpers.dashboard.getStats.prefetch).not.toHaveBeenCalled();
       expect(agencyHelpers.meetings.getUpcoming.prefetch).not.toHaveBeenCalled();
       expect(mocks.withTenantDb).not.toHaveBeenCalled();
+      expect(page.props.children.type).toBe(RestaurantDashboardContent);
     }
   );
 
