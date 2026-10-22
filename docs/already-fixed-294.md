@@ -30,3 +30,11 @@ Meta or that Meta credentials have been provisioned. Those are deployment and
 provider-account prerequisites, not missing application behavior. No archive
 branch recovery was requested by this issue, so there were no archive-only
 changes to port or skip.
+
+## Attempt 2 review scope
+
+The security-review findings supplied with attempt 2 concern follow-up branches
+for issues #339, #299, #289, #284, and #238. None is part of issue #294, and all
+five branches are explicitly marked `HOLD`; consequently, no code from them was
+ported. In particular, this verification does not alter authorization, pharmacy
+finance postings, khata settlement, prescription permissions, or migrations.
