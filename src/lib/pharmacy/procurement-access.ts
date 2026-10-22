@@ -23,11 +23,10 @@ export function procurementCapabilityGranted(input: {
   role: readonly CapabilityRule[];
 }): boolean {
   const overrides = matching(input.overrides);
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const role = matching(input.role);
-  if (role.some((rule) => rule.effect === 'DENY')) return false;
-  return role.some((rule) => rule.effect === 'ALLOW');
+  const rules = [...overrides, ...role];
+  if (rules.some((rule) => rule.effect === 'DENY')) return false;
+  return rules.some((rule) => rule.effect === 'ALLOW');
 }
 
 import type { ScopedDb } from '@/lib/tenancy/scoped-db';

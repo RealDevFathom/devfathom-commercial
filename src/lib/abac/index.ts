@@ -48,13 +48,14 @@ async function customDecision(
   const overrides = user.permissionOverrides.filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (overrides.some((rule) => rule.effect === 'DENY')) return false;
-  if (overrides.some((rule) => rule.effect === 'ALLOW')) return true;
   const roleRules = (user.organizationRole?.permissions ?? []).filter((rule) =>
     capabilityMatches(rule.capability, action, rule.effect === 'DENY' ? 'DENY' : 'ALLOW')
   );
-  if (roleRules.some((rule) => rule.effect === 'DENY')) return false;
-  if (roleRules.some((rule) => rule.effect === 'ALLOW')) return true;
+  const matchingRules = [...overrides, ...roleRules];
+  // A deny is authoritative regardless of whether the conflicting allow came
+  // from the role or a per-user override. No precedence tier may bypass it.
+  if (matchingRules.some((rule) => rule.effect === 'DENY')) return false;
+  if (matchingRules.some((rule) => rule.effect === 'ALLOW')) return true;
   return null;
 }
 

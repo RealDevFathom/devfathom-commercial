@@ -80,6 +80,28 @@ describe('opt-in pharmacy Owner / Operator access', () => {
     ).resolves.toBe(false);
   });
 
+  it.each([
+    {
+      deniedBy: 'role',
+      rolePermissions: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
+      overrides: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+    },
+    {
+      deniedBy: 'user',
+      rolePermissions: [{ capability: 'pharmacy:procurement', effect: 'ALLOW' }],
+      overrides: [{ capability: 'pharmacy:procurement', effect: 'DENY' }],
+    },
+  ] as const)('makes an explicit $deniedBy deny beat a conflicting allow', async (rules) => {
+    await expect(
+      can(employee, 'pharmacy:procurement', undefined, {
+        db: authorizationDb({
+          rolePermissions: [...rules.rolePermissions],
+          overrides: [...rules.overrides],
+        }),
+      })
+    ).resolves.toBe(false);
+  });
+
   it.each(['*', 'pharmacy:*'])(
     'lets a %s DENY override revoke an exact sensitive grant',
     async (wildcard) => {

@@ -119,6 +119,61 @@ beforeEach(() => {
   mocks.hasModule.mockImplementation((view, key) => view.enabledModules.includes(key));
 });
 
+describe('procurement mutation authorization', () => {
+  it.each([
+    {
+      procedure: 'createSupplier',
+      invoke: () => caller('unrelated_member').createSupplier({ name: 'Acme' }),
+    },
+    {
+      procedure: 'setSupplierAuthorization',
+      invoke: () =>
+        caller('unrelated_member').setSupplierAuthorization({
+          supplierId: 'supplier_a',
+          authorized: true,
+        }),
+    },
+    {
+      procedure: 'createPurchaseOrder',
+      invoke: () =>
+        caller('unrelated_member').createPurchaseOrder({
+          reference: 'PO-1',
+          supplierId: 'supplier_a',
+          lines: [ORDER_LINE],
+        }),
+    },
+    {
+      procedure: 'approvePurchaseOrder',
+      invoke: () =>
+        caller('unrelated_member').approvePurchaseOrder({
+          purchaseOrderId: 'po_a',
+          decision: 'APPROVED',
+        }),
+    },
+  ])('denies $procedure to a same-tenant member without procurement', async ({ invoke }) => {
+    // `can()` represents the member's unrelated grant resolving to default deny
+    // for the canonical pharmacy procurement action.
+    mocks.can.mockResolvedValue(false);
+
+    await expect(invoke()).rejects.toMatchObject({
+      code: 'FORBIDDEN',
+      message: 'You do not have permission for this action.',
+    });
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'unrelated_member' }),
+      'pharmacy:procurement',
+      undefined,
+      expect.objectContaining({ db, source: 'TRPC' })
+    );
+    expect(db.pharmacySupplier.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.create).not.toHaveBeenCalled();
+    expect(db.pharmacySupplier.update).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.findFirst).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrder.create).not.toHaveBeenCalled();
+    expect(db.pharmacyPurchaseOrderApproval.create).not.toHaveBeenCalled();
+  });
+});
+
 describe.each(['purchaseReturns', 'supplierCredits'] as const)(
   '%s live read contract',
   (endpoint) => {
