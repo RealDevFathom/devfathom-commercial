@@ -74,6 +74,7 @@ export type BillCommandErrorReason =
   | 'BILL_NOT_OPEN'
   | 'LINE_NOT_FOUND'
   | 'ALREADY_COMPED'
+  | 'NOT_COMPED'
   | 'COMP_EXCEEDS_BILL'
   | 'INVALID_SPLIT'
   | 'PARTITION_INCOMPLETE'
@@ -1019,6 +1020,95 @@ export async function compLine(db: ScopedDb, input: CompLineInput): Promise<Comp
 
     await recordMoneyIdempotentResult(tx, input.actor, encodeCompResult(line.id, releasedDiscount));
     return { billLineId: line.id, billId: bill.id, releasedDiscount, replayed: false };
+  });
+}
+
+export type ReverseCompInput = CompLineInput & {
+  /** Trusted authenticated terminal session; omitted only by non-terminal command callers. */
+  terminalSessionId?: string | null;
+};
+
+export type ReverseCompResult = {
+  billLineId: string;
+  billId: string;
+  replayed: boolean;
+};
+
+/**
+ * Reverse a mistaken line comp. Unlike a re-cut, this correction remains valid after
+ * a partial tender: the bill must still be OPEN, but its existing tenders are retained
+ * and the restored charge simply becomes part of the remaining balance. The approving
+ * manager, acting operator, reason, device, authenticated terminal session and target
+ * are appended to the co-auth audit trail before the original charge is restored.
+ */
+export async function reverseComp(
+  db: ScopedDb,
+  input: ReverseCompInput
+): Promise<ReverseCompResult> {
+  return runInTransaction(db, async (tx) => {
+    await tx.$queryRaw`SELECT id FROM restaurant_bills WHERE id = ${input.billId} AND "branchId" = ${input.branchId} FOR UPDATE`;
+    const bill = await tx.restaurantBill.findFirst({
+      where: { id: input.billId, branchId: input.branchId },
+      select: { id: true, status: true, compTotal: true, grandTotal: true },
+    });
+    if (!bill) throw new BillCommandError('The bill does not exist.', 'BILL_NOT_FOUND');
+
+    const idem = await beginMoneyIdempotent(tx, input.actor, 'bill.comp.reverse');
+    if (idem.replay) {
+      return { billLineId: idem.resultRef ?? input.billLineId, billId: bill.id, replayed: true };
+    }
+
+    const reason = requireReason(input.reason);
+    if (bill.status !== 'OPEN') {
+      throw new BillCommandError('Only an OPEN bill can have a comp reversed.', 'BILL_NOT_OPEN');
+    }
+    const line = await tx.restaurantBillLine.findUnique({
+      where: { id: input.billLineId },
+      select: {
+        id: true,
+        billId: true,
+        lineSubtotal: true,
+        taxAmount: true,
+        serviceChargeAmount: true,
+        compAmount: true,
+      },
+    });
+    if (!line || line.billId !== bill.id) {
+      throw new BillCommandError('The bill line does not belong to this bill.', 'LINE_NOT_FOUND');
+    }
+    if (line.compAmount.isZero()) {
+      throw new BillCommandError('The line is not comped.', 'NOT_COMPED');
+    }
+
+    await persistCoAuth(tx, {
+      actingStaffProfileId: input.actor.staffProfileId,
+      approvingStaffProfileId: input.approvingStaffProfileId,
+      capability: 'orders:comp',
+      reason,
+      targetType: 'RestaurantBillLineCompReversal',
+      targetId: line.id,
+      deviceId: input.actor.deviceId,
+      terminalSessionId: input.terminalSessionId,
+    });
+
+    await tx.restaurantBillLine.update({
+      where: { id: line.id },
+      data: {
+        compAmount: ZERO,
+        lineTotal: add(add(line.lineSubtotal, line.taxAmount), line.serviceChargeAmount),
+        compReason: null,
+        compCoAuthorizationId: null,
+      },
+    });
+    await tx.restaurantBill.update({
+      where: { id: bill.id },
+      data: {
+        compTotal: sub(bill.compTotal, line.compAmount),
+        grandTotal: add(bill.grandTotal, line.compAmount),
+      },
+    });
+    await recordMoneyIdempotentResult(tx, input.actor, line.id);
+    return { billLineId: line.id, billId: bill.id, replayed: false };
   });
 }
 

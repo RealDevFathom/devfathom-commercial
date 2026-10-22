@@ -248,6 +248,7 @@ beforeAll(async () => {
     import('@/lib/restaurant/operator-credentials'),
     import('@/app/api/restaurant/checkout/bill/route'),
     import('@/app/api/restaurant/checkout/comp/route'),
+    import('@/app/api/restaurant/checkout/comp/reverse/route'),
     import('@/app/api/restaurant/checkout/tender/route'),
     import('@/app/api/restaurant/checkout/refund/route'),
     import('@/app/api/restaurant/checkout/summary/route'),
@@ -268,6 +269,7 @@ beforeAll(async () => {
   const [
     bill,
     comp,
+    reverseComp,
     tender,
     refund,
     summary,
@@ -294,6 +296,7 @@ beforeAll(async () => {
     routes: {
       bill,
       comp,
+      reverseComp,
       tender,
       refund,
       summary,
@@ -709,7 +712,7 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       expect(after).toEqual(before);
     });
 
-    it('comps a bill line with manager co-authorization (payments:collect)', async () => {
+    it('comps and reverses a bill line with terminal-session co-authorization', async () => {
       const { orderId } = await seedOrder(ctx.branchA, ctx.posA.deviceId, TODAY, ['8.00']);
       const cut = await call(deps.routes.bill, {
         secret: ctx.posA.secret,
@@ -735,6 +738,42 @@ describeIfDatabase('M5-L5 checkout + cash route transport (real DB)', () => {
       });
       expect(res.status).toBe(200);
       expect(res.json.billId).toBe(billId);
+
+      const reversed = await call(deps.routes.reverseComp, {
+        secret: ctx.posA.secret,
+        session: token,
+        key: uniqueKey('comp-reverse'),
+        body: {
+          billId,
+          billLineId: line!.id,
+          reason: 'comp entered on wrong line',
+          approving: { staffProfileId: ctx.managerA, type: 'PIN', secret: PIN },
+        },
+      });
+      expect(reversed.status, JSON.stringify(reversed.json)).toBe(200);
+      expect(reversed.json).toMatchObject({ billId, billLineId: line!.id, replayed: false });
+
+      const evidence = await deps.withTenantDb(orgA, async (tx) => {
+        const session = await tx.restaurantTerminalSession.findFirstOrThrow({
+          where: {
+            deviceId: ctx.posA.deviceId,
+            activeStaffProfileId: ctx.staffA,
+            endedAt: null,
+          },
+          orderBy: { createdAt: 'desc' },
+        });
+        const audit = await tx.restaurantCoAuthorization.findFirstOrThrow({
+          where: { targetType: 'RestaurantBillLineCompReversal', targetId: line!.id },
+          include: { terminalSession: true },
+        });
+        return { session, audit };
+      });
+      expect(evidence.audit.terminalSessionId).toBe(evidence.session.id);
+      expect(evidence.audit.terminalSession).toMatchObject({
+        id: evidence.session.id,
+        deviceId: ctx.posA.deviceId,
+        activeStaffProfileId: ctx.staffA,
+      });
     });
 
     it('re-cuts an order by item with manager co-authorization (split)', async () => {

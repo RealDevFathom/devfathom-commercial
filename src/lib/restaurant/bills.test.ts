@@ -942,6 +942,81 @@ describeIfDatabase('bills command layer (real DB)', () => {
     ).rejects.toMatchObject({ reason: 'ALREADY_COMPED' });
   });
 
+  it('reverses a mistaken comp after a partial tender with co-auth and idempotency', async () => {
+    const { orderId, db } = await openWithItems([{}, {}]);
+    const { billIds } = await deps.bills.cutBills(db, {
+      orderId,
+      branchId: ids.branch,
+      split: { kind: 'NONE' },
+      actor: actor(),
+    });
+    const billId = billIds[0]!;
+    const line = await read((tx) =>
+      tx.restaurantBillLine.findFirstOrThrow({ where: { billId }, select: { id: true } })
+    );
+    await deps.bills.compLine(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'mistaken comp',
+      approvingStaffProfileId: ids.manager,
+      actor: actor(),
+    });
+    await read((tx) =>
+      tx.restaurantTender.create({
+        data: {
+          billId,
+          type: 'OTHER',
+          amount: D('1.00'),
+          businessDate: AT,
+          staffProfileId: ids.operator,
+          deviceId,
+        },
+      })
+    );
+
+    const reversingActor = actor();
+    const reversed = await deps.bills.reverseComp(db, {
+      billId,
+      branchId: ids.branch,
+      billLineId: line.id,
+      reason: 'comp entered on wrong line',
+      approvingStaffProfileId: ids.manager,
+      actor: reversingActor,
+    });
+    expect(reversed.replayed).toBe(false);
+    expect(
+      await deps.bills.reverseComp(db, {
+        billId,
+        branchId: ids.branch,
+        billLineId: line.id,
+        reason: 'comp entered on wrong line',
+        approvingStaffProfileId: ids.manager,
+        actor: reversingActor,
+      })
+    ).toMatchObject({ replayed: true, billLineId: line.id });
+
+    const after = await read(async (tx) => ({
+      bill: await tx.restaurantBill.findUniqueOrThrow({ where: { id: billId } }),
+      line: await tx.restaurantBillLine.findUniqueOrThrow({ where: { id: line.id } }),
+      audit: await tx.restaurantCoAuthorization.findFirstOrThrow({
+        where: { targetType: 'RestaurantBillLineCompReversal', targetId: line.id },
+      }),
+      tenders: await tx.restaurantTender.count({ where: { billId } }),
+    }));
+    expect(after.bill.compTotal.toString()).toBe('0');
+    expect(after.bill.grandTotal.toString()).toBe('25');
+    expect(after.line.compAmount.toString()).toBe('0');
+    expect(after.line.lineTotal.toString()).toBe('12.5');
+    expect(after.line.compReason).toBeNull();
+    expect(after.audit).toMatchObject({
+      actingStaffProfileId: ids.operator,
+      approvingStaffProfileId: ids.manager,
+      reason: 'comp entered on wrong line',
+    });
+    expect(after.tenders).toBe(1);
+  });
+
   it('re-split guard: blocks without recut, voids-and-recuts with co-auth, locks after tender/settle', async () => {
     const { orderId, db } = await openWithItems([{}, {}]);
     const firstCut = await deps.bills.cutBills(db, {
