@@ -2,35 +2,84 @@ import 'server-only';
 
 import { TRPCError } from '@trpc/server';
 import { z } from 'zod';
-import { requirePlatformSession } from '@/lib/platform/auth';
+import { canPlatform, requirePlatformSession } from '@/lib/platform/auth';
 import { PlatformSecurityError } from '@/lib/platform/security';
 import { withPlatformDb, type ScopedDb } from '@/lib/tenancy/scoped-db';
 import { publicProcedure, router } from '@/server/trpc';
 
-const MAX_USD = 1_000_000;
-const money = z.coerce.number().finite().positive().max(MAX_USD);
+const MAX_USD = 1_000_000n;
+
+/**
+ * Parse USD without ever passing it through a binary floating-point number.
+ * The returned canonical string is built from integer minor units and is safe
+ * to hand directly to Prisma Decimal.
+ */
+function exactUsd(decimalPlaces: number) {
+  return z
+    .string()
+    .trim()
+    .max(32)
+    .regex(/^\d+(?:\.\d+)?$/, 'Enter a positive USD amount.')
+    .transform((value, ctx) => {
+      const [whole, fraction = ''] = value.split('.');
+      if (fraction.length > decimalPlaces) {
+        ctx.addIssue({ code: 'custom', message: `Use at most ${decimalPlaces} decimal places.` });
+        return z.NEVER;
+      }
+      const units =
+        BigInt(whole) * 10n ** BigInt(decimalPlaces) +
+        BigInt(fraction.padEnd(decimalPlaces, '0'));
+      if (units <= 0n || units > MAX_USD * 10n ** BigInt(decimalPlaces)) {
+        ctx.addIssue({ code: 'custom', message: 'USD amount is outside the allowed range.' });
+        return z.NEVER;
+      }
+      const padded = units.toString().padStart(decimalPlaces + 1, '0');
+      return `${padded.slice(0, -decimalPlaces)}.${padded.slice(-decimalPlaces)}`;
+    });
+}
+
+const budgetUsd = exactUsd(4);
+const modelPriceUsd = exactUsd(6);
 const modelName = z.string().trim().min(1).max(200);
 const provider = z.enum(['anthropic', 'bedrock']);
 const tier = z.enum(['cheap', 'standard', 'deep']);
 
-const superAdminProcedure = publicProcedure.use(async ({ next }) => {
-  try {
-    const actor = await requirePlatformSession();
-    if (actor.role !== 'SUPER_ADMIN') {
-      throw new TRPCError({ code: 'FORBIDDEN', message: 'SuperAdmin access is required.' });
+function platformCapabilityProcedure(capability: 'settings:read' | 'settings:write') {
+  return publicProcedure.use(async ({ ctx, next }) => {
+    try {
+      const actor = await requirePlatformSession();
+      if (!canPlatform(actor, capability)) {
+        throw new TRPCError({
+          code: 'FORBIDDEN',
+          message: 'You do not have permission for this action.',
+        });
+      }
+      return next({ ctx: { ...ctx, platformActor: actor } });
+    } catch (error) {
+      if (error instanceof TRPCError) throw error;
+      if (error instanceof PlatformSecurityError) {
+        throw new TRPCError({
+          code: error.status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN',
+          message: error.message,
+        });
+      }
+      throw error;
     }
-    return next({ ctx: { platformActor: actor } });
-  } catch (error) {
-    if (error instanceof TRPCError) throw error;
-    if (error instanceof PlatformSecurityError) {
-      throw new TRPCError({
-        code: error.status === 401 ? 'UNAUTHORIZED' : 'FORBIDDEN',
-        message: error.message,
-      });
-    }
-    throw error;
-  }
-});
+  });
+}
+
+const platformReadProcedure = platformCapabilityProcedure('settings:read');
+const platformWriteProcedure = platformCapabilityProcedure('settings:write');
+
+type AiSettingsContext = { platformDb?: ScopedDb };
+
+function withAiSettingsDb<T>(ctx: AiSettingsContext, run: (db: ScopedDb) => Promise<T>) {
+  return ctx.platformDb ? run(ctx.platformDb) : withPlatformDb(run);
+}
+
+async function lockSettings(db: ScopedDb) {
+  await db.$queryRawUnsafe('SELECT id FROM ai_settings WHERE id = $1 FOR UPDATE', 'default');
+}
 
 function serializeSettings(settings: {
   mode: string;
@@ -83,19 +132,20 @@ const modelField = {
 } as const;
 
 export const aiSettingsRouter = router({
-  get: superAdminProcedure.query(async () =>
-    withPlatformDb(async (db) => {
+  get: platformReadProcedure.query(async ({ ctx }) =>
+    withAiSettingsDb(ctx, async (db) => {
       const settings = await db.aISetting.findUniqueOrThrow({ where: { id: 'default' } });
       return serializeSettings(settings);
     })
   ),
 
-  updateMode: superAdminProcedure
+  updateMode: platformWriteProcedure
     .input(
       z.object({ mode: z.enum(['Auto', 'ForceAnthropic', 'ForceBedrock', 'Disabled']) }).strict()
     )
     .mutation(async ({ ctx, input }) =>
-      withPlatformDb(async (db) => {
+      withAiSettingsDb(ctx, async (db) => {
+        await lockSettings(db);
         const before = await db.aISetting.findUniqueOrThrow({ where: { id: 'default' } });
         const after = await db.aISetting.update({
           where: { id: 'default' },
@@ -114,10 +164,11 @@ export const aiSettingsRouter = router({
       })
     ),
 
-  updateMonthlyBudget: superAdminProcedure
-    .input(z.object({ monthlyAnthropicBudgetUsd: money }).strict())
+  updateMonthlyBudget: platformWriteProcedure
+    .input(z.object({ monthlyAnthropicBudgetUsd: budgetUsd }).strict())
     .mutation(async ({ ctx, input }) =>
-      withPlatformDb(async (db) => {
+      withAiSettingsDb(ctx, async (db) => {
+        await lockSettings(db);
         const before = await db.aISetting.findUniqueOrThrow({ where: { id: 'default' } });
         const after = await db.aISetting.update({
           where: { id: 'default' },
@@ -139,10 +190,11 @@ export const aiSettingsRouter = router({
       })
     ),
 
-  updateTierModel: superAdminProcedure
+  updateTierModel: platformWriteProcedure
     .input(z.object({ provider, tier, model: modelName }).strict())
     .mutation(async ({ ctx, input }) =>
-      withPlatformDb(async (db) => {
+      withAiSettingsDb(ctx, async (db) => {
+        await lockSettings(db);
         const field = modelField[input.provider][input.tier];
         const before = await db.aISetting.findUniqueOrThrow({ where: { id: 'default' } });
         const after = await db.aISetting.update({
@@ -162,8 +214,8 @@ export const aiSettingsRouter = router({
       })
     ),
 
-  listModelPrices: superAdminProcedure.query(() =>
-    withPlatformDb(async (db) => {
+  listModelPrices: platformReadProcedure.query(({ ctx }) =>
+    withAiSettingsDb(ctx, async (db) => {
       const prices = await db.aIModelPrice.findMany({
         orderBy: [{ provider: 'asc' }, { model: 'asc' }, { effectiveFrom: 'desc' }],
       });
@@ -175,25 +227,32 @@ export const aiSettingsRouter = router({
     })
   ),
 
-  upsertModelPrice: superAdminProcedure
+  upsertModelPrice: platformWriteProcedure
     .input(
       z
         .object({
           provider,
           model: modelName,
-          inputUsdPerMTok: money,
-          outputUsdPerMTok: money,
+          inputUsdPerMTok: modelPriceUsd,
+          outputUsdPerMTok: modelPriceUsd,
           effectiveFrom: z.coerce.date(),
         })
         .strict()
     )
     .mutation(async ({ ctx, input }) =>
-      withPlatformDb(async (db) => {
+      withAiSettingsDb(ctx, async (db) => {
         const key = {
           provider: input.provider,
           model: input.model,
           effectiveFrom: input.effectiveFrom,
         };
+        // The composite row may not exist yet, so a row lock cannot serialize
+        // competing creates. A transaction-scoped advisory lock on the exact
+        // unique key makes the pre-image and its audit row truthful.
+        await db.$queryRawUnsafe(
+          'SELECT pg_advisory_xact_lock(hashtextextended($1, 0))',
+          `${key.provider}\u0000${key.model}\u0000${key.effectiveFrom.toISOString()}`
+        );
         const before = await db.aIModelPrice.findUnique({
           where: { provider_model_effectiveFrom: key },
         });

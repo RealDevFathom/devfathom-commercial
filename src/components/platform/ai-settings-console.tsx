@@ -90,7 +90,7 @@ export function AiSettingsConsole() {
             className="space-y-3"
             onSubmit={(event) =>
               submit(event, (form) =>
-                budget.mutate({ monthlyAnthropicBudgetUsd: Number(form.get('budget')) })
+                budget.mutate({ monthlyAnthropicBudgetUsd: String(form.get('budget')) })
               )
             }
           >
@@ -177,8 +177,8 @@ export function AiSettingsConsole() {
               price.mutate({
                 provider: String(form.get('provider')) as 'anthropic' | 'bedrock',
                 model: String(form.get('model')),
-                inputUsdPerMTok: Number(form.get('input')),
-                outputUsdPerMTok: Number(form.get('output')),
+                inputUsdPerMTok: String(form.get('input')),
+                outputUsdPerMTok: String(form.get('output')),
                 effectiveFrom: new Date(String(form.get('effectiveFrom'))),
               })
             )

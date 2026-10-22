@@ -19,7 +19,7 @@ import {
   TenantHostError,
   type TenantOrganization,
 } from '@/lib/tenancy/host';
-import { withTenantDb } from '@/lib/tenancy/scoped-db';
+import { withPlatformDb, withTenantDb } from '@/lib/tenancy/scoped-db';
 import type { SupportIdentity } from '@/lib/tenancy/support-session';
 import { responseForPasswordChange } from '@/lib/auth/session-state';
 import { resolveTenantActor } from '@/lib/tenancy/tenant-actor';
@@ -140,15 +140,41 @@ function isPlatformAiSettingsRequest(req: Request): boolean {
   return paths.length > 0 && paths.every((path) => path.startsWith('aiSettings.'));
 }
 
-function servePlatformAiSettings(req: Request) {
-  return fetchRequestHandler({
-    endpoint: TRPC_ENDPOINT,
-    req,
-    router: appRouter,
-    // AI settings procedures establish their own platform transaction after
-    // authenticating the platform cookie; tenant context must never be used.
-    createContext: () =>
-      ({ requestMeta: { ip: clientIp(req), userAgent: req.headers.get('user-agent') } }) as never,
+async function servePlatformAiSettings(req: Request) {
+  if (wantsStreamedResponse(req)) {
+    return requestFailed(
+      new TRPCError({
+        code: 'UNSUPPORTED_MEDIA_TYPE',
+        message: `Streamed responses (${STREAMED_ACCEPT}) are not supported by this endpoint: its database transaction has to end with the request. Use a non-streaming batch link.`,
+      })
+    );
+  }
+
+  return withPlatformDb(async (platformDb) => {
+    let procedureFailed = false;
+    const response = await fetchRequestHandler({
+      endpoint: TRPC_ENDPOINT,
+      req,
+      router: appRouter,
+      // One platform transaction covers the whole HTTP batch. The procedures
+      // reuse it, rather than committing independently before a sibling fails.
+      createContext: () =>
+        ({
+          platformDb,
+          requestMeta: { ip: clientIp(req), userAgent: req.headers.get('user-agent') },
+        }) as never,
+      onError: ({ error, path }) => {
+        procedureFailed = true;
+        if (error.code === 'INTERNAL_SERVER_ERROR') {
+          console.error(`[trpc] ${path ?? 'request'} failed:`, error);
+        }
+      },
+    });
+    if (procedureFailed) throw new TransactionAborted(response);
+    return response;
+  }, { timeout: 60_000 }).catch((error: unknown) => {
+    if (!(error instanceof TransactionAborted)) throw error;
+    return req.method === 'POST' ? withoutDiscardedResults(req, error.response) : error.response;
   });
 }
 
