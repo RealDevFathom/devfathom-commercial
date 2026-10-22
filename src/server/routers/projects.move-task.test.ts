@@ -32,6 +32,7 @@ import { projectsRouter } from './projects';
 
 const taskUpdate = vi.fn(async () => ({}));
 const assigneeDeleteMany = vi.fn(async () => ({ count: 1 }));
+const defaultAssigneeFindMany = vi.fn(async () => []);
 
 const tx = {
   task: {
@@ -45,7 +46,7 @@ const tx = {
     findUnique: vi.fn(async () => ({ board: { projectId: 'destination-project' } })),
   },
   taskAssignee: { deleteMany: assigneeDeleteMany, createMany: vi.fn() },
-  columnDefaultAssignee: { findMany: vi.fn(async () => []) },
+  columnDefaultAssignee: { findMany: defaultAssigneeFindMany },
 };
 
 const db = {
@@ -89,6 +90,13 @@ describe('projects.moveTask', () => {
         },
       },
     });
+    expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
+      where: {
+        columnId: 'target-column',
+        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+      },
+      select: { userId: true },
+    });
   });
 
   it('does not change assignees when moving between boards in the same project', async () => {
@@ -97,5 +105,36 @@ describe('projects.moveTask', () => {
     await caller().moveTask({ taskId: 'task-1', targetColumnId: 'target-column', newOrder: 0 });
 
     expect(assigneeDeleteMany).not.toHaveBeenCalled();
+  });
+
+  it('removes unauthorized assignees from every cross-project bulk move', async () => {
+    tx.task.findMany
+      .mockReset()
+      .mockResolvedValueOnce([
+        { id: 'task-1', column: { board: { projectId: 'source-project' } } },
+        { id: 'task-2', column: { board: { projectId: 'destination-project' } } },
+      ])
+      .mockResolvedValueOnce([]);
+
+    await caller().bulkMoveTasks({
+      taskIds: ['task-1', 'task-2'],
+      targetColumnId: 'target-column',
+    });
+
+    expect(assigneeDeleteMany).toHaveBeenCalledWith({
+      where: {
+        taskId: { in: ['task-1'] },
+        user: {
+          projectMembers: { none: { projectId: 'destination-project' } },
+        },
+      },
+    });
+    expect(defaultAssigneeFindMany).toHaveBeenCalledWith({
+      where: {
+        columnId: 'target-column',
+        user: { projectMembers: { some: { projectId: 'destination-project' } } },
+      },
+      select: { userId: true },
+    });
   });
 });

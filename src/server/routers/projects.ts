@@ -762,7 +762,12 @@ export const projectsRouter = router({
 
           // Auto-assign the target column's default assignees (additive).
           const defaults = await tx.columnDefaultAssignee.findMany({
-            where: { columnId: input.targetColumnId },
+            where: {
+              columnId: input.targetColumnId,
+              user: {
+                projectMembers: { some: { projectId: targetColumn.board.projectId } },
+              },
+            },
             select: { userId: true },
           });
           if (defaults.length > 0) {
@@ -816,6 +821,20 @@ export const projectsRouter = router({
       }
 
       await ctx.db.$transaction(async (tx) => {
+        const targetColumn = await tx.column.findUnique({
+          where: { id: input.targetColumnId },
+          select: { board: { select: { projectId: true } } },
+        });
+        if (!targetColumn) throw new TRPCError({ code: 'NOT_FOUND' });
+
+        const movedTasks = await tx.task.findMany({
+          where: { id: { in: input.taskIds } },
+          select: { id: true, column: { select: { board: { select: { projectId: true } } } } },
+        });
+        const crossProjectTaskIds = movedTasks
+          .filter((task) => task.column.board.projectId !== targetColumn.board.projectId)
+          .map((task) => task.id);
+
         const moving = new Set(input.taskIds);
         const targetList = await tx.task.findMany({
           where: { columnId: input.targetColumnId },
@@ -835,13 +854,33 @@ export const projectsRouter = router({
             data: { columnId: input.targetColumnId },
           });
         }
+
+        // Moving a task must not preserve principals who cannot access its new
+        // project. Apply this to every cross-project task in the bulk operation
+        // before adding the destination column's (membership-filtered) defaults.
+        if (crossProjectTaskIds.length > 0) {
+          await tx.taskAssignee.deleteMany({
+            where: {
+              taskId: { in: crossProjectTaskIds },
+              user: {
+                projectMembers: { none: { projectId: targetColumn.board.projectId } },
+              },
+            },
+          });
+        }
+
         for (let i = 0; i < finalIds.length; i++) {
           await tx.task.update({ where: { id: finalIds[i] }, data: { order: i } });
         }
 
         // Auto-assign the target column's default owners (additive), mirroring moveTask.
         const defaults = await tx.columnDefaultAssignee.findMany({
-          where: { columnId: input.targetColumnId },
+          where: {
+            columnId: input.targetColumnId,
+            user: {
+              projectMembers: { some: { projectId: targetColumn.board.projectId } },
+            },
+          },
           select: { userId: true },
         });
         if (defaults.length > 0) {
