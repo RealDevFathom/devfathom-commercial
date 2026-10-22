@@ -130,6 +130,17 @@ export async function deactivateDeliveryZone(
   if (changed.count !== 1) throw new DeliveryError('Delivery zone does not exist.', 'NOT_FOUND');
 }
 
+export async function reactivateDeliveryZone(
+  db: ScopedDb,
+  input: { organizationId: string; branchId: string; zoneId: string }
+) {
+  const changed = await db.restaurantDeliveryZone.updateMany({
+    where: { id: input.zoneId, organizationId: input.organizationId, branchId: input.branchId },
+    data: { active: true },
+  });
+  if (changed.count !== 1) throw new DeliveryError('Delivery zone does not exist.', 'NOT_FOUND');
+}
+
 export async function quoteDeliveryZone(
   db: ScopedDb,
   input: {
