@@ -39,8 +39,9 @@ async function sourceBatch(
     where: {
       organizationId,
       id: input.batchId,
+      branchId: input.branchId,
       sourceId: input.sourceId,
-      source: { organizationId },
+      source: { organizationId, branchId: input.branchId },
     },
     select: {
       id: true,
@@ -63,7 +64,7 @@ export async function listStagedMedicines(
   input: z.infer<typeof reviewListInput>
 ) {
   const batch = await sourceBatch(db, organizationId, input);
-  const base = { organizationId, batchId: batch.id, targetModelKey: 'med.product' };
+  const base = { organizationId, branchId: input.branchId, batchId: batch.id, targetModelKey: 'med.product' };
   const where: Prisma.PharmacyMigrationRowWhereInput = { ...base };
   if (input.query)
     where.OR = [
@@ -112,7 +113,7 @@ export async function listStagedMedicines(
   const candidateCount = await db.pharmacyMigrationRow.count({ where: base });
   const groups = await db.pharmacyMigrationException.groupBy({
     by: ['bucket'],
-    where: { organizationId, batchId: batch.id, status: 'OPEN' },
+    where: { organizationId, branchId: input.branchId, batchId: batch.id, status: 'OPEN' },
     _count: { _all: true },
   });
   return {
@@ -136,7 +137,7 @@ export async function stagedMedicineDetail(
 ) {
   const batch = await sourceBatch(db, organizationId, input);
   const row = await db.pharmacyMigrationRow.findFirst({
-    where: { organizationId, batchId: batch.id, id: input.rowId, targetModelKey: 'med.product' },
+    where: { organizationId, branchId: input.branchId, batchId: batch.id, id: input.rowId, targetModelKey: 'med.product' },
     include: {
       exceptions: {
         where: { organizationId },

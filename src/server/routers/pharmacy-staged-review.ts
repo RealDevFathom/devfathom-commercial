@@ -22,14 +22,29 @@ function organizationId(ctx: TRPCContext): string {
   return id;
 }
 
+async function authorizedBranchIds(ctx: TRPCContext, org: string): Promise<string[]> {
+  if (ctx.session!.user.role === 'ADMIN') {
+    const branches = await ctx.db.pharmacyBranch.findMany({
+      where: { organizationId: org, active: true }, select: { id: true },
+    });
+    return branches.map((branch) => branch.id);
+  }
+  const assignments = await ctx.db.pharmacyBranchAssignment.findMany({
+    where: { organizationId: org, userId: ctx.session!.user.id, active: true, branch: { active: true } },
+    select: { branchId: true },
+  });
+  return assignments.map((assignment) => assignment.branchId);
+}
+
 /** Server-page caller only. Nesting preserves the existing pharmacy-core entitlement path. */
 export const pharmacyStagedReviewRouter = router({
   importCore: router({
     /** Import operations use central can(); an explicit DENY wins over role grants. */
-    batches: capabilityProcedure('pharmacy:data-import').query(({ ctx }) => {
+    batches: capabilityProcedure('pharmacy:data-import').query(async ({ ctx }) => {
       const org = organizationId(ctx);
+      const branches = await authorizedBranchIds(ctx, org);
       return ctx.db.pharmacyMigrationBatch.findMany({
-        where: { organizationId: org, source: { organizationId: org } },
+        where: { organizationId: org, branchId: { in: branches }, source: { organizationId: org, branchId: { in: branches } } },
         orderBy: [{ createdAt: 'desc' }, { id: 'asc' }],
         select: {
           id: true,
@@ -56,7 +71,7 @@ export const pharmacyStagedReviewRouter = router({
       .query(async ({ ctx, input }) => {
         const org = organizationId(ctx);
         await assertReviewBranch(ctx.db, org, input.branchId);
-        const where = { organizationId: org, source: { organizationId: org } };
+        const where = { organizationId: org, branchId: input.branchId, source: { organizationId: org, branchId: input.branchId } };
         const total = await ctx.db.pharmacyMigrationBatch.count({ where });
         const batches = await ctx.db.pharmacyMigrationBatch.findMany({
           where,

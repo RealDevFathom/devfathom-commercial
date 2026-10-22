@@ -34,6 +34,9 @@ function makeDb() {
       findFirst: vi.fn().mockResolvedValue({ id: 'branch_a' }),
       findMany: vi.fn().mockResolvedValue([{ id: 'branch_a', name: 'Branch' }]),
     },
+    pharmacyBranchAssignment: {
+      findMany: vi.fn().mockResolvedValue([{ branchId: 'branch_a' }]),
+    },
     pharmacyMigrationBatch: {
       findFirst: vi.fn().mockResolvedValue({
         id: 'batch_a',
@@ -117,8 +120,9 @@ describe('staged review authorization and reads', () => {
         where: {
           organizationId: 'org_a',
           id: 'batch_a',
+          branchId: 'branch_a',
           sourceId: 'source_a',
-          source: { organizationId: 'org_a' },
+          source: { organizationId: 'org_a', branchId: 'branch_a' },
         },
       })
     );
@@ -140,6 +144,7 @@ describe('staged review authorization and reads', () => {
         orderBy: [{ rowNumber: 'asc' }, { id: 'asc' }],
         where: expect.objectContaining({
           organizationId: 'org_a',
+          branchId: 'branch_a',
           batchId: 'batch_a',
           targetModelKey: 'med.product',
           OR: expect.arrayContaining([
@@ -171,6 +176,7 @@ describe('staged review authorization and reads', () => {
       expect.objectContaining({
         where: {
           organizationId: 'org_a',
+          branchId: 'branch_a',
           batchId: 'batch_a',
           id: 'foreign',
           targetModelKey: 'med.product',

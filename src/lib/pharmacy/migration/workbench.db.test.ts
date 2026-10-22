@@ -44,6 +44,8 @@ const suffix = randomBytes(6).toString('hex');
 const orgA = `org_wha1163_a_${suffix}`;
 const orgB = `org_wha1163_b_${suffix}`;
 const signerA = `user_wha1163_a_${suffix}`;
+const branchA = `branch_wha1163_a_${suffix}`;
+const branchB = `branch_wha1163_b_${suffix}`;
 
 type Deps = {
   withTenantDb: (typeof import('@/lib/tenancy/scoped-db'))['withTenantDb'];
@@ -55,17 +57,24 @@ type Deps = {
 let deps: Deps;
 
 function inOrgA<T>(work: (tx: ScopedDb) => Promise<T>): Promise<T> {
-  return deps.withTenantDb(orgA, work);
+  return deps.withTenantDb(orgA, async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.current_branch_id', $1, true)", branchA);
+    return work(tx);
+  });
 }
 
 function inOrgB<T>(work: (tx: ScopedDb) => Promise<T>): Promise<T> {
-  return deps.withTenantDb(orgB, work);
+  return deps.withTenantDb(orgB, async (tx) => {
+    await tx.$executeRawUnsafe("SELECT set_config('app.current_branch_id', $1, true)", branchB);
+    return work(tx);
+  });
 }
 
 /** Register the fixture and profile it into a batch, as a caller would. */
 async function profileMissingFieldsFixture(db: ScopedDb, label: string) {
   const bytes = readFileSync(MISSING_FIELDS_FIXTURE);
   const source = await deps.workbench.recordSource(db, {
+    branchId: branchA,
     kind: 'EXCEL_CSV',
     fileName: 'excel-missing-fields.csv',
     bytes,
@@ -73,6 +82,7 @@ async function profileMissingFieldsFixture(db: ScopedDb, label: string) {
   });
   const result = profileTable(excelCsvProfiler, parseDelimitedText(bytes.toString('utf8')));
   const persisted = await deps.workbench.persistProfile(db, {
+    branchId: branchA,
     sourceId: source.id,
     label,
     profiler: excelCsvProfiler,
@@ -144,6 +154,12 @@ beforeAll(async () => {
          CURRENT_TIMESTAMP, 'ACTIVE', CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)`,
       [signerA, orgA, `${signerA}@example.test`]
     );
+    await owner.query(
+      `INSERT INTO "pharmacy_branches" ("id","organizationId","code","name","addressLine","city","provinceCode","createdAt","updatedAt")
+       VALUES ($1,$2,'A','Branch A','Test','Karachi','SD',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP),
+              ($3,$4,'B','Branch B','Test','Karachi','SD',CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`,
+      [branchA, orgA, branchB, orgB]
+    );
     await owner.query('COMMIT');
   } catch (error) {
     await owner.query('ROLLBACK').catch(() => {});
@@ -180,13 +196,15 @@ describeIfDatabase('PH-MIG workbench — MIG-01 read-only source evidence', () =
 
     const { first, second } = await inOrgA(async (db) => ({
       first: await deps.workbench.recordSource(db, {
-        kind: 'EXCEL_CSV',
+        branchId: branchA,
+    kind: 'EXCEL_CSV',
         fileName: 'excel-clean.csv',
         bytes,
         createdByUserId: signerA,
       }),
       second: await deps.workbench.recordSource(db, {
-        kind: 'EXCEL_CSV',
+        branchId: branchA,
+    kind: 'EXCEL_CSV',
         fileName: 'excel-clean-resent.csv',
         bytes,
         createdByUserId: signerA,
@@ -200,6 +218,7 @@ describeIfDatabase('PH-MIG workbench — MIG-01 read-only source evidence', () =
   it('refuses every update and delete against a registered source', async () => {
     const { source, updated, deleted, stillThere } = await inOrgA(async (db) => {
       const created = await deps.workbench.recordSource(db, {
+        branchId: branchA,
         kind: 'ABUZAR',
         fileName: 'abuzar-stock-export.csv',
         bytes: readFileSync(join(FIXTURE_DIR, 'abuzar-stock-export.csv')),

@@ -11553,7 +11553,9 @@ model PharmacyMigrationSource {
   fileName       String
   byteSize       BigInt
   contentHash    String
-  createdByUserId String
+  branchId        String
+  createdByUserId String?
+  createdBySystem Boolean                     @default(false)
   capturedAt     DateTime                    @default(now())
   createdAt      DateTime                    @default(now())
 
@@ -11561,8 +11563,9 @@ model PharmacyMigrationSource {
   batches      PharmacyMigrationBatch[]
 
   @@unique([organizationId, id])
-  @@unique([organizationId, contentHash])
-  @@index([organizationId, kind, capturedAt])
+  @@unique([organizationId, branchId, id])
+  @@unique([organizationId, branchId, contentHash])
+  @@index([organizationId, branchId, kind, capturedAt])
   @@map("pharmacy_migration_sources")
 }
 
@@ -11572,12 +11575,14 @@ model PharmacyMigrationBatch {
   id              String                       @id @default(cuid())
   organizationId  String                       @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   sourceId        String
+  branchId        String
   label           String
   status          PharmacyMigrationBatchStatus @default(UPLOADED)
   rowCount        Int                          @default(0)
   exceptionCount  Int                          @default(0)
   profilerVersion String
-  createdByUserId String
+  createdByUserId String?
+  createdBySystem Boolean                      @default(false)
   committedAt     DateTime?
   rolledBackAt    DateTime?
   failureReason   String?
@@ -11585,13 +11590,14 @@ model PharmacyMigrationBatch {
   createdAt       DateTime                     @default(now())
   updatedAt       DateTime                     @updatedAt
 
-  source     PharmacyMigrationSource      @relation(fields: [organizationId, sourceId], references: [organizationId, id], onDelete: Restrict)
+  source     PharmacyMigrationSource      @relation(fields: [organizationId, branchId, sourceId], references: [organizationId, branchId, id], onDelete: Restrict)
   rows       PharmacyMigrationRow[]
   exceptions PharmacyMigrationException[]
   entities   PharmacyMigrationBatchEntity[]
 
   @@unique([organizationId, id])
-  @@index([organizationId, sourceId, status])
+  @@unique([organizationId, branchId, id])
+  @@index([organizationId, branchId, sourceId, status])
   @@map("pharmacy_migration_batches")
 }
 
@@ -11601,17 +11607,18 @@ model PharmacyMigrationBatchEntity {
   id              String                           @id @default(cuid())
   organizationId  String                           @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   batchId         String
+  branchId        String
   rowSourceKey    String
   entityType      String
   entityId        String
   operation       PharmacyMigrationEntityOperation
   reversedById    String?
   createdAt       DateTime                         @default(now())
-  batch           PharmacyMigrationBatch           @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
+  batch           PharmacyMigrationBatch           @relation(fields: [organizationId, branchId, batchId], references: [organizationId, branchId, id], onDelete: Restrict)
 
   @@unique([organizationId, id])
-  @@unique([organizationId, batchId, rowSourceKey, entityType, operation])
-  @@index([organizationId, batchId, operation])
+  @@unique([organizationId, batchId, rowSourceKey, entityType, entityId, operation])
+  @@index([organizationId, branchId, batchId, operation])
   @@map("pharmacy_migration_batch_entities")
 }
 
@@ -11622,6 +11629,7 @@ model PharmacyMigrationRow {
   id                String    @id @default(cuid())
   organizationId    String    @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   batchId           String
+  branchId          String
   sourceKey         String
   rowNumber         Int
   rawPayload        Json
@@ -11641,12 +11649,13 @@ model PharmacyMigrationRow {
   balanceMinor      BigInt?
   createdAt         DateTime  @default(now())
 
-  batch      PharmacyMigrationBatch       @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
+  batch      PharmacyMigrationBatch       @relation(fields: [organizationId, branchId, batchId], references: [organizationId, branchId, id], onDelete: Restrict)
   exceptions PharmacyMigrationException[]
 
   @@unique([organizationId, id])
+  @@unique([organizationId, branchId, id])
   @@unique([organizationId, batchId, sourceKey])
-  @@index([organizationId, batchId, targetModelKey])
+  @@index([organizationId, branchId, batchId, targetModelKey])
   @@index([organizationId, targetModelKey, targetNaturalKey])
   @@map("pharmacy_migration_rows")
 }
@@ -11659,6 +11668,7 @@ model PharmacyMigrationException {
   id                String                             @id @default(cuid())
   organizationId    String                             @default(dbgenerated("current_setting('app.current_organization_id', true)"))
   batchId           String
+  branchId          String
   rowId             String?
   bucket            PharmacyMigrationExceptionBucket
   severity          PharmacyMigrationExceptionSeverity
@@ -11670,11 +11680,11 @@ model PharmacyMigrationException {
   createdAt         DateTime                           @default(now())
   updatedAt         DateTime                           @updatedAt
 
-  batch PharmacyMigrationBatch @relation(fields: [organizationId, batchId], references: [organizationId, id], onDelete: Restrict)
-  row   PharmacyMigrationRow?  @relation(fields: [organizationId, rowId], references: [organizationId, id], onDelete: Restrict)
+  batch PharmacyMigrationBatch @relation(fields: [organizationId, branchId, batchId], references: [organizationId, branchId, id], onDelete: Restrict)
+  row   PharmacyMigrationRow?  @relation(fields: [organizationId, branchId, rowId], references: [organizationId, branchId, id], onDelete: Restrict)
 
-  @@index([organizationId, batchId, bucket])
-  @@index([organizationId, batchId, status, severity])
+  @@index([organizationId, branchId, batchId, bucket])
+  @@index([organizationId, branchId, batchId, status, severity])
   @@index([organizationId, rowId])
   @@map("pharmacy_migration_exceptions")
 }

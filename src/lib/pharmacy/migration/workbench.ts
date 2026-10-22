@@ -52,6 +52,7 @@ export type RecordedSource = {
 export async function recordSource(
   db: ScopedDb,
   input: {
+    branchId: string;
     kind: MigrationSourceKind;
     fileName: string;
     bytes: Uint8Array | string;
@@ -63,7 +64,9 @@ export async function recordSource(
     typeof input.bytes === 'string' ? Buffer.byteLength(input.bytes) : input.bytes.byteLength
   );
 
-  const existing = await db.pharmacyMigrationSource.findFirst({ where: { contentHash } });
+  const existing = await db.pharmacyMigrationSource.findFirst({
+    where: { branchId: input.branchId, contentHash },
+  });
   if (existing) {
     return {
       id: existing.id,
@@ -77,6 +80,7 @@ export async function recordSource(
   const created = await db.pharmacyMigrationSource.create({
     data: {
       kind: input.kind,
+      branchId: input.branchId,
       fileName: input.fileName,
       byteSize,
       contentHash,
@@ -110,6 +114,7 @@ export type PersistedProfile = {
 export async function persistProfile(
   db: ScopedDb,
   input: {
+    branchId: string;
     sourceId: string;
     label: string;
     profiler: Pick<SourceProfiler, 'version'>;
@@ -122,6 +127,7 @@ export async function persistProfile(
   const batch = await db.pharmacyMigrationBatch.create({
     data: {
       sourceId: input.sourceId,
+      branchId: input.branchId,
       label: input.label,
       profilerVersion: input.profiler.version,
       createdByUserId: input.createdByUserId,
@@ -133,6 +139,7 @@ export async function persistProfile(
     await db.pharmacyMigrationRow.createMany({
       data: rows.map((row) => ({
         batchId: batch.id,
+        branchId: input.branchId,
         sourceKey: row.sourceKey,
         rowNumber: row.rowNumber,
         rawPayload: row.rawPayload,
@@ -158,7 +165,7 @@ export async function persistProfile(
   // exceptions. `sourceKey` is unique within a batch, which is what makes this
   // a lookup rather than a positional guess.
   const persistedRows = await db.pharmacyMigrationRow.findMany({
-    where: { batchId: batch.id },
+    where: { branchId: input.branchId, batchId: batch.id },
     select: { id: true, sourceKey: true },
   });
   const rowIdBySourceKey = new Map(persistedRows.map((row) => [row.sourceKey, row.id]));
@@ -169,6 +176,7 @@ export async function persistProfile(
         const sourceKey = exception.rowIndex === null ? null : rows[exception.rowIndex]?.sourceKey;
         return {
           batchId: batch.id,
+          branchId: input.branchId,
           rowId:
             sourceKey === null || sourceKey === undefined
               ? null
@@ -181,8 +189,8 @@ export async function persistProfile(
     });
   }
 
-  await db.pharmacyMigrationBatch.update({
-    where: { id: batch.id },
+  const transitioned = await db.pharmacyMigrationBatch.updateMany({
+    where: { id: batch.id, branchId: input.branchId, status: 'PARSING' },
     data: {
       status: 'PREVIEW',
       rowCount: rows.length,
@@ -190,6 +198,7 @@ export async function persistProfile(
       profiledAt: new Date(),
     },
   });
+  if (transitioned.count !== 1) throw new Error('Import profile lost its batch lifecycle race');
 
   const buckets: Partial<Record<ExceptionBucket, number>> = {};
   for (const exception of exceptions) {
