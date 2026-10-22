@@ -607,26 +607,10 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     orderableSupplier();
     resolvableCatalog();
     resolvableOrder();
-    db.user.findUnique.mockResolvedValue({
-      organizationRole: {
-        permissions: [{ capability: 'pharmacy.procurement', effect: 'ALLOW' }],
-      },
-      permissionOverrides: [],
-    });
     db.medicineBarcode.findFirst.mockResolvedValue({
       presentation: { medicineId: 'medicine_a' },
     });
   });
-
-  const CASHIER = {
-    organizationRole: {
-      permissions: [
-        { capability: 'pharmacy.counter', effect: 'ALLOW' },
-        { capability: 'pharmacy:orders', effect: 'ALLOW' },
-      ],
-    },
-    permissionOverrides: [],
-  };
 
   it('derives canonical units and the landed unit cost instead of trusting the payload', async () => {
     await caller().createGoodsReceipt(RECEIPT);
@@ -788,7 +772,7 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
   });
 
   it('refuses goods-in when the actor only holds the cashier grants', async () => {
-    db.user.findUnique.mockResolvedValue(CASHIER);
+    mocks.can.mockResolvedValue(false);
     await expect(caller().createGoodsReceipt(RECEIPT)).rejects.toMatchObject({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
@@ -811,6 +795,12 @@ describe('PUR-02 receiving / PUR-05 — drafting a goods receipt', () => {
     });
     expect(db.pharmacyGoodsReceipt.create).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
+    expect(mocks.can).toHaveBeenCalledWith(
+      expect.objectContaining({ id: 'user_a' }),
+      'pharmacy:procurement',
+      undefined,
+      { db }
+    );
   });
 
   it('stores the server parse of a scan and ignores a conflicting client serial', async () => {

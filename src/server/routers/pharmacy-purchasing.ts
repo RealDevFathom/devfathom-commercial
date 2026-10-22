@@ -56,7 +56,6 @@ import {
   type Gs1WarningCode,
 } from '@/lib/pharmacy/gs1-datamatrix';
 import { normalizeMedicineText } from '@/lib/pharmacy/medicine';
-import { actorCanProcure } from '@/lib/pharmacy/procurement-access';
 import {
   assertDirectPurchaseAuthorized,
   PharmacyReceivingError,
@@ -184,8 +183,11 @@ function serialUniqueViolation(error: unknown): boolean {
 }
 
 async function assertProcurement(ctx: TRPCContext) {
-  const actorId = ctx.session?.user?.id;
-  if (!actorId || !(await actorCanProcure(ctx.db, actorId))) {
+  const user = ctx.session?.user;
+  if (
+    !user ||
+    !(await can(subjectFromSession(user), 'pharmacy:procurement', undefined, { db: ctx.db }))
+  ) {
     throw new TRPCError({
       code: 'FORBIDDEN',
       message: 'You do not have permission for this action.',
