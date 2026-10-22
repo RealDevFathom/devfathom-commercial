@@ -75,13 +75,6 @@ const mocks = vi.hoisted(() => ({
       status: 'ACTIVE',
       restaurantStaffProfiles: [{ id: 'staff_other', displayName: 'Sous Chef' }],
     },
-    {
-      id: 'user_invited',
-      name: 'Nadia Ali',
-      email: 'nadia@example.com',
-      status: 'INVITED',
-      restaurantStaffProfiles: [],
-    },
   ],
 }));
 
@@ -266,11 +259,6 @@ describe('Restaurant staff credential UI', () => {
         name: 'Bilal Ahmed — bilal@example.com — linked to Sous Chef',
       })
     ).toBeDisabled();
-    expect(
-      within(selector).getByRole('option', {
-        name: 'Nadia Ali — nadia@example.com — invitation pending',
-      })
-    ).toBeEnabled();
     expect(within(dialog).queryByText(/linked user id/i)).not.toBeInTheDocument();
   });
   beforeEach(() => {

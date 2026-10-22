@@ -508,14 +508,11 @@ export function RestaurantStaffConsole() {
                   {(eligibleUsersQuery.data ?? []).map((user) => {
                     const linkedProfile = user.restaurantStaffProfiles[0];
                     const isCurrent = user.id === editingStaff?.userId;
-                    const canLink = user.status === 'ACTIVE' || user.status === 'INVITED';
                     const unavailable =
-                      !canLink || (Boolean(linkedProfile) && !isCurrent);
+                      user.status !== 'ACTIVE' || (Boolean(linkedProfile) && !isCurrent);
                     const state = isCurrent
                       ? ' — currently linked'
-                      : user.status === 'INVITED'
-                        ? ' — invitation pending'
-                        : !canLink
+                      : user.status !== 'ACTIVE'
                         ? ' — inactive'
                         : linkedProfile
                           ? ` — linked to ${linkedProfile.displayName}`
@@ -531,10 +528,10 @@ export function RestaurantStaffConsole() {
                 <span id="staff-user-help" className="block text-xs text-text-muted">
                   {eligibleUsersQuery.data?.every(
                     (user) =>
-                      !['ACTIVE', 'INVITED'].includes(user.status) ||
+                      user.status !== 'ACTIVE' ||
                       (user.restaurantStaffProfiles.length > 0 && user.id !== editingStaff?.userId)
                   )
-                    ? 'No active or invited, unlinked organization users are available.'
+                    ? 'No active, unlinked organization users are available.'
                     : 'Unavailable users remain visible for context but cannot be selected.'}
                 </span>
               </div>
