@@ -1,0 +1,14 @@
+[
+  {
+    "id": "explicit-deny-over-role-allow",
+    "centralCanResult": false,
+    "expectedError": "FORBIDDEN",
+    "mustNotCall": ["isAIConfigured", "listChurnRisks"]
+  },
+  {
+    "id": "foreign-tenant-input",
+    "input": { "organizationId": "org_foreign", "limit": 25 },
+    "expectedError": "BAD_REQUEST",
+    "mustNotCall": ["isAIConfigured", "listChurnRisks"]
+  }
+]

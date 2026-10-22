@@ -1,7 +1,7 @@
 import { cleanup, render, screen } from '@testing-library/react';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
 
-const mocks = vi.hoisted(() => ({ can: vi.fn() }));
+const mocks = vi.hoisted(() => ({ can: vi.fn(), recordTrpcAudit: vi.fn() }));
 vi.mock('server-only', () => ({}));
 vi.mock('@/lib/tenancy/scoped-db', () => ({ createTenantDb: vi.fn(() => ({})) }));
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn() }));
@@ -11,8 +11,8 @@ vi.mock('@/lib/entitlements', () => ({
 }));
 vi.mock('@/server/audit', () => ({
   ipFromHeaders: vi.fn(() => null),
-  isAuditExcludedPath: vi.fn(() => true),
-  recordTrpcAudit: vi.fn(),
+  isAuditExcludedPath: vi.fn(() => false),
+  recordTrpcAudit: mocks.recordTrpcAudit,
 }));
 vi.mock('@/lib/abac', async () => ({
   ...(await vi.importActual<typeof import('@/lib/abac')>('@/lib/abac')),
@@ -75,6 +75,73 @@ describe('AI churn read router', () => {
     vi.mocked(port.listChurnRisks).mockResolvedValue([]);
     await caller().list({ limit: 12 });
     expect(port.listChurnRisks).toHaveBeenCalledWith({ organizationId: 'org_1', limit: 12 });
+  });
+
+  it('returns the scored customers on the happy path', async () => {
+    const customers = [
+      {
+        customerId: 'customer_1',
+        displayName: 'Fixture Customer',
+        risk: 'HIGH' as const,
+        score: 91,
+        reason: 'No recent visit',
+        lastActivityAt: null,
+      },
+    ];
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(port.isAIConfigured).mockResolvedValue(true);
+    vi.mocked(port.listChurnRisks).mockResolvedValue(customers);
+
+    await expect(caller().list({ limit: 10 })).resolves.toEqual({
+      status: 'AVAILABLE',
+      customers,
+    });
+  });
+
+  it('rejects a caller-supplied tenant instead of weakening the scoped predicate', async () => {
+    mocks.can.mockResolvedValue(true);
+
+    await expect(
+      caller().list({ limit: 10, organizationId: 'org_foreign' } as never)
+    ).rejects.toMatchObject({ code: 'BAD_REQUEST' });
+    expect(port.isAIConfigured).not.toHaveBeenCalled();
+    expect(port.listChurnRisks).not.toHaveBeenCalled();
+  });
+
+  it('is idempotent when an identical read is retried', async () => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(port.isAIConfigured).mockResolvedValue(true);
+    vi.mocked(port.listChurnRisks).mockResolvedValue([]);
+
+    const first = await caller().list({ limit: 25 });
+    const retry = await caller().list({ limit: 25 });
+
+    expect(retry).toEqual(first);
+    expect(port.listChurnRisks).toHaveBeenCalledTimes(2);
+    expect(port.listChurnRisks).toHaveBeenNthCalledWith(1, {
+      organizationId: 'org_1',
+      limit: 25,
+    });
+    expect(port.listChurnRisks).toHaveBeenNthCalledWith(2, {
+      organizationId: 'org_1',
+      limit: 25,
+    });
+  });
+
+  it('audits successful and denied AI reads', async () => {
+    mocks.can.mockResolvedValue(true);
+    vi.mocked(port.isAIConfigured).mockResolvedValue(false);
+    await caller().list({ limit: 10 });
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'list', type: 'query', outcome: 'SUCCESS' })
+    );
+
+    mocks.recordTrpcAudit.mockClear();
+    mocks.can.mockResolvedValue(false);
+    await expect(caller().list({ limit: 10 })).rejects.toMatchObject({ code: 'FORBIDDEN' });
+    expect(mocks.recordTrpcAudit).toHaveBeenCalledWith(
+      expect.objectContaining({ path: 'list', type: 'query', outcome: 'FAILURE' })
+    );
   });
 });
 

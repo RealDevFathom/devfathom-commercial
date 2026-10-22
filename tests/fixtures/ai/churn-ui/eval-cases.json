@@ -1,0 +1,29 @@
+[
+  {
+    "id": "ranked-risk-list",
+    "input": { "organizationId": "org_fixture", "limit": 25 },
+    "expected": {
+      "status": "AVAILABLE",
+      "customers": [
+        {
+          "customerId": "customer_fixture_1",
+          "displayName": "Fixture Customer",
+          "risk": "HIGH",
+          "score": 91,
+          "reason": "No recent visit",
+          "lastActivityAt": null
+        }
+      ]
+    }
+  },
+  {
+    "id": "ai-off-by-default",
+    "input": { "organizationId": "org_without_provider", "limit": 25 },
+    "expected": { "status": "AI_OFF" }
+  },
+  {
+    "id": "empty-risk-list",
+    "input": { "organizationId": "org_fixture", "limit": 25 },
+    "expected": { "status": "AVAILABLE", "customers": [] }
+  }
+]
