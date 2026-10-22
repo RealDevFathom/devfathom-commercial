@@ -4,6 +4,10 @@ Issue #267 reported that campaign reach was always returned as `0` and that the 
 described consent as customers who said “haan”. The current implementation no longer contains
 either behavior, so no production code or migration is required.
 
+Verification was performed against the current branch rather than inferred from the issue's
+`aba82bfd` found-at revision. The referenced `growth.ts` is no longer present: the live pharmacy
+campaign path is the scoped marketing service and its review page described below.
+
 ## Current-code evidence
 
 - `src/lib/pharmacy/marketing-service.ts:255-268` builds the candidate audience from distinct
