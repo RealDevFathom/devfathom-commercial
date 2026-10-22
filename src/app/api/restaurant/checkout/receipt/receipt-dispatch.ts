@@ -118,6 +118,13 @@ async function receiptFacts(
       `Rounding ${receipt.totals.roundingAdjustment}`,
       `TOTAL ${receipt.totals.grandTotal}`,
       `Split ${receipt.splitKind}${receipt.fractionNumerator !== null && receipt.fractionDenominator !== null ? ` ${receipt.fractionNumerator}/${receipt.fractionDenominator}` : ''}`,
+      ...(receipt.loyaltyWallet
+        ? [
+            `Loyalty wallet ${receipt.loyaltyWallet.balance} points / ${receipt.loyaltyWallet.platforms
+              .map((platform) => (platform === 'APPLE' ? 'Apple Wallet' : 'Google Wallet'))
+              .join(' + ')}`,
+          ]
+        : []),
       ...(reason ? [`Reprint: ${reason}`] : []),
     ],
     payments: receipt.tenders.length

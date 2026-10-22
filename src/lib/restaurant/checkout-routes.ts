@@ -34,6 +34,7 @@ import { RefundError, type RefundTenderResult } from './refunds';
 import { quoteOpenBillSettlement, TenderError, type ApplyTenderResult } from './tenders';
 import { TaxConfigurationError, TaxProfileResolutionError } from './tax-calculator';
 import { OrderCommandError } from './orders';
+import { loyaltyBalance } from './loyalty';
 import {
   authenticateApprover,
   buildActor,
@@ -736,7 +737,26 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
       receiptNumber: true,
       settledAt: true,
       branch: { select: { name: true, timezone: true } },
-      order: { select: { orderNumber: true, channel: true } },
+      order: {
+        select: {
+          orderNumber: true,
+          channel: true,
+          customer: {
+            select: {
+              loyaltyAccount: {
+                select: {
+                  id: true,
+                  active: true,
+                  walletPasses: {
+                    where: { status: 'ACTIVE' },
+                    select: { platform: true },
+                  },
+                },
+              },
+            },
+          },
+        },
+      },
       lines: {
         orderBy: { createdAt: 'asc' },
         select: {
@@ -764,6 +784,15 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
   });
   if (!bill) return null;
 
+  const account = bill.order.customer?.loyaltyAccount;
+  const loyaltyWallet =
+    account?.active && account.walletPasses.length > 0
+      ? {
+          balance: await loyaltyBalance(db, account.id),
+          platforms: [...new Set(account.walletPasses.map(({ platform }) => platform))],
+        }
+      : null;
+
   return {
     billId: bill.id,
     orderId: bill.orderId,
@@ -775,6 +804,7 @@ export async function buildReceiptForBranch(db: ScopedDb, billId: string, branch
     receiptNumber: bill.receiptNumber,
     settledAt: bill.settledAt,
     splitKind: bill.splitKind,
+    loyaltyWallet,
     fractionNumerator: bill.fractionNumerator,
     fractionDenominator: bill.fractionDenominator,
     lines: bill.lines.map((line) => ({
