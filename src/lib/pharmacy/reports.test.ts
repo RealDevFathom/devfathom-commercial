@@ -74,6 +74,22 @@ describe('PH-RPT metric contract', () => {
     expect(sql).toContain('strength."ingredientId"=?');
     expect(sql).toContain('lot."manufacturingBatchId"=?');
     expect(sql).toContain('receipt."supplierId"=?');
+    expect(sql).not.toContain('Prisma.raw');
+    expect(sql).toContain('allocation."branchId"=l."branchId"');
+    expect(sql).toContain('receipt_line."branchId"=lot."branchId"');
+    expect(sql).toContain(
+      'receipt_line."branchId" = line."branchId"'
+    );
+    expect(
+      queryRaw.mock.calls
+        .map(([query]) => (query as { strings: readonly string[] }).strings.join('?'))
+        .filter((sql) =>
+          /pharmacy_(?:sale_lines|tenders|refunds|daily_closes|stock_signals|stock_balances|fiscal_documents)/.test(
+            sql
+          )
+        )
+        .every((sql) => sql.includes("current_setting('app.current_organization_id',true)"))
+    ).toBe(true);
     expect(pharmacySupplierClaim.count).toHaveBeenCalledWith(
       expect.objectContaining({
         where: expect.objectContaining({

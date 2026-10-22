@@ -63,6 +63,7 @@ function pharmacyDimensionFilter(scope: JournalReportScope) {
              AND receipt."branchId" = receipt_line."branchId"
              AND receipt."id" = receipt_line."goodsReceiptId"
            WHERE receipt_line."organizationId" = line."organizationId"
+             AND receipt_line."branchId" = line."branchId"
              AND receipt_line."inventoryLotId" = line."lotId"
              AND receipt."supplierId" = ${scope.supplierId}
           )`
@@ -172,7 +173,9 @@ export function grossMarginQuery(
         JOIN "finance_journal_entries" entry
           ON entry."organizationId" = line."organizationId" AND entry."id" = line."entryId"
         LEFT JOIN "pharmacy_inventory_lots" lot
-          ON lot."organizationId" = line."organizationId" AND lot."id" = line."lotId"
+          ON lot."organizationId" = line."organizationId"
+         AND lot."branchId" = line."branchId"
+         AND lot."id" = line."lotId"
        WHERE line."organizationId" = ${scope.organizationId}
          AND line."accountCode" IN ('SALES_REVENUE', 'SALES_DISCOUNT', 'COST_OF_GOODS_SOLD')
          AND entry."occurredAt" >= ${input.from}
