@@ -8,7 +8,18 @@
 const DISPOSABLE_DATABASE = /(?:^|[_-])(test|e2e|tmp|disposable)(?:[_-]|$)/i;
 const FORBIDDEN_HOST = /(?:^|[.-])(prod|production|preview|staging)(?:[.-]|$)/i;
 const COMMON_POSTGRES_PORTS = new Set(['5432', '6432']);
-const REQUIRED = ['PHARMACY_E2E_ADMIN_EMAIL', 'PHARMACY_E2E_ADMIN_PASSWORD'] as const;
+const FULL_SEED_REQUIRED = ['PHARMACY_E2E_ADMIN_EMAIL', 'PHARMACY_E2E_ADMIN_PASSWORD'] as const;
+
+function assertPharmacySeedCredentials(env: Record<string, string | undefined>): void {
+  const grantsOnly = env.PHARMACY_E2E_GRANTS_ONLY === '1';
+  const required = grantsOnly ? (['PHARMACY_E2E_ADMIN_PASSWORD'] as const) : FULL_SEED_REQUIRED;
+  for (const name of required) {
+    if (!env[name]?.trim()) {
+      const mode = grantsOnly ? '--grants-only seed' : 'full pharmacy seed';
+      throw new Error(`${name} is required for the ${mode}.`);
+    }
+  }
+}
 
 /** The staging RDS instance is DBInstanceIdentifier devfathom-staging in ap-southeast-1. */
 const STAGING_RDS_ENDPOINT = /^devfathom-staging\.[a-z0-9]+\.ap-southeast-1\.rds\.amazonaws\.com$/;
@@ -64,7 +75,7 @@ export function resolvePharmacyE2eDatabaseUrl(
   if (env.STAGING_DEMO_SEED === '1') {
     const target = env.STAGING_DEMO_DATABASE_URL;
     if (!target) throw new Error('STAGING_DEMO_DATABASE_URL is required for STAGING_DEMO_SEED=1.');
-    for (const name of REQUIRED) if (!env[name]) throw new Error(`${name} is required.`);
+    assertPharmacySeedCredentials(env);
     return assertStagingDemoTarget(target, env);
   }
   if (env.PHARMACY_E2E !== '1') throw new Error('PHARMACY_E2E=1 explicit opt-in is required.');
@@ -109,9 +120,7 @@ export function pharmacyE2eEnvironment(
   if (env.PLAYWRIGHT_BASE_URL) {
     throw new Error('PLAYWRIGHT_BASE_URL is forbidden for the Pharmacy counter E2E lane.');
   }
-  for (const name of REQUIRED) {
-    if (!env[name]) throw new Error(`${name} is required.`);
-  }
+  assertPharmacySeedCredentials(env);
   const databaseUrl = resolvePharmacyE2eDatabaseUrl(env);
   return { ...env, DATABASE_URL: databaseUrl, TEST_DATABASE_URL: databaseUrl, PHARMACY_E2E: '1' };
 }

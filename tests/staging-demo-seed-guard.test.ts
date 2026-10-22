@@ -105,4 +105,34 @@ describe('resolvePharmacyE2eDatabaseUrl staging path', () => {
       })
     ).toThrow();
   });
+
+  it.each(['PHARMACY_E2E_ADMIN_EMAIL', 'PHARMACY_E2E_ADMIN_PASSWORD'] as const)(
+    'requires %s for a full seed',
+    (name) => {
+      expect(() => resolvePharmacyE2eDatabaseUrl({ ...seedEnv, [name]: undefined })).toThrow(
+        `${name} is required for the full pharmacy seed.`
+      );
+    }
+  );
+
+  it('does not require the admin email for a grants-only seed', () => {
+    expect(
+      resolvePharmacyE2eDatabaseUrl({
+        ...seedEnv,
+        PHARMACY_E2E_GRANTS_ONLY: '1',
+        PHARMACY_E2E_ADMIN_EMAIL: undefined,
+      })
+    ).toBe(new URL(URL_OK).href);
+  });
+
+  it('still requires the password used to create the demo pharmacist in grants-only mode', () => {
+    expect(() =>
+      resolvePharmacyE2eDatabaseUrl({
+        ...seedEnv,
+        PHARMACY_E2E_GRANTS_ONLY: '1',
+        PHARMACY_E2E_ADMIN_EMAIL: undefined,
+        PHARMACY_E2E_ADMIN_PASSWORD: undefined,
+      })
+    ).toThrow('PHARMACY_E2E_ADMIN_PASSWORD is required for the --grants-only seed.');
+  });
 });
