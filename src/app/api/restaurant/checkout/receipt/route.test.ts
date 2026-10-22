@@ -245,16 +245,27 @@ describe('Restaurant receipt dispatch', () => {
       },
     });
   });
-  it('carries fractional split and every saved line/tender amount without recalculation', async () => {
+  it('prints and previews a fractional share without bill item lines', async () => {
     Object.assign(receipt!, {
-      splitKind: 'FRACTION',
+      splitKind: 'FRACTIONAL',
       fractionNumerator: 1,
       fractionDenominator: 3,
+      lines: [],
     });
-    await post();
+    const response = await post();
+    expect(response.status).toBe(200);
     const facts = PrintDocumentSchema.parse(jobs[0].document).receiptSnapshot!.facts;
-    expect(facts.totals).toContain('Split FRACTION 1/3');
+    expect(facts.lines).toEqual(['Fractional share 1/3: 26.05']);
+    expect(facts.totals).toContain('Split FRACTIONAL 1/3');
     expect(facts.payments).toEqual(['CASH 26.05 / Tip 1.50 / Change 3.95 / Cash received 30.00']);
+
+    const preview = await (
+      await GET(new Request('https://tenant.test/api/restaurant/checkout/receipt?billId=bill-1'))
+    ).json();
+    expect(preview.printing.preview).toMatchObject({
+      text: expect.stringContaining('Fractional share 1/3: 26.05'),
+      validation: null,
+    });
   });
   it('preserves saved tax currency, rate buckets and discount allocations', async () => {
     findBill.mockResolvedValue({

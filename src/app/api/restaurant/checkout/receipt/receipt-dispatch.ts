@@ -84,16 +84,29 @@ async function receiptFacts(
       },
     },
   });
+  const lines = receipt.lines.map((line) => {
+    const amounts = saved.lines.find((row) => row.id === line.id)!;
+    return `${line.quantity} x ${line.name} @ ${line.unitPrice}\nLine subtotal ${line.lineSubtotal} / Comp ${line.compAmount} / Line total ${line.lineTotal}\nLine tax ${amounts.taxAmount.toFixed(2)} / Line service ${amounts.serviceChargeAmount.toFixed(2)}`;
+  });
+  // Fractional bills own a share of the order total rather than item lines. Keep
+  // other empty bills invalid, but give a valid fractional receipt its saved share.
+  if (
+    lines.length === 0 &&
+    receipt.splitKind === 'FRACTIONAL' &&
+    receipt.fractionNumerator !== null &&
+    receipt.fractionDenominator !== null
+  ) {
+    lines.push(
+      `Fractional share ${receipt.fractionNumerator}/${receipt.fractionDenominator}: ${receipt.totals.grandTotal}`
+    );
+  }
   return {
     businessName: receipt.branchName,
     invoiceNumber: `${receipt.receiptNumber}${reason ? ' - COPY' : ''}`,
     issuedAt: `${receipt.settledAt!.toISOString()} / Business date ${receipt.businessDate}`,
     orderNumber: String(receipt.orderNumber),
     channel: receipt.channel,
-    lines: receipt.lines.map((line) => {
-      const amounts = saved.lines.find((row) => row.id === line.id)!;
-      return `${line.quantity} x ${line.name} @ ${line.unitPrice}\nLine subtotal ${line.lineSubtotal} / Comp ${line.compAmount} / Line total ${line.lineTotal}\nLine tax ${amounts.taxAmount.toFixed(2)} / Line service ${amounts.serviceChargeAmount.toFixed(2)}`;
-    }),
+    lines,
     taxLines: [
       `Tax ${receipt.totals.taxTotal}`,
       ...saved.taxTransactionSnapshots.flatMap((tax) => [
