@@ -104,6 +104,7 @@ access to the objects the migration role owns:
 GRANT USAGE ON SCHEMA public TO devfathom_app;
 GRANT SELECT, INSERT, UPDATE, DELETE ON ALL TABLES IN SCHEMA public TO devfathom_app;
 GRANT USAGE, SELECT ON ALL SEQUENCES IN SCHEMA public TO devfathom_app;
+GRANT EXECUTE ON FUNCTION public.similarity_op(text, text) TO devfathom_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
   GRANT SELECT, INSERT, UPDATE, DELETE ON TABLES TO devfathom_app;
 ALTER DEFAULT PRIVILEGES IN SCHEMA public
