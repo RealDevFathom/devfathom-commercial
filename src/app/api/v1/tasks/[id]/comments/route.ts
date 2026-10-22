@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { z } from 'zod';
 import { withApiAuth } from '@/lib/api-auth';
 import { readJson } from '@/lib/api-json';
+import { can, subjectFromSession } from '@/lib/abac';
 import { canAccessProject, projectIdOfTask } from '@/lib/authz';
 
 export const GET = withApiAuth(
@@ -56,6 +57,16 @@ export const POST = withApiAuth(
     const projectId = await projectIdOfTask(authCtx.db, id);
     if (!projectId) return NextResponse.json({ error: 'Task not found' }, { status: 404 });
     if (!(await canAccessProject(authCtx.db, authCtx.userId, authCtx.userRole, projectId))) {
+      return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
+    }
+    if (
+      !(await can(
+        subjectFromSession({ id: authCtx.userId, role: authCtx.userRole }),
+        'tasks:write',
+        undefined,
+        { db: authCtx.db, source: 'REST' }
+      ))
+    ) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 });
     }
 

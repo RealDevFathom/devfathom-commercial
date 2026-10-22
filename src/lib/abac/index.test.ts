@@ -244,7 +244,7 @@ describe('custom ABAC decisions', () => {
       'pharmacy:orders',
     ] as const satisfies readonly Action[];
 
-    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(45);
+    expect(ALL_ACTIONS.filter((action) => !action.startsWith('hotel:'))).toHaveLength(46);
     for (const action of actions) {
       expect(ALL_ACTIONS).toContain(action);
       expect(POLICIES[action]).toHaveLength(0);
@@ -252,6 +252,21 @@ describe('custom ABAC decisions', () => {
         false
       );
     }
+  });
+
+  it('keeps an explicit tasks:write denial above the REST baseline grant', async () => {
+    const rest = { source: 'REST' as const };
+    await expect(can(employee, 'tasks:write', undefined, { db: authorizationDb({}), ...rest }))
+      .resolves.toBe(true);
+    await expect(
+      can(employee, 'tasks:write', undefined, {
+        db: authorizationDb({
+          rolePermissions: [{ capability: 'tasks:write', effect: 'ALLOW' }],
+          overrides: [{ capability: 'tasks:write', effect: 'DENY' }],
+        }),
+        ...rest,
+      })
+    ).resolves.toBe(false);
   });
 });
 

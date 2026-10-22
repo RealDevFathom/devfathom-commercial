@@ -25,6 +25,7 @@ export const ALL_ACTIONS = [
   'team:setRole', // change a member's role (privilege escalation — admin only)
   'leave:approve', // approve/decline leave requests
   'finance:read', // view finance & invoices
+  'tasks:write', // mutate agency tasks after token-scope and project-access checks
   'resignation:request', // submit your own resignation
   'resignation:readAll', // see the company-wide resignation queue
   'resignation:review', // approve/decline a resignation (resource: { userId, status, targetRole })
@@ -110,12 +111,18 @@ const isHrOrAdmin: Policy = ({ subject }) => subject.role === 'ADMIN' || subject
 // upstream is wrong — not that the member is fine.
 const isActiveMember: Policy = ({ subject }) =>
   Boolean(subject.status) && ACTIVE_STATUSES.has(subject.status!);
+// REST API authentication already verifies account status, token scope, and tenant
+// membership. Keep that existing baseline while routing task mutations through
+// `can()` so explicit user/role DENY rules remain authoritative.
+const isAuthenticatedApiUser: Policy = ({ subject, env }) =>
+  env.source === 'REST' && Boolean(subject.id);
 
 export const POLICIES: Record<Action, Policy[]> = {
   // ── Coarse role gates (back the tRPC procedures) ──────────────────────────
   'admin:access': [isAdmin],
   'hr:access': [isHrOrAdmin],
   'finance:read': [isAdmin], // HR does NOT get finance
+  'tasks:write': [isAuthenticatedApiUser],
   'team:view': [isActiveMember],
   'team:setRole': [isAdmin], // only admins may grant/revoke roles
   'leave:approve': [isHrOrAdmin],

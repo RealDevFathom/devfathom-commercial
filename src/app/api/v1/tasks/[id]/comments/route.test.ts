@@ -2,10 +2,16 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const mocks = vi.hoisted(() => ({
+  can: vi.fn(async () => true),
   taskComment: {
     findUnique: vi.fn(),
     create: vi.fn(async () => ({ id: 'reply-1' })),
   },
+}));
+
+vi.mock('@/lib/abac', () => ({
+  can: mocks.can,
+  subjectFromSession: (user: unknown) => user,
 }));
 
 vi.mock('@/lib/api-auth', () => ({
@@ -44,6 +50,22 @@ beforeEach(() => {
 });
 
 describe('POST /api/v1/tasks/:id/comments reply target', () => {
+  it('honors a central authorization denial before reading or creating a comment', async () => {
+    mocks.can.mockResolvedValueOnce(false);
+
+    const response = await postReply('parent-1');
+
+    expect(response.status).toBe(403);
+    expect(mocks.can).toHaveBeenCalledWith(
+      { id: 'actor', role: 'ADMIN' },
+      'tasks:write',
+      undefined,
+      expect.objectContaining({ source: 'REST' })
+    );
+    expect(mocks.taskComment.findUnique).not.toHaveBeenCalled();
+    expect(mocks.taskComment.create).not.toHaveBeenCalled();
+  });
+
   it.each([
     ['a comment on another task', { taskId: 'task-2' }],
     ['a missing comment', null],
