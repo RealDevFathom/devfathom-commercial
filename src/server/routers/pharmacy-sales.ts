@@ -100,7 +100,13 @@ import {
 } from '@/lib/pharmacy/settlement';
 
 import { assertInOrganization } from '../org-refs';
-import { adminProcedure, auditedProtectedProcedure, protectedProcedure, router } from '../trpc';
+import {
+  adminProcedure,
+  auditedProtectedProcedure,
+  capabilityProcedure,
+  protectedProcedure,
+  router,
+} from '../trpc';
 import type { TRPCContext } from '../trpc';
 
 const branchId = z.string().trim().min(1).max(128);
@@ -402,6 +408,35 @@ async function requireCounterReceiptAccess(ctx: TRPCContext, branch: string): Pr
   throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
 }
 
+/** Money movements require an active branch assignment; tenant admins deliberately span branches. */
+async function requireDrawerMovementBranch(ctx: TRPCContext, branch: string): Promise<LedgerScope> {
+  const scope = await branchScopeOrForbidden(ctx, branch);
+  const user = ctx.session!.user;
+  if (user.organizationId !== scope.organizationId)
+    throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  if (user.role === 'ADMIN') {
+    annotateAudit(ctx, {
+      targetType: 'PharmacyBranch',
+      targetId: branch,
+      metadata: { branchId: branch, reason: 'org-admin-drawer-movement' },
+    });
+  } else {
+    const assignment = await ctx.db.pharmacyBranchAssignment.findFirst({
+      where: {
+        organizationId: scope.organizationId,
+        userId: user.id,
+        branchId: branch,
+        active: true,
+        branch: { organizationId: scope.organizationId, active: true },
+      },
+      select: { id: true },
+    });
+    if (!assignment)
+      throw new TRPCError({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+  }
+  return scope;
+}
+
 const closeDate = z
   .date()
   .refine(
@@ -640,7 +675,7 @@ export const pharmacySalesRouter = router({
         fail(error);
       }
     }),
-  drawerMovement: protectedProcedure
+  drawerMovement: capabilityProcedure('pharmacy:dispense')
     .input(
       z
         .object({
@@ -656,7 +691,11 @@ export const pharmacySalesRouter = router({
     .mutation(async ({ ctx, input }) => {
       try {
         return await ctx.db.$transaction(async (tx) =>
-          recordPharmacyCashMovement(txDb(tx), await scopeFor(ctx, input.branchId), input)
+          recordPharmacyCashMovement(
+            txDb(tx),
+            await requireDrawerMovementBranch(ctx, input.branchId),
+            input
+          )
         );
       } catch (error) {
         fail(error);

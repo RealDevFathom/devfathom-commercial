@@ -127,6 +127,8 @@ let db: {
   $queryRaw: ReturnType<typeof vi.fn>;
   $executeRaw: ReturnType<typeof vi.fn>;
   pharmacyBranch: { findMany: ReturnType<typeof vi.fn> };
+  pharmacyBranchAssignment: { findFirst: ReturnType<typeof vi.fn> };
+  user: { findUnique: ReturnType<typeof vi.fn> };
   pharmacyDailyClose: { findFirst: ReturnType<typeof vi.fn> };
   pharmacyDrawerSession: { findFirst: ReturnType<typeof vi.fn>; create: ReturnType<typeof vi.fn> };
   pharmacyDrawerMovement: { create: ReturnType<typeof vi.fn> };
@@ -155,6 +157,15 @@ beforeEach(() => {
     $executeRaw: vi.fn().mockResolvedValue(0),
     // Unknown, inactive and another tenant's branch all read as "no such active branch".
     pharmacyBranch: { findMany: vi.fn().mockResolvedValue([]) },
+    pharmacyBranchAssignment: { findFirst: vi.fn().mockResolvedValue(null) },
+    user: {
+      findUnique: vi.fn().mockResolvedValue({
+        organizationRole: {
+          permissions: [{ capability: 'pharmacy:dispense', effect: 'ALLOW' }],
+        },
+        permissionOverrides: [],
+      }),
+    },
     pharmacyDailyClose: { findFirst: vi.fn().mockResolvedValue(null) },
     pharmacyDrawerSession: {
       findFirst: vi.fn().mockResolvedValue(null),
@@ -215,4 +226,39 @@ describe('pharmacy drawer, close and cash procedures: the branch in the input', 
       }),
     });
   });
+
+  it('refuses drawer movements without an active branch assignment', async () => {
+    db.pharmacyBranch.findMany.mockResolvedValue([{ id: BRANCH }]);
+    await expect(
+      procedures.find(([name]) => name === 'drawerMovement')![1](caller('EMPLOYEE'))
+    ).rejects.toMatchObject({ code: 'FORBIDDEN', message: 'Branch is outside your scope.' });
+    expect(db.pharmacyBranchAssignment.findFirst).toHaveBeenCalledWith({
+      where: {
+        organizationId: 'org-1',
+        userId: 'actor-1',
+        branchId: BRANCH,
+        active: true,
+        branch: { organizationId: 'org-1', active: true },
+      },
+      select: { id: true },
+    });
+    expect(db.$queryRaw).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ['role', [], [{ capability: 'pharmacy:dispense', effect: 'DENY' }]],
+    ['user', [{ capability: 'pharmacy:dispense', effect: 'DENY' }], []],
+  ])(
+    'honors an explicit %s deny before a drawer movement',
+    async (_source, overrides, permissions) => {
+      db.user.findUnique.mockResolvedValue({
+        organizationRole: { permissions },
+        permissionOverrides: overrides,
+      });
+      await expect(
+        procedures.find(([name]) => name === 'drawerMovement')![1](caller())
+      ).rejects.toMatchObject({ code: 'FORBIDDEN' });
+      expect(db.$transaction).not.toHaveBeenCalled();
+    }
+  );
 });

@@ -33,6 +33,12 @@ if (TEST_DATABASE_URL) process.env.DATABASE_URL = TEST_DATABASE_URL;
 process.env.PLATFORM_ENCRYPTION_KEY ??= randomBytes(32).toString('base64');
 
 vi.mock('@/lib/tenancy/tenant-actor', () => ({ resolveTenantActor: vi.fn(async () => null) }));
+// Authorization is covered by the focused router tests; this suite exercises the
+// settlement transaction and migrated PostgreSQL constraints.
+vi.mock('@/lib/abac', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/abac')>()),
+  can: vi.fn(async () => true),
+}));
 vi.mock('@/server/audit', async (importOriginal) => ({
   ...(await importOriginal<typeof import('@/server/audit')>()),
   recordTrpcAudit: vi.fn(),
@@ -308,11 +314,26 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
         })
       )
     ).rejects.toMatchObject({ code: 'BAD_REQUEST', message: 'IDEMPOTENCY_CONFLICT' });
+    const raced = await Promise.all(
+      [1, 2].map(() =>
+        asAdmin((c) =>
+          c.drawerMovement({
+            branchId: ACTIVE,
+            drawerSessionId: drawer!.id,
+            kind: 'PAID_IN',
+            amountMinor: 100,
+            reason: 'Concurrent float top-up',
+            operationKey: 'concurrent-float-top-up',
+          })
+        )
+      )
+    );
+    expect(raced[0]!.id).toBe(raced[1]!.id);
     await expect(
       asAdmin((c) =>
-        c.closeDrawer({ branchId: ACTIVE, drawerSessionId: drawer!.id, countedCashMinor: 1250 })
+        c.closeDrawer({ branchId: ACTIVE, drawerSessionId: drawer!.id, countedCashMinor: 1350 })
       )
-    ).resolves.toMatchObject({ expectedCashMinor: 1250, varianceMinor: 0 });
+    ).resolves.toMatchObject({ expectedCashMinor: 1350, varianceMinor: 0 });
     // The close read, like the branch list before it, carries the workspace's zone.
     await expect(
       asAdmin((c) => c.closePreview({ branchId: ACTIVE, businessDate }))
@@ -324,7 +345,7 @@ describeIfDatabase('pharmacy drawer and close procedures, against PostgreSQL', (
     await expect(asAdmin((c) => c.counterBranches())).resolves.toMatchObject({
       timezone: 'America/Chicago',
     });
-    expect(await rowsFor(ACTIVE)).toEqual({ drawers: 1, movements: 3, closed: 1, closes: 0 });
+    expect(await rowsFor(ACTIVE)).toEqual({ drawers: 1, movements: 4, closed: 1, closes: 0 });
   });
 
   it('answers the daily close’s typed refusals as typed errors, not as a 500', async () => {
