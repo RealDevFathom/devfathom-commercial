@@ -231,6 +231,9 @@ describe('pharmacy inventory entitlement and tenant boundaries', () => {
       undefined,
       expect.anything()
     );
+    // Authorization must fail before either procedure resolves caller-supplied
+    // tenant references or starts its write transaction.
+    expect(db.pharmacyBranch.findMany).not.toHaveBeenCalled();
     expect(db.$transaction).not.toHaveBeenCalled();
   });
 
